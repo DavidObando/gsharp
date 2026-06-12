@@ -99,7 +99,8 @@ import System
 import System.Collections.Generic
 
 func fib(max int32) sequence[int32] {
-    a, b := 0, 1
+    var a = 0
+    var b = 1
     for a <= max {
         yield a
         a, b = b, a+b
@@ -124,7 +125,7 @@ import System
 import System.Collections.Generic
 
 func evens(max int32) sequence[int32] {
-    i := 0
+    var i = 0
     for i <= max {
         if i % 2 == 0 {
             yield i

@@ -27,7 +27,7 @@ import System.Linq
 import GSharp.Core.Tests.CodeAnalysis.Binding
 
 var total = 0
-await for v := range AsyncStreamFixture.Counts() {
+await for v in AsyncStreamFixture.Counts() {
     total = total + v
 }
 total
@@ -45,7 +45,7 @@ total
         // starts.
         var source = @"
 let n = 42
-await for v := range (n + 1) {
+await for v in (n + 1) {
 }
 ";
         var result = Evaluate(source);
@@ -58,7 +58,7 @@ await for v := range (n + 1) {
         var source = @"
 import GSharp.Core.Tests.CodeAnalysis.Binding
 
-await for v := range AsyncStreamFixture.Empty() {
+await for v in AsyncStreamFixture.Empty() {
 }
 ";
         var result = Evaluate(source);
@@ -75,7 +75,7 @@ await for v := range AsyncStreamFixture.Empty() {
 import GSharp.Core.Tests.CodeAnalysis.Binding
 
 var evens = 0
-await for v := range AsyncStreamFixture.Counts() {
+await for v in AsyncStreamFixture.Counts() {
     if v % 2 == 0 {
         evens = evens + 1
     }

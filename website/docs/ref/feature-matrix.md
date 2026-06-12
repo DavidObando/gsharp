@@ -56,7 +56,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 
 | Feature | Emit (`gsc`) | Interpreter | Notes |
 | --- | --- | --- | --- |
-| Top-level functions and variables | Supported | Supported | `var`, `let`, `const`, and `:=` are implemented. |
+| Top-level functions and variables | Supported | Supported | `var`, `let`, and `const` are implemented. The legacy `:=` short variable declaration was removed by ADR-0077 (issue #717); the parser hard-rejects it with `GS0305`. |
 | Visibility modifiers | Supported | Supported | `public`, `internal`, and `private`; invalid locations report `GS0180`. |
 | Receiver methods and extension functions | Supported | Supported | G# receiver style and imported CLR extension dispatch. |
 | Operator declarations | Supported | Supported where evaluator invokes user/CLR op paths | Receiver `operator` declarations map to CLR `op_*` names. |
@@ -74,8 +74,8 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | `if` expression (ADR-0064) | Supported | Supported | `let x = if cond { a } else { b }` and `else if` chains in value position. Requires a terminal `else` (`GS0276`); blocks must end in a value-producing expression (`GS0277`); branches with no common type report `GS0263` (shared with the ternary). Lowers through the same `BoundConditionalExpression` / `BoundBlockExpression` nodes the ternary and switch expression use. |
 | `guard let` | Supported | Supported | ADR-0071. `guard let name = expr else { ... }` binds `name` for the remainder of the enclosing block and requires the else clause to unconditionally exit (`GS0297`). |
 | `for` condition, clause, infinite loops | Supported | Supported | Companion `while` and `do`-`while` forms shipped in ADR-0070. |
-| `for x in collection` and `for x := range collection` | Supported | Supported | Canonical `in` form plus Go-style range form. |
-| Ellipsis loops | Supported | Supported | `for i := start ... end`. |
+| `for x in collection` | Supported | Supported | Canonical `in` form. The legacy `for x := range collection` Go-style spelling was removed by ADR-0077 (issue #717). |
+| Ellipsis loops | Supported | Supported | `for i in start ... end`. The legacy `for i := start ... end` spelling was removed by ADR-0077 (issue #717). |
 | `while` and `do`-`while` | Supported | Supported | ADR-0070. `while cond { ... }` (pre-test) and `do { ... } while cond` (post-test). |
 | `break` and `continue` (with optional loop labels) | Supported | Supported | Invalid locations are diagnosed. Loop labels (`label: for ...`, `break label`, `continue label`) added in ADR-0070; diagnostics `GS0293`–`GS0295`. |
 | Multi-assignment and deconstruction | Supported | Supported | Target/value mismatches are diagnosed. |

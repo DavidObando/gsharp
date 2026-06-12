@@ -51,7 +51,7 @@ public class Issue520ClrArrayForRangeTests
                 import Probe
 
                 var arr = Helper.GetColors()
-                for c := range arr {
+                for c in arr {
                   Console.WriteLine(int32(c))
                 }
                 """;
@@ -82,7 +82,7 @@ public class Issue520ClrArrayForRangeTests
                 import Probe
 
                 var arr = Helper.GetColors()
-                for c := range arr {
+                for c in arr {
                   if Enum.IsDefined(typeof(Color), c) {
                     Console.WriteLine("ok")
                   } else {
@@ -112,7 +112,7 @@ public class Issue520ClrArrayForRangeTests
             import System
 
             var ca = "abc".ToCharArray()
-            for c := range ca {
+            for c in ca {
               Console.WriteLine(int32(c))
             }
             """;
@@ -132,7 +132,7 @@ public class Issue520ClrArrayForRangeTests
             import System.Linq
 
             var ia = Enumerable.ToArray[int32](Enumerable.Range(10, 3))
-            for i := range ia {
+            for i in ia {
               Console.WriteLine(i)
             }
             """;
@@ -152,7 +152,7 @@ public class Issue520ClrArrayForRangeTests
             import System
 
             var sa = "x y z".Split(' ')
-            for s := range sa {
+            for s in sa {
               Console.WriteLine(s)
             }
             """;
@@ -175,7 +175,7 @@ public class Issue520ClrArrayForRangeTests
             type Region enum { Us, Uk, De, Fr, Es, It, Pt, Pl, Cz, At, Nl }
 
             var names = Enum.GetNames(typeof(Region))
-            for n := range names {
+            for n in names {
               Console.WriteLine(n)
             }
             """;

@@ -86,7 +86,7 @@ public class Issue654IfInLambdaEmitTests
 
             var sum = 0
             Task.Run(func() {
-                for i := 0; i < 5; i = i + 1 {
+                for var i = 0; i < 5; i = i + 1 {
                     if i > 2 {
                         if i < 5 {
                             sum = sum + i

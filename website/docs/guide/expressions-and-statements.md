@@ -86,14 +86,14 @@ Missing the terminal `else` in value position reports `GS0276`. A block with no 
 
 ## Loops
 
-G# has infinite `for`, condition `for`, three-part `for`, `for in`, `for := range`, and ellipsis range loops. It does not implement a `while` keyword; use `for condition { ... }` for while-style control flow. `for in` is the canonical collection iteration spelling from [ADR-0031](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0031-canonical-for-in.md).
+G# has infinite `for`, condition `for`, three-part `for`, `for in`, and ellipsis range loops. It does not implement a `while` keyword; use `for condition { ... }` for while-style control flow. `for in` is the canonical collection iteration spelling from [ADR-0031](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0031-canonical-for-in.md). The legacy `for v := range coll` and `for i := lo ... hi` spellings were removed in [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md); use the `in` form.
 
 ```gsharp
 for item in items {
     Console.WriteLine(item)
 }
 
-for i := 0...10 {
+for i in 0...10 {
     Console.WriteLine(i)
 }
 ```

@@ -31,7 +31,7 @@ public class VariadicEmitTests
 
             func sum(nums ...int32) int32 {
               var total = 0
-              for v := range nums {
+              for v in nums {
                 total = total + v
               }
               return total
@@ -53,7 +53,7 @@ public class VariadicEmitTests
 
             func sum(nums ...int32) int32 {
               var total = 0
-              for v := range nums {
+              for v in nums {
                 total = total + v
               }
               return total
@@ -76,7 +76,7 @@ public class VariadicEmitTests
 
             func sumWithBase(base int32, extras ...int32) int32 {
               var total = base
-              for v := range extras {
+              for v in extras {
                 total = total + v
               }
               return total

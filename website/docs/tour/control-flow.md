@@ -115,7 +115,7 @@ import System
 
 var count = 5
 
-for i := count; i > 0; i-- {
+for var i = count; i > 0; i-- {
     Console.WriteLine("Count value: $i")
 }
 ```
@@ -160,7 +160,7 @@ two
 2
 ```
 
-The older `for x := range values` spelling is still accepted and appears in some samples.
+The legacy `for x := range values` Go-style spelling was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md); use the `for x in values` form everywhere.
 
 ## While and do-while (ADR-0070)
 

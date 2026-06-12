@@ -25,7 +25,7 @@ public class VariadicTests
         var result = Evaluate(@"
 func sum(nums ...int32) int32 {
     var total = 0
-    for i := 0; i < len(nums); i++ {
+    for var i = 0; i < len(nums); i++ {
         total = total + nums[i]
     }
     return total
@@ -53,7 +53,7 @@ count()
         var result = Evaluate(@"
 func joinWith(sep string, parts ...string) string {
     var s = """"
-    for i := 0; i < len(parts); i++ {
+    for var i = 0; i < len(parts); i++ {
         if i > 0 { s = s + sep }
         s = s + parts[i]
     }

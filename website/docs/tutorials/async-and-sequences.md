@@ -253,7 +253,7 @@ done
 
 ## 4. Understand sequences
 
-G# has `sequence[T]` for synchronous iterators and `async sequence[T]` for async streams. Iterator functions return a sequence and use `yield`. Async streams are consumed with `await for x in stream` or the legacy `await for x := range stream` spelling. The type-clause forms are part of the current grammar even when a specific sample focuses on async tasks rather than stream construction.
+G# has `sequence[T]` for synchronous iterators and `async sequence[T]` for async streams. Iterator functions return a sequence and use `yield`. Async streams are consumed with `await for x in stream`. (The legacy `await for x := range stream` Go-style spelling was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md).) The type-clause forms are part of the current grammar even when a specific sample focuses on async tasks rather than stream construction.
 
 ```gsharp
 func numbers() sequence[int32] {

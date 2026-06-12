@@ -12,16 +12,18 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 2.3: <c>a, b := 1, 2</c> short-var multi-decl and <c>a, b = b, a</c>
-/// multi-assignment with sequential evaluation via synthesized temporaries.
-/// The call form (<c>a, b := f()</c>) waits for Phase 4 multi-return.
+/// Phase 2.3: <c>a, b = b, a</c> multi-target assignment with sequential
+/// evaluation via synthesized temporaries. The short-var multi-decl form
+/// <c>a, b := 1, 2</c> was removed by ADR-0077 / issue #717; the parser
+/// now emits GS0305 for that spelling — covered by
+/// <see cref="GSharp.Core.Tests.CodeAnalysis.Syntax.Issue717ColonEqualsRemovedParserTests"/>.
 /// </summary>
 public class MultiAssignmentTests
 {
     [Fact]
-    public void MultiShortDecl_Binds()
+    public void MultiDecl_AsTwoVarLines_Binds()
     {
-        Assert.Empty(Bind("func F() {\n a, b := 1, 2\n var s = a + b\n }\n"));
+        Assert.Empty(Bind("func F() {\n var a = 1\n var b = 2\n var s = a + b\n }\n"));
     }
 
     [Fact]
@@ -44,13 +46,6 @@ public class MultiAssignmentTests
     }
 
     [Fact]
-    public void MultiShortDecl_Count_Mismatch_Reports_Error()
-    {
-        var diagnostics = Bind("func F() {\n a, b := 1\n }\n");
-        Assert.Contains(diagnostics, d => d.Message.Contains("target", System.StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
     public void MultiAssignment_To_Readonly_Reports_Error()
     {
         var diagnostics = Bind("func F() {\n let a = 1\n var b = 2\n a, b = b, a\n }\n");
@@ -65,9 +60,9 @@ public class MultiAssignmentTests
     }
 
     [Fact]
-    public void MultiShortDecl_AllowsDifferentTypes()
+    public void MultiDecl_DifferentTypes_AsTwoVarLines_Binds()
     {
-        Assert.Empty(Bind("func F() {\n a, b := 1, \"two\"\n var s = b\n var n = a\n }\n"));
+        Assert.Empty(Bind("func F() {\n var a = 1\n var b = \"two\"\n var s = b\n var n = a\n }\n"));
     }
 
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)

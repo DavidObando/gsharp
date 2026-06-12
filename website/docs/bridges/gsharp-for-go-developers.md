@@ -17,7 +17,7 @@ G# is a Go-inspired language for .NET. You will recognize packages, `func`, `def
 | `func main()` | top-level statements or `func Main()` | SDK projects synthesize an entry point from top-level statements. |
 | `fmt.Println(x)` | `Console.WriteLine(x)` | Use .NET library types directly. |
 | `var x int` | `var x int32` or `var x int64` | G# uses width-bearing numeric names. |
-| `:=` | `:=` | Short declarations are available where inference is possible. |
+| `:=` | `let x = …` or `var x = …` | G# removed the Go-style `:=` short declaration ([ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md)); every binding site requires `let` (immutable) or `var` (mutable). For ranges, write `for i in lo ... hi` and `for v in xs`. |
 | `[]T` | `[]T` | Slices are backed by CLR arrays and support `len`, `cap`, and `append`. |
 | `[3]T` | `[3]T` | Fixed arrays carry the length in the type. |
 | `map[K]V` | `map[K]V` or `Dictionary[K, V]` | CLR generic syntax uses brackets. |

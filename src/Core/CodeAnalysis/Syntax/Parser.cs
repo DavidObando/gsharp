@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -2794,16 +2795,29 @@ public class Parser
 
     private StatementSyntax ParseSingleShortVariableDeclaration()
     {
+        // ADR-0077 / issue #717: the legacy short variable-declaration
+        // operator `:=` is removed. Emit GS0305 against the `:=` token and
+        // recover by synthesising a `var` declaration so downstream binding
+        // produces no cascade.
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var colonEquals = MatchToken(SyntaxKind.ColonEqualsToken);
+        Diagnostics.ReportColonEqualsRemoved(
+            colonEquals.Location,
+            $"let {identifier.Text} = …  or  var {identifier.Text} = …");
         var initializer = ParseExpression();
+        var equalsToken = SynthesiseEqualsToken(colonEquals);
         return new VariableDeclarationSyntax(
             syntaxTree: syntaxTree,
             keyword: null,
             identifier: identifier,
             typeClause: null,
-            equalsToken: colonEquals,
+            equalsToken: equalsToken,
             initializer: initializer);
+    }
+
+    private SyntaxToken SynthesiseEqualsToken(SyntaxToken colonEquals)
+    {
+        return new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, colonEquals.Position, "=", null);
     }
 
     private StatementSyntax ParseIncrementDecrementStatement()
@@ -2858,7 +2872,17 @@ public class Parser
         SyntaxToken op;
         if (Current.Kind == SyntaxKind.ColonEqualsToken)
         {
-            op = MatchToken(SyntaxKind.ColonEqualsToken);
+            // ADR-0077 / issue #717: the legacy multi-target short variable-
+            // declaration `a, b := e1, e2` is removed. Emit GS0305 and recover
+            // by treating the operator as `=`; the binder still routes through
+            // BindMultiAssignmentStatement and reports any follow-on errors
+            // (e.g. undeclared targets) without spurious cascades.
+            var colonEquals = MatchToken(SyntaxKind.ColonEqualsToken);
+            var targetSnippet = BuildMultiTargetSnippet(targets);
+            Diagnostics.ReportColonEqualsRemoved(
+                colonEquals.Location,
+                $"var {targetSnippet[0]} = …  // one declaration per identifier");
+            op = SynthesiseEqualsToken(colonEquals);
         }
         else
         {
@@ -2867,6 +2891,24 @@ public class Parser
 
         var values = ParseMultiValueList();
         return new MultiAssignmentStatementSyntax(syntaxTree, targets, op, values);
+    }
+
+    private static string[] BuildMultiTargetSnippet(SeparatedSyntaxList<ExpressionSyntax> targets)
+    {
+        var names = new string[Math.Max(1, targets.Count)];
+        for (var i = 0; i < targets.Count; i++)
+        {
+            if (targets[i] is NameExpressionSyntax name)
+            {
+                names[i] = name.IdentifierToken.Text;
+            }
+            else
+            {
+                names[i] = "x";
+            }
+        }
+
+        return names;
     }
 
     private SeparatedSyntaxList<ExpressionSyntax> ParseMultiTargetList()
@@ -3229,12 +3271,18 @@ public class Parser
         // `for <ident>, <ident> := range <expr> { ... }`
         // `for <ident> in <expr> { ... }`
         // `for <ident>, <ident> in <expr> { ... }`
+        //
+        // NB: `for <ident> in <lo> ... <hi> { ... }` is the integer-range
+        // (ellipsis) form (ADR-0077). The shared `in` token means we must
+        // peek past the collection / lower-bound expression to see whether
+        // an ellipsis follows — if so, this is *not* the range form.
         if (Peek(1).Kind != SyntaxKind.IdentifierToken)
         {
             return false;
         }
 
         int o = 2;
+        bool hasCommaSecondId = false;
         if (Peek(o).Kind == SyntaxKind.CommaToken)
         {
             if (Peek(o + 1).Kind != SyntaxKind.IdentifierToken)
@@ -3242,12 +3290,23 @@ public class Parser
                 return false;
             }
 
+            hasCommaSecondId = true;
             o += 2;
         }
 
         if (Peek(o).Kind == SyntaxKind.IdentifierToken && Peek(o).Text == "in")
         {
-            return true;
+            // A `k, v in dict` form never collides with the ellipsis form
+            // (ellipsis is single-identifier only) — accept immediately.
+            if (hasCommaSecondId)
+            {
+                return true;
+            }
+
+            // Single-identifier `in`: distinguish from `for i in lo ... hi`
+            // by scanning ahead for an ellipsis at depth zero before the
+            // body's open brace.
+            return !HasEllipsisBeforeBrace(o + 1);
         }
 
         if (Peek(o).Kind != SyntaxKind.ColonEqualsToken)
@@ -3258,15 +3317,55 @@ public class Parser
         return Peek(o + 1).Kind == SyntaxKind.RangeKeyword;
     }
 
+    private bool HasEllipsisBeforeBrace(int startOffset)
+    {
+        int depth = 0;
+        for (int i = startOffset; i < 256; i++)
+        {
+            var k = Peek(i).Kind;
+            if (depth == 0)
+            {
+                if (k == SyntaxKind.EllipsisToken)
+                {
+                    return true;
+                }
+
+                if (k == SyntaxKind.OpenBraceToken ||
+                    k == SyntaxKind.SemicolonToken ||
+                    k == SyntaxKind.EndOfFileToken)
+                {
+                    return false;
+                }
+            }
+
+            if (k == SyntaxKind.OpenParenthesisToken)
+            {
+                depth++;
+            }
+            else if (k == SyntaxKind.CloseParenthesisToken && depth > 0)
+            {
+                depth--;
+            }
+        }
+
+        return false;
+    }
+
     private bool LooksLikeForEllipsis()
     {
-        // `for <ident> := <expr> ... <expr> { ... }`
+        // Canonical: `for <ident> in <expr> ... <expr> { ... }`
+        // Legacy (removed by ADR-0077 / issue #717, but still recognised by
+        // the parser so it can emit GS0305 instead of a parse cascade):
+        //   `for <ident> := <expr> ... <expr> { ... }`
         if (Peek(1).Kind != SyntaxKind.IdentifierToken)
         {
             return false;
         }
 
-        if (Peek(2).Kind != SyntaxKind.ColonEqualsToken)
+        var separator = Peek(2);
+        var hasSeparator = separator.Kind == SyntaxKind.ColonEqualsToken
+            || (separator.Kind == SyntaxKind.IdentifierToken && separator.Text == "in");
+        if (!hasSeparator)
         {
             return false;
         }
@@ -3383,11 +3482,17 @@ public class Parser
 
     private StatementSyntax ParseSimpleStatement()
     {
-        // A "simple statement" in the for-header context is one of:
-        //   short variable declaration `x := expr`
+        // A "simple statement" in the for-header / if-init context is one of:
+        //   variable declaration      `var x = expr` / `let x = expr` (ADR-0077)
+        //   legacy short var decl     `x := expr`    — GS0305, removed
         //   increment/decrement       `x++` / `x--`
         //   assignment                `x = expr`, `x += expr`, ...
         //   expression statement      `f()`
+        if (Current.Kind == SyntaxKind.VarKeyword || Current.Kind == SyntaxKind.LetKeyword)
+        {
+            return ParseVariableDeclaration();
+        }
+
         if (Current.Kind == SyntaxKind.IdentifierToken &&
             Peek(1).Kind == SyntaxKind.ColonEqualsToken)
         {
@@ -3431,8 +3536,20 @@ public class Parser
         }
         else
         {
+            // ADR-0077 / issue #717: `for v := range coll` (and its `for k, v :=
+            // range dict` sibling) is removed. The canonical `for v in coll`
+            // form already exists (ADR-0031); emit GS0305 and recover by
+            // synthesising an `in` token so binding still produces a
+            // `BoundForRangeStatement` and downstream diagnostics are clean.
             colonEqualsToken = MatchToken(SyntaxKind.ColonEqualsToken);
             rangeKeyword = MatchToken(SyntaxKind.RangeKeyword);
+            var snippet = secondIdentifier == null
+                ? $"for {firstIdentifier.Text} in …"
+                : $"for {firstIdentifier.Text}, {secondIdentifier.Text} in …";
+            Diagnostics.ReportColonEqualsRemoved(colonEqualsToken.Location, snippet);
+            inToken = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, colonEqualsToken.Position, "in", null);
+            colonEqualsToken = null;
+            rangeKeyword = null;
         }
 
         var collection = ParseExpressionInBodyHeader();
@@ -3444,12 +3561,29 @@ public class Parser
     {
         var keyword = MatchToken(SyntaxKind.ForKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
-        var colonEqualsToken = MatchToken(SyntaxKind.ColonEqualsToken);
+        SyntaxToken colonEqualsToken;
+        SyntaxToken inToken = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "in")
+        {
+            // ADR-0077 / issue #717: `for i in lo ... hi` is the canonical
+            // integer-range form. The legacy `:=` spelling is removed below.
+            inToken = NextToken();
+            colonEqualsToken = null;
+        }
+        else
+        {
+            colonEqualsToken = MatchToken(SyntaxKind.ColonEqualsToken);
+            Diagnostics.ReportColonEqualsRemoved(
+                colonEqualsToken.Location,
+                $"for {identifier.Text} in lo ... hi");
+            inToken = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, colonEqualsToken.Position, "in", null);
+        }
+
         var lowerBound = ParseExpressionInBodyHeader();
         var toKeyword = MatchToken(SyntaxKind.EllipsisToken);
         var upperBound = ParseExpressionInBodyHeader();
         var body = ParseStatement();
-        return new ForEllipsisStatementSyntax(syntaxTree, keyword, identifier, colonEqualsToken, lowerBound, toKeyword, upperBound, body);
+        return new ForEllipsisStatementSyntax(syntaxTree, keyword, identifier, inToken, lowerBound, toKeyword, upperBound, body);
     }
 
     private StatementSyntax ParseBreakStatement()
@@ -3803,9 +3937,9 @@ public class Parser
 
     private StatementSyntax ParseAwaitForRangeStatement()
     {
-        // Phase 5.8 / ADR-0023 legacy `await for v := range stream { … }`.
-        // Phase 7.2 adds canonical `await for v in stream { … }` with `in`
-        // parsed as a contextual identifier token.
+        // Canonical: `await for v in stream { … }` (ADR-0031).
+        // Legacy `:=` spelling removed by ADR-0077 / issue #717 — emit GS0305
+        // when the parser still encounters it.
         var awaitKeyword = MatchToken(SyntaxKind.AwaitKeyword);
         var forKeyword = MatchToken(SyntaxKind.ForKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -3820,6 +3954,12 @@ public class Parser
         {
             colonEquals = MatchToken(SyntaxKind.ColonEqualsToken);
             rangeKeyword = MatchToken(SyntaxKind.RangeKeyword);
+            Diagnostics.ReportColonEqualsRemoved(
+                colonEquals.Location,
+                $"await for {identifier.Text} in …");
+            inToken = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, colonEquals.Position, "in", null);
+            colonEquals = null;
+            rangeKeyword = null;
         }
 
         var stream = ParseExpressionInBodyHeader();
@@ -3887,13 +4027,40 @@ public class Parser
                 body);
         }
 
-        // case v := <-ch { ... } — receive, bind.
+        // case let v = <-ch { ... } — receive, bind (ADR-0077).
+        if (Current.Kind == SyntaxKind.LetKeyword &&
+            Peek(1).Kind == SyntaxKind.IdentifierToken &&
+            Peek(2).Kind == SyntaxKind.EqualsToken &&
+            Peek(3).Kind == SyntaxKind.LeftArrowToken)
+        {
+            NextToken(); // consume `let`
+            var identifier = MatchToken(SyntaxKind.IdentifierToken);
+            MatchToken(SyntaxKind.EqualsToken);
+            MatchToken(SyntaxKind.LeftArrowToken);
+            var channel = ParseExpression();
+            var body = ParseBlockStatement();
+            return new SelectCaseSyntax(
+                syntaxTree,
+                caseKeyword,
+                SelectCaseKind.ReceiveBind,
+                identifier,
+                channel,
+                value: null,
+                body);
+        }
+
+        // case v := <-ch { ... } — legacy receive-bind. ADR-0077 / issue #717
+        // removes `:=`; emit GS0305 and recover by binding the identifier as
+        // a `case let v = <-ch` would.
         if (Current.Kind == SyntaxKind.IdentifierToken &&
             Peek(1).Kind == SyntaxKind.ColonEqualsToken &&
             Peek(2).Kind == SyntaxKind.LeftArrowToken)
         {
             var identifier = MatchToken(SyntaxKind.IdentifierToken);
-            MatchToken(SyntaxKind.ColonEqualsToken);
+            var colonEquals = MatchToken(SyntaxKind.ColonEqualsToken);
+            Diagnostics.ReportColonEqualsRemoved(
+                colonEquals.Location,
+                $"case let {identifier.Text} = <-ch");
             MatchToken(SyntaxKind.LeftArrowToken);
             var channel = ParseExpression();
             var body = ParseBlockStatement();

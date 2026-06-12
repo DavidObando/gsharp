@@ -74,7 +74,7 @@ nums = append(nums, 40)
 Console.WriteLine(nums[3])
 ```
 
-Arrays and slices support indexing, index assignment when mutable, `len`, and `cap`. `for i := 0 ... len(nums)` is the common indexed loop form; `for x in nums` and `for x := range nums` are also supported by the language.
+Arrays and slices support indexing, index assignment when mutable, `len`, and `cap`. `for i in 0 ... len(nums)` is the common indexed loop form; `for x in nums` is the canonical iteration form. (The legacy Go-style `for x := range nums` spelling was removed by ADR-0077 / issue #717.)
 
 ## Maps
 

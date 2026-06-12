@@ -11,6 +11,6 @@ import System
 
 var count = 5
 
-for i := count; i > 0; i-- {
+for var i = count; i > 0; i-- {
     Console.WriteLine("Count value: $i")
 }

@@ -48,8 +48,8 @@ public class Issue707WhileDoLabeledBindingTests
     {
         var source = """
             package P
-            outer: for i := 0; i < 3; i++ {
-                for j := 0; j < 3; j++ {
+            outer: for var i = 0; i < 3; i++ {
+                for var j = 0; j < 3; j++ {
                     break outer
                     continue outer
                 }
@@ -65,7 +65,7 @@ public class Issue707WhileDoLabeledBindingTests
         var source = """
             package P
             outer: while true {
-                for j := 0; j < 1; j++ {
+                for var j = 0; j < 1; j++ {
                     break outer
                 }
             }
@@ -81,7 +81,7 @@ public class Issue707WhileDoLabeledBindingTests
             package P
             var n = 0
             spin: do {
-                for j := 0; j < 1; j++ {
+                for var j = 0; j < 1; j++ {
                     break spin
                 }
                 n = n + 1
@@ -118,7 +118,7 @@ public class Issue707WhileDoLabeledBindingTests
     {
         var source = """
             package P
-            for i := 0; i < 1; i++ {
+            for var i = 0; i < 1; i++ {
                 break notalabel
             }
             """;
@@ -131,7 +131,7 @@ public class Issue707WhileDoLabeledBindingTests
     {
         var source = """
             package P
-            for i := 0; i < 1; i++ {
+            for var i = 0; i < 1; i++ {
                 continue notalabel
             }
             """;
@@ -155,8 +155,8 @@ public class Issue707WhileDoLabeledBindingTests
     {
         var source = """
             package P
-            outer: for i := 0; i < 1; i++ {
-                outer: for j := 0; j < 1; j++ {
+            outer: for var i = 0; i < 1; i++ {
+                outer: for var j = 0; j < 1; j++ {
                     break outer
                 }
             }

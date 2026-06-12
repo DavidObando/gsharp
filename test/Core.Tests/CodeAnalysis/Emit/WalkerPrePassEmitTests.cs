@@ -175,7 +175,7 @@ type Box data struct {
 }
 var b Box
 var nums = [3]int32{0, 1, 2}
-for i, v := range nums {
+for i, v in nums {
     b.Value = v + i
 }
 Console.WriteLine(b.Value)

@@ -19,7 +19,7 @@ Console.WriteLine(names[0])
 Console.WriteLine(names[1])
 
 var sum = 0
-for i := 0 ... 3 {
+for i in 0 ... 3 {
     sum = sum + nums[i]
 }
 

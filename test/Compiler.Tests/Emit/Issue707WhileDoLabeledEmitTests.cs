@@ -76,8 +76,8 @@ public class Issue707WhileDoLabeledEmitTests
             package P
             import System
 
-            outer: for i := 0; i < 3; i++ {
-                for j := 0; j < 3; j++ {
+            outer: for var i = 0; i < 3; i++ {
+                for var j = 0; j < 3; j++ {
                     if i == 1 && j == 1 {
                         Console.WriteLine("breaking")
                         break outer
@@ -98,8 +98,8 @@ public class Issue707WhileDoLabeledEmitTests
             package P
             import System
 
-            outer: for i := 0; i < 3; i++ {
-                for j := 0; j < 3; j++ {
+            outer: for var i = 0; i < 3; i++ {
+                for var j = 0; j < 3; j++ {
                     if j == 1 {
                         continue outer
                     }
@@ -121,7 +121,7 @@ public class Issue707WhileDoLabeledEmitTests
 
             var n = 0
             outer: while n < 100 {
-                for j := 0; j < 5; j++ {
+                for var j = 0; j < 5; j++ {
                     if j == 2 {
                         break outer
                     }
@@ -142,7 +142,7 @@ public class Issue707WhileDoLabeledEmitTests
             import System
 
             spin: do {
-                for j := 0; j < 5; j++ {
+                for var j = 0; j < 5; j++ {
                     if j == 3 {
                         break spin
                     }
@@ -162,8 +162,8 @@ public class Issue707WhileDoLabeledEmitTests
             package P
             import System
 
-            outer: for i := 0; i < 2; i++ {
-                for j := 0; j < 5; j++ {
+            outer: for var i = 0; i < 2; i++ {
+                for var j = 0; j < 5; j++ {
                     if j == 2 {
                         break
                     }
@@ -183,9 +183,9 @@ public class Issue707WhileDoLabeledEmitTests
             package P
             import System
 
-            a: for i := 0; i < 3; i++ {
-                b: for j := 0; j < 3; j++ {
-                    for k := 0; k < 3; k++ {
+            a: for var i = 0; i < 3; i++ {
+                b: for var j = 0; j < 3; j++ {
+                    for var k = 0; k < 3; k++ {
                         if i == 0 && j == 1 && k == 2 {
                             break a
                         }

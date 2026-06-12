@@ -62,7 +62,7 @@ Channel lowering rationale is in [ADR-0022](https://github.com/DavidObando/gshar
 
 ```gsharp
 select {
-case value := <-ch {
+case let value = <-ch {
     Console.WriteLine(value)
 }
 default {

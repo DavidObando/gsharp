@@ -2585,6 +2585,22 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0304", $"Cannot infer the type of lambda parameter '{parameterName}'. The parameter has no explicit type and no target type is available; either add a type (e.g. '({parameterName} int32) -> ...') or declare the binding with an explicit function type (e.g. 'let f (int32) -> R = ...').", DiagnosticSeverity.Error);
     }
 
+    /// <summary>
+    /// ADR-0077 / issue #717: GS0305 — the legacy short variable-declaration
+    /// operator <c>:=</c> has been removed. Every binding site must spell
+    /// <c>let name = expr</c> (immutable) or <c>var name = expr</c> (mutable).
+    /// The lexer continues to tokenise <c>:=</c> so the parser can emit a
+    /// single high-quality diagnostic at the offending token rather than
+    /// cascading parse errors.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>:=</c> token.</param>
+    /// <param name="migration">A context-specific replacement snippet
+    /// (e.g. <c>let x = 1</c> or <c>var x = 1</c>) shown in the message.</param>
+    public void ReportColonEqualsRemoved(TextLocation location, string migration)
+    {
+        Report(location, "GS0305", $"':=' short variable declaration has been removed; use 'let' (immutable) or 'var' (mutable) instead (e.g. '{migration}') (ADR-0077).", DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

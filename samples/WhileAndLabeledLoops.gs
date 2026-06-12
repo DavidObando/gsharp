@@ -26,8 +26,8 @@ do {
 
 // 3. Labeled `break` — escape a nested loop from the inner body.
 var firstHit = ""
-outer: for x := 0; x < 4; x++ {
-    for y := 0; y < 4; y++ {
+outer: for var x = 0; x < 4; x++ {
+    for var y = 0; y < 4; y++ {
         if x * y == 6 {
             firstHit = "x=$x,y=$y"
             break outer
@@ -39,8 +39,8 @@ Console.WriteLine("first product-6 hit: $firstHit")
 
 // 4. Labeled `continue` — skip the rest of the inner body and resume
 // the outer loop's next iteration.
-skip: for n := 0; n < 3; n++ {
-    for m := 0; m < 3; m++ {
+skip: for var n = 0; n < 3; n++ {
+    for var m = 0; m < 3; m++ {
         if m == 1 {
             continue skip
         }
@@ -53,7 +53,7 @@ skip: for n := 0; n < 3; n++ {
 // targets the innermost loop, leaving the do-while running.
 var k = 0
 do {
-    for s := 0; s < 5; s++ {
+    for var s = 0; s < 5; s++ {
         if s == 2 {
             break
         }

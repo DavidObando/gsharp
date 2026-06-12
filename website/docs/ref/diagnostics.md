@@ -120,7 +120,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0160 | Error | Ambiguous overload. | A call that matches more than one overload equally well. |
 | GS0161 | Error | `copy`/`with` receiver is not a `data struct`. | `.copy(…)` used on a plain `struct`. |
 | GS0162 | Error | Named arguments only supported for `data struct` `.copy(…)`. | Named arguments passed to a regular function. |
-| GS0163 | Error | Deconstruction field count mismatch. | `a, b := p` where `p` is a `data struct` with three fields. |
+| GS0163 | Error | Deconstruction field count mismatch. | `let (a, b) = p` where `p` is a `data struct` with three fields. |
 | GS0164 | Error | Deconstruction requires a tuple or `data struct` initializer. | Deconstruction attempted on a plain `struct`. |
 | GS0165 | Error | Multiple top-level files. | More than one source file contains top-level statements. |
 | GS0166 | Error | Top-level statements conflict with an explicit `Main` function. | Both top-level statements and a `func Main()` are present. |
@@ -532,3 +532,29 @@ ADR-0076 introduces type inference for `let` / `var` bindings whose initializer 
 Cause/fix:
 
 - **GS0304** — `let f = (x) -> x + 1`. Either side may carry the types. Spell the lambda parameters: `let f = (x int32) -> x + 1`, or spell the binding: `let f (int32) -> int32 = (x) -> x + 1`. Generic method calls that take a lambda (for example `xs.Where(x -> x > 0)`) still use the existing method-type-inference path and are unaffected.
+
+## `:=` short variable declaration removal (GS0305)
+
+ADR-0077 removes the Go-style `:=` short variable declaration from the
+language. The lexer still tokenizes `:=` so the parser can produce a
+targeted, span-accurate diagnostic with a context-sensitive migration
+suggestion instead of cascading parse errors. Every occurrence of `:=`
+— at statement scope, in multi-target assignment, in `for` / `await for`
+range and ellipsis loops, in `if` / `for` simple-statement initialisers,
+and in `select` case bindings — emits `GS0305`.
+
+| ID | Severity | Message |
+|----|----------|---------|
+| GS0305 | Error | `':=' short variable declaration has been removed; use 'let' (immutable) or 'var' (mutable) instead (e.g. '<migration>') (ADR-0077).` |
+
+Cause/fix:
+
+- **GS0305** — `x := 1`. Use `let x = 1` when the binding is never
+  rebound, or `var x = 1` when it is. For looping forms: `for i := 0 ...
+  10` → `for i in 0 ... 10`, `for v := range xs` → `for v in xs`, `for
+  k, v := range dict` → `for k, v in dict`, `await for x := range seq` →
+  `await for x in seq`, `case v := <-ch { … }` → `case let v = <-ch { …
+  }`. The three-part `for` init slot accepts a `var`/`let` declaration,
+  e.g. `for var i = 0; i < n; i++` (previously written as `for i := 0;
+  i < n; i++`).
+

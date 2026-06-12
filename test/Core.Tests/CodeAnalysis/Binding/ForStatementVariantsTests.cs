@@ -26,7 +26,7 @@ public class ForStatementVariantsTests
     [Fact]
     public void ForClause_Full_Parses_And_Binds()
     {
-        Assert.Empty(Bind("func F() {\n for i := 0; i < 3; i++ {\n }\n }\n"));
+        Assert.Empty(Bind("func F() {\n for var i = 0; i < 3; i++ {\n }\n }\n"));
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public class ForStatementVariantsTests
     {
         // If `continue` skipped `i++` we'd loop forever; the test just
         // checks the bound program is well-formed.
-        Assert.Empty(Bind("func F() {\n for i := 0; i < 3; i++ {\n if i == 1 { continue }\n }\n }\n"));
+        Assert.Empty(Bind("func F() {\n for var i = 0; i < 3; i++ {\n if i == 1 { continue }\n }\n }\n"));
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class ForStatementVariantsTests
     [Fact]
     public void ForEllipsis_Still_Works()
     {
-        Assert.Empty(Bind("func F() {\n for i := 0 ... 3 {\n }\n }\n"));
+        Assert.Empty(Bind("func F() {\n for i in 0 ... 3 {\n }\n }\n"));
     }
 
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)

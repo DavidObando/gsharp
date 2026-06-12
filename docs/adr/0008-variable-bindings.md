@@ -1,9 +1,11 @@
 # ADR-0008: Variable bindings — keep Go's `var`/`const`/`:=`, add `let`
 
-- **Status**: Accepted
+- **Status**: Superseded by [ADR-0077](0077-drop-colon-equals-short-variable-declaration.md) (the `:=` short variable-declaration leg only; `var`, `const`, and `let` remain as decided here).
 - **Date**: 2026-05-22
 - **Phase**: Phase 1 (implementation), Phase 0 (lock)
 - **Related**: gaps doc §6.1; execution plan §0 D8, §1.6; design doc D8
+
+> **Note (ADR-0077, issue #717):** the `:=` short variable declaration described below was **removed** from the language. The parser now hard-rejects every occurrence of `:=` with diagnostic `GS0305` and a context-sensitive `let`/`var` (or `for … in …`, `case let v = <-ch`, etc.) migration suggestion. Use `let name = expr` (immutable) or `var name = expr` (mutable) at every binding site. The rest of this ADR is preserved as a historical record of the original decision.
 
 ## Context
 

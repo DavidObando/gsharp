@@ -150,7 +150,7 @@ public class GenericFunctionEmitTests
             import System
 
             func Repeat[T any](x T, n int32, f func(T)) {
-                for i := 0; i < n; i = i + 1 {
+                for var i = 0; i < n; i = i + 1 {
                     f(x)
                 }
             }

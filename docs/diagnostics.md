@@ -112,7 +112,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0160 | Error | Ambiguous overload. | A call that matches more than one overload equally well. |
 | GS0161 | Error | `copy`/`with` receiver is not a `data struct`. | `.copy(…)` used on a plain `struct`. |
 | GS0162 | Error | Named arguments only supported for `data struct` `.copy(…)`. | Named arguments passed to a regular function. |
-| GS0163 | Error | Deconstruction field count mismatch. | `a, b := p` where `p` is a `data struct` with three fields. |
+| GS0163 | Error | Deconstruction field count mismatch. | `let (a, b) = p` where `p` is a `data struct` with three fields. |
 | GS0164 | Error | Deconstruction requires a tuple or `data struct` initializer. | Deconstruction attempted on a plain `struct`. |
 | GS0165 | Error | Top-level statements may appear in at most one package per compilation. | Two or more `package` declarations in a single compilation each contain top-level statements (see [ADR-0066](adr/0066-top-level-statement-mechanics.md)). |
 | GS0166 | Warning | Top-level statements conflict with an explicit `Main` function. | Both top-level statements and a `func Main()` are present; TLS wins, the explicit `Main` is shadowed (see [ADR-0066](adr/0066-top-level-statement-mechanics.md) §4). |
@@ -519,6 +519,16 @@ See [ADR-0076](adr/0076-lambda-binding-type-inference.md). When a `let` / `var` 
 | GS0304 | Error | `Cannot infer the type of '<name>' from a lambda with untyped parameters; supply a function-type clause on the binding or annotate the lambda parameters (ADR-0076).` | `let f = (x) -> x + 1` — fix by spelling either side, e.g. `let f = (x int32) -> x + 1` or `let f (int32) -> int32 = (x) -> x + 1`. |
 
 GS0304 fires only when *both* sides of the binding are open. If the binding spells the function type, parameter types may be omitted on the lambda (the existing target-typing path). If the lambda's parameters are fully typed, the binding's type is inferred to the lambda's `(T1, ...) -> R` signature with the return type computed bottom-up from the body (single-expression: the expression's type; block body: the common type of every value-producing return path; if no `return` produces a value, `void`). Generic method calls that receive a lambda argument (`xs.Where(x -> x > 0)`) still go through the method-type-inference path and are unaffected.
+
+## `:=` short variable declaration removal (GS0305)
+
+See [ADR-0077](adr/0077-drop-colon-equals-short-variable-declaration.md). The Go-style `:=` short variable declaration was removed from the language; every binding site requires `let` (immutable) or `var` (mutable). The lexer keeps tokenising `:=` as `ColonEqualsToken` so the parser can emit a span-accurate diagnostic with a context-sensitive migration suggestion instead of cascading parse errors.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0305 | Error | `':=' short variable declaration has been removed; use 'let' (immutable) or 'var' (mutable) instead (e.g. '<migration>') (ADR-0077).` | `x := 1` → `let x = 1` (or `var x = 1`). `for i := 0 ... 10` → `for i in 0 ... 10`. `for v := range xs` → `for v in xs`. `for k, v := range dict` → `for k, v in dict`. `await for x := range seq` → `await for x in seq`. `case v := <-ch` → `case let v = <-ch`. `for i := 0; i < n; i++` → `for var i = 0; i < n; i++`. `if x := init; cond` → `if var x = init; cond`. |
+
+GS0305 fires at every parse position that previously accepted `:=` — statement scope, multi-target assignment, `for` and `await for` range and ellipsis loops, `for` / `if` simple-statement initialisers, and `select` case bindings — and recovers by synthesising the corresponding canonical token (`=` for declarations / multi-target assignment, `in` for the for-range and for-ellipsis and await-for-range forms) so subsequent binding, lowering, and emit see a well-formed tree and no cascade diagnostics fire on the same statement. The diagnostic's `Location` covers the `:=` token itself.
 
 ## Internal compiler error diagnostics (GS9998–GS9999)
 

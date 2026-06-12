@@ -86,7 +86,7 @@ let x = if true { 1 } else { }
         // statement" rule from issue #711's binder scope.
         var result = Evaluate(@"
 let x = if true {
-    for i := 0...3 {
+    for i in 0...3 {
     }
 } else {
     42

@@ -65,7 +65,7 @@ public class StackTraceTests
                 "",                              // 4
                 "func Inner(seed int32) {",        // 5
                 "    var acc = 0",               // 6
-                "    for i := 0; i < seed; i++ {",  // 7
+                "    for var i = 0; i < seed; i++ {",  // 7
                 "        acc = acc + i",         // 8
                 "    }",                         // 9
                 "    if acc >= 0 {",             // 10

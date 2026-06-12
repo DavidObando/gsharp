@@ -42,7 +42,7 @@ var opened = 0
 var i = 0
 for i < 4 {
     select {
-    case v := <-results {
+    case let v = <-results {
         if v > 0 {
             opened = opened + 1
         }
@@ -59,7 +59,7 @@ let slow = make(chan int32, 1)
 let timeoutCh = make(chan int32, 1)
 timeoutCh <- 1
 select {
-case v := <-slow {
+case let v = <-slow {
     Console.WriteLine("got value: $v")
 }
 case <-timeoutCh {

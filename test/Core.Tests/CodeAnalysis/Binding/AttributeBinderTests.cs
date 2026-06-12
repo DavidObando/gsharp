@@ -957,13 +957,13 @@ type Point struct {
     public void AttributeUsage_UserAttribute_AllowMultiple_True_Permits_Duplicates()
     {
         // Issue #177: a user-declared `@Attribute` class whose
-        // `@AttributeUsage(All, AllowMultiple := true)` opts into multiple
+        // `@AttributeUsage(All, AllowMultiple = true)` opts into multiple
         // applications — two applications must NOT report GS0210.
         var source = """
             import System
 
             @Attribute
-            @AttributeUsage(AttributeTargets.All, AllowMultiple := true)
+            @AttributeUsage(AttributeTargets.All, AllowMultiple = true)
             type Tag class {
             }
 
