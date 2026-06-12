@@ -381,8 +381,12 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="name">The name of the variable.</param>
     public void ReportUndefinedVariable(TextLocation location, string name)
     {
-        // Issue #660: when the user writes 'null' (C# spelling), produce a
-        // targeted diagnostic suggesting 'nil' instead of the generic GS0125.
+        // Issue #660 / #721: when the user writes 'null' (C# spelling) and no
+        // symbol named `null` exists in scope, surface the GS0273 "did you
+        // mean 'nil'?" diagnostic instead of the generic GS0125. The binder
+        // also synthesises a `nil` literal so that target-type contexts (such
+        // as `let x string? = null` or `Foo(null)` with a nullable parameter)
+        // continue to typecheck without cascading errors.
         if (name == "null")
         {
             ReportUseNilInsteadOfNull(location);
@@ -2288,12 +2292,12 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <summary>
     /// Reports that the identifier <c>null</c> was used where the G# null
     /// literal <c>nil</c> is required. G# does not recognise <c>null</c> as
-    /// a keyword — the correct spelling is <c>nil</c>.
+    /// a keyword — the correct spelling is <c>nil</c> (ADR-0081).
     /// </summary>
     /// <param name="location">The source location of the <c>null</c> identifier.</param>
     public void ReportUseNilInsteadOfNull(TextLocation location)
     {
-        Report(location, "GS0273", "G# spells the null literal as 'nil'; 'null' is not a recognised keyword.");
+        Report(location, "GS0273", "'null' is not a literal in G#. Did you mean 'nil'?");
     }
 
     /// <summary>

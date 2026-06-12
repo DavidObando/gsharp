@@ -443,6 +443,14 @@ Cause/fix examples:
 | GS0271 | Error | `await using let` outside an async function. | `func f() { await using let x = ... }` — `await using let` requires `async func`. |
 | GS0272 | Error | Type is not async-disposable. | `await using let x = Foo()` where `Foo` provides no public `DisposeAsync()` method returning `ValueTask`. |
 
+## `null` identifier "did you mean nil?" diagnostic (GS0273)
+
+See [ADR-0081](adr/0081-null-identifier-did-you-mean-nil.md). `null` is not a keyword in G#; the canonical null literal is `nil` (ADR-0001). When the identifier `null` is used in a value-expression position and no symbol named `null` is in scope, the binder emits `GS0273` and recovers by synthesising a `nil` literal so target-type contexts continue to typecheck. The diagnostic is suppressed when a symbol named `null` (variable, function, field) is in scope — those declarations remain legal and identifier resolution wins over the recovery.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0273 | Error | `'null' is not a literal in G#. Did you mean 'nil'?` | `let x string? = null` — replace `null` with `nil`. Also fires for `Foo(null)` where `Foo` takes `T?`, `x == null`, and inside lambda bodies. Does not fire when `null` resolves to a real symbol in scope. |
+
 ## If-expression diagnostics (GS0276–GS0277)
 
 See [ADR-0064](adr/0064-if-expression-and-block-expression.md). `if` used as a value-producing expression (`let x = if cond { a } else { b }`) requires both branches to produce a value of a common type. The diagnostics below guard the two binder rejection paths that are unique to the expression form; the branch-type-mismatch case reuses GS0263 (shared with the ADR-0062 ternary).

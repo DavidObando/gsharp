@@ -657,4 +657,32 @@ Cause/fix:
   be deferred — but note this is a one-release grace period; the `=`
   branch is removed in a later release.
 
+## `null` identifier "did you mean nil?" diagnostic (GS0273)
+
+ADR-0081 (issue #721) pins the contract for the C# spelling `null` used
+in a G# source where the canonical null literal is `nil` (ADR-0001).
+`null` is **not** a keyword in G# — it parses as an ordinary identifier
+and resolves through normal symbol lookup. When the identifier `null`
+is used in a value-expression position and no symbol named `null` is
+in scope, the binder emits `GS0273` and recovers by treating the
+identifier as `nil` so target-type contexts (e.g.
+`let x string? = null`, `Foo(null)` where `Foo` takes `T?`, or
+`x == null`) continue to typecheck without cascading errors.
+
+| ID | Severity | Message |
+|----|----------|---------|
+| GS0273 | Error | `'null' is not a literal in G#. Did you mean 'nil'?` |
+
+Cause/fix:
+
+- **GS0273** — `let x string? = null`, `Foo(null)` where `Foo` takes
+  `T?`, `x == null`. Replace `null` with `nil` (`let x string? = nil`,
+  `Foo(nil)`, `x == nil`). The diagnostic is anchored at the `null`
+  token. GS0273 does **not** fire when a symbol named `null` is in
+  scope — `let null = "hi"; let s = null` and
+  `func null() int32 { return 42 }; let v = null()` both resolve
+  normally with no diagnostic. See
+  [ADR-0081](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0081-null-identifier-did-you-mean-nil.md)
+  for the full rule, scope, and recovery rationale.
+
 

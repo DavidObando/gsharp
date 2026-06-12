@@ -158,4 +158,8 @@ Console.WriteLine(counts["gsharp"])
 
 A composite literal with no fields uses the zero value for each field. A `var` declaration with an explicit type and no initializer also starts at the type's zero value: `0` for numeric types, `False` for `bool`, empty for `string`, and `nil` for nullable values.
 
+## A note on `nil` vs `null`
+
+The null literal in G# is spelled `nil`, not `null`. Coming from C#, Kotlin, Java, or TypeScript? Your fingers will reach for `null` — and the compiler will catch it for you. Typing `null` in a value position reports `GS0273` ("`'null'` is not a literal in G#. Did you mean `'nil'`?") and the binder treats it as `nil` so the rest of the expression still typechecks. The diagnostic only fires when nothing in scope is named `null`; the identifier itself is not a keyword, so a function or local named `null` is legal and resolves normally. See [ADR-0081](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0081-null-identifier-did-you-mean-nil.md).
+
 Next: [Tour: Control flow](/docs/tour/control-flow).

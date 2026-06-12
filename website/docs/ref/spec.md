@@ -114,7 +114,7 @@ Malformed interpolation is reported by dedicated diagnostics: `GS0220` (non-cons
 
 ### Boolean and nil literals
 
-`true` and `false` are boolean literals. `nil` is the null literal. `null` is not a keyword or literal in G#.
+`true` and `false` are boolean literals. `nil` is the null literal. `null` is not a keyword or literal in G#. When the identifier `null` appears in a value-expression position and no symbol named `null` exists in scope, the binder reports `GS0273` ("`'null'` is not a literal in G#. Did you mean `'nil'`?") and recovers by treating the identifier as `nil`, so target-type contexts continue to typecheck (ADR-0081). Declarations may legally name a symbol `null` (e.g. `func null() { ... }` or `let null = "hi"`); identifier resolution wins over the recovery in that case.
 
 ## Constants and variables
 
