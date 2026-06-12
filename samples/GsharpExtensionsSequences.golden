@@ -1,0 +1,70 @@
+Range:
+10
+11
+12
+13
+14
+RangeStep:
+0
+3
+6
+9
+Iterate (Take 5):
+1
+2
+4
+8
+16
+Repeat (Take 3):
+x
+x
+x
+Of:
+a
+b
+c
+Empty.Any: False
+Indexed:
+0->1
+1->2
+2->3
+3->4
+4->5
+5->6
+Windowed(3):
+1,2,3
+2,3,4
+3,4,5
+4,5,6
+Chunked(2):
+1,2
+3,4
+5,6
+Pairwise:
+1/2
+2/3
+3/4
+4/5
+5/6
+Interleave:
+2
+1
+4
+3
+6
+5
+8
+7
+9
+FirstOrNil(names): alpha
+FirstOrNil(empty): <none>
+LastOrNil(names): beta
+SingleOrNil(one): solo
+SingleOrNil(many): <none>
+FirstValueOrNil: 11
+LastValueOrNil: 33
+SingleValueOrNil(one): 42
+SingleValueOrNil(many): -1
+ToSlice length: 4
+ToMap(pairs)[two]: 2
+ToMap(words)[a]: 5

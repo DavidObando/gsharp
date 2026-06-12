@@ -185,12 +185,15 @@ public sealed class ReferenceResolver : IDisposable
         // not enumerate (typical when a user DLL pulls in extra BCL pieces).
         var resolverPaths = new List<string>(paths);
         var hostPaths = GetHostTrustedPlatformAssemblies();
-        var pathSet = new HashSet<string>(paths.Select(p => Path.GetFileName(p)), StringComparer.OrdinalIgnoreCase);
+        var userPathFileNames = new HashSet<string>(paths.Select(p => Path.GetFileName(p)), StringComparer.OrdinalIgnoreCase);
+        var fallbackHostPaths = new List<string>();
+        var seenResolverFile = new HashSet<string>(userPathFileNames, StringComparer.OrdinalIgnoreCase);
         foreach (var host in hostPaths)
         {
-            if (pathSet.Add(Path.GetFileName(host)))
+            if (seenResolverFile.Add(Path.GetFileName(host)))
             {
                 resolverPaths.Add(host);
+                fallbackHostPaths.Add(host);
             }
         }
 
@@ -214,6 +217,48 @@ public sealed class ReferenceResolver : IDisposable
             }
             catch (BadImageFormatException)
             {
+            }
+        }
+
+        // ADR-0084 follow-on (issue #724). The user-supplied references
+        // frequently sit on top of the BCL — Gsharp.Extensions.dll, for
+        // example, surfaces helpers that take System.String / IEnumerable[T]
+        // arguments. The host fallback paths are already in the MLC's
+        // resolver closure; load the BCL/runtime subset of them into the
+        // user-visible `loaded` set as well so that
+        // ReferenceResolver.TryResolveType("System.String") finds the MLC
+        // copy and not the host's copy (the latter would cross-context
+        // mismatch later in member binding). The filter intentionally
+        // excludes non-runtime host assemblies (test runners, user libraries
+        // the host pulled in) to keep `loaded` to the user-meaningful
+        // surface. The augmentation is *only* applied when the user
+        // references include at least one non-BCL/runtime path: callers that
+        // pass only raw BCL (e.g. integration tests pinning a single
+        // System.Private.CoreLib) get exactly the surface they asked for.
+        var userHasNonBcl = paths.Any(p => !IsBclOrRuntimeAssemblyPath(p));
+        if (userHasNonBcl)
+        {
+            foreach (var host in fallbackHostPaths)
+            {
+                if (!IsBclOrRuntimeAssemblyPath(host))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var asm = mlc.LoadFromAssemblyPath(host);
+                    if (asm != null && seen.Add(asm.GetName().FullName))
+                    {
+                        builder.Add(asm);
+                    }
+                }
+                catch (FileNotFoundException)
+                {
+                }
+                catch (BadImageFormatException)
+                {
+                }
             }
         }
 
@@ -563,6 +608,40 @@ public sealed class ReferenceResolver : IDisposable
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when the host assembly path looks like a
+    /// .NET BCL / runtime assembly the user is likely to expect transitively
+    /// when they pass a single user reference (e.g. <c>System.Runtime</c>,
+    /// <c>System.Collections</c>, <c>Microsoft.CSharp</c>, <c>mscorlib</c>,
+    /// <c>netstandard</c>). Non-runtime host assemblies (test runners, user
+    /// libraries already loaded into the host's AppDomain) are excluded so
+    /// the user-visible reference set in <see cref="WithReferences(IEnumerable{string})"/>
+    /// stays scoped to the surface the user actually opted into.
+    /// </summary>
+    /// <param name="hostPath">Absolute path to a host TPA entry.</param>
+    /// <returns><see langword="true"/> when the path's file-name simple name
+    /// matches a known BCL / runtime prefix.</returns>
+    private static bool IsBclOrRuntimeAssemblyPath(string hostPath)
+    {
+        if (string.IsNullOrEmpty(hostPath))
+        {
+            return false;
+        }
+
+        var simple = Path.GetFileNameWithoutExtension(hostPath);
+        if (string.IsNullOrEmpty(simple))
+        {
+            return false;
+        }
+
+        return simple.StartsWith("System.", StringComparison.OrdinalIgnoreCase)
+            || simple.Equals("System", StringComparison.OrdinalIgnoreCase)
+            || simple.StartsWith("Microsoft.", StringComparison.OrdinalIgnoreCase)
+            || simple.Equals("mscorlib", StringComparison.OrdinalIgnoreCase)
+            || simple.Equals("netstandard", StringComparison.OrdinalIgnoreCase)
+            || simple.Equals("WindowsBase", StringComparison.OrdinalIgnoreCase);
     }
 
     private static IEnumerable<string> GetHostTrustedPlatformAssemblies()

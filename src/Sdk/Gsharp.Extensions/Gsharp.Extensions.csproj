@@ -33,6 +33,13 @@
          the on-disk file is Gsharp.Extensions.dll as documented in ADR-0082.
          Likewise force the XML doc file under the canonical assembly name. -->
     <DocumentationFile>$(OutputPath)/$(AssemblyName).xml</DocumentationFile>
+
+    <!-- ADR-0084 / issue #724. The Optional helpers in
+         Gsharp.Extensions.Optional are typed against `T?` on both
+         reference- and value-type receivers. Opt this assembly into the
+         nullable-annotation context so the `T?` spelling resolves and so
+         the surface accurately advertises which slots accept nil. -->
+    <Nullable>enable</Nullable>
   </PropertyGroup>
 
 </Project>
