@@ -540,6 +540,16 @@ See [ADR-0079](adr/0079-restrict-receiver-clauses-to-non-owned-types.md). The Go
 
 GS0314 is a soft warning during a one-release grace period; a future ADR may escalate it to an error. Suppress per-project via `<NoWarn>GS0314</NoWarn>` if migration must be deferred.
 
+## Named-argument `=` separator deprecation (GS0315)
+
+See [ADR-0080](adr/0080-deprecate-equals-named-arguments.md). Named arguments in call argument lists and attribute argument lists are canonically written `name: value` (issue #343). The pre-existing `name = value` shape — kept for back-compat by ADR-0032 (`.copy(field = value)`) and ADR-0047 (attribute named arguments) — emits a one-release deprecation warning before being removed.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0315 | Warning | `Named argument '<name>' uses the deprecated '=' separator; use '<name>: value' instead (ADR-0080).` | `Foo(timeout = 30)` — rewrite as `Foo(timeout: 30)`. Same migration for `.copy(x = 10)` → `.copy(x: 10)` and `@AttributeUsage(All, AllowMultiple = true)` → `@AttributeUsage(All, AllowMultiple: true)`. |
+
+GS0315 fires once per offending `=` separator, with the diagnostic location covering the `=` token itself. The parser continues to accept the `=` form so the resulting `NamedArgumentExpressionSyntax` binds and emits exactly as before; only the diagnostic is new. Plain assignment expressions (`x = 1`), parameter default values (`func f(x int32 = 0)`), and `with`-expression field initializers (`p with { x = 10 }`) parse on separate paths and are unaffected. A future ADR/issue (filed under parent #706) will escalate the warning to an error and remove the `=` branch from `ParseArgumentsCore`.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

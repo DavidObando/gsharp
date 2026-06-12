@@ -94,7 +94,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Feature | Emit (`gsc`) | Interpreter | Notes |
 | --- | --- | --- | --- |
 | Calls and generic calls | Supported | Supported | Bracketed type arguments. |
-| Named arguments | Supported | Supported | `Foo(timeout: 30, retries: 3)` for free functions, user methods/constructors, extension functions, and inherited CLR methods (including delegate `Invoke`). Indirect calls through a function-typed variable and variadic targets are excluded. Diagnostics `GS0244`–`GS0247`. |
+| Named arguments | Supported | Supported | `Foo(timeout: 30, retries: 3)` for free functions, user methods/constructors, extension functions, and inherited CLR methods (including delegate `Invoke`). The legacy `Foo(timeout = 30)` shape is deprecated and emits `GS0315` ([ADR-0080](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0080-deprecate-equals-named-arguments.md), issue #720); both spellings still parse for one release. Indirect calls through a function-typed variable and variadic targets are excluded. Diagnostics `GS0244`–`GS0247`, `GS0315`. |
 | Conditional (`?:`) ternary expression | Supported | Supported | Generalized in ADR-0062; `cond ? a : b` is a normal expression. `GS0263` covers the "no common type" failure. |
 | Conditional ref-arguments (`ref cond ? a : b`) | Supported | Supported | ADR-0061. Branches must produce same-typed lvalues. Diagnostics `GS0260`–`GS0262`. |
 | Struct, array, and map literals | Supported | Supported | Map literals bind to `Dictionary[K,V]` backing. |

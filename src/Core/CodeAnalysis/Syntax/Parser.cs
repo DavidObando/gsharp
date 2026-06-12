@@ -6255,9 +6255,18 @@ public class Parser
                 // Issue #343: a call-site named argument uses `name: value`.
                 // The pre-existing `name = value` form remains accepted for
                 // back-compat (used by `.copy(...)` sugar and attribute args).
-                var separator = Current.Kind == SyntaxKind.ColonToken
-                    ? MatchToken(SyntaxKind.ColonToken)
-                    : MatchToken(SyntaxKind.EqualsToken);
+                // ADR-0080 / issue #720: the `=` form is deprecated and emits
+                // a one-release warning (GS0315) before removal.
+                SyntaxToken separator;
+                if (Current.Kind == SyntaxKind.ColonToken)
+                {
+                    separator = MatchToken(SyntaxKind.ColonToken);
+                }
+                else
+                {
+                    separator = MatchToken(SyntaxKind.EqualsToken);
+                    Diagnostics.ReportNamedArgumentEqualsSeparatorDeprecated(separator.Location, name.Text);
+                }
 
                 // ADR-0060: a named argument may carry a ref-kind modifier in
                 // its value position (e.g. `name = ref x`). V1 rejects this

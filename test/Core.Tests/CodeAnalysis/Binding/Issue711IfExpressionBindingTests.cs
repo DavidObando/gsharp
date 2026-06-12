@@ -207,7 +207,7 @@ Pick(true)
 import System
 func Run(b bool) int32 {
     let x = if b {
-        throw Exception(message = ""bad"")
+        throw Exception(message: ""bad"")
         0
     } else {
         1

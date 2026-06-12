@@ -107,6 +107,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0060](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0060-ref-out-in-parameters.md) | `ref`/`out`/`in` parameters | Declaration-site and call-site ref-kind modifiers with diagnostics `GS0235`–`GS0243`; ref-aliasing locals (`let ref`/`var ref`) and ref returns are follow-ups (`GS0248`–`GS0258`). |
 | [0061](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0061-conditional-ref-arguments.md) | Conditional ref-arguments | Narrow `ref cond ? a : b` form inside ref-kind argument payloads; diagnostics `GS0259`–`GS0262`. |
 | [0063](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0063-method-overloading-and-optional-parameters.md) | Method overloading and optional parameters | Lifts the v0 "one declaration per name" rule and adds default parameter values; diagnostics `GS0264`–`GS0267`. |
+| [0080](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0080-deprecate-equals-named-arguments.md) | Deprecate `name = value` named-argument spelling (warning) | Reserves `name: value` as the canonical call-site and attribute named-argument separator (issue #343); the legacy `=` spelling kept for back-compat by ADR-0032 / ADR-0047 emits the soft `GS0315` warning before removal. |
 
 ## Emit and tooling
 
