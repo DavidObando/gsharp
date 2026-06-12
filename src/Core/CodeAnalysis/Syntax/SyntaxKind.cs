@@ -64,6 +64,11 @@ public enum SyntaxKind
     QuestionDotToken,
     QuestionColonToken,
     QuestionQuestionEqualsToken,
+
+    // ADR-0073 / issue #710: prefix token for `a?[i]` null-conditional indexing.
+    // Only produced when `?` is immediately followed by `[` with no intervening
+    // trivia, so a true ternary `cond ? [arr] : [arr]` is left undisturbed.
+    QuestionOpenBracketToken,
     LessToken,
     LessOrEqualsToken,
     LeftArrowToken,

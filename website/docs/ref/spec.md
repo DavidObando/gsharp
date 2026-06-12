@@ -31,7 +31,7 @@ The lexer produces identifiers, reserved keywords, literal tokens, punctuation a
 ```text
 +  +=  ++  -  -=  --  *  *=  /  /=  %  %=  (  )  [  ]  {  }
 :  :=  ;  ,  .  ...  ^  ^=  &  &&  &=  &^  &^=  |  |=  ||
-=  ==  !  !=  !!  ?  ?.  ?:  ??=  <  <=  <-  ->  <<  <<=  >  >=  >>  >>=  @
+=  ==  !  !=  !!  ?  ?.  ?[  ?:  ??=  <  <=  <-  ->  <<  <<=  >  >=  >>  >>=  @
 ```
 
 ### Identifiers
@@ -372,7 +372,7 @@ The conditional expression `cond ? whenTrue : whenFalse` (ADR-0062) requires `co
 
 `expr is T` evaluates to `bool` — `true` when the runtime type of `expr` is assignable to `T`, `false` otherwise (including when `expr` is `nil`). `expr as T` performs a safe downcast: it returns the value typed as `T` when the cast succeeds, or `nil` when it fails. For reference types the result type is `T`; for value types, the target must be written as the nullable form `T?` (e.g. `x as int32?`) and the result type is `T?`. Using `as` with a non-nullable value type target produces diagnostic `GS0269`. Both operators use the CLR `isinst` instruction and sit at precedence level 4 (same as equality and comparison), so `x is String == true` and `a is T && b is U` parse as expected without extra parentheses. The existing pattern-level `identifier is Type` syntax inside `switch`/`case` arms is unaffected.
 
-Postfix `!!`, member access `.`, null-conditional access `?.`, indexing, calls, and generic instantiation are parsed greedily on primary expressions. This applies to **any** primary, including a parenthesized expression — for example `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The sole exception is a bare numeric literal: `42.Member` is not accepted because it is ambiguous with float-literal lexing; wrap it as `(42).Member` instead (see ADR-0054).
+Postfix `!!`, member access `.`, null-conditional access `?.`, null-conditional indexing `?[`, indexing, calls, and generic instantiation are parsed greedily on primary expressions. This applies to **any** primary, including a parenthesized expression — for example `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The sole exception is a bare numeric literal: `42.Member` is not accepted because it is ambiguous with float-literal lexing; wrap it as `(42).Member` instead (see ADR-0054).
 
 ### Primary expressions and calls
 
@@ -393,7 +393,7 @@ TrailingLambda  = FunctionLiteral .
 
 ### Accessor chains
 
-Member access and indexing chain after primaries. `a.b`, `a?.b`, `a[i]`, `a.b(c)`, and generic call access forms are valid where the binder can resolve the target. Chains also apply to parenthesized and literal receivers — `(a + b).GetType()`, `(nums)[0]`, `("s").Length`, and `switch v { … }.ToString()` — with one exception: a bare numeric literal does not chain (`42.Member` is unsupported; write `(42).Member`). Assignment permits identifiers, indexed targets, field/property targets, and event `+=` or `-=` on accessors.
+Member access and indexing chain after primaries. `a.b`, `a?.b`, `a[i]`, `a?[i]`, `a.b(c)`, and generic call access forms are valid where the binder can resolve the target. Chains also apply to parenthesized and literal receivers — `(a + b).GetType()`, `(nums)[0]`, `("s").Length`, and `switch v { … }.ToString()` — with one exception: a bare numeric literal does not chain (`42.Member` is unsupported; write `(42).Member`). Assignment permits identifiers, indexed targets, field/property targets, and event `+=` or `-=` on accessors. Null-conditional forms (`?.`, `?[]`) are not allowed on the left-hand side of an assignment (see ADR-0073, diagnostic GS0301).
 
 ### Composite literals
 
@@ -425,7 +425,7 @@ Assignment        = identifier "=" Assignment
                   | BinaryExpression .
 BinaryExpression  = PrefixExpression { BinaryOperator PrefixExpression } .
 PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" ) PrefixExpression | PostfixExpression .
-PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | "[" Expression "]" } ( "with" "{" FieldEqualsList? "}" )? .
+PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) Expression "]" } ( "with" "{" FieldEqualsList? "}" )? .
 PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | SwitchExpr | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
 (* Postfix chains apply to every PrimaryExpression except a bare numeric Literal: `42.Member` is not accepted; use `(42).Member`. See ADR-0054. *)
 Literal           = Number | String | InterpolatedString | "true" | "false" | "nil" | char .
@@ -807,7 +807,7 @@ Assignment        ::= identifier '=' Assignment
                     | BinaryExpression
 BinaryExpression  ::= PrefixExpression (BinaryOperator PrefixExpression)*
 PrefixExpression  ::= ('+' | '-' | '!' | '^' | '*' | '&' | '<-' | 'await') PrefixExpression | PostfixExpression
-PostfixExpression ::= PrimaryExpression '!!'* (('.' | '?.') NameOrCall | '[' Expression ']')* ('with' '{' FieldEqualsList? '}')?
+PostfixExpression ::= PrimaryExpression '!!'* (('.' | '?.') NameOrCall | ('[' | '?[') Expression ']')* ('with' '{' FieldEqualsList? '}')?
 PrimaryExpression ::= Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | SwitchExpr | '(' Expression ')' | TupleLiteral | MakeChannel | TypeOf | NameOf
 Literal           ::= Number | String | InterpolatedString | 'true' | 'false' | 'nil' | char
 InterpolatedString ::= '"' ( InterpolationText | '$$' | '$' identifier | InterpolationHole )* '"'

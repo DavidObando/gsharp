@@ -882,6 +882,13 @@ internal sealed partial class MethodBodyEmitter
             // nil branch must materialize `default(Nullable<T>)` and the
             // not-null branch must wrap T via `Nullable<T>::.ctor(!0)`
             // so both branches leave the same Nullable<T> stack shape.
+            //
+            // ADR-0073 / issue #710: when WhenNotNull is itself already a
+            // Nullable<T> (e.g. inner `?[]`/`?.` produced a lifted value),
+            // we must NOT re-wrap with another `newobj Nullable<T>::.ctor`
+            // — both branches just need to leave a Nullable<T> on the
+            // stack. The nil branch still uses the slot to materialize
+            // `default(Nullable<T>)`.
             var slot = this.locals[nc.ResultSlot];
             var nullableType = (NullableTypeSymbol)nc.Type;
             var innerClr = nullableType.UnderlyingType.ClrType
@@ -906,14 +913,18 @@ internal sealed partial class MethodBodyEmitter
             this.il.LoadLocal(slot);
             this.il.Branch(ILOpCode.Br, end);
 
-            // not-null branch: produce T, then newobj Nullable<T>::.ctor(!0)
+            // not-null branch: produce T (then wrap), or — when WhenNotNull
+            // already produces Nullable<T> — emit it directly.
             this.il.MarkLabel(nonNull);
             this.EmitExpression(nc.WhenNotNull);
-            var ctor = nullableClr.GetConstructor(new[] { nullableInnerArg })
-                ?? throw new InvalidOperationException(
-                    $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
-            this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetCtorReference(ctor));
+            if (nc.WhenNotNull.Type is not NullableTypeSymbol)
+            {
+                var ctor = nullableClr.GetConstructor(new[] { nullableInnerArg })
+                    ?? throw new InvalidOperationException(
+                        $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(this.outer.GetCtorReference(ctor));
+            }
 
             this.il.MarkLabel(end);
             return;

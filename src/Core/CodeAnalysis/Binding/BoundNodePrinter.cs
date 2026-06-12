@@ -1418,6 +1418,40 @@ public static class BoundNodePrinter
     private static void WriteNullConditionalAccessExpression(BoundNullConditionalAccessExpression node, IndentedTextWriter writer)
     {
         node.Receiver.WriteTo(writer);
+
+        // ADR-0073 / issue #710: when the inner access is a `?[i]` (or
+        // `?[i]` over a CLR indexer), print using the `?[...]` punctuation
+        // rather than `?.<index-expr>` for syntactic fidelity.
+        if (node.WhenNotNull is BoundIndexExpression idx
+            && idx.Target is BoundVariableExpression idxRecv
+            && ReferenceEquals(idxRecv.Variable, node.Capture))
+        {
+            writer.WritePunctuation(SyntaxKind.QuestionOpenBracketToken);
+            idx.Index.WriteTo(writer);
+            writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
+            return;
+        }
+
+        if (node.WhenNotNull is BoundClrIndexExpression clrIdx
+            && clrIdx.Target is BoundVariableExpression clrIdxRecv
+            && ReferenceEquals(clrIdxRecv.Variable, node.Capture))
+        {
+            writer.WritePunctuation(SyntaxKind.QuestionOpenBracketToken);
+            for (var i = 0; i < clrIdx.Arguments.Length; i++)
+            {
+                if (i > 0)
+                {
+                    writer.WritePunctuation(SyntaxKind.CommaToken);
+                    writer.WriteSpace();
+                }
+
+                clrIdx.Arguments[i].WriteTo(writer);
+            }
+
+            writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
+            return;
+        }
+
         writer.WritePunctuation(SyntaxKind.QuestionDotToken);
         node.WhenNotNull.WriteTo(writer);
     }

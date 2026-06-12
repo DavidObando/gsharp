@@ -14,7 +14,9 @@ Unary operators include numeric identity and negation, logical not, bitwise comp
 
 ## Calls, access, and literals
 
-Calls use parentheses. Generic calls use bracketed type arguments. Member access uses `.`, null-conditional access uses `?.`, and indexing uses brackets. These postfix operators chain after any primary expression, including a parenthesized one — `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The one exception is a bare numeric literal: write `(42).ToString()` rather than `42.ToString()`, which is ambiguous with float-literal lexing (see [ADR-0054](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0054-postfix-member-access-on-primary-expressions.md)). Struct literals use field labels; data structs can be copied with `with` updates.
+Calls use parentheses. Generic calls use bracketed type arguments. Member access uses `.`, null-conditional access uses `?.`, indexing uses brackets, and null-conditional indexing uses `?[` (ADR-0073). These postfix operators chain after any primary expression, including a parenthesized one — `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The one exception is a bare numeric literal: write `(42).ToString()` rather than `42.ToString()`, which is ambiguous with float-literal lexing (see [ADR-0054](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0054-postfix-member-access-on-primary-expressions.md)). Struct literals use field labels; data structs can be copied with `with` updates.
+
+`a?[i]` evaluates the receiver `a` exactly once; when it is `nil` the whole expression yields `nil` and the index is not evaluated, otherwise the result is the indexed value lifted to the nullable form of the indexer's return type. Chained forms (`h?.Data?[i]?.Length`) short-circuit on the first nil receiver. Null-conditional forms (`?.`, `?[]`) are not allowed on the left-hand side of an assignment (diagnostic GS0301).
 
 Arguments may be positional, named (`f(timeout: 30, retries: 3)`), or ref-kind-prefixed (`f(ref x)`, `f(out var n)`, `f(in z)`). Named arguments work for free functions, user methods, user constructors, extension functions, and inherited CLR methods (including delegate `Invoke`); indirect calls through a function-typed variable and variadic call sites do not accept names. Ref-kind modifiers must match the parameter declaration (`GS0235`); passing a value to an `in` parameter requires an explicit `in` at the call site (`GS0242`).
 
@@ -22,6 +24,7 @@ Arguments may be positional, named (`f(timeout: 30, retries: 3)`), or ref-kind-p
 let p = Point{X: 3, Y: 4}
 let q = p with { X = 10 }
 let value = maybePoint?.X ?: 0
+let first = matrix?[0]?[0] ?: -1
 let kind = (p.X + p.Y).GetType()
 ```
 

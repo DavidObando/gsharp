@@ -4144,10 +4144,13 @@ public class Parser
         }
     }
 
-    // ADR-0054: chains postfix member access (`.` / `?.`) and indexing (`[]`)
-    // onto an already-parsed primary expression. Used by both the name/call path
-    // and the other primary-expression cases so accessors work uniformly on
-    // parenthesized expressions, literals, and other primaries.
+    // ADR-0054: chains postfix member access (`.` / `?.`) and indexing
+    // (`[]` / `?[]`) onto an already-parsed primary expression. Used by both
+    // the name/call path and the other primary-expression cases so accessors
+    // work uniformly on parenthesized expressions, literals, and other primaries.
+    // ADR-0073 / issue #710: the `?[` token is the prefix of a null-conditional
+    // index access and is treated symmetrically to `[`, with the resulting
+    // IndexExpressionSyntax carrying IsNullConditional = true.
     private ExpressionSyntax ParsePostfixChain(ExpressionSyntax current)
     {
         while (true)
@@ -4158,9 +4161,10 @@ public class Parser
                 var rightSide = ParseNameOrCallExpression();
                 current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
             }
-            else if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+            else if (Current.Kind == SyntaxKind.OpenSquareBracketToken
+                || Current.Kind == SyntaxKind.QuestionOpenBracketToken)
             {
-                var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+                var openBracket = NextToken();
 
                 // Issue #522: an indexer is a fresh inner expression context.
                 var savedSuppress = suppressTrailingObjectInitializer;

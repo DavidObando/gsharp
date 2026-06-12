@@ -357,6 +357,8 @@ public static class SyntaxFacts
                 return "?:";
             case SyntaxKind.QuestionQuestionEqualsToken:
                 return "??=";
+            case SyntaxKind.QuestionOpenBracketToken:
+                return "?[";
             case SyntaxKind.LessToken:
                 return "<";
             case SyntaxKind.LessOrEqualsToken:
