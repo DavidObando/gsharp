@@ -43,8 +43,12 @@ public sealed class FunctionTypeSymbol : TypeSymbol
     /// <returns>A cached <see cref="FunctionTypeSymbol"/>.</returns>
     public static FunctionTypeSymbol Get(ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
     {
+        // ADR-0075 / issue #715: the canonical display form of a function type
+        // is the arrow shape `(T1, T2, ...) -> R` (Kotlin/Swift style), to
+        // match the canonical source spelling. A void-returning function is
+        // displayed as `(T1, ...) -> void`.
         var sb = new System.Text.StringBuilder();
-        sb.Append("func(");
+        sb.Append('(');
         for (var i = 0; i < parameterTypes.Length; i++)
         {
             if (i > 0)
@@ -55,16 +59,19 @@ public sealed class FunctionTypeSymbol : TypeSymbol
             sb.Append(parameterTypes[i].Name);
         }
 
-        sb.Append(')');
+        sb.Append(") -> ");
         if (returnType != null && returnType != TypeSymbol.Void)
         {
-            sb.Append(' ');
             sb.Append(returnType.Name);
+        }
+        else
+        {
+            sb.Append("void");
         }
 
         var name = sb.ToString();
 
-        // The display name uses the type-parameter *names* (e.g. "func(T) U"),
+        // The display name uses the type-parameter *names* (e.g. "(T) -> U"),
         // but two distinct generic declarations can reuse the same letters for
         // different type parameters. Caching purely by name would alias them
         // and break substitution/inference, which compare TypeParameterSymbol
@@ -73,7 +80,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
         // same symbol instances, while concrete delegate types (keyed by their
         // stable type names) stay shared across the whole program.
         var keyBuilder = new System.Text.StringBuilder();
-        keyBuilder.Append("func(");
+        keyBuilder.Append('(');
         for (var i = 0; i < parameterTypes.Length; i++)
         {
             if (i > 0)
@@ -84,7 +91,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
             AppendIdentityKey(keyBuilder, parameterTypes[i]);
         }
 
-        keyBuilder.Append(')');
+        keyBuilder.Append(")->");
         AppendIdentityKey(keyBuilder, returnType ?? TypeSymbol.Void);
 
         var cacheKey = keyBuilder.ToString();
@@ -101,7 +108,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 builder.Append("!tp").Append(id);
                 break;
             case FunctionTypeSymbol fn:
-                builder.Append("func(");
+                builder.Append('(');
                 for (var i = 0; i < fn.ParameterTypes.Length; i++)
                 {
                     if (i > 0)
@@ -112,7 +119,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                     AppendIdentityKey(builder, fn.ParameterTypes[i]);
                 }
 
-                builder.Append(')');
+                builder.Append(")->");
                 AppendIdentityKey(builder, fn.ReturnType);
                 break;
             default:

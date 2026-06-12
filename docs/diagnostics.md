@@ -84,7 +84,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0132 | Error | `await` outside an `async func`. | `await someTask` in a regular (non-async) function. |
 | GS0133 | Error | Expression is not awaitable. | `await 42` — `int` is not a `Task` or `Task[T]`. |
 | GS0134 | Error | Expression is not async-enumerable. | `await for x in 42` — `int` does not implement `IAsyncEnumerable[T]`. |
-| GS0135 | Error | `async` modifier in a type clause is only valid before `sequence[T]` or `func(...)`. | `async int` in a type position. |
+| GS0135 | Error | `async` modifier in a type clause is only valid before `sequence[T]`, `(T) -> R`, or `func(...)`. | `async int` in a type position. |
 | GS0136 | Error | `yield` outside an iterator function. | `yield return 1` in a function that returns `int`, not `sequence[int]`. |
 | GS0137 | Error | `go` operand is not a call expression. | `go x + 1` — only function calls may follow `go`. |
 | GS0138 | Error | `defer` operand is not a call expression. | `defer x + 1`. |
@@ -491,6 +491,24 @@ See ADR-0072. `??=` (`a ??= b`) writes `b` into `a` only when the current value 
 | GS0299 | Error | The left-hand side of `??=` must be assignable: a variable, parameter, field, property, or indexer. | `compute() ??= "v"` — the result of a method call is not an lvalue. Store the value first and `??=` into the variable. |
 
 A read-only lvalue (`let x string? = nil; x ??= "v"`) reports the existing `GS0127` for parity with the simple assignment path.
+
+## Arrow lambda and switch-arm `:` diagnostics (GS0302)
+
+See [ADR-0074](adr/0074-arrow-lambda-and-colon-switch-arms.md). The lambda operator is now `->`; switch-expression arms separate pattern from result with `:`. The pre-existing `->` form on switch arms still parses for one release with a warning.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0302 | Warning | `'->' in a switch-expression arm is deprecated; use ':' instead (ADR-0074).` | `case 0 -> "zero"` — rewrite as `case 0: "zero"`. |
+
+## Arrow function-type clause diagnostics (GS0303)
+
+See [ADR-0075](adr/0075-arrow-function-type-clause.md). The canonical function-type clause is `(T1, T2, ...) -> R`; the legacy `func(T) R` spelling continues to parse for one release with a warning.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0303 | Warning | `'func(...)' function-type clauses are deprecated; use '(T) -> R' instead (ADR-0075).` | `var f func(int32) int32 = …` — rewrite as `var f (int32) -> int32 = …`. Async variant: `async func(T) R` → `async (T) -> R`. |
+
+GS0303 fires once per occurrence of the legacy `func` keyword in a *type-clause* position. It does **not** fire on function *declarations* (`func name(...) R { … }`), function *literals* (`func(...) R { … }` expressions), or `delegate func(...)` named-delegate type declarations — all three keep `func`.
 
 ## Internal compiler error diagnostics (GS9998–GS9999)
 

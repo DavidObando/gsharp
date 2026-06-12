@@ -502,7 +502,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="actualKind">The kind of the token actually following <c>async</c>.</param>
     public void ReportAsyncModifierInTypeClauseRequiresSequenceOrFunc(TextLocation location, SyntaxKind actualKind)
     {
-        var message = $"The 'async' modifier in a type clause is only valid before 'sequence[T]' or 'func(...)'; found '<{actualKind}>'.";
+        var message = $"The 'async' modifier in a type clause is only valid before 'sequence[T]', '(T) -> R', or 'func(...)'; found '<{actualKind}>'.";
         Report(location, "GS0135", message);
     }
 
@@ -2554,6 +2554,19 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportSwitchExpressionArmArrowDeprecated(TextLocation location)
     {
         Report(location, "GS0302", "'->' in a switch-expression arm is deprecated; use ':' instead (ADR-0074).", DiagnosticSeverity.Warning);
+    }
+
+    /// <summary>
+    /// ADR-0075 / issue #715: GS0303 (warning) — a type-clause slot used the
+    /// legacy <c>func(T1, T2, ...) R</c> spelling. The canonical form is the
+    /// arrow function type <c>(T1, T2, ...) -&gt; R</c> (Kotlin/Swift style).
+    /// Both forms are accepted for one release; the legacy form is removed in
+    /// a later release.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>func</c> keyword.</param>
+    public void ReportFunctionTypeClauseFuncKeywordDeprecated(TextLocation location)
+    {
+        Report(location, "GS0303", "'func(...)' as a type clause is deprecated; use the arrow form '(...) -> R' instead (ADR-0075).", DiagnosticSeverity.Warning);
     }
 
     private static string FormatMissingNames(IEnumerable<string> missingNames)

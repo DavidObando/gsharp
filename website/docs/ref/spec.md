@@ -206,7 +206,7 @@ Console.WriteLine(d)
 
 ### Function types
 
-Function types are written `func(T1, T2) R` or `func(T1, T2)` for no result. Async function type clauses are written `async func(T) R`; they represent functions returning `Task<R>` or `Task` for no result. G# function values can convert to compatible CLR delegate types.
+Function types are written `(T1, T2) -> R` (ADR-0075) — fully-parenthesized parameter type list, a single `->` arrow, then a return type clause. A void-returning function uses `void` as the return type: `(T1, T2) -> void`. Multi-return shapes use a tuple return type: `() -> (T1, T2)`. Async function type clauses are written `async (T) -> R`; they represent functions returning `Task<R>` or `Task` for no result. G# function values can convert to compatible CLR delegate types. The legacy `func(T1, T2) R` and `async func(T) R` type-clause spellings continue to parse for one release; each occurrence emits a `GS0303` deprecation warning.
 
 ### Structs, classes, records, and inline value classes
 
@@ -261,15 +261,20 @@ The implementation emits metadata specs for generic types and methods, but open 
 TypeClause = identifier TypeArgList? "?"?
            | "[" number? "]" identifier "?"?
            | "(" TypeClause { "," TypeClause } ")" "?"?
+           | "(" TypeClauseList? ")" "->" TypeClause "?"?
+           | "async" "(" TypeClauseList? ")" "->" TypeClause "?"?
            | "map" "[" TypeClause "]" TypeClause "?"?
            | "chan" TypeClause "?"?
            | "sequence" "[" TypeClause "]" "?"?
            | "async" "sequence" "[" TypeClause "]" "?"?
-           | "func" "(" TypeClauseList? ")" TypeClause? "?"?
-           | "async" "func" "(" TypeClauseList? ")" TypeClause? "?"?
+           | "func" "(" TypeClauseList? ")" TypeClause? "?"?                  (* deprecated, GS0303 *)
+           | "async" "func" "(" TypeClauseList? ")" TypeClause? "?"?          (* deprecated, GS0303 *)
            | "*" TypeClause "?"? .
+TypeClauseList = TypeClause { "," TypeClause } .
 TypeArgList = "[" TypeClause { "," TypeClause } "]" .
 ```
+
+The function-type productions disambiguate against the tuple-type production by bounded look-ahead: in a type-clause slot, an opening `(` is a function-type clause iff the matching `)` is followed by `->`, otherwise it is a tuple-type clause. The arrow form is the canonical spelling per [ADR-0075](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0075-arrow-function-type-clause.md); the legacy `func(T) R` and `async func(T) R` shapes still parse for one release and emit `GS0303`.
 
 Byref/pointer syntax exists as `*T`, unary `&`, and unary `*`. It is primarily an emit/interop feature today; the evaluator rejects the generic address-of and dereference path.
 
@@ -812,12 +817,14 @@ FunctionSignature ::= 'func' identifier '(' Parameters? ')' TypeClause? Block?
 TypeClause        ::= identifier TypeArgList? '?'?
                     | '[' Number? ']' identifier '?'?
                     | '(' TypeClause (',' TypeClause)+ ')' '?'?
+                    | '(' TypeClauseList? ')' '->' TypeClause '?'?
+                    | 'async' '(' TypeClauseList? ')' '->' TypeClause '?'?
                     | 'map' '[' TypeClause ']' TypeClause '?'?
                     | 'chan' TypeClause '?'?
                     | 'sequence' '[' TypeClause ']' '?'?
                     | 'async' 'sequence' '[' TypeClause ']' '?'?
-                    | 'func' '(' TypeClauseList? ')' TypeClause? '?'?
-                    | 'async' 'func' '(' TypeClauseList? ')' TypeClause? '?'?
+                    | 'func' '(' TypeClauseList? ')' TypeClause? '?'?            (* deprecated; GS0303 *)
+                    | 'async' 'func' '(' TypeClauseList? ')' TypeClause? '?'?    (* deprecated; GS0303 *)
                     | '*' TypeClause '?'?
 TypeArgList       ::= '[' TypeClause (',' TypeClause)* ']'
 TypeClauseList    ::= TypeClause (',' TypeClause)*

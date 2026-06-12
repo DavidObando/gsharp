@@ -16,7 +16,7 @@ public class EventParserTests
     [Fact]
     public void ParsesFieldLikeEvent()
     {
-        const string source = "package P\nimport System\ntype Foo class {\n  event Click func(Object, EventArgs)\n}\n";
+        const string source = "package P\nimport System\ntype Foo class {\n  event Click (Object, EventArgs) -> void\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -24,7 +24,7 @@ public class EventParserTests
     [Fact]
     public void ParsesFieldLikeEvent_WithAccessibility()
     {
-        const string source = "package P\nimport System\ntype Foo class {\n  public event Click func(Object, EventArgs)\n}\n";
+        const string source = "package P\nimport System\ntype Foo class {\n  public event Click (Object, EventArgs) -> void\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -32,7 +32,7 @@ public class EventParserTests
     [Fact]
     public void ParsesEvent_WithExplicitAccessors()
     {
-        const string source = "package P\nimport System\ntype Foo class {\n  event Changed func() {\n    add { }\n    remove { }\n  }\n}\n";
+        const string source = "package P\nimport System\ntype Foo class {\n  event Changed () -> void {\n    add { }\n    remove { }\n  }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -40,7 +40,7 @@ public class EventParserTests
     [Fact]
     public void ParsesEvent_OnInterface()
     {
-        const string source = "package P\ntype INotify interface {\n  event Changed func()\n}\n";
+        const string source = "package P\ntype INotify interface {\n  event Changed () -> void\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -48,7 +48,7 @@ public class EventParserTests
     [Fact]
     public void ParsesEvent_WithOpenModifier()
     {
-        const string source = "package P\ntype Base open class {\n  public open event Notify func()\n}\n";
+        const string source = "package P\ntype Base open class {\n  public open event Notify () -> void\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -56,7 +56,7 @@ public class EventParserTests
     [Fact]
     public void ParsesMultipleEvents()
     {
-        const string source = "package P\ntype Foo class {\n  event A func()\n  event B func(int32)\n}\n";
+        const string source = "package P\ntype Foo class {\n  event A () -> void\n  event B (int32) -> void\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -64,7 +64,7 @@ public class EventParserTests
     [Fact]
     public void EventDeclaration_HasCorrectSyntaxKind()
     {
-        const string source = "package P\ntype Foo class {\n  event Click func()\n}\n";
+        const string source = "package P\ntype Foo class {\n  event Click () -> void\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
@@ -77,7 +77,7 @@ public class EventParserTests
     [Fact]
     public void ParsesEvent_WithRaiseAccessor()
     {
-        const string source = "package P\ntype Foo class {\n  event Changed func() {\n    add { }\n    remove { }\n    raise { }\n  }\n}\n";
+        const string source = "package P\ntype Foo class {\n  event Changed () -> void {\n    add { }\n    remove { }\n    raise { }\n  }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
@@ -90,7 +90,7 @@ public class EventParserTests
     [Fact]
     public void ParsesEvent_RaiseAccessorOnly_WithAddRemove()
     {
-        const string source = "package P\ntype Foo class {\n  event Notify func(int32) {\n    add { }\n    remove { }\n    raise { }\n  }\n}\n";
+        const string source = "package P\ntype Foo class {\n  event Notify (int32) -> void {\n    add { }\n    remove { }\n    raise { }\n  }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 

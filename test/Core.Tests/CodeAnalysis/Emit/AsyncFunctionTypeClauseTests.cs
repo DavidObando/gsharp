@@ -223,7 +223,7 @@ func bad(s async int32) {
         Assert.False(result.Success);
         Assert.Contains(
             result.Diagnostics,
-            d => d.Message.Contains("'async' modifier in a type clause is only valid before 'sequence[T]' or 'func(...)'", StringComparison.Ordinal));
+            d => d.Message.Contains("'async' modifier in a type clause is only valid before 'sequence[T]', '(T) -> R', or 'func(...)'", StringComparison.Ordinal));
     }
 
     private static MethodInfo GetProgramMethod(Assembly asm, string name)

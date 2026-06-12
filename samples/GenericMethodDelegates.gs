@@ -1,6 +1,6 @@
 // file: GenericMethodDelegates.gs
 // Issue #312 follow-up: a method (or free) type parameter used as a generic
-// argument of a delegate type — e.g. `func Map[TResult](f func(TItem) TResult)`
+// argument of a delegate type — e.g. `func Map[TResult](f (TItem) -> TResult)`
 // — now binds and emits. The type-erased generic model encodes the open
 // delegate as System.Func<object, object> and invokes it through
 // System.Delegate.DynamicInvoke so value-type arguments and returns round-trip
@@ -15,17 +15,17 @@ import System
 type Box[TItem] class {
     var Value TItem
 
-    func Map[TResult](f func(TItem) TResult) TResult {
+    func Map[TResult](f (TItem) -> TResult) TResult {
         return f(this.Value)
     }
 
-    func Fold[TAcc](seed TAcc, f func(TAcc, TItem) TAcc) TAcc {
+    func Fold[TAcc](seed TAcc, f (TAcc, TItem) -> TAcc) TAcc {
         return f(seed, this.Value)
     }
 }
 
 // A free generic function with a delegate parameter over its type parameters.
-func Apply[T, U](x T, f func(T) U) U {
+func Apply[T, U](x T, f (T) -> U) U {
     return f(x)
 }
 

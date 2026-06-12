@@ -92,7 +92,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0132 | Error | `await` outside an `async func`. | `await someTask` in a regular (non-async) function. |
 | GS0133 | Error | Expression is not awaitable. | `await 42` — `int` is not a `Task` or `Task[T]`. |
 | GS0134 | Error | Expression is not async-enumerable. | `await for x in 42` — `int` does not implement `IAsyncEnumerable[T]`. |
-| GS0135 | Error | `async` modifier in a type clause is only valid before `sequence[T]` or `func(...)`. | `async int` in a type position. |
+| GS0135 | Error | `async` modifier in a type clause is only valid before `sequence[T]`, `(T) -> R`, or `func(...)`. | `async int` in a type position. |
 | GS0136 | Error | `yield` outside an iterator function. | `yield return 1` in a function that returns `int`, not `sequence[int]`. |
 | GS0137 | Error | `go` operand is not a call expression. | `go x + 1` — only function calls may follow `go`. |
 | GS0138 | Error | `defer` operand is not a call expression. | `defer x + 1`. |
@@ -507,4 +507,16 @@ ADR-0074 makes `->` the lambda operator and migrates switch-expression arms to u
 Cause/fix:
 
 - **GS0302** — `let label = switch x { case 0 -> "zero"; default -> "other" }`. Fix: replace each `->` between the pattern and the arm value with `:`, e.g. `case 0: "zero"; default: "other"`. The behaviour is otherwise identical. A future release will remove the legacy form and turn it into a parse error.
+
+## Function-type clause `func(...)` deprecation (GS0303)
+
+ADR-0075 makes `(T1, T2, ...) -> R` the canonical function-type clause spelling — the type spelling now matches the lambda expression form introduced in ADR-0074. The legacy `func(...) R` and `async func(...) R` type-clause spellings remain accepted for one release to ease migration, but every legacy occurrence produces a warning.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0303 | Warning | `func(...)` function-type clauses are deprecated; use `(T) -> R` instead (ADR-0075). |
+
+Cause/fix:
+
+- **GS0303** — `var f func(int32) int32 = (x int32) -> x + 1`. Fix: rewrite the type clause as `var f (int32) -> int32 = (x int32) -> x + 1`. Async variant: `async func(int32) int32` → `async (int32) -> int32`. The deprecation applies **only** to `func` in *type-clause* positions; function *declarations* (`func name(...) R { … }`), function *literals* (`func(...) R { … }` expressions), and `delegate func(...)` named-delegate declarations all keep `func`. A future release will remove the legacy type-clause spelling and turn it into a parse error.
 

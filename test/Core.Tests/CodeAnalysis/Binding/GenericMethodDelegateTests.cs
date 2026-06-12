@@ -14,7 +14,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #312 follow-up — a method (or free) type parameter used as a generic
-/// argument of a delegate type, e.g. <c>func Map[U](f func(T) U) U</c>. The
+/// argument of a delegate type, e.g. <c>func Map[U](f (T) -&gt; U) U</c>. The
 /// binder must substitute type parameters that appear inside a
 /// <see cref="FunctionTypeSymbol"/> (parameter and return positions) so the
 /// delegate argument type-checks, and the substituted return type must flow to
@@ -28,7 +28,7 @@ public class GenericMethodDelegateTests
         var source = @"
 type Box[TItem] class {
     var Value TItem
-    func Map[TResult](f func(TItem) TResult) TResult {
+    func Map[TResult](f (TItem) -> TResult) TResult {
         return f(this.Value)
     }
 }
@@ -43,7 +43,7 @@ type Box[TItem] class {
         var source = @"
 type Box[TItem] class {
     var Value TItem
-    func Map[TResult](f func(TItem) TResult) TResult {
+    func Map[TResult](f (TItem) -> TResult) TResult {
         return f(this.Value)
     }
 }
@@ -61,7 +61,7 @@ b.Map[int32](func(x int32) int32 { return x + x })
         var source = @"
 type Box[TItem] class {
     var Value TItem
-    func Map[TResult](f func(TItem) TResult) TResult {
+    func Map[TResult](f (TItem) -> TResult) TResult {
         return f(this.Value)
     }
 }
@@ -79,7 +79,7 @@ b.Map[string](func(x int32) string { return ""mapped"" })
         var source = @"
 type Box[TItem] class {
     var Value TItem
-    func Fold[TAcc](seed TAcc, f func(TAcc, TItem) TAcc) TAcc {
+    func Fold[TAcc](seed TAcc, f (TAcc, TItem) -> TAcc) TAcc {
         return f(seed, this.Value)
     }
 }
@@ -95,7 +95,7 @@ b.Fold[int32](100, func(acc int32, x int32) int32 { return acc + x })
     public void FreeGenericFunction_DelegateParameterOverTypeParameters_Binds()
     {
         var source = @"
-func Apply[T, U](x T, f func(T) U) U {
+func Apply[T, U](x T, f (T) -> U) U {
     return f(x)
 }
 Apply[int32, bool](5, func(x int32) bool { return x > 3 })
@@ -109,7 +109,7 @@ Apply[int32, bool](5, func(x int32) bool { return x > 3 })
     public void FreeGenericFunction_DelegateReturnInferred_Substitutes()
     {
         var source = @"
-func Apply[T, U](x T, f func(T) U) U {
+func Apply[T, U](x T, f (T) -> U) U {
     return f(x)
 }
 Apply(7, func(x int32) int32 { return x * 2 })

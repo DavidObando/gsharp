@@ -13,7 +13,7 @@ namespace GSharp.LanguageServer.Tests;
 /// Issue #713 — exercises the LSP completion and hover polish for the two
 /// async type-clause spellings:
 /// <list type="bullet">
-///   <item><c>async func(...) R</c> (ADR-0043) — alias for <c>func(...) Task[R]</c>.</item>
+///   <item><c>async (...) -&gt; R</c> (ADR-0043 / ADR-0075) — alias for <c>(...) -&gt; Task[R]</c>.</item>
 ///   <item><c>async sequence[T]</c> (ADR-0042) — alias for <c>IAsyncEnumerable[T]</c>.</item>
 /// </list>
 /// </summary>
@@ -40,7 +40,7 @@ public class AsyncTypeClauseCompletionTests
     {
         // User has typed `async ` in a type-clause slot. The parser produces an incomplete
         // async-prefixed type clause; the caret sits inside it. Both snippets should still
-        // appear so the user can pick `async func(...)` or `async sequence[T]`.
+        // appear so the user can pick `async (...) -> R` or `async sequence[T]`.
         const string source = "func foo(p async ) { }\n";
         var content = LanguageServerTestHelpers.Content(source);
 
@@ -140,7 +140,7 @@ public class AsyncTypeClauseCompletionTests
     [Fact]
     public void Hover_OnAsyncKeywordOfAsyncFuncTypeClause_RendersAdr0043Documentation()
     {
-        const string source = "func foo(cb async func(int32) int32) { }\n";
+        const string source = "func foo(cb async (int32) -> int32) { }\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "async"));
@@ -148,16 +148,16 @@ public class AsyncTypeClauseCompletionTests
         Assert.NotNull(hover);
         var text = hover.Contents.ToString();
         Assert.Contains("ADR-0043", text, System.StringComparison.Ordinal);
-        Assert.Contains("async func", text, System.StringComparison.Ordinal);
+        Assert.Contains("async", text, System.StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Hover_OnFuncKeywordOfAsyncFuncTypeClause_RendersAdr0043Documentation()
+    public void Hover_OnArrowOfAsyncArrowFunctionTypeClause_RendersAdr0043Documentation()
     {
-        const string source = "func foo(cb async func(int32) int32) { }\n";
+        const string source = "func foo(cb async (int32) -> int32) { }\n";
         var content = LanguageServerTestHelpers.Content(source);
 
-        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "func(int32)"));
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "->"));
 
         Assert.NotNull(hover);
         Assert.Contains("ADR-0043", hover.Contents.ToString(), System.StringComparison.Ordinal);

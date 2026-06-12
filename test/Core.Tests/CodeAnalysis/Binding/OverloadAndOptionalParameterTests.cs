@@ -236,7 +236,7 @@ type Box class {
 func op(x int32) int32 { return x + 1 }
 func op(x int32, y int32) int32 { return x + y }
 
-let f func(int32) int32 = op
+let f (int32) -> int32 = op
 f(10)
 ";
         var result = Evaluate(source);

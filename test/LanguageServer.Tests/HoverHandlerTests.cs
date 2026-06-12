@@ -35,7 +35,7 @@ public class HoverHandlerTests
     [InlineData("package P\nimport sys = System\n", "sys")]
     [InlineData("package Outer.Inner\n", "Outer")]
     [InlineData("package Outer.Inner\n", "Inner")]
-    [InlineData("package P\nimport System\ntype Foo class {\n  event Click func(Object, EventArgs)\n}\n", "Click")]
+    [InlineData("package P\nimport System\ntype Foo class {\n  event Click (Object, EventArgs) -> void\n}\n", "Click")]
     public void ComputeHover_ResolvesPropertyImportPackageAndEventSymbols(string source, string token)
     {
         var content = LanguageServerTestHelpers.Content(source);

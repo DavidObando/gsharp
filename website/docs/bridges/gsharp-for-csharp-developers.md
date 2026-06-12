@@ -37,7 +37,7 @@ G# is a .NET language with Go-inspired syntax. It emits CLR assemblies, imports 
 | `delegate void Handler(object sender)` | `type Handler = delegate func(sender Object)` | Named delegate types (ADR-0059). |
 | `cond ? a : b` | `cond ? a : b` | Ternary expression (ADR-0062). |
 | `/// <summary>…</summary>` XML doc | `/// summary text` Markdown doc | Markdown documentation comments round-trip to CLR XML (ADR-0057). |
-| lambda `x => x + 1` | `func(x int32) int32 { return x + 1 }` | Func literals are the lambda form; parameters and return type are explicit. |
+| lambda `x => x + 1` | `(x int32) -> x + 1` (or `func(x int32) int32 { return x + 1 }`) | Arrow lambdas (ADR-0074) and func literals are both valid; the arrow form is the canonical one-liner. |
 | extension method | `func (r Receiver) M()` | A receiver clause declares a CLR-visible extension method. |
 
 ## Packages replace namespaces in source
