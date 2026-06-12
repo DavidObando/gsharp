@@ -532,6 +532,7 @@ public sealed class Evaluator
                 BoundNodeKind.ClrIndexAssignmentExpression => EvaluateClrIndexAssignmentExpression((BoundClrIndexAssignmentExpression)node),
                 BoundNodeKind.AwaitExpression => EvaluateAwaitExpression((BoundAwaitExpression)node),
                 BoundNodeKind.SwitchExpression => EvaluateSwitchExpression((BoundSwitchExpression)node),
+                BoundNodeKind.ConditionalExpression => EvaluateConditionalExpression((BoundConditionalExpression)node),
                 BoundNodeKind.MakeChannelExpression => EvaluateMakeChannelExpression((BoundMakeChannelExpression)node),
                 BoundNodeKind.ChannelReceiveExpression => EvaluateChannelReceiveExpression((BoundChannelReceiveExpression)node),
                 BoundNodeKind.ChannelCloseExpression => EvaluateChannelCloseExpression((BoundChannelCloseExpression)node),
@@ -936,10 +937,42 @@ public sealed class Evaluator
                 continue;
             }
 
+            // Issue #711 / ADR-0064: when a multi-statement block is used as
+            // the branch of an if-expression, the prefix may include any
+            // legal statement form — most usefully `throw` and `try`. We
+            // delegate to the matching evaluator helpers and let the runtime
+            // exception propagate up through the surrounding expression.
+            if (statement is BoundThrowStatement throwStmt)
+            {
+                EvaluateThrowStatement(throwStmt);
+                continue;
+            }
+
+            if (statement is BoundTryStatement tryStmt)
+            {
+                EvaluateTryStatement(tryStmt);
+                continue;
+            }
+
             throw new EvaluatorException($"Unexpected block-expression statement {statement.Kind}", statement);
         }
 
         return EvaluateExpression(node.Expression);
+    }
+
+    /// <summary>
+    /// ADR-0062 / ADR-0064: evaluate a two-arm conditional. Only the chosen
+    /// arm is evaluated, matching the emit-side branch semantics. Reused by
+    /// both the ternary <c>cond ? a : b</c> and the if-expression form.
+    /// </summary>
+    /// <param name="node">The bound conditional expression.</param>
+    /// <returns>The value of the selected arm.</returns>
+    private object EvaluateConditionalExpression(BoundConditionalExpression node)
+    {
+        var condition = EvaluateExpression(node.Condition);
+        return (bool)condition
+            ? EvaluateExpression(node.WhenTrue)
+            : EvaluateExpression(node.WhenFalse);
     }
 
     private object EvaluateStructLiteralExpression(BoundStructLiteralExpression node)

@@ -188,7 +188,29 @@ lazy: 1
 dog: 1
 ```
 
-## 4. Use switch statements when each arm performs work
+## 4. Use `if` as a value (ADR-0064)
+
+When a branch picks a value rather than a side-effecting action, `if` can also sit in expression position. The form supports `else if` chains and multi-statement blocks whose trailing expression is the branch value:
+
+```gsharp
+let pct = 85
+let grade = if pct >= 90 { "A" }
+           else if pct >= 80 { "B" }
+           else if pct >= 70 { "C" }
+           else { "F" }
+Console.WriteLine(grade)
+```
+
+Rules:
+
+- A value-position `if` MUST end in `else` (`GS0276`). If you do not need a value, use the statement form (`if cond { … }`).
+- Each branch is a block. The block's **last expression** becomes its value — there is no `yield` keyword. An empty block reports `GS0277`.
+- Branch tails are unified by the same common-type rule as the `?:` ternary; mismatched branches report `GS0263`.
+- Only the chosen branch runs — the other arms are not evaluated.
+
+The complete worked example lives under `samples/IfExpression.gs`.
+
+## 5. Use switch statements when each arm performs work
 
 Switch cases have block bodies and never fall through. If two cases should do the same work, factor the body into a helper or repeat it deliberately.
 
@@ -275,7 +297,7 @@ elsewhere
 
 Pattern switch statements support constants, relational patterns, type patterns, list patterns, discard patterns, and data-struct property patterns.
 
-## 5. Use switch expressions when each arm returns a value
+## 6. Use switch expressions when each arm returns a value
 
 Switch expressions use `->` arms:
 
@@ -349,7 +371,7 @@ diag77
 
 A `default` arm is the easiest way to make the result total.
 
-## 6. Try a compact pattern example
+## 7. Try a compact pattern example
 
 Some pattern features originated on the interpreter path. The `Patterns` sample remains useful as the shortest expression-switch walkthrough:
 

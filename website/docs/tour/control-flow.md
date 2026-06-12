@@ -25,6 +25,23 @@ if n > 0 {
 }
 ```
 
+## `if` as a value (ADR-0064)
+
+`if` can also sit in expression position. The form requires a terminal `else`, supports `else if` chains, and may use multi-statement blocks whose trailing expression is the branch value.
+
+```gsharp
+let label = if n > 0 { "positive" } else if n < 0 { "negative" } else { "zero" }
+
+let title = if user.IsAdmin {
+    log("admin route")
+    "Admin Dashboard"
+} else {
+    "Home"
+}
+```
+
+The result type is the common type of all branch tails (same rule as the ternary `?:` operator). Missing the terminal `else` in value position reports `GS0276`; an empty block reports `GS0277`; branches with no common type report `GS0263`. The statement form is unchanged — `if cond { … }` (no else) still parses and behaves exactly as before.
+
 ## `if let` and `guard let` — nullable bindings (ADR-0071)
 
 `if let name = expr { ... }` strips the nullable layer from a value and binds
