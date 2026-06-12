@@ -1,9 +1,10 @@
 # ADR-0017: Method virtuality — sealed by default, opt-in with `open`
 
-- **Status**: Accepted
+- **Status**: Partially superseded by ADR-0078 (declaration-head spelling) — the `open` / `override` / `final` semantics described below are unchanged.
 - **Date**: 2026-05-22
 - **Phase**: Phase 3 (lock before 3.B.3)
-- **Related**: ADR-0003 (OO surface — data-oriented core with light OO escape hatch); ADR-0006 (visibility); execution plan §3.B.3; gaps doc §3.2
+- **Superseded**: The declaration-head examples below use the legacy `type Name class` form. ADR-0078 replaces them with `class Name`, `open class Name`, and `sealed class Name`. The `sealed class` modifier (Kotlin closed hierarchy with exhaustiveness checking) is new in ADR-0078.
+- **Related**: ADR-0003 (OO surface — data-oriented core with light OO escape hatch); ADR-0006 (visibility); ADR-0078 (Kotlin/Swift declaration head); execution plan §3.B.3; gaps doc §3.2
 
 ## Context
 

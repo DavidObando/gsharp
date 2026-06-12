@@ -6,7 +6,7 @@ package GSharp.Refactoring.ReadOnlyAttr
 
 import System
 
-type UserId inline struct(value string)
+inline struct UserId(value string)
 
 func showLen(id UserId) int32 {
     let (raw) = id

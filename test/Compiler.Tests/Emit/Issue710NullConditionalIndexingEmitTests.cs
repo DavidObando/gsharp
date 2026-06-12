@@ -196,7 +196,7 @@ public class Issue710NullConditionalIndexingEmitTests
             package Test
             import System
 
-            type Holder class {
+            class Holder {
                 var Data []int32?
             }
 

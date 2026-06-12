@@ -2,7 +2,7 @@ package MultiFile
 
 import System
 
-type Greeter class(Name string) {
+class Greeter(Name string) {
     func Greet() string {
         return "Hello, " + Name + "!"
     }

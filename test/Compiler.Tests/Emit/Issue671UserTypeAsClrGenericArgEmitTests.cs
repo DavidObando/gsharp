@@ -25,11 +25,11 @@ public class Issue671UserTypeAsClrGenericArgEmitTests
             import System
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
-            type Container class {
+            class Container {
                 var items List[MyType]
             }
 
@@ -52,11 +52,11 @@ public class Issue671UserTypeAsClrGenericArgEmitTests
             import System
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
-            type Container class {
+            class Container {
                 var items List[MyType]
 
                 func getItems() List[MyType] {
@@ -82,11 +82,11 @@ public class Issue671UserTypeAsClrGenericArgEmitTests
             import System
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
-            type Container class {
+            class Container {
                 func accept(xs List[MyType]) {
                 }
             }
@@ -107,11 +107,11 @@ public class Issue671UserTypeAsClrGenericArgEmitTests
             import System
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
-            type Container class {
+            class Container {
                 var lookup Dictionary[string, MyType]
             }
 

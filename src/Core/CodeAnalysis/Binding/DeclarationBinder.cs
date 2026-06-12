@@ -622,7 +622,7 @@ internal sealed class DeclarationBinder
                             continue;
                         }
 
-                        if (!baseStruct.IsOpen)
+                        if (!baseStruct.IsOpen && !baseStruct.IsSealedHierarchy)
                         {
                             Diagnostics.ReportBaseClassNotOpen(baseLocation, baseName);
                             continue;

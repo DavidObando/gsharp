@@ -25,7 +25,7 @@ public class GenericInterfaceTests
     public void GenericInterfaceDeclaration_Binds()
     {
         var source = @"
-type Iter[T any] interface {
+interface Iter[T any] {
     func Next() T
 }
 ";
@@ -37,7 +37,7 @@ type Iter[T any] interface {
     public void ConstructedInterface_AsParameterType_Binds()
     {
         var source = @"
-type Iter[T any] interface {
+interface Iter[T any] {
     func Next() T
 }
 
@@ -53,7 +53,7 @@ func consume(it Iter[int32]) int32 {
     public void VarianceOut_OnReturn_OK()
     {
         var source = @"
-type Producer[out T] interface {
+interface Producer[out T] {
     func Get() T
 }
 ";
@@ -65,7 +65,7 @@ type Producer[out T] interface {
     public void VarianceIn_OnParam_OK()
     {
         var source = @"
-type Consumer[in T] interface {
+interface Consumer[in T] {
     func Put(v T)
 }
 ";
@@ -77,7 +77,7 @@ type Consumer[in T] interface {
     public void VarianceOut_InParamPosition_Diagnoses()
     {
         var source = @"
-type Bad[out T] interface {
+interface Bad[out T] {
     func Take(v T)
 }
 ";
@@ -89,7 +89,7 @@ type Bad[out T] interface {
     public void VarianceIn_InReturnPosition_Diagnoses()
     {
         var source = @"
-type Bad[in T] interface {
+interface Bad[in T] {
     func Get() T
 }
 ";
@@ -101,7 +101,7 @@ type Bad[in T] interface {
     public void ConstructedInterface_WrongArity_Diagnoses()
     {
         var source = @"
-type Iter[T any] interface {
+interface Iter[T any] {
     func Next() T
 }
 
@@ -115,7 +115,7 @@ func consume(it Iter[int32, string]) int32 { return 0 }
     public void SealedGenericInterface_Binds()
     {
         var source = @"
-type Result[T any] sealed interface {
+sealed interface Result[T any] {
     func Get() T
 }
 ";

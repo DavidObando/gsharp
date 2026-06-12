@@ -19,7 +19,7 @@ public class Issue698DeinitParserTests
     {
         const string source = """
             package P
-            type Resource class {
+            class Resource {
                 var Handle int32 = 0
                 deinit {
                 }
@@ -41,7 +41,7 @@ public class Issue698DeinitParserTests
         const string source = """
             package P
             import System
-            type Resource class {
+            class Resource {
                 var Tag string = ""
                 deinit {
                     Console.WriteLine(Tag)
@@ -61,7 +61,7 @@ public class Issue698DeinitParserTests
     {
         const string source = """
             package P
-            type Point struct {
+            struct Point {
                 var X int32 = 0
                 deinit {
                 }
@@ -78,7 +78,7 @@ public class Issue698DeinitParserTests
     {
         const string source = """
             package P
-            type Resource class {
+            class Resource {
                 var Handle int32 = 0
                 deinit {
                 }
@@ -96,7 +96,7 @@ public class Issue698DeinitParserTests
     {
         const string source = """
             package P
-            type Resource class {
+            class Resource {
                 var Handle int32 = 0
                 deinit(x int32) {
                 }
@@ -112,7 +112,7 @@ public class Issue698DeinitParserTests
     {
         const string source = """
             package P
-            type Resource class {
+            class Resource {
                 var Handle int32 = 0
                 deinit int32 {
                 }

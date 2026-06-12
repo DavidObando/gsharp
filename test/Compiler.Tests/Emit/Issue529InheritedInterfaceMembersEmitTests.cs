@@ -93,7 +93,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
             import System
             import Probe.CSharp
 
-            type Impl class : IA, IB {
+            class Impl : IA, IB {
                 func M() string { return "from IA via IB" }
             }
 
@@ -131,7 +131,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
             import System
             import Probe.CSharp
 
-            type Named class : IA, IB {
+            class Named : IA, IB {
                 prop Name string { get { return "hello" } }
             }
 
@@ -173,7 +173,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
             import System
             import Probe.CSharp
 
-            type Deep class : IBase, IMid, ILeaf {
+            class Deep : IBase, IMid, ILeaf {
                 func Root() string { return "deep" }
             }
 
@@ -208,7 +208,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
             import System
             import Probe.CSharp
 
-            type DirectImpl class : IDirect {
+            class DirectImpl : IDirect {
                 func DirectMethod() string { return "dm" }
                 prop DirectProp string { get { return "dp" } }
             }
@@ -272,7 +272,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
             import System
             import Probe.CSharp
 
-            type Both class : IA, IB {
+            class Both : IA, IB {
                 func FromA() string { return "a" }
                 func FromB() string { return "b" }
             }

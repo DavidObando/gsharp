@@ -23,7 +23,7 @@ public class GenericTypeTests
     public void GenericDataStruct_ExplicitTypeArgs_FieldAccessReturnsValue()
     {
         var source = @"
-type Result[T any, E any] data struct {
+data struct Result[T any, E any] {
     var Ok T
     var Err E
 }
@@ -39,7 +39,7 @@ r.Ok
     public void GenericDataStruct_InferredTypeArgs_FieldAccessReturnsValue()
     {
         var source = @"
-type Box[T any] data struct {
+data struct Box[T any] {
     var Value T
 }
 let b = Box{Value: 42}
@@ -54,7 +54,7 @@ b.Value
     public void GenericDataStruct_StructuralEquality_HoldsForEqualValues()
     {
         var source = @"
-type Pair[A any, B any] data struct {
+data struct Pair[A any, B any] {
     var First A
     var Second B
 }
@@ -71,7 +71,7 @@ p1 == p2
     public void GenericDataStruct_WrongArity_Diagnoses()
     {
         var source = @"
-type Result[T any, E any] data struct {
+data struct Result[T any, E any] {
     var Ok T
     var Err E
 }
@@ -86,7 +86,7 @@ let r = Result[int32]{Ok: 5, Err: ""oops""}
     public void GenericClass_PrimaryCtorInferred_FieldAccessReturnsValue()
     {
         var source = @"
-type Box[T any] class(Value T) {
+class Box[T any](Value T) {
 }
 let b = Box(7)
 b.Value
@@ -100,7 +100,7 @@ b.Value
     public void GenericClass_PrimaryCtorExplicit_FieldAccessReturnsValue()
     {
         var source = @"
-type Box[T any] class(Value T) {
+class Box[T any](Value T) {
 }
 let b = Box[string](""hi"")
 b.Value
@@ -114,7 +114,7 @@ b.Value
     public void GenericClass_MethodCall_TypeChecksAndExecutes()
     {
         var source = @"
-type Holder[T any] class(value T) {
+class Holder[T any](value T) {
     func Get() T { return value }
 }
 let h = Holder(42)

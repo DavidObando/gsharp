@@ -25,7 +25,7 @@ public class SemanticLookupImplicitThisTests
     public void BareProperty_InsideMethodBody_ResolvesToProperty()
     {
         var sym = ResolveBareName(
-            "type Person class {\n    public prop Name string\n    func Get() string { return Name }\n}\n",
+            "class Person {\n    public prop Name string\n    func Get() string { return Name }\n}\n",
             useOffsetOfNthOccurrence: 2);
 
         Assert.IsType<PropertySymbol>(sym);
@@ -36,7 +36,7 @@ public class SemanticLookupImplicitThisTests
     public void BareProperty_InsideInterpolationHole_ResolvesToProperty()
     {
         var sym = ResolveBareName(
-            "type Person class {\n    public prop Name string\n    func Greet() string { return \"Hi ${Name}\" }\n}\n",
+            "class Person {\n    public prop Name string\n    func Greet() string { return \"Hi ${Name}\" }\n}\n",
             useOffsetOfNthOccurrence: 2);
 
         Assert.IsType<PropertySymbol>(sym);
@@ -47,7 +47,7 @@ public class SemanticLookupImplicitThisTests
     public void BareField_InsideMethodBody_ResolvesToField()
     {
         var sym = ResolveBareName(
-            "type Counter class {\n    var Value int32\n    func Read() int32 { return Value }\n}\n",
+            "class Counter {\n    var Value int32\n    func Read() int32 { return Value }\n}\n",
             tokenText: "Value",
             useOffsetOfNthOccurrence: 2);
 
@@ -59,7 +59,7 @@ public class SemanticLookupImplicitThisTests
     public void BareMethod_InsideMethodBody_ResolvesToMethod()
     {
         var sym = ResolveBareName(
-            "type Person class {\n    func Helper() int32 { return 1 }\n    func Use() int32 { return Helper() }\n}\n",
+            "class Person {\n    func Helper() int32 { return 1 }\n    func Use() int32 { return Helper() }\n}\n",
             tokenText: "Helper",
             useOffsetOfNthOccurrence: 2);
 
@@ -70,7 +70,7 @@ public class SemanticLookupImplicitThisTests
     [Fact]
     public void FindReferences_OnProperty_IncludesImplicitThisUses()
     {
-        const string source = "type Person class {\n    public prop Name string\n    func A() string { return Name }\n    func B() string { return \"v: ${Name}\" }\n    func C() string { return this.Name }\n}\n";
+        const string source = "class Person {\n    public prop Name string\n    func A() string { return Name }\n    func B() string { return \"v: ${Name}\" }\n    func C() string { return this.Name }\n}\n";
 
         var tree = SyntaxTree.Parse(GSharp.Core.CodeAnalysis.Text.SourceText.From(source));
         var compilation = new Compilation(tree);
@@ -90,7 +90,7 @@ public class SemanticLookupImplicitThisTests
     {
         // The bare `Name` in the field initializer position is not inside a method body,
         // so implicit-this resolution must not kick in there.
-        const string source = "type Person class {\n    public prop Name string\n}\nfunc main() { var x = Name }\n";
+        const string source = "class Person {\n    public prop Name string\n}\nfunc main() { var x = Name }\n";
 
         var tree = SyntaxTree.Parse(GSharp.Core.CodeAnalysis.Text.SourceText.From(source));
         var compilation = new Compilation(tree);

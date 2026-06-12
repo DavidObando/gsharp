@@ -68,7 +68,7 @@ public class AttributeEmitTests
             import System
 
             @Obsolete("legacy")
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
@@ -89,7 +89,7 @@ public class AttributeEmitTests
             import System
 
             @Attribute
-            type Trace class {
+            class Trace {
             }
             """;
 
@@ -111,7 +111,7 @@ public class AttributeEmitTests
             import System.Diagnostics
 
             @DebuggerTypeProxy(typeof(int32))
-            type Box data struct {
+            data struct Box {
                 var Value int32
             }
             """;
@@ -147,7 +147,7 @@ public class AttributeEmitTests
             import System.Diagnostics
 
             @DebuggerDisplay("{Value}", Target = typeof(string))
-            type Holder data struct {
+            data struct Holder {
                 var Value int32
             }
             """;
@@ -181,7 +181,7 @@ public class AttributeEmitTests
             import System.ComponentModel
 
             @DefaultValue(42)
-            type Counter data struct {
+            data struct Counter {
                 var Value int32
             }
             """;
@@ -206,7 +206,7 @@ public class AttributeEmitTests
             import System.ComponentModel
 
             @DefaultValue("hello")
-            type Greeter data struct {
+            data struct Greeter {
                 var Value int32
             }
             """;
@@ -232,7 +232,7 @@ public class AttributeEmitTests
             import System.Runtime.CompilerServices
 
             @TupleElementNames([]string{"first", "second"})
-            type Pair data struct {
+            data struct Pair {
                 var A int32
                 var B int32
             }
@@ -261,7 +261,7 @@ public class AttributeEmitTests
             import System.ComponentModel
 
             @DefaultValue(typeof(int32))
-            type Holder data struct {
+            data struct Holder {
                 var Value int32
             }
             """;
@@ -361,7 +361,7 @@ public class AttributeEmitTests
             package P
             import System
 
-            type Point data struct {
+            data struct Point {
                 @Obsolete("use NewX")
                 var X int32
                 var Y int32
@@ -394,7 +394,7 @@ public class AttributeEmitTests
             package P
             import System
 
-            type Box class {
+            class Box {
                 @Obsolete("retired")
                 var Value int32
             }
@@ -421,7 +421,7 @@ public class AttributeEmitTests
             package P
             import System.Diagnostics.CodeAnalysis
 
-            type Box class {
+            class Box {
                 @MemberNotNull("A", "B")
                 func Setup() {
                 }

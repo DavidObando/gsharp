@@ -29,7 +29,7 @@ public class Issue687ColorColorEmitTests
             import System
             import System.IO
 
-            type Entry class {
+            class Entry {
                 var Path string = ""
 
                 func Build(suffix string) string {
@@ -73,7 +73,7 @@ public class Issue687ColorColorEmitTests
             import System
             import System.IO
 
-            type Probe class {
+            class Probe {
                 var Path string = ""
 
                 func Len() int32 {

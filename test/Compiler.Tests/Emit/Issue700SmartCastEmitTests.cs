@@ -23,17 +23,17 @@ public class Issue700SmartCastEmitTests
         package Test
         import System
 
-        type Animal open class {
+        open class Animal {
             var Name string
             open func Describe() string { return Name }
         }
 
-        type Dog class : Animal {
+        class Dog : Animal {
             override func Describe() string { return Name + " (dog)" }
             func Bark() string { return Name + ":woof" }
         }
 
-        type Cat class : Animal {
+        class Cat : Animal {
             override func Describe() string { return Name + " (cat)" }
             func Purr() string { return Name + ":purr" }
         }
@@ -113,17 +113,17 @@ public class Issue700SmartCastEmitTests
             package Test
             import System
 
-            type A open class {
+            open class A {
                 var Tag string
                 open func Kind() string { return "A" }
             }
 
-            type B open class : A {
+            open class B : A {
                 override open func Kind() string { return "B" }
                 func OnB() string { return Tag + ":B" }
             }
 
-            type C class : B {
+            class C : B {
                 override func Kind() string { return "C" }
                 func OnC() string { return Tag + ":C" }
             }
@@ -179,16 +179,16 @@ public class Issue700SmartCastEmitTests
             package Test
             import System
 
-            type Speaker interface {
+            interface Speaker {
                 func Describe() string
             }
 
-            type Animal open class {
+            open class Animal {
                 var Name string
                 open func Describe() string { return Name }
             }
 
-            type Dog class : Animal {
+            class Dog : Animal {
                 override func Describe() string { return Name + " (dog)" }
                 func Bark() string { return Name + ":woof" }
             }

@@ -10,7 +10,7 @@ import System
 
 // Instance generic methods on a non-generic class. `Wrap` uses `T` in its
 // parameter, return type, and a local; `Pair` declares two type parameters.
-type Box class {
+class Box {
     func Wrap[T](item T) T {
         var local T = item
         return local
@@ -23,7 +23,7 @@ type Box class {
 
 // A generic method declared on a generic class: `Echo` uses the class's `T`
 // while `GetOr` introduces its own method-level type parameter `U`.
-type Container[T] class {
+class Container[T] {
     var Value T
 
     func Echo(x T) T {
@@ -36,7 +36,7 @@ type Container[T] class {
 }
 
 // A generic static method declared inside a `shared` block.
-type Util class {
+class Util {
     shared {
         func Identity[T](x T) T {
             return x

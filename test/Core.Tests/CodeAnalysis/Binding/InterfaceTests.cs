@@ -25,7 +25,7 @@ public class InterfaceTests
     public void InterfaceDeclaration_OnlySignatures_Binds()
     {
         var source = @"
-type IShape interface {
+interface IShape {
     func Area() int32
 }
 ";
@@ -37,7 +37,7 @@ type IShape interface {
     public void InterfaceMethodWithBody_ReportsDiagnostic()
     {
         var source = @"
-type IBad interface {
+interface IBad {
     func Area() int32 { return 0 }
 }
 ";
@@ -49,11 +49,11 @@ type IBad interface {
     public void ClassImplementsInterface_Dispatches()
     {
         var source = @"
-type IShape interface {
+interface IShape {
     func Area() int32
 }
 
-type Square class(Side int32) : IShape {
+class Square(Side int32) : IShape {
     func Area() int32 { return Side * Side }
 }
 
@@ -69,11 +69,11 @@ s.Area()
     public void ClassMissingInterfaceMethod_ReportsDiagnostic()
     {
         var source = @"
-type IShape interface {
+interface IShape {
     func Area() int32
 }
 
-type Square class(Side int32) : IShape {
+class Square(Side int32) : IShape {
 }
 ";
         var result = Evaluate(source);
@@ -84,15 +84,15 @@ type Square class(Side int32) : IShape {
     public void ClassImplementsMultipleInterfaces()
     {
         var source = @"
-type IShape interface {
+interface IShape {
     func Area() int32
 }
 
-type INamed interface {
+interface INamed {
     func Name() string
 }
 
-type Square class(Side int32) : IShape, INamed {
+class Square(Side int32) : IShape, INamed {
     func Area() int32 { return Side * Side }
     func Name() string { return ""square"" }
 }
@@ -109,15 +109,15 @@ s.Area()
     public void InterfaceDispatch_PicksRuntimeImpl()
     {
         var source = @"
-type IShape interface {
+interface IShape {
     func Area() int32
 }
 
-type Box open class(W int32) : IShape {
+open class Box(W int32) : IShape {
     open func Area() int32 { return W }
 }
 
-type BigBox class(W int32) : Box {
+class BigBox(W int32) : Box {
     override func Area() int32 { return W * 10 }
 }
 
@@ -134,11 +134,11 @@ b.Area()
     {
         var source = @"
 package GSharp.Tests.Sealed
-type IResult sealed interface {
+sealed interface IResult {
     func Ok() bool
 }
 
-type Success class : IResult {
+class Success : IResult {
     func Ok() bool { return true }
 }
 
@@ -154,7 +154,7 @@ s.Ok()
     public void SealedInterface_BodyOnMember_StillDiagnoses()
     {
         var source = @"
-type IBad sealed interface {
+sealed interface IBad {
     func F() int32 { return 0 }
 }
 ";
@@ -167,14 +167,14 @@ type IBad sealed interface {
     {
         var t1 = SyntaxTree.Parse(SourceText.From(@"
 package GSharp.Tests.Sealed.A
-public type IResult sealed interface {
+public sealed interface IResult {
     func Ok() bool
 }
 "));
         var t2 = SyntaxTree.Parse(SourceText.From(@"
 package GSharp.Tests.Sealed.B
 import GSharp.Tests.Sealed.A
-type Success class : IResult {
+class Success : IResult {
     func Ok() bool { return true }
 }
 "));
@@ -187,11 +187,11 @@ type Success class : IResult {
     public void GenericClass_Implements_UserGenericInterface_UsingTypeParameter_Binds()
     {
         var source = @"
-type IBox[T any] interface {
+interface IBox[T any] {
     func Get() T
 }
 
-type Box[T any] class(value T) : IBox[T] {
+class Box[T any](value T) : IBox[T] {
     func Get() T { return value }
 }
 
@@ -213,7 +213,7 @@ b.Get()
 import System.Collections
 import System.Collections.Generic
 
-type MyGeneric[T any] class : IEnumerable[T] {
+class MyGeneric[T any] : IEnumerable[T] {
     func GetEnumerator() IEnumerator[T] { return nil }
 }
 ";

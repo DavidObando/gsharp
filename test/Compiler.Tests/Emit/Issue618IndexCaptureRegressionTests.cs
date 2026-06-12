@@ -108,7 +108,7 @@ public class Issue618IndexCaptureRegressionTests
             package Probe
             import System
 
-            type Probe class {
+            class Probe {
                 init() {}
                 func Run() int32 {
                     var arr = []int32{10, 20, 30}

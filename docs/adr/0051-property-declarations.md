@@ -31,7 +31,7 @@ The `prop` keyword is contextual — it is recognized only inside a type body (s
 #### Auto-property (read-write)
 
 ```gs
-type Person class {
+class Person {
     prop Name string
 }
 ```
@@ -45,7 +45,7 @@ No body — the compiler synthesizes a private backing field, a trivial getter, 
 #### Auto-property (read-only)
 
 ```gs
-type Person class {
+class Person {
     prop Age int32 { get }
 }
 ```
@@ -55,7 +55,7 @@ Body contains only a bare `get` (no block) — synthesizes a backing field and g
 #### Computed property (read-only)
 
 ```gs
-type Person class {
+class Person {
     prop FullName string {
         get { return this.first + " " + this.last }
     }
@@ -69,7 +69,7 @@ Getter has a block body — no backing field is synthesized. The getter body is 
 #### Computed property (read-write)
 
 ```gs
-type Clamped class {
+class Clamped {
     prop Value int32 {
         get { return this._value }
         set(v) {
@@ -87,11 +87,11 @@ Both accessors have block bodies. The setter receives its incoming value via the
 #### Interface property requirement
 
 ```gs
-type Identifiable interface {
+interface Identifiable {
     prop Id string { get }
 }
 
-type Named interface {
+interface Named {
     prop Name string { get; set }
 }
 ```
@@ -103,13 +103,13 @@ In interfaces, accessor declarations have no bodies — they express the contrac
 Classes support `open prop` and `override prop`, mirroring the existing `open func` / `override func` modifiers (ADR-0003, Phase 3.B.3):
 
 ```gs
-type Animal open class {
+open class Animal {
     open prop Name string {
         get { return "Animal" }
     }
 }
 
-type Dog class : Animal {
+class Dog : Animal {
     override prop Name string {
         get { return "Dog" }
     }
@@ -125,11 +125,11 @@ type Dog class : Animal {
 Auto-properties can also be virtual:
 
 ```gs
-type Base open class {
+open class Base {
     open prop Label string    // virtual auto-property
 }
 
-type Derived class : Base {
+class Derived : Base {
     override prop Label string {
         get { return "custom: " + this._label }
         set(v) { this._label = v }
@@ -143,7 +143,7 @@ type Derived class : Base {
 Properties inherit the accessibility of their enclosing type by default (`public` for types, `internal` for non-exported). An explicit accessibility modifier on the `prop` declaration applies to the property and both accessors uniformly:
 
 ```gs
-type Foo class {
+class Foo {
     private prop secret int32       // private get + private set
     prop Name string                // public get + public set (class default)
 }
@@ -156,7 +156,7 @@ Per-accessor accessibility modifiers (e.g., `private set`) are deferred to a fol
 Data struct fields remain fields:
 
 ```gs
-type Point data struct {
+data struct Point {
     var X int32    // field — unchanged
     var Y int32    // field — unchanged
 }
@@ -165,7 +165,7 @@ type Point data struct {
 A `data struct` may additionally declare `prop` members for computed values:
 
 ```gs
-type Rect data struct {
+data struct Rect {
     var X int32
     var Y int32
     var Width int32
@@ -209,11 +209,11 @@ This is already how imported CLR properties work (ADR-0034). User-defined proper
 A class implementing an interface with `prop` requirements must declare a `prop` with at least the required accessors. A field does **not** satisfy a property requirement — the CLR requires actual `get_X`/`set_X` methods:
 
 ```gs
-type Identifiable interface {
+interface Identifiable {
     prop Id string { get }
 }
 
-type User class : Identifiable {
+class User : Identifiable {
     prop Id string { get }   // satisfies — read-only auto-property
     // or: prop Id string    // also satisfies (has both get and set, superset is fine)
 }

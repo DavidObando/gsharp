@@ -17,7 +17,7 @@ public class PropertyParserTests
     [Fact]
     public void ParsesAutoProperty()
     {
-        const string source = "package P\ntype Foo class {\n  prop Name string\n}\n";
+        const string source = "package P\nclass Foo {\n  prop Name string\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -25,7 +25,7 @@ public class PropertyParserTests
     [Fact]
     public void ParsesReadOnlyAutoProperty()
     {
-        const string source = "package P\ntype Foo class {\n  prop X int32 { get }\n}\n";
+        const string source = "package P\nclass Foo {\n  prop X int32 { get }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -33,7 +33,7 @@ public class PropertyParserTests
     [Fact]
     public void ParsesFullProperty_WithGetAndSetBodies()
     {
-        const string source = "package P\ntype Foo class {\n  prop X int32 { get { return 0 } set(v) { } }\n}\n";
+        const string source = "package P\nclass Foo {\n  prop X int32 { get { return 0 } set(v) { } }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -41,7 +41,7 @@ public class PropertyParserTests
     [Fact]
     public void ParsesInterfaceProperty()
     {
-        const string source = "package P\ntype Named interface {\n  prop Name string { get }\n}\n";
+        const string source = "package P\ninterface Named {\n  prop Name string { get }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -49,7 +49,7 @@ public class PropertyParserTests
     [Fact]
     public void ParsesPropertyWithPrivateAccessibility()
     {
-        const string source = "package P\ntype Foo class {\n  private prop secret int32\n}\n";
+        const string source = "package P\nclass Foo {\n  private prop secret int32\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -57,7 +57,7 @@ public class PropertyParserTests
     [Fact]
     public void ParsesOpenProperty()
     {
-        const string source = "package P\ntype Foo open class {\n  open prop X int32\n}\n";
+        const string source = "package P\nopen class Foo {\n  open prop X int32\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -65,7 +65,7 @@ public class PropertyParserTests
     [Fact]
     public void ParsesOverrideProperty()
     {
-        const string source = "package P\ntype Base open class {\n  open prop X int32\n}\ntype D class : Base {\n  override prop X int32\n}\n";
+        const string source = "package P\nopen class Base {\n  open prop X int32\n}\nclass D : Base {\n  override prop X int32\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -73,7 +73,7 @@ public class PropertyParserTests
     [Fact]
     public void ParsesMultipleProperties()
     {
-        const string source = "package P\ntype Person class {\n  prop Name string\n  prop Age int32\n}\n";
+        const string source = "package P\nclass Person {\n  prop Name string\n  prop Age int32\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -81,7 +81,7 @@ public class PropertyParserTests
     [Fact]
     public void ParsesPropertyWithGetAndSet_NoBody()
     {
-        const string source = "package P\ntype Foo class {\n  prop X int32 { get; set; }\n}\n";
+        const string source = "package P\nclass Foo {\n  prop X int32 { get; set; }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -89,7 +89,7 @@ public class PropertyParserTests
     [Fact]
     public void ParsesPropertyOnInterface_GetAndSet()
     {
-        const string source = "package P\ntype Mutable interface {\n  prop Value int32 { get set }\n}\n";
+        const string source = "package P\ninterface Mutable {\n  prop Value int32 { get set }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -98,7 +98,7 @@ public class PropertyParserTests
     public void AutoPropertyInDataStruct_ParsesButBinderReportsGS0189()
     {
         // The parser accepts prop in data struct; the binder reports GS0189.
-        const string source = "package P\ntype P data struct {\n  var X int32\n  prop Y int32\n}\n";
+        const string source = "package P\ndata struct P {\n  var X int32\n  prop Y int32\n}\n";
         var tree = SyntaxTree.Parse(source);
 
         // Parser should not fail — diagnostic comes from binder.
@@ -108,7 +108,7 @@ public class PropertyParserTests
     [Fact]
     public void PropertyDeclaration_HasCorrectSyntaxKind()
     {
-        const string source = "package P\ntype Foo class {\n  prop Name string\n}\n";
+        const string source = "package P\nclass Foo {\n  prop Name string\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
@@ -121,7 +121,7 @@ public class PropertyParserTests
     [Fact]
     public void ReadOnlyProperty_HasGetAccessor()
     {
-        const string source = "package P\ntype Foo class {\n  prop X int32 { get }\n}\n";
+        const string source = "package P\nclass Foo {\n  prop X int32 { get }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 

@@ -34,7 +34,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Maps | Supported | Supported | Backed by `Dictionary[K,V]`; `delete` and `len` are implemented. |
 | Tuples and multi-return | Supported | Supported | Multi-value return syntax is represented as tuple literals. |
 | Struct literals | Supported | Supported | Field initialization and field access are implemented. |
-| Data structs, records, `with`/copy | Supported | Supported | `record` is an alias for `data struct`; data equality and ergonomics are implemented. |
+| Data classes, data structs, `with`/copy | Supported | Supported | `data class` (reference) and `data struct` (value) synthesise equality, `with`-copy, and deconstruction. The `record` keyword was removed by ADR-0078 (issue #718); migrate to `data struct` (preserves value semantics) or `data class` (reference semantics). |
 | Inline structs | Supported | Supported | Exactly one field; participates in structural equality. |
 | Classes and primary constructors | Supported | Partially supported | Evaluator supports G# classes; CLR base initializer modeling is limited. |
 | Explicit class `init` constructors | Supported | Supported | G# class constructors are parsed, bound, and evaluated. |
@@ -50,7 +50,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Ref-aliasing locals (`let ref` / `var ref`) | Supported | Supported | Local whose IL slot is `T&` and aliases another lvalue. Diagnostics `GS0256`–`GS0258`. |
 | `ref`-returning functions | Supported | Supported | `func f(...) ref T { ... }` paired with `return ref <lvalue>`. Diagnostics `GS0248`–`GS0255`. |
 | `scoped` parameter modifier | Supported | Supported | Constrains a `ref struct` / managed-pointer parameter from escaping; enforced by `GS9004` / `GS9006`. |
-| Spans and `ref struct` types | Mostly supported | Limited | Stack-only consumption of `Span[T]` / `ReadOnlySpan[T]` and user `type X ref struct`: element read/write, `[]T`→span conversion, closed generic value-type fields (ADR-0056). Escape rules are `GS0219`; `ReadOnlySpan[T]` writes are `GS0226`. Full ref-safe-to-escape analysis is deferred (#376). |
+| Spans and `ref struct` types | Mostly supported | Limited | Stack-only consumption of `Span[T]` / `ReadOnlySpan[T]` and user `ref struct X`: element read/write, `[]T`→span conversion, closed generic value-type fields (ADR-0056). Escape rules are `GS0219`; `ReadOnlySpan[T]` writes are `GS0226`. Full ref-safe-to-escape analysis is deferred (#376). |
 
 ## Declarations and members
 

@@ -102,7 +102,7 @@ public class AttributeBinderTests
     {
         var source = @"
 @Obsolete
-type Point struct {
+struct Point {
     var X int32
     var Y int32
 }
@@ -119,7 +119,7 @@ type Point struct {
     {
         var source = @"
 @method:Obsolete
-type Point struct {
+struct Point {
     var X int32
 }
 ";
@@ -145,7 +145,7 @@ type Point struct {
             import System
 
             @Attribute
-            type Trace class {
+            class Trace {
             }
             """;
 
@@ -168,7 +168,7 @@ type Point struct {
             import System
 
             @Attribute
-            type Trace class : Attribute {
+            class Trace : Attribute {
             }
             """;
 
@@ -186,11 +186,11 @@ type Point struct {
             package P
             import System
 
-            open type Other class {
+            open class Other {
             }
 
             @Attribute
-            type Trace class : Other {
+            class Trace : Other {
             }
             """;
 
@@ -317,7 +317,7 @@ type Point struct {
         // #175: extend GS0204 to primary-constructor calls on classes.
         var source = """
             @Obsolete("retired")
-            type Old class (value int32) {
+            class Old (value int32) {
             }
 
             func Main() {
@@ -338,7 +338,7 @@ type Point struct {
         // #175: extend GS0204 to struct/class literal expressions.
         var source = """
             @Obsolete
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
@@ -364,7 +364,7 @@ type Point struct {
         // live on the global-scope diagnostic bag rather than per-body.
         var source = """
             @Obsolete("legacy")
-            type Old data struct {
+            data struct Old {
                 var Value int32
             }
 
@@ -382,7 +382,7 @@ type Point struct {
         // #175: extend GS0204 to interface type references.
         var source = """
             @Obsolete
-            type IOld interface {
+            interface IOld {
             }
 
             func Consume(o IOld) {
@@ -399,7 +399,7 @@ type Point struct {
         // #175: extend GS0204 to enum type references.
         var source = """
             @Obsolete
-            type Mode enum { A, B }
+            enum Mode { A, B }
 
             func Pick(m Mode) {
             }
@@ -435,7 +435,7 @@ type Point struct {
     {
         var source = """
             @Obsolete("gone", true)
-            type Old class (value int32) {
+            class Old (value int32) {
             }
 
             func Main() {
@@ -556,7 +556,7 @@ type Point struct {
         // onto the EnumMemberSymbol so #175 use-site diagnostics fire on
         // `Color.Red` references.
         var source = """
-            type Color enum {
+            enum Color {
                 @Obsolete("retired")
                 Red,
                 Green,
@@ -583,7 +583,7 @@ type Point struct {
         // Issue #188: every read of an `@Obsolete` enum member surfaces
         // GS0204 at the member-identifier location.
         var source = """
-            type Color enum {
+            enum Color {
                 @Obsolete("use Crimson instead")
                 Red,
                 Green,
@@ -608,7 +608,7 @@ type Point struct {
         // Issue #188: `@Obsolete("gone", true)` on an enum member promotes
         // the use-site GS0204 to an error.
         var source = """
-            type Color enum {
+            enum Color {
                 @Obsolete("gone", true)
                 Red,
                 Green,
@@ -630,7 +630,7 @@ type Point struct {
     {
         // `@method:` is not a valid target on an enum-member declaration.
         var source = """
-            type Color enum {
+            enum Color {
                 @method:Obsolete
                 Red,
                 Green,
@@ -648,7 +648,7 @@ type Point struct {
         // flow onto the FieldSymbol so #175 use-site diagnostics fire on
         // `p.Old` reads and writes.
         var source = """
-            type Point data struct {
+            data struct Point {
                 @Obsolete("retired")
                 var X int32
                 var Y int32
@@ -674,7 +674,7 @@ type Point struct {
         // Issue #186: reading an obsolete field via `p.X` surfaces GS0204
         // at the field-identifier location.
         var source = """
-            type Point data struct {
+            data struct Point {
                 @Obsolete("use NewX")
                 var X int32
                 var Y int32
@@ -699,7 +699,7 @@ type Point struct {
         // Issue #186: writing an obsolete field via `p.X = ...` surfaces
         // GS0204 at the field-identifier location.
         var source = """
-            type Point struct {
+            struct Point {
                 @Obsolete("use NewX")
                 var X int32
             }
@@ -722,7 +722,7 @@ type Point struct {
         // Issue #186: `@Obsolete("gone", true)` on a field promotes the
         // use-site GS0204 to an error at the read site.
         var source = """
-            type Point data struct {
+            data struct Point {
                 @Obsolete("gone", true)
                 var X int32
                 var Y int32
@@ -744,7 +744,7 @@ type Point struct {
     {
         // `@method:` is not a valid target on a field declaration.
         var source = """
-            type Point data struct {
+            data struct Point {
                 @method:Obsolete
                 var X int32
                 var Y int32
@@ -761,7 +761,7 @@ type Point struct {
         // Issue #186: bare field-name read inside a class method fires
         // GS0204 when the field carries `@Obsolete`.
         var source = """
-            type Box class {
+            class Box {
                 @Obsolete("use NewValue")
                 var Value int32
 
@@ -940,10 +940,10 @@ type Point struct {
 
             @Attribute
             @AttributeUsage(AttributeTargets.Method)
-            type MethodOnly class {
+            class MethodOnly {
             }
 
-            type Box class {
+            class Box {
                 @MethodOnly
                 var Value int32
             }
@@ -964,7 +964,7 @@ type Point struct {
 
             @Attribute
             @AttributeUsage(AttributeTargets.All, AllowMultiple = true)
-            type Tag class {
+            class Tag {
             }
 
             @Tag

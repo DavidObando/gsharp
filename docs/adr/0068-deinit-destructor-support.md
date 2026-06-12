@@ -26,7 +26,7 @@ deinit_declaration = "deinit" block
 There is no name, no parameter list, no return type, no accessibility modifier, no `open`/`override`/`async` modifier, and no `: base()` clause. The body is a regular G# block and binds with `this` and every instance member of the class in scope, exactly like an `init` body.
 
 ```gs
-type Resource class {
+class Resource {
     var handle int32 = 0
 
     init(h int32) {
@@ -73,9 +73,9 @@ The runtime walks the finalizer chain naturally: when a `Derived` instance is re
 
 ### Where `deinit` is allowed
 
-- `type X class { deinit { … } }` — allowed (canonical case).
-- `type X open class { deinit { … } }` — allowed; the deinit still emits as an override of `Finalize` and runs whether the instance is `X` or any subclass.
-- `type X class : Base { deinit { … } }` — allowed even when `Base` has its own `deinit`. The two are independent overrides of `Finalize`; the chain is established by the `finally` of each derived class calling `base.Finalize()`.
+- `class X { deinit { … } }` — allowed (canonical case).
+- `open class X { deinit { … } }` — allowed; the deinit still emits as an override of `Finalize` and runs whether the instance is `X` or any subclass.
+- `class X : Base { deinit { … } }` — allowed even when `Base` has its own `deinit`. The two are independent overrides of `Finalize`; the chain is established by the `finally` of each derived class calling `base.Finalize()`.
 
 ### Where `deinit` is forbidden
 

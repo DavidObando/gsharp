@@ -58,7 +58,7 @@ public class ConversionEmitTests
             package P
             import System
 
-            type Color enum { Red, Green, Blue }
+            enum Color { Red, Green, Blue }
 
             func ToInt(c Color) int32 {
                 return int32(c)
@@ -91,7 +91,7 @@ public class ConversionEmitTests
             package P
             import System
 
-            type Color enum { Red, Green, Blue }
+            enum Color { Red, Green, Blue }
 
             func FromInt(i int32) Color {
                 return Color(i)

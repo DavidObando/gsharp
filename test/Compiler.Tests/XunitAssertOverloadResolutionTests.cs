@@ -26,7 +26,7 @@ public class XunitAssertOverloadResolutionTests
         AssertGsCompilesCleanly("""
             package Probe.Tests
             import Xunit
-            type P class {
+            class P {
                 @Fact
                 func StringEq() {
                     Assert.Equal("hello", "hello")
@@ -43,7 +43,7 @@ public class XunitAssertOverloadResolutionTests
         AssertGsCompilesCleanly("""
             package Probe.Tests
             import Xunit
-            type P class {
+            class P {
                 @Fact
                 func StringEqExplicit() {
                     Assert.Equal[string]("hello", "hello")
@@ -60,7 +60,7 @@ public class XunitAssertOverloadResolutionTests
         AssertGsCompilesCleanly("""
             package Probe.Tests
             import Xunit
-            type P class {
+            class P {
                 @Fact
                 func IntEq() {
                     Assert.Equal(1, 1)
@@ -75,7 +75,7 @@ public class XunitAssertOverloadResolutionTests
         AssertGsCompilesCleanly("""
             package Probe.Tests
             import Xunit
-            type P class {
+            class P {
                 @Fact
                 func StringNotEq() {
                     Assert.NotEqual("a", "b")
@@ -99,7 +99,7 @@ public class XunitAssertOverloadResolutionTests
         AssertGsCompilesCleanlyAgainstRefPack("""
             package Probe.Tests
             import Xunit
-            type P class {
+            class P {
                 @Fact
                 func NullableBoolEqExplicit() {
                     var a bool? = false
@@ -122,7 +122,7 @@ public class XunitAssertOverloadResolutionTests
         AssertGsCompilesCleanlyAgainstRefPack("""
             package Probe.Tests
             import Xunit
-            type P class {
+            class P {
                 @Fact
                 func NullableBoolEqInferred() {
                     var a bool? = false
@@ -142,7 +142,7 @@ public class XunitAssertOverloadResolutionTests
         AssertGsCompilesCleanlyAgainstRefPack("""
             package Probe.Tests
             import Xunit
-            type P class {
+            class P {
                 @Fact
                 func NullableIntEq() {
                     var a int32? = 1
@@ -164,7 +164,7 @@ public class XunitAssertOverloadResolutionTests
         AssertGsCompilesCleanlyAgainstRefPack("""
             package Probe.Tests
             import Xunit
-            type P class {
+            class P {
                 @Fact
                 func NullableStringEq() {
                     var a string? = "x"
@@ -187,7 +187,7 @@ public class XunitAssertOverloadResolutionTests
             import System
             import Xunit
 
-            type P class {
+            class P {
                 @Fact
                 func NullableEnumEq() {
                     var actual DayOfWeek? = DayOfWeek.Monday
@@ -206,7 +206,7 @@ public class XunitAssertOverloadResolutionTests
             import System
             import Xunit
 
-            type P class {
+            class P {
                 @Fact
                 func NullableEnumEqSwapped() {
                     var actual DayOfWeek? = DayOfWeek.Monday
@@ -225,7 +225,7 @@ public class XunitAssertOverloadResolutionTests
             import System
             import Xunit
 
-            type P class {
+            class P {
                 @Fact
                 func BothNullableEnumEq() {
                     var a DayOfWeek? = DayOfWeek.Monday
@@ -245,7 +245,7 @@ public class XunitAssertOverloadResolutionTests
             import System
             import Xunit
 
-            type P class {
+            class P {
                 @Fact
                 func BothNonNullableEnumEq() {
                     Assert.Equal(DayOfWeek.Monday, DayOfWeek.Monday)
@@ -262,7 +262,7 @@ public class XunitAssertOverloadResolutionTests
             package Probe.Tests
             import Xunit
 
-            type P class {
+            class P {
                 @Fact
                 func MixedNullableIntEq() {
                     var actual int32? = 42
@@ -280,7 +280,7 @@ public class XunitAssertOverloadResolutionTests
             package Probe.Tests
             import Xunit
 
-            type P class {
+            class P {
                 @Fact
                 func StringVsNullableStringEq() {
                     var actual string? = "hello"
@@ -303,7 +303,7 @@ public class XunitAssertOverloadResolutionTests
             import System
             import Xunit
 
-            type P class {
+            class P {
                 @Fact
                 func UserEnumNullableEq() {
                     var actual DayOfWeek? = DayOfWeek.Monday

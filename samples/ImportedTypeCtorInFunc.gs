@@ -26,7 +26,7 @@ func buildQualified() string {
 }
 
 // Construction inside a method body shares the same binding path.
-type Joiner class {
+class Joiner {
     func join() string {
         var sb = System.Text.StringBuilder()
         sb.Append(buildSimple())

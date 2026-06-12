@@ -214,7 +214,7 @@ public class Issue523ClosureCaptureByRefTests
             package P
             import System
 
-            type Holder class {
+            class Holder {
                 public var First func() int32
                 public var Second func() int32
                 init() {}

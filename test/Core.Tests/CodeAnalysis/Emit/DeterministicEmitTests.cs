@@ -43,13 +43,13 @@ public class DeterministicEmitTests
     private const string RepresentativeSource = @"package Det
 import System
 
-type Color enum {
+enum Color {
     Red,
     Green,
     Blue,
 }
 
-type Counter data struct {
+data struct Counter {
     var N int32
 }
 

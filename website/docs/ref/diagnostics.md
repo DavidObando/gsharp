@@ -63,11 +63,11 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0103 | Error | Method receiver must be a struct or class declared in the same package. | Receiver type is a built-in or external type. |
 | GS0104 | Error | `data struct` requires at least one field. | `data struct Foo {}` — use `struct` instead. |
 | GS0105 | Error | `inline struct` requires exactly one field. | `inline struct Foo { a int; b int }` has two fields. |
-| GS0106 | Error | `inline` cannot be combined with `data` or `record`. | `inline data struct Foo { … }` is not legal. |
+| GS0106 | Error | `inline` cannot be combined with `data`. | `inline data struct Foo { … }` is not legal. (Historical: the `record` keyword was removed by ADR-0078; pre-removal this diagnostic also covered `inline record`.) |
 | GS0107 | Error | `inline struct` cannot be combined with `open`. | `open inline struct Foo { … }` is not legal. |
 | GS0108 | Error | Inline struct synthesised member conflicts with an explicit declaration. | An `inline struct` auto-generates certain member names that cannot be re-declared. |
-| GS0109 | Error | `record` is an alias for `data struct` and cannot be combined with `data`. | `data record Foo { … }` — use either `data struct` or `record`. |
-| GS0110 | Error | Empty enum declaration. | `type Color enum {}` — an enum must have at least one member. |
+| GS0109 | Error | (Historical) `record` was an alias for `data struct` and could not be combined with `data`. The `record` keyword was removed by ADR-0078; GS0307 replaces this on legacy sources. | `data record Foo { … }` — use `data struct Foo` or `data class Foo`. |
+| GS0110 | Error | Empty enum declaration. | `enum Color {}` — an enum must have at least one member. |
 | GS0111 | Error | Duplicate enum member. | Two members in the same `enum` share a name. |
 | GS0112 | Error | Undefined enum member. | `Color.Purple` where `Purple` is not a declared member of `Color`. |
 | GS0113 | Error | Undefined type. | A type name referenced in code does not exist. |
@@ -177,7 +177,7 @@ ADR-0047 introduces Kotlin-style attribute syntax (`@Foo(...)`) and the `@Attrib
 | GS0200 | Error | Type is not an attribute class (it does not derive from `System.Attribute`). | `@int func Foo() {}`. |
 | GS0201 | Error | Attribute target is not valid at this position. | `@field:Obsolete func Foo() {}` — `field` is not allowed on a function. |
 | GS0202 | Error | Attribute arguments must be compile-time constants. | `@Trace(myVar)` — argument is not a primitive, string, `typeof`, enum, or 1-D array thereof. |
-| GS0203 | Error | Class tagged `@Attribute` cannot also declare an explicit base class. | `@Attribute type Trace class : Other {}` — the `@Attribute` sugar implies `: System.Attribute`. |
+| GS0203 | Error | Class tagged `@Attribute` cannot also declare an explicit base class. | `@Attribute class Trace : Other {}` — the `@Attribute` sugar implies `: System.Attribute`. |
 | GS0204 | **Warning** (Error if `IsError=true`) | Reference to a symbol marked `[Obsolete]`. | Calling a function, instantiating a class (`Old(5)`), writing a struct literal (`Old{}`), naming a struct/class/interface/enum in a type clause, reading an obsolete parameter, reading/writing an obsolete `var`/`let`/`const`, reading an obsolete enum member (`Color.Red`), or reading/writing an obsolete struct/class field (`p.Old`) — all declared with `@Obsolete("use Bar")`. Severity is promoted to error when the attribute's second argument is `true`. |
 | GS0205 | Error | Attribute is reserved for compiler synthesis. | `@CompilerGenerated`, `@Extension`, `@AsyncStateMachine`, `@Nullable`, or `@NullableContext` written in user source. |
 | GS0206 | Error | Annotations are only allowed on variable declarations, not on this statement. | `@Obsolete\nreturn` inside a function body — annotations may precede `var`/`let`/`const` but no other statement kind. |
@@ -196,9 +196,9 @@ Issue #306 covers user class constructor flow — explicit `init(...)` construct
 |----|----------|-------------|-----------------|
 | GS0213 | Error | A base-constructor argument list requires an explicit base class. | `init() : base(1) { }` written on a class with no `: BaseType` clause. |
 | GS0214 | Error | Class `{base}` has no accessible constructor that takes `{N}` argument(s). | `init() : base(1, 2)` when the base only declares `init()`. |
-| GS0215 | Error | Class `{name}` cannot declare both a primary constructor and an explicit `init` constructor. | `type Customer class(id int32) { init(name string) { } }`. |
+| GS0215 | Error | Class `{name}` cannot declare both a primary constructor and an explicit `init` constructor. | `class Customer(id int32) { init(name string) { } }`. |
 | GS0216 | Error | Class `{name}` declares multiple `init` constructors; only a single explicit constructor is supported. | Two `init(...)` declarations in the same class body. |
-| GS0217 | Error | Generic class `{name}` with an explicit `init` constructor cannot be constructed; generic explicit constructors are not supported. | `type Box[T] class { init(x T) { } }` then `Box[int32](42)`. |
+| GS0217 | Error | Generic class `{name}` with an explicit `init` constructor cannot be constructed; generic explicit constructors are not supported. | `class Box[T] { init(x T) { } }` then `Box[int32](42)`. |
 
 ### Delegate conversion diagnostics (GS0218)
 
@@ -228,7 +228,7 @@ A by-ref-like type — a CLR `ref struct` carrying `System.Runtime.CompilerServi
 G# can also **declare** its own by-ref-like value types with a `ref` modifier on a `struct` declaration:
 
 ```gsharp
-type Window ref struct {
+ref struct Window {
     Items ReadOnlySpan[int32]   // a ref struct may hold by-ref-like fields
     Label string
 }
@@ -556,5 +556,49 @@ Cause/fix:
   `await for x in seq`, `case v := <-ch { … }` → `case let v = <-ch { …
   }`. The three-part `for` init slot accepts a `var`/`let` declaration,
   e.g. `for var i = 0; i < n; i++` (previously written as `for i := 0;
-  i < n; i++`).
+## Kotlin/Swift-style type-declaration head (GS0306–GS0313)
+
+ADR-0078 (issue #718) removes the legacy `type Name <kind> ...` aggregate
+head and the `record` keyword. The aggregate keyword (`class`, `struct`,
+`enum`, `interface`) is the declaration keyword. These diagnostics
+catalogue the invalid combinations and the legacy migrations. See
+[ADR-0078](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0078-kotlin-style-type-declaration-grammar.md)
+for the full grammar and rationale.
+
+| ID | Severity | Message |
+|----|----------|---------|
+| GS0306 | Error | Legacy `type Name <kind>` aggregate declaration — drop `type`; the kind keyword is now the head (ADR-0078). |
+| GS0307 | Error | The `record` keyword has been removed (ADR-0078); use `data struct Name` (value-typed) or `data class Name` (reference-typed). |
+| GS0308 | Error | `inline` is only legal on `struct` declarations (ADR-0078). |
+| GS0309 | Error | `open` is only legal on `class` declarations (ADR-0078). |
+| GS0310 | Error | `sealed` is only legal on `class` and `interface` declarations (ADR-0078). |
+| GS0311 | Error | `data` and `inline` are mutually exclusive (ADR-0078). |
+| GS0312 | Error | `open` and `sealed` are mutually exclusive (ADR-0078). |
+| GS0313 | Warning | Non-exhaustive `switch` over a sealed-hierarchy base or discriminated-union enum (ADR-0078). |
+
+Cause/fix:
+
+- **GS0306** — `type Foo class { … }` → `class Foo { … }`. Same for
+  `struct`, `enum`, `interface`. Type aliases (`type Count = int32`) and
+  named delegates (`type Greeter = delegate func(name string)`) are
+  unaffected.
+- **GS0307** — `record Point { x int32; y int32 }` →
+  `data struct Point(x int32, y int32)` (preserves value semantics) or
+  `data class Point(x int32, y int32)` if reference semantics are
+  desired.
+- **GS0308** — `inline class Foo` → `inline struct Foo`. Inline classes
+  do not exist; the wrapper must be a value type.
+- **GS0309** — `open struct Foo`, `open enum Foo`, `open interface Foo`
+  → drop `open`. Structs cannot be inherited from, enums and interfaces
+  are open by default.
+- **GS0310** — `sealed struct Foo` → drop `sealed`. `sealed enum Foo` →
+  use a discriminated-union enum (`enum Foo { … }` with payload-bearing
+  cases) or drop `sealed`.
+- **GS0311** — `data inline struct Foo` → choose one (`data struct` for
+  the record contract, `inline struct` for the newtype wrapper).
+- **GS0312** — `open sealed class Foo` → choose one. `open` admits
+  cross-package subclasses; `sealed` is the closed Kotlin hierarchy.
+- **GS0313** — Add missing cases to the `switch`, or add a default arm.
+  For `sealed class Shape` with subclasses `Circle`, `Square`, write
+  `switch s { case c is Circle: ... case sq is Square: ... }`.
 

@@ -6,7 +6,7 @@ package GSharp.Refactoring.RefStructByRefLike
 
 import System
 
-type Acc ref struct {
+ref struct Acc {
     var Total int32
 }
 

@@ -7,7 +7,7 @@ using System.Collections.Immutable;
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
-/// Represents a Go-style <c>type Name struct { ... }</c> declaration (Phase 3.B.1).
+/// Represents a Go-style <c>struct Name { ... }</c> declaration (Phase 3.B.1).
 /// </summary>
 public sealed class StructDeclarationSyntax : MemberSyntax
 {
@@ -436,7 +436,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <summary>Gets the closing brace.</summary>
     public SyntaxToken CloseBraceToken { get; }
 
-    /// <summary>Gets or sets the optional type-parameter list (Phase 4.3 / ADR-0020), e.g. <c>[T any]</c> in <c>type Box[T any] class { ... }</c>. Assigned by the parser when the declaration is generic; <c>null</c> otherwise.</summary>
+    /// <summary>Gets or sets the optional type-parameter list (Phase 4.3 / ADR-0020), e.g. <c>[T any]</c> in <c>class Box[T any] { ... }</c>. Assigned by the parser when the declaration is generic; <c>null</c> otherwise.</summary>
     public TypeParameterListSyntax TypeParameterList { get; set; }
 
     /// <summary>Gets or sets the optional <c>ref</c> contextual keyword (issue #367). Non-null marks this <c>struct</c> as by-ref-like (<c>ref struct</c>). Assigned by the parser; <c>null</c> otherwise.</summary>
@@ -457,7 +457,13 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <summary>Gets a value indicating whether this declaration carries an explicit base-constructor argument list (issue #306).</summary>
     public bool HasBaseConstructorArguments => BaseConstructorOpenParenthesisToken != null;
 
-    /// <summary>Gets or sets the standalone user-defined constructors (<c>init(...)</c>) declared in this class body (issue #306). Empty when the class declares none. Assigned by the parser.</summary>
+    /// <summary>Gets or sets the optional <c>sealed</c> contextual keyword (ADR-0078). Non-null marks a class as forming a closed hierarchy (subtypes confined to the same package). Always null for <c>struct</c>; the parser diagnoses <c>sealed struct</c> with GS0310.</summary>
+    public SyntaxToken SealedKeyword { get; set; }
+
+    /// <summary>Gets a value indicating whether this class was declared <c>sealed</c> (ADR-0078).</summary>
+    public bool IsSealed => SealedKeyword != null;
+
+    /// <summary>Gets or sets the optional standalone user-defined constructors (<c>init(...)</c>) declared in this class body (issue #306). Empty when the class declares none. Assigned by the parser.</summary>
     public System.Collections.Immutable.ImmutableArray<ConstructorDeclarationSyntax> Constructors { get; set; }
         = System.Collections.Immutable.ImmutableArray<ConstructorDeclarationSyntax>.Empty;
 

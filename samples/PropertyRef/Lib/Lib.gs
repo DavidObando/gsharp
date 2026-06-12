@@ -3,13 +3,13 @@ package PropertyRefLib
 import System
 
 // Auto-property (read-write)
-type Person class {
+class Person {
     prop Name string
     prop Age int32
 }
 
 // Computed property (read-only)
-type Rect class {
+class Rect {
     prop Width int32
     prop Height int32
     prop Area int32 {
@@ -18,7 +18,7 @@ type Rect class {
 }
 
 // Computed property (read-write) with custom setter parameter
-type Clamped class {
+class Clamped {
     prop raw int32
     prop Value int32 {
         get { return this.raw }
@@ -31,19 +31,19 @@ type Clamped class {
 }
 
 // Virtual and override properties
-type Animal open class {
+open class Animal {
     open prop Sound string {
         get { return "..." }
     }
 }
 
-type Dog class : Animal {
+class Dog : Animal {
     override prop Sound string {
         get { return "Woof" }
     }
 }
 
-type Cat class : Animal {
+class Cat : Animal {
     override prop Sound string {
         get { return "Meow" }
     }

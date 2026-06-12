@@ -7,7 +7,7 @@ package GSharp.Example.Records
 
 import System
 
-type Point record {
+data struct Point {
     var X int32
     var Y int32
 }

@@ -46,7 +46,7 @@ public class ImportedAttributeBindingTests
             import GSharp.Core.Tests.Fixtures
 
             @ImportedMarker
-            type Hello class {
+            class Hello {
             }
             """;
 
@@ -69,7 +69,7 @@ public class ImportedAttributeBindingTests
             package Demo
             import GSharp.Core.Tests.Fixtures
 
-            type Hello class {
+            class Hello {
                 @ImportedMarker
                 func Index() string {
                     return "hi"
@@ -92,7 +92,7 @@ public class ImportedAttributeBindingTests
             import GSharp.Core.Tests.Fixtures
 
             @ImportedDefault
-            type Hello class {
+            class Hello {
             }
             """;
 

@@ -81,7 +81,7 @@ public class Issue615InterpreterEnumArithmeticTests
     {
         var output = RunSubmission(
             "import System\n" +
-            "type Color enum {\n" +
+            "enum Color {\n" +
             "    Red,\n" +
             "    Green,\n" +
             "    Blue,\n" +
@@ -96,7 +96,7 @@ public class Issue615InterpreterEnumArithmeticTests
     {
         var output = RunSubmission(
             "import System\n" +
-            "type Color enum {\n" +
+            "enum Color {\n" +
             "    Red,\n" +
             "    Green,\n" +
             "    Blue,\n" +
@@ -110,7 +110,7 @@ public class Issue615InterpreterEnumArithmeticTests
     {
         var output = RunSubmission(
             "import System\n" +
-            "type Color enum {\n" +
+            "enum Color {\n" +
             "    Red,\n" +
             "    Green,\n" +
             "    Blue,\n" +

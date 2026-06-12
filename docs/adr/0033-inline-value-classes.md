@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Partially superseded by ADR-0078 — the `inline struct` semantics described below are unchanged; the declaration head is updated to the Kotlin/Swift form (drop the `type` keyword). Combination rules (inline rejects with `class`, `data`, and `open`) are catalogued canonically in ADR-0078 §3 and emitted as diagnostics GS0308 / GS0311.
 
 ## Context
 
@@ -10,7 +10,7 @@ Phase 7.4 adds a missing value-wrapper shape that `data struct` does not address
 
 ## Decision
 
-GSharp adds a contextual `inline` modifier on `struct` declarations: `type UserId inline struct(value string)`. An inline struct must have exactly one field, typically from the primary constructor, and the body may be omitted when empty. The single field and the struct itself are implicitly readonly. Inline structs synthesize a minimal single-field contract: `Equals(object)`, `Equals(Name)`, `GetHashCode()`, `ToString()`, `op_Equality`, `op_Inequality`, and `Deconstruct(out T field)`. The emitted CLR type is a value type with sequential layout, an init-only public field, and `System.Runtime.CompilerServices.IsReadOnlyAttribute` so C# consumers see the readonly-struct intent. `inline` cannot combine with `data`, `record`, or `open`.
+GSharp adds a contextual `inline` modifier on `struct` declarations: `inline struct UserId(value string)`. An inline struct must have exactly one field, typically from the primary constructor, and the body may be omitted when empty. The single field and the struct itself are implicitly readonly. Inline structs synthesize a minimal single-field contract: `Equals(object)`, `Equals(Name)`, `GetHashCode()`, `ToString()`, `op_Equality`, `op_Inequality`, and `Deconstruct(out T field)`. The emitted CLR type is a value type with sequential layout, an init-only public field, and `System.Runtime.CompilerServices.IsReadOnlyAttribute` so C# consumers see the readonly-struct intent. `inline` cannot combine with `data`, `record`, or `open`.
 
 ## Rationale
 

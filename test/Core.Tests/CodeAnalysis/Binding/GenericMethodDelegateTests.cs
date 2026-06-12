@@ -26,7 +26,7 @@ public class GenericMethodDelegateTests
     public void GenericMethod_DelegateParameterOverTypeParameters_Binds()
     {
         var source = @"
-type Box[TItem] class {
+class Box[TItem] {
     var Value TItem
     func Map[TResult](f (TItem) -> TResult) TResult {
         return f(this.Value)
@@ -41,7 +41,7 @@ type Box[TItem] class {
     public void GenericMethod_DelegateParameter_ValueTypeRoundTrips()
     {
         var source = @"
-type Box[TItem] class {
+class Box[TItem] {
     var Value TItem
     func Map[TResult](f (TItem) -> TResult) TResult {
         return f(this.Value)
@@ -59,7 +59,7 @@ b.Map[int32](func(x int32) int32 { return x + x })
     public void GenericMethod_DelegateParameter_ReferenceTypeReturn()
     {
         var source = @"
-type Box[TItem] class {
+class Box[TItem] {
     var Value TItem
     func Map[TResult](f (TItem) -> TResult) TResult {
         return f(this.Value)
@@ -77,7 +77,7 @@ b.Map[string](func(x int32) string { return ""mapped"" })
     public void GenericMethod_MultipleDelegateParameters_Bind()
     {
         var source = @"
-type Box[TItem] class {
+class Box[TItem] {
     var Value TItem
     func Fold[TAcc](seed TAcc, f (TAcc, TItem) -> TAcc) TAcc {
         return f(seed, this.Value)

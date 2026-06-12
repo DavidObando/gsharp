@@ -14,40 +14,54 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 6.7 — <c>record</c> as a parse-time alias for <c>data struct</c>.
+/// ADR-0078 / issue #718: the legacy <c>record</c> keyword and the
+/// <c>type Name record { ... }</c> declaration head have been removed in
+/// favor of the canonical <c>data class</c> / <c>data struct</c> forms.
+/// These tests pin the migration shape and the new declaration semantics.
 /// </summary>
 public class RecordAliasTests
 {
     [Fact]
-    public void RecordAlias_ProducesDataStructSymbolShape()
+    public void DataClass_ProducesClassSymbolShape()
     {
         var record = BuildStruct(@"
-type Point record {
-    var X int32
-    var Y int32
-}
-0
-");
-        var dataStruct = BuildStruct(@"
-type Point data struct {
+data class Point {
     var X int32
     var Y int32
 }
 0
 ");
 
-        Assert.Equal(dataStruct.Name, record.Name);
-        Assert.Equal(dataStruct.IsData, record.IsData);
-        Assert.False(record.IsClass);
-        Assert.Equal(dataStruct.Fields.Select(f => f.Name), record.Fields.Select(f => f.Name));
-        Assert.Equal(dataStruct.Fields.Select(f => f.Type.Name), record.Fields.Select(f => f.Type.Name));
+        Assert.Equal("Point", record.Name);
+        Assert.True(record.IsData);
+        Assert.True(record.IsClass);
+        Assert.Collection(
+            record.Fields,
+            f => Assert.Equal("X", f.Name),
+            f => Assert.Equal("Y", f.Name));
     }
 
     [Fact]
-    public void RecordAlias_EqualValues_AreEqual()
+    public void DataStruct_ProducesStructSymbolShape()
+    {
+        var dataStruct = BuildStruct(@"
+data struct Point {
+    var X int32
+    var Y int32
+}
+0
+");
+
+        Assert.Equal("Point", dataStruct.Name);
+        Assert.True(dataStruct.IsData);
+        Assert.False(dataStruct.IsClass);
+    }
+
+    [Fact]
+    public void DataStruct_EqualValues_AreEqual()
     {
         var result = Evaluate(@"
-type Point record {
+data struct Point {
     var X int32
     var Y int32
 }
@@ -59,10 +73,10 @@ Point{X: 1, Y: 2} == Point{X: 1, Y: 2}
     }
 
     [Fact]
-    public void RecordAlias_GenericDataStruct_Binds()
+    public void DataClass_GenericDataClass_Binds()
     {
         var result = Evaluate(@"
-type Pair[A any, B any] record {
+data class Pair[A any, B any] {
     var First A
     var Second B
 }
@@ -75,7 +89,23 @@ p.Second
     }
 
     [Fact]
-    public void RecordAlias_ContextualKeywordFallback_AllowsVariableNamedRecord()
+    public void RecordKeyword_AsTypeKind_IsRejected()
+    {
+        // ADR-0078 removes the `record` keyword. The legacy
+        // `type Name record { ... }` head is reported with GS0307 (and the
+        // generic GS0306 legacy-head migration diagnostic).
+        var result = Evaluate(@"
+type Foo record {
+    var Value int32
+}
+0
+");
+        Assert.NotEmpty(result.Diagnostics);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0307" || d.Id == "GS0306");
+    }
+
+    [Fact]
+    public void RecordKeyword_AsIdentifier_StillBindsAsValueName()
     {
         var result = Evaluate(@"
 let record = 42
@@ -87,10 +117,10 @@ record
     }
 
     [Fact]
-    public void RecordAlias_ContextualKeywordFallback_AllowsFieldNamedRecord()
+    public void RecordKeyword_AsFieldName_StillBindsAsIdentifier()
     {
         var result = Evaluate(@"
-type X struct {
+struct X {
     var record int32
 }
 let x = X{record: 5}
@@ -102,59 +132,19 @@ x.record
     }
 
     [Fact]
-    public void RecordAlias_OpenRecord_Diagnoses()
+    public void LegacyTypeHead_RejectedWithMigrationDiagnostic()
     {
+        // ADR-0078: the entire `type Name <kind> ...` head is gone — the kind
+        // keyword has to come first. The diagnostic should point at the new
+        // grammar.
         var result = Evaluate(@"
-type Foo open record {
+type Foo class {
     var Value int32
 }
 0
 ");
-
         Assert.NotEmpty(result.Diagnostics);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Unexpected token"));
-    }
-
-    [Fact]
-    public void RecordAlias_DataRecord_Diagnoses()
-    {
-        var result = Evaluate(@"
-type Foo data record {
-    var Value int32
-}
-0
-");
-
-        Assert.NotEmpty(result.Diagnostics);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("cannot be combined with 'data'"));
-    }
-
-    [Fact]
-    public void RecordAlias_SealedRecord_Diagnoses()
-    {
-        var result = Evaluate(@"
-type Foo sealed record {
-    var Value int32
-}
-0
-");
-
-        Assert.NotEmpty(result.Diagnostics);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Unexpected token"));
-    }
-
-    [Fact]
-    public void RecordAlias_FunctionParameterTypeNameRecord_RemainsIdentifier()
-    {
-        var result = Evaluate(@"
-func Use(r record) int32 {
-    var return 0
-}
-0
-");
-
-        Assert.NotEmpty(result.Diagnostics);
-        Assert.Contains(result.Diagnostics, d => d.Message == "Type 'record' doesn't exist.");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0306");
     }
 
     private static StructSymbol BuildStruct(string source)

@@ -44,7 +44,7 @@ public sealed class EnumSymbol : TypeSymbol
     /// <summary>Gets the enum members in declaration order.</summary>
     public ImmutableArray<EnumMemberSymbol> Members { get; private set; }
 
-    /// <summary>Gets the CLR underlying type for enum values.</summary>
+    /// <summary>Gets the CLR underlying enum for values.</summary>
     public TypeSymbol UnderlyingType => TypeSymbol.Int32;
 
     /// <summary>Sets the enum members after the owning enum symbol has been created.</summary>

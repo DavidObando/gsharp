@@ -69,7 +69,7 @@ public class GenericMethodUserTypeArgUnderReferencesTests
             package App
             import System
 
-            type Clock class {
+            class Clock {
             }
 
             func main() {
@@ -88,7 +88,7 @@ public class GenericMethodUserTypeArgUnderReferencesTests
             package App
             import System
 
-            type Clock class {
+            class Clock {
                 var Ticks int32
                 func Read() int32 {
                     return Ticks

@@ -24,7 +24,7 @@ public class LetFieldEmitTests
             package P
             import System
 
-            type Holder class {
+            class Holder {
                 public let Name string = "x"
                 init() {}
             }
@@ -46,7 +46,7 @@ public class LetFieldEmitTests
             package P
             import System
 
-            type Holder class {
+            class Holder {
                 public var Name string = "x"
                 init() {}
             }

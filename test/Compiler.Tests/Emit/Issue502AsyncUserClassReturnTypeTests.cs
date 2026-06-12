@@ -31,9 +31,9 @@ public class Issue502AsyncUserClassReturnTypeTests
             import System
             import System.Threading.Tasks
 
-            type AsyncPC class(Value int32) {}
+            class AsyncPC(Value int32) {}
 
-            type Probe class {
+            class Probe {
                 async func MakePC() AsyncPC {
                     await Task.Delay(1)
                     return AsyncPC(7)
@@ -68,12 +68,12 @@ public class Issue502AsyncUserClassReturnTypeTests
             import System
             import System.Threading.Tasks
 
-            type AsyncCC class {
+            class AsyncCC {
                 var Value int32
                 init() { Value = 0 }
             }
 
-            type Probe class {
+            class Probe {
                 async func MakeCC() AsyncCC {
                     await Task.Delay(1)
                     var cc = AsyncCC()
@@ -110,9 +110,9 @@ public class Issue502AsyncUserClassReturnTypeTests
             import System
             import System.Threading.Tasks
 
-            type Container class(X int32, Y int32) {}
+            class Container(X int32, Y int32) {}
 
-            type Svc class {
+            class Svc {
                 async func MakeContainer() Container {
                     await Task.Delay(1)
                     return Container(10, 20)
@@ -152,9 +152,9 @@ public class Issue502AsyncUserClassReturnTypeTests
             import System
             import System.Threading.Tasks
 
-            type Box class(Item int32) {}
+            class Box(Item int32) {}
 
-            type Svc class {
+            class Svc {
                 async func MakeBox() Box {
                     await Task.Delay(1)
                     return Box(99)
@@ -194,7 +194,7 @@ public class Issue502AsyncUserClassReturnTypeTests
             import System
             import System.Threading.Tasks
 
-            type Point class(X int32, Y int32) {}
+            class Point(X int32, Y int32) {}
 
             async func Bad() {
                 let p = Point(1, 2)

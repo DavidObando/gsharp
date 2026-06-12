@@ -32,16 +32,16 @@ let names = map[int32]string{1: "one", 2: "two"}
 
 Slice design rationale is in [ADR-0016](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0016-slice-storage.md).
 
-## Structs, data structs, records, and inline structs
+## Structs, data classes/structs, and inline structs
 
-Use plain `struct` for value-like aggregates, `data struct` for structural equality and copy/update ergonomics, `record` as the data-struct alias, and `inline struct` for a single-field value wrapper.
+Use plain `struct` for value-like aggregates, `data struct` for value-typed records with structural equality and copy/update ergonomics, `data class` for the reference-typed counterpart, and `inline struct` for a single-field value wrapper. The `record` keyword was removed by [ADR-0078](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0078-kotlin-style-type-declaration-grammar.md); migrate to `data struct` (preserves value semantics) or `data class` (reference semantics).
 
 ```gsharp title="samples/DataStruct.gs"
 package GSharp.Example.DataStruct
 
 import System
 
-type Point data struct {
+data struct Point {
     X int32
     Y int32
 }
@@ -64,7 +64,7 @@ Interfaces define method, property, and event signatures. Current implementation
 Enums are closed sets of named values. They cannot be generic and must contain at least one member. Equality and switch exhaustiveness diagnostics understand enum members.
 
 ```gsharp
-type Status enum { Pending, Complete, Failed }
+enum Status { Pending, Complete, Failed }
 ```
 
 ## Sequences and channels
@@ -80,11 +80,11 @@ A **named delegate type** is declared with `type Name = delegate func(...)` (ADR
 ```gsharp
 type Handler = delegate func(sender Object, e EventArgs)
 
-type Button class {
+class Button {
     event Click Handler
 }
 ```
 
 ## Generics and variance
 
-G# uses bracketed generics: declarations such as `type Box[T any] class { ... }` and instantiations such as `Box[int32]`. Type parameters can use `in` and `out` variance markers and named constraints. The implementation supports metadata specs and inference, but some open or partially constructed generic shapes are erased to `object` in emit paths. See [ADR-0004](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0004-generics-scope.md), [ADR-0020](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0020-generic-brackets.md), and [ADR-0021](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0021-generic-variance.md).
+G# uses bracketed generics: declarations such as `class Box[T any] { ... }` and instantiations such as `Box[int32]`. Type parameters can use `in` and `out` variance markers and named constraints. The implementation supports metadata specs and inference, but some open or partially constructed generic shapes are erased to `object` in emit paths. See [ADR-0004](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0004-generics-scope.md), [ADR-0020](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0020-generic-brackets.md), and [ADR-0021](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0021-generic-variance.md).

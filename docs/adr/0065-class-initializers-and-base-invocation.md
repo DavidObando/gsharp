@@ -9,7 +9,7 @@
 
 G# classes today support two constructor forms (ADR-0003):
 
-1. **Primary constructor** — `type C class(p T) { … }`: parameters declare same-named fields; implicitly chains to a parameterless base ctor (or an explicit base via `: Base(args)`).
+1. **Primary constructor** — `class C(p T) { … }`: parameters declare same-named fields; implicitly chains to a parameterless base ctor (or an explicit base via `: Base(args)`).
 2. **Explicit `init` constructor** — `init(params) [: base(args)] { body }`: arbitrary statement body that initialises fields manually.
 
 ADR-0003 originally stated "a class may declare *either* form but not both, and at most one `init` constructor." ADR-0063 §9 relaxed the second restriction: multiple `init(...)` overloads are now supported for binding, overload resolution, and evaluation. However, several aspects remain unspecified:
@@ -35,7 +35,7 @@ A **designated initializer** is the canonical path that fully constructs a class
 Syntax — an `init` member without a `convenience` modifier:
 
 ```gsharp
-type Rect class {
+class Rect {
     var Width int32
     var Height int32
     var Area int32
@@ -57,7 +57,7 @@ A **convenience initializer** is a secondary entry point that must delegate to a
 Syntax — the contextual modifier `convenience` precedes `init`:
 
 ```gsharp
-type Rect class {
+class Rect {
     var Width int32
     var Height int32
     var Area int32
@@ -81,11 +81,11 @@ The delegation call uses bare `init(args)` (calling another initializer in the s
 A designated initializer in a derived class invokes a base-class designated initializer using the existing `: base(args)` syntax (established in ADR-0003 / issue #306):
 
 ```gsharp
-type Animal open class(Name string) {
+open class Animal(Name string) {
     func Speak() string { return Name }
 }
 
-type Dog class : Animal {
+class Dog : Animal {
     var Tricks int32
 
     init(name string, tricks int32) : base(name) {
@@ -117,12 +117,12 @@ When a class declares both a primary-constructor parameter list and one or more 
 
 Specifically:
 
-- `type C class(a int32, b string) { … }` synthesises a designated `init(a int32, b string)` that assigns the primary-ctor parameters to their corresponding fields.
+- `class C(a int32, b string) { … }` synthesises a designated `init(a int32, b string)` that assigns the primary-ctor parameters to their corresponding fields.
 - Additional `init(...)` bodies declared in the class body are additional designated (or convenience) initializers.
 - The synthesised primary-ctor init is treated identically to any user-written designated init for overload resolution, inheritance, and emission purposes.
 - If a user-written `init` has the same parameter signature as the primary ctor, it is a compile-time error (duplicate overload per ADR-0063 §1).
 
-This directly unblocks issue #656: a class with no primary-ctor parameter list (e.g. `type FakeJobService class : IJobService { … }`) that declares an explicit `init()` body **is** a class whose sole designated initializer is that explicit `init()`. The emitter selects it as the "emitted primary ctor" without requiring primary-ctor parameters.
+This directly unblocks issue #656: a class with no primary-ctor parameter list (e.g. `class FakeJobService : IJobService { … }`) that declares an explicit `init()` body **is** a class whose sole designated initializer is that explicit `init()`. The emitter selects it as the "emitted primary ctor" without requiring primary-ctor parameters.
 
 **Emitter selection rule** (replaces the current heuristic that trips GS9998):
 
@@ -161,7 +161,7 @@ package Probe.Tests
 import Probe.CSharp
 import System.Collections.Generic
 
-type FakeJobService class : IJobService {
+class FakeJobService : IJobService {
     var Active List[JobSnapshot]
 
     init() {
@@ -179,7 +179,7 @@ type FakeJobService class : IJobService {
 ### Example 2 — Primary-constructor syntax AND a secondary `init` body
 
 ```gsharp
-type LifecycleTab class(Title string, Key string) {
+class LifecycleTab(Title string, Key string) {
     var Active bool = false
 
     convenience init(key string) {
@@ -196,7 +196,7 @@ The primary ctor synthesises `init(Title string, Key string)` as designated. The
 ### Example 3 — Multiple designated initializers (no inheritance)
 
 ```gsharp
-type Color class {
+class Color {
     var R float64
     var G float64
     var B float64
@@ -226,7 +226,7 @@ var black = Color()
 ### Example 4 — Derived class with base invocation and two-phase ordering
 
 ```gsharp
-type Vehicle open class {
+open class Vehicle {
     var Wheels int32
 
     init(wheels int32) {
@@ -234,7 +234,7 @@ type Vehicle open class {
     }
 }
 
-type Car class : Vehicle {
+class Car : Vehicle {
     var Brand string
 
     init(brand string, wheels int32) : base(wheels) {
@@ -256,7 +256,7 @@ If the programmer tried to read `Wheels` **before** assigning `Brand`, the compi
 ### Example 5 — Convenience initializer delegating to designated
 
 ```gsharp
-type HttpClient open class {
+open class HttpClient {
     var BaseUrl string
     var Timeout int32
 

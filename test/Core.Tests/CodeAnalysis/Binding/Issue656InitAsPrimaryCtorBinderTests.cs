@@ -25,7 +25,7 @@ public class Issue656InitAsPrimaryCtorBinderTests
     public void BareInit_Parameterless_SetsExplicitConstructor()
     {
         var source = @"
-type Counter class {
+class Counter {
     var Value int32
     init() {
         Value = 0
@@ -47,7 +47,7 @@ var c = Counter()
     {
         // `func init()` should be treated identically to bare `init()`
         var source = @"
-type Counter class {
+class Counter {
     var Value int32
     func init() {
         Value = 0
@@ -68,7 +68,7 @@ var c = Counter()
     public void FuncInit_WithParameters_SetsExplicitConstructor()
     {
         var source = @"
-type Greeting class {
+class Greeting {
     var Message string
     func init(name string) {
         Message = name
@@ -90,7 +90,7 @@ var g = Greeting(""hi"")
     public void MultipleInits_SetsExplicitConstructors()
     {
         var source = @"
-type Color class {
+class Color {
     var R int32
     var G int32
     var B int32
@@ -122,7 +122,7 @@ var c = Color(1, 2, 3)
     public void FuncInit_WithDefaultFields_BindsCleanly()
     {
         var source = @"
-type Config class {
+class Config {
     var Name string = ""default""
     var Count int32
     func init() {
@@ -146,7 +146,7 @@ var cfg = Config()
         // ADR-0065 §5: primary ctor + explicit `func init(age int32)` with
         // distinct signatures coexist; both are designated initializers.
         var source = @"
-type Dual class(Name string) {
+class Dual(Name string) {
     var Age int32
     func init(age int32) {
         Age = age
@@ -169,7 +169,7 @@ var d = Dual(""x"")
     public void NoInit_NoPrimaryCtor_HasNoExplicitConstructor()
     {
         var source = @"
-type Plain class {
+class Plain {
     var Value int32
 }
 
@@ -187,7 +187,7 @@ var p = Plain()
     public void PrimaryCtor_Only_HasPrimaryConstructor()
     {
         var source = @"
-type Box class(Value int32) { }
+class Box(Value int32) { }
 
 var b = Box(42)
 ";

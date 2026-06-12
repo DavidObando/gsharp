@@ -1,7 +1,7 @@
 // file: AsyncClassMethod.gs
 //
 // Issue #502 exit sample. `async func` declared as an instance member of a
-// `type X class { ... }` body — and also inside a `shared { ... }` static
+// `class X { ... }` body — and also inside a `shared { ... }` static
 // block — parses, binds, and emits the same Task / Task<T> shape as a
 // top-level `async func` (see AsyncTask.gs).
 //
@@ -14,7 +14,7 @@ package GSharp.Samples.AsyncClassMethod
 import System
 import System.Threading.Tasks
 
-type Adder class(Base int32) {
+class Adder(Base int32) {
     async func Bump(n int32) int32 {
         await Task.Delay(1)
         return Base + n
@@ -26,7 +26,7 @@ type Adder class(Base int32) {
     }
 }
 
-type Math2 class {
+class Math2 {
     shared {
         async func Triple(n int32) int32 {
             await Task.Delay(1)

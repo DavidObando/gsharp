@@ -38,7 +38,7 @@ x
     public void SwitchExpression_TypePattern_EvaluatesAndBindsVariable()
     {
         AssertEvaluates(@"
-type User class { var Name string }
+class User { var Name string }
 let u = User{Name: ""x""}
 let x = switch u { case v is User: v.Name default: ""n"" }
 x
@@ -49,7 +49,7 @@ x
     public void SwitchExpression_PropertyPattern_Evaluates()
     {
         AssertEvaluates(@"
-type User class { var Name string var Age int32 }
+class User { var Name string var Age int32 }
 let u = User{Name: ""x"", Age: 1}
 let x = switch u { case { Name: ""x"", Age: > 0 }: ""hit"" default: ""miss"" }
 x

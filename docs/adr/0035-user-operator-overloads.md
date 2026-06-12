@@ -18,7 +18,7 @@ Ship receiver-form binary and unary `operator` overloads on GSharp `struct` / `d
 ### Syntax
 
 ```gsharp
-type Vector2 struct {
+struct Vector2 {
     var X int
     var Y int
 }

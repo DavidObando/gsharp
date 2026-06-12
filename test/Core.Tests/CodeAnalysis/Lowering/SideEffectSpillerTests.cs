@@ -207,7 +207,7 @@ Console.WriteLine(list[0])
         const string Source = @"package main
 import System
 
-type Box class {
+class Box {
     prop raw int32
     prop Value int32 {
         get { return this.raw }

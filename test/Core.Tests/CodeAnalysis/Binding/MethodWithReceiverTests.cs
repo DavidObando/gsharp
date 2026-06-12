@@ -22,7 +22,7 @@ public class MethodWithReceiverTests
     public void MethodWithReceiver_OnStruct_BindsAndDispatches()
     {
         var source = @"
-type Point struct {
+struct Point {
     var X int32
     var Y int32
 }
@@ -43,7 +43,7 @@ p.Distance()
     public void MethodWithReceiver_OnClass_BindsAndDispatches()
     {
         var source = @"
-type Point class {
+class Point {
     var X int32
     var Y int32
 }
@@ -64,7 +64,7 @@ p.Distance()
     public void MethodWithReceiver_ComposesWithOtherMethodsOnSameType()
     {
         var source = @"
-type Point struct {
+struct Point {
     var X int32
     var Y int32
 }
@@ -85,7 +85,7 @@ p.DoubleSum()
     {
         var definingTree = SyntaxTree.Parse(SourceText.From(@"
 package Geometry
-public type Point struct {
+public struct Point {
     var X int32
 }
 "));
@@ -106,7 +106,7 @@ func (p Point) Next() int32 { return p.X + 1 }
     public void TopLevelMethod_CollidingWithInBodyMethod_Diagnoses()
     {
         var source = @"
-type Point class {
+class Point {
     func Sum() int32 { return 1 }
 }
 
@@ -124,7 +124,7 @@ func (p Point) Sum() int32 { return 2 }
     public void MethodReceiver_OnInterface_Diagnoses()
     {
         var source = @"
-type I interface {
+interface I {
     func F() int32
 }
 
@@ -149,7 +149,7 @@ func (c Count) G() int32 { return c + 1 }
     public void MethodWithReceiver_BareFieldAccess_UsesImplicitThis()
     {
         var source = @"
-type Counter struct {
+struct Counter {
     var Value int32
 }
 

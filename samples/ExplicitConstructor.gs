@@ -19,7 +19,7 @@ import System
 
 // A class whose explicit constructor runs arbitrary statements: it assigns the
 // `Width`/`Height` fields and computes the derived `Area` field.
-type Rect class {
+class Rect {
     var Width int32
     var Height int32
     var Area int32
@@ -37,7 +37,7 @@ Console.WriteLine(r.Height)
 Console.WriteLine(r.Area)
 
 // The constructor body may contain control flow.
-type Clamped class {
+class Clamped {
     var Value int32
 
     init(v int32) {
@@ -54,13 +54,13 @@ Console.WriteLine(Clamped(7).Value)
 
 // An `init` constructor can chain to a GSharp base class's primary constructor
 // and then run its own body.
-type Animal open class(Name string) {
+open class Animal(Name string) {
     func Speak() string {
         return Name
     }
 }
 
-type Dog class : Animal {
+class Dog : Animal {
     var Tricks int32
 
     init(name string, tricks int32) : base(name) {
@@ -75,7 +75,7 @@ Console.WriteLine(d.Tricks)
 
 // An `init` constructor can chain to a CLR base (System.Exception) whose
 // constructors all require arguments, then run its own body.
-type MyError class : Exception {
+class MyError : Exception {
     var Code int32
 
     init(message string, code int32) : base(message) {

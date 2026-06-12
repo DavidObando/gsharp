@@ -9,14 +9,14 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 
 /// <summary>
-/// Phase 6.8 parser coverage for <c>type Name enum { ... }</c> declarations.
+/// Phase 6.8 parser coverage for <c>enum Name { ... }</c> declarations.
 /// </summary>
 public class EnumDeclarationParserTests
 {
     [Fact]
     public void EnumDeclaration_ParsesMembers()
     {
-        var tree = SyntaxTree.Parse("type Color enum { Red, Green, Blue }");
+        var tree = SyntaxTree.Parse("enum Color { Red, Green, Blue }");
 
         Assert.Empty(tree.Diagnostics);
         var declaration = tree.Root.Members.OfType<EnumDeclarationSyntax>().Single();
@@ -30,7 +30,7 @@ public class EnumDeclarationParserTests
     [Fact]
     public void EnumDeclaration_AllowsTrailingComma()
     {
-        var tree = SyntaxTree.Parse("type Color enum { Red, Green, Blue, }");
+        var tree = SyntaxTree.Parse("enum Color { Red, Green, Blue, }");
 
         Assert.Empty(tree.Diagnostics);
         var declaration = tree.Root.Members.OfType<EnumDeclarationSyntax>().Single();
@@ -40,7 +40,7 @@ public class EnumDeclarationParserTests
     [Fact]
     public void EnumDeclaration_EmptyBody_Diagnoses()
     {
-        var tree = SyntaxTree.Parse("type Color enum { }");
+        var tree = SyntaxTree.Parse("enum Color { }");
 
         Assert.Contains(tree.Diagnostics, d => d.Message.Contains("must declare at least one member", System.StringComparison.Ordinal));
     }

@@ -27,7 +27,7 @@ public class InlineStructEqualsEmitTests
             package MyLib
             import System
 
-            type UserId inline struct(value int32)
+            inline struct UserId(value int32)
             """;
 
         var assembly = CompileToAssembly(source);
@@ -68,7 +68,7 @@ public class InlineStructEqualsEmitTests
             package MyLib
             import System
 
-            type UserId inline struct(value int32)
+            inline struct UserId(value int32)
             """;
 
         var assembly = CompileToAssembly(source);

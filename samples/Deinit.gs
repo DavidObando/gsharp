@@ -18,13 +18,13 @@ package GSharp.Example.Deinit
 
 import System
 
-type Resource open class(Tag string) {
+open class Resource(Tag string) {
     deinit {
         Console.WriteLine("Resource deinit: " + Tag)
     }
 }
 
-type CachedResource class : Resource {
+class CachedResource : Resource {
     var CacheKey string = ""
 
     init(tag string, key string) : base(tag) {

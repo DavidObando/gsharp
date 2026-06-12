@@ -25,7 +25,7 @@ public class SemanticLookupMemberAccessTests
     [Fact]
     public void InstanceProperty_AccessedViaLocal_ResolvesAndIsCounted()
     {
-        const string source = "type Person class {\n    public prop Name string\n}\nfunc Main() {\n    var p = Person{}\n    p.Name = \"a\"\n    var q = p.Name\n}\n";
+        const string source = "class Person {\n    public prop Name string\n}\nfunc Main() {\n    var p = Person{}\n    p.Name = \"a\"\n    var q = p.Name\n}\n";
         var (compilation, tree) = Compile(source);
 
         var nameInWrite = IdentifierAt(tree, "Name", occurrence: 2);
@@ -43,7 +43,7 @@ public class SemanticLookupMemberAccessTests
     [Fact]
     public void InstanceProperty_AccessedInsideInterpolationHole_Resolves()
     {
-        const string source = "type Person class {\n    public prop Name string\n}\nfunc Main() {\n    var p = Person{}\n    var s = \"hi ${p.Name}\"\n}\n";
+        const string source = "class Person {\n    public prop Name string\n}\nfunc Main() {\n    var p = Person{}\n    var s = \"hi ${p.Name}\"\n}\n";
         var (compilation, tree) = Compile(source);
 
         var nameInHole = IdentifierAt(tree, "Name", occurrence: 2);
@@ -53,7 +53,7 @@ public class SemanticLookupMemberAccessTests
     [Fact]
     public void ChainedMemberAccess_ResolvesInnerSegment()
     {
-        const string source = "type Inner class {\n    public prop Value int32\n}\ntype Outer class {\n    public prop In Inner\n}\nfunc Main() {\n    var o = Outer{}\n    var v = o.In.Value\n}\n";
+        const string source = "class Inner {\n    public prop Value int32\n}\nclass Outer {\n    public prop In Inner\n}\nfunc Main() {\n    var o = Outer{}\n    var v = o.In.Value\n}\n";
         var (compilation, tree) = Compile(source);
 
         // `Value` after the `In.` segment
@@ -70,7 +70,7 @@ public class SemanticLookupMemberAccessTests
         // by-name fallbacks. Enum members live in `globals` by name, so the
         // receiver-typed lookup must also handle EnumSymbol receivers — otherwise
         // existing `Color.Red`-style lenses regressed to "0 references".
-        const string source = "type Color enum {\n    Red,\n    Green\n}\nvar a = Color.Red\nvar b = Color.Red\nvar c = Color.Green\n";
+        const string source = "enum Color {\n    Red,\n    Green\n}\nvar a = Color.Red\nvar b = Color.Red\nvar c = Color.Green\n";
         var (compilation, tree) = Compile(source);
 
         var redUse = IdentifierAt(tree, "Red", occurrence: 2);
@@ -81,7 +81,7 @@ public class SemanticLookupMemberAccessTests
     [Fact]
     public void GoStyleReceiver_ExplicitMemberAccess_Resolves()
     {
-        const string source = "type Person class {\n    public prop Name string\n}\nfunc (r Person) Greet() string { return r.Name }\nfunc Main() {\n    var x = Person{}\n    x.Name = \"a\"\n}\n";
+        const string source = "class Person {\n    public prop Name string\n}\nfunc (r Person) Greet() string { return r.Name }\nfunc Main() {\n    var x = Person{}\n    x.Name = \"a\"\n}\n";
         var (compilation, tree) = Compile(source);
 
         // r.Name inside the Go-style receiver method
@@ -97,7 +97,7 @@ public class SemanticLookupMemberAccessTests
     [Fact]
     public void GoStyleReceiver_ReceiverParameter_ResolvesToParameter()
     {
-        const string source = "type Person class {\n    public prop Name string\n}\nfunc (r Person) Use() string { return r.Name }\n";
+        const string source = "class Person {\n    public prop Name string\n}\nfunc (r Person) Use() string { return r.Name }\n";
         var (compilation, tree) = Compile(source);
 
         // The `r` in `r.Name`
@@ -113,7 +113,7 @@ public class SemanticLookupMemberAccessTests
         // Inside a Go-style receiver method, a bare member name must NOT resolve
         // to a receiver member (the language requires an explicit `r.Member`).
         // Otherwise IDE features would offer fake references the binder doesn't agree with.
-        const string source = "type Person class {\n    public prop Name string\n}\nfunc (r Person) Bad() string { return Name }\n";
+        const string source = "class Person {\n    public prop Name string\n}\nfunc (r Person) Bad() string { return Name }\n";
         var (compilation, tree) = Compile(source);
 
         var bareNameUse = IdentifierAt(tree, "Name", occurrence: 2);
@@ -126,7 +126,7 @@ public class SemanticLookupMemberAccessTests
     [Fact]
     public void FieldAssignment_FieldIdentifier_Resolves()
     {
-        const string source = "type Counter class {\n    var Value int32\n}\nfunc Main() {\n    var c = Counter{}\n    c.Value = 1\n}\n";
+        const string source = "class Counter {\n    var Value int32\n}\nfunc Main() {\n    var c = Counter{}\n    c.Value = 1\n}\n";
         var (compilation, tree) = Compile(source);
 
         var valueInAssignment = IdentifierAt(tree, "Value", occurrence: 2);
@@ -139,7 +139,7 @@ public class SemanticLookupMemberAccessTests
     public void MemberName_NotShadowedByGlobalOfSameName()
     {
         // A top-level `Name` global must not be the resolution of `p.Name`.
-        const string source = "type Person class {\n    public prop Name string\n}\nvar Name = \"global\"\nfunc Main() {\n    var p = Person{}\n    var q = p.Name\n}\n";
+        const string source = "class Person {\n    public prop Name string\n}\nvar Name = \"global\"\nfunc Main() {\n    var p = Person{}\n    var q = p.Name\n}\n";
         var (compilation, tree) = Compile(source);
 
         var memberAccess = IdentifierAt(tree, "Name", occurrence: 2); // declaration is 1, top-level var is also "Name"... use occurrence 3 to be safe

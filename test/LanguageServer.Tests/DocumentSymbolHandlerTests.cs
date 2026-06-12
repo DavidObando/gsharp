@@ -28,7 +28,7 @@ public class DocumentSymbolHandlerTests
     [Fact]
     public void ComputeDocumentSymbols_ReturnsStructWithFields()
     {
-        const string source = "type Point struct {\nvar X int32\nvar Y int32\n}\n";
+        const string source = "struct Point {\nvar X int32\nvar Y int32\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var symbols = DocumentSymbolComputer.ComputeDocumentSymbols(content);
@@ -43,7 +43,7 @@ public class DocumentSymbolHandlerTests
     [Fact]
     public void ComputeDocumentSymbols_ReturnsEnumWithMembers()
     {
-        const string source = "type Color enum { Red, Green, Blue }\n";
+        const string source = "enum Color { Red, Green, Blue }\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var symbols = DocumentSymbolComputer.ComputeDocumentSymbols(content);

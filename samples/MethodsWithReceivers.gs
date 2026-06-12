@@ -8,7 +8,7 @@ package GSharp.Samples.MethodsWithReceivers
 
 import System
 
-type Point struct {
+struct Point {
     var X int32
     var Y int32
 }

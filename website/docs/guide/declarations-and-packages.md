@@ -109,19 +109,19 @@ Named delegates emit as real CLR `MulticastDelegate`-derived types so C# consume
 
 ## Type declarations
 
-`type` introduces aliases, structs, classes, enums, interfaces, data structs, records, and inline structs.
+The aggregate keyword (`class`, `struct`, `enum`, `interface`) is the declaration head — see [ADR-0078](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0078-kotlin-style-type-declaration-grammar.md). `data` adds record-style synthesis (equality, `with`-copy, deconstruction). `inline struct` declares a single-field value wrapper. `sealed class` / `sealed interface` declare Kotlin-style closed hierarchies. Payload-bearing enums (`enum Shape { Circle(r float64); Square(s float64) }`) are discriminated unions. The `type` keyword is retained for aliases (`type Count = int32`) and named delegates (`type Greeter = delegate func(name string)`).
 
 ```gsharp
-type Point data struct {
+data struct Point {
     X int32
     Y int32
 }
 
-type Service open class(name string) {
+open class Service(name string) {
     prop Name string { get; }
 }
 
-type Result enum { Ok, Failed }
+enum Result { Ok, Failed }
 ```
 
 Classes can have primary constructors, explicit `init` constructors, base clauses, fields, methods, properties, events, and `shared` static members. Base classes must be open to derive from; overriding uses `override`.
@@ -131,7 +131,7 @@ Classes can have primary constructors, explicit `init` constructors, base clause
 Properties use contextual `prop` and may have accessors. Events use contextual `event` and may declare `add`, `remove`, and `raise` accessors. Static members live in a contextual `shared` block.
 
 ```gsharp
-type Counter class {
+class Counter {
     shared {
         var Created int32
     }

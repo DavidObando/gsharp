@@ -36,11 +36,11 @@ public class Issue521ClassToInterfaceUpcastEmitTests
             package P
             import System
 
-            type IGreeter interface {
+            interface IGreeter {
                 func Greet(name string) string
             }
 
-            type HelloGreeter class : IGreeter {
+            class HelloGreeter : IGreeter {
                 func Greet(name string) string { return "Hello, " + name }
             }
 
@@ -62,11 +62,11 @@ public class Issue521ClassToInterfaceUpcastEmitTests
             package P
             import System
 
-            type IGreeter interface {
+            interface IGreeter {
                 func Greet(name string) string
             }
 
-            type HelloGreeter class : IGreeter {
+            class HelloGreeter : IGreeter {
                 func Greet(name string) string { return "Hi, " + name }
             }
 
@@ -91,11 +91,11 @@ public class Issue521ClassToInterfaceUpcastEmitTests
             package P
             import System
 
-            type IGreeter interface {
+            interface IGreeter {
                 func Greet(name string) string
             }
 
-            type HelloGreeter class : IGreeter {
+            class HelloGreeter : IGreeter {
                 func Greet(name string) string { return "Hey, " + name }
             }
 
@@ -121,11 +121,11 @@ public class Issue521ClassToInterfaceUpcastEmitTests
             package P
             import System
 
-            type IGreeter interface {
+            interface IGreeter {
                 func Greet(name string) string
             }
 
-            type HelloGreeter class : IGreeter {
+            class HelloGreeter : IGreeter {
                 func Greet(name string) string { return "Yo, " + name }
             }
 

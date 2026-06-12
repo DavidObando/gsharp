@@ -37,7 +37,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
             import System
             import ProbeRef
 
-            type Impl1 class : IHasName {
+            class Impl1 : IHasName {
                 var Name string
             }
 
@@ -68,7 +68,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
             import System
             import ProbeRef
 
-            type Impl1 class : IHasName {
+            class Impl1 : IHasName {
                 var Name string
             }
 
@@ -100,7 +100,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
             import System
             import ProbeRef
 
-            type Impl2 class : IHasName {
+            class Impl2 : IHasName {
                 prop Name string { get { return "accessor" } }
             }
 
@@ -132,7 +132,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
             import System
             import ProbeRef
 
-            type RWImpl class : IReadWrite {
+            class RWImpl : IReadWrite {
                 var Value string
             }
 
@@ -165,7 +165,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
             import System
             import ProbeRef
 
-            type NoImpl class : IHasName {
+            class NoImpl : IHasName {
             }
             """;
 

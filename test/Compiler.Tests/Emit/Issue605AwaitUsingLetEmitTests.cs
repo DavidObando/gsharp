@@ -27,7 +27,7 @@ public class Issue605AwaitUsingLetEmitTests
             import System
             import System.Threading.Tasks
 
-            type AsyncResource class : IAsyncDisposable {
+            class AsyncResource : IAsyncDisposable {
                 func DisposeAsync() ValueTask {
                     Console.WriteLine("disposed-async")
                     return ValueTask.CompletedTask
@@ -91,7 +91,7 @@ public class Issue605AwaitUsingLetEmitTests
             import System
             import System.Threading.Tasks
 
-            type DualDisp class : IDisposable, IAsyncDisposable {
+            class DualDisp : IDisposable, IAsyncDisposable {
                 func Dispose() {
                     Console.WriteLine("sync-dispose")
                 }
@@ -121,7 +121,7 @@ public class Issue605AwaitUsingLetEmitTests
             import System
             import System.Threading.Tasks
 
-            type SafeRes class : IAsyncDisposable {
+            class SafeRes : IAsyncDisposable {
                 func DisposeAsync() ValueTask {
                     Console.WriteLine("safe-dispose")
                     return ValueTask.CompletedTask
@@ -154,7 +154,7 @@ public class Issue605AwaitUsingLetEmitTests
             import System
             import System.Threading.Tasks
 
-            type TrackRes class : IAsyncDisposable {
+            class TrackRes : IAsyncDisposable {
                 func DisposeAsync() ValueTask {
                     Console.WriteLine("track-dispose")
                     return ValueTask.CompletedTask
@@ -187,7 +187,7 @@ public class Issue605AwaitUsingLetEmitTests
             import System
             import System.Threading.Tasks
 
-            type Res class : IAsyncDisposable {
+            class Res : IAsyncDisposable {
                 func DisposeAsync() ValueTask {
                     return ValueTask.CompletedTask
                 }
@@ -212,7 +212,7 @@ public class Issue605AwaitUsingLetEmitTests
             import System
             import System.Threading.Tasks
 
-            type AsyncOnly class : IAsyncDisposable {
+            class AsyncOnly : IAsyncDisposable {
                 func DisposeAsync() ValueTask {
                     Console.WriteLine("async-only")
                     return ValueTask.CompletedTask
@@ -238,7 +238,7 @@ public class Issue605AwaitUsingLetEmitTests
             package Probe
             import System
 
-            type SyncRes class : IDisposable {
+            class SyncRes : IDisposable {
                 func Dispose() {
                     Console.WriteLine("sync-disposed")
                 }

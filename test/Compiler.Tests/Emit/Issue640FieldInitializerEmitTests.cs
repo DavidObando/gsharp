@@ -27,7 +27,7 @@ public class Issue640FieldInitializerEmitTests
             package P
             import System
 
-            type Holder class {
+            class Holder {
                 var n int32 = 42
                 func Get() int32 { return n }
             }
@@ -47,7 +47,7 @@ public class Issue640FieldInitializerEmitTests
             package P
             import System
 
-            type Holder class {
+            class Holder {
                 var n int64 = 100
                 func Get() int64 { return n }
             }
@@ -67,7 +67,7 @@ public class Issue640FieldInitializerEmitTests
             package P
             import System
 
-            type Holder class {
+            class Holder {
                 var flag bool = true
                 func Get() bool { return flag }
             }
@@ -87,7 +87,7 @@ public class Issue640FieldInitializerEmitTests
             package P
             import System
 
-            type Holder class {
+            class Holder {
                 var s string = "hello"
                 func Get() string { return s }
             }
@@ -107,7 +107,7 @@ public class Issue640FieldInitializerEmitTests
             package P
             import System
 
-            type Holder class {
+            class Holder {
                 var c int32 = 1 + 2 * 3
                 func Get() int32 { return c }
             }
@@ -127,7 +127,7 @@ public class Issue640FieldInitializerEmitTests
             package P
             import System
 
-            type Multi class {
+            class Multi {
                 var a int32 = 10
                 var b int32 = 20
                 var c string = "abc"
@@ -152,7 +152,7 @@ public class Issue640FieldInitializerEmitTests
             package P
             import System
 
-            type Widget class {
+            class Widget {
                 var baseValue int32 = 100
                 var extra int32
 
@@ -178,7 +178,7 @@ public class Issue640FieldInitializerEmitTests
             package P
             import System
 
-            type Thing class(name string) {
+            class Thing(name string) {
                 var prefix string = "Item:"
                 func Label() string { return prefix + name }
             }
@@ -199,7 +199,7 @@ public class Issue640FieldInitializerEmitTests
             package P
             import System
 
-            type Dual class {
+            class Dual {
                 var tag string = "default"
                 var n int32
 
@@ -225,12 +225,12 @@ public class Issue640FieldInitializerEmitTests
             package P
             import System
 
-            type Base open class {
+            open class Base {
                 var baseVal int32 = 1
                 func GetBase() int32 { return baseVal }
             }
 
-            type Derived class : Base {
+            class Derived : Base {
                 var derivedVal int32 = 2
                 func GetDerived() int32 { return derivedVal }
             }
@@ -252,7 +252,7 @@ public class Issue640FieldInitializerEmitTests
             package P
             import System
 
-            type Mixed class {
+            class Mixed {
                 var initialized int32 = 42
                 var uninitialized int32
                 func Show() string {
@@ -275,7 +275,7 @@ public class Issue640FieldInitializerEmitTests
             package P
             import System
 
-            type Holder class {
+            class Holder {
                 var d float64 = 3.14
                 func Get() float64 { return d }
             }
@@ -297,7 +297,7 @@ public class Issue640FieldInitializerEmitTests
             package P
             import System
 
-            type Override class {
+            class Override {
                 var n int32 = 10
 
                 init(value int32) {

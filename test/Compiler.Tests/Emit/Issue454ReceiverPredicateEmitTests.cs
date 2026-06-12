@@ -47,7 +47,7 @@ public class Issue454ReceiverPredicateEmitTests
             import System
             import System.Text
 
-            type Box struct {
+            struct Box {
                 var sb StringBuilder
             }
 
@@ -150,7 +150,7 @@ public class Issue454ReceiverPredicateEmitTests
             package P
             import System
 
-            type Point struct {
+            struct Point {
                 var X int32
                 var Y int32
                 prop Sum int32 {

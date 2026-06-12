@@ -48,11 +48,11 @@ public class Issue526NestedClrTypeEmitTests
             import System
             import Probe.CSharp
 
-            type Maker class : Outer.INested {
+            class Maker : Outer.INested {
                 func Compute() int32 { return 11 }
             }
 
-            type X class {
+            class X {
                 func Use() {
                     var x Outer.INested = Maker{}
                     Console.WriteLine(x.Compute())
@@ -94,7 +94,7 @@ public class Issue526NestedClrTypeEmitTests
             import System
             import Probe.CSharp
 
-            type Impl class : Outer.INested {
+            class Impl : Outer.INested {
                 func Compute() int32 { return 42 }
             }
 
@@ -131,7 +131,7 @@ public class Issue526NestedClrTypeEmitTests
             import System
             import Probe.CSharp
 
-            type Impl class : Outer.INested {
+            class Impl : Outer.INested {
                 func Compute() int32 { return 7 }
             }
 
@@ -173,7 +173,7 @@ public class Issue526NestedClrTypeEmitTests
             import System
             import Probe.CSharp
 
-            type Impl class : A.B.C {
+            class Impl : A.B.C {
                 func Compute() int32 { return 99 }
             }
 
@@ -207,7 +207,7 @@ public class Issue526NestedClrTypeEmitTests
             package Probe.Tests
             import System
 
-            type Impl class : Probe.CSharp.Outer.INested {
+            class Impl : Probe.CSharp.Outer.INested {
                 func Compute() int32 { return 5 }
             }
 

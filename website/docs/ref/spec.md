@@ -55,7 +55,7 @@ The reserved keywords are:
 as async await break case catch chan class const continue default defer do else enum false fallthrough finally for func go goto guard if import interface internal is let map nil open operator override package private public range return scope sealed select sequence struct switch throw true try type using var while
 ```
 
-Several words are contextual rather than reserved. `record`, `data`, `inline`, `prop`, `event`, `shared`, `init`, `get`, `set`, `add`, `remove`, `raise`, `in`, `out`, `yield`, `with`, `typeof`, `nameof`, and `make` retain identifier status except in the grammar contexts described below.
+Several words are contextual rather than reserved. `data`, `inline`, `prop`, `event`, `shared`, `init`, `get`, `set`, `add`, `remove`, `raise`, `in`, `out`, `yield`, `with`, `typeof`, `nameof`, and `make` retain identifier status except in the grammar contexts described below. The legacy `record` contextual keyword was removed by ADR-0078; the lexer still recognises it so the parser can emit the GS0307 migration diagnostic (`use data struct` / `data class`).
 
 ### Operators and punctuation
 
@@ -211,18 +211,18 @@ Console.WriteLine(d)
 
 Function types are written `(T1, T2) -> R` (ADR-0075) — fully-parenthesized parameter type list, a single `->` arrow, then a return type clause. A void-returning function uses `void` as the return type: `(T1, T2) -> void`. Multi-return shapes use a tuple return type: `() -> (T1, T2)`. Async function type clauses are written `async (T) -> R`; they represent functions returning `Task<R>` or `Task` for no result. G# function values can convert to compatible CLR delegate types. The legacy `func(T1, T2) R` and `async func(T) R` type-clause spellings continue to parse for one release; each occurrence emits a `GS0303` deprecation warning.
 
-### Structs, classes, records, and inline value classes
+### Structs, classes, data classes/structs, and inline value classes
 
-Type declarations introduce aggregates with `type`. Structs are value-like. Classes are reference-like and can have primary constructors, explicit `init` constructors, base classes, interfaces, fields, methods, properties, events, and `shared` static members. Plain classes are sealed for inheritance unless marked `open`; overriding requires `override` and a compatible open base method.
+Type declarations introduce aggregates with the aggregate keyword (`class`, `struct`, `enum`, `interface`) as the head — the legacy `type Name kind` form was removed by ADR-0078 / issue #718. Structs are value-like. Classes are reference-like and can have primary constructors, explicit `init` constructors, base classes, interfaces, fields, methods, properties, events, and `shared` static members. Plain classes are sealed for inheritance unless marked `open`; overriding requires `override` and a compatible open base method. `sealed class` declares a Kotlin-style closed hierarchy (subclasses allowed in-package, exhaustiveness-bound in `switch`).
 
-`data struct` synthesizes structural ergonomics such as equality and copy/update support. `record` is currently a parser-level alias for `data struct`. `inline struct` is the inline value class form and must have exactly one field.
+`data class` and `data struct` synthesize structural ergonomics such as equality and copy/update support; `data class` is reference-typed, `data struct` is value-typed. The `record` keyword was removed by ADR-0078; migrate to `data struct Name(...)` (or `data class Name(...)` when reference semantics are desired). `inline struct` is the inline value class form and must have exactly one field.
 
 ```gsharp title="samples/DataStruct.gs"
 package GSharp.Example.DataStruct
 
 import System
 
-type Point data struct {
+data struct Point {
     X int32
     Y int32
 }
@@ -238,11 +238,23 @@ Console.WriteLine(q == r)
 
 ### Interfaces
 
-Interfaces contain method, property, and event signatures. Although design records discuss default interface members, the current parser diagnoses interface method bodies and the symbol model treats interfaces as signatures only. Classes can implement interfaces and values can upcast to implemented interfaces.
+Interfaces are declared with `interface Name { ... }` (ADR-0078). Interfaces contain method, property, and event signatures. Although design records discuss default interface members, the current parser diagnoses interface method bodies and the symbol model treats interfaces as signatures only. Classes can implement interfaces and values can upcast to implemented interfaces. `sealed interface` declares a Kotlin-style closed hierarchy.
 
 ### Enums
 
-Enums are declared with `type Name enum { ... }`. They may not be generic and must contain at least one member. Equality is supported, and switch exhaustiveness diagnostics understand enum members.
+Enums are declared with `enum Name { ... }`. They may not be generic and must contain at least one member. Equality is supported, and switch exhaustiveness diagnostics understand enum members.
+
+An enum whose members carry payload parameters is a **discriminated union** (ADR-0078 §5 / issue #725):
+
+```gsharp
+enum Shape {
+    Circle(r float64);
+    Square(s float64);
+    Empty
+}
+```
+
+The parser desugars each payload-bearing case into a class deriving from a sealed base named after the enum, so construction (`Circle(2.0)`), pattern matching (`case c is Circle:`), and exhaustiveness checking reuse the sealed-class machinery.
 
 ### Generics
 
@@ -281,7 +293,7 @@ The function-type productions disambiguate against the tuple-type production by 
 
 Byref/pointer syntax exists as `*T`, unary `&`, and unary `*`. It is primarily an emit/interop feature today; the evaluator rejects the generic address-of and dereference path.
 
-CLR `ref struct` types such as `Span[T]` and `ReadOnlySpan[T]` are consumable as stack-only values (ADR-0056): they are indexable (`s[i]`), ref-returning members auto-dereference in rvalue position, a `[]T` slice converts implicitly to a span, and a user `type X ref struct { … }` may embed a closed generic value-type field. Stack-escape violations are reported as `GS0219`; writing through a `ReadOnlySpan[T]` element is `GS0226`. The full ref-safe-to-escape analysis is deferred (issue #376).
+CLR `ref struct` types such as `Span[T]` and `ReadOnlySpan[T]` are consumable as stack-only values (ADR-0056): they are indexable (`s[i]`), ref-returning members auto-dereference in rvalue position, a `[]T` slice converts implicitly to a span, and a user `ref struct X { … }` may embed a closed generic value-type field. Stack-escape violations are reported as `GS0219`; writing through a `ReadOnlySpan[T]` element is `GS0226`. The full ref-safe-to-escape analysis is deferred (issue #376).
 
 ## Declarations and scope
 
@@ -327,17 +339,21 @@ A function declared `func f(...) ref T` returns a managed pointer and pairs with
 ### Type declarations
 
 ```ebnf
-TypeDecl          = "type" identifier TypeParamList? ( TypeAliasTail | DelegateAliasTail | StructDeclTail | ClassDeclTail | EnumDeclTail | InterfaceDeclTail ) .
-TypeAliasTail     = "=" identifier .
-DelegateAliasTail = "=" "delegate" "func" "(" Parameters? ")" TypeClause? .
-StructDeclTail    = Data? Inline? Open? Ref? "struct" PrimaryCtor? StructBody .
-ClassDeclTail     = Open? "class" PrimaryCtor? BaseClause? StructBody .
-RecordDeclTail    = ( "record" | Data? "record" ) StructBody .
-EnumDeclTail      = "enum" "{" EnumMemberList? "}" .
-InterfaceDeclTail = Sealed? "interface" InterfaceBody .
+TypeDecl          = TypeAliasDecl | DelegateAliasDecl | AggregateDecl .
+TypeAliasDecl     = "type" identifier TypeParamList? "=" identifier .
+DelegateAliasDecl = "type" identifier TypeParamList? "=" "delegate" "func" "(" Parameters? ")" TypeClause? .
+AggregateDecl     = Visibility? OpenOrSealed? Data? Inline? AggregateKeyword identifier TypeParamList? PrimaryCtor? BaseClause? AggregateBody? .
+AggregateKeyword  = "class" | "struct" | "enum" | "interface" .
+Visibility        = "public" | "internal" | "private" .
+OpenOrSealed      = "open" | "sealed" .
 PrimaryCtor       = "(" Parameters? ")" .
 BaseClause        = ":" QualifiedTypeName ( "(" Arguments? ")" )? { "," QualifiedTypeName } .
+AggregateBody     = "{" Member* "}" .
 ```
+
+The aggregate keyword IS the declaration keyword (ADR-0078). Legal modifier combinations are enumerated in ADR-0078 §3 — every other combination is rejected at parse time (diagnostics GS0306–GS0312). Discriminated-union enums (members that carry a payload parameter list) are desugared at parse time to a sealed base class plus one subclass per case (ADR-0078 §5 / issue #725). The `type` keyword is retained only for the alias and named-delegate forms above.
+
+```ebnf
 
 A `DelegateAliasTail` declares a real CLR `MulticastDelegate`-derived named delegate type (ADR-0059), so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Diagnostics `GS0233`–`GS0234` cover malformed declarations.
 

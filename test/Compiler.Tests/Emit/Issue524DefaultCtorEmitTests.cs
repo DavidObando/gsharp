@@ -38,7 +38,7 @@ public class Issue524DefaultCtorEmitTests
             package P
             import System
 
-            type Holder class {
+            class Holder {
                 var Value int32
                 var Name  string
                 var Flag  bool
@@ -66,7 +66,7 @@ public class Issue524DefaultCtorEmitTests
             package P
             import System
 
-            type Counter class {
+            class Counter {
                 var Count int32
 
                 func Get() int32 {
@@ -96,7 +96,7 @@ public class Issue524DefaultCtorEmitTests
             package P
             import System
 
-            type Empty class { }
+            class Empty { }
 
             var e = Empty()
             Console.WriteLine("ok")
@@ -117,7 +117,7 @@ public class Issue524DefaultCtorEmitTests
             package P
             import System
 
-            type Point class {
+            class Point {
                 var X int32
                 var Y int32
 
@@ -145,7 +145,7 @@ public class Issue524DefaultCtorEmitTests
             package P
             import System
 
-            type Box class(value int32) { }
+            class Box(value int32) { }
 
             var b = Box(42)
             Console.WriteLine(b.value)
@@ -166,7 +166,7 @@ public class Issue524DefaultCtorEmitTests
             package P
             import System
 
-            type Holder class { var Value int32 }
+            class Holder { var Value int32 }
 
             var h = Holder(1)
             Console.WriteLine(h.Value)
@@ -279,7 +279,7 @@ public class Issue524DefaultCtorEmitTests
             package P
             import System
 
-            type Box[T] class {
+            class Box[T] {
                 var Value T
             }
 

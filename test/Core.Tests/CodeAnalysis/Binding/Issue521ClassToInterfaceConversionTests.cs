@@ -45,11 +45,11 @@ public class Issue521ClassToInterfaceConversionTests
     public void GSharpClass_To_GSharpInterface_Assignment_Binds()
     {
         var source = @"
-type IGreeter interface {
+interface IGreeter {
     func Greet(name string) string
 }
 
-type HelloGreeter class : IGreeter {
+class HelloGreeter : IGreeter {
     func Greet(name string) string { return ""Hello, "" + name }
 }
 
@@ -65,11 +65,11 @@ g.Greet(""world"")
     public void GSharpClass_To_GSharpInterface_AsArgument_Binds()
     {
         var source = @"
-type IGreeter interface {
+interface IGreeter {
     func Greet(name string) string
 }
 
-type HelloGreeter class : IGreeter {
+class HelloGreeter : IGreeter {
     func Greet(name string) string { return ""Hi, "" + name }
 }
 
@@ -88,11 +88,11 @@ Run(HelloGreeter{}, ""ada"")
     public void GSharpClass_To_GSharpInterface_AsReturnType_Binds()
     {
         var source = @"
-type IGreeter interface {
+interface IGreeter {
     func Greet(name string) string
 }
 
-type HelloGreeter class : IGreeter {
+class HelloGreeter : IGreeter {
     func Greet(name string) string { return ""Hey, "" + name }
 }
 
@@ -111,11 +111,11 @@ Make().Greet(""bob"")
     public void GSharpClass_To_GSharpInterface_ExplicitCast_Binds()
     {
         var source = @"
-type IGreeter interface {
+interface IGreeter {
     func Greet(name string) string
 }
 
-type HelloGreeter class : IGreeter {
+class HelloGreeter : IGreeter {
     func Greet(name string) string { return ""Yo, "" + name }
 }
 

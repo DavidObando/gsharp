@@ -15,7 +15,7 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #525: a G# class declaring <c>type X class : ISomething { ... }</c>
+/// Issue #525: a G# class declaring <c>class X : ISomething { ... }</c>
 /// against a reachable CLR interface must (1) bind without GS0157, (2) emit
 /// real <c>InterfaceImpl</c> metadata so the produced TypeDef is a CLR
 /// implementer of the interface, and (3) dispatch through an interface
@@ -37,7 +37,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             package Probe
             import System
 
-            type MyDisposable class : IDisposable {
+            class MyDisposable : IDisposable {
                 func Dispose() {
                     Console.WriteLine("disposed")
                 }
@@ -58,7 +58,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             package Probe
             import System
 
-            type MyStringComparable class : IComparable[string] {
+            class MyStringComparable : IComparable[string] {
                 func CompareTo(other string) int32 {
                     return 0
                 }
@@ -82,7 +82,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             package Probe
             import System
 
-            type MyDisposable class : IDisposable {
+            class MyDisposable : IDisposable {
                 func Dispose() {
                     Console.WriteLine("disposed")
                 }
@@ -129,7 +129,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             package Probe
             import System
 
-            type Box class : IDisposable, ICloneable {
+            class Box : IDisposable, ICloneable {
                 func Dispose() {
                     Console.WriteLine("gone")
                 }
@@ -175,7 +175,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             import System
             import ProbeRef
 
-            type Boxed class : ILabel {
+            class Boxed : ILabel {
                 prop Label string { get { return "hello" } }
             }
 
@@ -209,7 +209,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             import System
             import Probe.CSharp
 
-            type MyGreeter class : IGreeter {
+            class MyGreeter : IGreeter {
                 func Greet(name string) string { return "hi " + name }
             }
 
@@ -230,7 +230,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
         var source = """
             package Probe
 
-            type Oops class : INotAnInterfaceThatExistsAnywhere {
+            class Oops : INotAnInterfaceThatExistsAnywhere {
                 func Foo() {}
             }
             """;
@@ -251,11 +251,11 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             package Probe
             import System
 
-            type Animal open class {
+            open class Animal {
                 func Sound() string { return "generic" }
             }
 
-            type Dog class : Animal {
+            class Dog : Animal {
                 func Bark() string { return "woof" }
             }
 

@@ -22,7 +22,7 @@ G# is a .NET language with Go-inspired syntax. It emits CLR assemblies, imports 
 | `var x = ...;` | `let x = ...` or `var x = ...` | `let` is immutable; `var` is mutable. A keyword-less `x := ...` short declaration is also mutable. |
 | object initializer `new T { F = v }` | brace initializer `T{F: v}` | Data structs also offer `.copy(F = v)` and `with` copy/update. |
 | `record struct` | `data struct` or `record` | `record` is an alias for `data struct`. |
-| `readonly struct CustomerId` | `type CustomerId inline struct(value string)` | Inline structs are nominal single-field wrappers. |
+| `readonly struct CustomerId` | `inline struct CustomerId(value string)` | Inline structs are nominal single-field wrappers. |
 | `Task<T>` | `Task[T]` | Generic type arguments use brackets. |
 | `async Task<T>` | `async func ... T` | Await is available inside async functions. |
 | `IEnumerable<T>` iterator | `sequence[T]` with `yield` | Async streams use `async sequence[T]`. |
@@ -97,7 +97,7 @@ Imported CLR methods that expose `[Optional]` arguments work the same way G# def
 Use `class` for reference identity and inheritance. Use `struct` for value aggregates. Use `data struct` or `record` for structural equality, copy/update, and deconstruction. Use `inline struct` when you want a nominal wrapper over one value.
 
 ```gsharp
-type Point data struct {
+data struct Point {
     X int32
     Y int32
 }

@@ -67,7 +67,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0107 | Error | `inline struct` cannot be combined with `open`. | `open inline struct Foo { … }` is not legal. |
 | GS0108 | Error | Inline struct synthesised member conflicts with an explicit declaration. | An `inline struct` auto-generates certain member names that cannot be re-declared. |
 | GS0109 | Error | `record` is an alias for `data struct` and cannot be combined with `data`. | `data record Foo { … }` — use either `data struct` or `record`. |
-| GS0110 | Error | Empty enum declaration. | `type Color enum {}` — an enum must have at least one member. |
+| GS0110 | Error | Empty enum declaration. | `enum Color {}` — an enum must have at least one member. |
 | GS0111 | Error | Duplicate enum member. | Two members in the same `enum` share a name. |
 | GS0112 | Error | Undefined enum member. | `Color.Purple` where `Purple` is not a declared member of `Color`. |
 | GS0113 | Error | Undefined type. | A type name referenced in code does not exist. |
@@ -177,7 +177,7 @@ ADR-0047 introduces Kotlin-style attribute syntax (`@Foo(...)`) and the `@Attrib
 | GS0200 | Error | Type is not an attribute class (it does not derive from `System.Attribute`). | `@int func Foo() {}`. |
 | GS0201 | Error | Attribute target is not valid at this position. | `@field:Obsolete func Foo() {}` — `field` is not allowed on a function. |
 | GS0202 | Error | Attribute arguments must be compile-time constants. | `@Trace(myVar)` — argument is not a primitive, string, `typeof`, enum, or 1-D array thereof. |
-| GS0203 | Error | Class tagged `@Attribute` cannot also declare an explicit base class. | `@Attribute type Trace class : Other {}` — the `@Attribute` sugar implies `: System.Attribute`. |
+| GS0203 | Error | Class tagged `@Attribute` cannot also declare an explicit base class. | `@Attribute class Trace : Other {}` — the `@Attribute` sugar implies `: System.Attribute`. |
 | GS0204 | **Warning** (Error if `IsError=true`) | Reference to a symbol marked `[Obsolete]`. | Calling a function, instantiating a class (`Old(5)`), writing a struct literal (`Old{}`), naming a struct/class/interface/enum in a type clause, reading an obsolete parameter, reading/writing an obsolete `var`/`let`/`const`, reading an obsolete enum member (`Color.Red`), or reading/writing an obsolete struct/class field (`p.Old`) — all declared with `@Obsolete("use Bar")`. Severity is promoted to error when the attribute's second argument is `true`. |
 | GS0205 | Error | Attribute is reserved for compiler synthesis. | `@CompilerGenerated`, `@Extension`, `@AsyncStateMachine`, `@Nullable`, or `@NullableContext` written in user source. |
 | GS0206 | Error | Annotations are only allowed on variable declarations, not on this statement. | `@Obsolete\nreturn` inside a function body — annotations may precede `var`/`let`/`const` but no other statement kind. |
@@ -196,9 +196,9 @@ Issue #306 covers user class constructor flow — explicit `init(...)` construct
 |----|----------|-------------|-----------------|
 | GS0213 | Error | A base-constructor argument list requires an explicit base class. | `init() : base(1) { }` written on a class with no `: BaseType` clause. |
 | GS0214 | Error | Class `{base}` has no accessible constructor that takes `{N}` argument(s). | `init() : base(1, 2)` when the base only declares `init()`. |
-| GS0215 | Error | Class `{name}` cannot declare both a primary constructor and an explicit `init` constructor. | `type Customer class(id int32) { init(name string) { } }`. |
+| GS0215 | Error | Class `{name}` cannot declare both a primary constructor and an explicit `init` constructor. | `class Customer(id int32) { init(name string) { } }`. |
 | GS0216 | Error | Class `{name}` declares multiple `init` constructors; only a single explicit constructor is supported. | Two `init(...)` declarations in the same class body. |
-| GS0217 | Error | Generic class `{name}` with an explicit `init` constructor cannot be constructed; generic explicit constructors are not supported. | `type Box[T] class { init(x T) { } }` then `Box[int32](42)`. |
+| GS0217 | Error | Generic class `{name}` with an explicit `init` constructor cannot be constructed; generic explicit constructors are not supported. | `class Box[T] { init(x T) { } }` then `Box[int32](42)`. |
 
 ### Delegate conversion diagnostics (GS0218)
 
@@ -228,7 +228,7 @@ A by-ref-like type — a CLR `ref struct` carrying `System.Runtime.CompilerServi
 G# can also **declare** its own by-ref-like value types with a `ref` modifier on a `struct` declaration:
 
 ```gsharp
-type Window ref struct {
+ref struct Window {
     Items ReadOnlySpan[int32]   // a ref struct may hold by-ref-like fields
     Label string
 }

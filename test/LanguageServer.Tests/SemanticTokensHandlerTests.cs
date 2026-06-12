@@ -105,22 +105,18 @@ public class SemanticTokensHandlerTests
     [Fact]
     public void Tokenize_ClassifiesStructDeclaration()
     {
-        const string source = "type Point struct {\n    var X int32\n    var Y int32\n}\n";
+        const string source = "struct Point {\n    var X int32\n    var Y int32\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
         var tokens = GetTokens(content);
 
-        // "type" keyword
-        var typeKeyword = FindToken(tokens, 0, 0, 4);
-        Assert.NotNull(typeKeyword);
-        Assert.Equal(TokenTypeIndex("Keyword"), typeKeyword.Value.TokenType);
-
-        // "struct" keyword
-        var structKeyword = FindToken(tokens, 0, 11, 6);
+        // ADR-0078: the `struct` keyword IS the declaration head; it sits at
+        // column 0 with length 6.
+        var structKeyword = FindToken(tokens, 0, 0, 6);
         Assert.NotNull(structKeyword);
         Assert.Equal(TokenTypeIndex("Keyword"), structKeyword.Value.TokenType);
 
-        // "Point" should be Struct with Declaration (at position 5, length 5)
-        var pointToken = FindToken(tokens, 0, 5, 5);
+        // "Point" should be Struct with Declaration (position 7, length 5).
+        var pointToken = FindToken(tokens, 0, 7, 5);
         Assert.NotNull(pointToken);
         Assert.Equal(TokenTypeIndex("Struct"), pointToken.Value.TokenType);
         Assert.True((pointToken.Value.TokenModifiers & ModifierBit("Declaration")) != 0);
@@ -231,7 +227,7 @@ public class SemanticTokensHandlerTests
         // server's interpolated-string hole detection — collapsing the whole literal into a
         // single String token with no hole highlighting.
         const string source =
-            "type Person class {\n" +
+            "class Person {\n" +
             "    shared {\n" +
             "        prop CallCount int32\n" +
             "    }\n" +

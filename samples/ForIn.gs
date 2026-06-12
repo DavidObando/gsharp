@@ -1,7 +1,7 @@
 import System
 import System.Collections.Generic
 
-type NumberEnumerator class(Index int32, Current int32) {
+class NumberEnumerator(Index int32, Current int32) {
     func MoveNext() bool {
         Index = Index + 1
         if Index <= 3 {
@@ -13,7 +13,7 @@ type NumberEnumerator class(Index int32, Current int32) {
     }
 }
 
-type Numbers class {
+class Numbers {
     func GetEnumerator() NumberEnumerator {
         return NumberEnumerator(0, 0)
     }

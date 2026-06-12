@@ -25,7 +25,7 @@ public class Adr0065ConvenienceInitEmitTests
             package Probe
             import System
 
-            type Rect class {
+            class Rect {
                 var Width int32
                 var Height int32
                 init(w int32, h int32) {
@@ -59,7 +59,7 @@ public class Adr0065ConvenienceInitEmitTests
             package Probe
             import System
 
-            type HttpClient class {
+            class HttpClient {
                 var BaseUrl string
                 var Timeout int32
                 init(baseUrl string, timeout int32) {
@@ -99,7 +99,7 @@ public class Adr0065ConvenienceInitEmitTests
             package Probe
             import System
 
-            type LifecycleTab class(Title string, Key string) {
+            class LifecycleTab(Title string, Key string) {
                 var Active bool = false
                 convenience init(key string) {
                     init(key, key)
@@ -129,7 +129,7 @@ public class Adr0065ConvenienceInitEmitTests
             package Probe
             import System
 
-            type Person class(Name string) {
+            class Person(Name string) {
                 var Age int32
                 init(age int32) {
                     Age = age
@@ -154,7 +154,7 @@ public class Adr0065ConvenienceInitEmitTests
         var source = """
             package Probe
 
-            type Bad class {
+            class Bad {
                 var X int32
                 init(x int32) {
                     X = x
@@ -179,7 +179,7 @@ public class Adr0065ConvenienceInitEmitTests
         var source = """
             package Probe
 
-            type Bad class {
+            class Bad {
                 var X int32
                 init(x int32) {
                     X = x
@@ -203,14 +203,14 @@ public class Adr0065ConvenienceInitEmitTests
         var source = """
             package Probe
 
-            type Animal open class {
+            open class Animal {
                 var Name string
                 init(name string) {
                     Name = name
                 }
             }
 
-            type Dog class : Animal {
+            class Dog : Animal {
                 init(name string) : base(name) {
                 }
                 convenience init() : base("rex") {
@@ -235,7 +235,7 @@ public class Adr0065ConvenienceInitEmitTests
         var source = """
             package Probe
 
-            type Foo class {
+            class Foo {
                 init() {
                 }
             }
@@ -261,7 +261,7 @@ public class Adr0065ConvenienceInitEmitTests
             package Probe
             import System
 
-            type Color class {
+            class Color {
                 var R int32
                 var G int32
                 var B int32

@@ -27,9 +27,9 @@ public class AttributeMemberRefCacheTests
     public void MultipleInlineStructs_ProduceSingleIsReadOnlyAttributeCtorMemberRef()
     {
         const string source = @"package InlineStructCache
-type AId inline struct(value string) {}
-type BId inline struct(value string) {}
-type CId inline struct(value string) {}
+inline struct AId(value string) {}
+inline struct BId(value string) {}
+inline struct CId(value string) {}
 func Main() {}
 ";
         using var pe = Compile(source);
@@ -44,9 +44,9 @@ func Main() {}
     public void MultipleRefStructs_ProduceSingleIsByRefLikeAndObsoleteAttributeCtorMemberRef()
     {
         const string source = @"package RefStructCache
-type A ref struct { var x int32 }
-type B ref struct { var y int32 }
-type C ref struct { var z int32 }
+ref struct A { var x int32 }
+ref struct B { var y int32 }
+ref struct C { var z int32 }
 func Main() {}
 ";
         using var pe = Compile(source);

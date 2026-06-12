@@ -6,7 +6,7 @@ draft: false
 
 # Tour: Types and values
 
-G# has value-oriented structs, reference-oriented classes, data structs, records, arrays, slices, maps, tuples, sequences, channels, and function types. This chapter focuses on the everyday aggregate and collection shapes.
+G# has value-oriented structs, reference-oriented classes, data structs, data classes, arrays, slices, maps, tuples, sequences, channels, and function types. This chapter focuses on the everyday aggregate and collection shapes.
 
 ## Structs and classes
 
@@ -17,7 +17,7 @@ package GSharp.Example.Struct
 
 import System
 
-type Point struct {
+struct Point {
     X int32
     Y int32
 }
@@ -52,7 +52,7 @@ package Tour.Types
 
 import System
 
-type Point class {
+class Point {
     X int32
     Y int32
 }
@@ -63,16 +63,16 @@ q.X = 99
 Console.WriteLine(p.X)
 ```
 
-## Data structs and records
+## Data classes and data structs
 
-`data struct` adds ergonomic value behavior such as structural equality and copy support. `record` is a context-sensitive alias for `data struct`.
+`data struct` and `data class` add ergonomic value-record behaviour: structural equality, `with`-copy, and deconstruction. `data struct` is value-typed; `data class` is reference-typed. The legacy `record` keyword was removed by ADR-0078; migrate to `data struct` (value semantics) or `data class` (reference semantics).
 
 ```gsharp title="DataStruct.gs"
 package GSharp.Example.DataStruct
 
 import System
 
-type Point data struct {
+data struct Point {
     X int32
     Y int32
 }
@@ -99,7 +99,7 @@ package GSharp.Example.DataStructErgonomics
 
 import System
 
-type Point data struct {
+data struct Point {
     x int32
     y int32
 }

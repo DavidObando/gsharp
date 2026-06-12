@@ -1,9 +1,10 @@
 # ADR-0018: Interface default methods — not in Phase 3
 
-- **Status**: Accepted
+- **Status**: Partially superseded by ADR-0078 (declaration-head spelling) — the default-interface-methods deferral described below is unchanged.
 - **Date**: 2026-05-22
 - **Phase**: Phase 3 (lock before 3.B.4); revisit in Phase 6
-- **Related**: ADR-0003 (OO surface); ADR-0017 (method virtuality); execution plan §3.B.4
+- **Superseded**: The declaration-head examples below use the legacy `type Name interface` form. ADR-0078 replaces them with `interface Name` and `sealed interface Name` (the sealed variant is new).
+- **Related**: ADR-0003 (OO surface); ADR-0017 (method virtuality); ADR-0078 (Kotlin/Swift declaration head); execution plan §3.B.4
 
 ## Context
 

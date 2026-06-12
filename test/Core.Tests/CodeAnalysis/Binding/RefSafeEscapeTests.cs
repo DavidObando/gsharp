@@ -111,7 +111,7 @@ func test() {
     {
         var source = @"
 package P
-type S struct {
+struct S {
     var Ptr *int32
 }
 ";
@@ -124,7 +124,7 @@ type S struct {
     {
         var source = @"
 package P
-type C class {
+class C {
     var Ptr *int32
 }
 ";
@@ -137,7 +137,7 @@ type C class {
     {
         var source = @"
 package P
-type S struct {
+struct S {
     var Value int32
 }
 ";
@@ -284,7 +284,7 @@ func f(scoped x int32) int32 {
     {
         var source = @"
 package P
-type Acc ref struct {
+ref struct Acc {
     var Total int32
 }
 func bad(scoped a Acc) Acc {
@@ -300,7 +300,7 @@ func bad(scoped a Acc) Acc {
     {
         var source = @"
 package P
-type Acc ref struct {
+ref struct Acc {
     var Total int32
 }
 func passThrough(a Acc) Acc {
@@ -428,7 +428,7 @@ func bad(scoped s ReadOnlySpan[int32]) ReadOnlySpan[int32] {
         // Returning a field that is itself a ref struct should be caught.
         var source = @"
 package P
-type MySpan ref struct {
+ref struct MySpan {
     var Value int32
 }
 func (s MySpan) getSelf() MySpan {
@@ -445,7 +445,7 @@ func (s MySpan) getSelf() MySpan {
         // Returning a non-ref-struct field from a ref struct method is fine.
         var source = @"
 package P
-type MySpan ref struct {
+ref struct MySpan {
     var Value int32
 }
 func (s MySpan) getValue() int32 {
@@ -462,7 +462,7 @@ func (s MySpan) getValue() int32 {
         // @UnscopedRef relaxes the implicit scoped on `this`.
         var source = @"
 package P
-type MySpan ref struct {
+ref struct MySpan {
     var Value int32
 }
 @UnscopedRef
@@ -480,7 +480,7 @@ func (s MySpan) getSelf() MySpan {
         // Non-ref-struct methods don't have implicit scoped on `this`.
         var source = @"
 package P
-type Builder struct {
+struct Builder {
     var Count int32
 }
 func (b Builder) copy() Builder {

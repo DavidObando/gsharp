@@ -19,7 +19,7 @@ import System
 // `MyError` extends System.Exception, whose accessible constructors all require
 // arguments. The primary-constructor parameter `Detail` is forwarded to the
 // base `Exception(string)` ctor, so the inherited `Message` property is set.
-type MyError class(Detail string) : Exception(Detail) {
+class MyError(Detail string) : Exception(Detail) {
 }
 
 var e = MyError("boom")
@@ -28,20 +28,20 @@ Console.WriteLine(e.Detail)
 
 // A base-constructor argument may be an arbitrary expression over the primary
 // parameters rather than a bare parameter reference.
-type LabeledError class(Label string) : Exception(Label + "!") {
+class LabeledError(Label string) : Exception(Label + "!") {
 }
 
 var le = LabeledError("warn")
 Console.WriteLine(le.Message)
 
 // A GSharp base class with its own primary constructor is chained identically.
-type Animal open class(Name string) {
+open class Animal(Name string) {
     func Speak() string {
         return Name
     }
 }
 
-type Dog class(Pet string) : Animal(Pet) {
+class Dog(Pet string) : Animal(Pet) {
 }
 
 var d = Dog("Rex")

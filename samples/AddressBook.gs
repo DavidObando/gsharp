@@ -13,13 +13,13 @@ package GSharp.Example.AddressBook
 
 import System
 
-type Contact class(Name string, Email string) {
+class Contact(Name string, Email string) {
     func Display() string {
         return "$Name <$Email>"
     }
 }
 
-type Book class(First Contact, Second Contact, Third Contact) {
+class Book(First Contact, Second Contact, Third Contact) {
     func Find(name string) Contact? {
         if First.Name == name {
             return First

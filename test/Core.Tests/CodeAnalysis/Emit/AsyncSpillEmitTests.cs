@@ -255,7 +255,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-type Box struct {
+struct Box {
     var Value int32
 }
 

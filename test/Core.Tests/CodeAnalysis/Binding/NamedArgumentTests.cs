@@ -111,7 +111,7 @@ let r = sub(1, x: 2)
     public void UserMethod_NamedArguments_BindAndEvaluate()
     {
         var source = @"
-type Calc data struct {
+data struct Calc {
     var Bias int32
 }
 
@@ -131,7 +131,7 @@ let r = c.Combine(b: 7, a: 3)
     public void UserConstructor_PrimaryCtor_NamedArguments_BindAndEvaluate()
     {
         var source = @"
-type Point class(X int32, Y int32) {
+class Point(X int32, Y int32) {
 }
 
 let p = Point(Y: 7, X: 3)
@@ -146,7 +146,7 @@ let r = p.X * 10 + p.Y
     public void UserConstructor_PrimaryCtor_NameAlsoPositional_Diagnoses_GS0247()
     {
         var source = @"
-type Point class(X int32, Y int32) {
+class Point(X int32, Y int32) {
 }
 
 let p = Point(1, X: 9)
@@ -159,7 +159,7 @@ let p = Point(1, X: 9)
     public void UserExtensionFunction_NamedArguments_BindAndEvaluate()
     {
         var source = @"
-type Box data struct { var N int32 }
+data struct Box { var N int32 }
 
 func (b Box) Mix(low int32, high int32) int32 {
     return b.N + low * 100 + high

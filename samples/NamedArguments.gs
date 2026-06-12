@@ -11,7 +11,7 @@ package GSharp.Example.NamedArguments
 
 import System
 
-type Point class(X int32, Y int32) {
+class Point(X int32, Y int32) {
     func Sum() int32 {
         return X + Y
     }

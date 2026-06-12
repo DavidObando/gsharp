@@ -28,7 +28,7 @@ public class UserDefinedExceptionCatchEmitTests
             package main
             import System
 
-            type MyError class(Detail string) : Exception(Detail) {
+            class MyError(Detail string) : Exception(Detail) {
             }
 
             func Main() int32 {
@@ -55,10 +55,10 @@ public class UserDefinedExceptionCatchEmitTests
             package main
             import System
 
-            type MyError class(Detail string) : Exception(Detail) {
+            class MyError(Detail string) : Exception(Detail) {
             }
 
-            type AnotherError class(Detail string) : Exception(Detail) {
+            class AnotherError(Detail string) : Exception(Detail) {
             }
 
             func Main() int32 {

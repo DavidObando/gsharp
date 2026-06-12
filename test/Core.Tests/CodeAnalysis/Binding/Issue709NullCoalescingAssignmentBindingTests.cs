@@ -93,7 +93,7 @@ public class Issue709NullCoalescingAssignmentBindingTests
     {
         var diagnostics = Bind("""
             package P
-            type Box class {
+            class Box {
                 var Name string
             }
             func F() {
@@ -109,7 +109,7 @@ public class Issue709NullCoalescingAssignmentBindingTests
     {
         var diagnostics = Bind("""
             package P
-            type Box class {
+            class Box {
                 var Name string?
             }
             func F() {
@@ -125,7 +125,7 @@ public class Issue709NullCoalescingAssignmentBindingTests
     {
         var diagnostics = Bind("""
             package P
-            type Person class {
+            class Person {
                 prop Name string?
             }
             func F() {

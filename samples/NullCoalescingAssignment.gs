@@ -30,7 +30,7 @@ Console.WriteLine(answer)
 // 3. Field LHS on a class instance. The receiver `b` is evaluated
 // once; the field write goes through the live reference, so other
 // aliases observe it too.
-type Box class {
+class Box {
     var Name string?
 }
 

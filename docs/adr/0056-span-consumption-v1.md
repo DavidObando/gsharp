@@ -27,7 +27,7 @@ What is blocked today (each reproduced against the current `main`):
    - `span[0]` in value position binds but emits a malformed open methodref `System.T& ReadOnlySpan`1.get_Item(Int32)` → **`MissingMethodException`** at runtime (the element type is erased and the by-ref return is not loaded).
    - `Span[T]` element write `s[i] = 99` → `GS0116: type ... is not indexable`.
 2. **`[]T → Span[T]` / `ReadOnlySpan[T]` conversion is not applied in argument position.** `sum(nums)` where `sum` takes `ReadOnlySpan[int32]` and `nums` is `[]int32` → `GS0154`, even though the identical conversion succeeds at local-init. Argument coercion / overload applicability uses `Conversion.Classify` (which returns `None` for slice→span) and never reaches the `op_Implicit` fallback that `BindConversion` uses.
-3. **A user `ref struct` embedding a closed constructed generic value-type field faults at runtime (#375).** `type Window ref struct { data ReadOnlySpan[int32] }` constructs and compiles, but reading `w.data.Length` throws **`AccessViolationException`**. *(Diagnosis corrected during implementation — see [Amendment](#amendment-2026-06-01-4-root-cause-correction): the field is in fact laid out correctly; the fault is a value-type receiver address-of bug, not erasure.)*
+3. **A user `ref struct` embedding a closed constructed generic value-type field faults at runtime (#375).** `ref struct Window { data ReadOnlySpan[int32] }` constructs and compiles, but reading `w.data.Length` throws **`AccessViolationException`**. *(Diagnosis corrected during implementation — see [Amendment](#amendment-2026-06-01-4-root-cause-correction): the field is in fact laid out correctly; the fault is a value-type receiver address-of bug, not erasure.)*
 
 These three gaps are exactly what keeps level 2 from delivering value: a span you cannot index, cannot pass a slice into, and cannot embed is barely usable. They share one root theme — **G# can name `ref struct` and by-ref types but cannot yet flow values through ref-returning members or lay out closed generic value types** — so they are best decided together.
 
@@ -82,7 +82,7 @@ This boundary is captured here (rather than as a bare bug) because it *decides w
 
 - Returning `ref` / `ref struct` from G# functions (`func f() *T { ... }`), the `scoped` and `[UnscopedRef]` modifiers, and the full two-level ref-safe-to-escape analysis — all remain deferred to **#376**.
 - `stackalloc`, stack-allocated span buffers, `MemoryMarshal`, unmanaged pointers / `unsafe` — out of scope (ADR-0039 §Follow-ups).
-- Generic user `ref struct` declarations over an *open* element type (`type Buffer[T] ref struct { data ReadOnlySpan[T] }`) — open generic value-type field layout is a separate, larger problem; v1 supports only **closed** generic value-type fields.
+- Generic user `ref struct` declarations over an *open* element type (`ref struct Buffer[T] { data ReadOnlySpan[T] }`) — open generic value-type field layout is a separate, larger problem; v1 supports only **closed** generic value-type fields.
 - Auto-dereference of ref *parameters* — still require `&` (ADR-0039 unchanged).
 
 ## Consequences
@@ -138,7 +138,7 @@ Leave ADR-0004 erasure untouched and box the span into the field.
 ## Follow-ups
 
 - **#376** — full ref-safe-to-escape (`scoped`, `[UnscopedRef]`, ref returns from G# functions, assignment/return escape diagnostics). The §1 auto-deref rule and §4 layout decision are designed to compose with it.
-- **Open generic `ref struct` declarations** (`type Buffer[T] ref struct { data ReadOnlySpan[T] }`) — open generic value-type field layout, broader than v1's closed-only support.
+- **Open generic `ref struct` declarations** (`ref struct Buffer[T] { data ReadOnlySpan[T] }`) — open generic value-type field layout, broader than v1's closed-only support.
 - **`stackalloc` / stack buffers / `MemoryMarshal`** — high-performance span creation, a separate ADR.
 - **`Utf8JsonReader` end-to-end** — once §1–§4 land, re-evaluate the originally-motivating ref-struct JSON reader path from #344 as a conformance target.
 
@@ -146,7 +146,7 @@ Leave ADR-0004 erasure untouched and box the span into the field.
 
 During implementation of §4 (PR #382, fixing #375) the documented root cause turned out to be wrong, so this amendment records the corrected analysis. The design decision and its invariant are unchanged; only the *diagnosis* and the *nature of the fix* are corrected.
 
-**What the ADR originally claimed.** That `type Window ref struct { data ReadOnlySpan[int32] }` faulted with `AccessViolationException` because the closed constructed generic value-type field was laid out under the ADR-0004 type-erased model (erased to `System.Object`), giving the field the wrong size and corrupting the stack. §4 therefore proposed "routing generic value-type field signatures through the constructed-generic path instead of the erased-object path."
+**What the ADR originally claimed.** That `ref struct Window { data ReadOnlySpan[int32] }` faulted with `AccessViolationException` because the closed constructed generic value-type field was laid out under the ADR-0004 type-erased model (erased to `System.Object`), giving the field the wrong size and corrupting the stack. §4 therefore proposed "routing generic value-type field signatures through the constructed-generic path instead of the erased-object path."
 
 **What was actually true.** The field signature was already correct. The emitted metadata shows the real value type, no `ClassLayout` row, and the correct `IsByRefLikeAttribute`:
 

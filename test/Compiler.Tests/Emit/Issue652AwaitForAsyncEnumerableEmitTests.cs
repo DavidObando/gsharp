@@ -70,7 +70,7 @@ public class Issue652AwaitForAsyncEnumerableEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Producer class {
+            class Producer {
                 init() {}
 
                 async func Numbers() IAsyncEnumerable[int32] {

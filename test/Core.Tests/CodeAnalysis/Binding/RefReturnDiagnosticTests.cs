@@ -129,13 +129,13 @@ func ok(ref x int32) ref int32 {
     {
         const string Source = @"package OverrideMismatch
 
-type Base open class {
+open class Base {
     open func Get(ref x int32) ref int32 {
         return ref x
     }
 }
 
-type Derived class : Base {
+class Derived : Base {
     override func Get(ref x int32) int32 {
         return x
     }

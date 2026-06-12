@@ -59,11 +59,11 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
-            type Container class {
+            class Container {
                 var items List[MyType]
             }
             """;
@@ -78,11 +78,11 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type IMyType interface {
+            interface IMyType {
                 func GetName() string
             }
 
-            type Container class {
+            class Container {
                 var items List[IMyType]
             }
             """;
@@ -99,11 +99,11 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
-            type Container class {
+            class Container {
                 var items List[MyType]
 
                 func getItems() List[MyType] {
@@ -124,11 +124,11 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
-            type Container class {
+            class Container {
                 func addAll(xs List[MyType]) {
                 }
             }
@@ -146,11 +146,11 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Value int32
             }
 
-            type Container class {
+            class Container {
                 var items IReadOnlyList[MyType]
             }
             """;
@@ -165,11 +165,11 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Value int32
             }
 
-            type Container class {
+            class Container {
                 var items IEnumerable[MyType]
             }
             """;
@@ -184,11 +184,11 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Threading.Tasks
 
-            type MyType class {
+            class MyType {
                 var Value int32
             }
 
-            type Container class {
+            class Container {
                 var pending Task[MyType]
             }
             """;
@@ -205,11 +205,11 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
-            type Container class {
+            class Container {
                 var items Dictionary[string, MyType]
             }
             """;
@@ -226,7 +226,7 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
             """;
@@ -235,7 +235,7 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type Container class {
+            class Container {
                 var items List[MyType]
             }
             """;
@@ -252,7 +252,7 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type Container class {
+            class Container {
                 var items List[string]
             }
             """;
@@ -267,7 +267,7 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type Container class {
+            class Container {
                 var items Dictionary[string, int32]
             }
             """;
@@ -282,11 +282,11 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
-            type Container class {
+            class Container {
                 var items List[MyType]
             }
 
@@ -336,11 +336,11 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
-            type Container class {
+            class Container {
                 var items List[MyType]
             }
             """;
@@ -355,11 +355,11 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
-            type Container class {
+            class Container {
                 var items Dictionary[string, MyType]
             }
             """;
@@ -381,7 +381,7 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
@@ -401,7 +401,7 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type IMyType interface {
+            interface IMyType {
                 func GetName() string
             }
 
@@ -420,7 +420,7 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type Color enum {
+            enum Color {
                 Red, Green, Blue
             }
 
@@ -439,7 +439,7 @@ public class Issue671UserTypeAsClrGenericArgTests
         var source = """
             package App
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
@@ -459,7 +459,7 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
@@ -480,7 +480,7 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
@@ -518,7 +518,7 @@ public class Issue671UserTypeAsClrGenericArgTests
             package App
             import System.Collections.Generic
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 
@@ -537,7 +537,7 @@ public class Issue671UserTypeAsClrGenericArgTests
         var source = """
             package App
 
-            type MyType class {
+            class MyType {
                 var Name string = ""
             }
 

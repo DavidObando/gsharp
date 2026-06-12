@@ -48,7 +48,7 @@ public class Issue608InterpreterCLRDispatchTests
         var source = """
             import GSharp.Interpreter.Tests.ProbeRef
             import System
-            type Impl1 class : IHasName {
+            class Impl1 : IHasName {
                 var Name string
             }
             var impl = Impl1{Name: "hello"}
@@ -71,7 +71,7 @@ public class Issue608InterpreterCLRDispatchTests
         var source = """
             import GSharp.Interpreter.Tests.ProbeRef
             import System
-            type RWImpl class : IReadWrite {
+            class RWImpl : IReadWrite {
                 var Value string
             }
             var impl = RWImpl{Value: "initial"}

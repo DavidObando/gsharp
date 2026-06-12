@@ -5,7 +5,7 @@ package GSharp.Example.DataStructErgonomics
 
 import System
 
-type Point data struct {
+data struct Point {
     var x int32
     var y int32
 }

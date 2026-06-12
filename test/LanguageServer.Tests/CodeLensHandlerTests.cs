@@ -79,7 +79,7 @@ public class CodeLensHandlerTests
     [Fact]
     public void ComputeLenses_StructFields()
     {
-        const string source = "type Point struct {\n    var X int32\n    var Y int32\n}\nvar p = Point{X: 1, Y: 2}\nvar q = p.X\n";
+        const string source = "struct Point {\n    var X int32\n    var Y int32\n}\nvar p = Point{X: 1, Y: 2}\nvar q = p.X\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var lenses = CodeLensComputer.ComputeLenses(content);
@@ -93,7 +93,7 @@ public class CodeLensHandlerTests
     [Fact]
     public void ComputeLenses_EnumMembers()
     {
-        const string source = "type Color enum {\n    Red,\n    Green,\n    Blue\n}\nvar c = Color.Red\n";
+        const string source = "enum Color {\n    Red,\n    Green,\n    Blue\n}\nvar c = Color.Red\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var lenses = CodeLensComputer.ComputeLenses(content);
@@ -105,7 +105,7 @@ public class CodeLensHandlerTests
     [Fact]
     public void ComputeLenses_EnumMemberReferenceCounts()
     {
-        const string source = "type Color enum {\n    Red,\n    Green\n}\nvar a = Color.Red\nvar b = Color.Red\nvar c = Color.Green\n";
+        const string source = "enum Color {\n    Red,\n    Green\n}\nvar a = Color.Red\nvar b = Color.Red\nvar c = Color.Green\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var lenses = CodeLensComputer.ComputeLenses(content);
@@ -121,7 +121,7 @@ public class CodeLensHandlerTests
     [Fact]
     public void ComputeLenses_ClassBodyMethods()
     {
-        const string source = "type Counter class {\n    var Value int32\n    func Increment() {\n        Value = Value + 1\n    }\n}\nvar c = Counter{Value: 0}\nc.Increment()\nc.Increment()\n";
+        const string source = "class Counter {\n    var Value int32\n    func Increment() {\n        Value = Value + 1\n    }\n}\nvar c = Counter{Value: 0}\nc.Increment()\nc.Increment()\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var lenses = CodeLensComputer.ComputeLenses(content);
@@ -133,7 +133,7 @@ public class CodeLensHandlerTests
     [Fact]
     public void ComputeLenses_InterfaceMethods()
     {
-        const string source = "type Greeter interface {\n    func Greet() string\n}\n";
+        const string source = "interface Greeter {\n    func Greet() string\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var lenses = CodeLensComputer.ComputeLenses(content);
@@ -171,7 +171,7 @@ public class CodeLensHandlerTests
     [Fact]
     public void ComputeLenses_SharedBlockMembers()
     {
-        const string source = "type Config class {\n    var Name string\n    shared {\n        var Default string\n    }\n}\n";
+        const string source = "class Config {\n    var Name string\n    shared {\n        var Default string\n    }\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var lenses = CodeLensComputer.ComputeLenses(content);
@@ -187,7 +187,7 @@ public class CodeLensReproTests
     [Xunit.Fact]
     public void Repro_UserFile_ClassWithSharedBlock()
     {
-        const string source = "package Temp\n\nimport System\n\ntype Person class {\n    shared {\n        prop CallCount int32\n    }\n    public prop Name string\n    public prop Age int32\n\n    func ToString() string {\n        return \"Name: ${Name}, Age: ${this.Age}\"\n    }\n}\n\nfunc Main() {\n    var person = Person{}\n    person.Name = \"Alice\"\n    person.Age = 30\n    Console.WriteLine(\"Name: ${person.Name}\")\n}\n";
+        const string source = "package Temp\n\nimport System\n\nclass Person {\n    shared {\n        prop CallCount int32\n    }\n    public prop Name string\n    public prop Age int32\n\n    func ToString() string {\n        return \"Name: ${Name}, Age: ${this.Age}\"\n    }\n}\n\nfunc Main() {\n    var person = Person{}\n    person.Name = \"Alice\"\n    person.Age = 30\n    Console.WriteLine(\"Name: ${person.Name}\")\n}\n";
         var content = GSharp.LanguageServer.Tests.LanguageServerTestHelpers.Content(source);
 
         var lenses = GSharp.LanguageServer.CodeLensComputer.ComputeLenses(content);
@@ -206,7 +206,7 @@ public class CodeLensReproTests
     public void Repro_UserFile_WithProjectState()
     {
         // Simulate the real server path where a ProjectState is used
-        const string source = "package Temp\n\nimport System\n\ntype Person class {\n    shared {\n        prop CallCount int32\n    }\n    public prop Name string\n    public prop Age int32\n\n    func ToString() string {\n        return \"Name: ${Name}, Age: ${this.Age}\"\n    }\n}\n\nfunc Main() {\n    var person = Person{}\n    person.Name = \"Alice\"\n    person.Age = 30\n    Console.WriteLine(\"Name: ${person.Name}\")\n}\n";
+        const string source = "package Temp\n\nimport System\n\nclass Person {\n    shared {\n        prop CallCount int32\n    }\n    public prop Name string\n    public prop Age int32\n\n    func ToString() string {\n        return \"Name: ${Name}, Age: ${this.Age}\"\n    }\n}\n\nfunc Main() {\n    var person = Person{}\n    person.Name = \"Alice\"\n    person.Age = 30\n    Console.WriteLine(\"Name: ${person.Name}\")\n}\n";
 
         // Create a temp project file to satisfy ProjectState constructor
         var tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), System.Guid.NewGuid().ToString());
@@ -254,7 +254,7 @@ public class CodeLensReproTests
         // textDocument/didOpen still holds the prior tree. Without the fix, SemanticLookup uses
         // reference equality on SyntaxTokens and member-identifier lookups silently return null,
         // causing class members to lose their CodeLenses.
-        const string source = "package Temp\n\nimport System\n\ntype Person class {\n    shared {\n        prop CallCount int32\n    }\n    public prop Name string\n    public prop Age int32\n\n    func ToString() string {\n        return \"Name: ${Name}, Age: ${this.Age}\"\n    }\n}\n\nfunc Main() {\n    var person = Person{}\n    person.Name = \"Alice\"\n}\n";
+        const string source = "package Temp\n\nimport System\n\nclass Person {\n    shared {\n        prop CallCount int32\n    }\n    public prop Name string\n    public prop Age int32\n\n    func ToString() string {\n        return \"Name: ${Name}, Age: ${this.Age}\"\n    }\n}\n\nfunc Main() {\n    var person = Person{}\n    person.Name = \"Alice\"\n}\n";
 
         var tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), System.Guid.NewGuid().ToString());
         System.IO.Directory.CreateDirectory(tempDir);

@@ -16,7 +16,7 @@ public class EventInterpreterTests
     [Fact]
     public void FieldLikeEvent_ParsesWithoutError()
     {
-        var source = "import System\ntype Foo class {\n  public event Click func()\n}\n";
+        var source = "import System\nclass Foo {\n  public event Click func()\n}\n";
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
     }
@@ -24,7 +24,7 @@ public class EventInterpreterTests
     [Fact]
     public void FieldLikeEvent_OnClass_WithEventArgs()
     {
-        var source = "import System\ntype MyBtn class {\n  public event Click func(Object, EventArgs)\n}\n";
+        var source = "import System\nclass MyBtn {\n  public event Click func(Object, EventArgs)\n}\n";
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
     }
@@ -32,7 +32,7 @@ public class EventInterpreterTests
     [Fact]
     public void MultipleEvents_ParseWithoutError()
     {
-        var source = "import System\ntype Foo class {\n  public event A func()\n  public event B func(int32)\n}\n";
+        var source = "import System\nclass Foo {\n  public event A func()\n  public event B func(int32)\n}\n";
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
     }
@@ -40,7 +40,7 @@ public class EventInterpreterTests
     [Fact]
     public void InterfaceEvent_ParsesWithoutError()
     {
-        var source = "type INotify interface {\n  event Changed func()\n}\n";
+        var source = "interface INotify {\n  event Changed func()\n}\n";
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
     }

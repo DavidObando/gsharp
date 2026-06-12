@@ -29,7 +29,7 @@ public class Issue698DeinitEmitTests
             package Probe
             import System
 
-            type Resource class {
+            class Resource {
                 var Tag string = ""
                 deinit {
                     Console.WriteLine(Tag)
@@ -70,7 +70,7 @@ public class Issue698DeinitEmitTests
             package Probe
             import System
 
-            type Resource class {
+            class Resource {
                 var Tag string = ""
                 init(tag string) {
                     Tag = tag
@@ -102,13 +102,13 @@ public class Issue698DeinitEmitTests
             package Probe
             import System
 
-            type Resource open class(Tag string) {
+            open class Resource(Tag string) {
                 deinit {
                     Console.WriteLine("base: " + Tag)
                 }
             }
 
-            type CachedResource class : Resource {
+            class CachedResource : Resource {
                 var Key string = ""
                 init(tag string, key string) : base(tag) {
                     Key = key
@@ -146,7 +146,7 @@ public class Issue698DeinitEmitTests
     {
         var source = """
             package Probe
-            type Point struct {
+            struct Point {
                 var X int32 = 0
                 deinit {
                 }
@@ -164,13 +164,13 @@ public class Issue698DeinitEmitTests
             package Probe
             import System
 
-            type Resource open class(Tag string) {
+            open class Resource(Tag string) {
                 deinit {
                     Console.WriteLine("dispose: " + Tag)
                 }
             }
 
-            type CachedResource class : Resource {
+            class CachedResource : Resource {
                 init(tag string) : base(tag) {
                 }
                 deinit {

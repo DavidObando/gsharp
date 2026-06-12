@@ -7,7 +7,7 @@ package GSharp.Refactoring.GenericMethodSpec
 
 import System
 
-type Tag class {
+class Tag {
     var Name string
 }
 

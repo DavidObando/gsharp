@@ -1,6 +1,6 @@
 // file: ImportedBaseClass.gs
 // Issue #296: a GSharp `class` can inherit from an IMPORTED (CLR) base class.
-// Previously `type X class : SomeImportedType { }` reported GS0157
+// Previously `class X : SomeImportedType { }` reported GS0157
 // "Cannot find type" even though the type resolved for construction / static
 // use. This sample proves the full scenario end-to-end:
 //   * base-type name resolution against imported CLR types (simple + qualified)
@@ -15,7 +15,7 @@ import System.IO
 
 // `Buffer` extends System.IO.MemoryStream via a simple (import-resolved) name.
 // It also declares its own method alongside the inherited surface.
-type Buffer class : MemoryStream {
+class Buffer : MemoryStream {
     func Describe(label string) string {
         return label
     }
@@ -39,7 +39,7 @@ Console.WriteLine(bytes.Length)
 Console.WriteLine(b.Describe("buffer"))
 
 // A fully-qualified imported base type also resolves.
-type Args class : System.EventArgs {
+class Args : System.EventArgs {
 }
 
 var a = Args{}

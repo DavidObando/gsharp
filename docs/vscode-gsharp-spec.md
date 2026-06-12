@@ -126,7 +126,7 @@ Provide a `snippets/gsharp.json` file with common patterns:
 | `for` | C-style for loop |
 | `forin` | For-range over a sequence |
 | `while` | While loop (`for cond { … }`) |
-| `class` | Class declaration (`type X class { … }`) |
+| `class` | Class declaration (`class X { … }`) |
 | `classp` | Class with primary constructor |
 | `struct` | Struct declaration |
 | `datastruct` | `data struct` (value-semantics record) |

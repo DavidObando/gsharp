@@ -69,13 +69,13 @@ package GSharp.Example.AddressBook
 
 import System
 
-type Contact class(Name string, Email string) {
+class Contact(Name string, Email string) {
     func Display() string {
         return "$Name <$Email>"
     }
 }
 
-type Book class(First Contact, Second Contact, Third Contact) {
+class Book(First Contact, Second Contact, Third Contact) {
     func Find(name string) Contact? {
         if First.Name == name {
             return First
@@ -128,7 +128,7 @@ package GSharp.Example.DataStructErgonomics
 
 import System
 
-type Point data struct {
+data struct Point {
     x int32
     y int32
 }
@@ -176,7 +176,7 @@ package GSharp.Example.Records
 
 import System
 
-type Point record {
+data struct Point {
     X int32
     Y int32
 }
@@ -222,7 +222,7 @@ package GSharp.Example.DataStruct
 
 import System
 
-type Point data struct {
+data struct Point {
     X int32
     Y int32
 }
@@ -261,8 +261,8 @@ package GSharp.Example.InlineStruct
 
 import System
 
-type UserId inline struct(value string)
-type OrderId inline struct(value string)
+inline struct UserId(value string)
+inline struct OrderId(value string)
 
 func printUser(id UserId) {
     let (raw) = id

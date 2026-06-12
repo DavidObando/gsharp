@@ -48,7 +48,7 @@ public class Issue709NullCoalescingAssignmentParserTests
         const string source = """
             package P
             import System
-            type Box class {
+            class Box {
                 var Name string?
             }
             func main() {

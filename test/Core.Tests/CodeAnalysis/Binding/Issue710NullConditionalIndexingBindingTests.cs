@@ -71,7 +71,7 @@ public class Issue710NullConditionalIndexingBindingTests
         // when the type chain supports it.
         var diagnostics = Bind("""
             package P
-            type Holder class {
+            class Holder {
                 var Data []int32?
             }
             func F() {

@@ -10,7 +10,7 @@ package GSharp.Example.DataStruct
 
 import System
 
-type Point data struct {
+data struct Point {
     var X int32
     var Y int32
 }

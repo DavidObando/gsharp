@@ -8,7 +8,7 @@ package GSharp.Example.Class
 
 import System
 
-type Point class {
+class Point {
     var X int32
     var Y int32
 }
@@ -27,7 +27,7 @@ Console.WriteLine(q.X)
 var origin = Point{}
 Console.WriteLine(origin.X + origin.Y)
 
-type Vec class(X int32, Y int32) {
+class Vec(X int32, Y int32) {
 }
 
 var v = Vec(5, 7)
@@ -38,7 +38,7 @@ Console.WriteLine(v.X + v.Y)
 // Phase 3.B.3 (2b/3): methods inside the class body with implicit `this`.
 // Bare `X` inside `Sum`/`Scale` resolves to `this.X` (field access). The
 // method dispatch is virtual under the hood (callvirt) for null safety.
-type Pt class(X int32, Y int32) {
+class Pt(X int32, Y int32) {
     func Sum() int32 {
         return X + Y
     }
@@ -60,7 +60,7 @@ Console.WriteLine(pt.Sum())
 // the derived override at runtime. Phase 3 does not yet forward derived
 // primary ctors to base ctors; the sample uses composite literals to
 // initialize inherited fields directly.
-type Animal open class {
+open class Animal {
     var Kind string
     open func Speak() string {
         return "..."
@@ -71,7 +71,7 @@ type Animal open class {
     }
 }
 
-type Dog class : Animal {
+class Dog : Animal {
     override func Speak() string {
         return "Woof"
     }
@@ -88,11 +88,11 @@ Console.WriteLine(unknown.Speak())
 // implements one or more interfaces via the `:` clause (after the optional
 // base class). Calls through an interface-typed receiver dispatch to the
 // runtime type's implementation.
-type IShape interface {
+interface IShape {
     func Area() int32
 }
 
-type Square class(Side int32) : IShape {
+class Square(Side int32) : IShape {
     func Area() int32 {
         return Side * Side
     }

@@ -29,7 +29,7 @@ public class MethodSpecCacheUserTypeArgsEmitTests
             package P
             import System
 
-            type Clock class {
+            class Clock {
                 var Ticks int32
             }
 
@@ -58,11 +58,11 @@ public class MethodSpecCacheUserTypeArgsEmitTests
             package P
             import System
 
-            type ClockA class {
+            class ClockA {
                 var Ticks int32
             }
 
-            type ClockB class {
+            class ClockB {
                 var Ticks int32
             }
 

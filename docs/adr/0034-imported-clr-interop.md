@@ -41,7 +41,7 @@ GSharp-side `operator` keyword (declaring `operator +` on a user type) is **expl
 Additionally, `FindMatchingFieldForGetterOnlyProperty` enables a public field on a G# class to satisfy a getter-only CLR interface property contract. When a class declares `Name string` and implements an interface requiring `string Name { get; }`, the binder synthesizes a `PropertySymbol` at binding time with `BackingField` pointing to the existing field. The emit machinery handles it via the existing auto-property path — no duplicate backing field is emitted. Fields only satisfy getter-only contracts; a `{ get; set; }` interface property still requires an explicit property declaration. Example:
 
 ```
-type Impl class : IHasName {
+class Impl : IHasName {
     var Name string
 }
 ```

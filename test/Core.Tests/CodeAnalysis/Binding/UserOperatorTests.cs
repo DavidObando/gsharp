@@ -22,7 +22,7 @@ public class UserOperatorTests
     public void StructPlusOperator_BinaryAddition_BindsAndEvaluates()
     {
         var source = @"
-type Vector2 struct {
+struct Vector2 {
     var X int32
     var Y int32
 }
@@ -45,7 +45,7 @@ var first = r.X
     public void StructUnaryNegation_BindsAndEvaluates()
     {
         var source = @"
-type Vector2 struct {
+struct Vector2 {
     var X int32
     var Y int32
 }
@@ -69,7 +69,7 @@ var negX = r.X
         // Two Vector2 values whose X+Y sums match should compare equal under a
         // user-defined op_Equality even when individual fields differ.
         var source = @"
-type Vector2 struct {
+struct Vector2 {
     var X int32
     var Y int32
 }

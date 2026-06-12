@@ -23,7 +23,7 @@ public class StructTests
     public void StructLiteral_ReadFields()
     {
         var source = @"
-type Point struct {
+struct Point {
     var X int32
     var Y int32
 }
@@ -40,7 +40,7 @@ p.X + p.Y
     public void StructLiteral_PartialInitDefaultsZero()
     {
         var source = @"
-type Point struct {
+struct Point {
     var X int32
     var Y int32
 }
@@ -57,7 +57,7 @@ p.Y
     public void StructLiteral_EmptyLiteralZeroes()
     {
         var source = @"
-type Point struct {
+struct Point {
     var X int32
     var Y int32
 }
@@ -74,7 +74,7 @@ p.X + p.Y
     public void StructFieldAssignment_Mutates()
     {
         var source = @"
-type Point struct {
+struct Point {
     var X int32
     var Y int32
 }
@@ -92,7 +92,7 @@ p.X
     public void StructAssignment_HasValueSemantics()
     {
         var source = @"
-type Point struct {
+struct Point {
     var X int32
     var Y int32
 }
@@ -111,7 +111,7 @@ p.X
     public void UnknownField_Diagnosed()
     {
         var source = @"
-type Point struct {
+struct Point {
     var X int32
 }
 
@@ -126,7 +126,7 @@ p.Z
     public void DuplicateFieldName_Diagnosed()
     {
         var source = @"
-type Point struct {
+struct Point {
     var X int32
     var X int32
 }
@@ -140,10 +140,10 @@ type Point struct {
     public void DuplicateStructName_Diagnosed()
     {
         var source = @"
-type Point struct {
+struct Point {
     var X int32
 }
-type Point struct {
+struct Point {
     var Y int32
 }
 0

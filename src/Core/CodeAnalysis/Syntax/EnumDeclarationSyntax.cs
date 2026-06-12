@@ -5,7 +5,7 @@
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
-/// Represents a <c>type Name enum { ... }</c> declaration.
+/// Represents a <c>enum Name { ... }</c> declaration.
 /// </summary>
 public sealed class EnumDeclarationSyntax : MemberSyntax
 {
@@ -63,4 +63,7 @@ public sealed class EnumDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the closing brace.</summary>
     public SyntaxToken CloseBraceToken { get; }
+
+    /// <summary>Gets or sets the optional <c>sealed</c> contextual keyword (ADR-0078). The parser sets this to non-null for an enum declared <c>sealed enum Foo { ... }</c>, but the new grammar rejects that combination — kept as a field only for diagnostic recovery. Discriminated-union enums are already closed-hierarchy by construction.</summary>
+    public SyntaxToken SealedKeyword { get; set; }
 }

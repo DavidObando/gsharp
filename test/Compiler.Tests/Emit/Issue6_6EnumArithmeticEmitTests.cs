@@ -82,7 +82,7 @@ public class Issue6_6EnumArithmeticEmitTests
             package P
             import System
 
-            type Color enum {
+            enum Color {
                 Red,
                 Green,
                 Blue,
@@ -102,7 +102,7 @@ public class Issue6_6EnumArithmeticEmitTests
             package P
             import System
 
-            type Color enum {
+            enum Color {
                 Red,
                 Green,
                 Blue,
@@ -121,7 +121,7 @@ public class Issue6_6EnumArithmeticEmitTests
             package P
             import System
 
-            type Color enum {
+            enum Color {
                 Red,
                 Green,
                 Blue,

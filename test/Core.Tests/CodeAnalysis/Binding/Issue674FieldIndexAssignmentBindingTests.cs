@@ -31,7 +31,7 @@ public class Issue674FieldIndexAssignmentBindingTests
             package P
             import System.Collections.Generic
 
-            type Bag class {
+            class Bag {
                 var items List[int32] = List[int32]()
 
                 func Swap(i int32, j int32) {
@@ -53,7 +53,7 @@ public class Issue674FieldIndexAssignmentBindingTests
             package P
             import System.Collections.Generic
 
-            type Cache class {
+            class Cache {
                 var data Dictionary[string, int32] = Dictionary[string, int32]()
 
                 func Set(key string, value int32) {
@@ -71,7 +71,7 @@ public class Issue674FieldIndexAssignmentBindingTests
         var source = """
             package P
 
-            type Container class {
+            class Container {
                 var arr []int32 = []int32{0, 0, 0}
 
                 func Set(i int32, v int32) {
@@ -90,7 +90,7 @@ public class Issue674FieldIndexAssignmentBindingTests
             package P
             import System.Collections.Generic
 
-            type Holder class {
+            class Holder {
                 var items List[int32] = List[int32]()
 
                 init() {
@@ -110,7 +110,7 @@ public class Issue674FieldIndexAssignmentBindingTests
             package P
             import System.Collections.Generic
 
-            type Counter class {
+            class Counter {
                 var counts List[int32] = List[int32]()
 
                 init() {
@@ -133,7 +133,7 @@ public class Issue674FieldIndexAssignmentBindingTests
             package P
             import System.Collections.Generic
 
-            type Multi class {
+            class Multi {
                 var names List[string] = List[string]()
                 var scores List[int32] = List[int32]()
 

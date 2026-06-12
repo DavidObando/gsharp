@@ -27,7 +27,7 @@ public class DataStructSynthesizedMembersTests
             package MyLib
             import System
 
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
@@ -52,7 +52,7 @@ public class DataStructSynthesizedMembersTests
             package MyLib
             import System
 
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
@@ -78,7 +78,7 @@ public class DataStructSynthesizedMembersTests
             package MyLib
             import System
 
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
@@ -104,7 +104,7 @@ public class DataStructSynthesizedMembersTests
             package MyLib
             import System
 
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
@@ -133,7 +133,7 @@ public class DataStructSynthesizedMembersTests
             package MyLib
             import System
 
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
@@ -156,7 +156,7 @@ public class DataStructSynthesizedMembersTests
             package MyLib
             import System
 
-            type Pair data struct {
+            data struct Pair {
                 var Name string
                 var Count int32
             }
@@ -181,7 +181,7 @@ public class DataStructSynthesizedMembersTests
             package MyLib
             import System
 
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
@@ -212,7 +212,7 @@ public class DataStructSynthesizedMembersTests
             package MyLib
             import System
 
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
@@ -238,7 +238,7 @@ public class DataStructSynthesizedMembersTests
             package MyLib
             import System
 
-            type Pair data struct {
+            data struct Pair {
                 var Name string
                 var Count int32
             }
@@ -268,7 +268,7 @@ public class DataStructSynthesizedMembersTests
             package MyLib
             import System
 
-            type Big data struct {
+            data struct Big {
                 var A int32
                 var B int32
                 var C int32
@@ -316,7 +316,7 @@ public class DataStructSynthesizedMembersTests
             package MyLib
             import System
 
-            type Pair data struct {
+            data struct Pair {
                 var Name string
                 var Count int32
             }
@@ -358,7 +358,7 @@ public class DataStructSynthesizedMembersTests
             package MyLib
             import System
 
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
@@ -378,7 +378,7 @@ public class DataStructSynthesizedMembersTests
             package MyLib
             import System
 
-            type Box[T any] data struct {
+            data struct Box[T any] {
                 var Value T
             }
             """;

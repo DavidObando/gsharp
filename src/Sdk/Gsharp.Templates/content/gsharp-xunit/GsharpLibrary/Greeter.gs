@@ -10,7 +10,7 @@ package GsharpLibrary
 
 import System
 
-type Greeter class {
+class Greeter {
     func Greet(name string) string {
         return "Hello, " + name + "!"
     }

@@ -7,7 +7,7 @@ package GSharp.Refactoring.AwaitInFieldAssignment
 import System
 import System.Threading.Tasks
 
-type Holder class {
+class Holder {
     var Value int32
 }
 

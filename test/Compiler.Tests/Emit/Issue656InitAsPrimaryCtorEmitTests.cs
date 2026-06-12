@@ -53,7 +53,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             import System.Collections.Generic
             import System
 
-            type FakeJobService class : IJobService {
+            class FakeJobService : IJobService {
                 var Active List[JobSnapshot]
                 func init() {
                     Active = List[JobSnapshot]()
@@ -97,7 +97,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             import System.Collections.Generic
             import System
 
-            type FakeJobService class : IJobService {
+            class FakeJobService : IJobService {
                 var Active List[JobSnapshot]
                 init() {
                     Active = List[JobSnapshot]()
@@ -128,7 +128,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             package Probe
             import System
 
-            type LifecycleTab class {
+            class LifecycleTab {
                 var Title string
                 var Key string
                 var Active bool = false
@@ -159,7 +159,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             package Probe
             import System
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 func init() {
                     Value = 42
@@ -185,7 +185,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             package Probe
             import System
 
-            type Greeting class {
+            class Greeting {
                 var Message string
                 func init(name string) {
                     Message = "Hello, " + name + "!"
@@ -211,7 +211,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             package Probe
             import System
 
-            type Config class {
+            class Config {
                 var Name string = "default"
                 var Count int32
                 func init() {
@@ -244,7 +244,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             package Probe
             import System
 
-            type Dual class(Name string) {
+            class Dual(Name string) {
                 var Age int32
                 func init(age int32) {
                     Age = age
@@ -270,7 +270,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             package Probe
             import System
 
-            type Dup class(Name string) {
+            class Dup(Name string) {
                 func init(other string) {
                     Name = other
                 }
@@ -294,7 +294,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             package Probe
             import System
 
-            type Color class {
+            class Color {
                 var R int32
                 var G int32
                 var B int32
@@ -343,7 +343,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             import Probe.CSharp
             import System
 
-            type TextRenderer class : IRenderer {
+            class TextRenderer : IRenderer {
                 var Prefix string
                 var Suffix string
                 func init() {

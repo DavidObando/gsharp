@@ -1,9 +1,10 @@
 # ADR-0029: `data struct` synthesized members
 
-- **Status**: Accepted
+- **Status**: Superseded by ADR-0078 (spelling) — synthesis contract is retained
 - **Date**: 2026-05-22
 - **Phase**: Phase 3 (lock before 3.B.2)
-- **Related**: ADR-0003 (OO surface); ADR-0017 (method virtuality); ADR-0026 (copy syntax, Phase 7); execution plan §3.B.2; gaps doc §3.2.1
+- **Superseded**: The `record` keyword and the `record` alias are removed by ADR-0078. The synthesis pipeline (equality, `with`-copy, deconstruction) lives on unchanged under the canonical spellings `data class Name(...)` and `data struct Name(...)`. References below to the `record` keyword should be read as historical.
+- **Related**: ADR-0003 (OO surface); ADR-0017 (method virtuality); ADR-0026 (copy syntax, Phase 7); ADR-0078 (Kotlin/Swift declaration head); execution plan §3.B.2; gaps doc §3.2.1
 - **Implementation**: Issue [#410](https://github.com/DavidObando/gsharp/issues/410); see `EmitDataStructSynthesizedMembers` in `src/Core/CodeAnalysis/Emit/ReflectionMetadataEmitter.cs` and diagnostic GS0232.
 
 ## Context

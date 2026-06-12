@@ -25,7 +25,7 @@ public class DataStructInteropTests
             package MyLib
             import System
 
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
@@ -54,7 +54,7 @@ public class DataStructInteropTests
             package MyLib
             import System
 
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
@@ -84,12 +84,12 @@ public class DataStructInteropTests
             package MyLib
             import System
 
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
 
-            type UserId inline struct(value int32)
+            inline struct UserId(value int32)
             """;
 
         var assembly = CompileToAssembly(source);
@@ -113,14 +113,14 @@ public class DataStructInteropTests
             package MyLib
             import System
 
-            type Point data struct {
+            data struct Point {
                 var X int32
                 var Y int32
             }
 
-            type UserId inline struct(value int32)
+            inline struct UserId(value int32)
 
-            type Foo class {
+            class Foo {
                 var Name string
                 var Count int32
             }

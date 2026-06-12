@@ -156,7 +156,7 @@ let d = Dictionary[string, Dictionary[string, int32]]()
         // branch as well, not only `(`.
         const string source = @"
 package P
-type Pair[A, B any] struct {
+struct Pair[A, B any] {
     var First A
     var Second B
 }

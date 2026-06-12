@@ -32,12 +32,12 @@ public class Issue567ClockHolderRegressionTests
             package Probe
             import System
 
-            type ClockHolder class {
+            class ClockHolder {
                 var Value int32
                 init() {}
             }
 
-            type GS9998_Probe class {
+            class GS9998_Probe {
                 init() {}
                 func Run() int32 {
                     var clock = ClockHolder()
@@ -67,12 +67,12 @@ public class Issue567ClockHolderRegressionTests
             package Probe
             import System
 
-            type ClockHolder class {
+            class ClockHolder {
                 var Value int32
                 init() {}
             }
 
-            type Probe2 class {
+            class Probe2 {
                 init() {}
                 func Run() int32 {
                     var clock = ClockHolder()
@@ -102,7 +102,7 @@ public class Issue567ClockHolderRegressionTests
             import System
             import System.Collections.Generic
 
-            type ListProbe class {
+            class ListProbe {
                 init() {}
                 func Run() int32 {
                     var items = List[int32]()
@@ -133,7 +133,7 @@ public class Issue567ClockHolderRegressionTests
             import System
             import System.Collections.Generic
 
-            type DictProbe class {
+            class DictProbe {
                 init() {}
                 func Run() int32 {
                     var d = Dictionary[string, int32]()
@@ -163,12 +163,12 @@ public class Issue567ClockHolderRegressionTests
             package Probe
             import System
 
-            type Counter class {
+            class Counter {
                 var N int32
                 init() {}
             }
 
-            type MultiProbe class {
+            class MultiProbe {
                 init() {}
                 func Run() int32 {
                     var c = Counter()
@@ -200,12 +200,12 @@ public class Issue567ClockHolderRegressionTests
             package Probe
             import System
 
-            type Holder class {
+            class Holder {
                 var Val int32
                 init() {}
             }
 
-            type NestProbe class {
+            class NestProbe {
                 init() {}
                 func Run() int32 {
                     var h = Holder()
@@ -239,7 +239,7 @@ public class Issue567ClockHolderRegressionTests
             package Probe
             import System
 
-            type Box class {
+            class Box {
                 var X int32
                 init() {}
             }
@@ -270,12 +270,12 @@ public class Issue567ClockHolderRegressionTests
             package Probe
             import System
 
-            type State class {
+            class State {
                 var Running bool
                 init() {}
             }
 
-            type Controller class {
+            class Controller {
                 init() {}
                 func Execute() string {
                     var state = State()

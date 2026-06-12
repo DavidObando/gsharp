@@ -25,7 +25,7 @@ public class ClassTests
     public void ClassLiteral_ReadFields()
     {
         var source = @"
-type Box class {
+class Box {
     var Width int32
     var Height int32
 }
@@ -42,7 +42,7 @@ b.Width + b.Height
     public void ClassAssignment_HasReferenceSemantics()
     {
         var source = @"
-type Box class {
+class Box {
     var Width int32
 }
 
@@ -60,7 +60,7 @@ b.Width
     public void ClassFieldAssignment_MutatesInPlace()
     {
         var source = @"
-type Box class {
+class Box {
     var Width int32
 }
 
@@ -78,7 +78,7 @@ b.Width
     {
         // Regression: 3.B.3's IsClass dispatch must not regress struct value-copy.
         var source = @"
-type Point struct {
+struct Point {
     var X int32
 }
 
@@ -96,7 +96,7 @@ p.X
     public void ClassLiteral_EmptyInitializerZeroes()
     {
         var source = @"
-type Box class {
+class Box {
     var Width int32
     var Height int32
 }
@@ -110,18 +110,22 @@ b.Width + b.Height
     }
 
     [Fact]
-    public void DataClass_Rejected()
+    public void DataClass_Accepted()
     {
-        // `data class` is intentionally not part of Phase 3 (ADR-0029 limits
-        // `data` to `struct`); diagnose at parse time.
+        // ADR-0078: `data class` is now a first-class declaration form that
+        // pairs reference identity with synthesized equality / with-copy /
+        // deconstruction (combines with `class` for the reference flavor of
+        // the data carrier).
         var source = @"
-type Foo data class {
-    var X int32
+data class Foo(X int32) {
 }
-0
+
+let f = Foo(7)
+f.X
 ";
         var result = Evaluate(source);
-        Assert.NotEmpty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
     }
 
     [Fact]
@@ -131,7 +135,7 @@ type Foo data class {
         // public fields of the same name; the class is constructed positionally
         // via `Name(args)`.
         var source = @"
-type Point class(X int32, Y int32) {
+class Point(X int32, Y int32) {
 }
 
 var p = Point(3, 4)
@@ -147,7 +151,7 @@ p.X + p.Y
     {
         // Body fields not listed in the primary ctor are zero-initialized.
         var source = @"
-type Counter class(initial int32) {
+class Counter(initial int32) {
     var Count int32
 }
 
@@ -163,7 +167,7 @@ c.initial + c.Count
     public void PrimaryConstructor_WrongArgumentCount_Diagnoses()
     {
         var source = @"
-type Point class(X int32, Y int32) {
+class Point(X int32, Y int32) {
 }
 
 var p = Point(3)
@@ -177,7 +181,7 @@ var p = Point(3)
     public void PrimaryConstructor_WrongArgumentType_Diagnoses()
     {
         var source = @"
-type Point class(X int32, Y int32) {
+class Point(X int32, Y int32) {
 }
 
 var p = Point(3, true)
@@ -191,7 +195,7 @@ var p = Point(3, true)
     public void PrimaryConstructor_NameCollidesWithBodyField_Diagnoses()
     {
         var source = @"
-type Point class(X int32, Y int32) {
+class Point(X int32, Y int32) {
     var X int32
 }
 0
@@ -204,11 +208,11 @@ type Point class(X int32, Y int32) {
     public void GenericClass_Inherits_GenericBaseClass_UsingTypeParameter_Binds()
     {
         var source = @"
-type Base[T any] open class {
+open class Base[T any] {
     func Echo(x T) T { return x }
 }
 
-type Derived[T any] class : Base[T] {
+class Derived[T any] : Base[T] {
 }
 
 var d = Derived[string]{}
@@ -225,7 +229,7 @@ d.Echo(""ok"")
         // Phase 3.B.3 sub-step 2b: bare `X` / `Y` inside `Sum` resolve to
         // `this.X` / `this.Y`.
         var source = @"
-type Pt class(X int32, Y int32) {
+class Pt(X int32, Y int32) {
     func Sum() int32 {
         return X + Y
     }
@@ -242,7 +246,7 @@ p.Sum()
     public void Method_MutatesReceiverViaImplicitFieldAssignment()
     {
         var source = @"
-type Pt class(X int32, Y int32) {
+class Pt(X int32, Y int32) {
     func Scale(f int32) {
         X = X * f
         Y = Y * f
@@ -261,7 +265,7 @@ p.X + p.Y
     public void Method_TakesAndUsesArguments()
     {
         var source = @"
-type Vec class(X int32) {
+class Vec(X int32) {
     func Add(n int32) int32 {
         return X + n
     }
@@ -278,7 +282,7 @@ v.Add(7)
     public void Method_WrongArgCount_Diagnoses()
     {
         var source = @"
-type Pt class(X int32) {
+class Pt(X int32) {
     func Inc() int32 {
         return X + 1
     }
@@ -294,7 +298,7 @@ p.Inc(99)
     public void Method_NameCollidesWithField_Diagnoses()
     {
         var source = @"
-type Pt class(X int32) {
+class Pt(X int32) {
     func X() int32 {
         return 0
     }
@@ -310,7 +314,7 @@ type Pt class(X int32) {
     {
         // Methods are class-only in 3.B.3 sub-step 2b.
         var source = @"
-type Pt struct {
+struct Pt {
     var X int32
 
     func Sum() int32 {
@@ -329,8 +333,8 @@ type Pt struct {
     public void Inheritance_BaseMustBeOpen_Diagnoses()
     {
         var source = @"
-type A class { var X int32 }
-type B class : A { var Y int32 }
+class A { var X int32 }
+class B : A { var Y int32 }
 0
 ";
         var result = Evaluate(source);
@@ -341,8 +345,8 @@ type B class : A { var Y int32 }
     public void Inheritance_OpenClass_Subclass_Works()
     {
         var source = @"
-type A open class { var X int32 }
-type B class : A { var Y int32 }
+open class A { var X int32 }
+class B : A { var Y int32 }
 var b = B{X: 1, Y: 2}
 b.X + b.Y
 ";
@@ -355,10 +359,10 @@ b.X + b.Y
     public void Override_OverridesOpenMethod_Dispatches()
     {
         var source = @"
-type A open class {
+open class A {
     open func F() int32 { return 1 }
 }
-type B class : A {
+class B : A {
     override func F() int32 { return 2 }
 }
 var b = B{}
@@ -373,10 +377,10 @@ b.F()
     public void Override_OfNonOpenMethod_Diagnoses()
     {
         var source = @"
-type A open class {
+open class A {
     func F() int32 { return 1 }
 }
-type B class : A {
+class B : A {
     override func F() int32 { return 2 }
 }
 0
@@ -389,10 +393,10 @@ type B class : A {
     public void Override_WithoutKeyword_Diagnoses()
     {
         var source = @"
-type A open class {
+open class A {
     open func F() int32 { return 1 }
 }
-type B class : A {
+class B : A {
     func F() int32 { return 2 }
 }
 0
@@ -405,8 +409,8 @@ type B class : A {
     public void Override_NoBaseMethod_Diagnoses()
     {
         var source = @"
-type A open class {}
-type B class : A {
+open class A {}
+class B : A {
     override func F() int32 { return 1 }
 }
 0
@@ -419,10 +423,10 @@ type B class : A {
     public void Override_SignatureMismatch_Diagnoses()
     {
         var source = @"
-type A open class {
+open class A {
     open func F() int32 { return 1 }
 }
-type B class : A {
+class B : A {
     override func F(x int32) int32 { return x }
 }
 0
@@ -435,11 +439,11 @@ type B class : A {
     public void Inheritance_InheritedFieldAccessibleByBareName()
     {
         var source = @"
-type A open class {
+open class A {
     var X int32
     func GetX() int32 { return X }
 }
-type B class : A {}
+class B : A {}
 var b = B{X: 42}
 b.GetX()
 ";
@@ -452,10 +456,10 @@ b.GetX()
     public void Inheritance_InheritedMethod_Callable()
     {
         var source = @"
-type A open class {
+open class A {
     func Hello() int32 { return 7 }
 }
-type B class : A {}
+class B : A {}
 var b = B{}
 b.Hello()
 ";
@@ -469,10 +473,10 @@ b.Hello()
     {
         // Issue #306: `: Base(args)` chains to the base primary constructor.
         var source = @"
-type Animal open class(Name string) {
+open class Animal(Name string) {
     func Speak() string { return Name }
 }
-type Dog class(Pet string) : Animal(Pet) {}
+class Dog(Pet string) : Animal(Pet) {}
 var d = Dog(""Rex"")
 d.Speak()
 ";
@@ -486,8 +490,8 @@ d.Speak()
     {
         // Issue #306: GS0214 when no base ctor matches the supplied arguments.
         var source = @"
-type Animal open class(Name string) {}
-type Dog class(Pet string) : Animal(Pet, Pet) {}
+open class Animal(Name string) {}
+class Dog(Pet string) : Animal(Pet, Pet) {}
 0
 ";
         var result = Evaluate(source);
@@ -499,10 +503,10 @@ type Dog class(Pet string) : Animal(Pet, Pet) {}
     {
         // Issue #306: GS0213 when base-ctor args are given but there is no base class.
         var source = @"
-type IShape interface {
+interface IShape {
     func Area() int32
 }
-type Square class(Side int32) : IShape(Side) {
+class Square(Side int32) : IShape(Side) {
     func Area() int32 { return Side * Side }
 }
 0
@@ -517,7 +521,7 @@ type Square class(Side int32) : IShape(Side) {
         // Issue #306: an `init(...)` constructor body runs arbitrary statements
         // with `this`, its parameters, and the class fields in scope.
         var source = @"
-type Rect class {
+class Rect {
     var Width int32
     var Height int32
     var Area int32
@@ -540,7 +544,7 @@ r.Area
     {
         // The constructor body may contain control flow.
         var source = @"
-type Clamped class {
+class Clamped {
     var Value int32
     init(v int32) {
         if v < 0 {
@@ -563,10 +567,10 @@ Clamped(-5).Value
         // Issue #306: an `init` may chain to a GSharp base class's primary
         // constructor via `: base(args)` and then run its own body.
         var source = @"
-type Animal open class(Name string) {
+open class Animal(Name string) {
     func Speak() string { return Name }
 }
-type Dog class : Animal {
+class Dog : Animal {
     var Tricks int32
     init(name string, tricks int32) : base(name) {
         Tricks = tricks
@@ -584,10 +588,10 @@ d.Speak()
     public void ExplicitConstructor_GSharpBase_BodyFieldIsSet()
     {
         var source = @"
-type Animal open class(Name string) {
+open class Animal(Name string) {
     func Speak() string { return Name }
 }
-type Dog class : Animal {
+class Dog : Animal {
     var Tricks int32
     init(name string, tricks int32) : base(name) {
         Tricks = tricks
@@ -605,7 +609,7 @@ d.Tricks
     public void ExplicitConstructor_WrongArgumentCount_Diagnoses()
     {
         var source = @"
-type Rect class {
+class Rect {
     var Width int32
     init(w int32, h int32) {
         Width = w
@@ -622,7 +626,7 @@ var r = Rect(3)
     public void ExplicitConstructor_WrongArgumentType_Diagnoses()
     {
         var source = @"
-type Rect class {
+class Rect {
     var Width int32
     init(w int32) {
         Width = w
@@ -642,7 +646,7 @@ var r = Rect(true)
         // others. A user-declared init that duplicates its signature is a
         // compile-time error (GS0284).
         var source = @"
-type Bad class(X int32) {
+class Bad(X int32) {
     init(y int32) {
         X = y
     }
@@ -660,7 +664,7 @@ type Bad class(X int32) {
         // list AND additional explicit init(...) bodies with distinct
         // signatures, both kinds coexist as designated initializers.
         var source = @"
-type Both class(Name string) {
+class Both(Name string) {
     var Age int32
     init(age int32) {
         Age = age
@@ -680,7 +684,7 @@ byName.Name
         // ADR-0063 §9: multiple `init(...)` overloads are now supported. The
         // call site selects the best match by argument arity/type.
         var source = @"
-type Bag class {
+class Bag {
     var X int32
     init(a int32) {
         X = a
@@ -703,7 +707,7 @@ b.X
         // ADR-0065 §2: convenience init body begins with `init(args)` which
         // delegates to the designated init in the same class.
         var source = @"
-type Rect class {
+class Rect {
     var Width int32
     var Height int32
     init(w int32, h int32) {
@@ -727,7 +731,7 @@ r.Width + r.Height
     {
         // ADR-0065 §2 Rule 3 / GS0278.
         var source = @"
-type Bad class {
+class Bad {
     var X int32
     init(x int32) {
         X = x
@@ -747,7 +751,7 @@ type Bad class {
     {
         // ADR-0065 §2 / GS0281: only convenience init may use init(args).
         var source = @"
-type Bad class {
+class Bad {
     var X int32
     init(x int32) {
         X = x
@@ -767,9 +771,9 @@ type Bad class {
     {
         // ADR-0065 §2 / GS0279: convenience may not declare `: base()`.
         var source = @"
-type Animal open class(Name string) {
+open class Animal(Name string) {
 }
-type Dog class : Animal(""rex"") {
+class Dog : Animal(""rex"") {
     init(n string) {
     }
     convenience init() : base(""rex"") {

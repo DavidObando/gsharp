@@ -40,7 +40,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Holder struct {
+            struct Holder {
                 var Map Dictionary[string, int32]
             }
 
@@ -71,11 +71,11 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Inner struct {
+            struct Inner {
                 var Map Dictionary[string, int32]
             }
 
-            type Outer struct {
+            struct Outer {
                 var InnerObj Inner
             }
 
@@ -130,7 +130,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             package P
             import System
 
-            type Holder struct {
+            struct Holder {
                 var Value int32
             }
 
@@ -156,7 +156,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Holder struct {
+            struct Holder {
                 var Map Dictionary[string, int32]
             }
 
@@ -204,7 +204,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Holder struct {
+            struct Holder {
                 var Map Dictionary[string, int32]
             }
 
@@ -228,7 +228,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Holder struct {
+            struct Holder {
                 var Map Dictionary[string, int32]
             }
 
@@ -251,7 +251,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Holder struct {
+            struct Holder {
                 var Map Dictionary[string, int32]
             }
 
@@ -299,11 +299,11 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Inner struct {
+            struct Inner {
                 var Map Dictionary[string, int32]
             }
 
-            type Outer struct {
+            struct Outer {
                 var InnerObj Inner
             }
 
@@ -330,7 +330,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Bag struct {
+            struct Bag {
                 var Map Dictionary[string, int32]
             }
 
@@ -367,7 +367,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Holder class(Map Dictionary[string, int32]) {
+            class Holder(Map Dictionary[string, int32]) {
             }
 
             let m = Dictionary[string, int32]()
@@ -391,7 +391,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Holder class(Map Dictionary[string, int32]) {
+            class Holder(Map Dictionary[string, int32]) {
             }
 
             let m = Dictionary[string, int32]()
@@ -418,10 +418,10 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Inner class(Map Dictionary[string, int32]) {
+            class Inner(Map Dictionary[string, int32]) {
             }
 
-            type Outer class(InnerObj Inner?) {
+            class Outer(InnerObj Inner?) {
             }
 
             let m = Dictionary[string, int32]()
@@ -445,10 +445,10 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Inner class(Map Dictionary[string, int32]) {
+            class Inner(Map Dictionary[string, int32]) {
             }
 
-            type Outer class(InnerObj Inner?) {
+            class Outer(InnerObj Inner?) {
             }
 
             let o = Outer(nil)

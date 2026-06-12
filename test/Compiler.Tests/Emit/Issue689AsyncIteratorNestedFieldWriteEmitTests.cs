@@ -35,11 +35,11 @@ public class Issue689AsyncIteratorNestedFieldWriteEmitTests
             import System.Threading
             import System.Threading.Tasks
 
-            type Counter class {
+            class Counter {
                 var Value int32 = 0
             }
 
-            type Executor class {
+            class Executor {
                 var Tracker Counter = Counter()
 
                 async func Run(ct CancellationToken) IAsyncEnumerable[int32] {
@@ -77,11 +77,11 @@ public class Issue689AsyncIteratorNestedFieldWriteEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Counter class {
+            class Counter {
                 var Value int32 = 0
             }
 
-            type Probe class {
+            class Probe {
                 var Tracker Counter = Counter()
 
                 async func Run() IAsyncEnumerable[int32] {
@@ -120,11 +120,11 @@ public class Issue689AsyncIteratorNestedFieldWriteEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Counter class {
+            class Counter {
                 var Value int32 = 0
             }
 
-            type Executor class {
+            class Executor {
                 var Tracker Counter = Counter()
 
                 async func Run() IAsyncEnumerable[int32] {
@@ -166,11 +166,11 @@ public class Issue689AsyncIteratorNestedFieldWriteEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Counter class {
+            class Counter {
                 var Value int32 = 0
             }
 
-            type Executor class {
+            class Executor {
                 var Tracker Counter = Counter()
 
                 async func Run() IAsyncEnumerable[int32] {
@@ -209,7 +209,7 @@ public class Issue689AsyncIteratorNestedFieldWriteEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Executor class {
+            class Executor {
                 var PlainNum int32 = 0
 
                 async func Run() IAsyncEnumerable[int32] {
@@ -249,11 +249,11 @@ public class Issue689AsyncIteratorNestedFieldWriteEmitTests
         var source = """
             package Probe
 
-            type Counter class {
+            class Counter {
                 var Value int32 = 0
             }
 
-            type Executor class {
+            class Executor {
                 var Tracker Counter = Counter()
 
                 func Run() int32 {
@@ -280,11 +280,11 @@ public class Issue689AsyncIteratorNestedFieldWriteEmitTests
         var source = """
             package Probe
 
-            type Counter class {
+            class Counter {
                 var Value int32 = 0
             }
 
-            type Executor class {
+            class Executor {
                 var Tracker Counter = Counter()
 
                 func Run() int32 {
@@ -319,11 +319,11 @@ public class Issue689AsyncIteratorNestedFieldWriteEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Counter class {
+            class Counter {
                 var Value int32 = 0
             }
 
-            type Executor class {
+            class Executor {
                 var Tracker Counter = Counter()
 
                 async func Run() IAsyncEnumerable[int32] {
@@ -366,16 +366,16 @@ public class Issue689AsyncIteratorNestedFieldWriteEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Counter class {
+            class Counter {
                 var Value int32 = 0
                 var Name string = "init"
             }
 
-            type Holder class {
+            class Holder {
                 var Inner Counter = Counter()
             }
 
-            type Executor class {
+            class Executor {
                 var H Holder = Holder()
 
                 async func Run() IAsyncEnumerable[int32] {
@@ -416,11 +416,11 @@ public class Issue689AsyncIteratorNestedFieldWriteEmitTests
             package Probe
             import System.Collections.Generic
 
-            type Counter class {
+            class Counter {
                 var Value int32 = 0
             }
 
-            type Executor class {
+            class Executor {
                 var Tracker Counter = Counter()
 
                 func Run() sequence[int32] {
@@ -457,11 +457,11 @@ public class Issue689AsyncIteratorNestedFieldWriteEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Counter class {
+            class Counter {
                 var Value int32 = 0
             }
 
-            type Executor class {
+            class Executor {
                 var Tracker Counter = Counter()
 
                 async func Run() async sequence[int32] {

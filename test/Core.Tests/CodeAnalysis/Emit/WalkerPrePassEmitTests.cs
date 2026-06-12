@@ -34,7 +34,7 @@ public class WalkerPrePassEmitTests
         // child expressions (a context the old WalkForStructLiterals skipped).
         const string Source = @"package P
 import System
-type Point data struct {
+data struct Point {
     var X int32
     var Y int32
 }
@@ -62,7 +62,7 @@ Console.WriteLine(t.Item2)
         // side, exercising deeper descent than the old walker reached.
         const string Source = @"package P
 import System
-type Point data struct {
+data struct Point {
     var X int32
     var Y int32
 }
@@ -86,7 +86,7 @@ Console.WriteLine(p.Y)
     {
         const string Source = @"package P
 import System
-type Point data struct {
+data struct Point {
     var X int32
     var Y int32
 }
@@ -145,7 +145,7 @@ Console.WriteLine(xs[2])
         // from a function exercises the BoundDefaultExpression slot path.
         const string Source = @"package P
 import System
-type Point data struct {
+data struct Point {
     var X int32
     var Y int32
 }
@@ -170,7 +170,7 @@ Console.WriteLine(t.Item2)
         // field assignments.
         const string Source = @"package P
 import System
-type Box data struct {
+data struct Box {
     var Value int32
 }
 var b Box
@@ -214,7 +214,7 @@ Console.WriteLine(nine())
         // a slot allocated.
         const string Source = @"package P
 import System
-type Pair data struct {
+data struct Pair {
     var A int32
     var B int32
 }

@@ -178,7 +178,7 @@ public class Issue527StructDelegateFieldEmitTests
             import System
             import Probe.CSharp
 
-            type StructFieldProbe class {
+            class StructFieldProbe {
                 func Test() string {
                     var bag = CallbackBag()
                     bag.OnAsk = func() string { return "hello" }
@@ -235,7 +235,7 @@ public class Issue527StructDelegateFieldEmitTests
             package Probe.Tests
             import System
 
-            type CallbackBag struct {
+            struct CallbackBag {
                 var OnAsk func() string
             }
 

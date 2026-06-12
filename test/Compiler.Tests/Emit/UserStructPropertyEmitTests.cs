@@ -31,7 +31,7 @@ public class UserStructPropertyEmitTests
             package P
             import System
 
-            type Point struct {
+            struct Point {
                 var X int32
                 var Y int32
                 prop Sum int32 {
@@ -56,7 +56,7 @@ public class UserStructPropertyEmitTests
             package P
             import System
 
-            type Point struct {
+            struct Point {
                 var X int32
                 var Y int32
                 prop Sum int32 {
@@ -83,14 +83,14 @@ public class UserStructPropertyEmitTests
             package P
             import System
 
-            type Inner struct {
+            struct Inner {
                 var V int32
                 prop Triple int32 {
                     get { return this.V * 3 }
                 }
             }
 
-            type Outer struct {
+            struct Outer {
                 var Inner Inner
             }
 
@@ -112,7 +112,7 @@ public class UserStructPropertyEmitTests
             package P
             import System
 
-            type Point struct {
+            struct Point {
                 var X int32
                 var Y int32
                 prop Sum int32 {
@@ -137,7 +137,7 @@ public class UserStructPropertyEmitTests
             package P
             import System
 
-            type Point struct {
+            struct Point {
                 var X int32
                 var Y int32
                 prop Sum int32 {
@@ -145,7 +145,7 @@ public class UserStructPropertyEmitTests
                 }
             }
 
-            type Pair struct {
+            struct Pair {
                 var A int32
                 var B int32
             }
@@ -171,7 +171,7 @@ public class UserStructPropertyEmitTests
             package P
             import System
 
-            type Box class {
+            class Box {
                 prop V int32
                 prop Doubled int32 {
                     get { return this.V * 2 }
@@ -197,7 +197,7 @@ public class UserStructPropertyEmitTests
             package P
             import System
 
-            type Holder struct {
+            struct Holder {
                 prop raw int32
                 prop V int32 {
                     get { return this.raw }

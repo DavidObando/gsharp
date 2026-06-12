@@ -366,7 +366,7 @@ if !dict.TryGetValue(""key"", &value) {
         var result = Evaluate(@"
 import System.Diagnostics.CodeAnalysis
 
-type Box class {
+class Box {
     var _name string?
 
     func EnsureInit() {
@@ -400,7 +400,7 @@ b.Run()
         var result = Evaluate(@"
 import System.Diagnostics.CodeAnalysis
 
-type Box class {
+class Box {
     var _name string?
 
     @MemberNotNull(""_name"")
@@ -428,7 +428,7 @@ b.Run()
         var result = Evaluate(@"
 import System.Diagnostics.CodeAnalysis
 
-type Box class {
+class Box {
     var _name string?
 
     @MemberNotNull(""_name"")
@@ -458,7 +458,7 @@ b.Run()
         var result = Evaluate(@"
 import System.Diagnostics.CodeAnalysis
 
-type Box class {
+class Box {
     var _name string?
 
     @MemberNotNullWhen(true, ""_name"")
@@ -491,7 +491,7 @@ b.Run()
         var result = Evaluate(@"
 import System.Diagnostics.CodeAnalysis
 
-type Box class {
+class Box {
     var _name string?
 
     @MemberNotNullWhen(true, ""_name"")
@@ -523,7 +523,7 @@ b.Run()
         var result = Evaluate(@"
 import System.Diagnostics.CodeAnalysis
 
-type Box class {
+class Box {
     var _name string?
 
     @MemberNotNullWhen(true, ""_name"")
@@ -556,7 +556,7 @@ b.Run()
         var result = Evaluate(@"
 import System.Diagnostics.CodeAnalysis
 
-type Pair class {
+class Pair {
     var _a string?
     var _b string?
 

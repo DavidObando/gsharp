@@ -42,7 +42,7 @@ tweak()
     public void VarRef_AliasingStructField_BindsCleanly()
     {
         var source = @"
-type Counter struct {
+struct Counter {
     var Value int32
 }
 

@@ -27,7 +27,7 @@ public class Issue568UsingLetUserIDisposableTests
             package Probe
             import System
 
-            type Fixture class : IDisposable {
+            class Fixture : IDisposable {
                 func Dispose() {
                     Console.WriteLine("disposed")
                 }
@@ -52,13 +52,13 @@ public class Issue568UsingLetUserIDisposableTests
             package Probe
             import System
 
-            type BaseDisp open class : IDisposable {
+            open class BaseDisp : IDisposable {
                 func Dispose() {
                     Console.WriteLine("base-dispose")
                 }
             }
 
-            type Child class : BaseDisp {
+            class Child : BaseDisp {
             }
 
             func test() {

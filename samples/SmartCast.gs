@@ -9,14 +9,14 @@ package GSharp.Example.SmartCast
 
 import System
 
-type Animal open class {
+open class Animal {
     var Name string
     open func Describe() string {
         return Name
     }
 }
 
-type Dog class : Animal {
+class Dog : Animal {
     override func Describe() string {
         return Name + " (dog)"
     }
@@ -26,7 +26,7 @@ type Dog class : Animal {
     }
 }
 
-type Cat class : Animal {
+class Cat : Animal {
     override func Describe() string {
         return Name + " (cat)"
     }

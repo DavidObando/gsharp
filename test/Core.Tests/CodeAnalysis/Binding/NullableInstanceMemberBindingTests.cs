@@ -134,7 +134,7 @@ var r = describe(5)
     public void NullableInt32_OnField_Binds()
     {
         var source = @"
-type Holder class {
+class Holder {
     var Flag bool?
 
     init() {

@@ -33,7 +33,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Bag class {
+            class Bag {
                 var items List[int32] = List[int32]()
 
                 func Add(v int32) {
@@ -74,7 +74,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Cache class {
+            class Cache {
                 var data Dictionary[string, int32] = Dictionary[string, int32]()
 
                 func Set(key string, value int32) {
@@ -105,7 +105,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             package P
             import System
 
-            type Container class {
+            class Container {
                 var arr []int32 = []int32{0, 0, 0, 0, 0}
 
                 func Set(i int32, v int32) {
@@ -137,7 +137,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Holder class {
+            class Holder {
                 var items List[int32] = List[int32]()
 
                 init() {
@@ -170,7 +170,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Multi class {
+            class Multi {
                 var names List[string] = List[string]()
                 var scores List[int32] = List[int32]()
 
@@ -215,7 +215,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Acc class {
+            class Acc {
                 var vals List[int32] = List[int32]()
 
                 init() {
@@ -252,7 +252,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             import System
             import System.Collections.Generic
 
-            type Counter class {
+            class Counter {
                 var counts List[int32] = List[int32]()
 
                 init() {
