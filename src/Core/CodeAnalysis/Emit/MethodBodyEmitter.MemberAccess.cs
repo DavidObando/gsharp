@@ -386,7 +386,25 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitFieldAccess(BoundFieldAccessExpression fa)
     {
-        if (!this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var fieldHandle))
+        // ADR-0087 §3 R3+R4: when the receiver is a constructed
+        // generic user type, the ldfld must reference the field via
+        // a MemberRef parented at the TypeSpec. With the field
+        // signature now encoding VAR(idx), the value read off `stfld`
+        // is already the correct concrete type, so the unbox.any /
+        // castclass bridge that R0/R1 erasure required is dropped.
+        var containing = fa.StructType;
+        bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(containing);
+
+        EntityHandle fieldHandle;
+        if (isGeneric)
+        {
+            fieldHandle = this.outer.ResolveFieldToken(containing, fa.Field);
+        }
+        else if (this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var defHandle))
+        {
+            fieldHandle = defHandle;
+        }
+        else
         {
             throw new InvalidOperationException(
                 $"Struct field '{fa.Field.Name}' has no emitted FieldDef.");
@@ -417,40 +435,6 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.OpCode(ILOpCode.Ldfld);
         this.il.Token(fieldHandle);
-
-        // Phase 4 emit parity (F2, type-erased generic user types): if
-        // the definition's field is open (T) but the constructed
-        // instance substitutes it to a value type, the ldfld pushes an
-        // object reference (the boxed value). Unbox.any so the rest of
-        // the IL sees the expected primitive.
-        if (fa.StructType?.Definition is StructSymbol def && def != fa.StructType)
-        {
-            FieldSymbol defField = null;
-            foreach (var f in def.Fields)
-            {
-                if (f.Name == fa.Field.Name)
-                {
-                    defField = f;
-                    break;
-                }
-            }
-
-            if (defField != null
-                && defField.Type is TypeParameterSymbol
-                && fa.Field.Type is not TypeParameterSymbol)
-            {
-                if (ReflectionMetadataEmitter.IsValueTypeSymbol(fa.Field.Type))
-                {
-                    this.il.OpCode(ILOpCode.Unbox_any);
-                    this.il.Token(this.outer.GetElementTypeToken(fa.Field.Type));
-                }
-                else if (fa.Field.Type?.ClrType != typeof(object))
-                {
-                    this.il.OpCode(ILOpCode.Castclass);
-                    this.il.Token(this.outer.GetElementTypeToken(fa.Field.Type));
-                }
-            }
-        }
     }
 
     private void EmitFieldAssignment(BoundFieldAssignmentExpression fas)
@@ -468,7 +452,20 @@ internal sealed partial class MethodBodyEmitter
             fas.Receiver == null || !ValueExpressionMutatesReceiver(fas.Value, fas.Receiver),
             $"EmitFieldAssignment precondition violated: BoundFieldAssignmentExpression value must not reassign the receiver variable for field '{fas.Field.Name}' — see issue #420 / P3-4.");
 
-        if (!this.outer.cache.StructFieldDefs.TryGetValue(fas.Field, out var fieldHandle))
+        // ADR-0087 §3 R3: route via TypeSpec MemberRef when generic.
+        var containing = fas.StructType;
+        bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(containing);
+
+        EntityHandle fieldHandle;
+        if (isGeneric)
+        {
+            fieldHandle = this.outer.ResolveFieldToken(containing, fas.Field);
+        }
+        else if (this.outer.cache.StructFieldDefs.TryGetValue(fas.Field, out var defHandle))
+        {
+            fieldHandle = defHandle;
+        }
+        else
         {
             throw new InvalidOperationException(
                 $"Struct field '{fas.Field.Name}' has no emitted FieldDef.");

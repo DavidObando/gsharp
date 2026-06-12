@@ -315,12 +315,20 @@ internal sealed partial class MethodBodyEmitter
         // reference equality and return false for equal boxed value types.
         // Dispatch through static Object.Equals(object, object) — which
         // routes to the boxed value's Equals override — for correct value
-        // semantics. Operands already sit on the stack as boxed objects.
-        if (b.Left.Type is TypeParameterSymbol && b.Right.Type is TypeParameterSymbol &&
+        // semantics. ADR-0087 §3 R2+R4: after R2, operands carry their
+        // VAR/MVAR type rather than erased object; we must explicitly
+        // `box T` each operand before invoking the static Object.Equals
+        // overload that takes (object, object). The JIT elides the box
+        // when T resolves to a reference type at runtime.
+        if (b.Left.Type is TypeParameterSymbol leftTp && b.Right.Type is TypeParameterSymbol rightTp &&
             (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals))
         {
             this.EmitExpression(b.Left);
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(leftTp));
             this.EmitExpression(b.Right);
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(rightTp));
             this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
             if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
             {

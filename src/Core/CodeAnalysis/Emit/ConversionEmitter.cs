@@ -98,6 +98,20 @@ internal sealed class ConversionEmitter
         {
             il.OpCode(ILOpCode.Box);
             il.Token(this.getElementTypeToken(type));
+            return;
+        }
+
+        // ADR-0087 §3 R3: a value of type-parameter type may be a
+        // value type or reference type at runtime; for callers that
+        // need an `object` (e.g. Object.Equals(object,object),
+        // HashCode.Add<object>(object), Convert.ToString(object,...)),
+        // the CLR requires `box T` to materialise the boxed slot.
+        // The JIT eliminates the box when T is statically a reference
+        // type at the JIT site.
+        if (type is TypeParameterSymbol)
+        {
+            il.OpCode(ILOpCode.Box);
+            il.Token(this.getElementTypeToken(type));
         }
     }
 

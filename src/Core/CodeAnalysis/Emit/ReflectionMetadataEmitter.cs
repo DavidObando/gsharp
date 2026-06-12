@@ -491,7 +491,10 @@ internal sealed class ReflectionMetadataEmitter
             this.EncodeTypeSymbol,
             this.GetElementTypeToken,
             this.GetTypeReference,
-            this.customAttrEncoder.NextParameterHandle);
+            this.customAttrEncoder.NextParameterHandle,
+            this.ResolveUserTypeToken,
+            this.ResolveFieldToken,
+            this.GetUserStructMethodRef);
 
         // PR-E-7: MemberDefEmitter wires up after DataStructSynthesizer.
         // It depends on the same EmitContext/MetadataTokenCache/WellKnownReferences
@@ -1950,6 +1953,13 @@ internal sealed class ReflectionMetadataEmitter
         // For reference assemblies we use MvidPEBuilder which adds a .mvid
         // PE section so MSBuild's CopyRefAssembly can efficiently extract
         // the module version identifier without loading full metadata.
+        //
+        // ADR-0087 §3 R1: the GenericParam table is required by ECMA-335
+        // II.22.20 to be sorted by (Owner, Number). Because TypeDefs and
+        // MethodDefs are emitted in interleaved visit orders, the rows
+        // were buffered into emitCtx.PendingGenericParameters and are
+        // flushed in sorted order here, just before PE serialisation.
+        TypeDefEmitter.FlushPendingGenericParameters(this.emitCtx);
         var peHeaderBuilder = new PEHeaderBuilder(
             imageCharacteristics: entryHandle.IsNil
                 ? Characteristics.Dll | Characteristics.ExecutableImage
@@ -2762,7 +2772,10 @@ internal sealed class ReflectionMetadataEmitter
         il.OpCode(ILOpCode.Call);
         il.Token(baseCtorToken);
 
-        // Primary ctor parameter → field assignments
+        // Primary ctor parameter → field assignments. ADR-0087 §3 R3:
+        // for a generic class the stfld must reference the field via
+        // a MemberRef parented at the self-instantiation TypeSpec so
+        // ilverify accepts the receiver type (`Box`1<!0>`).
         for (var i = 0; i < parameters.Length; i++)
         {
             var param = parameters[i];
@@ -2771,10 +2784,7 @@ internal sealed class ReflectionMetadataEmitter
                 throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
             }
 
-            if (!this.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
-            {
-                throw new InvalidOperationException($"Class field '{field.Name}' has no emitted FieldDef.");
-            }
+            var fieldHandle = this.ResolveFieldToken(classSym, field);
 
             il.LoadArgument(0);
             il.LoadArgument(i + 1);
@@ -3586,7 +3596,9 @@ internal sealed class ReflectionMetadataEmitter
 
         var sigBlob = new BlobBuilder();
         var signatureParameterCount = function.Parameters.Length - (function.ExplicitReceiverParameter == null ? 0 : 1);
-        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: function.IsInstanceMethod)
+        new BlobEncoder(sigBlob).MethodSignature(
+                isInstanceMethod: function.IsInstanceMethod,
+                genericParameterCount: function.TypeParameters.IsDefaultOrEmpty ? 0 : function.TypeParameters.Length)
             .Parameters(
                 signatureParameterCount,
                 r =>
@@ -3776,6 +3788,12 @@ internal sealed class ReflectionMetadataEmitter
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
+
+        // ADR-0087 §3 R1: emit GenericParam rows for a user-declared generic
+        // method immediately after AddMethodDefinition. The signature's
+        // genericParameterCount above and these rows together make the method
+        // a proper CLR generic method definition.
+        TypeDefEmitter.EmitGenericParamRows(this.emitCtx, handle, function.TypeParameters);
 
         // Phase 4/5 (ADR-0027 §7.7a): hand the body's sequence points and
         // locals to the PDB emitter, keyed by the freshly minted MethodDef row
@@ -4110,6 +4128,18 @@ internal sealed class ReflectionMetadataEmitter
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
+        // ADR-0087 §3 R3: an ImportedTypeSymbol whose generic args mention a
+        // type parameter (e.g. `Dictionary<string, T>` where T is MVAR(0))
+        // must tokenise as a TypeSpec carrying VAR/MVAR, not the erased
+        // closed `ClrType` (which encodes T as `object`). Otherwise tokens
+        // like `unbox.any Dictionary<string,T>` widen to the wrong shape.
+        if (element is ImportedTypeSymbol tpImported && tpImported.HasTypeParameterArgument)
+        {
+            var sigBlob = new BlobBuilder();
+            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), tpImported);
+            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        }
+
         if (element.ClrType != null)
         {
             if (element.ClrType.IsConstructedGenericType)
@@ -4120,9 +4150,39 @@ internal sealed class ReflectionMetadataEmitter
             return this.GetTypeReference(element.ClrType);
         }
 
-        if (element is StructSymbol structSym && this.cache.StructTypeDefs.TryGetValue(structSym, out var td))
+        if (element is StructSymbol structSym)
         {
-            return td;
+            // ADR-0087 §3 R3: a constructed user-generic struct must
+            // tokenise as a TypeSpec, not the bare TypeDef row.
+            if (IsUserGenericTypeReference(structSym))
+            {
+                return this.GetUserStructTypeSpec(structSym);
+            }
+
+            if (this.cache.StructTypeDefs.TryGetValue(structSym, out var td))
+            {
+                return td;
+            }
+        }
+
+        if (element is TypeParameterSymbol tpSym)
+        {
+            // ADR-0087 §3 R3: a type-parameter element token (e.g. for
+            // `stobj T` against a `&T` parameter, or `initobj T` for a
+            // default value) encodes as a TypeSpec naming VAR(idx) /
+            // MVAR(idx).
+            var sigBlob = new BlobBuilder();
+            var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
+            if (tpSym.IsMethodTypeParameter)
+            {
+                encoder.GenericMethodTypeParameter(tpSym.Ordinal);
+            }
+            else
+            {
+                encoder.GenericTypeParameter(tpSym.Ordinal);
+            }
+
+            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
         if (element is EnumSymbol enumSym && this.cache.EnumTypeDefs.TryGetValue(enumSym, out var etd))
@@ -4323,6 +4383,541 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return this.GetTypeReference(type);
+    }
+
+    // -----------------------------------------------------------------
+    // ADR-0087 §3 R3: user-defined generic-type TypeSpec / MemberRef
+    // plumbing. After R1 a user-declared generic TypeDef carries
+    // GenericParam rows and a backtick-arity name; after R2 its
+    // field/parameter/return signatures encode VAR(idx)/MVAR(idx).
+    // CLR verification then rejects any body reference (`ldfld`,
+    // `stfld`, `call`, `newobj`, `callvirt`, `isinst`, `unbox`,
+    // `unbox.any`) that targets the bare TypeDef row or a bare
+    // FieldDef/MethodDef on it — every such reference must go through
+    // a MemberRef parented at a TypeSpec naming the instantiation
+    // (the self-instantiation `Box`1<!0,...>` for the type's own
+    // bodies, the constructed instantiation `Box`1<int32>` for
+    // external uses). The helpers below provide that routing.
+    // -----------------------------------------------------------------
+
+    /// <summary>
+    /// ADR-0087 §3 R3+R4: builds a MethodSpec for a generic G# user
+    /// function call. Derives the type arguments from the call's
+    /// arguments and substituted return type. Required because the
+    /// post-R2 MethodDef carries MVAR slots; the call site must
+    /// reference a MethodSpec naming the substituted instantiation.
+    /// </summary>
+    internal EntityHandle BuildMethodSpecForGenericCall(EntityHandle openMethod, BoundCallExpression call)
+    {
+        var tps = call.Function.TypeParameters;
+        var args = new TypeSymbol[tps.Length];
+        for (int i = 0; i < tps.Length; i++)
+        {
+            args[i] = InferMethodTypeArgument(call.Function, call.Arguments, call.ReturnType, tps[i]);
+        }
+
+        return this.BuildMethodSpec(openMethod, args);
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R3+R4: builds a MethodSpec for a generic G# user
+    /// instance method call (`h.Box[int32](42)`). Same inference rules
+    /// as <see cref="BuildMethodSpecForGenericCall"/>.
+    /// </summary>
+    internal EntityHandle BuildMethodSpecForGenericInstanceCall(EntityHandle openMethod, BoundUserInstanceCallExpression call)
+    {
+        var tps = call.Method.TypeParameters;
+        var args = new TypeSymbol[tps.Length];
+        var calleeParameterOffset = call.Method.ExplicitReceiverParameter == null ? 0 : 1;
+
+        // The user-instance call's Arguments excludes the receiver,
+        // but Method.Parameters includes the explicit receiver (when
+        // present) at index 0. We pass a sliced view to the inference
+        // helper so positional indices line up.
+        var userParams = call.Method.Parameters;
+        if (calleeParameterOffset > 0)
+        {
+            userParams = call.Method.Parameters.RemoveAt(0);
+        }
+
+        for (int i = 0; i < tps.Length; i++)
+        {
+            args[i] = InferMethodTypeArgument(userParams, call.Arguments, call.Type, call.Method.Type, tps[i]);
+        }
+
+        return this.BuildMethodSpec(openMethod, args);
+    }
+
+    private EntityHandle BuildMethodSpec(EntityHandle openMethod, TypeSymbol[] args)
+    {
+        var sigBlob = new BlobBuilder();
+        var argsEnc = new BlobEncoder(sigBlob).MethodSpecificationSignature(args.Length);
+        for (int i = 0; i < args.Length; i++)
+        {
+            this.EncodeTypeSymbol(argsEnc.AddArgument(), args[i]);
+        }
+
+        return this.emitCtx.Metadata.AddMethodSpecification(openMethod, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    private static TypeSymbol InferMethodTypeArgument(FunctionSymbol fn, ImmutableArray<BoundExpression> args, TypeSymbol substitutedReturn, TypeParameterSymbol tp)
+    {
+        return InferMethodTypeArgument(fn.Parameters, args, substitutedReturn, fn.Type, tp);
+    }
+
+    private static TypeSymbol InferMethodTypeArgument(
+        ImmutableArray<ParameterSymbol> formalParams,
+        ImmutableArray<BoundExpression> actualArgs,
+        TypeSymbol substitutedReturn,
+        TypeSymbol formalReturn,
+        TypeParameterSymbol tp)
+    {
+        // ADR-0087 §3 R3+R4: structural unification across the formal/
+        // actual parameter shapes finds the substituted type for `tp`.
+        // Covers `Id[T](x T) T`, `Pair[A,B](first A, second B)`,
+        // `Echo[T](s []T) []T`, `Wrap[T](b Box[T])`, etc. Recursive
+        // higher-kinded unification (e.g. `MakeList[T]() List[T]`) is
+        // R5 territory and stays out of scope here.
+        for (int i = 0; i < formalParams.Length && i < actualArgs.Length; i++)
+        {
+            // The binder may insert a `BoundConversionExpression` widening
+            // the actual to the (erased) formal type — that conversion's
+            // `.Type` is the formal type, which would defeat unification.
+            // Peel off the conversion to see the underlying expression's
+            // pre-widening type. (We still pass the formal as-is.)
+            var actualType = StripConversion(actualArgs[i]).Type;
+            if (TryUnify(formalParams[i].Type, actualType, tp, out var inferred))
+            {
+                return inferred;
+            }
+        }
+
+        if (formalReturn != null && substitutedReturn != null &&
+            TryUnify(formalReturn, substitutedReturn, tp, out var fromReturn))
+        {
+            return fromReturn;
+        }
+
+        throw new InvalidOperationException(
+            $"Cannot infer type argument for '{tp.Name}'; "
+            + "the type parameter does not appear in any parameter or return shape.");
+    }
+
+    private static BoundExpression StripConversion(BoundExpression expr)
+    {
+        while (expr is BoundConversionExpression conv)
+        {
+            expr = conv.Expression;
+        }
+
+        return expr;
+    }
+
+    private static bool TryUnify(TypeSymbol formal, TypeSymbol actual, TypeParameterSymbol tp, out TypeSymbol inferred)
+    {
+        if (ReferenceEquals(formal, tp))
+        {
+            inferred = actual;
+            return true;
+        }
+
+        if (formal is SliceTypeSymbol fs && actual is SliceTypeSymbol asl)
+        {
+            return TryUnify(fs.ElementType, asl.ElementType, tp, out inferred);
+        }
+
+        if (formal is ArrayTypeSymbol fa && actual is ArrayTypeSymbol aa)
+        {
+            return TryUnify(fa.ElementType, aa.ElementType, tp, out inferred);
+        }
+
+        var formalArgs = GetGenericTypeArguments(formal);
+        var actualArgs = GetGenericTypeArguments(actual);
+        if (!formalArgs.IsDefaultOrEmpty && !actualArgs.IsDefaultOrEmpty
+            && formalArgs.Length == actualArgs.Length)
+        {
+            for (int i = 0; i < formalArgs.Length; i++)
+            {
+                if (TryUnify(formalArgs[i], actualArgs[i], tp, out inferred))
+                {
+                    return true;
+                }
+            }
+        }
+
+        inferred = null;
+        return false;
+    }
+
+    private static ImmutableArray<TypeSymbol> GetGenericTypeArguments(TypeSymbol type)
+    {
+        var args = type switch
+        {
+            StructSymbol s => s.TypeArguments,
+            InterfaceSymbol i => i.TypeArguments,
+            ImportedTypeSymbol it => it.TypeArguments,
+            _ => default,
+        };
+
+        if (!args.IsDefaultOrEmpty)
+        {
+            return args;
+        }
+
+        // ADR-0087 §3 R3+R4: imported CLR constructed generics may carry
+        // their type arguments only on the CLR `Type` (the binder elides
+        // `TypeArguments` when the GS-side use site doesn't need them).
+        // Recover them by inspecting `ClrType.GenericTypeArguments` so
+        // structural unification still succeeds for `List[int32]` /
+        // `Dictionary[string, int32]` actual arguments.
+        var clr = type?.ClrType;
+        if (clr != null && clr.IsGenericType && !clr.IsGenericTypeDefinition)
+        {
+            var clrArgs = clr.GenericTypeArguments;
+            var builder = ImmutableArray.CreateBuilder<TypeSymbol>(clrArgs.Length);
+            for (int i = 0; i < clrArgs.Length; i++)
+            {
+                builder.Add(TypeSymbol.FromClrType(clrArgs[i]));
+            }
+
+            return builder.MoveToImmutable();
+        }
+
+        return default;
+    }
+
+    private readonly Dictionary<StructSymbol, EntityHandle> userStructTypeSpecCache = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<(StructSymbol Containing, FieldSymbol DefField), EntityHandle> userStructFieldRefCache = new();
+    private readonly Dictionary<(StructSymbol Containing, EntityHandle OpenMember), EntityHandle> userStructMethodRefCache = new();
+
+    /// <summary>
+    /// ADR-0087 §3 R3: returns <see langword="true"/> when
+    /// <paramref name="structSym"/> is a user-declared generic type
+    /// reference whose body/field/method/ctor references must be
+    /// parented at a <c>TypeSpec</c> rather than the bare TypeDef row.
+    /// </summary>
+    internal static bool IsUserGenericTypeReference(StructSymbol structSym)
+    {
+        if (structSym == null)
+        {
+            return false;
+        }
+
+        if (!structSym.TypeArguments.IsDefaultOrEmpty)
+        {
+            return true;
+        }
+
+        var def = structSym.Definition ?? structSym;
+        return !def.TypeParameters.IsDefaultOrEmpty;
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R3: returns a <c>TypeSpec</c> EntityHandle for a
+    /// user-declared generic type. When <paramref name="structSym"/>
+    /// carries <see cref="StructSymbol.TypeArguments"/> the spec
+    /// encodes the construction (<c>Box`1&lt;int32&gt;</c>); when it is
+    /// the open definition the spec encodes the self-instantiation
+    /// (<c>Box`1&lt;!0,...&gt;</c>) which is the only valid receiver
+    /// type for the definition's own instance bodies (ECMA-335 II.10.3.1).
+    /// </summary>
+    internal EntityHandle GetUserStructTypeSpec(StructSymbol structSym)
+    {
+        if (this.userStructTypeSpecCache.TryGetValue(structSym, out var cached))
+        {
+            return cached;
+        }
+
+        var def = structSym.Definition ?? structSym;
+        if (!this.cache.StructTypeDefs.TryGetValue(def, out var defHandle))
+        {
+            throw new InvalidOperationException(
+                $"User generic type '{def.Name}' has no emitted TypeDef when constructing TypeSpec.");
+        }
+
+        ImmutableArray<TypeSymbol> typeArgs;
+        if (!structSym.TypeArguments.IsDefaultOrEmpty)
+        {
+            typeArgs = structSym.TypeArguments;
+        }
+        else
+        {
+            // Open definition → encode self-instantiation using the
+            // definition's own type parameters as arguments. Each will
+            // encode as `VAR(idx)` via EncodeTypeSymbol after R2.
+            var defTps = def.TypeParameters;
+            var bld = ImmutableArray.CreateBuilder<TypeSymbol>(defTps.Length);
+            foreach (var tp in defTps)
+            {
+                bld.Add(tp);
+            }
+
+            typeArgs = bld.MoveToImmutable();
+        }
+
+        var sigBlob = new BlobBuilder();
+        var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
+        var gi = encoder.GenericInstantiation(defHandle, typeArgs.Length, isValueType: !def.IsClass);
+        foreach (var arg in typeArgs)
+        {
+            this.EncodeTypeSymbol(gi.AddArgument(), arg);
+        }
+
+        var spec = (EntityHandle)this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.userStructTypeSpecCache[structSym] = spec;
+        return spec;
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R3: returns a <c>MemberRef</c> handle for a field
+    /// on a user-declared generic type, parented at the
+    /// <c>TypeSpec</c> for <paramref name="containingType"/>.
+    /// The MemberRef's signature is encoded from the OPEN definition's
+    /// field — type-parameter slots round-trip as <c>VAR(idx)</c>.
+    /// </summary>
+    internal EntityHandle GetUserStructFieldRef(StructSymbol containingType, FieldSymbol fieldOnContaining)
+    {
+        var def = containingType.Definition ?? containingType;
+        FieldSymbol defField = null;
+        foreach (var candidate in def.Fields)
+        {
+            if (candidate.Name == fieldOnContaining.Name)
+            {
+                defField = candidate;
+                break;
+            }
+        }
+
+        if (defField == null)
+        {
+            // ADR-0029 backing-field fallback: synthesised members (auto-property,
+            // field-like event) live alongside Fields under different containers.
+            defField = fieldOnContaining;
+        }
+
+        var key = (containingType, defField);
+        if (this.userStructFieldRefCache.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        var parent = this.GetUserStructTypeSpec(containingType);
+        var sigBlob = new BlobBuilder();
+        this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), defField.Type);
+        var memberRef = (EntityHandle)this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(defField.Name),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.userStructFieldRefCache[key] = memberRef;
+        return memberRef;
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R3: returns the correct token for a field reference.
+    /// For a non-generic type returns the bare <c>FieldDef</c>; for a
+    /// user-declared generic type returns a <c>MemberRef</c> parented
+    /// at the constructed (or self-) <c>TypeSpec</c>.
+    /// </summary>
+    internal EntityHandle ResolveFieldToken(StructSymbol containingType, FieldSymbol field)
+    {
+        if (IsUserGenericTypeReference(containingType))
+        {
+            return this.GetUserStructFieldRef(containingType, field);
+        }
+
+        return this.cache.StructFieldDefs[field];
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R3: returns a <c>MemberRef</c> handle for an
+    /// instance method or ctor on a user-declared generic type,
+    /// parented at the <c>TypeSpec</c> for <paramref name="containingType"/>.
+    /// The signature is supplied by the caller (already encoded against
+    /// the open definition with <c>VAR</c> slots).
+    /// </summary>
+    internal EntityHandle GetUserStructMethodRef(
+        StructSymbol containingType,
+        EntityHandle openMethodDef,
+        string methodName,
+        BlobBuilder signature)
+    {
+        var key = (containingType, openMethodDef);
+        if (this.userStructMethodRefCache.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        var parent = this.GetUserStructTypeSpec(containingType);
+        var memberRef = (EntityHandle)this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(methodName),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(signature));
+        this.userStructMethodRefCache[key] = memberRef;
+        return memberRef;
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R3: encodes a method signature blob from a
+    /// <see cref="FunctionSymbol"/>, using the OPEN definition's type
+    /// information so <c>VAR(idx)</c> placeholders are produced for
+    /// in-scope type-type parameters. Used to back the MemberRef
+    /// signature returned by <see cref="GetUserStructMethodRef"/>.
+    /// </summary>
+    internal BlobBuilder EncodeOpenMethodSignature(FunctionSymbol openMethod)
+    {
+        var sigBlob = new BlobBuilder();
+        var paramCount = openMethod.Parameters.Length - (openMethod.ExplicitReceiverParameter == null ? 0 : 1);
+        new BlobEncoder(sigBlob)
+            .MethodSignature(
+                isInstanceMethod: openMethod.IsInstanceMethod,
+                genericParameterCount: openMethod.TypeParameters.IsDefaultOrEmpty ? 0 : openMethod.TypeParameters.Length)
+            .Parameters(
+                paramCount,
+                r => EncodeReturnSymbol(r, openMethod.Type, openMethod.ReturnRefKind),
+                ps =>
+                {
+                    foreach (var p in openMethod.Parameters)
+                    {
+                        if (ReferenceEquals(p, openMethod.ThisParameter))
+                        {
+                            continue;
+                        }
+
+                        EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                    }
+                });
+        return sigBlob;
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R3: resolves the right token for a call to a user
+    /// instance method. For a non-generic containing type returns the
+    /// bare <c>MethodDef</c>; for a generic containing type returns a
+    /// <c>MemberRef</c> parented at the constructed (or self-) <c>TypeSpec</c>.
+    /// </summary>
+    internal EntityHandle ResolveUserInstanceMethodToken(StructSymbol containingType, FunctionSymbol method)
+    {
+        if (!this.cache.MethodHandles.TryGetValue(method, out var openDef))
+        {
+            throw new InvalidOperationException(
+                $"Instance method '{method.Name}' has no emitted handle.");
+        }
+
+        if (!IsUserGenericTypeReference(containingType))
+        {
+            return openDef;
+        }
+
+        return this.GetUserStructMethodRef(containingType, openDef, method.Name, this.EncodeOpenMethodSignature(method));
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R3: resolves the right token for a <c>newobj</c>
+    /// against a user-declared primary ctor. Returns the bare
+    /// <c>MethodDef</c> for a non-generic type, or a MemberRef
+    /// parented at the constructed <c>TypeSpec</c> for a generic type.
+    /// </summary>
+    internal EntityHandle ResolveUserCtorTokenForPrimary(StructSymbol structType)
+    {
+        if (!this.cache.ClassPrimaryCtorHandles.TryGetValue(structType, out var primaryDef))
+        {
+            throw new InvalidOperationException($"Type '{structType.Name}' has no emitted primary ctor.");
+        }
+
+        if (!IsUserGenericTypeReference(structType))
+        {
+            return primaryDef;
+        }
+
+        var def = structType.Definition ?? structType;
+        var defParams = def.PrimaryConstructorParameters;
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob)
+            .MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                defParams.Length,
+                r => r.Void(),
+                ps =>
+                {
+                    foreach (var p in defParams)
+                    {
+                        EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                    }
+                });
+        return this.GetUserStructMethodRef(structType, primaryDef, ".ctor", sigBlob);
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R3: resolves the right token for a <c>newobj</c>
+    /// against a user-declared default (parameter-less) ctor.
+    /// </summary>
+    internal EntityHandle ResolveUserCtorTokenForDefault(StructSymbol structType)
+    {
+        if (!this.cache.ClassCtorHandles.TryGetValue(structType, out var defaultDef))
+        {
+            throw new InvalidOperationException($"Type '{structType.Name}' has no emitted default ctor.");
+        }
+
+        if (!IsUserGenericTypeReference(structType))
+        {
+            return defaultDef;
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob)
+            .MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+        return this.GetUserStructMethodRef(structType, defaultDef, ".ctor", sigBlob);
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R3: resolves the right token for a <c>newobj</c>
+    /// against a user-declared explicit (<c>init(...)</c>) ctor
+    /// (ADR-0063 §9).
+    /// </summary>
+    internal EntityHandle ResolveUserCtorTokenForExplicit(StructSymbol structType, ConstructorSymbol ctor)
+    {
+        if (!this.cache.ExplicitCtorHandles.TryGetValue(ctor, out var explicitDef))
+        {
+            throw new InvalidOperationException($"Constructor on '{ctor?.DeclaringType?.Name}' has no emitted handle.");
+        }
+
+        if (!IsUserGenericTypeReference(structType))
+        {
+            return explicitDef;
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob)
+            .MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                ctor.Parameters.Length,
+                r => r.Void(),
+                ps =>
+                {
+                    foreach (var p in ctor.Parameters)
+                    {
+                        EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                    }
+                });
+        return this.GetUserStructMethodRef(structType, explicitDef, ".ctor", sigBlob);
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R3: resolves the right token for a type operation
+    /// (<c>isinst</c>, <c>unbox</c>, <c>unbox.any</c>, <c>initobj</c>,
+    /// <c>castclass</c>) against a user-declared type. Returns the
+    /// bare <c>TypeDef</c> for a non-generic type, or a <c>TypeSpec</c>
+    /// for a generic type.
+    /// </summary>
+    internal EntityHandle ResolveUserTypeToken(StructSymbol structType)
+    {
+        if (IsUserGenericTypeReference(structType))
+        {
+            return this.GetUserStructTypeSpec(structType);
+        }
+
+        return this.cache.StructTypeDefs[structType];
     }
 
     /// <summary>
@@ -5141,16 +5736,23 @@ internal sealed class ReflectionMetadataEmitter
         {
             throw new InvalidOperationException("Use ReturnTypeEncoder.Void() for void returns.");
         }
-        else if (type is TypeParameterSymbol)
+        else if (type is TypeParameterSymbol tp)
         {
-            // Phase 4 emit parity (F1, type-erased): generic function emit
-            // currently follows the interpreter's type-erased model — each
-            // open type parameter is encoded as System.Object. Call sites
-            // insert box / unbox.any around the boundary so value-type
-            // arguments and value-typed returns round-trip correctly.
-            // ADR-0004 mandates CLR reified generics as the long-term goal;
-            // a follow-up will add GenericParam rows and MVAR/VAR encoding.
-            encoder.Object();
+            // ADR-0087 §3 R2: a user-declared open type parameter encodes as
+            // GenericTypeParameter(idx) (`Var(idx)`) when it belongs to a
+            // generic type, or as GenericMethodTypeParameter(idx) (`MVar(idx)`)
+            // when it belongs to a generic method. The
+            // TypeParameterSymbol.IsMethodTypeParameter flag, set by the
+            // FunctionSymbol.TypeParameters setter, discriminates the owner
+            // kind without a back-reference cycle.
+            if (tp.IsMethodTypeParameter)
+            {
+                encoder.GenericMethodTypeParameter(tp.Ordinal);
+            }
+            else
+            {
+                encoder.GenericTypeParameter(tp.Ordinal);
+            }
         }
         else if (type is ImportedTypeSymbol symbolicImported
             && !symbolicImported.TypeArguments.IsDefaultOrEmpty
@@ -5169,12 +5771,24 @@ internal sealed class ReflectionMetadataEmitter
         }
         else if (type is ImportedTypeSymbol erasedGeneric && erasedGeneric.HasTypeParameterArgument)
         {
-            // #313: a generic type constructed over an in-scope type parameter
-            // (e.g. `List[T]`) is type-erased to System.Object at emit, exactly
-            // like a bare type parameter. The actual runtime object is a closed
-            // generic (e.g. `List<int32>`); call sites insert castclass around
-            // the boundary when the substituted type is recovered.
-            encoder.Object();
+            // ADR-0087 §3 R2: a generic CLR type constructed over an in-scope
+            // type parameter (e.g. `List[T]`) is no longer erased to
+            // `System.Object`. Emit a real `GENERICINST<def><args>` so the
+            // signature carries `Var`/`MVar` slots that match the actual
+            // runtime type. Boxing/unboxing at boundaries is now handled by
+            // explicit `box T`/`unbox.any T` in the body emitter when the
+            // value bridges across an `object` slot.
+            var openDef = erasedGeneric.OpenDefinition
+                ?? throw new InvalidOperationException(
+                    $"Imported generic '{erasedGeneric.Name}' has no OpenDefinition for GENERICINST encoding.");
+            var giOpen = encoder.GenericInstantiation(
+                this.GetTypeReference(openDef),
+                erasedGeneric.TypeArguments.Length,
+                isValueType: openDef.IsValueType);
+            foreach (var arg in erasedGeneric.TypeArguments)
+            {
+                this.EncodeTypeSymbol(giOpen.AddArgument(), arg);
+            }
         }
         else if (type is ArrayTypeSymbol arr)
         {
@@ -5186,12 +5800,47 @@ internal sealed class ReflectionMetadataEmitter
         }
         else if (type is StructSymbol structSym)
         {
-            if (!this.cache.StructTypeDefs.TryGetValue(structSym, out var typeDef))
+            // ADR-0087 §3 R2: a user-declared generic struct encodes as
+            // GENERICINST<def><args>. For a constructed instance the args
+            // come from TypeArguments; for the open definition itself we
+            // emit the self-instantiation `Box`1<!0,!1,…>` so signatures
+            // of synthesized members (Equals(typed), op_Equality, …)
+            // round-trip correctly under verification.
+            var defSym = structSym.Definition ?? structSym;
+            if (!this.cache.StructTypeDefs.TryGetValue(defSym, out var typeDef))
             {
-                throw new InvalidOperationException($"Struct '{structSym.Name}' has no emitted TypeDef.");
+                throw new InvalidOperationException($"Struct '{defSym.Name}' has no emitted TypeDef.");
             }
 
-            encoder.Type(typeDef, isValueType: !structSym.IsClass);
+            if (IsUserGenericTypeReference(structSym))
+            {
+                ImmutableArray<TypeSymbol> typeArgs;
+                if (!structSym.TypeArguments.IsDefaultOrEmpty)
+                {
+                    typeArgs = structSym.TypeArguments;
+                }
+                else
+                {
+                    var defTps = defSym.TypeParameters;
+                    var bld = ImmutableArray.CreateBuilder<TypeSymbol>(defTps.Length);
+                    foreach (var defTp in defTps)
+                    {
+                        bld.Add(defTp);
+                    }
+
+                    typeArgs = bld.MoveToImmutable();
+                }
+
+                var gi = encoder.GenericInstantiation(typeDef, typeArgs.Length, isValueType: !defSym.IsClass);
+                foreach (var arg in typeArgs)
+                {
+                    this.EncodeTypeSymbol(gi.AddArgument(), arg);
+                }
+            }
+            else
+            {
+                encoder.Type(typeDef, isValueType: !structSym.IsClass);
+            }
         }
         else if (type is EnumSymbol enumSym)
         {

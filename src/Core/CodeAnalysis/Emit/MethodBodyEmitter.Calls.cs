@@ -39,52 +39,52 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitConstructorCall(BoundConstructorCallExpression call)
     {
-        MethodDefinitionHandle ctorHandle;
+        // ADR-0087 §3 R3+R4: when the constructed type is a user-declared
+        // generic type, every newobj must reference the ctor via a
+        // MemberRef parented at the TypeSpec for the construction. The
+        // R0/R1 erasure-era box at TypeParameterSymbol parameter slots
+        // is dropped — the parameter's signature is `!0` and resolves
+        // through the parent TypeSpec to the concrete arg type.
+        bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(call.StructType);
+
+        EntityHandle ctorHandle;
         if (call.SelectedConstructor != null
-            && this.outer.cache.ExplicitCtorHandles.TryGetValue(call.SelectedConstructor, out var selectedHandle))
+            && this.outer.cache.ExplicitCtorHandles.ContainsKey(call.SelectedConstructor))
         {
             // ADR-0063 §9: bind-time overload resolution picked this exact
-            // ctor; emit a newobj against its specific MethodDef.
-            ctorHandle = selectedHandle;
+            // ctor; emit a newobj against its specific MethodDef (or a
+            // MemberRef on the constructed TypeSpec for a generic type).
+            ctorHandle = isGeneric
+                ? this.outer.ResolveUserCtorTokenForExplicit(call.StructType, call.SelectedConstructor)
+                : this.outer.cache.ExplicitCtorHandles[call.SelectedConstructor];
         }
-        else if (!this.outer.cache.ClassPrimaryCtorHandles.TryGetValue(call.StructType, out ctorHandle))
+        else if (this.outer.cache.ClassPrimaryCtorHandles.ContainsKey(call.StructType.Definition ?? call.StructType))
+        {
+            ctorHandle = isGeneric
+                ? this.outer.ResolveUserCtorTokenForPrimary(call.StructType)
+                : this.outer.cache.ClassPrimaryCtorHandles[call.StructType];
+        }
+        else if (call.Arguments.IsDefaultOrEmpty
+            && this.outer.cache.ClassCtorHandles.ContainsKey(call.StructType.Definition ?? call.StructType))
         {
             // Issue #523: synthesized classes (e.g. capture boxes) declare
             // no primary constructor; for a zero-argument newobj we fall
             // back to the parameterless default ctor that PHASE B emitted
             // into classCtorHandles.
-            if (call.Arguments.IsDefaultOrEmpty
-                && this.outer.cache.ClassCtorHandles.TryGetValue(call.StructType, out var defaultCtorHandle))
-            {
-                ctorHandle = defaultCtorHandle;
-            }
-            else
-            {
-                throw new InvalidOperationException(
-                    $"Type '{call.StructType.Name}' has no emitted primary ctor.");
-            }
+            ctorHandle = isGeneric
+                ? this.outer.ResolveUserCtorTokenForDefault(call.StructType)
+                : this.outer.cache.ClassCtorHandles[call.StructType];
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"Type '{call.StructType.Name}' has no emitted primary ctor.");
         }
 
-        // Phase 4 emit parity (F2, type-erased generic user types): the
-        // primary ctor is emitted on the definition with each T-typed
-        // parameter encoded as System.Object. When the call site uses
-        // a constructed instance, value-type arguments crossing into
-        // those parameters must be boxed at the boundary.
-        var def = call.StructType.Definition ?? call.StructType;
-        var defParams = def.PrimaryConstructorParameters;
         for (int i = 0; i < call.Arguments.Length; i++)
         {
             var arg = call.Arguments[i];
             this.EmitExpression(arg);
-
-            if (i < defParams.Length
-                && defParams[i].Type is TypeParameterSymbol
-                && arg.Type is not TypeParameterSymbol
-                && ReflectionMetadataEmitter.IsValueTypeSymbol(arg.Type))
-            {
-                this.il.OpCode(ILOpCode.Box);
-                this.il.Token(this.outer.GetElementTypeToken(arg.Type));
-            }
         }
 
         this.il.OpCode(ILOpCode.Newobj);
@@ -123,10 +123,41 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitUserInstanceCall(BoundUserInstanceCallExpression call)
     {
-        if (!this.outer.cache.MethodHandles.TryGetValue(call.Method, out var methodHandle))
+        // ADR-0087 §3 R3+R4: when the receiver is a constructed
+        // generic user type, the method must be referenced via a
+        // MemberRef parented at the constructed TypeSpec (e.g.
+        // `Container`1<int32>`, not the open `Container`1<!0>`).
+        // Use the receiver expression's type — `Method.ReceiverType`
+        // is the OPEN class symbol from declaration, which yields the
+        // wrong (open) TypeSpec for the parent. The R0/R1 box at
+        // TypeParameterSymbol parameter slots is dropped: the method
+        // signature is `!0`/`!!0` and resolves through the parent
+        // TypeSpec.
+        var receiverType = (call.Receiver.Type as StructSymbol) ?? (call.Method.ReceiverType as StructSymbol);
+        bool isGenericReceiver = receiverType != null
+            && ReflectionMetadataEmitter.IsUserGenericTypeReference(receiverType);
+
+        EntityHandle methodHandle;
+        if (isGenericReceiver)
+        {
+            methodHandle = this.outer.ResolveUserInstanceMethodToken(receiverType, call.Method);
+        }
+        else if (this.outer.cache.MethodHandles.TryGetValue(call.Method, out var defHandle))
+        {
+            methodHandle = defHandle;
+        }
+        else
         {
             throw new InvalidOperationException(
                 $"Instance method '{call.Method.Name}' on '{call.Method.ReceiverType?.Name}' has no emitted handle.");
+        }
+
+        // ADR-0087 §3 R3+R4: when the method itself is generic, wrap
+        // the open method token in a MethodSpec carrying the
+        // substituted type arguments inferred from the call.
+        if (call.Method.IsGeneric && !call.Method.TypeParameters.IsDefaultOrEmpty)
+        {
+            methodHandle = this.outer.BuildMethodSpecForGenericInstanceCall(methodHandle, call);
         }
 
         this.EmitInstanceReceiver(call.Receiver);
@@ -135,26 +166,15 @@ internal sealed partial class MethodBodyEmitter
         {
             var arg = call.Arguments[i];
             this.EmitExpression(arg);
-
-            // Issue #312 (emit parity, type-erased generics): a parameter
-            // typed as an open type parameter is encoded as System.Object,
-            // so value-type arguments must be boxed at the call boundary to
-            // match the emitted signature.
-            var paramType = call.Method.Parameters[i + calleeParameterOffset].Type;
-            if (paramType is TypeParameterSymbol
-                && arg.Type is not TypeParameterSymbol
-                && ReflectionMetadataEmitter.IsValueTypeSymbol(arg.Type))
-            {
-                this.il.OpCode(ILOpCode.Box);
-                this.il.Token(this.outer.GetElementTypeToken(arg.Type));
-            }
         }
 
         var receiverIsValueType = call.Method.ReceiverType is StructSymbol receiverStruct && !receiverStruct.IsClass;
         this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
         this.il.Token(methodHandle);
 
-        this.EmitErasedObjectReturnWidening(call.Method.Type, call.Type);
+        // ADR-0087 §3 R3+R4: after R2, a user-instance call returns the
+        // method's reified signature (substituted at the TypeSpec / MethodSpec
+        // level). No erasure-widening is required at the call boundary.
     }
 
     private void EmitClrConstructorCall(BoundClrConstructorCallExpression ctorCall)
@@ -271,8 +291,11 @@ internal sealed partial class MethodBodyEmitter
             this.EmitExpression(arg);
 
             // Value-type arguments must be boxed into the object[] slot.
-            // Open type-parameter arguments already flow as System.Object.
-            if (arg.Type is not TypeParameterSymbol && ReflectionMetadataEmitter.IsValueTypeSymbol(arg.Type))
+            // ADR-0087 §3 R4: after R2 a `T` value lives in a real
+            // VAR/MVAR slot, not an erased object. Boxing is now
+            // mandatory to land it in the `object[]` cell — the JIT
+            // elides the box if T resolves to a reference type.
+            if (arg.Type is TypeParameterSymbol || ReflectionMetadataEmitter.IsValueTypeSymbol(arg.Type))
             {
                 this.il.OpCode(ILOpCode.Box);
                 this.il.Token(this.outer.GetElementTypeToken(arg.Type));
@@ -298,6 +321,20 @@ internal sealed partial class MethodBodyEmitter
         if (call.FunctionType.ReturnType == TypeSymbol.Void)
         {
             this.il.OpCode(ILOpCode.Pop);
+            return;
+        }
+
+        // ADR-0087 §3 R4: DynamicInvoke returns object; coerce back to the
+        // reified return slot when the consumer expects a real T (e.g. a
+        // type-parameter or instantiation containing one). For consumers
+        // expecting `object` we leave the boxed value on the stack
+        // unchanged — historical delegate-over-erased-T paths rely on the
+        // boxed shape and explicit `unbox.any` would NRE on a null result
+        // from a delegate binding to a lambda whose runtime return type
+        // is a value type bound to a `Func<object>`-shaped open delegate.
+        if (call.Type is TypeParameterSymbol || TypeSymbol.ContainsTypeParameter(call.Type))
+        {
+            this.EmitErasedObjectReturnWidening(TypeSymbol.Object, call.Type);
         }
     }
 
