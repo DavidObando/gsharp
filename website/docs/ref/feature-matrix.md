@@ -80,7 +80,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | `break` and `continue` (with optional loop labels) | Supported | Supported | Invalid locations are diagnosed. Loop labels (`label: for ...`, `break label`, `continue label`) added in ADR-0070; diagnostics `GS0293`–`GS0295`. |
 | Multi-assignment and deconstruction | Supported | Supported | Target/value mismatches are diagnosed. |
 | Null-coalescing compound assignment (`??=`) | Supported | Supported | ADR-0072. `a ??= b` writes `b` only when `a` reads as `nil`; RHS short-circuits otherwise. Receiver and index expressions evaluated exactly once. Works on locals, fields, properties, and indexers. Non-nullable LHS reports `GS0298`; non-assignable LHS reports `GS0299`. |
-| `switch` statements | Supported | Supported | Cases do not fall through. |
+| `switch` statements | Supported | Supported | Cases do not fall through. ADR-0069 (+ #712 addendum) flow-narrows the discriminator inside type-pattern arms (`case d is T`) and lifts a common narrowing into the rest of the enclosing block when the switch is exhaustive and every non-exiting arm contributes the same narrowing. |
 | Switch expressions | Supported | Supported | Exhaustiveness and arm type diagnostics implemented. |
 | Patterns | Supported | Supported | Constant, relational, type, property, list, and discard patterns are represented. |
 | `fallthrough` | Not supported | Not supported | Reserved and diagnosed as `GS0168`. |
@@ -101,6 +101,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Indexing and index assignment | Supported | Supported | Arrays, slices, maps, and imported CLR indexers. |
 | Null-conditional access | Supported | Supported | `?.` and `?[i]` (ADR-0073) represented in the bound tree. `?[i]` covers arrays, slices, maps, and CLR indexers; non-nullable receiver warns `GS0300`; `?[i]` rejected as assignment LHS (`GS0301`). |
 | Type operators | Supported | Supported | `typeof(...)` and `nameof(...)`. |
+| Smart casts / flow narrowing | Supported | Supported | ADR-0069 (+ #712 addendum). `is` / `!is` on a local, parameter, or read-only top-level `let` narrows the receiver to the tested type. Composes through `!`, `&&`, `||` (De Morgan dual), `if`/`else`, the early-exit lift, `switch` arms, and `if let` / `guard let`. Mutable receivers, fields, properties, and indexed expressions are not narrowed. |
 | Trailing `func` lambdas | Supported | Supported | `call(...) func(...) { ... }` form. |
 | Arrow trailing lambdas | Not supported | Not supported | ADR-0050 is proposed; current parser uses `->` for switch-expression arms. |
 

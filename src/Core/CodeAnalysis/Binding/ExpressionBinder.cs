@@ -397,6 +397,20 @@ internal sealed partial class ExpressionBinder
         return (thenFrame != null && thenFrame.Count > 0) ? thenFrame : null;
     }
 
+    /// <summary>
+    /// ADR-0069 addendum / issue #712: when binding a <c>||</c> expression,
+    /// derive the narrowing frame the right operand should bind under from
+    /// the (already-bound) left operand. The right operand is only
+    /// evaluated when the left was false, so the left operand's
+    /// <c>else</c> frame (the negation of its narrowing) applies. This
+    /// makes `!(x is T) || f(x)` bind `f(x)` with `x` narrowed to `T`.
+    /// </summary>
+    private Dictionary<VariableSymbol, TypeSymbol> TryClassifyTypeTestNarrowingForOr(BoundExpression boundLeft)
+    {
+        var (_, elseFrame) = ClassifyTypeTestNarrowing(boundLeft);
+        return (elseFrame != null && elseFrame.Count > 0) ? elseFrame : null;
+    }
+
     private static (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) ClassifyTypeTestNarrowing(BoundExpression condition)
     {
         switch (condition)
@@ -457,6 +471,52 @@ internal sealed partial class ExpressionBinder
                     }
 
                     return (combined, null);
+                }
+
+            case BoundBinaryExpression binary when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr:
+                {
+                    // ADR-0069 addendum / issue #712: De Morgan dual of `&&`.
+                    // For `A || B`: then = intersection of thenL and thenR
+                    // (a narrowing only survives the OR if both operands prove it);
+                    // else = elseL ∪ elseR (both operands were false → both
+                    // negations apply). This is the expression-level mirror
+                    // of the if-condition classifier in StatementBinder.
+                    var (leftThen, leftElse) = ClassifyTypeTestNarrowing(binary.Left);
+                    var (rightThen, rightElse) = ClassifyTypeTestNarrowing(binary.Right);
+
+                    Dictionary<VariableSymbol, TypeSymbol> combinedThen = null;
+                    if (leftThen != null && leftThen.Count > 0 && rightThen != null && rightThen.Count > 0)
+                    {
+                        foreach (var kv in leftThen)
+                        {
+                            if (rightThen.TryGetValue(kv.Key, out var other) && other == kv.Value)
+                            {
+                                combinedThen ??= new Dictionary<VariableSymbol, TypeSymbol>();
+                                combinedThen[kv.Key] = kv.Value;
+                            }
+                        }
+                    }
+
+                    Dictionary<VariableSymbol, TypeSymbol> combinedElse = null;
+                    if ((leftElse != null && leftElse.Count > 0) || (rightElse != null && rightElse.Count > 0))
+                    {
+                        combinedElse = leftElse == null ? new Dictionary<VariableSymbol, TypeSymbol>() : new Dictionary<VariableSymbol, TypeSymbol>(leftElse);
+                        if (rightElse != null)
+                        {
+                            foreach (var kv in rightElse)
+                            {
+                                combinedElse[kv.Key] = kv.Value;
+                            }
+                        }
+                    }
+
+                    if ((combinedThen == null || combinedThen.Count == 0)
+                        && (combinedElse == null || combinedElse.Count == 0))
+                    {
+                        return (null, null);
+                    }
+
+                    return (combinedThen, combinedElse);
                 }
         }
 

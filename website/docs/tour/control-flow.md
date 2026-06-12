@@ -287,4 +287,60 @@ for n in nums {
 101 -> huge
 ```
 
+## Smart casts (flow narrowing) — ADR-0069 (+ issue #712 addendum)
+
+After a successful `is` (or `!is`) test against a local, parameter, or read-only top-level `let`, G# automatically narrows the receiver to the tested type for the rest of the flow region. No explicit `as`-cast is required.
+
+```gsharp
+type Animal open class {
+    var Name string
+}
+
+type Dog class : Animal {
+    func Bark() string { return Name + ": woof" }
+}
+
+func Speak(a Animal) {
+    if a is Dog {
+        Console.WriteLine(a.Bark())   // a is Dog inside the then-block
+    }
+}
+
+func SpeakOrSilent(a Animal) {
+    if a !is Dog { return }
+    Console.WriteLine(a.Bark())       // a is Dog in the rest of the function
+}
+```
+
+Narrowing composes with `&&` and `||`. `&&` threads the left operand's narrowing into the right operand; `||` is the De Morgan dual — its right operand sees the inverted narrowing from the left, and the combined else-frame is the merge of both operands' negative narrowings, which the early-exit lift can surface into the rest of the block.
+
+```gsharp
+// && narrows the right operand.
+if a is Dog && a.Name != "" {
+    Console.WriteLine(a.Bark())
+}
+
+// || + early-exit guard: a is Dog AND silent is false in the rest of the function.
+func GreetOrSilent(a Animal, silent bool) {
+    if !(a is Dog) || silent {
+        return
+    }
+    Console.WriteLine(a.Bark())
+}
+```
+
+`switch` arms narrow the discriminator in addition to the bound arm variable. When the switch is exhaustive (has a `default` arm) AND every non-exiting arm contributes the same narrowing, that narrowing is lifted into the rest of the enclosing block after the switch.
+
+```gsharp
+func Describe(a Animal) string {
+    switch a {
+        case d is Dog { return a.Bark() }   // a is Dog inside this arm
+        case c is Cat { return a.Purr() }   // a is Cat inside this arm
+        default       { return a.Name }
+    }
+}
+```
+
+Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region. Fields, properties, and indexed expressions are never narrowed because their reads are not idempotent. See ADR-0069 (and its issue #712 addendum) for the full rules.
+
 Next: [Tour: Concurrency](/docs/tour/concurrency).

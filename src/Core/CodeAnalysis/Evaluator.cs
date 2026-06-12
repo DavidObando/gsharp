@@ -3517,15 +3517,20 @@ public sealed class Evaluator
             return false;
         }
 
-        var targetClr = node.TargetType is NullableTypeSymbol nts
-            ? nts.UnderlyingType?.ClrType
-            : node.TargetType?.ClrType;
-        if (targetClr == null)
+        var targetType = node.TargetType is NullableTypeSymbol nts
+            ? nts.UnderlyingType
+            : node.TargetType;
+        if (targetType == null || targetType == TypeSymbol.Error)
         {
             return false;
         }
 
-        return targetClr.IsInstanceOfType(value);
+        // ADR-0069 (and addendum / issue #712): use the same matching helper
+        // pattern-matching uses, so user-declared G# classes (whose runtime
+        // representation is a <see cref="StructValue"/>) correctly satisfy
+        // an `is` test against a declared base/derived type even when no
+        // CLR-side type identity exists.
+        return MatchesType(targetType, value);
     }
 
     private object EvaluateAsExpression(BoundAsExpression node)
@@ -3536,15 +3541,18 @@ public sealed class Evaluator
             return null;
         }
 
-        var targetClr = node.TargetType is NullableTypeSymbol nts
-            ? nts.UnderlyingType?.ClrType
-            : node.TargetType?.ClrType;
-        if (targetClr == null)
+        var targetType = node.TargetType is NullableTypeSymbol nts
+            ? nts.UnderlyingType
+            : node.TargetType;
+        if (targetType == null || targetType == TypeSymbol.Error)
         {
             return null;
         }
 
-        if (targetClr.IsInstanceOfType(value))
+        // ADR-0069 (and addendum / issue #712): mirror EvaluateIsExpression
+        // so an `as` cast on a user-declared G# class succeeds when the
+        // value is a matching <see cref="StructValue"/>.
+        if (MatchesType(targetType, value))
         {
             return value;
         }

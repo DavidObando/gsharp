@@ -64,7 +64,7 @@ if a is Dog && a.Name != "" {
 }
 ```
 
-`||` (logical or) intentionally does **not** narrow inside either branch. In `if (x is T || x is U) { … }` the variable could be `T`, `U`, or neither at the use site, so binding `x` at one specific narrower type would be unsound. This is the same rule Kotlin enforces.
+`||` (logical or) was intentionally not narrowed by the original ADR for soundness reasons. The addendum below (issue #712) lifts that restriction by classifying `||` as the De Morgan dual of `&&` (intersection-then, merge-else, right-operand sees left's else-frame), so the *Combinations* rule for `||` is superseded — see the addendum at the bottom of this document for the current semantics.
 
 Negation flips which branch sees the narrowing: `!(x is T)` adds the `T` narrowing to the *else*-branch frame, not the then-branch. The early-exit lift described above is precisely the case where the negated test, combined with an early-exit then-branch, surfaces the original `is T` narrowing in the rest of the enclosing block.
 
@@ -114,7 +114,7 @@ No new diagnostic is introduced. The previously-emitted `GS0159` (member-not-fou
   - `BoundUnaryExpression(LogicalNegation, inner)` where `inner` itself classifies into `(then, else)`. Returns `(else, then)` — i.e., the swap that negation implies.
   - `BoundBinaryExpression(LogicalAnd, left, right)` where `left` classifies into `(thenL, elseL)` and `right` classifies into `(thenR, elseR)`. Returns then = merge(thenL, thenR), else = null. (Disjunction is intentionally not classified.)
 - **Binder — if-statement integration**. `BindIfStatement` already calls `TryClassifyNilGuard` and `TryClassifyBoolCallNarrowing`. A third call is added — `TryClassifyTypeTestNarrowing` — and the resulting frames are merged with the nil-guard / `[NotNullWhen]` frames before invoking `BindStatementWithNarrowing`. When both classifiers contribute a then-frame, the union is used (the same variable keyed in both is collapsed to the more specific narrowing — type-test wins because it implies non-nil, then the binder rebinds at the union narrowing).
-- **Binder — `&&` short-circuit narrowing inside expressions**. `BindBinaryExpression` is extended: when the operator is `LogicalAnd`, the left operand is bound first, classified for narrowing, and the right operand is bound under the resulting then-frame. This makes `x is T && f(x)` narrow `x` inside the call to `f`. (`||` is not extended for the soundness reason discussed above.)
+- **Binder — `&&` short-circuit narrowing inside expressions**. `BindBinaryExpression` is extended: when the operator is `LogicalAnd`, the left operand is bound first, classified for narrowing, and the right operand is bound under the resulting then-frame. This makes `x is T && f(x)` narrow `x` inside the call to `f`. (`||` was deferred by the original ADR; the addendum below — issue #712 — extends the same threading to `||` with the De Morgan-dual frame, and superseded by the implementation notes there.)
 - **Binder — early-exit narrowing propagation**. `BindBlockStatements` already keeps a `memberNotNullFrame` that survives across the block's statements. After binding each top-level statement, if the statement is a `BoundIfStatement` whose then-branch unconditionally exits the enclosing block (return / throw / unconditional goto, including `break` / `continue` which lower to goto, or a block whose last statement does any of those), the else-frame from the if-condition's classifier is merged into the persistent frame so that subsequent reads in this block see the narrowing. The else-frame is computed once at if-binding time and stored on the resulting `BoundIfStatement` via a per-binder side-table keyed by node identity, so the block-walker does not need to re-classify the condition.
 - **Emit — narrowed variable read**. `MethodBodyEmitter.EmitExpression(BoundVariableExpression)` is extended: after `EmitLoadVariable(v.Variable)`, if `v.NarrowedType` is non-null and the narrowed CLR type differs from the variable's declared CLR type, the emitter inserts a single conversion opcode — `unbox.any T` when the narrowed type is a value type (the boxed reference must be unboxed back to its native value-type representation) and `castclass T` for any reference-type narrowing. The cast is guaranteed safe because the binder placed it inside a region where an `is` test already verified the runtime type. This is the same single instruction the C# compiler emits at the use site for `if (x is Y y) { … }`; the only difference is that G# does not introduce a new local for `y` — the cast happens inline on each read.
 - **Bound tree**. No new bound-node kind is introduced. The narrowing is recorded on the existing `BoundVariableExpression.NarrowedType` slot, which the rewriter (`RewriteVariableExpression`), walker (`VisitVariableExpression`), printer (`WriteVariableExpression`), and spiller (`SpillSequenceSpiller`) already handle. The four bound-node exhaustiveness allowlists therefore require no updates.
@@ -143,11 +143,13 @@ func GreetNamed(a Animal) {
     }
 }
 
-// `||` does not narrow — both branches see the broader type.
+// `||` short-circuit — see the issue #712 addendum below for the
+// De Morgan-dual narrowing that this combination now enables.
 func Maybe(a Animal) {
-    if a is Dog || a is Cat {
-        // a stays typed as Animal here — `Bark` / `Meow` is rejected.
+    if !(a is Dog) || a.Name == "" {
+        return
     }
+    a.Bark()    // accepted — a is Dog after the guard.
 }
 
 // Reassignment invalidates the narrowing.
@@ -177,3 +179,103 @@ func Sum(boxed object) int32 {
 ## Status
 
 Accepted; implemented in the same PR as this ADR.
+
+## Addendum — issue #712 (`||` short-circuit and `switch` discriminator)
+
+- **Status**: Accepted (addendum)
+- **Date**: 2026-06-21
+- **Related**: parent issue [#706](https://github.com/DavidObando/gsharp/issues/706), this addendum's issue [#712](https://github.com/DavidObando/gsharp/issues/712), ADR-0001, ADR-0017, ADR-0067, ADR-0071 (`if let` / `guard let`), ADR-0064 (`if`-as-expression).
+
+This addendum extends the flow-narrowing analysis defined above to two control-flow shapes that the original ADR explicitly deferred. It supersedes the *Combinations* paragraph that read "`||` (logical or) intentionally does **not** narrow inside either branch" — see the new rules below.
+
+### Motivation
+
+The original ADR pinned `&&` narrowing and the early-exit lift, but left `||` short-circuit and `switch` arm narrowing on the table. Real programs hit these shapes constantly: guard-style `if (a == nil || force) { return }`, De Morgan rewrites of `&&`, and `switch x { case T t: ... }` arms that want to call `T`'s methods without re-binding. With ADR-0064 (`if`-as-expression) and ADR-0071 (`if let` / `guard let`) now landed, the soundness analysis required for `||` is the same one those features already perform, so the previous "rejected for now" stance no longer carries weight.
+
+### Rules
+
+#### `||` short-circuit (De Morgan dual of `&&`)
+
+For `cond = left || right`:
+
+1. **Then-frame** = intersection of `left.Then` and `right.Then`. Only narrowings that appear in BOTH operands' then-frames with the same target type survive. Example: `if (x is T || x is T) { ... }` keeps `{ x → T }`. The mixed shape `if (x is T || x is U) { ... }` keeps nothing (consistent with the original ADR's soundness reasoning), because at the use site `x` could be either `T` or `U`.
+2. **Else-frame** = merge (union) of `left.Else` and `right.Else`. When the whole `||` is false, both operands were false, so both operands' else-narrowings apply.
+3. **Right-operand binding**. The right operand of `||` is bound with `left.Else` pushed as a narrowing frame, so a guard like `a !is Dog || a.Bark() != ""` sees `a` narrowed to `Dog` inside the right operand (because the right operand only runs when the left was false, i.e. `a is Dog`).
+4. **Nil-guard composition**. `TryClassifyNilGuard` composes through `!`, `&&`, and `||` recursively before falling through to the leaf `== nil` / `!= nil` shape. This is what makes `if (a == nil || force) { return }; use(a)` narrow `a` to its non-nullable underlying type post-`if`.
+5. **Negation interaction**. `!` continues to flip then/else exactly as defined in the original ADR. Composed with the rules above, `if !(a is T) || cond { ... }` lifts the `T` narrowing into the *else* branch (or into the rest of the block on early exit), matching the De Morgan rewrite `if !(a is T && !cond) { ... }`.
+
+#### `switch` arm discriminator narrowing
+
+For `switch x { case <pattern>: <body> default: <body> }`:
+
+1. **In-arm narrowing**. When an arm's pattern is a type-pattern `<ident> is T` (or any pattern that proves the discriminator's runtime type), the discriminator `x` (in addition to the bound arm variable, which was already typed `T`) binds at type `T` inside the arm body. This applies only when `x` is a *stable narrowable receiver* (see below) — mirroring the original ADR's rule for `is`. Mutating `x` inside the arm body drops the narrowing for the remainder of that arm (the same `InvalidateNarrowingsForAssignedVariables` path that the original ADR uses).
+2. **Post-switch lift**. After the `switch`, the binder lifts a narrowing into the enclosing block iff
+   - the switch is exhaustive (has a `default` or discard arm), AND
+   - every arm that does *not* unconditionally exit (`return` / `throw` / `break` / `continue`) contributes the same `{ x → T }` narrowing for the same target type.
+   Otherwise nothing is lifted (an unmatched discriminant or a fall-through arm with a divergent narrowing would make the lift unsound). This is the switch analog of the early-exit lift `if a !is T { return }; use(a)` in the original ADR.
+
+#### Stable narrowable receivers
+
+The original ADR restricted narrowing to `LocalVariableSymbol` and `ParameterSymbol`. This addendum extends that allow-list (consistently across both `is`-narrowing and switch-pattern narrowing) to include read-only `GlobalVariableSymbol` (top-level `let` bindings). The rationale is the same as for `let` locals: an immutable binding cannot be reassigned between the test and the use, so the narrowing is sound. Mutable globals (`var` at file scope) are still excluded.
+
+In summary, narrowing applies when the receiver is one of:
+
+- A `LocalVariableSymbol` (`let` or `var` local — `var` is invalidated on assignment), which includes `ParameterSymbol` as a subclass.
+- A read-only `GlobalVariableSymbol` (top-level `let`).
+
+Mutable receivers (`var` globals, fields, properties, indexed expressions) remain excluded — they may change between the test and the use.
+
+### Implementation notes (addendum)
+
+- `StatementBinder.TryClassifyTypeTestNarrowing` gains a `LogicalOr` case implementing the intersection-then / merge-else rules above. A new helper `IntersectNarrowingFrames` keeps frames whose entries agree on both variable and target type.
+- `ExpressionBinder.ClassifyTypeTestNarrowing` mirrors the same `LogicalOr` rule for expression-position classification (used by the if-expression form added in ADR-0064).
+- `ExpressionBinder.TryClassifyTypeTestNarrowingForOr` returns `left.Else` so the binary-expression binder can thread it into the right operand's binding context. `BindBinaryExpression` is extended to push that frame around the right-operand binding when the operator is `||`.
+- `StatementBinder.TryClassifyNilGuard` now recursively composes through `!`, `&&`, and `||` at its head, falling through to the existing leaf `== nil` / `!= nil` shape only when no top-level composition matches. This is what makes nullable narrowing benefit from the same De Morgan dual without changes at every call-site.
+- `BindSwitchStatement` is rewritten to record, for each arm body, the narrowing frame that the arm contributes for the discriminator. If the switch is exhaustive (has a default/discard arm — see `SwitchHandlesAllValues`), the binder intersects across all non-exiting arms and stores the lifted frame on `BinderContext.PendingSwitchExitFrames`, a side-table keyed by the resulting `BoundPatternSwitchStatement`. `ApplyEarlyExitNarrowings` consults this side-table and merges the lifted frame into the enclosing block's persistent frame, exactly as it already does for `if`/early-exit. `EndsInUnconditionalExit` recognises exhaustive switches where every arm exits, so a downstream `if` after such a switch can also apply its own narrowing.
+- No new bound-node kind is introduced — narrowing continues to ride on `BoundVariableExpression.NarrowedType` and the existing emit path (`MethodBodyEmitter.EmitNarrowingCastIfNeeded`) handles the read site. The four bound-tree exhaustiveness allowlists therefore require no updates.
+- Interpreter parity: this addendum also fixes a long-standing bug in `Evaluator.EvaluateIsExpression` / `EvaluateAsExpression`, which used `Type.IsInstanceOfType(value)` directly. That check fails for user-declared G# classes (whose runtime representation is `StructValue`, not a CLR-backed instance). Both methods now route through the existing `MatchesType` helper that the pattern matcher already uses; this makes `is` / `as` behave consistently between the emit and interpreter back-ends and is required for the new switch-arm narrowing to function under the interpreter.
+
+### Examples (addendum)
+
+```gs
+// `||` else-branch narrowing — De Morgan dual of `&&`.
+func GreetOrSilent(a Animal, silent bool) {
+    if !(a is Dog) || silent {
+        return
+    }
+    a.Bark()            // accepted — a is Dog after the guard.
+}
+
+// `||` right-operand narrowing — right runs only when left was false.
+func RunOrCheck(a Animal) bool {
+    return !(a is Dog) || a.Bark() != ""   // a binds as Dog inside the right operand.
+}
+
+// Nil-guard composition through `||`.
+func Length(s string?, force bool) int32 {
+    if s == nil || force {
+        return -1
+    }
+    return s.Length     // accepted — s is non-nullable after the guard.
+}
+
+// `switch` arm narrowing — both `x` (the discriminator) and `t` (the bound arm
+// variable) bind at the arm's narrowed type.
+func Describe(a Animal) string {
+    switch a {
+        case d is Dog: { return a.Bark() }     // a narrowed to Dog inside this arm
+        case c is Cat: { return a.Purr() }     // a narrowed to Cat inside this arm
+        default: { return a.Describe() }
+    }
+}
+
+// Post-switch lift — every non-exiting arm contributes the same narrowing.
+func RunDogs(a Animal) {
+    switch a {
+        case c is Cat { return }
+        case d is Dog { Console.WriteLine("dog") }
+        default       { return }
+    }
+    Console.WriteLine(a.Bark())    // accepted — a is Dog after the switch.
+}
+```

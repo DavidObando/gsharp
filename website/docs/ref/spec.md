@@ -372,6 +372,8 @@ The conditional expression `cond ? whenTrue : whenFalse` (ADR-0062) requires `co
 
 `expr is T` evaluates to `bool` — `true` when the runtime type of `expr` is assignable to `T`, `false` otherwise (including when `expr` is `nil`). `expr as T` performs a safe downcast: it returns the value typed as `T` when the cast succeeds, or `nil` when it fails. For reference types the result type is `T`; for value types, the target must be written as the nullable form `T?` (e.g. `x as int32?`) and the result type is `T?`. Using `as` with a non-nullable value type target produces diagnostic `GS0269`. Both operators use the CLR `isinst` instruction and sit at precedence level 4 (same as equality and comparison), so `x is String == true` and `a is T && b is U` parse as expected without extra parentheses. The existing pattern-level `identifier is Type` syntax inside `switch`/`case` arms is unaffected.
 
+A successful `is` (or `!is`) test against a local, parameter, or read-only top-level `let` flow-narrows the receiver to the tested type for the rest of the enclosing flow region — see *Smart casts (flow narrowing)* below.
+
 Postfix `!!`, member access `.`, null-conditional access `?.`, null-conditional indexing `?[`, indexing, calls, and generic instantiation are parsed greedily on primary expressions. This applies to **any** primary, including a parenthesized expression — for example `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The sole exception is a bare numeric literal: `42.Member` is not accepted because it is ambiguous with float-literal lexing; wrap it as `(42).Member` instead (see ADR-0054).
 
 ### Primary expressions and calls
@@ -562,6 +564,44 @@ Switch statement cases use block bodies and never fall through. The `fallthrough
 SwitchStmt = "switch" Expression "{" SwitchCase* "}" .
 SwitchCase = "case" Pattern Block | "default" Block .
 ```
+
+When an arm pattern is a type-pattern `<ident> is T` (or any pattern that proves the discriminator's runtime type), the discriminator expression is flow-narrowed to `T` inside the arm body in addition to the bound arm variable — see *Smart casts (flow narrowing)* below.
+
+### Smart casts (flow narrowing)
+
+Ref: ADR-0069 and its issue #712 addendum.
+
+A successful `is` (or `!is`) test against a *stable narrowable receiver* — a local, a parameter, or a read-only top-level `let` binding — flow-narrows that receiver to the tested type for the rest of the enclosing flow region. The narrowing applies to member lookup, overload resolution, conversion, and emit. The same machinery composes through `!`, `&&`, `||`, `if`/`else`, `switch` arms, `if let` / `guard let`, and the early-exit lift.
+
+```gsharp
+if a is Dog {
+    a.Bark()                      // a narrowed to Dog inside the then-block
+}
+
+if a !is Dog { return }
+a.Bark()                          // a narrowed to Dog in the rest of the block
+
+if a is Dog && a.Name != "" {
+    Console.WriteLine(a.Bark())   // && threads the left narrowing into the right operand
+}
+
+if !(a is Dog) || silent { return }
+a.Bark()                          // || + early-exit: a is Dog AND silent is false here
+
+switch a {
+    case d is Dog { Console.WriteLine(a.Bark()) }    // a narrowed to Dog in this arm
+    case c is Cat { Console.WriteLine(a.Purr()) }    // a narrowed to Cat in this arm
+    default       { return }
+}
+```
+
+Rules summary:
+
+- `!` flips which branch sees the narrowing: `!(a is T)` narrows `a` to `T` in the *else*-branch (and in the rest of the block when the then-branch unconditionally exits).
+- `&&` threads the left operand's then-frame into the right operand and into the combined then-branch.
+- `||` is the De Morgan dual of `&&`: the combined then-frame is the *intersection* of both operands' then-frames; the combined else-frame is the *merge* of both operands' else-frames; the right operand is bound with the left's else-frame.
+- A `switch` arm pattern of the shape `<ident> is T` narrows the discriminator inside the arm body. When the switch is exhaustive (has a `default` or discard arm) AND every non-exiting arm contributes the same `{discriminator → T}` narrowing, that narrowing is lifted into the rest of the enclosing block after the switch.
+- Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region; the same applies if the receiver is captured by a closure (the closure body binds the receiver at its declared type). Fields, properties, and indexed expressions are never narrowed because their reads are not idempotent.
 
 ### For loops and while-style loops
 

@@ -503,30 +503,44 @@ internal sealed class StatementBinder
     /// </summary>
     private void ApplyEarlyExitNarrowings(BoundStatement statement, Dictionary<VariableSymbol, TypeSymbol> persistentFrame)
     {
-        if (statement is not BoundIfStatement ifStmt)
+        if (statement is BoundIfStatement ifStmt)
         {
+            if (!binderCtx.PendingEarlyExitFrames.TryGetValue(ifStmt, out var elseFrame))
+            {
+                return;
+            }
+
+            binderCtx.PendingEarlyExitFrames.Remove(ifStmt);
+
+            // Only apply the lift if the then-branch unconditionally exits.
+            // Falling through means the variable could still be of any type
+            // that satisfies the original condition, so the else-frame is not
+            // a safe post-condition.
+            if (!EndsInUnconditionalExit(ifStmt.ThenStatement))
+            {
+                return;
+            }
+
+            foreach (var kv in elseFrame)
+            {
+                persistentFrame[kv.Key] = kv.Value;
+            }
+
             return;
         }
 
-        if (!binderCtx.PendingEarlyExitFrames.TryGetValue(ifStmt, out var elseFrame))
+        // ADR-0069 addendum / issue #712: post-switch narrowing lift. When
+        // every non-exiting arm contributes the same narrowing on the
+        // discriminator, propagate that narrowing into the enclosing block.
+        if (statement is BoundPatternSwitchStatement switchStmt
+            && binderCtx.PendingSwitchExitFrames.TryGetValue(switchStmt, out var switchFrame))
         {
-            return;
-        }
+            binderCtx.PendingSwitchExitFrames.Remove(switchStmt);
 
-        binderCtx.PendingEarlyExitFrames.Remove(ifStmt);
-
-        // Only apply the lift if the then-branch unconditionally exits.
-        // Falling through means the variable could still be of any type
-        // that satisfies the original condition, so the else-frame is not
-        // a safe post-condition.
-        if (!EndsInUnconditionalExit(ifStmt.ThenStatement))
-        {
-            return;
-        }
-
-        foreach (var kv in elseFrame)
-        {
-            persistentFrame[kv.Key] = kv.Value;
+            foreach (var kv in switchFrame)
+            {
+                persistentFrame[kv.Key] = kv.Value;
+            }
         }
     }
 
@@ -568,6 +582,30 @@ internal sealed class StatementBinder
 
                 return EndsInUnconditionalExit(nested.ThenStatement)
                     && EndsInUnconditionalExit(nested.ElseStatement);
+
+            case BoundPatternSwitchStatement nestedSwitch:
+                {
+                    // ADR-0069 addendum / issue #712: a switch unconditionally
+                    // exits when every arm (including default) does, and it
+                    // covers every input the discriminator can take — i.e.,
+                    // a default arm exists. Without a default the switch
+                    // can fall through past every arm without entering any.
+                    var hasDefault = false;
+                    foreach (var arm in nestedSwitch.Arms)
+                    {
+                        if (arm.Pattern == null || arm.Pattern is BoundDiscardPattern)
+                        {
+                            hasDefault = true;
+                        }
+
+                        if (!EndsInUnconditionalExit(arm.Body))
+                        {
+                            return false;
+                        }
+                    }
+
+                    return hasDefault;
+                }
 
             default:
                 return false;
@@ -1361,6 +1399,9 @@ internal sealed class StatementBinder
 
             case BoundBinaryExpression binary when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd:
                 {
+                    // De Morgan for `&&`: then = thenL ∧ thenR (both true → both narrowings apply).
+                    // The else frame is intentionally dropped — either operand could have been
+                    // the false one, so we cannot single out a per-variable narrowing.
                     var (leftThen, _) = TryClassifyTypeTestNarrowing(binary.Left);
                     var (rightThen, _) = TryClassifyTypeTestNarrowing(binary.Right);
                     var combinedThen = MergeNarrowingFrames(leftThen, rightThen);
@@ -1371,9 +1412,61 @@ internal sealed class StatementBinder
 
                     return (combinedThen, null);
                 }
+
+            case BoundBinaryExpression binary when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr:
+                {
+                    // ADR-0069 addendum / issue #712: De Morgan dual of `&&` for `||`.
+                    // For `A || B`:
+                    //   • then = intersection of thenL and thenR — only narrowings present
+                    //     in BOTH operands' then-frames with the same target type survive
+                    //     (canonical example: `x is T || x is T` keeps `{x → T}`).
+                    //   • else = elseL ∧ elseR — when the whole `||` is false, BOTH operands
+                    //     were false, so both negative narrowings apply.
+                    var (leftThen, leftElse) = TryClassifyTypeTestNarrowing(binary.Left);
+                    var (rightThen, rightElse) = TryClassifyTypeTestNarrowing(binary.Right);
+
+                    var combinedThen = IntersectNarrowingFrames(leftThen, rightThen);
+                    var combinedElse = MergeNarrowingFrames(leftElse, rightElse);
+
+                    if ((combinedThen == null || combinedThen.Count == 0)
+                        && (combinedElse == null || combinedElse.Count == 0))
+                    {
+                        return (null, null);
+                    }
+
+                    return (combinedThen, combinedElse);
+                }
         }
 
         return (null, null);
+    }
+
+    /// <summary>
+    /// ADR-0069 addendum / issue #712: intersect two narrowing frames. Only
+    /// variables present in both frames AND narrowed to the same type
+    /// survive. Used by the <c>||</c> then-frame classifier where a
+    /// narrowing is only sound if both operands prove the same fact.
+    /// </summary>
+    private static Dictionary<VariableSymbol, TypeSymbol> IntersectNarrowingFrames(
+        Dictionary<VariableSymbol, TypeSymbol> a,
+        Dictionary<VariableSymbol, TypeSymbol> b)
+    {
+        if (a == null || a.Count == 0 || b == null || b.Count == 0)
+        {
+            return null;
+        }
+
+        Dictionary<VariableSymbol, TypeSymbol> result = null;
+        foreach (var kv in a)
+        {
+            if (b.TryGetValue(kv.Key, out var other) && other == kv.Value)
+            {
+                result ??= new Dictionary<VariableSymbol, TypeSymbol>();
+                result[kv.Key] = kv.Value;
+            }
+        }
+
+        return result;
     }
 
     private static bool IsNarrowableVariable(BoundExpression expr, out VariableSymbol variable)
@@ -1395,6 +1488,23 @@ internal sealed class StatementBinder
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// ADR-0069 addendum / issue #712: stability rule for switch-pattern
+    /// narrowing. We narrow non-mutable receivers — locals, parameters,
+    /// and read-only globals (<c>let</c>). Mutable globals are excluded
+    /// because they can be reassigned between the test and the use under
+    /// aliasing or another thread.
+    /// </summary>
+    private static bool IsStableNarrowableVariable(VariableSymbol variable)
+    {
+        return variable switch
+        {
+            LocalVariableSymbol => true,
+            GlobalVariableSymbol g => g.IsReadOnly,
+            _ => false,
+        };
     }
 
     private static TypeSymbol StripNullable(TypeSymbol type)
@@ -1432,9 +1542,49 @@ internal sealed class StatementBinder
 
     private (Dictionary<VariableSymbol, TypeSymbol> NonNil, Dictionary<VariableSymbol, TypeSymbol> Nil) TryClassifyNilGuard(BoundExpression condition)
     {
+        // ADR-0069 addendum / issue #712: compose nil-guard classification across
+        // `!`, `&&`, and `||` so guards like `if a == nil || cond { ... } else { use(a) }`
+        // narrow `a` to its non-nullable underlying type in the else-branch.
+        switch (condition)
+        {
+            case BoundUnaryExpression unary when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation:
+                {
+                    var (inThen, inElse) = TryClassifyNilGuard(unary.Operand);
+                    return (inElse, inThen);
+                }
+
+            case BoundBinaryExpression bin when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd:
+                {
+                    var (leftThen, _) = TryClassifyNilGuard(bin.Left);
+                    var (rightThen, _) = TryClassifyNilGuard(bin.Right);
+                    var combinedThen = MergeNarrowingFrames(leftThen, rightThen);
+                    if (combinedThen == null || combinedThen.Count == 0)
+                    {
+                        return (null, null);
+                    }
+
+                    return (combinedThen, null);
+                }
+
+            case BoundBinaryExpression bin when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr:
+                {
+                    var (leftThen, leftElse) = TryClassifyNilGuard(bin.Left);
+                    var (rightThen, rightElse) = TryClassifyNilGuard(bin.Right);
+                    var combinedThen = IntersectNarrowingFrames(leftThen, rightThen);
+                    var combinedElse = MergeNarrowingFrames(leftElse, rightElse);
+                    if ((combinedThen == null || combinedThen.Count == 0)
+                        && (combinedElse == null || combinedElse.Count == 0))
+                    {
+                        return (null, null);
+                    }
+
+                    return (combinedThen, combinedElse);
+                }
+        }
+
         // Phase 3.C.4: recognise the canonical narrowing patterns. We support
-        // only single-variable guards here; conjunctions, disjunctions and
-        // pattern-based narrowing are deferred.
+        // only single-variable guards here at the leaf; conjunctions, disjunctions
+        // and pattern-based narrowing compose via the cases above.
         if (condition is not BoundBinaryExpression be)
         {
             return (null, null);
@@ -1693,6 +1843,15 @@ internal sealed class StatementBinder
             return null;
         }
 
+        // ADR-0069 addendum / issue #712: only narrow non-mutable receivers
+        // (locals, parameters, and read-only globals). Mutable globals could
+        // be reassigned between the test and the use under aliasing or
+        // another thread, mirroring ADR-0069's stability rule.
+        if (!IsStableNarrowableVariable(variableExpression.Variable))
+        {
+            return null;
+        }
+
         var variable = variableExpression.Variable;
         TypeSymbol narrowedType = null;
         switch (pattern)
@@ -1812,6 +1971,17 @@ internal sealed class StatementBinder
         var arms = ImmutableArray.CreateBuilder<BoundPatternSwitchArm>(syntax.Cases.Length);
         var hasDefault = false;
 
+        // ADR-0069 addendum / issue #712: track each non-exiting arm's
+        // discriminator narrowing so we can lift a common post-switch
+        // narrowing into the enclosing block when every fall-through arm
+        // contributes the same `{discriminator → T}` mapping. Arms that
+        // end in an unconditional exit (return/throw/break/continue) do
+        // not contribute to the merge — they remove themselves from the
+        // post-switch dataflow.
+        var hasAnyFallThroughArm = false;
+        Dictionary<VariableSymbol, TypeSymbol> mergedExitFrame = null;
+        var mergeFailed = false;
+
         foreach (var caseSyntax in syntax.Cases)
         {
             if (caseSyntax.IsDefault)
@@ -1822,7 +1992,18 @@ internal sealed class StatementBinder
                 }
 
                 hasDefault = true;
-                arms.Add(new BoundPatternSwitchArm(null, pattern: null, BindBlockStatement(caseSyntax.Body)));
+                var defaultBody = BindBlockStatement(caseSyntax.Body);
+                arms.Add(new BoundPatternSwitchArm(null, pattern: null, defaultBody));
+
+                if (!EndsInUnconditionalExit(defaultBody))
+                {
+                    // A default arm that falls through carries no narrowing
+                    // on the discriminator (we can't observe any specific
+                    // type), so it defeats the merge unconditionally.
+                    hasAnyFallThroughArm = true;
+                    mergeFailed = true;
+                }
+
                 continue;
             }
 
@@ -1842,6 +2023,52 @@ internal sealed class StatementBinder
             var body = BindStatementWithNarrowing(caseSyntax.Body, frame);
             scope = scope.Parent;
             arms.Add(new BoundPatternSwitchArm(null, pattern, body));
+
+            if (mergeFailed)
+            {
+                continue;
+            }
+
+            if (EndsInUnconditionalExit(body))
+            {
+                continue;
+            }
+
+            hasAnyFallThroughArm = true;
+
+            if (frame == null || frame.Count == 0)
+            {
+                // Fall-through arm with no narrowing — nothing to lift.
+                mergeFailed = true;
+                continue;
+            }
+
+            if (mergedExitFrame == null)
+            {
+                mergedExitFrame = new Dictionary<VariableSymbol, TypeSymbol>(frame);
+                continue;
+            }
+
+            // Intersect with the running merge. Only variables narrowed to
+            // the same type by every fall-through arm survive.
+            var next = new Dictionary<VariableSymbol, TypeSymbol>();
+            foreach (var kv in frame)
+            {
+                if (mergedExitFrame.TryGetValue(kv.Key, out var existing) && existing == kv.Value)
+                {
+                    next[kv.Key] = kv.Value;
+                }
+            }
+
+            if (next.Count == 0)
+            {
+                mergeFailed = true;
+                mergedExitFrame = null;
+            }
+            else
+            {
+                mergedExitFrame = next;
+            }
         }
 
         var boundArms = arms.ToImmutable();
@@ -1852,7 +2079,46 @@ internal sealed class StatementBinder
             scope.GetDeclaredStructs(),
             Diagnostics);
 
-        return new BoundPatternSwitchStatement(null, discriminant, boundArms);
+        var result = new BoundPatternSwitchStatement(null, discriminant, boundArms);
+
+        // ADR-0069 addendum / issue #712: park the merged narrowing on the
+        // bound switch so the enclosing block walker can lift it. Only do
+        // so when at least one arm fell through (otherwise the switch
+        // itself unconditionally exits and the post-switch dataflow is
+        // unreachable). Also require the switch to be exhaustive — if a
+        // non-matching value escapes the switch without entering any arm,
+        // the discriminator's type is unchanged and we must not narrow.
+        if (!mergeFailed && hasAnyFallThroughArm && mergedExitFrame != null && mergedExitFrame.Count > 0
+            && SwitchHandlesAllValues(boundArms, switchType))
+        {
+            binderCtx.PendingSwitchExitFrames[result] = mergedExitFrame;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// ADR-0069 addendum / issue #712: a switch is "exhaustive enough" for
+    /// post-switch narrowing when it has a default arm OR its declared
+    /// arm set covers every input the discriminator can take. We
+    /// conservatively require either a default/discard arm — anything
+    /// else is treated as non-exhaustive and we skip the lift. The
+    /// exhaustiveness analyzer already reports a separate diagnostic for
+    /// truly-non-exhaustive switches; this check only guards the
+    /// narrowing lift.
+    /// </summary>
+    private static bool SwitchHandlesAllValues(ImmutableArray<BoundPatternSwitchArm> arms, TypeSymbol discriminantType)
+    {
+        foreach (var arm in arms)
+        {
+            if (arm.Pattern == null || arm.Pattern is BoundDiscardPattern)
+            {
+                return true;
+            }
+        }
+
+        // No default — we cannot prove the post-switch frame is safe.
+        return false;
     }
 
     private BoundStatement BindTryStatement(TryStatementSyntax syntax)
