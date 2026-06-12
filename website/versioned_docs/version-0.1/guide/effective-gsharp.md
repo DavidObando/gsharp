@@ -36,10 +36,10 @@ Use `let` when a binding should not be reassigned, `var` when mutation is part o
 
 ## Prefer simple data declarations
 
-Start with `struct` for value-like aggregates and `class` for identity, mutation, or inheritance. Use `data struct` when structural equality and copy/update behavior are part of the model. `record` is an alias for `data struct`, so teams should choose one spelling and use it consistently. Use `inline struct` for a single-field value wrapper when you want a domain-specific type without class identity.
+Start with `struct` for value-like aggregates and `class` for identity, mutation, or inheritance. Use `data struct` when structural equality and copy/update behavior are part of the model. `record` is an alias for `data struct`, so teams should choose one spelling and use it consistently. Use `inline struct` for a single-field value wrapper when you want a domain-specific class without identity.
 
 ```gsharp
-type Point data struct {
+data struct Point {
     X int32
     Y int32
 }

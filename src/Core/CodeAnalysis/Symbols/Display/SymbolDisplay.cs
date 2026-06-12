@@ -142,11 +142,7 @@ public static class SymbolDisplay
             return builder.ToImmutable();
         }
 
-        builder.Keyword("type");
-        builder.Space();
-        builder.Type(FormatClrTypeName(clrType, format.QualifyNames));
-        builder.Space();
-
+        // ADR-0078: the aggregate kind keyword comes first.
         if (clrType.IsInterface)
         {
             builder.Keyword("interface");
@@ -169,6 +165,9 @@ public static class SymbolDisplay
         {
             builder.Keyword("class");
         }
+
+        builder.Space();
+        builder.Type(FormatClrTypeName(clrType, format.QualifyNames));
 
         return builder.ToImmutable();
     }
@@ -296,12 +295,8 @@ public static class SymbolDisplay
 
     private static void AppendAggregate(PartBuilder builder, SymbolDisplayFormat format, StructSymbol aggregate)
     {
-        builder.Keyword("type");
-        builder.Space();
-        builder.Type(QualifiedName(format, aggregate.PackageName, aggregate.Name));
-        AppendTypeParameters(builder, aggregate.TypeParameters);
-        builder.Space();
-
+        // ADR-0078: the aggregate kind keyword IS the declaration head.
+        // Render as `[ref]? [data]? [inline]? [open|sealed]? (class|struct) Name [TParams]? { fields }?`.
         if (aggregate.IsRefStruct)
         {
             builder.Keyword("ref");
@@ -321,6 +316,9 @@ public static class SymbolDisplay
         }
 
         builder.Keyword(aggregate.IsClass ? "class" : "struct");
+        builder.Space();
+        builder.Type(QualifiedName(format, aggregate.PackageName, aggregate.Name));
+        AppendTypeParameters(builder, aggregate.TypeParameters);
 
         if (!aggregate.Fields.IsEmpty)
         {

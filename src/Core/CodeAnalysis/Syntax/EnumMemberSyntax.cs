@@ -7,7 +7,7 @@ using System.Collections.Immutable;
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
-/// Represents a member in a <c>type Name enum { ... }</c> declaration.
+/// Represents a member in a <c>enum Name { ... }</c> declaration.
 /// </summary>
 public sealed class EnumMemberSyntax : SyntaxNode
 {
@@ -39,6 +39,28 @@ public sealed class EnumMemberSyntax : SyntaxNode
 
     /// <summary>Gets the enum member identifier.</summary>
     public SyntaxToken Identifier { get; }
+
+    /// <summary>
+    /// Gets the opening parenthesis for the optional payload parameter list
+    /// (ADR-0078 / issue #725). Null when the case has no payload.
+    /// </summary>
+    public SyntaxToken PayloadOpenParenthesis { get; internal set; }
+
+    /// <summary>
+    /// Gets the optional primary-constructor parameter list for this enum
+    /// case (ADR-0078 / issue #725). Empty when the case has no payload —
+    /// inspect <see cref="HasPayload"/> to distinguish.
+    /// </summary>
+    public SeparatedSyntaxList<ParameterSyntax> PayloadParameters { get; internal set; }
+
+    /// <summary>
+    /// Gets the closing parenthesis for the optional payload parameter list
+    /// (ADR-0078 / issue #725). Null when the case has no payload.
+    /// </summary>
+    public SyntaxToken PayloadCloseParenthesis { get; internal set; }
+
+    /// <summary>Gets a value indicating whether this case has a payload parameter list.</summary>
+    public bool HasPayload => PayloadOpenParenthesis != null;
 
     /// <summary>Attaches the given annotation list to this enum member and returns this same instance for fluent parser use.</summary>
     /// <param name="annotations">The annotation list to attach (may be empty).</param>

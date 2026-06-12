@@ -18,7 +18,7 @@ Identifiers start with a Unicode letter or `_` and continue with Unicode letters
 
 Reserved keywords include declarations (`package`, `import`, `type`, `func`, `var`, `let`, `const`), control flow (`if`, `else`, `for`, `switch`, `case`, `default`, `break`, `continue`, `return`), concurrency (`go`, `chan`, `select`, `scope`), exceptions (`try`, `catch`, `finally`, `throw`), and modifiers such as `public`, `internal`, `private`, `open`, `override`, and `sealed`.
 
-Some words are contextual: `record`, `data`, `inline`, `prop`, `event`, `shared`, `init`, `get`, `set`, `add`, `remove`, `raise`, `in`, `out`, `yield`, `with`, `typeof`, `nameof`, and `make` are identifiers except in the syntax positions that give them special meaning.
+Some words are contextual: `data`, `inline`, `prop`, `event`, `shared`, `init`, `get`, `set`, `add`, `remove`, `raise`, `in`, `out`, `yield`, `with`, `typeof`, `nameof`, and `make` are identifiers except in the syntax positions that give them special meaning. The legacy `record` contextual keyword was removed by [ADR-0078](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0078-kotlin-style-type-declaration-grammar.md); the lexer still recognises it so the parser can emit the GS0307 migration diagnostic.
 
 ## Numeric literals
 

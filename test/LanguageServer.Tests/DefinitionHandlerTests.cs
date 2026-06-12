@@ -43,7 +43,7 @@ public class DefinitionHandlerTests
     [Fact]
     public void ComputeDefinition_StructNameGoesToDeclaration()
     {
-        const string source = "type Point struct {\nvar X int32\nvar Y int32\n}\n";
+        const string source = "struct Point {\nvar X int32\nvar Y int32\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
         var uri = DocumentUri.From("file:///def.gs");
 

@@ -26,7 +26,7 @@ public class Issue671ConstructionCallEmitTests
             import System
             import System.Collections.Generic
 
-            type MyGs class {
+            class MyGs {
                 var Name string = ""
             }
 
@@ -48,7 +48,7 @@ public class Issue671ConstructionCallEmitTests
             import System
             import System.Collections.Generic
 
-            type IMyGs interface {
+            interface IMyGs {
                 func GetName() string
             }
 
@@ -74,7 +74,7 @@ public class Issue671ConstructionCallEmitTests
             import System
             import System.Collections.Generic
 
-            type MyGs class {
+            class MyGs {
                 var Name string = ""
             }
 
@@ -94,7 +94,7 @@ public class Issue671ConstructionCallEmitTests
             import System
             import System.Collections.Generic
 
-            type MyGs class {
+            class MyGs {
                 var Name string = ""
             }
 
@@ -116,7 +116,7 @@ public class Issue671ConstructionCallEmitTests
             package App
             import System
 
-            type MyGs class {
+            class MyGs {
                 var Name string = ""
             }
 

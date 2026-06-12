@@ -25,7 +25,7 @@ public class DataStructTests
     public void DataStruct_EqualValues_AreEqual()
     {
         var source = @"
-type Point data struct {
+data struct Point {
     var X int32
     var Y int32
 }
@@ -43,7 +43,7 @@ p == q
     public void DataStruct_DifferentFieldValues_AreNotEqual()
     {
         var source = @"
-type Point data struct {
+data struct Point {
     var X int32
     var Y int32
 }
@@ -61,7 +61,7 @@ p != q
     public void DataStruct_AssignmentCreatesEqualCopy()
     {
         var source = @"
-type Point data struct {
+data struct Point {
     var X int32
     var Y int32
 }
@@ -80,7 +80,7 @@ p == q
     public void PlainStruct_EqualityRejected()
     {
         var source = @"
-type Point struct {
+struct Point {
     var X int32
     var Y int32
 }
@@ -97,10 +97,10 @@ p == q
     public void DataStruct_DistinctTypes_EqualityRejected()
     {
         var source = @"
-type A data struct {
+data struct A {
     var V int32
 }
-type B data struct {
+data struct B {
     var V int32
 }
 
@@ -116,7 +116,7 @@ a == b
     public void DataStruct_NoFields_Diagnosed()
     {
         var source = @"
-type Empty data struct {
+data struct Empty {
 }
 0
 ";
@@ -128,7 +128,7 @@ type Empty data struct {
     public void DataStruct_ToString_IncludesFieldValues()
     {
         var source = @"
-type Point data struct {
+data struct Point {
     var X int32
     var Y int32
 }
@@ -166,7 +166,7 @@ p
         // cannot be hand-written, so the structural contract stays
         // predictable.
         var source = @"
-type Point data struct {
+data struct Point {
     var X int32
     var Y int32
 }
@@ -184,7 +184,7 @@ func (p Point) Equals(other any) bool {
     public void DataStruct_ExplicitGetHashCode_ReportsGS0232()
     {
         var source = @"
-type Point data struct {
+data struct Point {
     var X int32
     var Y int32
 }
@@ -202,7 +202,7 @@ func (p Point) GetHashCode() int32 {
     public void DataStruct_ExplicitDeconstruct_ReportsGS0232()
     {
         var source = @"
-type Point data struct {
+data struct Point {
     var X int32
     var Y int32
 }
@@ -218,7 +218,7 @@ func (p Point) Deconstruct() {
     private static StructSymbol BuildPoint(out Compilation compilation)
     {
         var source = @"
-type Point data struct {
+data struct Point {
     var X int32
     var Y int32
 }

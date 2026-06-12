@@ -24,7 +24,7 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Person class {
+            class Person {
                 prop Name string
             }
             """;
@@ -50,7 +50,7 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Person class {
+            class Person {
                 prop Name string
             }
             """;
@@ -70,7 +70,7 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Foo class {
+            class Foo {
                 prop X int32 { get }
             }
             """;
@@ -93,7 +93,7 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Box class {
+            class Box {
                 prop Item string
             }
             """;
@@ -116,7 +116,7 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Counter class {
+            class Counter {
                 prop Value int32
             }
             """;
@@ -139,7 +139,7 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Person class {
+            class Person {
                 prop Name string
                 prop Age int32
             }
@@ -171,7 +171,7 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Base open class {
+            open class Base {
                 open prop Label string
             }
             """;
@@ -192,11 +192,11 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Base open class {
+            open class Base {
                 open prop Label string
             }
 
-            type Derived class : Base {
+            class Derived : Base {
                 override prop Label string
             }
             """;
@@ -219,7 +219,7 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Named interface {
+            interface Named {
                 prop Name string { get }
             }
             """;
@@ -242,7 +242,7 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Foo class {
+            class Foo {
                 prop Count int32
             }
             """;
@@ -264,7 +264,7 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Foo class {
+            class Foo {
                 prop Name string
             }
             """;
@@ -286,7 +286,7 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Rect class {
+            class Rect {
                 prop Width int32
                 prop Height int32
                 prop Area int32 {
@@ -313,7 +313,7 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Counter class {
+            class Counter {
                 prop raw int32
                 prop Value int32 {
                     get {
@@ -341,7 +341,7 @@ public class PropertyEmitTests
             package MyLib
             import System
 
-            type Greeter class {
+            class Greeter {
                 prop Name string
                 prop Greeting string {
                     get {

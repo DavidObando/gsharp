@@ -2601,6 +2601,104 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0305", $"':=' short variable declaration has been removed; use 'let' (immutable) or 'var' (mutable) instead (e.g. '{migration}') (ADR-0077).", DiagnosticSeverity.Error);
     }
 
+    /// <summary>
+    /// ADR-0078 / issue #718: GS0306 — the legacy <c>type Name &lt;agg-kw&gt; ...</c>
+    /// declaration head has been removed. The aggregate-kind keyword
+    /// (<c>class</c>, <c>struct</c>, <c>enum</c>, <c>interface</c>) is now the
+    /// declaration keyword and precedes the name. The diagnostic message includes
+    /// a concrete migration snippet so existing code can be ported by hand or
+    /// with a mechanical rewrite.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>type</c> keyword.</param>
+    /// <param name="migration">A context-specific replacement snippet (e.g. <c>class Point(x, y int32)</c>).</param>
+    public void ReportOldTypeDeclarationFormRemoved(TextLocation location, string migration)
+    {
+        Report(location, "GS0306", $"The 'type Name <kind> ...' declaration head has been removed; use the kind keyword first (e.g. '{migration}') (ADR-0078).", DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0078 / issue #718: GS0307 — the <c>record</c> contextual keyword has
+    /// been deleted. Records are spelled <c>data class</c> (reference) or
+    /// <c>data struct</c> (value) with the aggregate keyword as the
+    /// declaration head.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>record</c> identifier.</param>
+    /// <param name="name">The aggregate name (used to build the migration snippet).</param>
+    public void ReportRecordKeywordRemoved(TextLocation location, string name)
+    {
+        Report(location, "GS0307", $"The 'record' keyword has been removed; use 'data class {name}' (reference equality-bearing) or 'data struct {name}' (value equality-bearing) instead (ADR-0078).", DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0078 / issue #718: GS0308 — <c>inline</c> is only valid on
+    /// <c>struct</c>. <c>inline class</c> is rejected because the inline value
+    /// class (newtype) form only makes sense for value types.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>inline</c> modifier.</param>
+    public void ReportInlineOnlyValidOnStruct(TextLocation location)
+    {
+        Report(location, "GS0308", "'inline' is only valid on 'struct'; use 'inline struct Name(field T)' for a newtype wrapper (ADR-0078).", DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0078 / issue #718: GS0309 — <c>open</c> is only valid on
+    /// <c>class</c>. Structs are value types and cannot be subclassed; enums and
+    /// interfaces define their own openness model.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>open</c> modifier.</param>
+    /// <param name="kindName">The kind keyword that follows (e.g. <c>struct</c>).</param>
+    public void ReportOpenOnlyValidOnClass(TextLocation location, string kindName)
+    {
+        Report(location, "GS0309", $"'open' is only valid on 'class'; '{kindName}' cannot be marked 'open' (ADR-0078).", DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0078 / issue #718: GS0310 — <c>sealed</c> is only valid on
+    /// <c>class</c> and <c>interface</c>. Enums already form a closed
+    /// hierarchy by construction; structs cannot be subclassed.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>sealed</c> modifier.</param>
+    /// <param name="kindName">The kind keyword that follows.</param>
+    public void ReportSealedOnlyValidOnClassOrInterface(TextLocation location, string kindName)
+    {
+        Report(location, "GS0310", $"'sealed' is only valid on 'class' or 'interface'; '{kindName}' cannot be marked 'sealed' (ADR-0078).", DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0078 / issue #718: GS0311 — <c>data</c> and <c>inline</c> cannot be
+    /// combined. A <c>data struct</c> already carries field-wise equality; an
+    /// <c>inline struct</c> compares by its single wrapped field. The two
+    /// equality models are mutually exclusive.
+    /// </summary>
+    /// <param name="location">The source location of the offending modifier.</param>
+    public void ReportDataAndInlineCannotCombine(TextLocation location)
+    {
+        Report(location, "GS0311", "'data' and 'inline' cannot be combined; choose one (ADR-0078).", DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0078 / issue #718: GS0312 — <c>open</c> and <c>sealed</c> on the
+    /// same declaration are mutually exclusive (a class is either subclassable
+    /// or part of a closed hierarchy).
+    /// </summary>
+    /// <param name="location">The source location of the second modifier.</param>
+    public void ReportOpenAndSealedCannotCombine(TextLocation location)
+    {
+        Report(location, "GS0312", "'open' and 'sealed' cannot be combined on the same declaration (ADR-0078).", DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0078 / issue #718: GS0313 — a switch over a sealed-class hierarchy
+    /// is missing a case for a known subtype.
+    /// </summary>
+    /// <param name="location">The source location of the switch keyword.</param>
+    /// <param name="missingCaseName">The name of the missing case / subtype.</param>
+    /// <param name="baseTypeName">The sealed-base type name.</param>
+    public void ReportSealedHierarchyMissingCase(TextLocation location, string missingCaseName, string baseTypeName)
+    {
+        Report(location, "GS0313", $"Switch over sealed hierarchy '{baseTypeName}' is missing a case for '{missingCaseName}' (ADR-0078).", DiagnosticSeverity.Warning);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

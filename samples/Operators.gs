@@ -6,7 +6,7 @@ package GSharp.Sample.Operators
 
 import System
 
-type Vector2 class {
+class Vector2 {
     var X int32
     var Y int32
 }

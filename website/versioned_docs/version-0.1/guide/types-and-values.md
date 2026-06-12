@@ -41,7 +41,7 @@ package GSharp.Example.DataStruct
 
 import System
 
-type Point data struct {
+data struct Point {
     X int32
     Y int32
 }
@@ -64,7 +64,7 @@ Interfaces define method, property, and event signatures. Current implementation
 Enums are closed sets of named values. They cannot be generic and must contain at least one member. Equality and switch exhaustiveness diagnostics understand enum members.
 
 ```gsharp
-type Status enum { Pending, Complete, Failed }
+enum Status { Pending, Complete, Failed }
 ```
 
 ## Sequences and channels
@@ -80,11 +80,11 @@ A **named delegate type** is declared with `type Name = delegate func(...)` (ADR
 ```gsharp
 type Handler = delegate func(sender Object, e EventArgs)
 
-type Button class {
+class Button {
     event Click Handler
 }
 ```
 
 ## Generics and variance
 
-G# uses bracketed generics: declarations such as `type Box[T any] class { ... }` and instantiations such as `Box[int32]`. Type parameters can use `in` and `out` variance markers and named constraints. The implementation supports metadata specs and inference, but some open or partially constructed generic shapes are erased to `object` in emit paths. See [ADR-0004](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0004-generics-scope.md), [ADR-0020](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0020-generic-brackets.md), and [ADR-0021](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0021-generic-variance.md).
+G# uses bracketed generics: declarations such as `class Box[T any] { ... }` and instantiations such as `Box[int32]`. Type parameters can use `in` and `out` variance markers and named constraints. The implementation supports metadata specs and inference, but some open or partially constructed generic shapes are erased to `object` in emit paths. See [ADR-0004](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0004-generics-scope.md), [ADR-0020](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0020-generic-brackets.md), and [ADR-0021](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0021-generic-variance.md).

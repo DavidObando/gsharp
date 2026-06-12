@@ -26,7 +26,7 @@ public class Issue660InlineDataNilEmitTests
             package Probe.Tests
             import Xunit
 
-            type Tests class {
+            class Tests {
                 @Theory
                 @InlineData(nil, "abc", false)
                 @InlineData("abc", "abc", true)
@@ -65,7 +65,7 @@ public class Issue660InlineDataNilEmitTests
             package Probe.Tests
             import Xunit
 
-            type Tests class {
+            class Tests {
                 @Theory
                 @InlineData(nil, "abc", false)
                 func Equal_Compare(a string, b string, expected bool) {
@@ -89,7 +89,7 @@ public class Issue660InlineDataNilEmitTests
             package Probe.Tests
             import Xunit
 
-            type Tests class {
+            class Tests {
                 @Theory
                 @InlineData(null, "abc", false)
                 func Equal_Compare(a string?, b string, expected bool) {

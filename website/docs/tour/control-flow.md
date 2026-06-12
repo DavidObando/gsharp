@@ -292,11 +292,11 @@ for n in nums {
 After a successful `is` (or `!is`) test against a local, parameter, or read-only top-level `let`, G# automatically narrows the receiver to the tested type for the rest of the flow region. No explicit `as`-cast is required.
 
 ```gsharp
-type Animal open class {
+open class Animal {
     var Name string
 }
 
-type Dog class : Animal {
+class Dog : Animal {
     func Bark() string { return Name + ": woof" }
 }
 

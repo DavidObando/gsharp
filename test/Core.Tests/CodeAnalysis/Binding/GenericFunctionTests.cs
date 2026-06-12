@@ -153,11 +153,11 @@ Eq([]int32{1}, []int32{2})
     public void GenericInterfaceConstraint_Dispatch_OnImplementor_Works()
     {
         var source = @"
-type IShape sealed interface {
+sealed interface IShape {
     func Area() int32
 }
 
-type Square class : IShape {
+class Square : IShape {
     func Area() int32 { return 9 }
 }
 
@@ -173,11 +173,11 @@ AreaOf(Square{})
     public void GenericInterfaceConstraint_NonImplementor_Diagnoses()
     {
         var source = @"
-type IShape sealed interface {
+sealed interface IShape {
     func Area() int32
 }
 
-type NotAShape class {}
+class NotAShape {}
 
 func AreaOf[T IShape](x T) int32 { return x.Area() }
 AreaOf[NotAShape](NotAShape{})
@@ -190,7 +190,7 @@ AreaOf[NotAShape](NotAShape{})
     public void GenericConstraint_OnNonSealedInterface_Diagnoses()
     {
         var source = @"
-type IShape interface {
+interface IShape {
     func Area() int32
 }
 

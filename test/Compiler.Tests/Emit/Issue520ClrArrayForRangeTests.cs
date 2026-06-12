@@ -172,7 +172,7 @@ public class Issue520ClrArrayForRangeTests
             package P
             import System
 
-            type Region enum { Us, Uk, De, Fr, Es, It, Pt, Pl, Cz, At, Nl }
+            enum Region { Us, Uk, De, Fr, Es, It, Pt, Pl, Cz, At, Nl }
 
             var names = Enum.GetNames(typeof(Region))
             for n in names {

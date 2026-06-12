@@ -27,7 +27,7 @@ public class EnumEmitTests
             package P
             import System
 
-            type Color enum { Red, Green, Blue }
+            enum Color { Red, Green, Blue }
             """;
 
         var assembly = CompileToAssembly(source);
@@ -52,7 +52,7 @@ public class EnumEmitTests
             package P
             import System
 
-            type Pri enum { Low, Medium, High }
+            enum Pri { Low, Medium, High }
             """;
 
         var assembly = CompileToAssembly(source);
@@ -89,7 +89,7 @@ public class EnumEmitTests
             package P
             import System
 
-            type Color enum {
+            enum Color {
                 Red,
                 @Obsolete("use Red")
                 Crimson,
@@ -115,7 +115,7 @@ public class EnumEmitTests
             import System
 
             @Obsolete("legacy enum")
-            type Color enum { Red, Green }
+            enum Color { Red, Green }
             """;
 
         var assembly = CompileToAssembly(source);
@@ -134,7 +134,7 @@ public class EnumEmitTests
             package P
             import System
 
-            type Color enum { Red, Green, Blue }
+            enum Color { Red, Green, Blue }
 
             func Pick(c Color) Color {
                 return c
@@ -166,20 +166,20 @@ public class EnumEmitTests
             package P
             import System
 
-            type S1 data struct {
+            data struct S1 {
                 var A int32
                 var B int32
             }
-            type S2 data struct {
+            data struct S2 {
                 var X int32
                 var Y int32
                 var Z int32
             }
-            type S3 data struct {
+            data struct S3 {
                 var N int32
             }
 
-            type Color enum { Red, Green, Blue }
+            enum Color { Red, Green, Blue }
             """;
 
         var assembly = CompileToAssembly(source);
@@ -216,9 +216,9 @@ public class EnumEmitTests
             package P
             import System
 
-            type A enum { A0, A1 }
-            type B enum { B0, B1, B2 }
-            type C enum { C0 }
+            enum A { A0, A1 }
+            enum B { B0, B1, B2 }
+            enum C { C0 }
             """;
 
         var assembly = CompileToAssembly(source);

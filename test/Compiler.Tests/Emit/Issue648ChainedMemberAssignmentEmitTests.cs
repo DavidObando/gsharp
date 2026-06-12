@@ -33,12 +33,12 @@ public class Issue648ChainedMemberAssignmentEmitTests
             package P
             import System
 
-            type Inner class {
+            class Inner {
                 var Value int32
                 init() {}
             }
 
-            type Outer class {
+            class Outer {
                 var Inner Inner
                 init() { Inner = Inner() }
             }
@@ -59,12 +59,12 @@ public class Issue648ChainedMemberAssignmentEmitTests
             package P
             import System
 
-            type Inner class {
+            class Inner {
                 prop Value int32
                 init() {}
             }
 
-            type Outer class {
+            class Outer {
                 var Inner Inner
                 init() { Inner = Inner() }
             }
@@ -85,17 +85,17 @@ public class Issue648ChainedMemberAssignmentEmitTests
             package P
             import System
 
-            type Leaf class {
+            class Leaf {
                 var Val int32
                 init() {}
             }
 
-            type Mid class {
+            class Mid {
                 var Leaf Leaf
                 init() { Leaf = Leaf() }
             }
 
-            type Root class {
+            class Root {
                 var Mid Mid
                 init() { Mid = Mid() }
             }
@@ -116,12 +116,12 @@ public class Issue648ChainedMemberAssignmentEmitTests
             package P
             import System
 
-            type Inner class {
+            class Inner {
                 var Value int32
                 init() {}
             }
 
-            type Outer class {
+            class Outer {
                 var _inner Inner
                 init() { _inner = Inner() }
                 func GetInner() Inner { return _inner }
@@ -143,12 +143,12 @@ public class Issue648ChainedMemberAssignmentEmitTests
             package P
             import System
 
-            type Inner class {
+            class Inner {
                 var Value int32
                 init() {}
             }
 
-            type Outer class {
+            class Outer {
                 var Inner Inner
                 init() { Inner = Inner() }
             }
@@ -170,12 +170,12 @@ public class Issue648ChainedMemberAssignmentEmitTests
             package P
             import System
 
-            type Inner class {
+            class Inner {
                 var Value int32
                 init() {}
             }
 
-            type Outer class {
+            class Outer {
                 var Inner Inner
                 init() { Inner = Inner() }
             }
@@ -197,7 +197,7 @@ public class Issue648ChainedMemberAssignmentEmitTests
             package P
             import System
 
-            type Box class {
+            class Box {
                 var Value int32
                 init() {}
             }
@@ -226,12 +226,12 @@ public class Issue648ChainedMemberAssignmentEmitTests
             package P
             import System
 
-            type Inner class {
+            class Inner {
                 prop Val int32
                 init() {}
             }
 
-            type Outer class {
+            class Outer {
                 var _inner Inner
                 prop Inner Inner {
                     get { return _inner }

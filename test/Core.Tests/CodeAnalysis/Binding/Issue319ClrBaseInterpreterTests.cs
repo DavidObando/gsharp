@@ -31,7 +31,7 @@ public class Issue319ClrBaseInterpreterTests
         // Explicit `init(...) : base(msg)` against System.Exception.
         var source = @"
 import System
-type MyErr class : Exception {
+class MyErr : Exception {
     var Code int32
     init(message string, code int32) : base(message) {
         Code = code
@@ -53,7 +53,7 @@ e.Message
         // 'this' representation.
         var source = @"
 import System
-type MyErr class : Exception {
+class MyErr : Exception {
     var Code int32
     init(message string, code int32) : base(message) {
         Code = code
@@ -74,7 +74,7 @@ e.Code
         // shapes covered by issue #306 / #319.
         var source = @"
 import System
-type MyErr class(Detail string) : Exception(Detail) {
+class MyErr(Detail string) : Exception(Detail) {
 }
 var e = MyErr(""nope"")
 e.Message
@@ -92,7 +92,7 @@ e.Message
         // scope where the parameter is bound before invoking the CLR ctor.
         var source = @"
 import System
-type LabeledErr class(Label string) : Exception(Label + ""!"") {
+class LabeledErr(Label string) : Exception(Label + ""!"") {
 }
 var e = LabeledErr(""oops"")
 e.Message
@@ -111,7 +111,7 @@ e.Message
         // CLR backing.
         var source = @"
 import System
-type MyErr class(Detail string) : Exception(Detail) {
+class MyErr(Detail string) : Exception(Detail) {
 }
 var e = MyErr(""x"")
 e.HResult = 123
@@ -131,7 +131,7 @@ e.HResult
         // receiver was a StructValue, not a System.Exception.
         var source = @"
 import System
-type MyErr class(Detail string) : Exception(Detail) {
+class MyErr(Detail string) : Exception(Detail) {
 }
 var e = MyErr(""hello"")
 var s = e.ToString()
@@ -150,7 +150,7 @@ s.Contains(""hello"")
         // whose size is observable via the inherited `Capacity` property.
         var source = @"
 import System.IO
-type SizedStream class(Cap int32) : MemoryStream(Cap) {
+class SizedStream(Cap int32) : MemoryStream(Cap) {
 }
 var s = SizedStream(128)
 s.Capacity
@@ -169,7 +169,7 @@ s.Capacity
         // routes share the same CLR backing.
         var source = @"
 import System.IO
-type SizedStream class(Cap int32) : MemoryStream(Cap) {
+class SizedStream(Cap int32) : MemoryStream(Cap) {
 }
 var s = SizedStream(16)
 s.SetLength(7)
@@ -190,7 +190,7 @@ s.Length
         // Exception(value.ToString()).
         var source = @"
 import System
-type MyErr class(Detail string) : Exception(Detail) {
+class MyErr(Detail string) : Exception(Detail) {
 }
 var msg = """"
 try {

@@ -114,7 +114,7 @@ Event accessors on user types are declared with the G# `event` member form; impo
 Imported CLR operator overloads and conversion operators participate in binding. User-defined G# operator declarations use receiver syntax and map to CLR `op_*` names for emit and interop.
 
 ```gsharp
-type Vec class {
+class Vec {
     X int32
     Y int32
 }
@@ -136,7 +136,7 @@ func OldName() {
 }
 
 @Attribute
-type Trace class {
+class Trace {
 }
 ```
 
@@ -241,7 +241,7 @@ A user `ref struct` may embed a **closed** constructed generic value-type field,
 ```gsharp
 import System
 
-type Window ref struct {
+ref struct Window {
     data ReadOnlySpan[int32]
 }
 
@@ -254,7 +254,7 @@ Such a field is emitted with its real layout (`valuetype ReadOnlySpan<int32>`, n
 
 ### Limitations
 
-Per ADR-0056, the following remain out of scope: the full two-level `ref-safe-to-escape` analysis (including `[UnscopedRef]`), deferred to [issue #376](https://github.com/DavidObando/gsharp/issues/376) — though the `scoped` parameter modifier from [ADR-0058](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0058-ref-safe-to-escape.md) is wired up; open generic value-type `ref struct` fields (`type Buffer[T] ref struct { data ReadOnlySpan[T] }`); `stackalloc` and other span-*creation* primitives; and a lowercase `span[T]` alias (spans are imported CLR types `Span[T]` / `ReadOnlySpan[T]`, requiring `import System`).
+Per ADR-0056, the following remain out of scope: the full two-level `ref-safe-to-escape` analysis (including `[UnscopedRef]`), deferred to [issue #376](https://github.com/DavidObando/gsharp/issues/376) — though the `scoped` parameter modifier from [ADR-0058](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0058-ref-safe-to-escape.md) is wired up; open generic value-type `ref struct` fields (`ref struct Buffer[T] { data ReadOnlySpan[T] }`); `stackalloc` and other span-*creation* primitives; and a lowercase `span[T]` alias (spans are imported CLR types `Span[T]` / `ReadOnlySpan[T]`, requiring `import System`).
 
 ## Generics interop
 

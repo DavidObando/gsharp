@@ -19,9 +19,11 @@ public static class ExhaustivenessAnalyzer
     /// Determines whether the specified discriminant type participates in exhaustiveness checking.
     /// </summary>
     /// <param name="type">The switch discriminant type.</param>
-    /// <returns>True for enum types and sealed interfaces; otherwise false.</returns>
+    /// <returns>True for enum types, sealed interfaces, and sealed-hierarchy classes; otherwise false.</returns>
     public static bool IsExhaustiveDiscriminant(TypeSymbol type)
-        => type is EnumSymbol || type is InterfaceSymbol { IsSealed: true };
+        => type is EnumSymbol
+        || type is InterfaceSymbol { IsSealed: true }
+        || type is StructSymbol { IsSealedHierarchy: true };
 
     /// <summary>
     /// Reports a diagnostic when a switch expression over a closed discriminant misses variants.
@@ -132,6 +134,49 @@ public static class ExhaustivenessAnalyzer
                 .Select(implementor => implementor.Name)
                 .ToImmutableArray();
             return missingNames.Length > 0;
+        }
+
+        if (discriminantType is StructSymbol { IsSealedHierarchy: true } sealedBaseClass)
+        {
+            // ADR-0078: sealed class hierarchies form a closed set. Subclasses
+            // must live in the same package; the switch arms must cover every
+            // direct or indirect subclass.
+            discriminantDescription = $"sealed class '{sealedBaseClass.Name}'";
+            var subclasses = structs
+                .Where(s => s.IsClass
+                    && string.Equals(s.PackageName ?? string.Empty, sealedBaseClass.PackageName ?? string.Empty, System.StringComparison.Ordinal)
+                    && IsSubclassOf(s, sealedBaseClass))
+                .ToImmutableArray();
+
+            var coveredSubclasses = new HashSet<StructSymbol>();
+            foreach (var pattern in patternArray)
+            {
+                if (pattern is BoundTypePattern typePattern
+                    && typePattern.TargetType is StructSymbol structSymbol
+                    && IsSubclassOf(structSymbol, sealedBaseClass))
+                {
+                    coveredSubclasses.Add(structSymbol);
+                }
+            }
+
+            missingNames = subclasses
+                .Where(s => !coveredSubclasses.Contains(s))
+                .Select(s => s.Name)
+                .ToImmutableArray();
+            return missingNames.Length > 0;
+        }
+
+        return false;
+    }
+
+    private static bool IsSubclassOf(StructSymbol candidate, StructSymbol baseClass)
+    {
+        for (var current = candidate.BaseClass; current != null; current = current.BaseClass)
+        {
+            if (current == baseClass || current.Definition == baseClass || current == baseClass.Definition || current.Definition == baseClass.Definition)
+            {
+                return true;
+            }
         }
 
         return false;

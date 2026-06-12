@@ -7,7 +7,7 @@ using System.Collections.Immutable;
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
-/// Represents a <c>type Name interface { ... }</c> declaration (Phase 3.B.4).
+/// Represents a <c>interface Name { ... }</c> declaration (Phase 3.B.4).
 /// Per ADR-0018, interfaces in Phase 3 carry method signatures only — bodies,
 /// default methods, and static members are diagnosed by the parser.
 /// </summary>

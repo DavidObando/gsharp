@@ -25,7 +25,7 @@ public sealed class InlineStructTests
     public void InlineStruct_SinglePrimaryConstructorField_BindsAndCompares()
     {
         var result = Evaluate(@"
-type UserId inline struct(value string)
+inline struct UserId(value string)
 let a = UserId(""u-1"")
 let b = UserId(""u-1"")
 a == b
@@ -38,7 +38,7 @@ a == b
     public void InlineStruct_ToString_IncludesSingleField()
     {
         var result = Evaluate(@"
-type UserId inline struct(value string) {}
+inline struct UserId(value string) {}
 let a = UserId(""u-1"")
 a
 ");
@@ -47,13 +47,11 @@ a
     }
 
     [Theory]
-    [InlineData("type Bad inline struct(a string, b string) {}")]
-    [InlineData("type Bad inline struct {}")]
-    [InlineData("type Bad inline struct(a string) { var b string }")]
-    [InlineData("type Bad data inline struct(value string) {}")]
-    [InlineData("type Bad inline data struct(value string) {}")]
-    [InlineData("type Bad open inline struct(value string) {}")]
-    [InlineData("type Bad inline open struct(value string) {}")]
+    [InlineData("inline struct Bad(a string, b string) {}")]
+    [InlineData("inline struct Bad {}")]
+    [InlineData("inline struct Bad(a string) { var b string }")]
+    [InlineData("data inline struct Bad(value string) {}")]
+    [InlineData("open inline struct Bad(value string) {}")]
     public void InlineStruct_InvalidShapes_Diagnose(string declaration)
     {
         var result = Evaluate(declaration + "\n0\n");
@@ -64,7 +62,7 @@ a
     public void InlineStruct_HandWrittenSynthesizedMember_Diagnoses()
     {
         var result = Evaluate(@"
-type UserId inline struct(value string) {}
+inline struct UserId(value string) {}
 func (u UserId) Equals(other UserId) bool { return true }
 0
 ");
@@ -75,8 +73,8 @@ func (u UserId) Equals(other UserId) bool { return true }
     public void InlineStruct_DistinctUnderlyingTypes_AreNotAssignableOrComparable()
     {
         var assign = Evaluate(@"
-type UserId inline struct(value string) {}
-type OrderId inline struct(value string) {}
+inline struct UserId(value string) {}
+inline struct OrderId(value string) {}
 let user = UserId(""u-1"")
 let order OrderId = user
 0
@@ -84,8 +82,8 @@ let order OrderId = user
         Assert.NotEmpty(assign.Diagnostics);
 
         var compare = Evaluate(@"
-type UserId inline struct(value string) {}
-type OrderId inline struct(value string) {}
+inline struct UserId(value string) {}
+inline struct OrderId(value string) {}
 UserId(""1"") == OrderId(""1"")
 ");
         Assert.NotEmpty(compare.Diagnostics);
@@ -95,7 +93,7 @@ UserId(""1"") == OrderId(""1"")
     public void InlineStruct_PassesByValue()
     {
         var result = Evaluate(@"
-type UserId inline struct(value string) {}
+inline struct UserId(value string) {}
 func echo(id UserId) UserId { return id }
 let original = UserId(""u-1"")
 let copied = echo(original)
@@ -109,7 +107,7 @@ original == copied
     public void InlineStruct_EmitsReadOnlyMetadataAndMembers()
     {
         const string Source = @"package InlineMetadata
-type UserId inline struct(value string) {}
+inline struct UserId(value string) {}
 let id = UserId(""u-1"")
 ";
         using var peStream = new MemoryStream();

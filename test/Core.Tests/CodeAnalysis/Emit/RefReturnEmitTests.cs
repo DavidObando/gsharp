@@ -73,7 +73,7 @@ func pick(ref a int32) ref int32 {
         const string Source = @"package ClassRefReturn
 import System
 
-type Box class {
+class Box {
     var Value int32
     func GetRef(ref x int32) ref int32 {
         return ref x
@@ -99,7 +99,7 @@ Console.WriteLine(b.Value)
         const string Source = @"package StructRefReturn
 import System
 
-type Pair struct {
+struct Pair {
     var A int32
     var B int32
 }

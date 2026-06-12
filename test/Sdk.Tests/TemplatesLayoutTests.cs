@@ -118,7 +118,7 @@ public class TemplatesLayoutTests
 
         var src = File.ReadAllText(path);
         Assert.Contains("package GsharpLibrary", src, System.StringComparison.Ordinal);
-        Assert.Contains("type Greeter class", src, System.StringComparison.Ordinal);
+        Assert.Contains("class Greeter", src, System.StringComparison.Ordinal);
         Assert.Contains("func Greet", src, System.StringComparison.Ordinal);
     }
 
@@ -212,7 +212,7 @@ public class TemplatesLayoutTests
 
         var src = File.ReadAllText(path);
         Assert.Contains("package GsharpLibrary", src, System.StringComparison.Ordinal);
-        Assert.Contains("type Greeter class", src, System.StringComparison.Ordinal);
+        Assert.Contains("class Greeter", src, System.StringComparison.Ordinal);
     }
 
     [Fact]
@@ -241,7 +241,7 @@ public class TemplatesLayoutTests
         var src = File.ReadAllText(path);
         Assert.Contains("package GsharpLibrary.Tests", src, System.StringComparison.Ordinal);
         Assert.Contains("import Xunit", src, System.StringComparison.Ordinal);
-        Assert.Contains("type GreeterTests class", src, System.StringComparison.Ordinal);
+        Assert.Contains("class GreeterTests", src, System.StringComparison.Ordinal);
         Assert.Contains("@Fact", src, System.StringComparison.Ordinal);
         Assert.Contains("@Theory", src, System.StringComparison.Ordinal);
         Assert.Contains("@InlineData", src, System.StringComparison.Ordinal);

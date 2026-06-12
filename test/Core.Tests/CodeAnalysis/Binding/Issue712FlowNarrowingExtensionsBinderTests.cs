@@ -24,19 +24,19 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public class Issue712FlowNarrowingExtensionsBinderTests
 {
     private const string AnimalHierarchy = @"
-type Animal open class {
+open class Animal {
     var Name string
     open func Describe() string { return Name }
 }
-type Dog open class : Animal {
+open class Dog : Animal {
     override func Describe() string { return ""Dog"" }
     func Bark() string { return ""woof"" }
 }
-type Cat class : Animal {
+class Cat : Animal {
     override func Describe() string { return ""Cat"" }
     func Purr() string { return ""purr"" }
 }
-type Puppy class : Dog {
+class Puppy : Dog {
     func Yip() string { return ""yip"" }
 }
 ";
@@ -203,7 +203,7 @@ Run(""hi"", false)
         // ADR-0069 stability rule: a field receiver is never narrowed,
         // and the `||` extension keeps the same rule.
         var result = Evaluate(AnimalHierarchy + @"
-type Box class { var Pet Animal }
+class Box { var Pet Animal }
 func Run(b Box) string {
     if !(b.Pet is Dog) || b.Pet.Name == """" {
         return """"

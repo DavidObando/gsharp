@@ -49,7 +49,7 @@ A named delegate may serve as an `event` handler type, replacing the previous `A
 ```gs
 public type PropertyChangedHandler = delegate func(sender Object, e PropertyChangedEventArgs)
 
-type Button class {
+class Button {
     public event Changed PropertyChangedHandler
 }
 ```

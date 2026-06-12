@@ -21,8 +21,9 @@ G# is a .NET language with Go-inspired syntax. It emits CLR assemblies, imports 
 | `long` | `int64` | CLR signatures stay obvious in source. |
 | `var x = ...;` | `let x = ...` or `var x = ...` | `let` is immutable; `var` is mutable. (The short `x := ...` form was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md).) |
 | object initializer `new T { F = v }` | brace initializer `T{F: v}` | Data structs also offer `.copy(F = v)` and `with` copy/update. |
-| `record struct` | `data struct` or `record` | `record` is an alias for `data struct`. |
-| `readonly struct CustomerId` | `type CustomerId inline struct(value string)` | Inline structs are nominal single-field wrappers. |
+| `record struct` | `data struct` | The `record` keyword was removed by ADR-0078; `data struct Name(...)` is the canonical spelling. |
+| `record class` | `data class` | Reference-typed record. |
+| `readonly struct CustomerId` | `inline struct CustomerId(value string)` | Inline structs are nominal single-field wrappers. |
 | `Task<T>` | `Task[T]` | Generic type arguments use brackets. |
 | `async Task<T>` | `async func ... T` | Await is available inside async functions. |
 | `IEnumerable<T>` iterator | `sequence[T]` with `yield` | Async streams use `async sequence[T]`. |
@@ -94,10 +95,10 @@ Imported CLR methods that expose `[Optional]` arguments work the same way G# def
 
 ## Data shapes are richer than plain classes
 
-Use `class` for reference identity and inheritance. Use `struct` for value aggregates. Use `data struct` or `record` for structural equality, copy/update, and deconstruction. Use `inline struct` when you want a nominal wrapper over one value.
+Use `class` for reference identity and inheritance. Use `struct` for value aggregates. Use `data class` or `data struct` for structural equality, copy/update, and deconstruction. Use `inline struct` when you want a nominal wrapper over one value. Use `sealed class` for a Kotlin-style closed hierarchy, and a payload-bearing `enum` for a discriminated union (ADR-0078).
 
 ```gsharp
-type Point data struct {
+data struct Point {
     X int32
     Y int32
 }

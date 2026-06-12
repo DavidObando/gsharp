@@ -44,7 +44,7 @@ A type may contain at most one `shared` block. The parser reports an error on du
 The `shared` block appears inside `struct`, `class`, or `sealed class` bodies:
 
 ```gs
-type Counter class {
+class Counter {
     value int
 
     shared {
@@ -140,7 +140,7 @@ A future follow-up may introduce `type Utils object { … }` syntax for declarin
 ### A1: `static` modifier on individual members
 
 ```gs
-type Counter class {
+class Counter {
     static var count int = 0
     static func create() Counter { … }
 }
@@ -169,7 +169,7 @@ Pro: simple. Con: overly restrictive — common pattern (factory methods, shared
 ### A4: `companion object { … }` (Kotlin-verbatim)
 
 ```gs
-type Counter class {
+class Counter {
     companion object {
         var count int = 0
     }

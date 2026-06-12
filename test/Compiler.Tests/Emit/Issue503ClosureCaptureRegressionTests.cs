@@ -31,18 +31,18 @@ public class Issue503ClosureCaptureRegressionTests
             package MyLib
             import System
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
-            type Probe class {
+            class Probe {
                 var Src Source
                 var Cnt Counter
                 init() {
@@ -81,18 +81,18 @@ public class Issue503ClosureCaptureRegressionTests
             package MyLib
             import System
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
-            type Probe class {
+            class Probe {
                 var Src Source
                 var Cnt Counter
                 init() {
@@ -130,18 +130,18 @@ public class Issue503ClosureCaptureRegressionTests
             package MyLib
             import System
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
-            type Probe class {
+            class Probe {
                 var Src Source
                 var Cnt Counter
                 init() {
@@ -174,12 +174,12 @@ public class Issue503ClosureCaptureRegressionTests
             package MyLib
             import System
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Probe class {
+            class Probe {
                 var Src Source
                 var Hits int32
                 init() {
@@ -212,18 +212,18 @@ public class Issue503ClosureCaptureRegressionTests
             package MyLib
             import System
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Add(n int32) { Value = Value + n }
             }
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Probe class {
+            class Probe {
                 var Src Source
                 var A Counter
                 var B Counter
@@ -268,13 +268,13 @@ public class Issue503ClosureCaptureRegressionTests
             package MyLib
             import System
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
-            type Probe class {
+            class Probe {
                 init() { }
                 func Subscribe() {
                     var counter = Counter()
@@ -297,13 +297,13 @@ public class Issue503ClosureCaptureRegressionTests
             package MyLib
             import System
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
-            type Probe class {
+            class Probe {
                 init() { }
                 func Subscribe() {
                     var counter = Counter()
@@ -329,12 +329,12 @@ public class Issue503ClosureCaptureRegressionTests
             package MyLib
             import System
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
@@ -364,18 +364,18 @@ public class Issue503ClosureCaptureRegressionTests
             package MyLib
             import System
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Probe class {
+            class Probe {
                 var Src Source
                 var Original Counter
                 var Replacement Counter
@@ -430,13 +430,13 @@ public class Issue503ClosureCaptureRegressionTests
             package MyLib
             import System
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
-            type Probe class {
+            class Probe {
                 var Cnt Counter
                 init() {
                     Cnt = Counter()
@@ -468,18 +468,18 @@ public class Issue503ClosureCaptureRegressionTests
             package MyLib
             import System
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Probe class {
+            class Probe {
                 var Src Source
                 var Cnt Counter
                 init() {
@@ -742,18 +742,18 @@ public class Issue503ClosureCaptureRegressionTests
             package MyLib
             import System
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Probe class {
+            class Probe {
                 init() {
                     var s = Source()
                     var c = Counter()

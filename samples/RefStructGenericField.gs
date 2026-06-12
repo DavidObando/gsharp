@@ -17,7 +17,7 @@ package GSharp.Samples.RefStructGenericField
 
 import System
 
-type Window ref struct {
+ref struct Window {
     var data ReadOnlySpan[int32]
 }
 

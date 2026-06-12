@@ -19,7 +19,7 @@ public class PatternTests
     public void TypePattern_BindsVariableOnlyInArmScope()
     {
         var diagnostics = Bind(@"
-type User class { var Name string }
+class User { var Name string }
 let u = User{Name: ""x""}
 let a = switch u { case v is User: v.Name default: ""n"" }
 let b = v.Name
@@ -39,7 +39,7 @@ let b = v.Name
     public void PropertyPattern_MissingField_Diagnoses()
     {
         var diagnostics = Bind(@"
-type User class { var Name string }
+class User { var Name string }
 let u = User{Name: ""x""}
 let x = switch u { case { Missing: 1 }: 1 default: 0 }
 ");
@@ -64,7 +64,7 @@ let x = switch u { case { Missing: 1 }: 1 default: 0 }
     public void DiscardPattern_AcceptsAnyDiscriminantType()
     {
         var diagnostics = Bind(@"
-type User class { var Name string }
+class User { var Name string }
 let u = User{Name: ""x""}
 let x = switch u { case _: 1 }
 ");

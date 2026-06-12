@@ -151,7 +151,7 @@ public class Issue649TupleClrRefTypeEmitTests
             import System
             import Probe.CSharp
 
-            type MyClass class {
+            class MyClass {
                 var Name string
                 init() {}
             }
@@ -200,7 +200,7 @@ public class Issue649TupleClrRefTypeEmitTests
             import System
             import Probe.CSharp
 
-            type Container class {
+            class Container {
                 var Data (Holder, int32)
                 init() {
                     Data = (Holder() { A = "field" }, 99)

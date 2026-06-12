@@ -230,7 +230,7 @@ Console.WriteLine(cOut)
         const string Source = @"package StructRefMethod
 import System
 
-type Counter struct {
+struct Counter {
     var Value int32
 }
 
@@ -262,7 +262,7 @@ Console.WriteLine(d)
         const string Source = @"package ClassOutMethod
 import System
 
-type Producer class {
+class Producer {
     init() {
     }
     func MakeFortyTwo(out result int32) bool {
@@ -295,7 +295,7 @@ Console.WriteLine(v)
         const string Source = @"package ClassInStatic
 import System
 
-type Helper class {
+class Helper {
     shared {
         func DoubleIt(in source int32) int32 {
             return source + source
@@ -327,7 +327,7 @@ Console.WriteLine(Helper.DoubleIt(in n))
         const string Source = @"package ClassCtorRef
 import System
 
-type Box class {
+class Box {
     var Value int32
 
     init(ref delta int32) {

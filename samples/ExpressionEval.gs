@@ -12,19 +12,19 @@ package GSharp.Samples.ExpressionEval
 
 import System
 
-type Expr sealed interface {
+sealed interface Expr {
 }
 
-type Lit class : Expr {
+class Lit : Expr {
     var Value int32
 }
 
-type Add class : Expr {
+class Add : Expr {
     var Left Expr
     var Right Expr
 }
 
-type Mul class : Expr {
+class Mul : Expr {
     var Left Expr
     var Right Expr
 }

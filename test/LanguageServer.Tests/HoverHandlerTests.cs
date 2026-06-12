@@ -18,9 +18,9 @@ public class HoverHandlerTests
     [InlineData("var count = 0\n", "count", "var count int32")]
     [InlineData("func add(a int32, b int32) int32 { return a + b }\n", "add", "func add(a int32, b int32) int32")]
     [InlineData("func greet(name string) { }\n", "name", "name string")]
-    [InlineData("type Point struct {\nvar X int32\nvar Y int32\n}\n", "Point", "type Point struct { var X int32; var Y int32 }")]
-    [InlineData("type Color enum { Red, Green }\n", "Color", "enum Color { Red, Green }")]
-    [InlineData("import System\nfunc main() {\nConsole.WriteLine(\"hi\")\n}\n", "Console", "type System.Console class")]
+    [InlineData("struct Point {\nvar X int32\nvar Y int32\n}\n", "Point", "struct Point { var X int32; var Y int32 }")]
+    [InlineData("enum Color { Red, Green }\n", "Color", "enum Color { Red, Green }")]
+    [InlineData("import System\nfunc main() {\nConsole.WriteLine(\"hi\")\n}\n", "Console", "class System.Console")]
     public void ComputeHover_ReturnsMarkdownSignature(string source, string token, string expected)
     {
         var content = LanguageServerTestHelpers.Content(source);
@@ -31,11 +31,11 @@ public class HoverHandlerTests
     }
 
     [Theory]
-    [InlineData("package P\ntype Person class {\n    prop Name string\n}\n", "Name")]
+    [InlineData("package P\nclass Person {\n    prop Name string\n}\n", "Name")]
     [InlineData("package P\nimport sys = System\n", "sys")]
     [InlineData("package Outer.Inner\n", "Outer")]
     [InlineData("package Outer.Inner\n", "Inner")]
-    [InlineData("package P\nimport System\ntype Foo class {\n  event Click (Object, EventArgs) -> void\n}\n", "Click")]
+    [InlineData("package P\nimport System\nclass Foo {\n  event Click (Object, EventArgs) -> void\n}\n", "Click")]
     public void ComputeHover_ResolvesPropertyImportPackageAndEventSymbols(string source, string token)
     {
         var content = LanguageServerTestHelpers.Content(source);
@@ -48,8 +48,8 @@ public class HoverHandlerTests
     [Theory]
     [InlineData("func greet(name string) { }\n", "name", "(parameter) name string")]
     [InlineData("func f() {\nvar x = 5\nx = x + 1\n}\n", "x", "(local variable) x int32")]
-    [InlineData("type Color enum { Red, Green }\n", "Red", "Color.Red = 0")]
-    [InlineData("type Color enum { Red, Green }\n", "Green", "Color.Green = 1")]
+    [InlineData("enum Color { Red, Green }\n", "Red", "Color.Red = 0")]
+    [InlineData("enum Color { Red, Green }\n", "Green", "Color.Green = 1")]
     [InlineData("package P\nimport sys = System\n", "sys", "import sys = System")]
     [InlineData("package Outer.Inner\n", "Inner", "package Outer.Inner")]
     public void ComputeHover_RendersEnrichedDescriptors(string source, string token, string expected)
@@ -64,7 +64,7 @@ public class HoverHandlerTests
     [Fact]
     public void ComputeHover_RendersPropertyAccessors()
     {
-        const string source = "package P\ntype Person class {\n    prop Name string\n}\n";
+        const string source = "package P\nclass Person {\n    prop Name string\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
         var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Name"));
 
@@ -77,7 +77,7 @@ public class HoverHandlerTests
     [Fact]
     public void ComputeHover_ResolvesPropertyOnUserDefinedClass()
     {
-        const string source = "package P\ntype Person class {\n    /// The name\n    prop Name string\n}\nfunc Main() {\n    var person = Person{}\n    var n = person.Name\n}\n";
+        const string source = "package P\nclass Person {\n    /// The name\n    prop Name string\n}\nfunc Main() {\n    var person = Person{}\n    var n = person.Name\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
         var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Name", 1));
 
@@ -90,7 +90,7 @@ public class HoverHandlerTests
     [Fact]
     public void ComputeHover_ResolvesFieldOnUserDefinedStruct()
     {
-        const string source = "package P\ntype Point struct {\n    /// X coordinate\n    var X int32\n    var Y int32\n}\nfunc Main() {\n    var p = Point{}\n    var x = p.X\n}\n";
+        const string source = "package P\nstruct Point {\n    /// X coordinate\n    var X int32\n    var Y int32\n}\nfunc Main() {\n    var p = Point{}\n    var x = p.X\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
         var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "X", 1));
 
@@ -103,7 +103,7 @@ public class HoverHandlerTests
     [Fact]
     public void ComputeHover_ResolvesMethodOnUserDefinedClass()
     {
-        const string source = "package P\ntype Person class {\n    prop Name string\n    /// Says hello\n    func Greet() string { return \"hi\" }\n}\nfunc Main() {\n    var person = Person{}\n    person.Greet()\n}\n";
+        const string source = "package P\nclass Person {\n    prop Name string\n    /// Says hello\n    func Greet() string { return \"hi\" }\n}\nfunc Main() {\n    var person = Person{}\n    person.Greet()\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
         var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Greet", 1));
 
@@ -116,7 +116,7 @@ public class HoverHandlerTests
     [Fact]
     public void ComputeHover_ResolvesChainedUserDefinedAndClrMembers()
     {
-        const string source = "package P\ntype Person class {\n    /// The name of the person\n    prop Name string\n}\nfunc Main() {\n    var person = Person{}\n    var y = person.Name.GetType()\n}\n";
+        const string source = "package P\nclass Person {\n    /// The name of the person\n    prop Name string\n}\nfunc Main() {\n    var person = Person{}\n    var y = person.Name.GetType()\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var nameHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Name", 1));
@@ -133,7 +133,7 @@ public class HoverHandlerTests
     [Fact]
     public void ComputeHover_ResolvesFieldAssignmentOnUserDefinedClass()
     {
-        const string source = "package P\ntype Person class {\n    /// The age of the person\n    prop Age int32\n}\nfunc Main() {\n    var person = Person{}\n    person.Age = 30\n}\n";
+        const string source = "package P\nclass Person {\n    /// The age of the person\n    prop Age int32\n}\nfunc Main() {\n    var person = Person{}\n    person.Age = 30\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
         var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Age", 1));
 
@@ -268,7 +268,7 @@ public class HoverHandlerTests
     [Fact]
     public void ComputeHover_ThisKeyword_InsideClassMethod_ResolvesToReceiver()
     {
-        const string source = "package P\ntype Person class {\n    prop Name string\n    func ToString() string {\n        return \"${this.Name}\"\n    }\n}\n";
+        const string source = "package P\nclass Person {\n    prop Name string\n    func ToString() string {\n        return \"${this.Name}\"\n    }\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         // Hover on 'this' should resolve to the implicit receiver parameter.
@@ -280,7 +280,7 @@ public class HoverHandlerTests
     [Fact]
     public void ComputeHover_MemberAccess_ViaThis_InsideClassMethod()
     {
-        const string source = "package P\ntype Person class {\n    prop Name string\n    func ToString() string {\n        return \"${this.Name}\"\n    }\n}\n";
+        const string source = "package P\nclass Person {\n    prop Name string\n    func ToString() string {\n        return \"${this.Name}\"\n    }\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         // Hover on 'Name' in 'this.Name' should resolve to the property.
@@ -293,7 +293,7 @@ public class HoverHandlerTests
     [Fact]
     public void ComputeHover_ImplicitThis_BarePropertyName_InsideClassMethod()
     {
-        const string source = "package P\ntype Person class {\n    prop Name string\n    prop Age int32\n    func Greet() string {\n        return Name\n    }\n}\n";
+        const string source = "package P\nclass Person {\n    prop Name string\n    prop Age int32\n    func Greet() string {\n        return Name\n    }\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         // Hover on bare 'Name' inside method body should resolve to the property via implicit this.

@@ -45,7 +45,7 @@ func Add(a int32, b int32) int32 {
         var source = @"package Shapes
 
 /// Represents a 2D point.
-type Point data struct {
+data struct Point {
     /// The X coordinate.
     var X float64
     /// The Y coordinate.

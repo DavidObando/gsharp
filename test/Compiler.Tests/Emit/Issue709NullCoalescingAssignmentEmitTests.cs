@@ -67,7 +67,7 @@ public class Issue709NullCoalescingAssignmentEmitTests
             package Test
             import System
 
-            type Box class {
+            class Box {
                 var Name string?
             }
 
@@ -92,7 +92,7 @@ public class Issue709NullCoalescingAssignmentEmitTests
             package Test
             import System
 
-            type Person class {
+            class Person {
                 prop Name string?
             }
 
@@ -142,7 +142,7 @@ public class Issue709NullCoalescingAssignmentEmitTests
             package Test
             import System
 
-            type Box class {
+            class Box {
                 var Name string?
             }
 

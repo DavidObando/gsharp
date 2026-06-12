@@ -5,8 +5,8 @@ package GSharp.Example.InlineStruct
 
 import System
 
-type UserId inline struct(value string)
-type OrderId inline struct(value string)
+inline struct UserId(value string)
+inline struct OrderId(value string)
 
 func printUser(id UserId) {
     let (raw) = id

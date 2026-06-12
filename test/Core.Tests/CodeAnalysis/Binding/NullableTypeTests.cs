@@ -52,7 +52,7 @@ x
     {
         // The parser must accept `[3]int?` as a type clause (questioned element type).
         var source = @"
-type X struct {
+struct X {
     var Items [3]int32?
 }
 ";

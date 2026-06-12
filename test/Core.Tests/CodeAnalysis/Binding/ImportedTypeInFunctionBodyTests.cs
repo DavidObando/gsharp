@@ -68,7 +68,7 @@ public class ImportedTypeInFunctionBodyTests
             package Demo
             import GSharp.Core.Tests.Fixtures
 
-            type Host class {
+            class Host {
                 func Run() string {
                     var g = ImportedGreeter()
                     return g.Greet("world")

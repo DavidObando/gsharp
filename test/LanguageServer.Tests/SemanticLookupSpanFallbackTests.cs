@@ -24,7 +24,7 @@ public class SemanticLookupSpanFallbackTests
     private const string Source =
         "package Temp\n" +
         "\n" +
-        "type Person class {\n" +
+        "class Person {\n" +
         "    public prop Name string\n" +
         "    public prop Age int32\n" +
         "\n" +

@@ -29,7 +29,7 @@ public class GenericTypeEmitTests
             package P
             import System
 
-            type Box[T any] data struct {
+            data struct Box[T any] {
                 var Value T
             }
 
@@ -48,7 +48,7 @@ public class GenericTypeEmitTests
             package P
             import System
 
-            type Box[T any] data struct {
+            data struct Box[T any] {
                 var Value T
             }
 
@@ -67,7 +67,7 @@ public class GenericTypeEmitTests
             package P
             import System
 
-            type Box[T any] class(Value T) {
+            class Box[T any](Value T) {
             }
 
             let b = Box[int32](7)
@@ -85,7 +85,7 @@ public class GenericTypeEmitTests
             package P
             import System
 
-            type Box[T any] class(Value T) {
+            class Box[T any](Value T) {
             }
 
             let b = Box[string]("hello")
@@ -103,7 +103,7 @@ public class GenericTypeEmitTests
             package P
             import System
 
-            type Pair[A any, B any] data struct {
+            data struct Pair[A any, B any] {
                 var First A
                 var Second B
             }
@@ -126,7 +126,7 @@ public class GenericTypeEmitTests
             package P
             import System
 
-            type Box[T any] data struct {
+            data struct Box[T any] {
                 var Value T
             }
 

@@ -14,16 +14,16 @@ Phase 6.7 asked whether GSharp should add a `record` keyword as an optional spel
 Accept `record` as pure parse-time syntactic sugar for `data struct`.
 
 ```gsharp
-type Point record { X int; Y int }
+data class Point { X int; Y int }
 ```
 
 is equivalent to:
 
 ```gsharp
-type Point data struct { X int; Y int }
+data struct Point { X int; Y int }
 ```
 
-The equivalence is total at parse time: the bound tree, symbols, emit, equality semantics, and synthesized members are identical to the `data struct` form. Generic records use the same type-parameter syntax as generic data structs, for example `type Pair[A any, B any] record { First A; Second B }`.
+The equivalence is total at parse time: the bound tree, symbols, emit, equality semantics, and synthesized members are identical to the `data struct` form. Generic records use the same type-parameter syntax as generic data structs, for example `data class Pair[A any, B any] { First A; Second B }`.
 
 `record` is a contextual keyword. It is special only in a type-declaration header position where `struct`, `class`, `enum`, or `data struct` would be expected, and only when followed by `{`. Elsewhere it remains an ordinary identifier, so `let record = 42`, a field named `record`, or a parameter type name `record` continue through the normal identifier paths.
 
@@ -56,4 +56,4 @@ Negative:
 
 Rejecting the alias would avoid keyword proliferation and keep `data struct` as the only canonical spelling, but would forgo a low-cost familiarity bridge for C# developers.
 
-A positional constructor form such as `type Point record(X int, Y int)` was considered, but that changes data-struct ergonomics rather than providing an alias and is deferred to Phase 7.3.
+A positional constructor form such as `data class Point(X int, Y int)` was considered, but that changes data-struct ergonomics rather than providing an alias and is deferred to Phase 7.3.

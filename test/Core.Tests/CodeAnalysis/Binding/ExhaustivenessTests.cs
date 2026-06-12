@@ -21,7 +21,7 @@ public class ExhaustivenessTests
     public void SwitchExpression_Enum_AllMembersCovered_HasNoDiagnostic()
     {
         var diagnostics = Bind(@"
-type Color enum { Red, Green, Blue }
+enum Color { Red, Green, Blue }
 let color = Color.Red
 let label = switch color { case Color.Red: ""red"" case Color.Green: ""green"" case Color.Blue: ""blue"" }
 ");
@@ -33,7 +33,7 @@ let label = switch color { case Color.Red: ""red"" case Color.Green: ""green"" c
     public void SwitchExpression_Enum_MissingMember_DiagnosesMissingName()
     {
         var diagnostics = Bind(@"
-type Color enum { Red, Green, Blue }
+enum Color { Red, Green, Blue }
 let color = Color.Red
 let label = switch color { case Color.Red: ""red"" case Color.Green: ""green"" }
 ");
@@ -45,7 +45,7 @@ let label = switch color { case Color.Red: ""red"" case Color.Green: ""green"" }
     public void SwitchExpression_Enum_DefaultArm_HasNoDiagnostic()
     {
         var diagnostics = Bind(@"
-type Color enum { Red, Green, Blue }
+enum Color { Red, Green, Blue }
 let color = Color.Red
 let label = switch color { case Color.Red: ""red"" default: ""other"" }
 ");
@@ -57,7 +57,7 @@ let label = switch color { case Color.Red: ""red"" default: ""other"" }
     public void SwitchExpression_Enum_DiscardArm_HasNoDiagnostic()
     {
         var diagnostics = Bind(@"
-type Color enum { Red, Green, Blue }
+enum Color { Red, Green, Blue }
 let color = Color.Red
 let label = switch color { case Color.Red: ""red"" case _: ""other"" }
 ");
@@ -69,9 +69,9 @@ let label = switch color { case Color.Red: ""red"" case _: ""other"" }
     public void SwitchExpression_SealedInterface_AllImplementorsCovered_HasNoDiagnostic()
     {
         var diagnostics = Bind(@"
-type Expr sealed interface { }
-type Add class : Expr { }
-type Mul class : Expr { }
+sealed interface Expr { }
+class Add : Expr { }
+class Mul : Expr { }
 func Label(expr Expr) string {
  return switch expr { case x is Add: ""add"" case x is Mul: ""mul"" }
 }
@@ -84,9 +84,9 @@ func Label(expr Expr) string {
     public void SwitchExpression_SealedInterface_MissingImplementor_DiagnosesMissingName()
     {
         var diagnostics = Bind(@"
-type Expr sealed interface { }
-type Add class : Expr { }
-type Mul class : Expr { }
+sealed interface Expr { }
+class Add : Expr { }
+class Mul : Expr { }
 func Label(expr Expr) string {
  return switch expr { case x is Add: ""add"" }
 }
@@ -99,9 +99,9 @@ func Label(expr Expr) string {
     public void SwitchExpression_SealedInterface_DefaultArm_HasNoDiagnostic()
     {
         var diagnostics = Bind(@"
-type Expr sealed interface { }
-type Add class : Expr { }
-type Mul class : Expr { }
+sealed interface Expr { }
+class Add : Expr { }
+class Mul : Expr { }
 func Label(expr Expr) string {
  return switch expr { case x is Add: ""add"" default: ""other"" }
 }
@@ -126,7 +126,7 @@ let label = switch value { case 1: ""one"" }
     public void SwitchStatement_Enum_MissingMember_DiagnosesStatementForm()
     {
         var diagnostics = Bind(@"
-type Color enum { Red, Green, Blue }
+enum Color { Red, Green, Blue }
 var label = """"
 switch Color.Red { case Color.Red { label = ""red"" } case Color.Green { label = ""green"" } }
 ");

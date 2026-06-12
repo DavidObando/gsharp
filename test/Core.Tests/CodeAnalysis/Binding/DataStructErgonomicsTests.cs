@@ -70,7 +70,7 @@ q == r
     public void With_NonDataStruct_Diagnosed()
     {
         var result = Evaluate(@"
-type Point struct {
+struct Point {
     var x int32
     var y int32
 }
@@ -84,7 +84,7 @@ p with { x = 10 }
     public void Copy_NonDataStruct_Diagnosed()
     {
         var result = Evaluate(@"
-type Point struct {
+struct Point {
     var x int32
     var y int32
 }
@@ -199,7 +199,7 @@ hits
     }
 
     private const string PointPrelude = @"
-type Point data struct {
+data struct Point {
     var x int32
     var y int32
 }

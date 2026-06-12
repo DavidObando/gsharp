@@ -28,7 +28,7 @@ public class ObjectInitializerBinderTests
     public void Binds_AgainstUserDefinedClassFields()
     {
         var source = @"
-type Box class {
+class Box {
     var Width int32
     var Height int32
     init() { }
@@ -46,7 +46,7 @@ b.Width + b.Height
     public void Binds_AgainstUserDefinedClassProperty()
     {
         var source = @"
-type Box class {
+class Box {
     prop Width int32
     prop Height int32
     init() { }
@@ -64,7 +64,7 @@ b.Width + b.Height
     public void Binds_EmptyInitializerListYieldsConstructedInstance()
     {
         var source = @"
-type Box class {
+class Box {
     var Width int32
     init() { }
 }
@@ -81,7 +81,7 @@ b.Width
     public void Diagnoses_UnknownMemberName()
     {
         var source = @"
-type Box class {
+class Box {
     var Width int32
     init() { }
 }
@@ -97,7 +97,7 @@ var b = Box() { Unknown = 1 }
     public void Diagnoses_DuplicatePropertyName()
     {
         var source = @"
-type Box class {
+class Box {
     var Width int32
     init() { }
 }
@@ -112,7 +112,7 @@ var b = Box() { Width = 1, Width = 2 }
     public void Diagnoses_NonWritableProperty()
     {
         var source = @"
-type Box class {
+class Box {
     prop Width int32 { get }
     init() { }
 }

@@ -36,7 +36,7 @@ public class Issue606FieldRwPropertyTests
             import System
             import ProbeRef606
 
-            type Impl class : IReadWrite {
+            class Impl : IReadWrite {
                 var Value string
             }
 
@@ -69,7 +69,7 @@ public class Issue606FieldRwPropertyTests
             import System
             import ProbeRef606
 
-            type Counter class : ICounter {
+            class Counter : ICounter {
                 var Count int32
             }
 
@@ -101,7 +101,7 @@ public class Issue606FieldRwPropertyTests
             import System
             import ProbeRef606
 
-            type Named class : IReadWrite {
+            class Named : IReadWrite {
                 var Name string
             }
 
@@ -134,7 +134,7 @@ public class Issue606FieldRwPropertyTests
             import System
             import ProbeRef606
 
-            type GetImpl class : IGetOnly {
+            class GetImpl : IGetOnly {
                 var Name string
             }
 
@@ -166,7 +166,7 @@ public class Issue606FieldRwPropertyTests
             import System
             import ProbeRef606
 
-            type BadImpl class : IReadWrite {
+            class BadImpl : IReadWrite {
                 private var Value string
             }
             """;
@@ -194,7 +194,7 @@ public class Issue606FieldRwPropertyTests
             import System
             import ProbeRef606
 
-            type BadImpl class : IReadWrite {
+            class BadImpl : IReadWrite {
                 var Value int32
             }
             """;
@@ -221,7 +221,7 @@ public class Issue606FieldRwPropertyTests
             import System
             import ProbeRef606
 
-            type Empty class : IReadWrite {
+            class Empty : IReadWrite {
             }
             """;
 

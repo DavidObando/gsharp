@@ -230,13 +230,13 @@ public func F() {
 package P
 
 @Serializable
-type Point struct {
+struct Point {
 }
 ";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
-        // `type Point struct { }` lowers in the parser to a
+        // `struct Point { }` lowers in the parser to a
         // StructDeclarationSyntax (not a TypeAliasDeclarationSyntax), but
         // either way the annotation must round-trip on the MemberSyntax base.
         var member = tree.Root.Members.OfType<MemberSyntax>().Single(m => m is StructDeclarationSyntax || m is TypeAliasDeclarationSyntax);
@@ -343,7 +343,7 @@ func Main() {
         const string source = @"
 package P
 
-type Color enum {
+enum Color {
     @Obsolete(""retired"")
     Red,
     Green,
@@ -370,7 +370,7 @@ type Color enum {
         const string source = @"
 package P
 
-type Color enum {
+enum Color {
     @Obsolete
     @Serializable
     Red,
@@ -397,7 +397,7 @@ type Color enum {
         const string source = @"
 package P
 
-type Point data struct {
+data struct Point {
     @Obsolete(""retired"")
     var X int32
     var Y int32
@@ -423,7 +423,7 @@ type Point data struct {
         const string source = @"
 package P
 
-type Point struct {
+struct Point {
     @Obsolete
     @Serializable
     var X int32
@@ -450,7 +450,7 @@ type Point struct {
         const string source = @"
 package P
 
-type Box class {
+class Box {
     @Obsolete
     public var Value int32
     public var Other int32

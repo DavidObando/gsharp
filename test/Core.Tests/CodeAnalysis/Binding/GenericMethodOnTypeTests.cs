@@ -27,7 +27,7 @@ public class GenericMethodOnTypeTests
     {
         // The repro from the issue: the method's `T` used to fail with GS0113.
         var source = @"
-type Box class {
+class Box {
     func Wrap[T](item T) T { return item }
 }
 ";
@@ -39,7 +39,7 @@ type Box class {
     public void GenericInstanceMethod_InferredFromIntArgument_ReturnsInt()
     {
         var source = @"
-type Box class {
+class Box {
     func Wrap[T](item T) T { return item }
 }
 var b = Box{}
@@ -54,7 +54,7 @@ b.Wrap(5)
     public void GenericInstanceMethod_InferredFromStringArgument_ReturnsString()
     {
         var source = @"
-type Box class {
+class Box {
     func Wrap[T](item T) T { return item }
 }
 var b = Box{}
@@ -69,7 +69,7 @@ b.Wrap(""hi"")
     public void GenericInstanceMethod_ExplicitTypeArgument_ReturnsInt()
     {
         var source = @"
-type Box class {
+class Box {
     func Wrap[T](item T) T { return item }
 }
 var b = Box{}
@@ -84,7 +84,7 @@ b.Wrap[int32](7)
     public void GenericInstanceMethod_TypeParameterUsableInLocal()
     {
         var source = @"
-type Box class {
+class Box {
     func Wrap[T](item T) T {
         var local T = item
         return local
@@ -102,7 +102,7 @@ b.Wrap(11)
     public void GenericInstanceMethod_TwoTypeParameters_FirstWins()
     {
         var source = @"
-type Box class {
+class Box {
     func Pair[T, U](a T, b U) T { return a }
 }
 var b = Box{}
@@ -117,7 +117,7 @@ b.Pair(10, ""ignored"")
     public void GenericInstanceMethod_WrongExplicitArity_Diagnoses()
     {
         var source = @"
-type Box class {
+class Box {
     func Wrap[T](item T) T { return item }
 }
 var b = Box{}
@@ -131,7 +131,7 @@ b.Wrap[int32, string](5)
     public void GenericInstanceMethod_ComparableConstraint_NonComparableArg_Diagnoses()
     {
         var source = @"
-type Box class {
+class Box {
     func Eq[T comparable](a T, b T) bool { return a == b }
 }
 var b = Box{}
@@ -145,7 +145,7 @@ b.Eq[[]int32]([]int32{1}, []int32{1})
     public void GenericStaticMethod_InferredFromArgument_ReturnsInt()
     {
         var source = @"
-type Util class {
+class Util {
     shared {
         func Identity[T](x T) T { return x }
     }
@@ -161,7 +161,7 @@ Util.Identity(3)
     public void GenericMethod_OnGenericClass_OwnTypeParameter_Binds()
     {
         var source = @"
-type Container[T] class {
+class Container[T] {
     var Value T
     func GetOr[U](other U) U { return other }
 }
@@ -177,7 +177,7 @@ c.GetOr(""x"")
     public void GenericMethod_OnGenericClass_ClassTypeParameter_UsableInBody()
     {
         var source = @"
-type Container[T] class {
+class Container[T] {
     var Value T
     func Echo(x T) T { return x }
 }

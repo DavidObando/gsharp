@@ -46,7 +46,7 @@ public class Issue659DimOutParamEmitTests
             import System
             import Probe.CSharp
 
-            type MyReader class : IKeyReader {
+            class MyReader : IKeyReader {
                 func TryReadKey(millisecondsTimeout int32, out key ConsoleKeyInfo) bool {
                     key = ConsoleKeyInfo('A', ConsoleKey.A, false, false, false)
                     return true
@@ -85,7 +85,7 @@ public class Issue659DimOutParamEmitTests
             import System
             import Probe.CSharp
 
-            type Empty class : IOptional {
+            class Empty : IOptional {
             }
 
             var o IOptional = Empty{}
@@ -118,7 +118,7 @@ public class Issue659DimOutParamEmitTests
             import System
             import Probe.CSharp
 
-            type FullReader class : IKeyReader2 {
+            class FullReader : IKeyReader2 {
                 func TryReadKey(millisecondsTimeout int32, out key ConsoleKeyInfo) bool {
                     key = ConsoleKeyInfo('B', ConsoleKey.B, false, false, false)
                     return true
@@ -160,7 +160,7 @@ public class Issue659DimOutParamEmitTests
             import System
             import Probe.CSharp
 
-            type MySwapper class : ISwapper {
+            class MySwapper : ISwapper {
                 func Swap(ref a int32, ref b int32) {
                     var tmp = a
                     a = b
@@ -201,7 +201,7 @@ public class Issue659DimOutParamEmitTests
             import System
             import Probe.CSharp
 
-            type Incomplete class : IRequired {
+            class Incomplete : IRequired {
                 func DoWork() {
                 }
             }
@@ -231,7 +231,7 @@ public class Issue659DimOutParamEmitTests
             import System
             import Probe.CSharp
 
-            type MyParser class : IParser {
+            class MyParser : IParser {
                 func TryParse(input string, out result int32) bool {
                     result = 42
                     return true

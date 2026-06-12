@@ -59,7 +59,7 @@ public class NamedArgumentEmitTests
             package P
             import System
 
-            type Point class(X int32, Y int32) {
+            class Point(X int32, Y int32) {
             }
 
             public var result = 0

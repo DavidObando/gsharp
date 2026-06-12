@@ -41,7 +41,7 @@ The `type_clause` must resolve to a function type (`func(…) …`) which maps t
 #### Field-like event (most common)
 
 ```gs
-type MyButton struct {
+struct MyButton {
     public event Click func(sender Object, e EventArgs)
 }
 ```
@@ -57,7 +57,7 @@ The add/remove methods use the standard `Delegate.Combine`/`Delegate.Remove` pat
 #### Event with explicit accessors
 
 ```gs
-type ObservableList struct {
+struct ObservableList {
     private var handlers []func(sender Object, e EventArgs)
 
     public event CollectionChanged func(sender Object, e EventArgs) {
@@ -72,7 +72,7 @@ When an explicit body is present, the compiler does **not** synthesize a backing
 #### Interface event
 
 ```gs
-type INotifyPropertyChanged interface {
+interface INotifyPropertyChanged {
     event PropertyChanged func(sender Object, e PropertyChangedEventArgs)
 }
 ```
@@ -112,11 +112,11 @@ public event Click func(sender Object, e EventArgs)
 Events follow the same virtuality model as methods (ADR-0017):
 
 ```gs
-type Base class {
+class Base {
     public open event Changed func(sender Object, e EventArgs)
 }
 
-type Derived class {
+class Derived {
     public override event Changed func(sender Object, e EventArgs)
 }
 ```

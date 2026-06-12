@@ -219,7 +219,7 @@ package GSharp.Example.DataStruct
 
 import System
 
-type Point data struct {
+data struct Point {
     X int32
     Y int32
 }
@@ -239,7 +239,7 @@ Interfaces contain method, property, and event signatures. Although design recor
 
 ### Enums
 
-Enums are declared with `type Name enum { ... }`. They may not be generic and must contain at least one member. Equality is supported, and switch exhaustiveness diagnostics understand enum members.
+Enums are declared with `enum Name { ... }`. They may not be generic and must contain at least one member. Equality is supported, and switch exhaustiveness diagnostics understand enum members.
 
 ### Generics
 
@@ -273,7 +273,7 @@ TypeArgList = "[" TypeClause { "," TypeClause } "]" .
 
 Byref/pointer syntax exists as `*T`, unary `&`, and unary `*`. It is primarily an emit/interop feature today; the evaluator rejects the generic address-of and dereference path.
 
-CLR `ref struct` types such as `Span[T]` and `ReadOnlySpan[T]` are consumable as stack-only values (ADR-0056): they are indexable (`s[i]`), ref-returning members auto-dereference in rvalue position, a `[]T` slice converts implicitly to a span, and a user `type X ref struct { … }` may embed a closed generic value-type field. Stack-escape violations are reported as `GS0219`; writing through a `ReadOnlySpan[T]` element is `GS0226`. The full ref-safe-to-escape analysis is deferred (issue #376).
+CLR `ref struct` types such as `Span[T]` and `ReadOnlySpan[T]` are consumable as stack-only values (ADR-0056): they are indexable (`s[i]`), ref-returning members auto-dereference in rvalue position, a `[]T` slice converts implicitly to a span, and a user `ref struct X { … }` may embed a closed generic value-type field. Stack-escape violations are reported as `GS0219`; writing through a `ReadOnlySpan[T]` element is `GS0226`. The full ref-safe-to-escape analysis is deferred (issue #376).
 
 ## Declarations and scope
 

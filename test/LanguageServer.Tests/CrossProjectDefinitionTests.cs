@@ -31,7 +31,7 @@ public class CrossProjectDefinitionTests
         sibling.AssemblyName = siblingProjectName;
         sibling.UpdateFile(
             $"/test/{siblingProjectName}/StringBuilder.gs",
-            "package System.Text\n\ntype StringBuilder class { }\n");
+            "package System.Text\n\nclass StringBuilder { }\n");
 
         var resolved = CrossAssemblyDefinitionResolver.TryResolveType(workspace, target, out var location);
 
@@ -59,7 +59,7 @@ public class CrossProjectDefinitionTests
         sibling.AssemblyName = siblingProjectName;
         sibling.UpdateFile(
             $"/test/{siblingProjectName}/StringBuilder.gs",
-            "package System.Text\n\ntype StringBuilder class {\n    func Clear() { }\n}\n");
+            "package System.Text\n\nclass StringBuilder {\n    func Clear() { }\n}\n");
 
         var resolved = CrossAssemblyDefinitionResolver.TryResolveMethod(workspace, target, out var location);
 
@@ -68,7 +68,7 @@ public class CrossProjectDefinitionTests
         Assert.Contains("StringBuilder.gs", location.Uri.GetFileSystemPath());
 
         // The Identifier of the Clear() method lives on line 3 (0-based) of the source above
-        // (line 0 = "package System.Text", 1 = "", 2 = "type StringBuilder class {", 3 = "    func Clear() { }").
+        // (line 0 = "package System.Text", 1 = "", 2 = "class StringBuilder {", 3 = "    func Clear() { }").
         Assert.Equal(3, location.Range.Start.Line);
     }
 
@@ -88,7 +88,7 @@ public class CrossProjectDefinitionTests
         var sibling = workspace.AddProject($"/test/{siblingProjectName}/{siblingProjectName}.gsproj");
         sibling.AssemblyName = siblingProjectName;
         // Note: no `package` statement → G# struct's PackageName is empty, won't match "System".
-        sibling.UpdateFile($"/test/{siblingProjectName}/Object.gs", "type Object class { }\n");
+        sibling.UpdateFile($"/test/{siblingProjectName}/Object.gs", "class Object { }\n");
 
         var resolved = CrossAssemblyDefinitionResolver.TryResolveType(workspace, target, out var location);
 
@@ -254,7 +254,7 @@ public class CrossProjectDefinitionTests
             var libSourcePath = System.IO.Path.Combine(libDir, "Greeter.gs");
             const string LibSource =
                 "package XProjTestLib\n" +
-                "type Greeter class(Name string) {\n" +
+                "class Greeter(Name string) {\n" +
                 "    func Greet() string {\n" +
                 "        return \"hi\"\n" +
                 "    }\n" +
@@ -360,7 +360,7 @@ public class CrossProjectDefinitionTests
             var libSourcePath = System.IO.Path.Combine(libDir, "Greeter.gs");
             const string LibSource =
                 "package XProjPdbLib\n" +
-                "type Greeter class(Name string) {\n" +
+                "class Greeter(Name string) {\n" +
                 "    func Greet() string {\n" +
                 "        return \"hi\"\n" +
                 "    }\n" +

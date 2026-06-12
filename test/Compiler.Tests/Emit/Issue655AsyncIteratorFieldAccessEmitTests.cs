@@ -32,12 +32,12 @@ public class Issue655AsyncIteratorFieldAccessEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 func Enter() { Value++ }
             }
 
-            type Probe class {
+            class Probe {
                 var Counter Counter = Counter()
 
                 async func GetAsync() IAsyncEnumerable[int32] {
@@ -78,7 +78,7 @@ public class Issue655AsyncIteratorFieldAccessEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Sensor class {
+            class Sensor {
                 var Reading int32
 
                 async func Measure() IAsyncEnumerable[int32] {
@@ -119,7 +119,7 @@ public class Issue655AsyncIteratorFieldAccessEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Tracker class {
+            class Tracker {
                 var Writes int32
 
                 async func Track() IAsyncEnumerable[int32] {
@@ -164,12 +164,12 @@ public class Issue655AsyncIteratorFieldAccessEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Accumulator class {
+            class Accumulator {
                 var Total int32
                 func Add(n int32) { Total = Total + n }
             }
 
-            type Worker class {
+            class Worker {
                 var Acc Accumulator = Accumulator()
 
                 async func Process() IAsyncEnumerable[int32] {
@@ -210,7 +210,7 @@ public class Issue655AsyncIteratorFieldAccessEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Sequencer class {
+            class Sequencer {
                 var Step int32
 
                 async func Generate() IAsyncEnumerable[int32] {
@@ -250,7 +250,7 @@ public class Issue655AsyncIteratorFieldAccessEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type State class {
+            class State {
                 var A int32
                 var B int32
 
@@ -293,7 +293,7 @@ public class Issue655AsyncIteratorFieldAccessEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Config class {
+            class Config {
                 var Scale int32
 
                 init(s int32) {
@@ -335,12 +335,12 @@ public class Issue655AsyncIteratorFieldAccessEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 func Enter() { Value++ }
             }
 
-            type Probe class {
+            class Probe {
                 var Counter Counter = Counter()
 
                 async func GetAsync() async sequence[int32] {

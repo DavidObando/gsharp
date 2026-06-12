@@ -33,7 +33,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Producer class {
+            class Producer {
                 init() {}
 
                 async func ProduceAsync() async sequence[int32] {
@@ -71,7 +71,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Counter class(Start int32) {
+            class Counter(Start int32) {
                 async func CountUp() async sequence[int32] {
                     yield Start
                     await Task.Delay(1)
@@ -107,7 +107,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type CapturingExecutor class {
+            class CapturingExecutor {
                 var Calls int32
                 init() {}
 
@@ -149,7 +149,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Doubler class(Factor int32) {
+            class Doubler(Factor int32) {
                 func Apply(n int32) int32 {
                     return Factor * n
                 }
@@ -190,7 +190,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Offset class(Base int32) {
+            class Offset(Base int32) {
                 async func Generate(n int32) async sequence[int32] {
                     yield Base + n
                     await Task.Delay(1)
@@ -227,7 +227,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Multi class {
+            class Multi {
                 init() {}
 
                 async func Items() async sequence[int32] {
@@ -267,7 +267,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Early class(Limit int32) {
+            class Early(Limit int32) {
                 async func Items() async sequence[int32] {
                     yield 1
                     await Task.Delay(1)
@@ -309,7 +309,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type StringGen class(Prefix string) {
+            class StringGen(Prefix string) {
                 async func Greetings() async sequence[string] {
                     yield Prefix + " hello"
                     await Task.Delay(1)
@@ -345,7 +345,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type Yielder class {
+            class Yielder {
                 init() {}
 
                 async func Items() async sequence[int32] {
@@ -384,7 +384,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
             package Probe
             import System.Collections.Generic
 
-            type Repeater class(Value int32) {
+            class Repeater(Value int32) {
                 func Repeat(n int32) sequence[int32] {
                     var i = 0
                     for i < n {
@@ -417,7 +417,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
             package Probe
             import System.Threading.Tasks
 
-            type Adder class(Base int32) {
+            class Adder(Base int32) {
                 async func Add(n int32) int32 {
                     await Task.Delay(1)
                     return Base + n
@@ -478,7 +478,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
             package Probe
             import System.Collections.Generic
 
-            type Simple class {
+            class Simple {
                 init() {}
 
                 func Items() sequence[int32] {

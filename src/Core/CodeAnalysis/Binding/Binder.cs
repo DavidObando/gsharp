@@ -362,7 +362,7 @@ public sealed class Binder
             // properties of the enclosing user type as bare names inside both
             // shared method bodies AND instance method bodies, so that
             //
-            //     type Counter class {
+            //     class Counter {
             //         shared { prop CallCount int32 }
             //         func Bump() { CallCount += 1 }    // bare access OK
             //     }

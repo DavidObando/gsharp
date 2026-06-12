@@ -40,7 +40,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type MaybeIntImpl class : IMaybeInt {
+            class MaybeIntImpl : IMaybeInt {
                 func Try(give bool) int32? {
                     if give {
                         return 42
@@ -78,7 +78,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type MaybeBoolImpl class : IMaybeBool {
+            class MaybeBoolImpl : IMaybeBool {
                 func Check() bool? {
                     return true
                 }
@@ -110,7 +110,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type MaybeDoubleImpl class : IMaybeDouble {
+            class MaybeDoubleImpl : IMaybeDouble {
                 func Compute() float64? {
                     return 3.14
                 }
@@ -142,13 +142,13 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type MaybeLongImplNil class : IMaybeLong {
+            class MaybeLongImplNil : IMaybeLong {
                 func Big() int64? {
                     return nil
                 }
             }
 
-            type MaybeLongImplValue class : IMaybeLong {
+            class MaybeLongImplValue : IMaybeLong {
                 func Big() int64? {
                     return 42
                 }
@@ -182,7 +182,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type MaybeCharImpl class : IMaybeChar {
+            class MaybeCharImpl : IMaybeChar {
                 func Letter() char? {
                     return 'A'
                 }
@@ -214,7 +214,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type MaybeDateTimeImpl class : IMaybeDateTime {
+            class MaybeDateTimeImpl : IMaybeDateTime {
                 func When() DateTime? {
                     return nil
                 }
@@ -246,7 +246,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type HasNullableIntProp class : IHasNullableIntProp {
+            class HasNullableIntProp : IHasNullableIntProp {
                 prop Value int32? { get { return 7 } }
             }
 
@@ -276,7 +276,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type Adder class : IAdder {
+            class Adder : IAdder {
                 func Sum(a int32, b int32) int32? {
                     return a + b
                 }
@@ -308,7 +308,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type Echoer class : IEcho {
+            class Echoer : IEcho {
                 func Echo(input int32?) int32? {
                     return input
                 }
@@ -343,7 +343,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type Mixed class : IMixed {
+            class Mixed : IMixed {
                 func NullableInt() int32? { return 10 }
                 func PlainString() string { return "hi" }
                 func NullableBool() bool? { return nil }
@@ -377,7 +377,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type MaybeStringImpl class : IMaybeString {
+            class MaybeStringImpl : IMaybeString {
                 func Try() string? {
                     return nil
                 }
@@ -413,7 +413,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type Impl class : IDerived {
+            class Impl : IDerived {
                 func GetId() int32? { return 123 }
                 prop Name string { get { return "test" } }
             }
@@ -445,7 +445,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type KeyReader class : IKeyReader {
+            class KeyReader : IKeyReader {
                 func ReadKey() ConsoleKeyInfo? {
                     return nil
                 }
@@ -477,7 +477,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type LongAdder class : ILongAdder {
+            class LongAdder : ILongAdder {
                 func Add(a int64, b int64) int64? {
                     return a + b
                 }
@@ -509,7 +509,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type MaybeULongImpl class : IMaybeULong {
+            class MaybeULongImpl : IMaybeULong {
                 func Value() uint64? {
                     return uint64(1024)
                 }
@@ -542,7 +542,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type LongEchoer class : ILongEcho {
+            class LongEchoer : ILongEcho {
                 func Echo(input int64?) int64? {
                     return input
                 }
@@ -576,7 +576,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type HasNullableLongProp class : IHasNullableLongProp {
+            class HasNullableLongProp : IHasNullableLongProp {
                 prop Value int64? { get { return 42 } }
             }
 
@@ -607,7 +607,7 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type DoubleRoundTrip class : IDoubleRoundTrip {
+            class DoubleRoundTrip : IDoubleRoundTrip {
                 func Echo(input float64?) float64? {
                     return input
                 }

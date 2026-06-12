@@ -24,7 +24,7 @@ public class EnumDeclarationTests
     public void EnumMemberAccess_HasEnumType()
     {
         var scope = BindGlobalScope(@"
-type Color enum { Red, Green, Blue }
+enum Color { Red, Green, Blue }
 let c = Color.Red
 ");
 
@@ -38,7 +38,7 @@ let c = Color.Red
     public void DuplicateEnumMember_Diagnoses()
     {
         var diagnostics = Evaluate(@"
-type Color enum { Red, Red }
+enum Color { Red, Red }
 0
 ").Diagnostics;
 
@@ -49,7 +49,7 @@ type Color enum { Red, Red }
     public void UndefinedEnumMember_Diagnoses()
     {
         var diagnostics = Evaluate(@"
-type Color enum { Red }
+enum Color { Red }
 Color.Blue
 ").Diagnostics;
 
@@ -60,7 +60,7 @@ Color.Blue
     public void EmptyEnum_Diagnoses()
     {
         var diagnostics = Evaluate(@"
-type Color enum { }
+enum Color { }
 0
 ").Diagnostics;
 
@@ -71,7 +71,7 @@ type Color enum { }
     public void SwitchStatement_EnumDiscriminant_Binds()
     {
         var diagnostics = Bind(@"
-type Color enum { Red, Green, Blue }
+enum Color { Red, Green, Blue }
 func F() {
  var color = Color.Green
  switch color {
@@ -92,7 +92,7 @@ func F() {
     public void SwitchStatement_EnumDiscriminant_Evaluates(string color, int expected)
     {
         var result = Evaluate($@"
-type Color enum {{ Red, Green, Blue }}
+enum Color {{ Red, Green, Blue }}
 var value = 0
 switch {color} {{
 case Color.Red {{ value = 1 }}
@@ -110,7 +110,7 @@ value
     public void SwitchExpression_EnumDiscriminant_BindsAndEvaluatesDefault()
     {
         var result = Evaluate(@"
-type Color enum { Red, Green, Blue }
+enum Color { Red, Green, Blue }
 let color = Color.Blue
 let label = switch color { case Color.Red: ""red"" case Color.Green: ""green"" default: ""other"" }
 label
@@ -124,7 +124,7 @@ label
     public void SwitchStatement_EnumCaseValueTypeMismatch_Diagnoses()
     {
         var diagnostics = Bind(@"
-type Color enum { Red, Green }
+enum Color { Red, Green }
 func F() {
  var color = Color.Red
  switch color {
@@ -140,7 +140,7 @@ func F() {
     public void SwitchExpression_EnumCaseValueTypeMismatch_Diagnoses()
     {
         var diagnostics = Evaluate(@"
-type Color enum { Red, Green }
+enum Color { Red, Green }
 let color = Color.Red
 let label = switch color { case 0: ""red"" default: ""other"" }
 label
@@ -153,7 +153,7 @@ label
     public void EnumEquality_Evaluates()
     {
         var result = Evaluate(@"
-type Color enum { Red, Green }
+enum Color { Red, Green }
 let same = Color.Red == Color.Red
 let different = Color.Red != Color.Green
 same && different

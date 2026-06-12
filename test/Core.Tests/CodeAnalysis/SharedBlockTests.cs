@@ -34,7 +34,7 @@ public class SharedBlockTests
     public void SharedBlock_Parses_InClass()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared {
         var count int32
     }
@@ -48,7 +48,7 @@ type Counter class {
     public void SharedBlock_Parses_InStruct()
     {
         var source = @"
-type Counter struct {
+struct Counter {
     shared {
         var count int32
     }
@@ -62,7 +62,7 @@ type Counter struct {
     public void SharedBlock_Parses_WithMethods()
     {
         var source = @"
-type Factory struct {
+struct Factory {
     shared {
         func create() int32 {
             return 42
@@ -78,7 +78,7 @@ type Factory struct {
     public void SharedBlock_DuplicateSharedBlock_ReportsDiagnostic()
     {
         var source = @"
-type Counter struct {
+struct Counter {
     shared {
         var x int32
     }
@@ -100,7 +100,7 @@ type Counter struct {
     public void SharedBlock_StaticFieldAccess_Binds()
     {
         var source = @"
-type Counter struct {
+struct Counter {
     shared {
         var count int32
     }
@@ -116,7 +116,7 @@ var x = Counter.count
     public void SharedBlock_StaticMethodCall_Binds()
     {
         var source = @"
-type Factory struct {
+struct Factory {
     shared {
         func create() int32 {
             return 42
@@ -134,7 +134,7 @@ var x = Factory.create()
     public void SharedBlock_StaticField_AssignmentBinds()
     {
         var source = @"
-type Counter struct {
+struct Counter {
     shared {
         var count int32
     }
@@ -154,7 +154,7 @@ Counter.count = 5
     public void SharedBlock_StaticField_ReadWrite()
     {
         var source = @"
-type Counter struct {
+struct Counter {
     shared {
         var count int32
     }
@@ -172,7 +172,7 @@ var result = Counter.count
     public void SharedBlock_StaticMethod_ReturnsValue()
     {
         var source = @"
-type Factory struct {
+struct Factory {
     shared {
         func create() int32 {
             return 99
@@ -191,7 +191,7 @@ var result = Factory.create()
     public void SharedBlock_StaticField_SharedAcrossInstances()
     {
         var source = @"
-type Counter struct {
+struct Counter {
     shared {
         var count int32
     }
@@ -216,7 +216,7 @@ var result = Counter.count
         var source = @"package SharedFieldEmit
 import System
 
-type Counter struct {
+struct Counter {
     shared {
         var count int32
     }
@@ -235,7 +235,7 @@ Console.WriteLine(Counter.count)
         var source = @"package SharedMethodEmit
 import System
 
-type Factory struct {
+struct Factory {
     shared {
         func create() int32 {
             return 123
@@ -257,7 +257,7 @@ Console.WriteLine(Factory.create())
     public void SharedBlock_StaticFieldInitializer_Parses()
     {
         var source = @"
-type Counter struct {
+struct Counter {
     shared {
         var count int32 = 42
     }
@@ -273,7 +273,7 @@ type Counter struct {
         var source = @"package CctorEmit
 import System
 
-type Counter struct {
+struct Counter {
     shared {
         var count int32 = 42
     }
@@ -291,7 +291,7 @@ Console.WriteLine(Counter.count)
         var source = @"package CctorMulti
 import System
 
-type Config struct {
+struct Config {
     shared {
         var x int32 = 10
         var y int32 = 20
@@ -316,7 +316,7 @@ Console.WriteLine(Config.name)
         var source = @"package CctorZero
 import System
 
-type Counter struct {
+struct Counter {
     shared {
         var count int32 = 0
         var active int32 = 5
@@ -337,7 +337,7 @@ Console.WriteLine(Counter.active)
         var source = @"package CctorClass
 import System
 
-type Service class {
+class Service {
     shared {
         var instanceCount int32 = 100
     }
@@ -415,7 +415,7 @@ Console.WriteLine(Service.instanceCount)
     public void SharedBlock_ImplicitStaticFieldRead_InSharedMethod()
     {
         var source = @"
-type Foo class {
+class Foo {
     shared {
         var x int32
         func bar() int32 {
@@ -436,7 +436,7 @@ var result = Foo.bar()
     public void SharedBlock_ImplicitStaticFieldWrite_InSharedMethod()
     {
         var source = @"
-type Foo class {
+class Foo {
     shared {
         var x int32
         func setX(val int32) {
@@ -457,7 +457,7 @@ var result = Foo.x
     public void SharedBlock_ImplicitStaticFieldReadWrite_InSharedMethod()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared {
         var count int32
         func increment() int32 {
@@ -479,7 +479,7 @@ var result = Counter.increment()
     public void SharedBlock_ImplicitStaticFieldAccess_ChainedMemberAccess()
     {
         var source = @"
-type Holder class {
+class Holder {
     shared {
         var name string
         func getLen() int32 {
@@ -500,7 +500,7 @@ var result = Holder.getLen()
     public void SharedBlock_ParameterShadowsStaticField()
     {
         var source = @"
-type Foo class {
+class Foo {
     shared {
         var x int32
         func bar(x int32) int32 {
@@ -525,7 +525,7 @@ var result = Foo.bar(7)
     public void SharedBlock_StaticAutoProperty_ReadWrite()
     {
         var source = @"
-type Config class {
+class Config {
     shared {
         prop name string
     }
@@ -543,7 +543,7 @@ var result = Config.name
     public void SharedBlock_StaticComputedProperty_Getter()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared {
         var count int32
         prop doubled int32 {
@@ -564,7 +564,7 @@ var result = Counter.doubled
     public void SharedBlock_StaticComputedProperty_GetterSetter()
     {
         var source = @"
-type Config class {
+class Config {
     shared {
         var _value int32
         prop value int32 {
@@ -588,7 +588,7 @@ var result = Config.value
         var source = @"package StaticAutoPropEmit
 import System
 
-type Config class {
+class Config {
     shared {
         prop name string
     }
@@ -607,7 +607,7 @@ Console.WriteLine(Config.name)
         var source = @"package StaticComputedPropEmit
 import System
 
-type Counter class {
+class Counter {
     shared {
         var count int32
         prop doubled int32 {
@@ -629,7 +629,7 @@ Console.WriteLine(Counter.doubled)
         var source = @"package StaticComputedPropGetSetEmit
 import System
 
-type Config class {
+class Config {
     shared {
         var _value int32
         prop value int32 {
@@ -656,7 +656,7 @@ Console.WriteLine(Config.value)
         var source = @"package StaticEventEmit
 import System
 
-type EventBus class {
+class EventBus {
     shared {
         event onNotify Action
     }
@@ -687,7 +687,7 @@ Console.WriteLine(""subscribed"")
         var source = @"package MixedProps
 import System
 
-type Mixed class {
+class Mixed {
     prop Name string
     shared {
         prop Counter int32
@@ -714,7 +714,7 @@ Console.WriteLine(Mixed.Counter)
         var source = @"package StaticOnlyProp
 import System
 
-type Config class {
+class Config {
     shared {
         prop Name string
     }
@@ -750,7 +750,7 @@ Console.WriteLine(Config.Name)
         var source = @"package MixedPropsShape
 import System
 
-type Mixed class {
+class Mixed {
     prop Name string
     shared {
         prop Counter int32
@@ -782,7 +782,7 @@ type Mixed class {
     public void BareStaticField_InInstanceMethod_Read()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared { var count int32 }
     func get() int32 { return count }
 }
@@ -800,7 +800,7 @@ var r = c.get()
     public void BareStaticField_InInstanceMethod_SimpleAssign()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared { var count int32 }
     func set(v int32) { count = v }
 }
@@ -818,7 +818,7 @@ var r = Counter.count
     public void BareStaticField_InInstanceMethod_CompoundAssign()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared { var count int32 }
     func bump() int32 {
         count += 1
@@ -839,7 +839,7 @@ var r = c.bump()
     public void BareStaticProp_InInstanceMethod_Read()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared { prop count int32 }
     func get() int32 { return count }
 }
@@ -857,7 +857,7 @@ var r = c.get()
     public void BareStaticProp_InInstanceMethod_SimpleAssign()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared { prop count int32 }
     func set(v int32) { count = v }
 }
@@ -875,7 +875,7 @@ var r = Counter.count
     public void BareStaticProp_InInstanceMethod_CompoundAssign()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared { prop count int32 }
     func bump() int32 {
         count += 1
@@ -896,7 +896,7 @@ var r = c.bump()
     public void BareStaticProp_InSharedMethod_Read()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared {
         prop count int32
         func get() int32 { return count }
@@ -915,7 +915,7 @@ var r = Counter.get()
     public void BareStaticProp_InSharedMethod_CompoundAssign()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared {
         prop count int32
         func bump() int32 {
@@ -937,7 +937,7 @@ var r = Counter.bump()
     public void BareStaticField_InSharedMethod_CompoundAssign()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared {
         var count int32
         func bump() int32 {
@@ -959,7 +959,7 @@ var r = Counter.bump()
     public void TypeQualified_StaticField_CompoundAssign()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared { var count int32 }
 }
 
@@ -976,7 +976,7 @@ var r = Counter.count
     public void TypeQualified_StaticProp_CompoundAssign()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared { prop count int32 }
 }
 
@@ -993,7 +993,7 @@ var r = Counter.count
     public void TypeQualified_StaticField_CompoundMinus()
     {
         var source = @"
-type Counter class {
+class Counter {
     shared { var count int32 }
 }
 
@@ -1013,7 +1013,7 @@ var r = Counter.count
         // existing shared-method seeding already enforces this; the new
         // instance-method seeding must do the same.
         var source = @"
-type Foo class {
+class Foo {
     shared { var count int32 }
     func echo(count int32) int32 { return count }
 }
@@ -1033,7 +1033,7 @@ var r = f.echo(99)
         // Qualified read `Type.X` (regression — should keep working
         // after refactor that splits static-event vs static-field branches).
         var source = @"
-type Counter class {
+class Counter {
     shared { var count int32 }
     func get() int32 { return Counter.count }
 }
@@ -1059,7 +1059,7 @@ var r = c.get()
         var source = @"package EventAndFieldCompound
 import System
 
-type Bus class {
+class Bus {
     shared {
         event Tick Action
         var count int32
@@ -1084,7 +1084,7 @@ Console.WriteLine(Bus.count)
         // property must fail with `CannotAssign` (GS0127) on the bare
         // compound path.
         var source = @"
-type Foo class {
+class Foo {
     shared {
         var _v int32
         prop value int32 { get { return _v } }
@@ -1103,7 +1103,7 @@ type Foo class {
         // property must fail with `CannotAssign` (GS0127) on the bare
         // compound path.
         var source = @"
-type Foo class {
+class Foo {
     shared {
         var _v int32
         prop value int32 { set(v) { _v = v } }
@@ -1119,7 +1119,7 @@ type Foo class {
     public void TypeQualified_StaticGetterOnlyProp_CompoundReportsCannotAssign()
     {
         var source = @"
-type Foo class {
+class Foo {
     shared {
         var _v int32
         prop value int32 { get { return _v } }
@@ -1142,7 +1142,7 @@ Foo.value += 1
         // bare static access from an instance method on a generic type
         // must still resolve.
         var source = @"
-type Container[T] class {
+class Container[T] {
     shared { var count int32 }
     var Value T
     func bump() int32 {
@@ -1169,7 +1169,7 @@ r
         var source = @"package BareStaticInGo
 import System
 
-type Bus class {
+class Bus {
     shared { var count int32 }
     func bump() int32 {
         count += 1
@@ -1203,7 +1203,7 @@ Console.WriteLine(Bus.count)
         var source = @"package ReproUserBug
 import System
 
-type Person class {
+class Person {
     shared {
         prop CallCount int32
     }

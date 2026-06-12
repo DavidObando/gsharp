@@ -24,7 +24,7 @@ public class ExtensionFunctionTests
     {
         var typeTree = SyntaxTree.Parse(SourceText.From(@"
 package Geometry
-public type Point struct {
+public struct Point {
     var X int32
     var Y int32
 }

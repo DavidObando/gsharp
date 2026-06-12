@@ -233,7 +233,7 @@ public class Issue569NestedTypeConstructionTests
             import System
             import Probe.CSharp
 
-            type Impl class : Outer.INested {
+            class Impl : Outer.INested {
                 func Compute() int32 { return 77 }
             }
 

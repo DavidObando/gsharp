@@ -29,7 +29,7 @@ public class WorkspaceSymbolHandlerTests
     [Fact]
     public void CollectSymbols_FindsStructsAndFields()
     {
-        const string source = "type Point struct {\nvar X int32\nvar Y int32\n}\n";
+        const string source = "struct Point {\nvar X int32\nvar Y int32\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
         var results = new List<WorkspaceSymbol>();
 
@@ -45,7 +45,7 @@ public class WorkspaceSymbolHandlerTests
     [Fact]
     public void CollectSymbols_FindsEnumsAndMembers()
     {
-        const string source = "type Color enum { Red, Green, Blue }\n";
+        const string source = "enum Color { Red, Green, Blue }\n";
         var content = LanguageServerTestHelpers.Content(source);
         var results = new List<WorkspaceSymbol>();
 

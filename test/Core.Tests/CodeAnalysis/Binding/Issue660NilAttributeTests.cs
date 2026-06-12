@@ -74,7 +74,7 @@ public class Issue660NilAttributeTests
         var source = """
             import System.Diagnostics.CodeAnalysis
 
-            type Box class {
+            class Box {
                 @MemberNotNull(nil)
                 func Setup() {
                 }

@@ -10,7 +10,7 @@ package GsharpLibrary.Tests
 import Xunit
 import GsharpLibrary
 
-type GreeterTests class {
+class GreeterTests {
     @Fact
     func Greet_Returns_Hello_With_Name() {
         var greeter = Greeter()

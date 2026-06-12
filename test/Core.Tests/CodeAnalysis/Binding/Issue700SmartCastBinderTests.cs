@@ -24,19 +24,19 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public class Issue700SmartCastBinderTests
 {
     private const string AnimalHierarchy = @"
-type Animal open class {
+open class Animal {
     var Name string
     open func Describe() string { return Name }
 }
-type Dog open class : Animal {
+open class Dog : Animal {
     override func Describe() string { return ""Dog"" }
     func Bark() string { return ""woof"" }
 }
-type Cat class : Animal {
+class Cat : Animal {
     override func Describe() string { return ""Cat"" }
     func Purr() string { return ""purr"" }
 }
-type Puppy class : Dog {
+class Puppy : Dog {
     func Yip() string { return ""yip"" }
 }
 ";
@@ -177,7 +177,7 @@ if a is Dog {
         // aliasing or another thread could replace the field between
         // the test and the use.
         var result = Evaluate(AnimalHierarchy + @"
-type Box class {
+class Box {
     var Pet Animal
 }
 func Run(b Box) string {

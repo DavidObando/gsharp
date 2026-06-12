@@ -71,7 +71,7 @@ tweak()
         const string Source = @"package VarRefField
 import System
 
-type Counter struct {
+struct Counter {
     var Value int32
 }
 

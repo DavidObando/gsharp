@@ -18,7 +18,7 @@ public class PropertyInterpreterTests
     [Fact]
     public void AutoProperty_ReadWrite_OnClass()
     {
-        var source = "type Foo class {\n  prop Name string\n}\nlet f = Foo{}\nf.Name = \"hello\"\nf.Name";
+        var source = "class Foo {\n  prop Name string\n}\nlet f = Foo{}\nf.Name = \"hello\"\nf.Name";
         var output = RunSubmission(source);
         Assert.Contains("hello", output);
         Assert.DoesNotContain("error GS", output);
@@ -28,7 +28,7 @@ public class PropertyInterpreterTests
     public void AutoProperty_DefaultValue_String()
     {
         // Uninitialized auto-property of type string should return empty string.
-        var source = "type Foo class {\n  prop Name string\n}\nlet f = Foo{}\nf.Name";
+        var source = "class Foo {\n  prop Name string\n}\nlet f = Foo{}\nf.Name";
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
     }
@@ -37,7 +37,7 @@ public class PropertyInterpreterTests
     public void AutoProperty_DefaultValue_Int32()
     {
         // Uninitialized auto-property of type int32 should return 0.
-        var source = "type Foo class {\n  prop Count int32\n}\nlet f = Foo{}\nf.Count";
+        var source = "class Foo {\n  prop Count int32\n}\nlet f = Foo{}\nf.Count";
         var output = RunSubmission(source);
         Assert.Contains("0", output);
         Assert.DoesNotContain("error GS", output);
@@ -46,7 +46,7 @@ public class PropertyInterpreterTests
     [Fact]
     public void AutoProperty_ReadWrite_Int32_OnClass()
     {
-        var source = "type Counter class {\n  prop Value int32\n}\nlet c = Counter{}\nc.Value = 42\nc.Value";
+        var source = "class Counter {\n  prop Value int32\n}\nlet c = Counter{}\nc.Value = 42\nc.Value";
         var output = RunSubmission(source);
         Assert.Contains("42", output);
         Assert.DoesNotContain("error GS", output);
@@ -55,7 +55,7 @@ public class PropertyInterpreterTests
     [Fact]
     public void AutoProperty_MultipleProperties_OnClass()
     {
-        var source = "type Person class {\n  prop Name string\n  prop Age int32\n}\nlet p = Person{}\np.Name = \"Alice\"\np.Age = 30\np.Name";
+        var source = "class Person {\n  prop Name string\n  prop Age int32\n}\nlet p = Person{}\np.Name = \"Alice\"\np.Age = 30\np.Name";
         var output = RunSubmission(source);
         Assert.Contains("Alice", output);
         Assert.DoesNotContain("error GS", output);
@@ -64,7 +64,7 @@ public class PropertyInterpreterTests
     [Fact]
     public void AutoProperty_Reassignment_OnClass()
     {
-        var source = "type Box class {\n  prop Item string\n}\nlet b = Box{}\nb.Item = \"first\"\nb.Item = \"second\"\nb.Item";
+        var source = "class Box {\n  prop Item string\n}\nlet b = Box{}\nb.Item = \"first\"\nb.Item = \"second\"\nb.Item";
         var output = RunSubmission(source);
         Assert.Contains("second", output);
         Assert.DoesNotContain("error GS", output);
@@ -74,7 +74,7 @@ public class PropertyInterpreterTests
     public void AutoProperty_ReadOnly_OnClass_ReturnsDefault()
     {
         // A get-only auto-property returns the type default.
-        var source = "type Foo class {\n  prop Count int32 { get }\n}\nlet f = Foo{}\nf.Count";
+        var source = "class Foo {\n  prop Count int32 { get }\n}\nlet f = Foo{}\nf.Count";
         var output = RunSubmission(source);
         Assert.Contains("0", output);
         Assert.DoesNotContain("error GS", output);
@@ -83,7 +83,7 @@ public class PropertyInterpreterTests
     [Fact]
     public void OpenProperty_Parses_Without_Error()
     {
-        var source = "type Base open class {\n  open prop Label string\n}\nlet b = Base{}\nb.Label = \"hi\"\nb.Label";
+        var source = "open class Base {\n  open prop Label string\n}\nlet b = Base{}\nb.Label = \"hi\"\nb.Label";
         var output = RunSubmission(source);
         Assert.Contains("hi", output);
         Assert.DoesNotContain("error GS", output);
@@ -92,7 +92,7 @@ public class PropertyInterpreterTests
     [Fact]
     public void OverrideProperty_Parses_Without_Error()
     {
-        var source = "type Base open class {\n  open prop Label string\n}\ntype Derived class : Base {\n  override prop Label string\n}\nlet d = Derived{}\nd.Label = \"derived\"\nd.Label";
+        var source = "open class Base {\n  open prop Label string\n}\nclass Derived : Base {\n  override prop Label string\n}\nlet d = Derived{}\nd.Label = \"derived\"\nd.Label";
         var output = RunSubmission(source);
         Assert.Contains("derived", output);
         Assert.DoesNotContain("error GS", output);
@@ -101,7 +101,7 @@ public class PropertyInterpreterTests
     [Fact]
     public void InterfaceProperty_Parses_Without_Error()
     {
-        var source = "type Named interface {\n  prop Name string { get }\n}\n";
+        var source = "interface Named {\n  prop Name string { get }\n}\n";
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
     }
@@ -109,7 +109,7 @@ public class PropertyInterpreterTests
     [Fact]
     public void AutoPropertyInDataStruct_ReportsGS0189()
     {
-        var source = "type P data struct {\n  var X int32\n  prop Y int32\n}\n";
+        var source = "data struct P {\n  var X int32\n  prop Y int32\n}\n";
         var output = RunSubmission(source);
         Assert.Contains("GS0189", output);
     }
@@ -118,7 +118,7 @@ public class PropertyInterpreterTests
     public void ComputedProperty_Getter_ReturnsValue()
     {
         var source = """
-            type Rect class {
+            class Rect {
                 prop Width int32
                 prop Height int32
                 prop Area int32 {
@@ -141,7 +141,7 @@ public class PropertyInterpreterTests
     public void ComputedProperty_Setter_UpdatesBackingState()
     {
         var source = """
-            type Counter class {
+            class Counter {
                 prop raw int32
                 prop Value int32 {
                     get {
@@ -165,7 +165,7 @@ public class PropertyInterpreterTests
     public void ComputedProperty_GetOnly_NoSetter()
     {
         var source = """
-            type Greeter class {
+            class Greeter {
                 prop Name string
                 prop Greeting string {
                     get {

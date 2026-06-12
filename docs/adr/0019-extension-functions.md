@@ -52,7 +52,7 @@ func (s string) Shout() string {
 ```gsharp
 package Geometry
 
-type Point struct {
+struct Point {
     var X int
     var Y int
 }

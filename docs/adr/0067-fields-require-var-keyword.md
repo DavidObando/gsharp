@@ -10,7 +10,7 @@
 G# `struct` and `class` bodies began life as bare field-only structures, in the Go tradition: a member line was an identifier followed by a type clause, with no leading keyword. Over the lifetime of the language the type body picked up several richer member shapes that *do* carry an introducer keyword: `func` for methods (ADR-0017), `prop` for properties (ADR-0051), `event` for events (ADR-0052), `init` for user-defined constructors (ADR-0065), `shared { … }` for static members (ADR-0053), and so on. The result is a member surface where every member kind except fields announces itself with a keyword:
 
 ```gs
-type Counter class {
+class Counter {
     Value int32 = 0              // field — bare; the odd one out
     prop Name string             // property — `prop` keyword
     event Changed Action         // event — `event` keyword
@@ -34,19 +34,19 @@ field_declaration = annotations? accessibility_modifier? ("var" | "let") identif
 ### Examples
 
 ```gs
-type Counter class {
+class Counter {
     var Value int32 = 0          // mutable instance field
     let Origin int32 = 0         // read-only instance field — set only at init time
     prop Name string             // property — unchanged
     func Touch() { … }           // method — unchanged
 }
 
-type Point struct {
+struct Point {
     var X int32
     var Y int32
 }
 
-type Defaults class {
+class Defaults {
     shared {
         var Counter int32 = 0    // mutable static field
         let Pi float64 = 3.14159 // read-only static field
@@ -66,8 +66,8 @@ type Defaults class {
 - **Event declarations** (`event`, ADR-0052) — unchanged.
 - **Method / function declarations** (`func`, ADR-0017) — unchanged.
 - **Constructor declarations** (`init`, ADR-0065) — unchanged.
-- **Primary-constructor parameter lists** — `type Person class(Name string, Age int32) { … }` continues to parse as before. Primary-constructor parameters are *parameters*, not field declarations; the binder still synthesises a public read-only field for each parameter automatically (this is a separate language affordance, not a field-declaration shape).
-- **`inline struct` value parameter** — `type UserId inline struct(value string)` continues to declare its single value through the parenthesised parameter list, identical to the primary-constructor parameter path above.
+- **Primary-constructor parameter lists** — `class Person(Name string, Age int32) { … }` continues to parse as before. Primary-constructor parameters are *parameters*, not field declarations; the binder still synthesises a public read-only field for each parameter automatically (this is a separate language affordance, not a field-declaration shape).
+- **`inline struct` value parameter** — `inline struct UserId(value string)` continues to declare its single value through the parenthesised parameter list, identical to the primary-constructor parameter path above.
 - **`const` declarations at top level / inside packages** — unchanged. ADR-0067 is scoped to type-body fields.
 
 ### Diagnostic

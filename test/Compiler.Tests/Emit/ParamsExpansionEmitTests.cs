@@ -232,7 +232,7 @@ public class ParamsExpansionEmitTests
             package P
             import System
 
-            type MyAgg class : AggregateException {
+            class MyAgg : AggregateException {
                 init(a Exception, b Exception, c Exception) : base(a, b, c) {
                 }
             }

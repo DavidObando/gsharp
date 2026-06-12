@@ -170,7 +170,7 @@ public class Issue715ArrowFunctionTypeClauseParserTests
     {
         const string source = """
             package P
-            type Box[T any] struct { var Value T }
+            struct Box[T any] { var Value T }
             var b Box[(int32) -> int32]
             """;
         var tree = SyntaxTree.Parse(source);

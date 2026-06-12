@@ -110,16 +110,16 @@ Named delegates emit as real CLR `MulticastDelegate`-derived types so C# consume
 `type` introduces aliases, structs, classes, enums, interfaces, data structs, records, and inline structs.
 
 ```gsharp
-type Point data struct {
+data struct Point {
     X int32
     Y int32
 }
 
-type Service open class(name string) {
+open class Service(name string) {
     prop Name string { get; }
 }
 
-type Result enum { Ok, Failed }
+enum Result { Ok, Failed }
 ```
 
 Classes can have primary constructors, explicit `init` constructors, base clauses, fields, methods, properties, events, and `shared` static members. Base classes must be open to derive from; overriding uses `override`.
@@ -129,7 +129,7 @@ Classes can have primary constructors, explicit `init` constructors, base clause
 Properties use contextual `prop` and may have accessors. Events use contextual `event` and may declare `add`, `remove`, and `raise` accessors. Static members live in a contextual `shared` block.
 
 ```gsharp
-type Counter class {
+class Counter {
     shared {
         var Created int32
     }

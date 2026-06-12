@@ -17,6 +17,14 @@ public class Parser
 {
     private readonly SyntaxTree syntaxTree;
     private readonly ImmutableArray<SyntaxToken> tokens;
+
+    // ADR-0078 / issue #725: when a single source-level declaration desugars
+    // into multiple synthesized top-level members (notably discriminated-union
+    // enums, which expand into a sealed base + one class per case), the
+    // expander stages the additional siblings here. `ParseMembers` drains the
+    // queue after each `ParseMember` call so they appear in declaration order.
+    private readonly Queue<MemberSyntax> pendingSyntheticMembers = new Queue<MemberSyntax>();
+
     private int position;
 
     // Issue #522: depth counter that suppresses trailing object-initializer
@@ -203,6 +211,14 @@ public class Parser
 
             members.Add(member);
 
+            // ADR-0078 / issue #725: drain any synthetic members produced by
+            // the desugaring (e.g. discriminated-union enums expand into a
+            // sealed base + one class per case).
+            while (pendingSyntheticMembers.Count > 0)
+            {
+                members.Add(pendingSyntheticMembers.Dequeue());
+            }
+
             if (Current == startToken)
             {
                 NextToken();
@@ -240,9 +256,26 @@ public class Parser
         {
             member = ParseFunctionDeclaration(accessibilityModifier, openModifier: null, overrideModifier: null, asyncModifier);
         }
+        else if (TryDetectAggregateDeclarationHead())
+        {
+            // ADR-0078 / issue #718: the canonical declaration head is
+            //   [visibility]? [open|sealed]? [data]? [inline]? (class|struct|enum|interface) Name ...
+            // The aggregate-kind keyword IS the declaration keyword — no leading
+            // `type`. Drop into the new aggregate parser path.
+            member = ParseAggregateDeclaration(accessibilityModifier);
+        }
         else if (Current.Kind == SyntaxKind.TypeKeyword)
         {
             member = ParseTypeAliasDeclaration(accessibilityModifier);
+        }
+        else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "record"
+            && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            // ADR-0078 / issue #718: the standalone `record` keyword has been
+            // removed. Detect `record Name ...` at member-position, emit
+            // GS0307 with a migration suggestion, and recover by parsing the
+            // declaration as if the user had written `data struct Name ...`.
+            member = ReportAndRecoverLegacyRecordHead(accessibilityModifier);
         }
         else if (accessibilityModifier != null &&
             (Current.Kind == SyntaxKind.VarKeyword ||
@@ -421,174 +454,505 @@ public class Parser
         }
     }
 
+    /// <summary>
+    /// ADR-0078 / issue #718: detects whether the current parser position
+    /// begins a Kotlin/Swift-style aggregate declaration head — optionally
+    /// preceded by modifiers (open, sealed, data, inline, ref) — by scanning
+    /// ahead to see if it terminates in one of <c>class</c>, <c>struct</c>,
+    /// <c>enum</c>, or <c>interface</c>. The scan does not consume tokens.
+    /// Returning false leaves dispatch to the legacy <c>type</c>-keyword path
+    /// (which now only handles type aliases and named delegates).
+    /// </summary>
+    private bool TryDetectAggregateDeclarationHead()
+    {
+        var offset = 0;
+        var saw = new HashSet<string>(System.StringComparer.Ordinal);
+        while (true)
+        {
+            var k = Peek(offset);
+            if (k.Kind == SyntaxKind.ClassKeyword ||
+                k.Kind == SyntaxKind.StructKeyword ||
+                k.Kind == SyntaxKind.EnumKeyword ||
+                k.Kind == SyntaxKind.InterfaceKeyword)
+            {
+                return true;
+            }
+
+            if (k.Kind == SyntaxKind.OpenKeyword || k.Kind == SyntaxKind.SealedKeyword)
+            {
+                offset++;
+                continue;
+            }
+
+            if (k.Kind == SyntaxKind.IdentifierToken && (k.Text == "data" || k.Text == "inline" || k.Text == "ref"))
+            {
+                // Bail out if the same contextual modifier appears twice — we are
+                // not in a declaration head; let the legacy / statement parser
+                // surface the right diagnostic.
+                if (!saw.Add(k.Text))
+                {
+                    return false;
+                }
+
+                offset++;
+                continue;
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// ADR-0078 / issue #718: parses an aggregate declaration whose head is
+    ///   [open|sealed]? [data]? [inline]? [ref]? (class|struct|enum|interface) Name[TParams]? ...
+    /// The accessibility modifier was already consumed in <see cref="ParseMember"/>.
+    /// </summary>
+    private MemberSyntax ParseAggregateDeclaration(SyntaxToken accessibilityModifier)
+    {
+        SyntaxToken openModifier = null;
+        SyntaxToken sealedModifier = null;
+        SyntaxToken dataKeyword = null;
+        SyntaxToken inlineKeyword = null;
+        SyntaxToken refModifier = null;
+
+        // Collect modifiers in any order. Re-issuing of a modifier is reported
+        // as an unexpected token but parsing continues for recovery.
+        while (true)
+        {
+            if (Current.Kind == SyntaxKind.OpenKeyword)
+            {
+                if (openModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword);
+                }
+
+                openModifier = NextToken();
+                continue;
+            }
+
+            if (Current.Kind == SyntaxKind.SealedKeyword)
+            {
+                if (sealedModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword);
+                }
+
+                sealedModifier = NextToken();
+                continue;
+            }
+
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data")
+            {
+                if (dataKeyword != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.StructKeyword);
+                }
+
+                dataKeyword = NextToken();
+                continue;
+            }
+
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "inline")
+            {
+                if (inlineKeyword != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.StructKeyword);
+                }
+
+                inlineKeyword = NextToken();
+                continue;
+            }
+
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "ref")
+            {
+                if (refModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.StructKeyword);
+                }
+
+                refModifier = NextToken();
+                continue;
+            }
+
+            break;
+        }
+
+        // Combination rules (ADR-0078):
+        //   - data + inline → GS0311
+        //   - open + sealed → GS0312
+        // The remaining kind-specific rules (open struct, sealed enum, inline
+        // class, ...) are validated below once the aggregate keyword is known.
+        if (dataKeyword != null && inlineKeyword != null)
+        {
+            Diagnostics.ReportDataAndInlineCannotCombine(inlineKeyword.Location);
+        }
+
+        if (openModifier != null && sealedModifier != null)
+        {
+            Diagnostics.ReportOpenAndSealedCannotCombine(sealedModifier.Location);
+        }
+
+        var aggregateKw = Current;
+        var aggregateKind = aggregateKw.Kind;
+        var aggregateText = aggregateKw.Text;
+
+        if (aggregateKind != SyntaxKind.ClassKeyword &&
+            aggregateKind != SyntaxKind.StructKeyword &&
+            aggregateKind != SyntaxKind.EnumKeyword &&
+            aggregateKind != SyntaxKind.InterfaceKeyword)
+        {
+            // Should not happen — TryDetectAggregateDeclarationHead already
+            // verified the lookahead. Defensive recovery: emit and bail.
+            Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword);
+            NextToken();
+            return new GlobalStatementSyntax(syntaxTree, ParseStatement());
+        }
+
+        // Per-kind modifier validation.
+        switch (aggregateKind)
+        {
+            case SyntaxKind.ClassKeyword:
+                if (inlineKeyword != null)
+                {
+                    Diagnostics.ReportInlineOnlyValidOnStruct(inlineKeyword.Location);
+                }
+
+                if (refModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(refModifier.Location, SyntaxKind.IdentifierToken, SyntaxKind.StructKeyword);
+                }
+
+                break;
+
+            case SyntaxKind.StructKeyword:
+                if (openModifier != null)
+                {
+                    Diagnostics.ReportOpenOnlyValidOnClass(openModifier.Location, aggregateText);
+                }
+
+                if (sealedModifier != null)
+                {
+                    Diagnostics.ReportSealedOnlyValidOnClassOrInterface(sealedModifier.Location, aggregateText);
+                }
+
+                break;
+
+            case SyntaxKind.EnumKeyword:
+                if (openModifier != null)
+                {
+                    Diagnostics.ReportOpenOnlyValidOnClass(openModifier.Location, aggregateText);
+                }
+
+                if (sealedModifier != null)
+                {
+                    Diagnostics.ReportSealedOnlyValidOnClassOrInterface(sealedModifier.Location, aggregateText);
+                }
+
+                if (dataKeyword != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(dataKeyword.Location, SyntaxKind.IdentifierToken, SyntaxKind.EnumKeyword);
+                }
+
+                if (inlineKeyword != null)
+                {
+                    Diagnostics.ReportInlineOnlyValidOnStruct(inlineKeyword.Location);
+                }
+
+                if (refModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(refModifier.Location, SyntaxKind.IdentifierToken, SyntaxKind.EnumKeyword);
+                }
+
+                break;
+
+            case SyntaxKind.InterfaceKeyword:
+                if (openModifier != null)
+                {
+                    Diagnostics.ReportOpenOnlyValidOnClass(openModifier.Location, aggregateText);
+                }
+
+                if (dataKeyword != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(dataKeyword.Location, SyntaxKind.IdentifierToken, SyntaxKind.InterfaceKeyword);
+                }
+
+                if (inlineKeyword != null)
+                {
+                    Diagnostics.ReportInlineOnlyValidOnStruct(inlineKeyword.Location);
+                }
+
+                if (refModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(refModifier.Location, SyntaxKind.IdentifierToken, SyntaxKind.InterfaceKeyword);
+                }
+
+                break;
+        }
+
+        // Consume the aggregate keyword and the identifier, then optional type
+        // parameters: `class Name[TParams]?`.
+        var aggregateKeyword = NextToken();
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var typeParameterList = ParseOptionalTypeParameterList();
+
+        if (aggregateKind == SyntaxKind.EnumKeyword)
+        {
+            // Note: the unified parser deliberately allows `enum` to fall
+            // through to the inner enum production even when stray modifiers
+            // were diagnosed above — recovery only.
+            if (typeParameterList != null)
+            {
+                Diagnostics.ReportUnexpectedToken(typeParameterList.OpenBracketToken.Location, SyntaxKind.OpenSquareBracketToken, SyntaxKind.EnumKeyword);
+            }
+
+            return ParseEnumDeclarationNew(accessibilityModifier, sealedModifier, aggregateKeyword, identifier);
+        }
+
+        if (aggregateKind == SyntaxKind.InterfaceKeyword)
+        {
+            return ParseInterfaceDeclarationNew(accessibilityModifier, sealedModifier, aggregateKeyword, identifier, typeParameterList);
+        }
+
+        // class / struct path.
+        var structDecl = ParseStructDeclarationNew(accessibilityModifier, dataKeyword, inlineKeyword, openModifier, sealedModifier, refModifier, aggregateKeyword, identifier);
+        structDecl.TypeParameterList = typeParameterList;
+        structDecl.RefModifier = refModifier;
+        return structDecl;
+    }
+
+    /// <summary>
+    /// ADR-0078: parses the body of a class or struct declaration whose
+    /// modifiers, aggregate keyword, and identifier have already been consumed
+    /// by <see cref="ParseAggregateDeclaration"/>. Delegates into the shared
+    /// body parser by passing the aggregate keyword as preconsumed.
+    /// </summary>
+    private StructDeclarationSyntax ParseStructDeclarationNew(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken dataKeyword,
+        SyntaxToken inlineKeyword,
+        SyntaxToken openModifier,
+        SyntaxToken sealedModifier,
+        SyntaxToken refModifier,
+        SyntaxToken aggregateKeyword,
+        SyntaxToken identifier)
+    {
+        var decl = ParseStructDeclaration(
+            accessibilityModifier,
+            typeKeyword: null,
+            identifier,
+            dataKeyword,
+            inlineKeyword,
+            openModifier,
+            preconsumedStructOrClassKeyword: aggregateKeyword);
+        decl.SealedKeyword = sealedModifier;
+        return decl;
+    }
+
+    private MemberSyntax ParseEnumDeclarationNew(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken sealedModifier,
+        SyntaxToken enumKeyword,
+        SyntaxToken identifier)
+    {
+        // The aggregate `enum` keyword is already consumed. Read the body
+        // directly, since ParseEnumDeclaration assumes it still has to match
+        // the keyword.
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        var members = ParseEnumMembers();
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+
+        if (members.Count == 0)
+        {
+            Diagnostics.ReportEmptyEnumDeclaration(identifier.Location, identifier.Text);
+        }
+
+        // ADR-0078 / issue #725: if ANY enum member carries a payload, the
+        // entire enum is a discriminated union. Desugar it at parse time into
+        //   sealed class EnumName { }
+        //   class Case1(params) : EnumName { ... }   // per case
+        // Flat (non-payload) cases turn into an empty class with the same
+        // base, so a uniform pattern-match works on every case.
+        var hasAnyPayload = false;
+        for (var i = 0; i < members.Count; i++)
+        {
+            if (members[i].HasPayload)
+            {
+                hasAnyPayload = true;
+                break;
+            }
+        }
+
+        if (hasAnyPayload)
+        {
+            return BuildDiscriminatedUnionDesugaring(accessibilityModifier, sealedModifier, enumKeyword, identifier, openBrace, members, closeBrace);
+        }
+
+        var decl = new EnumDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword: null, identifier, enumKeyword, openBrace, members, closeBrace);
+        decl.SealedKeyword = sealedModifier;
+        return decl;
+    }
+
+    private StructDeclarationSyntax BuildDiscriminatedUnionDesugaring(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken sealedModifier,
+        SyntaxToken enumKeyword,
+        SyntaxToken identifier,
+        SyntaxToken openBrace,
+        SeparatedSyntaxList<EnumMemberSyntax> members,
+        SyntaxToken closeBrace)
+    {
+        // ADR-0078 / issue #725: synthesize `sealed class EnumName {}` as the
+        // base, and queue `class CaseName[(params)] : EnumName { }` per case.
+        // The Parser.pendingSyntheticMembers queue is drained after the
+        // current ParseMember call returns, so the synthetic classes appear
+        // immediately after the base in declaration order.
+        var classKeyword = new SyntaxToken(syntaxTree, SyntaxKind.ClassKeyword, enumKeyword.Position, "class", null);
+        var effectiveSealed = sealedModifier ?? new SyntaxToken(syntaxTree, SyntaxKind.SealedKeyword, enumKeyword.Position, "sealed", null);
+
+        var baseDecl = new StructDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier,
+            typeKeyword: null,
+            identifier,
+            dataKeyword: null,
+            inlineKeyword: null,
+            openModifier: null,
+            structKeyword: classKeyword,
+            primaryConstructorOpenParen: null,
+            primaryConstructorParameters: new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty),
+            primaryConstructorCloseParen: null,
+            baseColonToken: null,
+            baseTypeIdentifier: null,
+            additionalBaseTypeIdentifiers: ImmutableArray<SyntaxToken>.Empty,
+            openBraceToken: openBrace,
+            fields: ImmutableArray<FieldDeclarationSyntax>.Empty,
+            properties: ImmutableArray<PropertyDeclarationSyntax>.Empty,
+            events: ImmutableArray<EventDeclarationSyntax>.Empty,
+            methods: ImmutableArray<FunctionDeclarationSyntax>.Empty,
+            closeBraceToken: closeBrace);
+        baseDecl.SealedKeyword = effectiveSealed;
+
+        for (var i = 0; i < members.Count; i++)
+        {
+            var member = members[i];
+            var caseClassKeyword = new SyntaxToken(syntaxTree, SyntaxKind.ClassKeyword, member.Identifier.Position, "class", null);
+            var colon = new SyntaxToken(syntaxTree, SyntaxKind.ColonToken, member.Identifier.Position, ":", null);
+
+            var primaryOpen = member.HasPayload ? member.PayloadOpenParenthesis : null;
+            var primaryClose = member.HasPayload ? member.PayloadCloseParenthesis : null;
+            var primaryParams = member.HasPayload
+                ? member.PayloadParameters
+                : new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty);
+
+            var caseDecl = new StructDeclarationSyntax(
+                syntaxTree,
+                accessibilityModifier: null,
+                typeKeyword: null,
+                member.Identifier,
+                dataKeyword: null,
+                inlineKeyword: null,
+                openModifier: null,
+                structKeyword: caseClassKeyword,
+                primaryConstructorOpenParen: primaryOpen,
+                primaryConstructorParameters: primaryParams,
+                primaryConstructorCloseParen: primaryClose,
+                baseColonToken: colon,
+                baseTypeIdentifier: identifier,
+                additionalBaseTypeIdentifiers: ImmutableArray<SyntaxToken>.Empty,
+                openBraceToken: openBrace,
+                fields: ImmutableArray<FieldDeclarationSyntax>.Empty,
+                properties: ImmutableArray<PropertyDeclarationSyntax>.Empty,
+                events: ImmutableArray<EventDeclarationSyntax>.Empty,
+                methods: ImmutableArray<FunctionDeclarationSyntax>.Empty,
+                closeBraceToken: closeBrace);
+
+            var baseTypeClause = new TypeClauseSyntax(syntaxTree, identifier);
+            caseDecl.BaseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray.Create<SyntaxNode>(baseTypeClause));
+
+            pendingSyntheticMembers.Enqueue(caseDecl);
+        }
+
+        return baseDecl;
+    }
+
+    private InterfaceDeclarationSyntax ParseInterfaceDeclarationNew(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken sealedModifier,
+        SyntaxToken interfaceKeyword,
+        SyntaxToken identifier,
+        TypeParameterListSyntax typeParameterList)
+    {
+        // The aggregate `interface` keyword is already consumed. Build the
+        // body by hand (mirroring ParseInterfaceDeclaration but without the
+        // up-front MatchToken on the keyword).
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+
+        var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
+        var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
+        var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+        while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var startToken = Current;
+
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
+            {
+                properties.Add(ParsePropertyDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
+            }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "event")
+            {
+                events.Add(ParseEventDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
+            }
+            else if (Current.Kind == SyntaxKind.FuncKeyword)
+            {
+                methods.Add(ParseInterfaceMethodSignature());
+            }
+            else
+            {
+                Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.FuncKeyword);
+                NextToken();
+            }
+
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new InterfaceDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier,
+            typeKeyword: null,
+            identifier,
+            typeParameterList,
+            sealedModifier,
+            interfaceKeyword,
+            openBrace,
+            properties.ToImmutable(),
+            events.ToImmutable(),
+            methods.ToImmutable(),
+            closeBrace);
+    }
+
     private MemberSyntax ParseTypeAliasDeclaration(SyntaxToken accessibilityModifier)
     {
         var typeKeyword = MatchToken(SyntaxKind.TypeKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
 
         // Phase 4.3 / ADR-0020: optional type-parameter list directly after the
-        // type name: `type Box[T any] class { ... }`. Reuses the same helpers
-        // as generic function declarations.
+        // type name: `type Box[T any] = ...`. Reuses the same helpers as
+        // generic function declarations.
         var typeParameterList = ParseOptionalTypeParameterList();
 
-        // `record` is a context-sensitive keyword (ADR-0025): in a type
-        // declaration header it aliases `data struct` only when followed by a
-        // body. Elsewhere it remains an ordinary identifier.
-        SyntaxToken preconsumedStructOrClassKeyword = null;
-        SyntaxToken dataKeyword = null;
-        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "record" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
+        // ADR-0078 / issue #718: the only valid uses of the `type` keyword are
+        //   `type Name [TParams]? = SomeType`          — erased type alias
+        //   `type Name [TParams]? = delegate func(...)` — named CLR delegate
+        // Anything else here is a legacy aggregate declaration (`class Name
+        // { … }`, `data class Name { … }`, `data struct Name { … }`, …)
+        // and must be rejected with GS0306 / GS0307 plus a migration snippet.
+        if (Current.Kind != SyntaxKind.EqualsToken)
         {
-            dataKeyword = NextToken();
-            preconsumedStructOrClassKeyword = new SyntaxToken(syntaxTree, SyntaxKind.StructKeyword, dataKeyword.Position, "struct", null);
-        }
-
-        // `data` is a context-sensitive keyword (ADR-0029): only acts as the
-        // data-struct marker when followed directly by `struct` or `enum`.
-        // Elsewhere it is an ordinary identifier.
-        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data" && (Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword || Peek(1).Text == "record" || Peek(1).Text == "inline"))
-        {
-            dataKeyword = NextToken();
-        }
-
-        SyntaxToken inlineKeyword = null;
-        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "inline" && (Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Text == "data" || Peek(1).Kind == SyntaxKind.OpenKeyword))
-        {
-            inlineKeyword = NextToken();
-        }
-
-        if (dataKeyword != null && Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "inline")
-        {
-            Diagnostics.ReportInlineCannotBeCombinedWithData(Current.Location);
-            inlineKeyword = NextToken();
-        }
-
-        if (inlineKeyword != null && Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data")
-        {
-            Diagnostics.ReportInlineCannotBeCombinedWithData(inlineKeyword.Location);
-            dataKeyword = NextToken();
-        }
-
-        // Phase 3.B.3 sub-step 3: optional `open` modifier on a class
-        // declaration. Per ADR-0017, plain `class` is sealed; `open class`
-        // can be subclassed. `open` before `struct` is diagnosed in the
-        // struct parser (structs cannot be subclassed in CLR).
-        SyntaxToken openModifier = null;
-        if (Current.Kind == SyntaxKind.OpenKeyword && (Peek(1).Kind == SyntaxKind.ClassKeyword || Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword || (Peek(1).Kind == SyntaxKind.IdentifierToken && (Peek(1).Text == "record" || Peek(1).Text == "inline"))))
-        {
-            openModifier = NextToken();
-        }
-
-        if (openModifier != null && Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "inline")
-        {
-            inlineKeyword = NextToken();
-        }
-
-        // Issue #367: optional `ref` contextual keyword marking a by-ref-like
-        // (`ref struct`) value type, e.g. `type Name ref struct { ... }`. Only
-        // meaningful directly before `struct`; combinations with `class` are
-        // diagnosed after the struct/class keyword is known.
-        SyntaxToken refModifier = null;
-        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "ref" && Peek(1).Kind == SyntaxKind.StructKeyword)
-        {
-            refModifier = NextToken();
-        }
-
-        // Phase 3.B.5: optional `sealed` modifier on an interface declaration.
-        // `sealed interface` restricts implementors to the same package
-        // (binder enforced). `sealed` is not legal on struct/class in Phase 3.
-        SyntaxToken sealedModifier = null;
-        if (Current.Kind == SyntaxKind.SealedKeyword && (Peek(1).Kind == SyntaxKind.InterfaceKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword || (Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "record")))
-        {
-            sealedModifier = NextToken();
-        }
-
-        if (dataKeyword != null && Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "record")
-        {
-            Diagnostics.ReportRecordCannotBeCombinedWithDataKeyword(dataKeyword.Location);
-            if (Peek(1).Kind == SyntaxKind.OpenBraceToken)
-            {
-                var recordToken = NextToken();
-                preconsumedStructOrClassKeyword = new SyntaxToken(syntaxTree, SyntaxKind.StructKeyword, recordToken.Position, "struct", null);
-            }
-        }
-
-        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "record" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
-        {
-            dataKeyword = NextToken();
-            preconsumedStructOrClassKeyword = new SyntaxToken(syntaxTree, SyntaxKind.StructKeyword, dataKeyword.Position, "struct", null);
-        }
-
-        if (Current.Kind == SyntaxKind.StructKeyword || Current.Kind == SyntaxKind.ClassKeyword || preconsumedStructOrClassKeyword != null)
-        {
-            if (sealedModifier != null)
-            {
-                Diagnostics.ReportUnexpectedToken(sealedModifier.Location, SyntaxKind.SealedKeyword, SyntaxKind.InterfaceKeyword);
-            }
-
-            var structDecl = ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword, inlineKeyword, openModifier, preconsumedStructOrClassKeyword);
-            structDecl.TypeParameterList = typeParameterList;
-            structDecl.RefModifier = refModifier;
-            return structDecl;
-        }
-
-        if (Current.Kind == SyntaxKind.EnumKeyword)
-        {
-            if (sealedModifier != null)
-            {
-                Diagnostics.ReportUnexpectedToken(sealedModifier.Location, SyntaxKind.SealedKeyword, SyntaxKind.InterfaceKeyword);
-            }
-
-            if (openModifier != null)
-            {
-                Diagnostics.ReportUnexpectedToken(openModifier.Location, SyntaxKind.OpenKeyword, SyntaxKind.ClassKeyword);
-            }
-
-            if (dataKeyword != null)
-            {
-                Diagnostics.ReportUnexpectedToken(dataKeyword.Location, SyntaxKind.IdentifierToken, SyntaxKind.StructKeyword);
-            }
-
-            if (typeParameterList != null)
-            {
-                Diagnostics.ReportUnexpectedToken(typeParameterList.OpenBracketToken.Location, SyntaxKind.OpenSquareBracketToken, SyntaxKind.EnumKeyword);
-            }
-
-            return ParseEnumDeclaration(accessibilityModifier, typeKeyword, identifier);
-        }
-
-        if (Current.Kind == SyntaxKind.InterfaceKeyword)
-        {
-            if (openModifier != null)
-            {
-                Diagnostics.ReportUnexpectedToken(openModifier.Location, SyntaxKind.OpenKeyword, SyntaxKind.InterfaceKeyword);
-            }
-
-            if (dataKeyword != null)
-            {
-                Diagnostics.ReportUnexpectedToken(dataKeyword.Location, SyntaxKind.IdentifierToken, SyntaxKind.InterfaceKeyword);
-            }
-
-            // Phase 4.3c / ADR-0020/0021: generic interfaces. The type-parameter
-            // list (if any) is now forwarded into ParseInterfaceDeclaration.
-            return ParseInterfaceDeclaration(accessibilityModifier, typeKeyword, identifier, typeParameterList, sealedModifier);
-        }
-
-        if (sealedModifier != null)
-        {
-            Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.InterfaceKeyword);
-        }
-
-        if (openModifier != null)
-        {
-            Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword);
-        }
-
-        if (dataKeyword != null)
-        {
-            // We already consumed `data` but the next token wasn't `struct`.
-            // This path is unreachable given the lookahead above, but keeps
-            // the parser deterministic if peek state ever drifts.
-            Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.StructKeyword);
+            return ReportAndRecoverLegacyAggregateForm(accessibilityModifier, typeKeyword, identifier, typeParameterList);
         }
 
         var equalsToken = MatchToken(SyntaxKind.EqualsToken);
@@ -606,6 +970,204 @@ public class Parser
         var aliasedIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var aliasedType = new TypeClauseSyntax(syntaxTree, aliasedIdentifier);
         return new TypeAliasDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, equalsToken, aliasedType);
+    }
+
+    /// <summary>
+    /// ADR-0078 / issue #718: emit GS0306 (or GS0307 for <c>record</c>) on a
+    /// legacy aggregate declaration head (<c>type Name [mods]? &lt;kind&gt; ...</c>)
+    /// and recover by consuming the modifier/keyword/body sequence as if the
+    /// declaration had been written in the new grammar. The recovered syntax
+    /// node feeds the rest of the pipeline so that downstream tests see one
+    /// high-quality diagnostic instead of a cascade.
+    /// </summary>
+    private MemberSyntax ReportAndRecoverLegacyAggregateForm(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier,
+        TypeParameterListSyntax typeParameterList)
+    {
+        // Collect any legacy modifiers in their original order so the migration
+        // suggestion preserves the spelling the user typed.
+        var seenSpellings = new List<string>();
+        SyntaxToken openModifier = null;
+        SyntaxToken sealedModifier = null;
+        SyntaxToken dataKeyword = null;
+        SyntaxToken inlineKeyword = null;
+        SyntaxToken refModifier = null;
+        SyntaxToken recordKeyword = null;
+        var hadRecord = false;
+
+        while (true)
+        {
+            if (Current.Kind == SyntaxKind.OpenKeyword)
+            {
+                openModifier = NextToken();
+                seenSpellings.Add("open");
+                continue;
+            }
+
+            if (Current.Kind == SyntaxKind.SealedKeyword)
+            {
+                sealedModifier = NextToken();
+                seenSpellings.Add("sealed");
+                continue;
+            }
+
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data")
+            {
+                dataKeyword = NextToken();
+                seenSpellings.Add("data");
+                continue;
+            }
+
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "inline")
+            {
+                inlineKeyword = NextToken();
+                seenSpellings.Add("inline");
+                continue;
+            }
+
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "ref")
+            {
+                refModifier = NextToken();
+                seenSpellings.Add("ref");
+                continue;
+            }
+
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "record")
+            {
+                recordKeyword = NextToken();
+                hadRecord = true;
+                continue;
+            }
+
+            break;
+        }
+
+        SyntaxToken aggregateKeyword = null;
+        string kindText = null;
+
+        if (hadRecord)
+        {
+            // `record` becomes `data class` in the new spelling (ref-typed
+            // equality-bearing aggregate). We synthesise the class keyword so
+            // recovery can run the class-body parser.
+            kindText = "data class";
+            aggregateKeyword = new SyntaxToken(syntaxTree, SyntaxKind.ClassKeyword, recordKeyword.Position, "class", null);
+            if (dataKeyword == null)
+            {
+                dataKeyword = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, recordKeyword.Position, "data", null);
+            }
+
+            Diagnostics.ReportRecordKeywordRemoved(typeKeyword.Location, identifier.Text);
+        }
+        else if (Current.Kind == SyntaxKind.ClassKeyword ||
+                 Current.Kind == SyntaxKind.StructKeyword ||
+                 Current.Kind == SyntaxKind.EnumKeyword ||
+                 Current.Kind == SyntaxKind.InterfaceKeyword)
+        {
+            aggregateKeyword = NextToken();
+            kindText = aggregateKeyword.Text;
+
+            var modifierSpelling = seenSpellings.Count == 0 ? string.Empty : string.Join(' ', seenSpellings) + " ";
+            var typeParamSuffix = typeParameterList == null
+                ? string.Empty
+                : RenderTypeParameterList(typeParameterList);
+            var migration = $"{modifierSpelling}{kindText} {identifier.Text}{typeParamSuffix}";
+            Diagnostics.ReportOldTypeDeclarationFormRemoved(typeKeyword.Location, migration);
+        }
+        else
+        {
+            // No `=` AND no aggregate keyword: probably a malformed alias.
+            // Emit a generic unexpected-token diagnostic and stop.
+            Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.EqualsToken);
+            return new TypeAliasDeclarationSyntax(
+                syntaxTree,
+                accessibilityModifier,
+                typeKeyword,
+                identifier,
+                new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, Current.Position, "=", null),
+                new TypeClauseSyntax(syntaxTree, new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, Current.Position, identifier.Text, null)));
+        }
+
+        // Recover by feeding the synthesised modifiers + aggregate keyword
+        // into the new-grammar aggregate parser so the rest of the file can
+        // still be analysed.
+        switch (aggregateKeyword.Kind)
+        {
+            case SyntaxKind.EnumKeyword:
+                {
+                    if (typeParameterList != null)
+                    {
+                        Diagnostics.ReportUnexpectedToken(typeParameterList.OpenBracketToken.Location, SyntaxKind.OpenSquareBracketToken, SyntaxKind.EnumKeyword);
+                    }
+
+                    return ParseEnumDeclarationNew(accessibilityModifier, sealedModifier, aggregateKeyword, identifier);
+                }
+
+            case SyntaxKind.InterfaceKeyword:
+                return ParseInterfaceDeclarationNew(accessibilityModifier, sealedModifier, aggregateKeyword, identifier, typeParameterList);
+
+            default:
+                {
+                    var structDecl = ParseStructDeclarationNew(accessibilityModifier, dataKeyword, inlineKeyword, openModifier, sealedModifier, refModifier, aggregateKeyword, identifier);
+                    structDecl.TypeParameterList = typeParameterList;
+                    structDecl.RefModifier = refModifier;
+                    return structDecl;
+                }
+        }
+    }
+
+    /// <summary>
+    /// ADR-0078 / issue #718: recover from the removed standalone <c>record</c>
+    /// keyword at member position. Emits GS0307 and parses the rest of the
+    /// declaration as if the user had written <c>data struct Name ...</c>.
+    /// </summary>
+    private MemberSyntax ReportAndRecoverLegacyRecordHead(SyntaxToken accessibilityModifier)
+    {
+        var recordToken = NextToken();
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        Diagnostics.ReportRecordKeywordRemoved(recordToken.Location, identifier.Text);
+
+        // Recover by parsing the body as a `data struct Name ...` so downstream
+        // analysis can still proceed against the (renamed) declaration.
+        var syntheticData = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, recordToken.Position, "data", null);
+        var syntheticStruct = new SyntaxToken(syntaxTree, SyntaxKind.StructKeyword, recordToken.Position, "struct", null);
+        return ParseStructDeclarationNew(
+            accessibilityModifier,
+            dataKeyword: syntheticData,
+            inlineKeyword: null,
+            openModifier: null,
+            sealedModifier: null,
+            refModifier: null,
+            aggregateKeyword: syntheticStruct,
+            identifier: identifier);
+    }
+
+    private static string RenderTypeParameterList(TypeParameterListSyntax list)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append('[');
+        var first = true;
+        foreach (var p in list.Parameters)
+        {
+            if (!first)
+            {
+                sb.Append(", ");
+            }
+
+            sb.Append(p.Identifier.Text);
+            if (p.Constraint != null)
+            {
+                sb.Append(' ');
+                sb.Append(p.Constraint.Text);
+            }
+
+            first = false;
+        }
+
+        sb.Append(']');
+        return sb.ToString();
     }
 
     private MemberSyntax ParseDelegateDeclaration(
@@ -741,11 +1303,29 @@ public class Parser
             // fields on the enum type per ECMA-335 §I.8.5.2).
             var annotations = ParseAnnotations();
             var identifier = MatchToken(SyntaxKind.IdentifierToken);
-            nodesAndSeparators.Add(new EnumMemberSyntax(syntaxTree, identifier).WithAnnotations(annotations));
+            var member = new EnumMemberSyntax(syntaxTree, identifier).WithAnnotations(annotations);
+
+            // ADR-0078 / issue #725: discriminated-union enum case may carry
+            // a payload as a primary-constructor parameter list:
+            //   enum Shape { Circle(r float64); Square(s float64) }
+            // We accept either `;` or `,` between cases — `;` is the canonical
+            // separator when payloads are present.
+            if (Current.Kind == SyntaxKind.OpenParenthesisToken)
+            {
+                member.PayloadOpenParenthesis = MatchToken(SyntaxKind.OpenParenthesisToken);
+                member.PayloadParameters = ParseParameterList();
+                member.PayloadCloseParenthesis = MatchToken(SyntaxKind.CloseParenthesisToken);
+            }
+
+            nodesAndSeparators.Add(member);
 
             if (Current.Kind == SyntaxKind.CommaToken)
             {
                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else if (Current.Kind == SyntaxKind.SemicolonToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.SemicolonToken));
             }
             else
             {
@@ -796,41 +1376,21 @@ public class Parser
             ? MatchToken(SyntaxKind.ClassKeyword)
             : MatchToken(SyntaxKind.StructKeyword));
 
-        if (inlineKeyword != null && structOrClassKeyword.Kind != SyntaxKind.StructKeyword)
-        {
-            Diagnostics.ReportUnexpectedToken(inlineKeyword.Location, SyntaxKind.IdentifierToken, SyntaxKind.StructKeyword);
-        }
-
-        if (dataKeyword != null && structOrClassKeyword.Kind == SyntaxKind.ClassKeyword)
-        {
-            // ADR-0029 limits `data` to `struct`; `data class` is not part of
-            // the Phase 3 design. Diagnose but continue so the rest of the
-            // body parses cleanly.
-            Diagnostics.ReportUnexpectedToken(structOrClassKeyword.Location, SyntaxKind.ClassKeyword, SyntaxKind.StructKeyword);
-        }
-
-        if (openModifier != null && structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
-        {
-            // ADR-0017: `open` is only meaningful on a `class` (structs are
-            // value types and cannot be subclassed).
-            Diagnostics.ReportUnexpectedToken(openModifier.Location, SyntaxKind.OpenKeyword, SyntaxKind.ClassKeyword);
-        }
+        // Modifier validation (inline only on struct, open only on class, data
+        // combination rules) is now performed in the caller — either
+        // ParseAggregateDeclaration (new grammar, ADR-0078) or
+        // ParseTypeAliasDeclaration (legacy grammar, GS0306).
 
         // Phase 3.B.3 sub-step 2: optional Kotlin-style primary constructor
         // parameter list `(name Type, name Type, ...)` directly after the
         // `class` keyword. Each parameter becomes both a ctor argument and a
-        // public field of the same name. Only valid for classes; structs are
-        // constructed exclusively via composite literals.
+        // public field of the same name. Both classes and structs accept a
+        // primary constructor parameter list.
         SyntaxToken primaryCtorOpenParen = null;
         SyntaxToken primaryCtorCloseParen = null;
         SeparatedSyntaxList<ParameterSyntax> primaryCtorParameters = new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty);
         if (Current.Kind == SyntaxKind.OpenParenthesisToken)
         {
-            if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword && inlineKeyword == null)
-            {
-                Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.OpenBraceToken);
-            }
-
             primaryCtorOpenParen = MatchToken(SyntaxKind.OpenParenthesisToken);
             primaryCtorParameters = ParseParameterList();
             primaryCtorCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
@@ -840,6 +1400,9 @@ public class Parser
         // Phase 3.B.4 extends this to `: Base, IFoo, IBar` — a comma-separated
         // list. The binder classifies each identifier as either the base class
         // (at most one, must come first) or an implemented interface.
+        // ADR-0078: structs may carry an implemented-interface clause too;
+        // earlier parser-level restrictions are dropped (binder enforces
+        // semantic legality, e.g. structs may not have a base class).
         SyntaxToken baseColon = null;
         SyntaxToken baseTypeIdentifier = null;
         SyntaxToken baseCtorOpenParen = null;
@@ -850,11 +1413,6 @@ public class Parser
         var baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
         if (Current.Kind == SyntaxKind.ColonToken)
         {
-            if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
-            {
-                Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.OpenBraceToken);
-            }
-
             baseColon = MatchToken(SyntaxKind.ColonToken);
             var firstBaseType = ParseTypeClause();
             baseTypeClauseNodesAndSeparators.Add(firstBaseType);
@@ -897,11 +1455,23 @@ public class Parser
         var constructors = ImmutableArray.CreateBuilder<ConstructorDeclarationSyntax>();
         DeinitDeclarationSyntax structDecl_deinit = null;
         SharedBlockSyntax structDecl_sharedBlock = null;
-        if (inlineKeyword != null && Current.Kind != SyntaxKind.OpenBraceToken)
+
+        // ADR-0078 / issue #718: the body block `{ ... }` is optional for any
+        // aggregate that uses the new declaration head. The bodyless form is
+        //   class Name(params) [: Bases]
+        //   struct Name(params) [: Bases]
+        //   data class Name(params) [: Bases]
+        //   data struct Name(params) [: Bases]
+        //   inline struct Name(params)
+        // — all of which carry their fields via the primary constructor. A
+        // bodyless declaration is detected when the next token after the
+        // declaration head is not <c>{</c>.
+        var isBodyless = Current.Kind != SyntaxKind.OpenBraceToken;
+        if (isBodyless)
         {
             openBrace = new SyntaxToken(syntaxTree, SyntaxKind.OpenBraceToken, Current.Position, "{", null);
             var syntheticCloseBrace = new SyntaxToken(syntaxTree, SyntaxKind.CloseBraceToken, Current.Position, "}", null);
-            var inlineDecl = new StructDeclarationSyntax(
+            var bodylessDecl = new StructDeclarationSyntax(
                 syntaxTree,
                 accessibilityModifier,
                 typeKeyword,
@@ -922,8 +1492,11 @@ public class Parser
                 events.ToImmutable(),
                 methods.ToImmutable(),
                 syntheticCloseBrace);
-            inlineDecl.BaseTypeClauses = baseTypeClauses;
-            return inlineDecl;
+            bodylessDecl.BaseTypeClauses = baseTypeClauses;
+            bodylessDecl.BaseConstructorOpenParenthesisToken = baseCtorOpenParen;
+            bodylessDecl.BaseConstructorArguments = baseCtorArguments;
+            bodylessDecl.BaseConstructorCloseParenthesisToken = baseCtorCloseParen;
+            return bodylessDecl;
         }
 
         openBrace = MatchToken(SyntaxKind.OpenBraceToken);
@@ -1918,6 +2491,8 @@ public class Parser
                 || follow.Kind == SyntaxKind.SealedKeyword
                 || follow.Kind == SyntaxKind.OpenKeyword
                 || follow.Kind == SyntaxKind.EqualsToken // ADR-0059: `type X[T any] = delegate func(...)` (rejected by binder as GS0234).
+                || follow.Kind == SyntaxKind.OpenBraceToken // ADR-0078: `class Name[T any] { ... }`.
+                || follow.Kind == SyntaxKind.ColonToken // ADR-0078: `class Name[T any] : Base { ... }`.
                 || (follow.Kind == SyntaxKind.IdentifierToken && (follow.Text == "data" || follow.Text == "record")))
             {
                 return true;

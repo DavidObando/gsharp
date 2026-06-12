@@ -101,7 +101,7 @@ tick()
     public void AsyncClassMember_ParsesAndBinds()
     {
         var source = @"
-type SmokeTests class {
+class SmokeTests {
     init() {}
     async func DoIt() {
     }
@@ -122,7 +122,7 @@ type SmokeTests class {
     public void AsyncClassMember_AwaitsSiblingAsyncMember_NoDiagnostics()
     {
         var source = @"
-type Probe class {
+class Probe {
     init() {}
 
     async func ReturnInt() int32 {

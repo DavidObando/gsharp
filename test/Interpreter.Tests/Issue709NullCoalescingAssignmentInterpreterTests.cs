@@ -51,7 +51,7 @@ public class Issue709NullCoalescingAssignmentInterpreterTests
     public void Field_LHS_WritesThroughClassReceiver()
     {
         var source = """
-            type Box class {
+            class Box {
                 var Name string?
             }
             func main() {
@@ -72,7 +72,7 @@ public class Issue709NullCoalescingAssignmentInterpreterTests
     public void Property_LHS_WritesThroughAutoProperty()
     {
         var source = """
-            type Person class {
+            class Person {
                 prop Name string?
             }
             func main() {
@@ -112,7 +112,7 @@ public class Issue709NullCoalescingAssignmentInterpreterTests
     public void Receiver_EvaluatedOnce_RhsOnlyWhenNil()
     {
         var source = """
-            type Box class {
+            class Box {
                 var Name string?
             }
             var receiverCalls int32 = 0

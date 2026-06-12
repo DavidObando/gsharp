@@ -112,7 +112,7 @@ func f(x int32 = 1 + 2) int32 { return x }
     public void ClassMethods_DistinctSignatures_BothBindOK()
     {
         var source = @"
-type Calc class {
+class Calc {
     func add(x int32) int32 { return x }
     func add(x int32, y int32) int32 { return x + y }
 }
@@ -125,7 +125,7 @@ type Calc class {
     public void ClassMethods_DuplicateSignature_DiagnosesGS0264()
     {
         var source = @"
-type Calc class {
+class Calc {
     func sum(x int32) int32 { return x }
     func sum(x int32) int32 { return x + 1 }
 }
@@ -138,7 +138,7 @@ type Calc class {
     public void InterfaceMethods_DistinctSignatures_BothBindOK()
     {
         var source = @"
-type IOps interface {
+interface IOps {
     func op(x int32) int32
     func op(x int32, y int32) int32
 }
@@ -153,7 +153,7 @@ type IOps interface {
         // ADR-0063 §9: instance-method overload resolution at call sites now
         // chooses by arity/type rather than first-by-name.
         var source = @"
-type Calc class(seed int32) {
+class Calc(seed int32) {
     func add(x int32) int32 { return x + seed }
     func add(x int32, y int32) int32 { return x + y + seed }
 }
@@ -169,7 +169,7 @@ c.add(10)
     public void InstanceMethod_OverloadResolution_PicksTwoArg()
     {
         var source = @"
-type Calc class(seed int32) {
+class Calc(seed int32) {
     func add(x int32) int32 { return x + seed }
     func add(x int32, y int32) int32 { return x + y + seed }
 }
@@ -186,7 +186,7 @@ c.add(7, 8)
     {
         // ADR-0063 §5: primary constructors honor optional parameters.
         var source = @"
-type P class(X int32, Y int32 = 5) {}
+class P(X int32, Y int32 = 5) {}
 let p = P(1)
 p.Y
 ";
@@ -200,7 +200,7 @@ p.Y
     {
         // ADR-0063 §9: multiple init(...) overloads, overload-resolved at call site.
         var source = @"
-type Box class {
+class Box {
     var X int32
     init(a int32) { X = a }
     init(a int32, b int32) { X = a * b }
@@ -217,7 +217,7 @@ b.X
     public void MultipleInitConstructors_DuplicateSignature_Diagnoses()
     {
         var source = @"
-type Box class {
+class Box {
     var X int32
     init(a int32) { X = a }
     init(a int32) { X = a + 1 }

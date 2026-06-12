@@ -62,7 +62,7 @@ public class AttributeInterpreterTests
     [Fact]
     public void Interpreter_Accepts_AttributeSugar_Class_Declaration()
     {
-        var source = "import System\n@Attribute\ntype Trace class {\n}\n";
+        var source = "import System\n@Attribute\nclass Trace {\n}\n";
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
     }
@@ -72,7 +72,7 @@ public class AttributeInterpreterTests
     {
         // Issue #186: reading an `@Obsolete` field surfaces GS0204 at the
         // use site; the value still evaluates and prints.
-        var source = "type Point data struct {\n  @Obsolete(\"use NewX\")\n  var X int32\n  var Y int32\n}\nlet p = Point{ X: 1, Y: 2 }\np.X";
+        var source = "data struct Point {\n  @Obsolete(\"use NewX\")\n  var X int32\n  var Y int32\n}\nlet p = Point{ X: 1, Y: 2 }\np.X";
         var output = RunSubmission(source);
         Assert.Contains("warning GS0204", output);
         Assert.Contains("Point.X", output);

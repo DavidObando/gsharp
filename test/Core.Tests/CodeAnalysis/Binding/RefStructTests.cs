@@ -111,7 +111,7 @@ func box(arr []int32) object {
     {
         var source = @"
 import System
-type Holder class {
+class Holder {
     var s ReadOnlySpan[int32]
 }
 ";
@@ -124,7 +124,7 @@ type Holder class {
     {
         var source = @"
 import System
-type Holder class(s ReadOnlySpan[int32]) {
+class Holder(s ReadOnlySpan[int32]) {
 }
 ";
         var result = Evaluate(source);
@@ -195,7 +195,7 @@ func f() {
     {
         var source = @"
 package P
-type Window ref struct {
+ref struct Window {
     var Total int32
 }
 ";
@@ -211,7 +211,7 @@ type Window ref struct {
     {
         var source = @"
 package P
-type Plain struct {
+struct Plain {
     var Total int32
 }
 ";
@@ -227,7 +227,7 @@ type Plain struct {
     {
         var source = @"
 package P
-type Acc ref struct {
+ref struct Acc {
     var Total int32
 }
 func use() int32 {
@@ -244,7 +244,7 @@ func use() int32 {
     {
         var source = @"
 package P
-type Acc ref struct {
+ref struct Acc {
     var Total int32
 }
 func box() object {
@@ -262,10 +262,10 @@ func box() object {
     {
         var source = @"
 package P
-type Acc ref struct {
+ref struct Acc {
     var Total int32
 }
-type Holder struct {
+struct Holder {
     var a Acc
 }
 ";
@@ -278,10 +278,10 @@ type Holder struct {
     {
         var source = @"
 package P
-type Inner ref struct {
+ref struct Inner {
     var V int32
 }
-type Outer ref struct {
+ref struct Outer {
     var Slot Inner
 }
 ";
@@ -294,7 +294,7 @@ type Outer ref struct {
     {
         var source = @"
 package P
-type Acc ref struct {
+ref struct Acc {
     var Total int32
 }
 func f() {
@@ -313,7 +313,7 @@ func f() {
         var source = @"
 package P
 import System.Collections.Generic
-type Acc ref struct {
+ref struct Acc {
     var Total int32
 }
 func f() {
@@ -338,7 +338,7 @@ var s ReadOnlySpan[int32] = []int32{1, 2, 3}
         // ... and to user-declared ones.
         var user = @"
 package P
-type Acc ref struct {
+ref struct Acc {
     var Total int32
 }
 var a Acc = Acc{Total: 1}

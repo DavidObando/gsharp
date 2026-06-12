@@ -37,7 +37,7 @@ import System
 var getterCalls = 0
 var setterCalls = 0
 
-type Box class {
+class Box {
     prop raw int32
     prop Value int32 {
         get {
@@ -74,7 +74,7 @@ import System
 
 var getterCalls = 0
 
-type Box class {
+class Box {
     prop raw int32
     prop Value int32 {
         get {
@@ -106,7 +106,7 @@ import System
 
 var rhsCalls = 0
 
-type Box class {
+class Box {
     prop raw int32
     prop Value int32 {
         get { return this.raw }
@@ -178,7 +178,7 @@ import System
 
 var getterCalls = 0
 
-type Box class {
+class Box {
     prop raw int32
     prop Value int32 {
         get {

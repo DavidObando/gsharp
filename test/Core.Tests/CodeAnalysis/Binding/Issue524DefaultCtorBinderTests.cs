@@ -14,7 +14,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #524 — focused binder coverage. A <c>type X class { ... }</c> whose
+/// Issue #524 — focused binder coverage. A <c>class X { ... }</c> whose
 /// body declares fields (but no explicit <c>init(...)</c> and no primary
 /// constructor) must surface a synthesized parameterless default constructor
 /// at the call site: <c>X()</c> must bind cleanly, with no diagnostics, and
@@ -30,7 +30,7 @@ public class Issue524DefaultCtorBinderTests
     public void GSharpClass_NoInit_CallExpression_BindsCleanly()
     {
         var source = @"
-type Holder class {
+class Holder {
     var Value int32
 }
 
@@ -47,7 +47,7 @@ var h = Holder()
         // argument should be reported against the class name — not as a
         // missing function or a failing conversion.
         var source = @"
-type Holder class {
+class Holder {
     var Value int32
 }
 
@@ -68,7 +68,7 @@ var h = Holder(7)
     public void GSharpClass_EmptyBody_DefaultConstructor_BindsCleanly()
     {
         var source = @"
-type Empty class { }
+class Empty { }
 
 var e = Empty()
 ";
@@ -82,7 +82,7 @@ var e = Empty()
         // Regression guard: classes that DO declare an explicit init(...)
         // must continue to bind against that constructor's parameter list.
         var source = @"
-type Point class {
+class Point {
     var X int32
     var Y int32
 
@@ -103,7 +103,7 @@ var p = Point(3, 4)
     {
         // Regression guard: primary-ctor classes must keep binding.
         var source = @"
-type Box class(value int32) { }
+class Box(value int32) { }
 
 var b = Box(42)
 ";

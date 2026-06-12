@@ -21,7 +21,7 @@ public class LetFieldBindingTests
     [Fact]
     public void LetField_ReassignmentReportsCannotAssign()
     {
-        const string source = "package P\ntype Counter class {\n  let Value int32 = 0\n  init() {}\n}\nvar c = Counter()\nc.Value = 1\n";
+        const string source = "package P\nclass Counter {\n  let Value int32 = 0\n  init() {}\n}\nvar c = Counter()\nc.Value = 1\n";
         var diagnostics = GetDiagnostics(source);
         Assert.Contains(diagnostics, d => d.Id == "GS0127");
     }
@@ -29,7 +29,7 @@ public class LetFieldBindingTests
     [Fact]
     public void VarField_ReassignmentAllowed()
     {
-        const string source = "package P\ntype Counter class {\n  var Value int32 = 0\n  init() {}\n}\nvar c = Counter()\nc.Value = 1\n";
+        const string source = "package P\nclass Counter {\n  var Value int32 = 0\n  init() {}\n}\nvar c = Counter()\nc.Value = 1\n";
         var diagnostics = GetDiagnostics(source);
         Assert.DoesNotContain(diagnostics, d => d.Id == "GS0127");
     }

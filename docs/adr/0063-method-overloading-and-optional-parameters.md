@@ -163,7 +163,7 @@ User-defined constructors declared with `init(...)` participate in overload sets
 Example:
 
 ```gsharp
-type FileStream class {
+class FileStream {
     init(path string)
     init(path string, mode FileMode = FileMode.Open)
 }

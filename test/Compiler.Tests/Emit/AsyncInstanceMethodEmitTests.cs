@@ -13,7 +13,7 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #502: `async func` declared as an instance (or shared/static) member
-/// of a <c>type X class { ... }</c> body parses, binds, and emits the same way
+/// of a <c>class X { ... }</c> body parses, binds, and emits the same way
 /// as a top-level <c>async func</c>. Each case asserts the call site sees a
 /// <c>Task</c>/<c>Task&lt;T&gt;</c> return type, that the kickoff method
 /// signature on the user type is <c>Task</c>-shaped, and that the assembly
@@ -30,7 +30,7 @@ public class AsyncInstanceMethodEmitTests
 
             import System.Threading.Tasks
 
-            type Greeter class(Name string) {
+            class Greeter(Name string) {
                 async func Greet() {
                     await Task.Delay(1)
                 }
@@ -65,7 +65,7 @@ public class AsyncInstanceMethodEmitTests
 
             import System.Threading.Tasks
 
-            type Calc class {
+            class Calc {
                 init() {}
 
                 async func Double(n int32) int32 {
@@ -101,7 +101,7 @@ public class AsyncInstanceMethodEmitTests
 
             import System.Threading.Tasks
 
-            type Calc class {
+            class Calc {
                 init() {}
 
                 async func Add(a int32, b int32) int32 {
@@ -141,7 +141,7 @@ public class AsyncInstanceMethodEmitTests
 
             import System.Threading.Tasks
 
-            type Tagged class {
+            class Tagged {
                 init() {}
 
                 public async func Tag(n int32) int32 {
@@ -180,7 +180,7 @@ public class AsyncInstanceMethodEmitTests
 
             import System.Threading.Tasks
 
-            type Adder class(Base int32) {
+            class Adder(Base int32) {
                 async func Bump(n int32) int32 {
                     await Task.Delay(1)
                     return Base + n
@@ -211,7 +211,7 @@ public class AsyncInstanceMethodEmitTests
 
             import System.Threading.Tasks
 
-            type Math2 class {
+            class Math2 {
                 shared {
                     async func Triple(n int32) int32 {
                         await Task.Delay(1)
@@ -251,7 +251,7 @@ public class AsyncInstanceMethodEmitTests
 
             import System.Threading.Tasks
 
-            type Box class {
+            class Box {
                 init() {}
 
                 async func Inc(n int32) int32 {
@@ -286,7 +286,7 @@ public class AsyncInstanceMethodEmitTests
 
             import System.Threading.Tasks
 
-            type Probe class {
+            class Probe {
                 init() {}
 
                 async func ReturnInt() int32 {
@@ -342,7 +342,7 @@ public class AsyncInstanceMethodEmitTests
 
             import System.Threading.Tasks
 
-            type Probe class {
+            class Probe {
                 init() {}
 
                 async func Inner() int32 {
@@ -389,7 +389,7 @@ public class AsyncInstanceMethodEmitTests
 
             import System.Threading.Tasks
 
-            type SmokeTests class {
+            class SmokeTests {
                 init() {}
 
                 @Obsolete
@@ -430,7 +430,7 @@ public class AsyncInstanceMethodEmitTests
 
             import System.Threading.Tasks
 
-            type Chain class {
+            class Chain {
                 init() {}
 
                 async func Add1(n int32) int32 {
@@ -474,9 +474,9 @@ public class AsyncInstanceMethodEmitTests
             import System
             import System.Threading.Tasks
 
-            type AsyncPC class(Value int32) {}
+            class AsyncPC(Value int32) {}
 
-            type Probe class {
+            class Probe {
                 async func MakePC() AsyncPC {
                     await Task.Delay(1)
                     return AsyncPC(7)

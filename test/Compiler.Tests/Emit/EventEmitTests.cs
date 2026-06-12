@@ -22,7 +22,7 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type MyButton class {
+            class MyButton {
                 public event Click func(Object, EventArgs)
             }
             """;
@@ -48,7 +48,7 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type MyButton class {
+            class MyButton {
                 public event Click func(Object, EventArgs)
             }
             """;
@@ -67,7 +67,7 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Notifier class {
+            class Notifier {
                 public event Changed func()
             }
             """;
@@ -102,7 +102,7 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Emitter class {
+            class Emitter {
                 public event Ping func()
             }
             """;
@@ -130,7 +130,7 @@ public class EventEmitTests
         var source = """
             package MyLib
 
-            type IObservable interface {
+            interface IObservable {
                 event Changed func()
             }
             """;
@@ -153,7 +153,7 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Notifier class {
+            class Notifier {
                 public event Changed func() {
                     add { }
                     remove { }
@@ -179,7 +179,7 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Emitter class {
+            class Emitter {
                 public event Notify func(int32, string) {
                     add { }
                     remove { }
@@ -207,7 +207,7 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type EventBus class {
+            class EventBus {
                 shared {
                     public event OnNotify func()
                 }
@@ -232,7 +232,7 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Bus class {
+            class Bus {
                 shared {
                     public event Ping func()
                 }
@@ -268,7 +268,7 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Hub class {
+            class Hub {
                 shared {
                     public event Alert func() {
                         add { }
@@ -307,7 +307,7 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
@@ -350,18 +350,18 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Probe class {
+            class Probe {
                 var Counter Counter
                 var Src Source
                 init() {
@@ -407,12 +407,12 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Notifier class {
+            class Notifier {
                 public event Fired EventHandler
                 init() { }
             }
 
-            type Probe class {
+            class Probe {
                 var N Notifier
                 init() {
                     N = Notifier()
@@ -448,18 +448,18 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Bump() { Value = Value + 1 }
             }
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Probe class {
+            class Probe {
                 var Counter Counter
                 var Src Source
                 init() {
@@ -533,23 +533,23 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Bump() { Value = Value + 1 }
             }
 
-            type Inner class {
+            class Inner {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Outer class {
+            class Outer {
                 var Inner Inner
                 init() { Inner = Inner() }
             }
 
-            type Probe class {
+            class Probe {
                 var Counter Counter
                 var O Outer
                 init() {
@@ -590,17 +590,17 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Inner class {
+            class Inner {
                 public event Fired EventHandler
                 init() { }
             }
 
-            type Outer class {
+            class Outer {
                 var Inner Inner
                 init() { Inner = Inner() }
             }
 
-            type Probe class {
+            class Probe {
                 var O Outer
                 init() {
                     O = Outer()
@@ -636,23 +636,23 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Counter class {
+            class Counter {
                 var Value int32
                 init() { Value = 0 }
                 func Bump() { Value = Value + 1 }
             }
 
-            type Inner class {
+            class Inner {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Outer class {
+            class Outer {
                 var Inner Inner
                 init() { Inner = Inner() }
             }
 
-            type Probe class {
+            class Probe {
                 var Counter Counter
                 var O Outer
                 var Handler EventHandler
@@ -707,12 +707,12 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Probe class {
+            class Probe {
                 var Src Source
                 var Hits int32
                 init() {
@@ -756,12 +756,12 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Probe class {
+            class Probe {
                 var Src Source
                 var Hits int32
                 init() {
@@ -802,12 +802,12 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Source class {
+            class Source {
                 public event Changed EventHandler
                 init() { }
             }
 
-            type Probe class {
+            class Probe {
                 var Src Source
                 var Hits int32
                 init() {
@@ -855,7 +855,7 @@ public class EventEmitTests
             package MyLib
             import System
 
-            type Probe class {
+            class Probe {
                 init() {
                     AppDomain.CurrentDomain.ProcessExit += this.OnExit
                 }

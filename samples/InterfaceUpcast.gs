@@ -8,17 +8,17 @@ package GSharp.Samples.InterfaceUpcast
 
 import System
 
-type IGreeter interface {
+interface IGreeter {
     func Greet() string
 }
 
-type English class(Name string) : IGreeter {
+class English(Name string) : IGreeter {
     func Greet() string {
         return "Hello, $Name"
     }
 }
 
-type Spanish class(Name string) : IGreeter {
+class Spanish(Name string) : IGreeter {
     func Greet() string {
         return "Hola, $Name"
     }

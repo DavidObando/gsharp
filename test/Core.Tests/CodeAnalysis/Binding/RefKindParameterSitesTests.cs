@@ -28,7 +28,7 @@ public class RefKindParameterSitesTests
         // (value-type) instance methods. Inline method bodies inside the
         // type body are class-only as of ADR-0017.
         var source = @"
-type Counter struct {
+struct Counter {
     var Value int32
 }
 
@@ -46,7 +46,7 @@ func (c Counter) Add(ref delta int32) {
     {
         // ADR-0017 / ADR-0024: static methods on classes live in a `shared { ... }` block.
         var source = @"
-type MathHelper class {
+class MathHelper {
     shared {
         func TryDouble(input int32, out result int32) bool {
             result = input * 2
@@ -64,7 +64,7 @@ type MathHelper class {
     public void InterfaceMember_OutParameter_BindsCleanly()
     {
         var source = @"
-type IParser interface {
+interface IParser {
     func TryParse(text string, out result int32) bool
 }
 0
@@ -77,7 +77,7 @@ type IParser interface {
     public void ClassConstructor_RefParameter_BindsCleanly()
     {
         var source = @"
-type Box class {
+class Box {
     var Value int32
 
     init(seed int32, ref delta int32) {
@@ -108,7 +108,7 @@ type StructInObserver = delegate func(in box int32)
     public void PrimaryCtor_RefParameter_Rejected()
     {
         var source = @"
-type Vec class(ref x int32) { }
+class Vec(ref x int32) { }
 0
 ";
         var result = Evaluate(source);
@@ -123,12 +123,12 @@ type Vec class(ref x int32) { }
     public void Override_AddsRefWhereBaseHasNone_ReportsGS0240()
     {
         var source = @"
-type Base open class {
+open class Base {
     open func Adjust(value int32) {
     }
 }
 
-type Derived class : Base {
+class Derived : Base {
     override func Adjust(ref value int32) {
         value = value + 1
     }
@@ -143,13 +143,13 @@ type Derived class : Base {
     public void Override_RemovesRef_ReportsGS0240()
     {
         var source = @"
-type Base open class {
+open class Base {
     open func Adjust(ref value int32) {
         value = value + 1
     }
 }
 
-type Derived class : Base {
+class Derived : Base {
     override func Adjust(value int32) {
     }
 }
@@ -163,12 +163,12 @@ type Derived class : Base {
     public void Override_ChangesInToRef_ReportsGS0240()
     {
         var source = @"
-type Base open class {
+open class Base {
     open func Observe(in value int32) {
     }
 }
 
-type Derived class : Base {
+class Derived : Base {
     override func Observe(ref value int32) {
         value = value + 1
     }
@@ -183,13 +183,13 @@ type Derived class : Base {
     public void Override_ChangesOutToIn_ReportsGS0240()
     {
         var source = @"
-type Base open class {
+open class Base {
     open func Produce(out value int32) {
         value = 0
     }
 }
 
-type Derived class : Base {
+class Derived : Base {
     override func Produce(in value int32) {
     }
 }
@@ -203,13 +203,13 @@ type Derived class : Base {
     public void Override_MatchingRefKind_BindsCleanly()
     {
         var source = @"
-type Base open class {
+open class Base {
     open func Adjust(ref value int32) {
         value = value + 1
     }
 }
 
-type Derived class : Base {
+class Derived : Base {
     override func Adjust(ref value int32) {
         value = value + 2
     }
@@ -224,11 +224,11 @@ type Derived class : Base {
     public void InterfaceImpl_MissingOutOnImplementor_ReportsGS0240()
     {
         var source = @"
-type IParser interface {
+interface IParser {
     func TryParse(text string, out result int32) bool
 }
 
-type MyParser class : IParser {
+class MyParser : IParser {
     func TryParse(text string, result int32) bool {
         return false
     }
@@ -243,11 +243,11 @@ type MyParser class : IParser {
     public void InterfaceImpl_MatchingOut_BindsCleanly()
     {
         var source = @"
-type IParser interface {
+interface IParser {
     func TryParse(text string, out result int32) bool
 }
 
-type MyParser class : IParser {
+class MyParser : IParser {
     func TryParse(text string, out result int32) bool {
         result = 0
         return false

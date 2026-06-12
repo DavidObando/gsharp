@@ -23,7 +23,7 @@ public class Issue698DeinitBinderTests
     public void Deinit_PopulatesDeinitializerSymbol()
     {
         var source = @"
-type Resource class {
+class Resource {
     var Handle int32 = 0
     deinit {
     }
@@ -44,7 +44,7 @@ type Resource class {
     {
         var source = @"
 import System
-type Resource class {
+class Resource {
     var Tag string = """"
     deinit {
         Console.WriteLine(Tag)
@@ -59,7 +59,7 @@ type Resource class {
     public void Deinit_OnStruct_IsRejected()
     {
         var source = @"
-type Point struct {
+struct Point {
     var X int32 = 0
     deinit {
     }
@@ -73,7 +73,7 @@ type Point struct {
     public void Deinit_DuplicateOnSameClass_IsRejected()
     {
         var source = @"
-type Resource class {
+class Resource {
     var Handle int32 = 0
     deinit {
     }
@@ -92,7 +92,7 @@ type Resource class {
         // member-lookup surface — `obj.deinit()` cannot resolve.
         var source = @"
 import System
-type Resource class {
+class Resource {
     var Handle int32 = 0
     deinit {
     }
@@ -109,11 +109,11 @@ r.deinit()
     public void Deinit_OnSubclass_BindsSeparately()
     {
         var source = @"
-type Resource open class(Tag string) {
+open class Resource(Tag string) {
     deinit {
     }
 }
-type CachedResource class : Resource {
+class CachedResource : Resource {
     var Key string = """"
     init(t string) : base(t) {
     }

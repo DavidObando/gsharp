@@ -72,12 +72,12 @@ func Use() {
     [Fact]
     public void BaseClause_With_DottedQualifier_Parses()
     {
-        // `type Impl class : Outer.INested { … }` used to fail in the shared
+        // `class Impl : Outer.INested { … }` used to fail in the shared
         // base-type parsing path. Base entries are now full TypeClauseSyntax
         // nodes so dotted (and generic) forms are preserved structurally.
         const string source = @"
 package P
-type Impl class : Outer.INested {
+class Impl : Outer.INested {
     func Compute() int32 { return 42 }
 }
 ";
@@ -98,7 +98,7 @@ type Impl class : Outer.INested {
 package P
 import System
 
-type Impl class : IComparable[string] {
+class Impl : IComparable[string] {
     func CompareTo(value object) int32 { return 0 }
 }
 ";
@@ -122,7 +122,7 @@ type Impl class : IComparable[string] {
 package P
 import System.Collections.Generic
 
-type MyGeneric[T any] class : IEnumerable[T] {
+class MyGeneric[T any] : IEnumerable[T] {
     func GetEnumerator() IEnumerator[T] { return nil }
 }
 ";

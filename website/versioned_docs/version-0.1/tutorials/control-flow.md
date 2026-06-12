@@ -56,7 +56,7 @@ The canonical collection iteration form is `for value in collection`. Dictionari
 import System
 import System.Collections.Generic
 
-type NumberEnumerator class(Index int32, Current int32) {
+class NumberEnumerator(Index int32, Current int32) {
     func MoveNext() bool {
         Index = Index + 1
         if Index <= 3 {
@@ -68,7 +68,7 @@ type NumberEnumerator class(Index int32, Current int32) {
     }
 }
 
-type Numbers class {
+class Numbers {
     func GetEnumerator() NumberEnumerator {
         return NumberEnumerator(0, 0)
     }
@@ -200,9 +200,9 @@ package GSharp.Samples.PatternSwitch
 
 import System
 
-type Animal open class { Name string }
-type Dog class : Animal { Bark int32 }
-type Cat class : Animal { Purr int32 }
+open class Animal { Name string }
+class Dog : Animal { Bark int32 }
+class Cat : Animal { Purr int32 }
 
 func describe(n int32) {
   switch n {
@@ -229,7 +229,7 @@ func shape(xs []int32) {
   }
 }
 
-type Point data struct { X int32 Y int32 }
+data struct Point { X int32 Y int32 }
 
 func origin(p Point) {
   switch p {
@@ -287,9 +287,9 @@ package GSharp.Samples.SwitchExpression
 
 import System
 
-type Shape open class { Name string }
-type Circle class : Shape { Radius int32 }
-type Square class : Shape { Side int32 }
+open class Shape { Name string }
+class Circle : Shape { Radius int32 }
+class Square : Shape { Side int32 }
 
 let nums = []int32{-3, 0, 1, 5, 101}
 for n in nums {
@@ -320,7 +320,7 @@ let listLabel = switch xs {
 }
 Console.WriteLine(listLabel)
 
-type Pair data struct { A int32 B int32 }
+data struct Pair { A int32 B int32 }
 let p = Pair{A: 7, B: 7}
 let pairLabel = switch p {
   case { A: 0, B: 0 }: "origin"

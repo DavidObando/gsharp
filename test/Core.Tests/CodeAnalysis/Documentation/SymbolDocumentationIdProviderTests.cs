@@ -49,7 +49,7 @@ public class SymbolDocumentationIdProviderTests
     [Fact]
     public void StructType_GeneratesTPrefix()
     {
-        var tree = SyntaxTree.Parse("package Lib\ntype Point data struct { var X int32, Y int32 }");
+        var tree = SyntaxTree.Parse("package Lib\ndata struct Point { var X int32, Y int32 }");
         var compilation = new Compilation(tree);
         var type = compilation.GlobalScope.Structs.First(s => s.Name == "Point");
         var id = SymbolDocumentationIdProvider.GetDocumentationId(type);
@@ -59,7 +59,7 @@ public class SymbolDocumentationIdProviderTests
     [Fact]
     public void StructField_GeneratesFPrefix()
     {
-        var tree = SyntaxTree.Parse("package Lib\ntype Point data struct { var X int32, Y int32 }");
+        var tree = SyntaxTree.Parse("package Lib\ndata struct Point { var X int32, Y int32 }");
         var compilation = new Compilation(tree);
         var type = compilation.GlobalScope.Structs.First(s => s.Name == "Point");
         var field = type.Fields[0];

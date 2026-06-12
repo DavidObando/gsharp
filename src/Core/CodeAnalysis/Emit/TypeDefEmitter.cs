@@ -332,13 +332,17 @@ internal sealed class TypeDefEmitter
         {
             // Phase 3.B.3 sub-step 3: classes are CLR reference types.
             // Sealed by default per ADR-0017 (Kotlin-style `open` opt-in).
+            // ADR-0078: `sealed class` denotes a CLOSED HIERARCHY (subclassing
+            // allowed in-package, exhaustiveness checked at switch sites). It
+            // must NOT carry the CLR `Sealed` flag, otherwise subclasses fail
+            // to load with `TypeLoadException: parent type is sealed`.
             // Base is either the user-declared base class (if any) or
             // System.Object.
             var classAttrs = TypeAttributes.Class
                 | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
                 | TypeAttributes.BeforeFieldInit
                 | AccessibilityMap.MapTypeAccessibility(structSym.Accessibility);
-            if (!structSym.IsOpen)
+            if (!structSym.IsOpen && !structSym.IsSealedHierarchy)
             {
                 classAttrs |= TypeAttributes.Sealed;
             }
@@ -454,7 +458,7 @@ internal sealed class TypeDefEmitter
                 | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
                 | TypeAttributes.BeforeFieldInit
                 | TypeAttributes.NestedPrivate;
-            if (!structSym.IsOpen)
+            if (!structSym.IsOpen && !structSym.IsSealedHierarchy)
             {
                 classAttrs |= TypeAttributes.Sealed;
             }
@@ -500,7 +504,7 @@ internal sealed class TypeDefEmitter
 
     /// <summary>
     /// Issue #193: emits a CLR <c>enum</c> TypeDef for a user-defined GSharp
-    /// <c>type Name enum { ... }</c>. The TypeDef is a sealed value type
+    /// <c>enum Name { ... }</c>. The TypeDef is a sealed value type
     /// deriving from <c>System.Enum</c> with:
     ///   * an instance field <c>value__</c> of <c>int32</c> (the underlying
     ///     type per ADR-0047 §3; widen later if we add explicit underlying

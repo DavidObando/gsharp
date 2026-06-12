@@ -78,7 +78,7 @@ public class DocumentationAttacherTests
     [Fact]
     public void DocOnEnum_Attaches()
     {
-        var source = "/// My enum.\ntype Color enum { Red, Green, Blue }";
+        var source = "/// My enum.\nenum Color { Red, Green, Blue }";
         var tree = SyntaxTree.Parse(source);
         var enumDecl = tree.Root.Members[0];
         var doc = tree.GetDocumentation(enumDecl);

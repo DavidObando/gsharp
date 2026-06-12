@@ -66,7 +66,7 @@ package MyLib
 import System
 
 /// A helper class exposing math and greeting utilities.
-type MathHelper class {
+class MathHelper {
     /// Greets the given name with a friendly message.
     func Greet(name string) string {
         return "Hello, " + name + "!"

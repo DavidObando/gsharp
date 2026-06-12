@@ -17,7 +17,7 @@ public class FieldDeclarationParserTests
     [Fact]
     public void ParsesVarField()
     {
-        const string source = "package P\ntype Counter class {\n  var Value int32\n}\n";
+        const string source = "package P\nclass Counter {\n  var Value int32\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
@@ -32,7 +32,7 @@ public class FieldDeclarationParserTests
     [Fact]
     public void ParsesVarField_WithInitializer()
     {
-        const string source = "package P\ntype Counter class {\n  var Value int32 = 0\n}\n";
+        const string source = "package P\nclass Counter {\n  var Value int32 = 0\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
@@ -45,7 +45,7 @@ public class FieldDeclarationParserTests
     [Fact]
     public void ParsesLetField()
     {
-        const string source = "package P\ntype Counter class {\n  let Name string\n}\n";
+        const string source = "package P\nclass Counter {\n  let Name string\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
@@ -59,7 +59,7 @@ public class FieldDeclarationParserTests
     [Fact]
     public void ParsesLetField_WithInitializer()
     {
-        const string source = "package P\ntype Counter class {\n  let Name string = \"x\"\n}\n";
+        const string source = "package P\nclass Counter {\n  let Name string = \"x\"\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
@@ -72,7 +72,7 @@ public class FieldDeclarationParserTests
     [Fact]
     public void ParsesVarField_WithAccessibility()
     {
-        const string source = "package P\ntype Counter class {\n  public var Value int32\n}\n";
+        const string source = "package P\nclass Counter {\n  public var Value int32\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
@@ -86,7 +86,7 @@ public class FieldDeclarationParserTests
     [Fact]
     public void BareField_ReportsGS0288()
     {
-        const string source = "package P\ntype Counter class {\n  Value int32\n}\n";
+        const string source = "package P\nclass Counter {\n  Value int32\n}\n";
         var tree = SyntaxTree.Parse(source);
         var diagnostic = Assert.Single(tree.Diagnostics);
         Assert.Equal("GS0288", diagnostic.Id);
@@ -97,7 +97,7 @@ public class FieldDeclarationParserTests
     [Fact]
     public void BareField_WithAccessibility_ReportsGS0288()
     {
-        const string source = "package P\ntype Counter class {\n  public Value int32\n}\n";
+        const string source = "package P\nclass Counter {\n  public Value int32\n}\n";
         var tree = SyntaxTree.Parse(source);
         var diagnostic = Assert.Single(tree.Diagnostics);
         Assert.Equal("GS0288", diagnostic.Id);
@@ -106,7 +106,7 @@ public class FieldDeclarationParserTests
     [Fact]
     public void ParsesMixedVarAndLetFields()
     {
-        const string source = "package P\ntype Counter class {\n  var Mutable int32\n  let Constant string = \"x\"\n}\n";
+        const string source = "package P\nclass Counter {\n  var Mutable int32\n  let Constant string = \"x\"\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
@@ -119,7 +119,7 @@ public class FieldDeclarationParserTests
     [Fact]
     public void ParsesVarField_InStruct()
     {
-        const string source = "package P\ntype Point struct {\n  var X int32\n  var Y int32\n}\n";
+        const string source = "package P\nstruct Point {\n  var X int32\n  var Y int32\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
@@ -130,7 +130,7 @@ public class FieldDeclarationParserTests
     [Fact]
     public void ParsesVarField_InSharedBlock()
     {
-        const string source = "package P\ntype Counter class {\n  shared {\n    var Instances int32 = 0\n  }\n}\n";
+        const string source = "package P\nclass Counter {\n  shared {\n    var Instances int32 = 0\n  }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }

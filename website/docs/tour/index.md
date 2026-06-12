@@ -14,7 +14,7 @@ G# combines Go-inspired syntax with the .NET runtime. You will see packages, imp
 ## Chapters
 
 1. [Basics](/docs/tour/basics) — variables, constants, functions, printing, and primitive types.
-2. [Types and values](/docs/tour/types) — structs, data structs, records, classes, arrays, slices, maps, and zero values.
+2. [Types and values](/docs/tour/types) — structs, data structs, data classes, classes, arrays, slices, maps, and zero values.
 3. [Control flow](/docs/tour/control-flow) — `if`, `switch`, `for`, `for in`, and pattern matching.
 4. [Concurrency](/docs/tour/concurrency) — `go`, `scope`, channels, and `select`.
 5. [.NET interop](/docs/tour/dotnet-interop) — imports, CLR types, extension functions, LINQ, and events.

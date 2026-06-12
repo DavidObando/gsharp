@@ -32,7 +32,7 @@ public class UserStructMethodEmitTests
         var source = """
             package P
 
-            type Point struct {
+            struct Point {
                 var X int32
             }
 
@@ -57,7 +57,7 @@ public class UserStructMethodEmitTests
         var source = """
             package P
 
-            type Greeter class {
+            class Greeter {
                 func Greet() int32 {
                     return 42
                 }
@@ -85,7 +85,7 @@ public class UserStructMethodEmitTests
             package P
             import System
 
-            type Point struct {
+            struct Point {
                 var X int32
                 var Y int32
             }
@@ -120,7 +120,7 @@ public class UserStructMethodEmitTests
             package P
             import System
 
-            type Point struct {
+            struct Point {
                 var X int32
                 var Y int32
             }
@@ -155,7 +155,7 @@ public class UserStructMethodEmitTests
             package P
             import System
 
-            type Wrap ref struct {
+            ref struct Wrap {
                 var V int32
             }
 
@@ -217,7 +217,7 @@ public class UserStructMethodEmitTests
             package P
             import System
 
-            type Point struct {
+            struct Point {
                 var X int32
                 var Y int32
             }
@@ -253,11 +253,11 @@ public class UserStructMethodEmitTests
             package P
             import System
 
-            type Inner struct {
+            struct Inner {
                 var V int32
             }
 
-            type Outer struct {
+            struct Outer {
                 var I Inner
             }
 
@@ -290,11 +290,11 @@ public class UserStructMethodEmitTests
             package P
             import System
 
-            type Inner struct {
+            struct Inner {
                 var V int32
             }
 
-            type Outer struct {
+            struct Outer {
                 var I Inner
             }
 
@@ -330,7 +330,7 @@ public class UserStructMethodEmitTests
             package P
             import System
 
-            type Point struct {
+            struct Point {
                 var X int32
                 var Y int32
             }
@@ -369,7 +369,7 @@ public class UserStructMethodEmitTests
             package P
             import System
 
-            type Point struct {
+            struct Point {
                 var X int32
                 var Y int32
             }

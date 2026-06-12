@@ -24,17 +24,17 @@ public class Issue712FlowNarrowingExtensionsEmitTests
         package Test
         import System
 
-        type Animal open class {
+        open class Animal {
             var Name string
             open func Describe() string { return Name }
         }
 
-        type Dog class : Animal {
+        class Dog : Animal {
             override func Describe() string { return Name + " (dog)" }
             func Bark() string { return Name + ":woof" }
         }
 
-        type Cat class : Animal {
+        class Cat : Animal {
             override func Describe() string { return Name + " (cat)" }
             func Purr() string { return Name + ":purr" }
         }

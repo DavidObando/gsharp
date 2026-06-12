@@ -109,7 +109,7 @@ public class Issue533NullToNullableParameterEmitTests
 
             import System
 
-            type Box class {
+            class Box {
                 var Value int32?
 
                 init(v int32?) {
@@ -134,7 +134,7 @@ public class Issue533NullToNullableParameterEmitTests
 
             import System
 
-            type Wrapper class {
+            class Wrapper {
                 var Text string?
 
                 init(t string?) {

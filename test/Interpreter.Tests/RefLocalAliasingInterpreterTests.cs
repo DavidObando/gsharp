@@ -69,7 +69,7 @@ tweak()
     public void LetRef_AliasStructField_WritesThrough()
     {
         var output = RunSubmission(@"
-type Counter struct {
+struct Counter {
     var Value int32
 }
 

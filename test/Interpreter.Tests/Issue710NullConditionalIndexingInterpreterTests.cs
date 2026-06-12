@@ -152,7 +152,7 @@ public class Issue710NullConditionalIndexingInterpreterTests
     public void Chained_NullConditional_Member_Then_Index()
     {
         var source = """
-            type Holder class {
+            class Holder {
                 var Data []int32?
             }
 

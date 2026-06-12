@@ -17,7 +17,7 @@ package GSharp.Example.Struct
 
 import System
 
-type Point struct {
+struct Point {
     X int32
     Y int32
 }
@@ -52,7 +52,7 @@ package Tour.Types
 
 import System
 
-type Point class {
+class Point {
     X int32
     Y int32
 }
@@ -72,7 +72,7 @@ package GSharp.Example.DataStruct
 
 import System
 
-type Point data struct {
+data struct Point {
     X int32
     Y int32
 }
@@ -99,7 +99,7 @@ package GSharp.Example.DataStructErgonomics
 
 import System
 
-type Point data struct {
+data struct Point {
     x int32
     y int32
 }

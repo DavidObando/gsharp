@@ -26,7 +26,7 @@ public class PropertyInteropTests
             package MyLib
             import System
 
-            type Person class {
+            class Person {
                 prop Name string
                 prop Age int32
             }
@@ -52,7 +52,7 @@ public class PropertyInteropTests
             package MyLib
             import System
 
-            type Config class {
+            class Config {
                 prop Version int32 { get }
             }
             """;
@@ -81,7 +81,7 @@ public class PropertyInteropTests
             package MyLib
             import System
 
-            type Rect class {
+            class Rect {
                 prop Width int32
                 prop Height int32
                 prop Area int32 {
@@ -111,7 +111,7 @@ public class PropertyInteropTests
             package MyLib
             import System
 
-            type Clamped class {
+            class Clamped {
                 prop raw int32
                 prop Value int32 {
                     get { return this.raw }
@@ -138,11 +138,11 @@ public class PropertyInteropTests
             package MyLib
             import System
 
-            type Animal open class {
+            open class Animal {
                 open prop Sound string
             }
 
-            type Dog class : Animal {
+            class Dog : Animal {
                 override prop Sound string
             }
             """;
@@ -165,13 +165,13 @@ public class PropertyInteropTests
             package MyLib
             import System
 
-            type Base open class {
+            open class Base {
                 open prop Label string {
                     get { return "base" }
                 }
             }
 
-            type Derived class : Base {
+            class Derived : Base {
                 override prop Label string {
                     get { return "derived" }
                 }
@@ -195,11 +195,11 @@ public class PropertyInteropTests
             package MyLib
             import System
 
-            type Named interface {
+            interface Named {
                 prop Name string { get }
             }
 
-            type User class : Named {
+            class User : Named {
                 prop Name string
             }
             """;
@@ -223,7 +223,7 @@ public class PropertyInteropTests
             package MyLib
             import System
 
-            type Widget class {
+            class Widget {
                 prop Id int32
                 prop Label string
                 prop IsActive bool
@@ -254,7 +254,7 @@ public class PropertyInteropTests
             package MyLib
             import System
 
-            type Item class {
+            class Item {
                 prop Name string
             }
             """;
@@ -282,7 +282,7 @@ public class PropertyInteropTests
             package MyLib
             import System
 
-            type Config class {
+            class Config {
                 prop Host string
                 prop Port int32
             }
@@ -306,7 +306,7 @@ public class PropertyInteropTests
             package MyLib
             import System
 
-            type Product class {
+            class Product {
                 prop Name string
                 prop Price int32
             }
@@ -339,7 +339,7 @@ public class PropertyInteropTests
             package MyLib
             import System
 
-            type Vec2 data struct {
+            data struct Vec2 {
                 var X int32
                 var Y int32
                 prop LengthSquared int32 {

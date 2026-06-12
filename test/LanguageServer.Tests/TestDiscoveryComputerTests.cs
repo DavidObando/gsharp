@@ -27,7 +27,7 @@ public class TestDiscoveryComputerTests
     [Fact]
     public void ComputeTests_DiscoversClassMethodsWithQualifiedFilter()
     {
-        const string source = "type MyTests class {\n  @Fact\n  func PassesA() {\n  }\n\n  @Fact\n  func PassesB() {\n  }\n}\n";
+        const string source = "class MyTests {\n  @Fact\n  func PassesA() {\n  }\n\n  @Fact\n  func PassesB() {\n  }\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var tests = TestDiscoveryComputer.ComputeTests("file:///t.gs", content);

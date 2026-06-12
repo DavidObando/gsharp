@@ -51,7 +51,7 @@ public class Issue658CtorClrInterfaceParamEmitTests
             import System
             import Probe.CSharp
 
-            type ProbeExecutor class : IExecutor {
+            class ProbeExecutor : IExecutor {
                 func Run() {
                     Console.WriteLine("executed")
                 }
@@ -92,7 +92,7 @@ public class Issue658CtorClrInterfaceParamEmitTests
             import System
             import Probe.CSharp
 
-            type ProbeExecutor class : IExecutor {
+            class ProbeExecutor : IExecutor {
                 func Run() {
                     Console.WriteLine("ran")
                 }
@@ -129,7 +129,7 @@ public class Issue658CtorClrInterfaceParamEmitTests
             import System
             import Probe.CSharp
 
-            type ProbeExecutor class : IExecutor {
+            class ProbeExecutor : IExecutor {
                 func Run() {
                     Console.WriteLine("annotated")
                 }
@@ -165,7 +165,7 @@ public class Issue658CtorClrInterfaceParamEmitTests
             import System
             import Probe.CSharp
 
-            type ProbeExecutor class : IExecutor {
+            class ProbeExecutor : IExecutor {
                 func Run() {
                     Console.WriteLine("as-cast")
                 }
@@ -203,7 +203,7 @@ public class Issue658CtorClrInterfaceParamEmitTests
             import System
             import Probe.CSharp
 
-            type ProbeExecutor class : IExecutor {
+            class ProbeExecutor : IExecutor {
                 func Run() {
                     Console.WriteLine("go")
                 }
@@ -240,7 +240,7 @@ public class Issue658CtorClrInterfaceParamEmitTests
             import System
             import Probe.CSharp
 
-            type ProbeExecutor class : IExecutor {
+            class ProbeExecutor : IExecutor {
                 func Run() {
                     Console.WriteLine("single")
                 }
