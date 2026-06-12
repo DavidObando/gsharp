@@ -178,7 +178,7 @@ public class Issue521ClassToInterfaceUpcastEmitTests
             mut.Add(20)
             mut.Add(30)
             var e IEnumerable[int32] = mut
-            for x := range e {
+            for x in e {
                 Console.WriteLine(x)
             }
             """;

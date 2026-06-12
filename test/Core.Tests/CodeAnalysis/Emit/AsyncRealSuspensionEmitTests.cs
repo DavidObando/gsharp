@@ -141,7 +141,7 @@ import System.Threading.Tasks
 
 async func run() int32 {
     var sum = 0
-    for i := 0; i < 3; i++ {
+    for var i = 0; i < 3; i++ {
         await Task.Yield()
         sum = sum + 10
     }

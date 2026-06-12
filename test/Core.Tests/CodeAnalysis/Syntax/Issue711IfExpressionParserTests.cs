@@ -215,7 +215,7 @@ public class Issue711IfExpressionParserTests
             package P
             import System
             func F() {
-                if x := 1; x > 0 {
+                if var x = 1; x > 0 {
                     Console.Write("p")
                 }
             }

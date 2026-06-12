@@ -226,7 +226,7 @@ public class Issue521ReferenceUpcastTests
 
             func CountItems(items IEnumerable[string]) int32 {
                 var count = 0
-                for x := range items {
+                for x in items {
                     count = count + 1
                 }
                 return count

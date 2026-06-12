@@ -21,13 +21,13 @@ public class IfInitClauseTests
     [Fact]
     public void IfInit_Binding_Is_Scoped_To_Arm()
     {
-        Assert.Empty(Bind("func F() {\n if x := 1; x > 0 {\n var y = x\n }\n }\n"));
+        Assert.Empty(Bind("func F() {\n if var x = 1; x > 0 {\n var y = x\n }\n }\n"));
     }
 
     [Fact]
     public void IfInit_Initializer_Not_Visible_After_Block()
     {
-        var diagnostics = Bind("func F() {\n if x := 1; x > 0 {\n }\n var y = x\n }\n");
+        var diagnostics = Bind("func F() {\n if var x = 1; x > 0 {\n }\n var y = x\n }\n");
         Assert.Contains(
             diagnostics,
             d => d.Message.Contains("doesn't exist", System.StringComparison.OrdinalIgnoreCase) ||
@@ -37,7 +37,7 @@ public class IfInitClauseTests
     [Fact]
     public void IfInit_With_Else_Sees_Initializer_In_Else_Arm()
     {
-        Assert.Empty(Bind("func F() {\n if x := 1; x > 0 {\n var a = x\n } else {\n var b = x\n }\n }\n"));
+        Assert.Empty(Bind("func F() {\n if var x = 1; x > 0 {\n var a = x\n } else {\n var b = x\n }\n }\n"));
     }
 
     [Fact]

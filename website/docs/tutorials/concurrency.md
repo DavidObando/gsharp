@@ -122,7 +122,7 @@ func delayedSend(ch chan int32) int32 {
 let ready = make(chan int32, 1)
 ready <- 7
 select {
-case v := <-ready {
+case let v = <-ready {
     Console.WriteLine("recv: $v")
 }
 }
@@ -138,7 +138,7 @@ Console.WriteLine(sentValue)
 
 let empty = make(chan int32, 1)
 select {
-case v := <-empty {
+case let v = <-empty {
     Console.WriteLine("unexpected: $v")
 }
 default {
@@ -150,7 +150,7 @@ let blocking = make(chan int32)
 scope {
     go delayedSend(blocking)
     select {
-    case v := <-blocking {
+    case let v = <-blocking {
         Console.WriteLine("blocked: $v")
     }
     }
@@ -255,7 +255,7 @@ var opened = 0
 var i = 0
 for i < 4 {
     select {
-    case v := <-results {
+    case let v = <-results {
         if v > 0 {
             opened = opened + 1
         }
@@ -272,7 +272,7 @@ let slow = make(chan int32, 1)
 let timeoutCh = make(chan int32, 1)
 timeoutCh <- 1
 select {
-case v := <-slow {
+case let v = <-slow {
     Console.WriteLine("got value: $v")
 }
 case <-timeoutCh {

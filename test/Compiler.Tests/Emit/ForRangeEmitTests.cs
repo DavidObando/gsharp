@@ -32,7 +32,7 @@ public class ForRangeEmitTests
             import System
 
             var arr = [3]int32{100, 200, 300}
-            for i, v := range arr {
+            for i, v in arr {
               Console.WriteLine(i)
               Console.WriteLine(v)
             }
@@ -54,7 +54,7 @@ public class ForRangeEmitTests
             xs.Add(10)
             xs.Add(20)
             xs.Add(30)
-            for v := range xs {
+            for v in xs {
               Console.WriteLine(v)
             }
             """;
@@ -74,7 +74,7 @@ public class ForRangeEmitTests
             var xs = List[int32]()
             xs.Add(10)
             xs.Add(20)
-            for i, v := range xs {
+            for i, v in xs {
               Console.WriteLine(i)
               Console.WriteLine(v)
             }
@@ -95,7 +95,7 @@ public class ForRangeEmitTests
             var d = Dictionary[string, int32]()
             d["a"] = 1
             d["b"] = 2
-            for k, v := range d {
+            for k, v in d {
               Console.WriteLine(k)
               Console.WriteLine(v)
             }
@@ -192,7 +192,7 @@ public class ForRangeEmitTests
 
             var xs = List[int32]()
             xs.Add(1)
-            for v := range xs {
+            for v in xs {
               Console.WriteLine(v)
             }
             """;
@@ -216,7 +216,7 @@ public class ForRangeEmitTests
             import System
             import System.Linq
 
-            for v := range Enumerable.Range(0, 3) {
+            for v in Enumerable.Range(0, 3) {
               Console.WriteLine(v)
             }
             """;
@@ -246,7 +246,7 @@ public class ForRangeEmitTests
             import System
             import System.IO
 
-            for line := range File.ReadLines("{{dataPath.Replace("\\", "\\\\")}}") {
+            for line in File.ReadLines("{{dataPath.Replace("\\", "\\\\")}}") {
               Console.WriteLine(line)
             }
             """;

@@ -62,8 +62,8 @@ public class Issue707WhileDoLabeledParserTests
     {
         const string source = """
             package P
-            outer: for i := 0; i < 3; i++ {
-                for j := 0; j < 3; j++ {
+            outer: for var i = 0; i < 3; i++ {
+                for var j = 0; j < 3; j++ {
                     break outer
                 }
             }

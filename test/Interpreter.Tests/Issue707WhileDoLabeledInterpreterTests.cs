@@ -57,8 +57,8 @@ public class Issue707WhileDoLabeledInterpreterTests
     {
         var source = """
             var hits = 0
-            outer: for i := 0; i < 3; i++ {
-                for j := 0; j < 3; j++ {
+            outer: for var i = 0; i < 3; i++ {
+                for var j = 0; j < 3; j++ {
                     if i == 1 && j == 1 {
                         break outer
                     }
@@ -77,8 +77,8 @@ public class Issue707WhileDoLabeledInterpreterTests
     {
         var source = """
             var hits = 0
-            outer: for i := 0; i < 3; i++ {
-                for j := 0; j < 3; j++ {
+            outer: for var i = 0; i < 3; i++ {
+                for var j = 0; j < 3; j++ {
                     if j == 1 {
                         continue outer
                     }
@@ -100,7 +100,7 @@ public class Issue707WhileDoLabeledInterpreterTests
             var hits = 0
             var run = true
             outer: while run {
-                for j := 0; j < 5; j++ {
+                for var j = 0; j < 5; j++ {
                     if j == 2 {
                         break outer
                     }
@@ -119,7 +119,7 @@ public class Issue707WhileDoLabeledInterpreterTests
         var source = """
             var hits = 0
             spin: do {
-                for j := 0; j < 5; j++ {
+                for var j = 0; j < 5; j++ {
                     if j == 2 {
                         break spin
                     }
@@ -137,8 +137,8 @@ public class Issue707WhileDoLabeledInterpreterTests
     {
         var source = """
             var hits = 0
-            outer: for i := 0; i < 2; i++ {
-                for j := 0; j < 5; j++ {
+            outer: for var i = 0; i < 2; i++ {
+                for var j = 0; j < 5; j++ {
                     if j == 2 {
                         break
                     }

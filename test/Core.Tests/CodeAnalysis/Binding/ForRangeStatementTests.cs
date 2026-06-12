@@ -25,7 +25,7 @@ public class ForRangeStatementTests
 import System
 
 var arr = [3]int32{10, 20, 30}
-for v := range arr {
+for v in arr {
     Console.WriteLine(v)
 }
 ";
@@ -40,7 +40,7 @@ for v := range arr {
 import System
 
 var arr = [3]int32{10, 20, 30}
-for i, v := range arr {
+for i, v in arr {
     Console.WriteLine(i)
     Console.WriteLine(v)
 }
@@ -59,7 +59,7 @@ import System.Collections.Generic
 var lst = List[int32]()
 lst.Add(1)
 lst.Add(2)
-for v := range lst {
+for v in lst {
     Console.WriteLine(v)
 }
 ";
@@ -76,7 +76,7 @@ import System.Collections.Generic
 
 var lst = List[int32]()
 lst.Add(7)
-for i, v := range lst {
+for i, v in lst {
     Console.WriteLine(i)
     Console.WriteLine(v)
 }
@@ -95,7 +95,7 @@ import System.Collections.Generic
 var d = Dictionary[string, int32]()
 d[""a""] = 1
 d[""b""] = 2
-for k, v := range d {
+for k, v in d {
     Console.WriteLine(k)
     Console.WriteLine(v)
 }
@@ -111,7 +111,7 @@ for k, v := range d {
 import System
 
 var arr = [4]int32{1, 2, 3, 4}
-for i, v := range arr {
+for i, v in arr {
     if v == 2 {
         continue
     }
@@ -130,7 +130,7 @@ for i, v := range arr {
     {
         var source = @"
 var x = 42
-for v := range x {
+for v in x {
 }
 ";
         var result = Evaluate(source);

@@ -81,7 +81,7 @@ public class ObjectInitializerParserTests
     [Fact]
     public void DoesNotEat_ForRangeStatementBody()
     {
-        const string source = "package P\nfunc Main() {\n  var total = 0\n  for v := range Items() {\n    total = total + v\n  }\n}\n";
+        const string source = "package P\nfunc Main() {\n  var total = 0\n  for v in Items() {\n    total = total + v\n  }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }

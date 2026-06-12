@@ -30,9 +30,13 @@ The lexer produces identifiers, reserved keywords, literal tokens, punctuation a
 
 ```text
 +  +=  ++  -  -=  --  *  *=  /  /=  %  %=  (  )  [  ]  {  }
-:  :=  ;  ,  .  ...  ^  ^=  &  &&  &=  &^  &^=  |  |=  ||
+:  ;  ,  .  ...  ^  ^=  &  &&  &=  &^  &^=  |  |=  ||
 =  ==  !  !=  !!  ?  ?.  ?[  ?:  ??=  <  <=  <-  ->  <<  <<=  >  >=  >>  >>=  @
 ```
+
+The `:=` sequence is still lexed (as `ColonEqualsToken`) for diagnostic
+purposes — the parser hard-rejects every occurrence with `GS0305` per
+ADR-0077 — but the operator has no role in the grammar.
 
 ### Identifiers
 
@@ -121,10 +125,9 @@ VariableDecl = ( "const" | "let" | "var" ) identifier TypeClause? "=" Expression
              | "var" identifier TypeClause
              | "let" "(" identifier { "," identifier } ")" "=" Expression
              | "let" "{" identifier "=" identifier { "," identifier "=" identifier } "}" "=" Expression .
-ShortVarDecl = identifier ":=" Expression .
 ```
 
-`let` communicates immutability of the binding. `var` introduces a mutable variable. `const` is for compile-time constants. Tuple deconstruction and named deconstruction use `let` forms. Multi-target assignment is statement syntax and is limited to identifier target lists today.
+`let` communicates immutability of the binding. `var` introduces a mutable variable. `const` is for compile-time constants. Tuple deconstruction and named deconstruction use `let` forms. Multi-target assignment is statement syntax and is limited to identifier target lists today. The legacy `identifier ":=" Expression` short variable-declaration form was removed by ADR-0077 / issue #717; use `let name = expr` (immutable) or `var name = expr` (mutable) instead.
 
 ## Types
 
@@ -494,12 +497,12 @@ A block is a braced statement list. Expression statements are accepted for expre
 
 ```ebnf
 Block     = "{" Statement* "}" .
-Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | NullCoalescingAssignmentStmt | ShortVarDecl | IncDecStmt | ChannelSendStmt | ExpressionStmt .
+Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | NullCoalescingAssignmentStmt | IncDecStmt | ChannelSendStmt | ExpressionStmt .
 ```
 
 ### Assignment and variable statements
 
-Short declaration is `name := expr`. Multi-target assignment supports `a, b = x, y` and `a, b := x, y` for identifier target lists. Increment and decrement are statements, not expressions.
+Bindings are introduced with `let` (immutable) or `var` (mutable); the legacy Go-style `name := expr` short declaration was removed by ADR-0077 / issue #717 and the parser now emits `GS0305` against any occurrence of `:=`. Multi-target assignment supports `a, b = x, y` for identifier target lists; the parallel `a, b := x, y` form is likewise removed (use one `let`/`var` declaration per name). Increment and decrement are statements, not expressions.
 
 A `let` or `var` may carry a `ref` prefix to declare a **ref-aliasing local** (ADR-0060 follow-up): `let ref m = arr[i]` produces a local whose IL slot is a managed pointer (`T&`) that aliases the right-hand-side storage. The RHS must be an lvalue (`GS0256`); ref locals are illegal at top level, inside `async` / iterator bodies, and as `const` (`GS0258`). Reads and writes through the alias forward to the underlying storage.
 
@@ -626,18 +629,24 @@ Rules summary:
 
 ### For loops and while-style loops
 
-G# has `for`, `for in`, `for range`, `while`, and `do`-`while` forms.
+G# has `for`, `for in`, `while`, and `do`-`while` forms. The legacy
+`for v := range coll`, `for k, v := range dict`, and `for i := lo ... hi`
+spellings were removed by ADR-0077 / issue #717; use the `in` forms.
 
 ```ebnf
 ForStmt = "for" Statement
         | "for" Expression Statement
         | "for" SimpleStmt? ";" Expression? ";" SimpleStmt? Statement
-        | "for" identifier ( "," identifier )? ( ":=" "range" | "in" ) Expression Statement
-        | "for" identifier ":=" Expression "..." Expression Statement .
+        | "for" identifier ( "," identifier )? "in" Expression Statement
+        | "for" identifier "in" Expression "..." Expression Statement .
 
 WhileStmt    = "while" Expression Statement .
 DoWhileStmt  = "do" Block "while" Expression .
 ```
+
+The optional `SimpleStmt` of the C-style three-part `for` accepts a `var`
+or `let` declaration (e.g. `for var i = 0; i < n; i++`), an assignment, an
+increment / decrement, or an expression statement.
 
 `while` evaluates its condition first and runs the body while the condition is
 true. `do`-`while` always runs the body once before evaluating the condition;
@@ -680,7 +689,7 @@ DeferStmt = "defer" Expression .
 
 ### Go, scope, channel send and receive, and select
 
-`go expr` starts a concurrent call; binding requires the operand to be a call. `scope { ... }` is structured concurrency and joins registered child tasks at scope exit. Channel receive is a prefix expression `<-ch`; channel send is a statement `ch <- value`. `select` supports default, receive-discard, receive-bind, and send cases.
+`go expr` starts a concurrent call; binding requires the operand to be a call. `scope { ... }` is structured concurrency and joins registered child tasks at scope exit. Channel receive is a prefix expression `<-ch`; channel send is a statement `ch <- value`. `select` supports default, receive-discard, receive-bind (via `case let v = <-ch`), and send cases.
 
 ```ebnf
 GoStmt     = "go" Expression .
@@ -688,7 +697,7 @@ ScopeStmt  = "scope" Block .
 SelectStmt = "select" "{" SelectCase* "}" .
 SelectCase = "default" Block
            | "case" "<-" Expression Block
-           | "case" identifier ":=" "<-" Expression Block
+           | "case" "let" identifier "=" "<-" Expression Block
            | "case" Expression "<-" Expression Block .
 ```
 
@@ -708,7 +717,7 @@ ThrowStmt     = "throw" Expression .
 `await expr` is a prefix expression and must appear in an async context with an awaitable operand. `await for` iterates asynchronous sequences.
 
 ```ebnf
-AwaitForRangeStmt = "await" "for" identifier ( "in" | ":=" "range" ) Expression Block .
+AwaitForRangeStmt = "await" "for" identifier "in" Expression Block .
 ```
 
 ## Concurrency
@@ -834,14 +843,13 @@ Statement         ::= Block
                     | Annotation* VariableDecl
                     | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt
                     | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt
-                    | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | ShortVarDecl
+                    | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt
                     | IncDecStmt | ChannelSendStmt | ExpressionStmt
 VariableDecl      ::= ('const' | 'let' | 'var') identifier TypeClause? '=' Expression
                     | 'var' identifier TypeClause
                     | 'let' '(' identifier (',' identifier)* ')' '=' Expression
                     | 'let' '{' identifier '=' identifier (',' identifier '=' identifier)* '}' '=' Expression
-ShortVarDecl      ::= identifier ':=' Expression
-MultiAssignment   ::= identifier (',' identifier)+ ('=' | ':=') Expression (',' Expression)*
+MultiAssignment   ::= identifier (',' identifier)+ '=' Expression (',' Expression)*
 IncDecStmt        ::= identifier ('++' | '--')
 
 IfStmt            ::= 'if' (SimpleStmt ';')? Expression Statement ('else' Statement)?
@@ -852,12 +860,12 @@ LetBindingClause  ::= 'let' identifier TypeClause? '=' Expression
 ForStmt           ::= 'for' Statement
                     | 'for' Expression Statement
                     | 'for' SimpleStmt? ';' Expression? ';' SimpleStmt? Statement
-                    | 'for' identifier (',' identifier)? (':=' 'range' | contextual 'in') Expression Statement
-                    | 'for' identifier ':=' Expression '...' Expression Statement
+                    | 'for' identifier (',' identifier)? contextual 'in' Expression Statement
+                    | 'for' identifier contextual 'in' Expression '...' Expression Statement
 WhileStmt         ::= 'while' Expression Statement
 DoWhileStmt       ::= 'do' Block 'while' Expression
 LabeledLoopStmt   ::= identifier ':' (ForStmt | WhileStmt | DoWhileStmt)
-SimpleStmt        ::= ShortVarDecl | IncDecStmt | ExpressionStmt
+SimpleStmt        ::= VariableDecl | IncDecStmt | Assignment | ExpressionStmt
 BreakStmt         ::= 'break' identifier?
 ContinueStmt      ::= 'continue' identifier?
 ReturnStmt        ::= 'return' Expression? (',' Expression)*
@@ -883,11 +891,11 @@ UsingStmt         ::= 'using' VariableDecl
 DeferStmt         ::= 'defer' Expression
 GoStmt            ::= 'go' Expression
 ScopeStmt         ::= 'scope' Block
-AwaitForRangeStmt ::= 'await' 'for' identifier (contextual 'in' | ':=' 'range') Expression Block
+AwaitForRangeStmt ::= 'await' 'for' identifier contextual 'in' Expression Block
 SelectStmt        ::= 'select' '{' SelectCase* '}'
 SelectCase        ::= 'default' Block
                     | 'case' '<-' Expression Block
-                    | 'case' identifier ':=' '<-' Expression Block
+                    | 'case' 'let' identifier '=' '<-' Expression Block
                     | 'case' Expression '<-' Expression Block
 ChannelSendStmt   ::= Expression '<-' Expression
 

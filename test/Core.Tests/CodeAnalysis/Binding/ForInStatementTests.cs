@@ -166,7 +166,7 @@ total
         var source = @"
 var xs = []int32{1, 2, 3}
 var sum = 0
-for v := range xs {
+for v in xs {
     sum = sum + v
 }
 sum
@@ -183,7 +183,7 @@ sum
 import GSharp.Core.Tests.CodeAnalysis.Binding
 
 var total = 0
-await for v := range AsyncStreamFixture.Counts() {
+await for v in AsyncStreamFixture.Counts() {
     total = total + v
 }
 total

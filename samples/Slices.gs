@@ -18,7 +18,7 @@ Console.WriteLine(len(nums))
 Console.WriteLine(nums[3])
 
 var sum = 0
-for i := 0 ... len(nums) {
+for i in 0 ... len(nums) {
     sum = sum + nums[i]
 }
 

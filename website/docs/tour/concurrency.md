@@ -88,14 +88,14 @@ import System
 let ready = make(chan int32, 1)
 ready <- 7
 select {
-case v := <-ready {
+case let v = <-ready {
     Console.WriteLine("recv: $v")
 }
 }
 
 let empty = make(chan int32, 1)
 select {
-case v := <-empty {
+case let v = <-empty {
     Console.WriteLine("unexpected: $v")
 }
 default {

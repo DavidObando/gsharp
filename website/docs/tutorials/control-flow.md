@@ -34,7 +34,7 @@ import System
 
 var count = 5
 
-for i := count; i > 0; i-- {
+for var i = count; i > 0; i-- {
     Console.WriteLine("Count value: $i")
 }
 ```
@@ -119,7 +119,7 @@ two
 6
 ```
 
-The older `for v := range collection` spelling still works for compatibility, but new docs and samples prefer `for v in collection`.
+The legacy `for v := range collection` Go-style spelling was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md); use `for v in collection` everywhere.
 
 ## 3. Use `if` for local decisions
 
@@ -137,8 +137,8 @@ The `CountWords` sample combines `if`, dictionary lookup, and loops to count wor
 //   - Indexer read/write on a CLR map (`counts[w]`) and instance method
 //     calls (`counts.ContainsKey(w)`) via the CLR member-access binder
 //     (Phase 4 exit, part 2).
-//   - Range iteration over both an array (`for w := range words`) and a
-//     CLR `IDictionary[K, V]` (`for k, v := range counts`) via the
+//   - Range iteration over both an array (`for w in words`) and a
+//     CLR `IDictionary[K, V]` (`for k, v in counts`) via the
 //     for-range lowerer (Phase 4 exit, part 3).
 //   - Cross-feature use of string interpolation (Phase 1.1) and the
 //     fixed-size array literal syntax (Phase 3.A.2).
@@ -162,7 +162,7 @@ var words = [12]string{
 
 var counts = Dictionary[string, int32]()
 
-for w := range words {
+for w in words {
     if counts.ContainsKey(w) {
         counts[w] = counts[w] + 1
     } else {
@@ -170,7 +170,7 @@ for w := range words {
     }
 }
 
-for k, v := range counts {
+for k, v in counts {
     Console.WriteLine("$k: $v")
 }
 ```

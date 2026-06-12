@@ -12,7 +12,7 @@ func add(num1 int32, num2 int32) int32 {
 }
 
 var sum = 0
-for i := 1 ... 5 {
+for i in 1 ... 5 {
     sum = sum + i
 }
 

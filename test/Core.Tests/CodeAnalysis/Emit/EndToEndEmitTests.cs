@@ -178,7 +178,7 @@ Console.WriteLine(add(2, 3))
         const string Source = @"package Loop
 import System
 var sum = 0
-for i := 1 ... 5 {
+for i in 1 ... 5 {
     sum = sum + i
 }
 Console.WriteLine(sum)

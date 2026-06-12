@@ -9,8 +9,8 @@
 //   - Indexer read/write on a CLR map (`counts[w]`) and instance method
 //     calls (`counts.ContainsKey(w)`) via the CLR member-access binder
 //     (Phase 4 exit, part 2).
-//   - Range iteration over both an array (`for w := range words`) and a
-//     CLR `IDictionary[K, V]` (`for k, v := range counts`) via the
+//   - Range iteration over both an array (`for w in words`) and a
+//     CLR `IDictionary[K, V]` (`for k, v in counts`) via the
 //     for-range lowerer (Phase 4 exit, part 3).
 //   - Cross-feature use of string interpolation (Phase 1.1) and the
 //     fixed-size array literal syntax (Phase 3.A.2).
@@ -34,7 +34,7 @@ var words = [12]string{
 
 var counts = Dictionary[string, int32]()
 
-for w := range words {
+for w in words {
     if counts.ContainsKey(w) {
         counts[w] = counts[w] + 1
     } else {
@@ -42,6 +42,6 @@ for w := range words {
     }
 }
 
-for k, v := range counts {
+for k, v in counts {
     Console.WriteLine("$k: $v")
 }

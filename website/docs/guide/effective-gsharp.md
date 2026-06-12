@@ -32,7 +32,7 @@ Prefer width-bearing primitive names such as `int32`, `uint64`, and `float64` in
 
 ## Choose `let`, `var`, and `const` deliberately
 
-Use `let` when a binding should not be reassigned, `var` when mutation is part of the algorithm, and `const` for compile-time constants. Use `:=` for a short local introduction when the type is obvious from the initializer. Use explicit types at API boundaries and for zero-value `var` declarations.
+Use `let` when a binding should not be reassigned, `var` when mutation is part of the algorithm, and `const` for compile-time constants. The short `name := expr` form was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md); spell `let name = expr` for a one-line immutable introduction and `var name = expr` when the value is rebound. Use explicit types at API boundaries and for zero-value `var` declarations.
 
 ## Prefer simple data declarations
 

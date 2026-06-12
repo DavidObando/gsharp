@@ -13,7 +13,7 @@ G# is a Go-inspired programming language for .NET. It keeps a compact surface wi
 
 ## How does G# relate to Go?
 
-G# borrows many ideas from Go: package-oriented source files, `func`, `:=`, slices, maps, channels, `go`, `select`, `defer`, and a bias toward simple syntax. It is not Go, and it does not try to replace Go; Go skills should transfer, but G# chooses CLR interop, .NET exceptions, nullable types, and `async`/`await` where the .NET platform requires them.
+G# borrows many ideas from Go: package-oriented source files, `func`, slices, maps, channels, `go`, `select`, `defer`, and a bias toward simple syntax. It is not Go, and it does not try to replace Go; Go skills should transfer, but G# chooses CLR interop, .NET exceptions, nullable types, `async`/`await`, and explicit `let`/`var` (no `:=`; see [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md)) where the .NET platform requires them.
 
 ## How does G# relate to C# and .NET?
 

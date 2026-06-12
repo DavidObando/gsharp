@@ -178,7 +178,7 @@ The end-to-end debug-info contract is verified at two levels:
   `LoadFromStream(peStream, pdbStream)`, invokes a method that throws, and
   asserts that `Exception.StackTrace` cites the original `.gs` file at the
   throwing line. Variants cover a synchronous throw, a throw inside a
-  `for x := 0; x < n; x++` body (validating that lowering preserves
+  `for var x = 0; x < n; x++` body (validating that lowering preserves
   user-visible sequence points), a throw across a non-trivial call
   boundary, and a throw after `await` in an `async` function (validating
   that Phase 5's async state-machine PDB rows resume on the correct line).

@@ -5,7 +5,12 @@
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
-/// Represents a for ellipsis statement syntax in the language.
+/// Represents a for ellipsis statement syntax in the language. The
+/// canonical separator is the contextual <c>in</c> token (e.g.
+/// <c>for i in 0 ... 5</c>). The legacy <c>:=</c> spelling was removed by
+/// ADR-0077 / issue #717; the parser still surfaces an <see cref="InToken"/>
+/// (synthesised when recovering from the legacy <c>:=</c> form) so
+/// downstream binding and printing have a single, uniform shape.
 /// </summary>
 public sealed class ForEllipsisStatementSyntax : StatementSyntax
 {
@@ -15,7 +20,7 @@ public sealed class ForEllipsisStatementSyntax : StatementSyntax
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="keyword">The for keyword.</param>
     /// <param name="identifier">The variable identifier.</param>
-    /// <param name="colonEqualsToken">The colon equals token.</param>
+    /// <param name="inToken">The contextual <c>in</c> separator token.</param>
     /// <param name="lowerBound">The lower bound expression.</param>
     /// <param name="ellipsisToken">The ellipsis token.</param>
     /// <param name="upperBound">The upper bound expression.</param>
@@ -24,7 +29,7 @@ public sealed class ForEllipsisStatementSyntax : StatementSyntax
         SyntaxTree syntaxTree,
         SyntaxToken keyword,
         SyntaxToken identifier,
-        SyntaxToken colonEqualsToken,
+        SyntaxToken inToken,
         ExpressionSyntax lowerBound,
         SyntaxToken ellipsisToken,
         ExpressionSyntax upperBound,
@@ -33,7 +38,7 @@ public sealed class ForEllipsisStatementSyntax : StatementSyntax
     {
         Keyword = keyword;
         Identifier = identifier;
-        ColonEqualsToken = colonEqualsToken;
+        InToken = inToken;
         LowerBound = lowerBound;
         EllipsisToken = ellipsisToken;
         UpperBound = upperBound;
@@ -54,9 +59,10 @@ public sealed class ForEllipsisStatementSyntax : StatementSyntax
     public SyntaxToken Identifier { get; }
 
     /// <summary>
-    /// Gets the colon equals statement.
+    /// Gets the contextual <c>in</c> separator token. May be a synthesised
+    /// token when the parser recovered from the removed <c>:=</c> spelling.
     /// </summary>
-    public SyntaxToken ColonEqualsToken { get; }
+    public SyntaxToken InToken { get; }
 
     /// <summary>
     /// Gets the lower bound expression.

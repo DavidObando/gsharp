@@ -19,7 +19,7 @@ G# is a .NET language with Go-inspired syntax. It emits CLR assemblies, imports 
 | method declaration in a class | `func (r Receiver) M()` or class member syntax | G# supports receiver-style and class-shaped members. |
 | `int` | `int32` | G# source names numeric widths explicitly. |
 | `long` | `int64` | CLR signatures stay obvious in source. |
-| `var x = ...;` | `let x = ...` or `var x = ...` | `let` is immutable; `var` is mutable. A keyword-less `x := ...` short declaration is also mutable. |
+| `var x = ...;` | `let x = ...` or `var x = ...` | `let` is immutable; `var` is mutable. (The short `x := ...` form was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md).) |
 | object initializer `new T { F = v }` | brace initializer `T{F: v}` | Data structs also offer `.copy(F = v)` and `with` copy/update. |
 | `record struct` | `data struct` or `record` | `record` is an alias for `data struct`. |
 | `readonly struct CustomerId` | `type CustomerId inline struct(value string)` | Inline structs are nominal single-field wrappers. |
@@ -116,7 +116,7 @@ G# adds `go`, `chan T`, `select`, and `scope`. The lowering targets .NET tasks a
 let ch = make(chan string, 1)
 ch <- "ready"
 select {
-case msg := <-ch {
+case let msg = <-ch {
     Console.WriteLine(msg)
 }
 default {

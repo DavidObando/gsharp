@@ -242,7 +242,7 @@ public class Issue528SliceToArrayConversionEmitTests
 
             var s []int32 = Maker.Range(4)
             var total int32 = 0
-            for _, v := range s {
+            for _, v in s {
                 total = total + v
             }
 

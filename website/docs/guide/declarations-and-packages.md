@@ -44,7 +44,7 @@ var count int32
 var total = 0
 ```
 
-Short declarations use `:=`. Deconstruction is available in `let` forms, and multi-target assignment supports identifier lists.
+Deconstruction is available in `let` forms, and multi-target assignment supports identifier lists.
 
 ```gsharp
 let (x, y) = pair
@@ -52,7 +52,9 @@ let { Name = n, Age = a } = person
 left, right = right, left
 ```
 
-Rationale: [ADR-0008](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0008-variable-bindings.md) and [ADR-0015](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0015-multi-target-assignment.md).
+The legacy `name := expr` short declaration was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md). Use `let name = expr` (immutable) or `var name = expr` (mutable) at every binding site.
+
+Rationale: [ADR-0008](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0008-variable-bindings.md), [ADR-0015](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0015-multi-target-assignment.md), and [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md).
 
 ## Functions and methods
 

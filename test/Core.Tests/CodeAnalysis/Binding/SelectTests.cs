@@ -25,7 +25,7 @@ public class SelectTests
 let ch = make(chan int32, 1)
 ch <- 1
 select {
-case v := <-ch { let x = v }
+case let v = <-ch { let x = v }
 }
 ";
         var result = Evaluate(source);
@@ -80,7 +80,7 @@ default { let b = 2 }
 let ch = make(chan int32, 1)
 ch <- 7
 select {
-case v := <-ch { let x = v }
+case let v = <-ch { let x = v }
 default { let y = 0 }
 }
 ";
@@ -110,7 +110,7 @@ select { }
 let ch = make(chan int32, 1)
 ch <- 5
 select {
-case v := <-ch {
+case let v = <-ch {
     if v > 0 {
         let x = v + 1
     }

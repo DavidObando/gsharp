@@ -118,7 +118,7 @@ public class Issue611SliceArrayParityTests
 
             func Sum(values []int32) int32 {
                 var total = 0
-                for _, v := range values {
+                for _, v in values {
                     total = total + v
                 }
                 return total
@@ -179,7 +179,7 @@ public class Issue611SliceArrayParityTests
             import System
 
             var s = []string{"a", "b"}
-            for i, v := range s {
+            for i, v in s {
                 Console.WriteLine(i.ToString() + ":" + v)
             }
             """;
