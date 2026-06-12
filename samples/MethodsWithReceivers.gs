@@ -1,20 +1,22 @@
 // file: MethodsWithReceivers.gs
 //
-// Phase 6.4 sample. Same-package receiver declarations bind as methods on
-// user-defined structs. Issue #409 promoted this sample out of aspirational/
-// once the emit backend produced correct IL for value-type receivers.
+// Instance methods on user-defined classes — declared in-body per ADR-0079
+// (issue #719). The receiver-clause form (`func (p Point) Distance() ...`)
+// is now reserved for non-owned receiver types; declarations on types this
+// package owns belong in the type body. See also ADR-0024 (canonical
+// methods-vs-extensions style).
 
 package GSharp.Samples.MethodsWithReceivers
 
 import System
 
-struct Point {
+class Point {
     var X int32
     var Y int32
-}
 
-func (p Point) Distance() int32 {
-    return p.X * p.X + p.Y * p.Y
+    func Distance() int32 {
+        return X * X + Y * Y
+    }
 }
 
 let p = Point{X: 3, Y: 4}

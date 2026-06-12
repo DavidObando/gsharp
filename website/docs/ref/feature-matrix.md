@@ -58,7 +58,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | --- | --- | --- | --- |
 | Top-level functions and variables | Supported | Supported | `var`, `let`, and `const` are implemented. The legacy `:=` short variable declaration was removed by ADR-0077 (issue #717); the parser hard-rejects it with `GS0305`. |
 | Visibility modifiers | Supported | Supported | `public`, `internal`, and `private`; invalid locations report `GS0180`. |
-| Receiver methods and extension functions | Supported | Supported | G# receiver style and imported CLR extension dispatch. |
+| Receiver methods and extension functions | Supported | Supported | G# receiver style and imported CLR extension dispatch. ADR-0079 reserves the receiver-clause form for non-owned receiver types and warns (`GS0314`) when it targets an owned class or struct; in-body declarations are the canonical form for owned-type methods. |
 | Operator declarations | Supported | Supported where evaluator invokes user/CLR op paths | Receiver `operator` declarations map to CLR `op_*` names. |
 | Interface implementation | Supported | Supported for checks/upcasts | Missing members and sealed-interface violations are diagnosed. |
 | Inheritance and overrides | Supported | Partially supported | Base classes must be `open`; override diagnostics are implemented. |

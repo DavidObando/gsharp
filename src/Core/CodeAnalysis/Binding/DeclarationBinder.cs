@@ -2548,6 +2548,23 @@ internal sealed class DeclarationBinder
             if (methodReceiverStruct != null)
             {
                 var methodName = syntax.Identifier.Text;
+
+                // ADR-0079 / issue #719: warn when a receiver-clause method
+                // targets a same-package ("owned") struct or class. The
+                // canonical form for owned-type instance methods is the
+                // in-body declaration; the receiver-clause form is reserved
+                // for non-owned types (imported CLR or referenced-package
+                // types). Operators are exempt because they have no in-body
+                // counterpart — the parser synthesises an `op_*`-prefixed
+                // identifier for `func (a T) operator …`.
+                if (!methodName.StartsWith("op_", StringComparison.Ordinal))
+                {
+                    Diagnostics.ReportReceiverClauseOnOwnedType(
+                        syntax.Receiver.Type.Location,
+                        methodReceiverStruct.Name,
+                        methodName);
+                }
+
                 if (methodReceiverStruct.IsInline && IsInlineSynthesizedMemberName(methodName))
                 {
                     Diagnostics.ReportInlineStructSynthesizedMemberConflict(syntax.Identifier.Location, methodReceiverStruct.Name, methodName);

@@ -52,11 +52,19 @@ Relevant rationale: [ADR-0029](https://github.com/DavidObando/gsharp/blob/main/d
 
 ## Methods, receiver functions, and extension functions
 
-Use class methods when behavior depends on class identity, virtual dispatch, or private representation. Use receiver-style functions for value-oriented behavior and extension-style APIs. ADR-0024 makes this the canonical style: keep data declarations focused and attach behavior with methods or receiver functions where it improves discoverability.
+Use class methods when behavior depends on class identity, virtual dispatch, or private representation. Use receiver-style functions for value-oriented behavior on types this package does **not** own (BCL primitives, imported CLR types, types from referenced packages). [ADR-0024](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0024-methods-vs-extensions-canonical-style.md) makes the in-body form canonical for owned-type instance methods; [ADR-0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md) backs that with the soft `GS0314` warning when a receiver clause targets an owned class or struct.
 
 ```gsharp
-func (p Point) LengthSquared() int32 {
-    return p.X * p.X + p.Y * p.Y
+class Point(X int32, Y int32) {
+    func LengthSquared() int32 {
+        return X * X + Y * Y
+    }
+}
+
+// Extension on a type this package does not own:
+func (value int32) Abs() int32 {
+    if value < 0 { return -value }
+    return value
 }
 ```
 

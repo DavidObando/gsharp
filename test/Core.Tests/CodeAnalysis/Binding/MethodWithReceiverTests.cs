@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
@@ -16,6 +17,12 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <summary>
 /// Phase 6.4 — methods with receivers on same-package user-defined types.
 /// </summary>
+/// <remarks>
+/// ADR-0079 (issue #719) makes the receiver-clause form on owned types
+/// emit the soft <c>GS0314</c> warning. These tests cover binding /
+/// dispatch behaviour and intentionally ignore that warning; the
+/// dedicated GS0314 coverage lives in <c>OwnedReceiverWarningTests</c>.
+/// </remarks>
 public class MethodWithReceiverTests
 {
     [Fact]
@@ -35,7 +42,7 @@ var p = Point{X: 3, Y: 4}
 p.Distance()
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        AssertOnlyOwnedReceiverWarnings(result.Diagnostics);
         Assert.Equal(25, result.Value);
     }
 
@@ -56,7 +63,7 @@ var p = Point{X: 6, Y: 8}
 p.Distance()
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        AssertOnlyOwnedReceiverWarnings(result.Diagnostics);
         Assert.Equal(100, result.Value);
     }
 
@@ -76,7 +83,7 @@ var p = Point{X: 5, Y: 7}
 p.DoubleSum()
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        AssertOnlyOwnedReceiverWarnings(result.Diagnostics);
         Assert.Equal(24, result.Value);
     }
 
@@ -161,8 +168,18 @@ var c = Counter{Value: 41}
 c.Inc()
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        AssertOnlyOwnedReceiverWarnings(result.Diagnostics);
         Assert.Equal(42, result.Value);
+    }
+
+    private static void AssertOnlyOwnedReceiverWarnings(ImmutableArray<Diagnostic> diagnostics)
+    {
+        foreach (var d in diagnostics)
+        {
+            Assert.True(
+                d.Id == "GS0314" && d.Severity == DiagnosticSeverity.Warning,
+                $"unexpected diagnostic: {d.Id} {d.Severity} {d.Message}");
+        }
     }
 
     private static EvaluationResult Evaluate(string source)

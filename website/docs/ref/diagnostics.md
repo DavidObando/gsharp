@@ -602,3 +602,30 @@ Cause/fix:
   For `sealed class Shape` with subclasses `Circle`, `Square`, write
   `switch s { case c is Circle: ... case sq is Square: ... }`.
 
+## Owned-receiver method warning (GS0314)
+
+ADR-0079 (issue #719) restricts Go-style receiver-clause methods to types
+this package does **not** own. Same-package owned-type instance methods
+should be declared inside the type body; the receiver-clause form is
+reserved for non-owned types (imported CLR types, BCL primitives, and
+types declared by referenced packages). See
+[ADR-0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md)
+for the full rationale.
+
+| ID | Severity | Message |
+|----|----------|---------|
+| GS0314 | Warning | `Receiver-clause methods are reserved for types this package does not own; declare '<MethodName>' as a member of '<TypeName>' instead (ADR-0079).` |
+
+Cause/fix:
+
+- **GS0314** — `func (p Point) Distance() int32 { ... }` where `Point` is
+  declared in the same package. Move the declaration into the class body
+  (`class Point { ... func Distance() int32 { ... } }`) and drop the
+  receiver clause. Cross-package and CLR receivers (`func (sb StringBuilder)
+  Reset() ...`) are unaffected. Operator overloads (`func (a Vector2)
+  operator +(b Vector2) Vector2 { ... }`) are exempt because operators
+  have no in-body form today. Suppress per-project via
+  `<NoWarn>GS0314</NoWarn>` if migration must be deferred — but note
+  this is a one-release grace period; a future ADR may escalate to error.
+
+

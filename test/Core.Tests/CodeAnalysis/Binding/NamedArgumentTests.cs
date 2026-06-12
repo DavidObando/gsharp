@@ -111,12 +111,12 @@ let r = sub(1, x: 2)
     public void UserMethod_NamedArguments_BindAndEvaluate()
     {
         var source = @"
-data struct Calc {
+class Calc {
     var Bias int32
-}
 
-func (c Calc) Combine(a int32, b int32) int32 {
-    return c.Bias + a * 10 + b
+    func Combine(a int32, b int32) int32 {
+        return Bias + a * 10 + b
+    }
 }
 
 let c = Calc{Bias: 100}
@@ -159,10 +159,12 @@ let p = Point(1, X: 9)
     public void UserExtensionFunction_NamedArguments_BindAndEvaluate()
     {
         var source = @"
-data struct Box { var N int32 }
+class Box {
+    var N int32
 
-func (b Box) Mix(low int32, high int32) int32 {
-    return b.N + low * 100 + high
+    func Mix(low int32, high int32) int32 {
+        return N + low * 100 + high
+    }
 }
 
 let b = Box{N: 1}

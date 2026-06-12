@@ -16,7 +16,7 @@ G# is a .NET language with Go-inspired syntax. It emits CLR assemblies, imports 
 | `using System;` | `import System` | Imports bring CLR namespaces and G# packages into scope. |
 | `static void Main()` | top-level statements or `func Main()` | SDK projects synthesize an entry point; an explicit entry point is named `Main`. |
 | `void M()` | `func M()` | Functions can be package-level or members. |
-| method declaration in a class | `func (r Receiver) M()` or class member syntax | G# supports receiver-style and class-shaped members. |
+| method declaration in a class | class-body `func M()` (canonical) or `func (r Receiver) M()` for unowned types | Per [ADR-0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md), receiver clauses on owned types emit the `GS0314` warning — declare the method inside the class body instead. |
 | `int` | `int32` | G# source names numeric widths explicitly. |
 | `long` | `int64` | CLR signatures stay obvious in source. |
 | `var x = ...;` | `let x = ...` or `var x = ...` | `let` is immutable; `var` is mutable. (The short `x := ...` form was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md).) |
@@ -39,7 +39,7 @@ G# is a .NET language with Go-inspired syntax. It emits CLR assemblies, imports 
 | `cond ? a : b` | `cond ? a : b` | Ternary expression (ADR-0062). |
 | `/// <summary>…</summary>` XML doc | `/// summary text` Markdown doc | Markdown documentation comments round-trip to CLR XML (ADR-0057). |
 | lambda `x => x + 1` | `(x int32) -> x + 1` (or `func(x int32) int32 { return x + 1 }`) | Arrow lambdas (ADR-0074) and func literals are both valid; the arrow form is the canonical one-liner. |
-| extension method | `func (r Receiver) M()` | A receiver clause declares a CLR-visible extension method. |
+| extension method | `func (r Receiver) M()` on a non-owned `Receiver` | A receiver clause declares a CLR-visible extension method. The receiver type must be a type the package does not own ([ADR-0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md)). |
 
 ## Packages replace namespaces in source
 
