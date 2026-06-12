@@ -313,7 +313,7 @@ func Identity[T any](value T) T {
 let x = Identity[int32](42)
 ```
 
-The implementation emits metadata specs for generic types and methods, but open or partially constructed shapes containing type parameters are erased to `object` in some emit paths under the current type-erased generic model. Generic method inference is implemented for supported cases.
+The implementation emits metadata specs for generic types and methods, but open or partially constructed shapes containing type parameters are erased to `object` in some emit paths under the current type-erased generic model. The complete audit of every erasure site, the target CLR metadata shape per category, and the staged elimination plan are recorded in ADR-0087. Generic method inference is implemented for supported cases.
 
 ### Type syntax
 
