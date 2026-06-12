@@ -1622,16 +1622,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// Reports GS0211 when <c>[DllImport]</c> is applied in source. ADR-0047 §6
-    /// recognises <see cref="System.Runtime.InteropServices.DllImportAttribute"/>
-    /// but only on declarations whose body marker is <c>extern</c>; emit of the
-    /// underlying P/Invoke metadata is post-v1.0, so v1.0 rejects every use.
+    /// Reports GS0211. The diagnostic ID is reserved (issue #179 / ADR-0047 §6)
+    /// for historical reasons — the v1.0 release flagged every use of
+    /// <c>@DllImport</c> with it. ADR-0086 / issue #727 removed the blanket
+    /// rejection; well-formed P/Invoke declarations now succeed and the
+    /// remaining invalid-shape cases route through GS0322–GS0329. This
+    /// fallback message is retained for callers that still report the old
+    /// "not supported" path while a follow-up audits every call site; in the
+    /// current codebase nothing fires it.
     /// </summary>
     /// <param name="location">The source location of the annotation.</param>
     /// <param name="name">The attribute name as written in source.</param>
     public void ReportDllImportNotSupported(TextLocation location, string name)
     {
-        Report(location, "GS0211", $"Attribute '{name}' is recognised but not supported in v1.0; P/Invoke (extern function bodies) is a post-v1.0 feature.");
+        Report(location, "GS0211", $"Attribute '{name}' is reserved (ADR-0086 supersedes this rejection); use '@DllImport(\"library\")' on a function with a ';' body instead.");
     }
 
     /// <summary>
@@ -2900,6 +2904,99 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             "GS0321",
             $"Modifier '{modifier}' on interface method '{methodName}' is not supported in this version of GSharp; see ADR-0085 for the deferred-features list.",
             DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Reports GS0322 when <c>@DllImport</c> is applied without a non-empty
+    /// string library name as the first positional argument (ADR-0086 §3 / issue #727).
+    /// </summary>
+    /// <param name="location">The annotation location.</param>
+    public void ReportDllImportMissingLibraryName(TextLocation location)
+    {
+        Report(location, "GS0322", "'@DllImport' requires a non-empty string library name as the first positional argument (ADR-0086).");
+    }
+
+    /// <summary>
+    /// Reports GS0323 when a P/Invoke parameter or return type is not in the
+    /// supported marshalling table (ADR-0086 §2 / issue #727).
+    /// </summary>
+    /// <param name="location">The offending type-clause location.</param>
+    /// <param name="typeName">The display name of the unsupported type.</param>
+    public void ReportPInvokeUnsupportedMarshallingType(TextLocation location, string typeName)
+    {
+        Report(location, "GS0323", $"Type '{typeName}' is not supported for P/Invoke marshalling in v1; see ADR-0086 §2 for the supported set.");
+    }
+
+    /// <summary>
+    /// Reports GS0324 when a function carries <c>@DllImport</c> but also has a
+    /// managed body (ADR-0086 §1 / issue #727). P/Invoke stubs must use a
+    /// <c>;</c> body marker.
+    /// </summary>
+    /// <param name="location">The body-block location.</param>
+    /// <param name="functionName">The declared function name.</param>
+    public void ReportPInvokeMustNotHaveBody(TextLocation location, string functionName)
+    {
+        Report(location, "GS0324", $"P/Invoke function '{functionName}' must not have a body; replace the '{{ ... }}' block with ';' (ADR-0086).");
+    }
+
+    /// <summary>
+    /// Reports GS0325 when a function uses a <c>;</c> body marker but is not
+    /// annotated with <c>@DllImport</c> (ADR-0086 §1 / issue #727). A
+    /// semicolon-only body is reserved for P/Invoke declarations.
+    /// </summary>
+    /// <param name="location">The function-identifier location.</param>
+    /// <param name="functionName">The declared function name.</param>
+    public void ReportSemicolonBodyRequiresDllImport(TextLocation location, string functionName)
+    {
+        Report(location, "GS0325", $"Function '{functionName}' has no body; only '@DllImport'-annotated functions may use a ';' body marker (ADR-0086).");
+    }
+
+    /// <summary>
+    /// Reports GS0326 when <c>@DllImport</c> is applied to a function shape
+    /// that v1 P/Invoke does not support — instance method, async, generic,
+    /// extension function, ref-returning function (ADR-0086 §1).
+    /// </summary>
+    /// <param name="location">The function-identifier location.</param>
+    /// <param name="functionName">The declared function name.</param>
+    /// <param name="reason">A short reason for the rejection.</param>
+    public void ReportDllImportInvalidFunctionShape(TextLocation location, string functionName, string reason)
+    {
+        Report(location, "GS0326", $"'@DllImport' is not valid on '{functionName}': {reason} (ADR-0086).");
+    }
+
+    /// <summary>
+    /// Reports GS0327 when a <c>CharSet:</c> argument to <c>@DllImport</c> is
+    /// not a valid <see cref="System.Runtime.InteropServices.CharSet"/> member
+    /// value (ADR-0086 §3).
+    /// </summary>
+    /// <param name="location">The argument location.</param>
+    /// <param name="value">The supplied raw value (display string).</param>
+    public void ReportDllImportInvalidCharSet(TextLocation location, string value)
+    {
+        Report(location, "GS0327", $"CharSet value '{value}' is not a valid 'CharSet' member (expected 'None', 'Ansi', 'Unicode', or 'Auto'). See ADR-0086.");
+    }
+
+    /// <summary>
+    /// Reports GS0328 when a <c>CallingConvention:</c> argument to
+    /// <c>@DllImport</c> is not a valid
+    /// <see cref="System.Runtime.InteropServices.CallingConvention"/> member
+    /// value (ADR-0086 §3).
+    /// </summary>
+    /// <param name="location">The argument location.</param>
+    /// <param name="value">The supplied raw value (display string).</param>
+    public void ReportDllImportInvalidCallingConvention(TextLocation location, string value)
+    {
+        Report(location, "GS0328", $"CallingConvention value '{value}' is not a valid 'CallingConvention' member (expected 'Winapi', 'Cdecl', 'StdCall', 'ThisCall', or 'FastCall'). See ADR-0086.");
+    }
+
+    /// <summary>
+    /// Reports GS0329 when the <c>EntryPoint:</c> argument to
+    /// <c>@DllImport</c> is not a non-empty string literal (ADR-0086 §3).
+    /// </summary>
+    /// <param name="location">The argument location.</param>
+    public void ReportDllImportInvalidEntryPoint(TextLocation location)
+    {
+        Report(location, "GS0329", "'@DllImport.EntryPoint' must be a non-empty string literal (ADR-0086).");
     }
 
     private static string FormatMissingNames(IEnumerable<string> missingNames)

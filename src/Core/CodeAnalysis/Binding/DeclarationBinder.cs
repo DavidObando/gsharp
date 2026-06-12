@@ -2771,6 +2771,16 @@ internal sealed class DeclarationBinder
             function.SetAttributes(functionAttributes);
             ValidateInlineDataNilArguments(functionAttributes, function.Parameters);
 
+            // ADR-0086 / issue #727: when @DllImport is present and well-formed,
+            // attach the resolved PInvokeMetadata so the emitter wires the
+            // ImplMap row and the body-binder skips body binding. If the user
+            // wrote `;` but no @DllImport, surface GS0325.
+            var isPInvoke = PInvokeBinder.TryAttachPInvokeMetadata(function, syntax, Diagnostics);
+            if (!isPInvoke && syntax.HasSemicolonBody)
+            {
+                Diagnostics.ReportSemicolonBodyRequiresDllImport(syntax.Identifier.Location, function.Name);
+            }
+
             if (syntax.IsExtension)
             {
                 function.IsExtension = true;
@@ -3871,16 +3881,14 @@ internal sealed class DeclarationBinder
             return null;
         }
 
-        // 3a.1) Issue #179 / ADR-0047 §6: recognise [DllImport] but reject it in
-        // v1.0. The attribute is only valid on declarations whose body marker is
-        // `extern`, which (together with the underlying P/Invoke metadata emit)
-        // is a post-v1.0 feature. Type-identity recognition prevents aliasing
-        // or shadowing the source-level name from bypassing the rule.
-        if (KnownAttributes.IsDllImport(attrType.ClrType))
-        {
-            Diagnostics.ReportDllImportNotSupported(GetAnnotationNameLocation(annotation), nameText);
-            return null;
-        }
+        // 3a.1) ADR-0086 / issue #727: the blanket rejection of @DllImport
+        // (formerly GS0211, ADR-0047 §6) is removed. Well-formed P/Invoke
+        // declarations bind normally here; the function-declaration binder
+        // (BindFunctionDeclaration) then drives the P/Invoke pipeline:
+        // validates the function shape (no body, no instance/async/generic),
+        // extracts the @DllImport metadata into PInvokeMetadata, and reports
+        // GS0322–GS0329 on any malformed input. The emitter picks up
+        // function.PInvokeMetadata to write the ImplMap row.
 
         // 3b) Issue #177 / ADR-0047 §6: enforce [AttributeUsage(ValidOn)].
         // For the `Type` target the actual CLR target depends on the kind

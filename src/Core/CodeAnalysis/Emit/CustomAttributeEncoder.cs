@@ -159,6 +159,41 @@ internal sealed class CustomAttributeEncoder
     }
 
     /// <summary>
+    /// Variant of <see cref="EmitUserAttributes"/> that skips any attribute
+    /// matching <paramref name="excludePredicate"/>. Used by the P/Invoke
+    /// emitter (ADR-0086 / issue #727) to elide the <c>@DllImport</c>
+    /// attribute itself — it is fully consumed by the ImplMap row and
+    /// duplicating it as a CustomAttribute would create a misleading
+    /// reflection view (matching C#'s emit shape).
+    /// </summary>
+    /// <param name="parent">The metadata entity (TypeDef / MethodDef / ...) to attach the attributes to.</param>
+    /// <param name="symbol">The symbol carrying the bound annotation list.</param>
+    /// <param name="filter">Only attributes whose <see cref="BoundAttribute.Target"/> equals this kind are considered.</param>
+    /// <param name="excludePredicate">Attributes for which this predicate returns <c>true</c> are skipped.</param>
+    public void EmitUserAttributesExcept(EntityHandle parent, Symbol symbol, AttributeTargetKind filter, Func<BoundAttribute, bool> excludePredicate)
+    {
+        if (symbol?.Attributes.IsDefaultOrEmpty != false)
+        {
+            return;
+        }
+
+        foreach (var attr in symbol.Attributes)
+        {
+            if (attr.Target != filter)
+            {
+                continue;
+            }
+
+            if (excludePredicate != null && excludePredicate(attr))
+            {
+                continue;
+            }
+
+            this.EmitBoundAttribute(parent, attr);
+        }
+    }
+
+    /// <summary>
     /// Returns the next <see cref="ParameterHandle"/> that will be assigned by
     /// the next call to <see cref="MetadataBuilder.AddParameter"/>. Issue #170:
     /// every <c>AddMethodDefinition</c> call must thread this value into its

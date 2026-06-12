@@ -177,7 +177,7 @@ ADR-0047 introduces Kotlin-style attribute syntax (`@Foo(...)`) and the `@Attrib
 | GS0208 | Error | Parameter `{name}` is annotated `@EnumeratorCancellation` but its enclosing function is not an async sequence (does not return `IAsyncEnumerable[T]`). | `@EnumeratorCancellation` on a sync function or a non-sequence async function. |
 | GS0209 | Error | Attribute `{name}` is not valid on this position; its `[AttributeUsage]` permits only: `{targets}`. | Applying a `@field`-targeted attribute to a method. |
 | GS0210 | Error | Duplicate attribute `{name}`; this attribute type does not allow multiple applications (`AllowMultiple = false`). | Two `@Trace(...)` annotations on the same declaration. |
-| GS0211 | Error | Attribute `[DllImport]` is recognised but not supported in v1.0; P/Invoke (extern function bodies) is a post-v1.0 feature. | `@DllImport("user32.dll") func MessageBox() {}` — emit support and the `extern` body marker arrive after v1.0. |
+| GS0211 | Error | _(repurposed in ADR-0086)_ Attribute `[DllImport]` was historically rejected wholesale; well-formed `@DllImport`-annotated P/Invoke declarations are now accepted (see GS0322–GS0329 for shape-specific diagnostics). The slot is reserved for any future blanket-rejection use. | n/a — no longer fired. |
 | GS0212 | Error | Function `{name}` is marked `@Conditional` but does not return `void`; conditional methods must return `void` because calls may be elided at the call site. | `@Conditional("DEBUG") func Probe() int32 { return 0 }`. |
 
 ### Class / constructor diagnostics (GS0213–GS0217)
@@ -570,6 +570,23 @@ See [ADR-0085](adr/0085-default-interface-methods-implementation.md) (which supe
 | GS0321 | Error | `Modifier '<modifier>' on interface method '<Name>' is not yet supported. ADR-0085 explicitly defers static-virtual, private, and sealed interface members.` | Fires when an interface method body carries a deferred modifier such as `sealed override` or `private` — the parser accepts the shape so the binder can report a precise diagnostic. |
 
 The historical `GS0186` ("Interface method may not have a body.") is no longer emitted; ADR-0085 explicitly unblocks default-interface methods. The diagnostic code is retained as a reserved slot for backwards compatibility but the binder no longer fires it.
+
+## P/Invoke diagnostics (GS0322–GS0329)
+
+ADR-0086 / issue #727 introduces `@DllImport`-annotated function declarations whose body is a single `;` token (no managed body). The compiler emits CLR `PinvokeImpl` metadata for these declarations. The following diagnostics flag malformed P/Invoke shapes — every check is performed by `PInvokeBinder`, and an unannotated `;` body is rejected by GS0325. The historical blanket-rejection at GS0211 no longer fires.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0322 | Error | `@DllImport` requires a non-empty library name as its first positional argument. | `@DllImport func F() int32;` — missing the library name. |
+| GS0323 | Error | P/Invoke parameter or return type `{type}` is not in the supported marshalling table (ADR-0086 §2). | `@DllImport("libc") func F(o Object) int32;` — `Object` is not marshallable in v1. |
+| GS0324 | Error | Function `{name}` is annotated `@DllImport` but has a managed body; P/Invoke declarations must use a `;` body. | `@DllImport("libc") func F() int32 { return 0 }`. |
+| GS0325 | Error | Function `{name}` has no body; only `@DllImport`-annotated functions may use a `;` body marker. | `func F() int32;` without a preceding `@DllImport`. |
+| GS0326 | Error | `@DllImport` is not supported on this function shape (`{reason}`). | `@DllImport("libc") async func F() int32;` — async functions, generic functions, instance/extension methods, `shared` members, and ref-returning functions are all disallowed in v1. |
+| GS0327 | Error | `@DllImport` `CharSet` value `{value}` is not recognised; valid values are `CharSet.Ansi`, `CharSet.Unicode`, `CharSet.Auto`, and `CharSet.None`. | `@DllImport("libc", CharSet: "Utf8")`. |
+| GS0328 | Error | `@DllImport` `CallingConvention` value `{value}` is not recognised; valid values are `CallingConvention.Winapi`, `Cdecl`, `StdCall`, `ThisCall`, and `FastCall`. | `@DllImport("libc", CallingConvention: "MyCall")`. |
+| GS0329 | Error | `@DllImport` `EntryPoint` must be a non-empty string. | `@DllImport("libc", EntryPoint: "")`. |
+
+See ADR-0086 for the complete attribute-knob table, supported marshalling types, and a worked example.
 
 ## Internal compiler error diagnostics (GS9998–GS9999)
 

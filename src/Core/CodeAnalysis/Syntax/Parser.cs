@@ -2370,9 +2370,26 @@ public class Parser
         }
 
         var type = ParseOptionalTypeClause();
-        var body = ParseBlockStatement();
+
+        // ADR-0086 / issue #727: a `;` in place of a `{ ... }` body marks the
+        // declaration as a P/Invoke stub (`@DllImport`-annotated function with
+        // no managed body). The binder validates that the annotation is
+        // present and well-formed; an unannotated `;` body produces GS0325.
+        BlockStatementSyntax body;
+        SyntaxToken semicolonBody = null;
+        if (Current.Kind == SyntaxKind.SemicolonToken)
+        {
+            semicolonBody = NextToken();
+            body = null;
+        }
+        else
+        {
+            body = ParseBlockStatement();
+        }
+
         var decl = new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, asyncModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, typeParameterList, openParenthesisToken, parameters, closeParenthesisToken, type, body);
         decl.ReturnRefModifier = returnRefModifier;
+        decl.SemicolonBodyToken = semicolonBody;
         return decl;
     }
 

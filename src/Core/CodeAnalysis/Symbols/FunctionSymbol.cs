@@ -259,4 +259,17 @@ public sealed class FunctionSymbol : Symbol
     /// Defaults to <c>false</c>.
     /// </summary>
     public bool IsReturnTypeInferred { get; set; }
+
+    /// <summary>
+    /// Gets or sets the resolved <c>@DllImport</c> metadata for a P/Invoke
+    /// function declaration (ADR-0086 / issue #727). Non-null when the
+    /// function is a well-formed P/Invoke stub; the emitter consumes the
+    /// payload to produce the <c>ImplMap</c> row that points the unmanaged
+    /// entry point at the runtime's native-library loader. Defaults to
+    /// <c>null</c> for ordinary managed functions.
+    /// </summary>
+    public PInvokeMetadata PInvokeMetadata { get; set; }
+
+    /// <summary>Gets a value indicating whether this function is a P/Invoke stub (ADR-0086).</summary>
+    public bool IsPInvoke => PInvokeMetadata != null;
 }

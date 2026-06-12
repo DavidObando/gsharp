@@ -156,4 +156,4 @@ See [ADR-0051](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0051-pro
 
 ## Annotations
 
-Annotations start with `@` and may include a use-site target such as `@field:` or `@return:`. They are part of declaration syntax and map toward CLR metadata attributes. User P/Invoke or extern declarations are not supported today.
+Annotations start with `@` and may include a use-site target such as `@field:` or `@return:`. They are part of declaration syntax and map toward CLR metadata attributes. A function annotated with `@DllImport("libname", ...)` whose body is a single `;` is bound as a P/Invoke stub (see [CLR interop &gt; Unmanaged interop (P/Invoke)](../ref/clr-interop.md#unmanaged-interop-pinvoke) and ADR-0086).
