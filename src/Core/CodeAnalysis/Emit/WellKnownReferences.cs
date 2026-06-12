@@ -446,6 +446,33 @@ internal sealed class WellKnownReferences
         return this.getMethodReference(getValue);
     }
 
+    // Issue #752 / ADR-0084 L3: returns a callable MemberRef for
+    // `System.Nullable<T>::GetValueOrDefault()` closed over the supplied value-type
+    // underlying CLR type. Used by `?:` emit on a value-type `Nullable<T>` operand
+    // on the non-null branch: since `HasValue` was just observed true, the result
+    // is the same as `get_Value()` but without the BCL's redundant HasValue check
+    // and exception path. No boxing, no callvirt.
+    public MemberReferenceHandle GetNullableGetValueOrDefaultReference(Type underlyingValueType)
+    {
+        if (underlyingValueType == null || !underlyingValueType.IsValueType)
+        {
+            throw new InvalidOperationException(
+                $"GetNullableGetValueOrDefaultReference: '{underlyingValueType?.FullName}' is not a value type.");
+        }
+
+        // Issue #571: see GetNullableGetValueReference for rationale.
+        if (!NullableLifting.TryConstructNullable(this.emitCtx.References, underlyingValueType, out var nullableClr))
+        {
+            throw new InvalidOperationException(
+                $"Cannot construct Nullable<{underlyingValueType.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+        }
+
+        var getValueOrDefault = nullableClr.GetMethod("GetValueOrDefault", Type.EmptyTypes)
+            ?? throw new InvalidOperationException(
+                $"System.Nullable<{underlyingValueType.FullName}>::GetValueOrDefault() is not resolvable.");
+        return this.getMethodReference(getValueOrDefault);
+    }
+
     // Issue #519: returns a callable MemberRef for `System.Nullable<T>::get_HasValue`
     // closed over the supplied value-type underlying CLR type. Used by `?:` emit
     // on a value-type `Nullable<T>` operand to branch on the presence flag without

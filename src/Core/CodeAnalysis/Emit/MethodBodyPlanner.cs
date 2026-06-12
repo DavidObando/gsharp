@@ -336,6 +336,7 @@ internal sealed class MethodBodyPlanner
         Dictionary<BoundExpression, int> indexAssignmentValueSlots,
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
         Dictionary<BoundBinaryExpression, LiftedBinarySlots> liftedBinarySlots,
+        Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots,
         InstructionEncoder il)
     {
         this.CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
@@ -512,22 +513,33 @@ internal sealed class MethodBodyPlanner
             receiverSpillSlots[unwrap] = slot;
         }
 
-        // Issue #519: `?:` whose LHS is a value-type `Nullable<T>` lowers at
-        // emit time to a HasValue/Value sequence that needs a `Nullable<T>`-
-        // typed temp slot (it cannot use `dup; brtrue`, which is invalid IL
-        // for value-type stack shapes). The slot is keyed by the binary
-        // expression node and typed as the LHS's NullableTypeSymbol so
-        // EncodeTypeSymbol emits the proper `System.Nullable<T>` token.
+        // Issue #519 / #752 / ADR-0084 L3: `?:` whose LHS is a value-type
+        // `Nullable<T>` lowers at emit time to a HasValue/GetValueOrDefault
+        // sequence that needs a `Nullable<T>`-typed temp slot (it cannot
+        // use `dup; brtrue`, which is invalid IL for value-type stack
+        // shapes). The slot is keyed by the binary expression node and
+        // typed as the LHS's NullableTypeSymbol so EncodeTypeSymbol emits
+        // the proper `System.Nullable<T>` token.
+        //
+        // The slot lives in its OWN dictionary (separate from
+        // `receiverSpillSlots`) because the same binary node may also be
+        // the receiver of an instance call — `(v ?: 0).ToString()` — in
+        // which case the receiver-spill collector independently
+        // allocates an underlying-`T`-typed slot to take `ldloca` of the
+        // call receiver. Conflating the two slots in one dictionary
+        // produced invalid IL (issue #752): the receiver slot's type
+        // overwrote the Nullable<T> spill type and the HasValue call
+        // received the wrong receiver address.
         foreach (var coalesce in this.CollectNullableValueTypeCoalesces(body))
         {
-            if (receiverSpillSlots.ContainsKey(coalesce))
+            if (nullableCoalesceSpillSlots.ContainsKey(coalesce))
             {
                 continue;
             }
 
             var slot = localTypes.Count;
             localTypes.Add(coalesce.Left.Type);
-            receiverSpillSlots[coalesce] = slot;
+            nullableCoalesceSpillSlots[coalesce] = slot;
         }
 
         // PR N-4 / §6.1 / C# §7.3.7: lifted binary operators over a value-

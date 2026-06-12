@@ -6,6 +6,11 @@
 // the reference-typed surface: the G# binder honours generic constraints
 // (`where T : class` vs `where T : struct`) during overload resolution
 // and picks the correct overload based on the receiver type.
+// Issue #752 / ADR-0084 L3 also closed the last value-typed gap: the
+// Elvis (`?:`) operator now emits verifiable IL on a nullable struct
+// receiver, so `count ?: -1` is preferred over `.OrElse(-1)` in
+// idiomatic G# code (the helper remains available for lazy/computed
+// fallbacks and for receiver clauses that need a method call shape).
 // The Gsharp.Extensions.* namespaces are explicit-import only — nothing here
 // is auto-imported, even with the implicit-imports compiler option enabled.
 
@@ -57,16 +62,18 @@ Console.WriteLine(name.OrThrow("name was missing"))
 // --- Value-typed nullables (T : struct) --------------------------------------
 // ADR-0088 / issue #750: the binder picks the struct overload based on the
 // receiver's CLR shape (Nullable<T>) and the `where T : struct` constraint.
+// Issue #752 / ADR-0084 L3: `?:` is now the canonical fallback shape; the
+// `OrCompute` helper remains for the deferred-default case.
 
 let count int32? = 7
 let doubled = count.Map(func(n int32) int32 { return n * 2 })
-Console.WriteLine(doubled.OrElse(-1))
+Console.WriteLine(doubled ?: -1)
 
 let none int32? = nil
-Console.WriteLine(none.OrElse(-1))
+Console.WriteLine(none ?: -1)
 
 let positive = count.Filter(func(n int32) bool { return n > 0 })
-Console.WriteLine(positive.OrElse(-1))
+Console.WriteLine(positive ?: -1)
 
 count.IfPresent(func(n int32) {
     Console.WriteLine("count present: " + n.ToString())

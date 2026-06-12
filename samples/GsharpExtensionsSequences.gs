@@ -90,17 +90,20 @@ Console.WriteLine("SingleOrNil(many): " + (Sequences.Of("a", "b").SingleOrNil() 
 // Value-type terminals share the canonical name with the reference-typed
 // surface: ADR-0088 (issue #750) lets the binder honour generic constraints
 // so `FirstOrNil` resolves to the struct overload on int sequences.
+// Issue #752 / ADR-0084 L3: the Elvis (`?:`) operator now emits verifiable
+// IL on a nullable struct receiver, so we apply it directly to the
+// value-typed terminals instead of routing through `.OrElse(-1)`.
 let firstVal = Sequences.Of(11, 22, 33).FirstOrNil()
-Console.WriteLine("FirstOrNil(value): " + firstVal.OrElse(-1).ToString())
+Console.WriteLine("FirstOrNil(value): " + (firstVal ?: -1).ToString())
 
 let lastVal = Sequences.Of(11, 22, 33).LastOrNil()
-Console.WriteLine("LastOrNil(value): " + lastVal.OrElse(-1).ToString())
+Console.WriteLine("LastOrNil(value): " + (lastVal ?: -1).ToString())
 
 let solo = Sequences.Of(42).SingleOrNil()
-Console.WriteLine("SingleOrNil(value, one): " + solo.OrElse(-1).ToString())
+Console.WriteLine("SingleOrNil(value, one): " + (solo ?: -1).ToString())
 
 let manyVals = Sequences.Of(1, 2).SingleOrNil()
-Console.WriteLine("SingleOrNil(value, many): " + manyVals.OrElse(-1).ToString())
+Console.WriteLine("SingleOrNil(value, many): " + (manyVals ?: -1).ToString())
 
 // --- Collectors --------------------------------------------------------------
 

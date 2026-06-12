@@ -235,13 +235,17 @@ hatch under `src/Sdk/Gsharp.Extensions/*.cs` works today.
   `src/Sdk/Gsharp.Extensions/Sequences/` migrate to native G#.
 - **L3. Native `?:` over nullable value types.**
   ([issue #752](https://github.com/DavidObando/gsharp/issues/752))
-  The current
-  emitter cannot lower the Elvis operator when the receiver is a
-  nullable struct (`Nullable<T>`) — the `dup; brtrue` pattern it
-  uses is invalid IL for boxed value-type stack slots. The
-  `OrElse` / `OrCompute` helpers exist partly to give
-  callers a safe surface today; `?:` over nullable value types is
-  tracked separately.
+  **Closed.** Issue #519 introduced the HasValue-based lowering
+  for value-type `Nullable<T>` LHS in the `?:` emit path; issue
+  #752 finished the job by switching the non-null branch's unwrap
+  from `Nullable<T>::get_Value()` to the cheaper
+  `GetValueOrDefault()` (no boxing, no callvirt, no redundant
+  throw path) and by giving the coalesce its own scratch slot
+  separate from the receiver-spill slot so `(v ?: 0).ToString()`
+  emits verifiable IL. The `Optional` and `Sequences` samples
+  now use `?:` directly on `int32?` receivers; the `OrElse` /
+  `OrCompute` helpers remain available for deferred / computed
+  fallbacks but are no longer the only safe surface.
 
 When any of these gaps closes, the corresponding helpers should
 migrate to native G# sources and the C# files under
@@ -260,12 +264,13 @@ of that migration, not left behind as dead code.
   in the tour and the standard-library reference.
 - **Positive — dogfooding pressure.** Shipping a real assembly
   meant to be authored in G# creates direct compiler pressure to
-  close L2 / L3 (L1 closed by ADR-0088). Each remaining gap is now
-  a tracked issue with a concrete callsite waiting on its fix.
-  L2's parser side closed in PR for #751; the residual binder /
-  emit gaps surfaced while attempting the port live as #773
-  (generic-receiver dispatch), #774 (open-receiver iteration),
-  and #775 (G# `class` / `struct` constraint spelling).
+  close the open language gaps. Each gap is tracked with a
+  concrete callsite waiting on its fix. L1 closed by ADR-0088,
+  L3 closed by issue #752, and L2's parser side closed in the PR
+  for #751; the residual binder / emit gaps surfaced while
+  attempting the port live as #773 (generic-receiver dispatch),
+  #774 (open-receiver iteration), and #775 (G# `class` / `struct`
+  constraint spelling).
 - **Positive — zero-friction adoption.** Because the assembly is
   bundled with the SDK and imports are explicit but trivial
   (`import Gsharp.Extensions.Optional`), the cost to a sample or
