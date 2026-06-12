@@ -1239,7 +1239,14 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0185", $"Override of method '{methodName}' must match the base method's parameter types and return type.");
     }
 
-    /// <summary>Reports an interface method declared with a body (ADR-0018: Phase 3 interfaces are signature-only).</summary>
+    /// <summary>
+    /// ADR-0085 (issue #726): GS0186 — previously reported when an interface
+    /// method carried a body in Phase 3 (ADR-0018 deferral). The deferral was
+    /// reversed by ADR-0085, which implements default-interface methods, so
+    /// this diagnostic is no longer emitted. The slot is preserved (rather
+    /// than reused) so historical references in changelogs and PRs still
+    /// resolve correctly.
+    /// </summary>
     /// <param name="location">The text location of the offending method identifier.</param>
     /// <param name="methodName">The method name.</param>
     public void ReportInterfaceMethodHasBody(TextLocation location, string methodName)
@@ -2789,6 +2796,109 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             location,
             "GS0317",
             message,
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0085 / issue #726: GS0318 — a class implements two unrelated
+    /// interfaces that each provide a default body for the same method
+    /// signature, and the class does not declare its own override. The
+    /// implementer must declare a same-name same-signature method to
+    /// disambiguate (Java-style "explicit override" rule). The message
+    /// names both interfaces and the disputed method so the fix is
+    /// immediately apparent.
+    /// </summary>
+    /// <param name="location">The source location of the implementing class identifier.</param>
+    /// <param name="className">The implementing class name.</param>
+    /// <param name="methodName">The disputed method name.</param>
+    /// <param name="firstInterfaceName">The name of the first interface providing a default.</param>
+    /// <param name="secondInterfaceName">The name of the second interface providing a default.</param>
+    public void ReportConflictingInterfaceDefaults(
+        TextLocation location,
+        string className,
+        string methodName,
+        string firstInterfaceName,
+        string secondInterfaceName)
+    {
+        Report(
+            location,
+            "GS0318",
+            $"Class '{className}' inherits conflicting default implementations of method '{methodName}' from interfaces '{firstInterfaceName}' and '{secondInterfaceName}'; declare an override on '{className}' to disambiguate (ADR-0085).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0085 / issue #726: GS0319 — a call site (or override) references
+    /// an interface method that has been turned back into an abstract slot
+    /// (its default body was removed in a later library version), and the
+    /// implementer was relying on the inherited default. The binder fires
+    /// this when an InterfaceImpl is satisfied solely through a default that
+    /// has been replaced by an abstract signature. Reserved so binary-compat
+    /// regressions surface with a dedicated, actionable error.
+    /// </summary>
+    /// <param name="location">The source location of the implementing class identifier.</param>
+    /// <param name="className">The implementing class name.</param>
+    /// <param name="interfaceName">The interface that dropped the default.</param>
+    /// <param name="methodName">The method that lost its default body.</param>
+    public void ReportInterfaceDefaultRemoved(
+        TextLocation location,
+        string className,
+        string interfaceName,
+        string methodName)
+    {
+        Report(
+            location,
+            "GS0319",
+            $"Class '{className}' relied on a default implementation of '{interfaceName}.{methodName}' that has been removed; declare an explicit override on '{className}' (ADR-0085).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0085 / issue #726: GS0320 — a class declares <c>: I</c> but
+    /// neither provides an implementation of an abstract method <c>M</c>
+    /// declared on <c>I</c> nor inherits one through its class chain, and
+    /// the interface deliberately marked <c>M</c> abstract (no default
+    /// body). This is the "no default, no impl" anchor that complements
+    /// the general GS0187 channel; it fires when DIM is *available* but
+    /// not used to bridge the gap, so users see immediately that the
+    /// interface intentionally requires an implementation.
+    /// </summary>
+    /// <param name="location">The source location of the implementing class identifier.</param>
+    /// <param name="className">The implementing class name.</param>
+    /// <param name="interfaceName">The interface declaring the abstract method.</param>
+    /// <param name="methodName">The abstract method name.</param>
+    public void ReportInterfaceAbstractMethodHasNoDefault(
+        TextLocation location,
+        string className,
+        string interfaceName,
+        string methodName)
+    {
+        Report(
+            location,
+            "GS0320",
+            $"Class '{className}' does not implement abstract interface method '{interfaceName}.{methodName}', and the interface provides no default body (ADR-0085).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0085 / issue #726: GS0321 — a deferred modifier (currently
+    /// <c>static</c> or <c>private</c>) appears on an interface method
+    /// declaration. ADR-0085 intentionally keeps DIM minimal in this PR
+    /// (instance-virtual default methods only); static-virtuals and
+    /// private helpers are tracked as follow-ups and are rejected here.
+    /// </summary>
+    /// <param name="location">The source location of the offending modifier or method identifier.</param>
+    /// <param name="modifier">The triggering modifier (e.g. <c>static</c>, <c>private</c>).</param>
+    /// <param name="methodName">The owning interface method name.</param>
+    public void ReportInterfaceMethodModifierDeferred(
+        TextLocation location,
+        string modifier,
+        string methodName)
+    {
+        Report(
+            location,
+            "GS0321",
+            $"Modifier '{modifier}' on interface method '{methodName}' is not supported in this version of GSharp; see ADR-0085 for the deferred-features list.",
             DiagnosticSeverity.Error);
     }
 

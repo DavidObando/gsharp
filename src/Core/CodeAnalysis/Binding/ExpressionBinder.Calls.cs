@@ -1060,6 +1060,19 @@ internal sealed partial class ExpressionBinder
                     return overloads.BindUserInstanceCall(receiver, userMethod, arguments, ce, argumentNames);
                 }
 
+                // ADR-0085 / issue #726: a class that does not override an
+                // inherited default interface method can still be called by
+                // the unqualified method name on a class-typed receiver. The
+                // binder routes the call to the interface's default method;
+                // the evaluator and emitter both rely on virtual dispatch
+                // through the interface slot to land on any subsequent
+                // override.
+                var defaultIfaceMethod = TryFindDefaultInterfaceMethod(userClass, methodName, arguments, ce, argumentNames);
+                if (defaultIfaceMethod != null)
+                {
+                    return overloads.BindUserInstanceCall(receiver, defaultIfaceMethod, arguments, ce, argumentNames);
+                }
+
                 // Issue #527: fall back to a delegate/function-typed field on
                 // the user struct/class. This is the same delegate-as-callable
                 // dispatch used for the imported-CLR path below; here the
@@ -1118,6 +1131,14 @@ internal sealed partial class ExpressionBinder
                 }
 
                 return overloads.BindUserInstanceCall(receiver, userMethodPriority, arguments, ce, argumentNames);
+            }
+
+            // ADR-0085 / issue #726: default-interface-method fallback —
+            // same as the primary branch above.
+            var defaultIfaceMethodPriority = TryFindDefaultInterfaceMethod(userClassPriority, methodName, arguments, ce, argumentNames);
+            if (defaultIfaceMethodPriority != null)
+            {
+                return overloads.BindUserInstanceCall(receiver, defaultIfaceMethodPriority, arguments, ce, argumentNames);
             }
 
             // Issue #527: a G#-defined struct/class field whose type is a
@@ -1280,6 +1301,58 @@ internal sealed partial class ExpressionBinder
     /// resulting expression may be a <see cref="BoundErrorExpression"/> if
     /// arity is wrong).
     /// </summary>
+    /// <summary>
+    /// ADR-0085 / issue #726: when a class-typed receiver does not have a
+    /// matching instance method, look at the class's implemented interfaces
+    /// (including bases) for a default-method (DIM) whose signature accepts
+    /// the supplied arguments. Returns the selected interface method or
+    /// <c>null</c> if there is no suitable candidate. Diamond conflicts are
+    /// reported by <c>VerifyInterfaceImplementations</c>; this helper picks
+    /// the first matching candidate so that diagnostics are not duplicated
+    /// at every call site.
+    /// </summary>
+    private FunctionSymbol TryFindDefaultInterfaceMethod(
+        StructSymbol receiverClass,
+        string methodName,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        ImmutableArray<string> argumentNames)
+    {
+        for (var c = receiverClass; c != null; c = c.BaseClass)
+        {
+            foreach (var iface in c.Interfaces)
+            {
+                if (iface == null)
+                {
+                    continue;
+                }
+
+                var candidates = iface.GetMethods(methodName);
+                var defaultsOnly = ImmutableArray.CreateBuilder<FunctionSymbol>();
+                for (var i = 0; i < candidates.Length; i++)
+                {
+                    if (InterfaceSymbol.HasDefaultBody(candidates[i]))
+                    {
+                        defaultsOnly.Add(candidates[i]);
+                    }
+                }
+
+                if (defaultsOnly.Count == 0)
+                {
+                    continue;
+                }
+
+                var selected = this.overloads.SelectInstanceOverloadOrReport(defaultsOnly.ToImmutable(), arguments, ce, methodName, argumentNames);
+                if (selected != null)
+                {
+                    return selected;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private bool TryBindUserStructDelegateFieldInvocation(
         BoundExpression receiver,
         StructSymbol receiverStruct,

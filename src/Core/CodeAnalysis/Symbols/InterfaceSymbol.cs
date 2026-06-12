@@ -173,6 +173,19 @@ public sealed class InterfaceSymbol : TypeSymbol
         return ConstructedCache.GetOrAdd((definition, key), _ => CreateConstructed(definition, typeArguments));
     }
 
+    /// <summary>
+    /// ADR-0085 / issue #726: returns true when <paramref name="method"/> is
+    /// a default-interface method on this interface — i.e. its declaring
+    /// <see cref="FunctionSymbol.Declaration"/> carries a non-null
+    /// <c>Body</c>. Abstract interface methods return false.
+    /// </summary>
+    /// <param name="method">The interface method to inspect.</param>
+    /// <returns>True when the method has a default body.</returns>
+    public static bool HasDefaultBody(FunctionSymbol method)
+    {
+        return method != null && method.Declaration?.Body != null;
+    }
+
     private static string BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments)
     {
         var parts = new string[typeArguments.Length];

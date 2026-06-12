@@ -1798,6 +1798,16 @@ internal sealed class DeclarationBinder
     {
         foreach (var (syntax, structSymbol) in pendingInterfaceImplementationChecks)
         {
+            // ADR-0085 / issue #726: collect every interface default-method
+            // the implementer would inherit if it does not provide its own
+            // method, keyed by signature (name + parameter shape). When two
+            // unrelated interfaces both provide a default for the same
+            // signature and the class does not declare an override, GS0318
+            // fires. The mapping is "first-seen wins" for the diagnostic
+            // message; conflicts are reported once per signature.
+            var inheritedDefaultsBySignature = new Dictionary<string, (FunctionSymbol Method, InterfaceSymbol Iface)>(System.StringComparer.Ordinal);
+            var conflictsReported = new HashSet<string>(System.StringComparer.Ordinal);
+
             foreach (var iface in structSymbol.Interfaces)
             {
                 foreach (var imethod in iface.Methods)
@@ -1818,13 +1828,65 @@ internal sealed class DeclarationBinder
                         }
                     }
 
+                    if (signatureMatch != null)
+                    {
+                        // The class itself provides an implementation that exactly
+                        // matches the interface signature — no default needed and
+                        // any earlier-seen conflicting default is preempted.
+                        var sigKey = BuildInterfaceMethodSignatureKey(imethod);
+                        inheritedDefaultsBySignature.Remove(sigKey);
+                        conflictsReported.Add(sigKey);
+                        continue;
+                    }
+
                     if (impl == null)
                     {
-                        Diagnostics.ReportInterfaceMethodNotImplemented(
-                            syntax.Identifier.Location,
-                            structSymbol.Name,
-                            iface.Name,
-                            imethod.Name);
+                        // ADR-0085: when the interface itself provides a default,
+                        // the implementer does not need to declare the method.
+                        // Track which default would be inherited so we can
+                        // diagnose diamond conflicts across multiple interfaces.
+                        if (InterfaceSymbol.HasDefaultBody(imethod))
+                        {
+                            var sigKey = BuildInterfaceMethodSignatureKey(imethod);
+                            if (inheritedDefaultsBySignature.TryGetValue(sigKey, out var prior))
+                            {
+                                if (!ReferenceEquals(prior.Method, imethod) && conflictsReported.Add(sigKey))
+                                {
+                                    Diagnostics.ReportConflictingInterfaceDefaults(
+                                        syntax.Identifier.Location,
+                                        structSymbol.Name,
+                                        imethod.Name,
+                                        prior.Iface.Name,
+                                        iface.Name);
+                                }
+                            }
+                            else
+                            {
+                                inheritedDefaultsBySignature[sigKey] = (imethod, iface);
+                            }
+
+                            continue;
+                        }
+
+                        // No impl, no default → original GS0187 channel for
+                        // missing implementations. GS0320 narrows it to "the
+                        // interface deliberately requires this method".
+                        if (InterfaceHasAnyDefaultsExcept(iface, imethod))
+                        {
+                            Diagnostics.ReportInterfaceAbstractMethodHasNoDefault(
+                                syntax.Identifier.Location,
+                                structSymbol.Name,
+                                iface.Name,
+                                imethod.Name);
+                        }
+                        else
+                        {
+                            Diagnostics.ReportInterfaceMethodNotImplemented(
+                                syntax.Identifier.Location,
+                                structSymbol.Name,
+                                iface.Name,
+                                imethod.Name);
+                        }
                     }
                     else if (signatureMatch == null)
                     {
@@ -1914,6 +1976,58 @@ internal sealed class DeclarationBinder
             // method or property. Diagnostic uses the same GS0187 channel.
             VerifyClrInterfaceImplementations(syntax, structSymbol);
         }
+    }
+
+    /// <summary>
+    /// ADR-0085 / issue #726: builds a stable signature key for an interface
+    /// method (used to detect diamond conflicts across multiple interfaces).
+    /// The key is "Name(P0, P1, …)" using the parameter type names from the
+    /// callable shape (which strips the implicit `this`).
+    /// </summary>
+    private string BuildInterfaceMethodSignatureKey(FunctionSymbol method)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append(method.Name);
+        sb.Append('(');
+        var parameters = GetCallableParameters(method);
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(',');
+            }
+
+            sb.Append(parameters[i].Type?.Name ?? "?");
+        }
+
+        sb.Append(')');
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// ADR-0085 helper: returns <c>true</c> when the supplied interface
+    /// carries at least one default-bearing method other than
+    /// <paramref name="excluded"/>. Used to decide whether GS0320 ("no
+    /// default available") fires instead of GS0187 (general "not
+    /// implemented"). When the interface is purely abstract, GS0187 stays
+    /// the right channel because DIM isn't part of the conversation.
+    /// </summary>
+    private static bool InterfaceHasAnyDefaultsExcept(InterfaceSymbol iface, FunctionSymbol excluded)
+    {
+        foreach (var m in iface.Methods)
+        {
+            if (ReferenceEquals(m, excluded))
+            {
+                continue;
+            }
+
+            if (InterfaceSymbol.HasDefaultBody(m))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void VerifyClrInterfaceImplementations(StructDeclarationSyntax syntax, StructSymbol structSymbol)
@@ -2163,6 +2277,16 @@ internal sealed class DeclarationBinder
 
             var returnType = bindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
             var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
+
+            // ADR-0085 / issue #726: an interface method whose declaration
+            // carries a body is a default-interface method. We set the
+            // receiver type to the owning InterfaceSymbol so the body
+            // binder gives the method a `this` parameter and the call
+            // binder routes virtual dispatch through the interface. An
+            // abstract interface method still gets the same receiver
+            // (`this` typed as the interface) so call-binder paths that
+            // resolve interface dispatch work uniformly — emit then drops
+            // the body when the declaration has none.
             var methodSymbol = new FunctionSymbol(
                 methodName,
                 parameters.ToImmutable(),
@@ -2170,10 +2294,33 @@ internal sealed class DeclarationBinder
                 methodSyntax,
                 package,
                 Accessibility.Public,
-                receiverType: null);
+                receiverType: (TypeSymbol)interfaceSymbol);
             methodSymbol.ReturnRefKind = methodReturnRefKind;
             methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
             Binder.AttachDocumentation(methodSymbol, methodSyntax);
+
+            // ADR-0085: reject `static` / `private` / `open` / `override`
+            // modifiers on interface members — these are tracked as
+            // deferred follow-ups (GS0321). The parser does not currently
+            // accept them on interface method signatures, but the
+            // FunctionDeclarationSyntax can carry them in principle via
+            // the constructor overload; defensively diagnose here so a
+            // future parser relaxation surfaces with a clear message.
+            if (methodSyntax.OpenModifier != null)
+            {
+                Diagnostics.ReportInterfaceMethodModifierDeferred(methodSyntax.OpenModifier.Location, "open", methodName);
+            }
+
+            if (methodSyntax.OverrideModifier != null)
+            {
+                Diagnostics.ReportInterfaceMethodModifierDeferred(methodSyntax.OverrideModifier.Location, "override", methodName);
+            }
+
+            if (methodSyntax.AccessibilityModifier != null
+                && string.Equals(methodSyntax.AccessibilityModifier.Text, "private", System.StringComparison.Ordinal))
+            {
+                Diagnostics.ReportInterfaceMethodModifierDeferred(methodSyntax.AccessibilityModifier.Location, "private", methodName);
+            }
 
             // ADR-0063 §11: detect duplicate-signature overloads on the interface.
             var hasDupSig = false;

@@ -856,6 +856,41 @@ public sealed class Binder
             }
         }
 
+        // ADR-0085 / issue #726: bind default-interface-method bodies. An
+        // interface method whose declaration carries a non-null Body is a
+        // DIM; bind it through the same pipeline as a class method so the
+        // resulting BoundBlockStatement is registered in functionBodies
+        // (interpreter + emit both look it up by FunctionSymbol). Abstract
+        // interface methods (no body) are skipped — they remain abstract
+        // MethodDef rows in metadata and have no entry in functionBodies.
+        foreach (var ifaceSym in globalScope.Interfaces)
+        {
+            if (ifaceSym.Methods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var method in ifaceSym.Methods)
+            {
+                if (method?.Declaration?.Body == null)
+                {
+                    continue;
+                }
+
+                var binder = new Binder(parentScope, method);
+                var body = binder.statements.BindStatement(method.Declaration.Body);
+                var loweredBody = Lowerer.Lower(body);
+
+                if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
+                {
+                    binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+                }
+
+                functionBodies.Add(method, loweredBody);
+                diagnostics.AddRange(binder.Diagnostics);
+            }
+        }
+
         // Issue #306: bind standalone user-defined constructor bodies. Like
         // instance methods, the constructor body sees `this`, the constructor
         // parameters, and the class's fields (via bare names). The body is keyed

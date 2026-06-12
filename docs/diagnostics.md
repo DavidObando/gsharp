@@ -135,7 +135,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0183 | Error | No matching open base method for `override`. | `override` keyword present but no base class defines a matching open method. |
 | GS0184 | Error | Cannot override a non-open base method. | `override` targets a method that was not declared `open`. |
 | GS0185 | Error | Override signature mismatch. | An `override` method has different parameter types or return type than the base. |
-| GS0186 | Error | Interface method may not have a body. | A method declared inside an `interface` has an implementation block. |
+| GS0186 | Error | _(historical — removed in ADR-0085)_ Interface method may not have a body. | Default-interface methods are now supported (see GS0318–GS0321). |
 | GS0187 | Error | Class does not implement interface method. | A class claims to implement an interface but a required method is absent. |
 | GS0188 | Error | Class cannot implement a sealed interface from a different package. | Implementing a `sealed interface` defined outside the current package. |
 | GS0189 | Error | The return type of an `async func(...)` type clause is implicitly wrapped in `Task`; do not write `Task[…]` explicitly. | `async func(int) Task[int]` in a type position (ADR-0043). |
@@ -557,6 +557,19 @@ See [ADR-0080](adr/0080-deprecate-equals-named-arguments.md). Named arguments in
 | GS0315 | Warning | `Named argument '<name>' uses the deprecated '=' separator; use '<name>: value' instead (ADR-0080).` | `Foo(timeout = 30)` — rewrite as `Foo(timeout: 30)`. Same migration for `.copy(x = 10)` → `.copy(x: 10)` and `@AttributeUsage(All, AllowMultiple = true)` → `@AttributeUsage(All, AllowMultiple: true)`. |
 
 GS0315 fires once per offending `=` separator, with the diagnostic location covering the `=` token itself. The parser continues to accept the `=` form so the resulting `NamedArgumentExpressionSyntax` binds and emits exactly as before; only the diagnostic is new. Plain assignment expressions (`x = 1`), parameter default values (`func f(x int32 = 0)`), and `with`-expression field initializers (`p with { x = 10 }`) parse on separate paths and are unaffected. A future ADR/issue (filed under parent #706) will escalate the warning to an error and remove the `=` branch from `ParseArgumentsCore`.
+
+## Default-interface-method diagnostics (GS0318–GS0321)
+
+See [ADR-0085](adr/0085-default-interface-methods-implementation.md) (which supersedes the deferral in ADR-0018). Interfaces may now expose default-method bodies; classes that implement the interface inherit the default unless they declare their own override. The four diagnostics below cover the conflict, dropped-default, missing-implementer, and deferred-modifier cases.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0318 | Error | `Class '<C>' inherits conflicting default implementations of '<Name>' from interfaces '<IA>' and '<IB>'. Declare '<C>.<Name>' explicitly to disambiguate.` | Two unrelated interfaces both supply a default body for the same signature; the class fails to override. Java-style rule per ADR-0085. |
+| GS0319 | Error | `Override targets default-interface method '<Name>' that was removed in interface '<I>'. Update the implementer or restore the default.` | Reserved — fires when an `override` keyword targets a slot that has been deleted from the interface. |
+| GS0320 | Error | `Class '<C>' does not implement interface method '<I>.<Name>' and the interface does not provide a default.` | Replaces the historical GS0187 path when an implementer omits a method that has no default. |
+| GS0321 | Error | `Modifier '<modifier>' on interface method '<Name>' is not yet supported. ADR-0085 explicitly defers static-virtual, private, and sealed interface members.` | Fires when an interface method body carries a deferred modifier such as `sealed override` or `private` — the parser accepts the shape so the binder can report a precise diagnostic. |
+
+The historical `GS0186` ("Interface method may not have a body.") is no longer emitted; ADR-0085 explicitly unblocks default-interface methods. The diagnostic code is retained as a reserved slot for backwards compatibility but the binder no longer fires it.
 
 ## Internal compiler error diagnostics (GS9998–GS9999)
 

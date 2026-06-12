@@ -59,7 +59,25 @@ Rationale: [ADR-0029](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0
 
 Classes are reference-like and support primary constructors, explicit `init` constructors, fields, methods, properties, events, inheritance, and `shared` members. Classes are sealed by default for inheritance unless marked `open`. Methods that can be overridden are marked `open`; overriding methods use `override`. See [ADR-0003](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0003-oo-surface.md) and [ADR-0017](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0017-method-virtuality.md).
 
-Interfaces define method, property, and event signatures. Current implementation treats interface bodies as signatures only; method bodies are diagnosed even though [ADR-0018](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0018-interface-defaults.md) records future-facing rationale for defaults.
+Interfaces define method, property, and event signatures. Per ADR-0085 (which supersedes the deferral in ADR-0018) interface methods MAY carry a body — a **default-interface method** (DIM). Classes implementing the interface inherit the default unless they declare their own override.
+
+```gsharp
+interface IGreeter {
+    func Hello() string { return "hi (default)" }
+    func Required(name string) string
+}
+
+class Quiet : IGreeter {
+    func Required(name string) string { return "(quiet) $name" }
+}
+
+class Loud : IGreeter {
+    func Hello() string { return "LOUD" }
+    func Required(name string) string { return "(loud) $name" }
+}
+```
+
+`Quiet` inherits `Hello`; `Loud` overrides it. Dispatch through either a class-typed or interface-typed receiver lands on the correct body. When two unrelated interfaces both supply a default for the same signature, the implementing class MUST declare its own override — the binder reports `GS0318` ("conflicting default implementations") otherwise. The deferred-modifier diagnostic `GS0321` covers static-virtual, private, and `sealed override` interface members, which are reserved for follow-up work.
 
 ## Enums
 
