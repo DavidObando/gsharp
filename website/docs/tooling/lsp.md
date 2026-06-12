@@ -52,7 +52,7 @@ The server capability factory enables the following:
 | Folding ranges | `textDocument/foldingRange`. |
 | Selection ranges | `textDocument/selectionRange`. |
 | Linked editing | `textDocument/linkedEditingRange`. |
-| Completion | `textDocument/completion`, triggered on `.`. |
+| Completion | `textDocument/completion`, triggered on `.`. In a type-clause position (parameter, local, field, return type, generic argument, etc.) the list includes ready-to-use snippets for `async func(...) R` (ADR-0043) and `async sequence[T]` (ADR-0042), with Markdown documentation rendered from the same prose hover surfaces on the corresponding tokens. |
 | Signature help | `textDocument/signatureHelp`, triggered by `(` and `,`. |
 | Rename | `textDocument/prepareRename` and `textDocument/rename`. |
 | Code actions | `textDocument/codeAction`, currently refactor/rewrite-style actions. |
@@ -70,7 +70,7 @@ During `initialize`, the server attempts best-effort workspace discovery from th
 
 ## Feature notes and limitations
 
-- Completion is scope-aware and dot-triggered, but the implementation remains much simpler than mature .NET language services.
+- Completion is scope-aware and dot-triggered, but the implementation remains much simpler than mature .NET language services. Type-clause positions additionally surface `async func(...) R` and `async sequence[T]` snippets so the two GSharp-flavored async-type spellings (ADR-0043 / ADR-0042) are discoverable without having to know they exist.
 - Formatting is a lexer-based whole-document formatter with a canonical whitespace pass; current implementation uses two-space indentation internally.
 - Rename, linked editing, references, CodeLens, implementation, and type-definition results are computed from the compiler's semantic lookup model and are strongest for symbols in the current project/document model.
 - The server serializes handlers through a single gate so edits and reads are processed in order, not incrementally in parallel.

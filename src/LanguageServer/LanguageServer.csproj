@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <PackageReference Include="@(StreamJsonRpcPackageReference)" />
+    <PackageReference Include="@(MessagePackPackageReference)" />
   </ItemGroup>
 
   <ItemGroup>

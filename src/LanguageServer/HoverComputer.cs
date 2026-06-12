@@ -26,6 +26,19 @@ public static class HoverComputer
         var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
+
+        // Issue #713: when hovering a token inside an `async func(...)` (ADR-0043) or
+        // `async sequence[T]` (ADR-0042) type clause, surface the ADR-rooted prose
+        // before falling through to symbol/identifier resolution. The two type-clause
+        // spellings have no resolved symbol of their own — the binder collapses them
+        // onto FunctionTypeSymbol / AsyncSequenceTypeSymbol — so without this carve-out
+        // the user would get nothing.
+        var asyncHover = TryComputeAsyncTypeClauseHover(content.SyntaxTree, offset, token);
+        if (asyncHover != null)
+        {
+            return asyncHover;
+        }
+
         var symbol = SemanticLookup.ResolveSymbol(compilation, token);
 
         // When the token isn't directly in the semantic model (e.g. member access
@@ -84,6 +97,54 @@ public static class HoverComputer
     public static string FormatSymbol(Symbol symbol, Compilation compilation)
     {
         return SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Signature, compilation);
+    }
+
+    private static Hover TryComputeAsyncTypeClauseHover(SyntaxTree tree, int offset, SyntaxToken token)
+    {
+        if (token == null || token.IsMissing)
+        {
+            return null;
+        }
+
+        // Only trigger on the three tokens that uniquely identify the two async-type
+        // spellings — anything else (identifier, operator, punctuation) falls back to
+        // the regular symbol-resolution path.
+        if (token.Kind != SyntaxKind.AsyncKeyword
+            && token.Kind != SyntaxKind.SequenceKeyword
+            && token.Kind != SyntaxKind.FuncKeyword)
+        {
+            return null;
+        }
+
+        var enclosing = TypeClauseCompletions.FindEnclosingTypeClause(tree.Root, offset);
+        if (enclosing == null)
+        {
+            return null;
+        }
+
+        string body;
+        if (enclosing.IsAsyncFunction && (token.Kind == SyntaxKind.AsyncKeyword || token.Kind == SyntaxKind.FuncKeyword))
+        {
+            body = "```gsharp\nasync func(...) R\n```\n\n" + TypeClauseCompletions.AsyncFuncDocumentation;
+        }
+        else if (enclosing.IsAsyncSequence && (token.Kind == SyntaxKind.AsyncKeyword || token.Kind == SyntaxKind.SequenceKeyword))
+        {
+            body = "```gsharp\nasync sequence[T]\n```\n\n" + TypeClauseCompletions.AsyncSequenceDocumentation;
+        }
+        else
+        {
+            return null;
+        }
+
+        return new Hover
+        {
+            Contents = new MarkedStringsOrMarkupContent(new MarkupContent
+            {
+                Kind = MarkupKind.Markdown,
+                Value = body,
+            }),
+            Range = SemanticLookup.ToRange(token),
+        };
     }
 
     private static HoverModel BuildHoverModel(Symbol symbol, Compilation compilation)
@@ -1285,6 +1346,12 @@ public static class CompletionComputer
 
         var items = new List<CompletionItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        // Issue #713: in a type-clause position, surface the `async func(...) R`
+        // (ADR-0043) and `async sequence[T]` (ADR-0042) snippets so the two
+        // GSharp-flavored async-type spellings are discoverable. The snippets stay
+        // out of every other completion context.
+        TypeClauseCompletions.TryAddTypeClauseSnippets(items, seen, content.SyntaxTree, offset);
 
         // Add keywords
         foreach (var keyword in GetKeywords())
