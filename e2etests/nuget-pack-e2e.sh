@@ -79,7 +79,7 @@ class MathHelper {
 }
 
 /// A strongly-typed wrapper around an integer identifier.
-type UserId inline struct(value int32)
+inline struct UserId(value int32)
 EOF
 
 # ============================================================================
