@@ -56,7 +56,7 @@ public class ImportedEnumAttributeEmitTests
             package Demo
             import GSharp.Core.Tests.Fixtures
 
-            @ImportedEnumArg(Mode = ImportedAttributeMode.Warning)
+            @ImportedEnumArg(Mode: ImportedAttributeMode.Warning)
             class Tagged {
             }
             """;
@@ -102,7 +102,7 @@ public class ImportedEnumAttributeEmitTests
             package Demo
             import GSharp.Core.Tests.Fixtures
 
-            @ImportedEnumArg(Mode = ImportedAttributeMode.Warning)
+            @ImportedEnumArg(Mode: ImportedAttributeMode.Warning)
             class Tagged {
             }
             """;

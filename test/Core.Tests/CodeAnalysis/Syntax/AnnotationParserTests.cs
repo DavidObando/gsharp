@@ -41,7 +41,7 @@ func Foo() {
         const string source = @"
 package P
 
-@AttributeUsage(AttributeTargets.Method, AllowMultiple = true)
+@AttributeUsage(AttributeTargets.Method, AllowMultiple: true)
 func Foo() {
 }
 ";

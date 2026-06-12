@@ -5,11 +5,14 @@
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
-/// Represents a named argument expression <c>Name = value</c>. Named arguments
-/// originate at three kinds of call site:
+/// Represents a named argument expression — either the canonical
+/// <c>Name: value</c> spelling (issue #343) or the deprecated
+/// <c>Name = value</c> spelling that is retained for back-compat and
+/// flagged by GS0315 (ADR-0080). Named arguments originate at three
+/// kinds of call site:
 /// <list type="bullet">
-///   <item><description>The scoped <c>.copy(field = value, ...)</c> sugar.</description></item>
-///   <item><description>Attribute argument lists (<c>[Attr(prop = value)]</c>).</description></item>
+///   <item><description>The scoped <c>.copy(field: value, ...)</c> sugar (ADR-0032).</description></item>
+///   <item><description>Attribute argument lists (<c>[Attr(prop: value)]</c>, ADR-0047).</description></item>
 ///   <item><description>Issue #343: ordinary call sites — free functions, user methods, user
 ///   constructors, user extension functions, imported CLR static/instance methods, imported
 ///   CLR constructors, imported extension methods, and inherited CLR instance methods —
@@ -22,7 +25,7 @@ public sealed class NamedArgumentExpressionSyntax : ExpressionSyntax
     /// <summary>Initializes a new instance of the <see cref="NamedArgumentExpressionSyntax"/> class.</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="nameToken">The argument name.</param>
-    /// <param name="equalsToken">The equals separator.</param>
+    /// <param name="equalsToken">The separator token — canonically <c>:</c> (issue #343); the legacy <c>=</c> spelling is retained for back-compat and flagged by GS0315 (ADR-0080).</param>
     /// <param name="expression">The argument value.</param>
     public NamedArgumentExpressionSyntax(SyntaxTree syntaxTree, SyntaxToken nameToken, SyntaxToken equalsToken, ExpressionSyntax expression)
         : base(syntaxTree)
@@ -38,7 +41,7 @@ public sealed class NamedArgumentExpressionSyntax : ExpressionSyntax
     /// <summary>Gets the argument name.</summary>
     public SyntaxToken NameToken { get; }
 
-    /// <summary>Gets the equals separator.</summary>
+    /// <summary>Gets the separator token — canonically <c>:</c> (issue #343); the legacy <c>=</c> spelling is retained for back-compat and flagged by GS0315 (ADR-0080).</summary>
     public SyntaxToken EqualsToken { get; }
 
     /// <summary>Gets the argument value.</summary>

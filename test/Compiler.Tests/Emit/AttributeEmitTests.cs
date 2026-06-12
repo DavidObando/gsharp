@@ -146,7 +146,7 @@ public class AttributeEmitTests
             import System
             import System.Diagnostics
 
-            @DebuggerDisplay("{Value}", Target = typeof(string))
+            @DebuggerDisplay("{Value}", Target: typeof(string))
             data struct Holder {
                 var Value int32
             }

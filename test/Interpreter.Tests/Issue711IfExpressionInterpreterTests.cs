@@ -185,7 +185,7 @@ public class Issue711IfExpressionInterpreterTests
         var source = """
             func Run(b bool) int32 {
                 let x = if b {
-                    throw Exception(message = "boom")
+                    throw Exception(message: "boom")
                     0
                 } else {
                     7

@@ -135,7 +135,7 @@ Run(""hi"")
 import System
 func Run(s string?) {
     guard let v = s else {
-        throw Exception(message = ""boom"")
+        throw Exception(message: ""boom"")
     }
     var x = v
 }

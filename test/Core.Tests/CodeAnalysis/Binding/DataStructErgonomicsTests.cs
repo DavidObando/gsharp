@@ -34,7 +34,7 @@ p == q
     {
         var result = Evaluate(PointPrelude + @"
 let p = Point{x: 1, y: 2}
-let q = p.copy(x = 10)
+let q = p.copy(x: 10)
 q.x + q.y
 ");
         Assert.Empty(result.Diagnostics);
@@ -46,7 +46,7 @@ q.x + q.y
     {
         var result = Evaluate(PointPrelude + @"
 let p = Point{x: 1, y: 2}
-let q = p.copy(x = 10, y = 20)
+let q = p.copy(x: 10, y: 20)
 q.x + q.y
 ");
         Assert.Empty(result.Diagnostics);
@@ -58,7 +58,7 @@ q.x + q.y
     {
         var result = Evaluate(PointPrelude + @"
 let p = Point{x: 1, y: 2}
-let q = p.copy(x = 10)
+let q = p.copy(x: 10)
 let r = p with { x = 10 }
 q == r
 ");
@@ -89,7 +89,7 @@ struct Point {
     var y int32
 }
 let p = Point{x: 1, y: 2}
-p.copy(x = 10)
+p.copy(x: 10)
 ");
         Assert.NotEmpty(result.Diagnostics);
     }
@@ -172,7 +172,7 @@ func make() Point {
     hits = hits + 1
     return Point{x: hits, y: 2}
 }
-let q = make().copy(x = 10)
+let q = make().copy(x: 10)
 hits
 ");
         // GS0286 (TLS must be contiguous, ADR-0066 D5) fires as a warning on

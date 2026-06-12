@@ -2720,6 +2720,24 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Warning);
     }
 
+    /// <summary>
+    /// ADR-0080 / issue #720: GS0315 (warning) — a call-site or attribute named
+    /// argument used the legacy <c>name = value</c> spelling. The canonical
+    /// spelling is <c>name: value</c> (issue #343). Both forms parse during a
+    /// one-release grace period; the <c>=</c> form is removed in a later
+    /// release.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>=</c> token.</param>
+    /// <param name="argumentName">The argument name on the left of the separator.</param>
+    public void ReportNamedArgumentEqualsSeparatorDeprecated(TextLocation location, string argumentName)
+    {
+        Report(
+            location,
+            "GS0315",
+            $"Named argument '{argumentName}' uses the deprecated '=' separator; use '{argumentName}: value' instead (ADR-0080).",
+            DiagnosticSeverity.Warning);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

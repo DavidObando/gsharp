@@ -106,7 +106,7 @@ data struct Point {
 
 let p = Point{x: 3, y: 4}
 let same = p.copy()
-let movedX = p.copy(x = 10)
+let movedX = p.copy(x: 10)
 let viaWith = p with { x = 10 }
 let (px, py) = p
 

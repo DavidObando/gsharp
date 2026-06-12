@@ -628,4 +628,33 @@ Cause/fix:
   `<NoWarn>GS0314</NoWarn>` if migration must be deferred — but note
   this is a one-release grace period; a future ADR may escalate to error.
 
+## Named-argument `=` separator deprecation (GS0315)
+
+ADR-0080 (issue #720) deprecates the legacy `name = value` named-argument
+spelling. The canonical spelling is `name: value` (issue #343). The `=`
+form was retained for back-compat by ADR-0032 (`.copy(field = value)`
+sugar) and ADR-0047 (attribute named arguments) and is still accepted
+this release; a warning fires so existing source can be migrated before
+the `=` branch is removed in a later release. See
+[ADR-0080](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0080-deprecate-equals-named-arguments.md)
+for the full rationale and follow-up plan.
+
+| ID | Severity | Message |
+|----|----------|---------|
+| GS0315 | Warning | `Named argument '<name>' uses the deprecated '=' separator; use '<name>: value' instead (ADR-0080).` |
+
+Cause/fix:
+
+- **GS0315** — `Foo(timeout = 30)` — rewrite the named-argument separator
+  as `:` (`Foo(timeout: 30)`). Migrate `.copy(...)` and attribute
+  argument lists alongside ordinary call sites:
+  `p.copy(x = 10)` → `p.copy(x: 10)`,
+  `@AttributeUsage(All, AllowMultiple = true)` → `@AttributeUsage(All, AllowMultiple: true)`.
+  Plain assignment expressions (`x = 1`), optional parameter defaults
+  (`func f(x int32 = 0)`), and `with`-expression field initializers
+  (`p with { x = 10 }`) parse on separate paths and are unaffected.
+  Suppress per-project via `<NoWarn>GS0315</NoWarn>` if migration must
+  be deferred — but note this is a one-release grace period; the `=`
+  branch is removed in a later release.
+
 

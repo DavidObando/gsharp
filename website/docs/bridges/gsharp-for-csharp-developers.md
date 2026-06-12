@@ -20,7 +20,7 @@ G# is a .NET language with Go-inspired syntax. It emits CLR assemblies, imports 
 | `int` | `int32` | G# source names numeric widths explicitly. |
 | `long` | `int64` | CLR signatures stay obvious in source. |
 | `var x = ...;` | `let x = ...` or `var x = ...` | `let` is immutable; `var` is mutable. (The short `x := ...` form was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md).) |
-| object initializer `new T { F = v }` | brace initializer `T{F: v}` | Data structs also offer `.copy(F = v)` and `with` copy/update. |
+| object initializer `new T { F = v }` | brace initializer `T{F: v}` | Data structs also offer `.copy(F: v)` and `with` copy/update. |
 | `record struct` | `data struct` | The `record` keyword was removed by ADR-0078; `data struct Name(...)` is the canonical spelling. |
 | `record class` | `data class` | Reference-typed record. |
 | `readonly struct CustomerId` | `inline struct CustomerId(value string)` | Inline structs are nominal single-field wrappers. |
@@ -31,7 +31,7 @@ G# is a .NET language with Go-inspired syntax. It emits CLR assemblies, imports 
 | `using var` or `using (...)` | `using` and `defer` | Defer and using cleanup at block exit. |
 | `void M(int x = 0)` | `func M(x int32 = 0)` | G# functions support optional parameters with constant defaults (ADR-0063). |
 | `void M(int x, int y); void M(int x);` | overloads of `M(int32, int32)` / `M(int32)` | G# functions support overloading on parameter shape (ADR-0063); duplicates report `GS0264`. |
-| named arg `M(timeout: 30)` | `M(timeout: 30)` (or `M(timeout = 30)` legacy) | Named arguments at call sites for user functions, methods, constructors, extensions, and CLR methods. |
+| named arg `M(timeout: 30)` | `M(timeout: 30)` (legacy `M(timeout = 30)` deprecated, GS0315) | Named arguments at call sites for user functions, methods, constructors, extensions, and CLR methods. The `=` separator emits the `GS0315` warning ([ADR-0080](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0080-deprecate-equals-named-arguments.md)) and is removed in a later release. |
 | `ref int M(int[] a, int i)` | `func M(a []int32, i int32) ref int32` paired with `return ref a[i]` | Ref returns (ADR-0060 follow-up). |
 | `ref int local = ref arr[i]` | `let ref local = arr[i]` or `var ref local = arr[i]` | Ref-aliasing locals. |
 | `out int n` parameter / `M(out var n)` | `out n int32` / `M(out var n)` | Ref-kind parameters and inline `out` declarations (ADR-0060). |
@@ -91,7 +91,7 @@ func area(width int32, height int32) int32 { return width * height }
 func area(side int32) int32                { return side * side }
 ```
 
-Imported CLR methods that expose `[Optional]` arguments work the same way G# defaults do, and CLR overload sets resolve identically. The legacy `name = value` named-argument form is still accepted for `.copy(...)` calls and attribute argument lists.
+Imported CLR methods that expose `[Optional]` arguments work the same way G# defaults do, and CLR overload sets resolve identically. The legacy `name = value` named-argument form is deprecated in this release ([ADR-0080](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0080-deprecate-equals-named-arguments.md), `GS0315`) and removed in a later release; rewrite to `name: value` everywhere — including `.copy(...)` calls and attribute argument lists.
 
 ## Data shapes are richer than plain classes
 
@@ -105,7 +105,7 @@ data struct Point {
 
 let p = Point{X: 1, Y: 2}
 let q = p with { X = 3 }
-let moved = p.copy(X = 3)
+let moved = p.copy(X: 3)
 let (px, py) = p
 ```
 
