@@ -520,3 +520,15 @@ Cause/fix:
 
 - **GS0303** — `var f func(int32) int32 = (x int32) -> x + 1`. Fix: rewrite the type clause as `var f (int32) -> int32 = (x int32) -> x + 1`. Async variant: `async func(int32) int32` → `async (int32) -> int32`. The deprecation applies **only** to `func` in *type-clause* positions; function *declarations* (`func name(...) R { … }`), function *literals* (`func(...) R { … }` expressions), and `delegate func(...)` named-delegate declarations all keep `func`. A future release will remove the legacy type-clause spelling and turn it into a parse error.
 
+
+## Lambda binding type-inference diagnostics (GS0304)
+
+ADR-0076 introduces type inference for `let` / `var` bindings whose initializer is a lambda. When the lambda's parameters are fully typed, the binding's type is inferred to the lambda's `(T1, ...) -> R` function type and the user does not need to repeat the function-type clause. If neither side resolves to a concrete type — the binding has no explicit type clause AND the lambda's parameter types are not spelled — the binder reports `GS0304`.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0304 | Error | Cannot infer the type of `<name>` from a lambda with untyped parameters; supply a function-type clause on the binding or annotate the lambda parameters (ADR-0076). |
+
+Cause/fix:
+
+- **GS0304** — `let f = (x) -> x + 1`. Either side may carry the types. Spell the lambda parameters: `let f = (x int32) -> x + 1`, or spell the binding: `let f (int32) -> int32 = (x) -> x + 1`. Generic method calls that take a lambda (for example `xs.Where(x -> x > 0)`) still use the existing method-type-inference path and are unaffected.

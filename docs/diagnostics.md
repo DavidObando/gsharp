@@ -510,6 +510,16 @@ See [ADR-0075](adr/0075-arrow-function-type-clause.md). The canonical function-t
 
 GS0303 fires once per occurrence of the legacy `func` keyword in a *type-clause* position. It does **not** fire on function *declarations* (`func name(...) R { … }`), function *literals* (`func(...) R { … }` expressions), or `delegate func(...)` named-delegate type declarations — all three keep `func`.
 
+## Lambda binding type-inference diagnostics (GS0304)
+
+See [ADR-0076](adr/0076-lambda-binding-type-inference.md). When a `let` / `var` binding has neither an explicit function-type clause nor a lambda initializer whose parameter types are all spelled, the binder has no way to resolve the binding's type.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0304 | Error | `Cannot infer the type of '<name>' from a lambda with untyped parameters; supply a function-type clause on the binding or annotate the lambda parameters (ADR-0076).` | `let f = (x) -> x + 1` — fix by spelling either side, e.g. `let f = (x int32) -> x + 1` or `let f (int32) -> int32 = (x) -> x + 1`. |
+
+GS0304 fires only when *both* sides of the binding are open. If the binding spells the function type, parameter types may be omitted on the lambda (the existing target-typing path). If the lambda's parameters are fully typed, the binding's type is inferred to the lambda's `(T1, ...) -> R` signature with the return type computed bottom-up from the body (single-expression: the expression's type; block body: the common type of every value-producing return path; if no `return` produces a value, `void`). Generic method calls that receive a lambda argument (`xs.Where(x -> x > 0)`) still go through the method-type-inference path and are unaffected.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

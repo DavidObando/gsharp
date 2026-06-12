@@ -2569,6 +2569,22 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0303", "'func(...)' as a type clause is deprecated; use the arrow form '(...) -> R' instead (ADR-0075).", DiagnosticSeverity.Warning);
     }
 
+    /// <summary>
+    /// ADR-0076 / issue #716: GS0304 — an arrow-lambda binding cannot resolve
+    /// its parameter type because neither side of the binding supplies one.
+    /// The lambda parameter has no explicit type clause AND there is no target
+    /// type (e.g. an explicit binding type, or a target-typed conversion
+    /// context) to infer it from. Either type the parameter
+    /// (<c>(p int32) -&gt; body</c>) or give the binding an explicit
+    /// function type (<c>let f (int32) -&gt; R = (p) -&gt; body</c>).
+    /// </summary>
+    /// <param name="location">The source location of the untyped parameter.</param>
+    /// <param name="parameterName">The name of the untyped lambda parameter.</param>
+    public void ReportLambdaBindingTypeCannotBeInferred(TextLocation location, string parameterName)
+    {
+        Report(location, "GS0304", $"Cannot infer the type of lambda parameter '{parameterName}'. The parameter has no explicit type and no target type is available; either add a type (e.g. '({parameterName} int32) -> ...') or declare the binding with an explicit function type (e.g. 'let f (int32) -> R = ...').", DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

@@ -325,7 +325,7 @@ internal sealed class LambdaBinder
 
     /// <summary>
     /// ADR-0074 / issue #714: binds an arrow-lambda expression
-    /// <c>(p1 T1, p2 T2) -&gt; body</c> to a
+    /// <c>[async] (p1 T1, p2 T2) -&gt; body</c> to a
     /// <see cref="BoundFunctionLiteralExpression"/>. Reuses every piece
     /// of <see cref="BindFunctionLiteralExpression"/>'s plumbing — scope,
     /// synthetic function, captured-variable analysis, smart-cast
@@ -334,23 +334,72 @@ internal sealed class LambdaBinder
     /// <see cref="BlockStatementSyntax"/>. The return type is inferred
     /// from the bound body's type; a <see cref="TypeSymbol.Void"/> body
     /// yields a void return.
+    /// <para>
+    /// ADR-0076 / issue #716 extends this in three ways:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description><b>Optional async modifier</b> — when
+    ///   <see cref="LambdaExpressionSyntax.IsAsync"/> is set, the body
+    ///   is bound under an async synthetic function and the function-
+    ///   type's return slot is widened to <c>Task</c> / <c>Task[T]</c>
+    ///   exactly as a function-literal would.</description></item>
+    ///   <item><description><b>Block-body return-type inference</b> —
+    ///   the placeholder synthetic function is marked
+    ///   <see cref="FunctionSymbol.IsReturnTypeInferred"/>, the return
+    ///   statements inside the block bind without a void or declared-
+    ///   return-type check, and a post-bind pass computes the common
+    ///   type and applies a single conversion to each return
+    ///   expression.</description></item>
+    ///   <item><description><b>Target-typed parameter inference</b> —
+    ///   when <paramref name="targetFunctionType"/> is non-null, an
+    ///   omitted parameter type clause is filled in from the
+    ///   corresponding slot of the target. With no target type, a
+    ///   missing parameter type is reported as GS0304.</description></item>
+    /// </list>
     /// </summary>
     /// <param name="syntax">The lambda-expression syntax node.</param>
+    /// <param name="targetFunctionType">Optional target function type
+    /// supplied by the caller (e.g. an explicit variable type clause)
+    /// when the parameter types should be inferred from a target. When
+    /// non-null and arity matches, omitted parameter type clauses are
+    /// filled in from this target.</param>
     /// <returns>The bound lambda as a <see cref="BoundFunctionLiteralExpression"/>.</returns>
-    public BoundExpression BindLambdaExpression(LambdaExpressionSyntax syntax)
+    public BoundExpression BindLambdaExpression(LambdaExpressionSyntax syntax, FunctionTypeSymbol targetFunctionType = null)
     {
         if (bindLambdaBodyExpression == null)
         {
             throw new InvalidOperationException("LambdaBinder was constructed without a bindLambdaBodyExpression callback; arrow-lambda binding is unavailable.");
         }
 
+        var isAsync = syntax.IsAsync;
+        var arityMatchesTarget = targetFunctionType != null && targetFunctionType.Arity == syntax.Parameters.Count;
         var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.Parameters.Count);
         var parameterSymbols = ImmutableArray.CreateBuilder<ParameterSymbol>(syntax.Parameters.Count);
         var seen = new HashSet<string>();
-        foreach (var p in syntax.Parameters)
+        for (var i = 0; i < syntax.Parameters.Count; i++)
         {
+            var p = syntax.Parameters[i];
             var pname = p.Identifier.Text;
-            var ptype = bindTypeClause(p.Type) ?? TypeSymbol.Error;
+            TypeSymbol ptype;
+            if (p.Type != null)
+            {
+                ptype = bindTypeClause(p.Type) ?? TypeSymbol.Error;
+            }
+            else if (arityMatchesTarget)
+            {
+                // ADR-0076 / issue #716: target-typed parameter inference —
+                // an omitted parameter type is filled in from the target's
+                // corresponding slot.
+                ptype = targetFunctionType.ParameterTypes[i] ?? TypeSymbol.Error;
+            }
+            else
+            {
+                // ADR-0076 / issue #716: no parameter type and no target to
+                // infer it from — GS0304.
+                Diagnostics.ReportLambdaBindingTypeCannotBeInferred(p.Location, pname);
+                ptype = TypeSymbol.Error;
+            }
+
             if (p.IsVariadic)
             {
                 Diagnostics.ReportVariadicParameterNotSupportedHere(p.Location, pname);
@@ -372,15 +421,15 @@ internal sealed class LambdaBinder
             parameterTypes.Add(ptype);
         }
 
-        // Construct a placeholder synthetic FunctionSymbol with a Void return
-        // type while binding the body — the arrow lambda's body is an
-        // expression (not a block of statements with `return` statements),
-        // so the placeholder type is never consulted from inside the body.
-        // After the body is bound and its type is known, we materialise the
-        // final FunctionSymbol with the inferred return type.
+        // Construct a placeholder synthetic FunctionSymbol whose return type
+        // is being inferred. The placeholder type itself is set to
+        // TypeSymbol.Error so an accidental consumer that ignores
+        // `IsReturnTypeInferred` still sees a poisoned type that suppresses
+        // cascading conversion diagnostics rather than a load-bearing void.
         var syntheticName = $"<lambda{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
-        var placeholder = new FunctionSymbol(syntheticName, parameterSymbols.ToImmutable(), TypeSymbol.Void);
-        placeholder.IsAsync = false;
+        var placeholder = new FunctionSymbol(syntheticName, parameterSymbols.ToImmutable(), TypeSymbol.Error);
+        placeholder.IsAsync = isAsync;
+        placeholder.IsReturnTypeInferred = true;
 
         var outerScope = Scope;
         var outerFunction = getCurrentFunction();
@@ -408,9 +457,13 @@ internal sealed class LambdaBinder
         Scope = outerScope;
         setCurrentFunction(outerFunction);
 
-        var returnType = boundBody is BoundErrorExpression
-            ? TypeSymbol.Error
-            : (boundBody.Type ?? TypeSymbol.Void);
+        // ADR-0076 / issue #716: infer the lambda's return type from
+        // (a) the bound body's trailing-expression type, combined with
+        // (b) the types of any `return` statements in the body. For a block-
+        // body lambda with explicit `return` statements, the void trailing
+        // produced by the body-binding pipeline is replaced by the common
+        // type of all return-statement expressions.
+        var returnType = InferLambdaReturnType(boundBody, syntax, targetFunctionType, isAsync);
 
         // ADR-0058: a managed-pointer (*T) cannot be used as a lambda return
         // type because CLR Func<> delegates cannot carry by-ref type arguments.
@@ -422,27 +475,44 @@ internal sealed class LambdaBinder
             returnType = TypeSymbol.Error;
         }
 
+        // For async lambdas, the observable function-type (from the caller's
+        // perspective) is Task / Task<T>, matching async function literals.
+        var observableReturnType = returnType;
+        if (isAsync && !isAsyncIteratorReturnType(returnType) && returnType != TypeSymbol.Error)
+        {
+            observableReturnType = WrapAsTask(returnType);
+        }
+
         var synthetic = new FunctionSymbol(syntheticName, placeholder.Parameters, returnType);
-        synthetic.IsAsync = false;
+        synthetic.IsAsync = isAsync;
+
+        // ADR-0076 / issue #716: rewrite the bound body so every return
+        // statement's expression is converted to the inferred return type.
+        // We deferred the conversion in BindReturnStatement; apply it now.
+        boundBody = ApplyInferredReturnTypeConversion(boundBody, syntax, returnType);
 
         // Synthesize the lambda's BoundBlockStatement body: for void bodies, an
         // ExpressionStatement; for value bodies, a ReturnStatement.
         var bodyStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-        if (returnType == TypeSymbol.Void || returnType == TypeSymbol.Error)
+        if (boundBody is BoundBlockExpression blockExpr)
         {
-            bodyStatements.Add(new BoundExpressionStatement(syntax.Body, boundBody));
-            if (returnType == TypeSymbol.Void)
+            // Block body — emit the prefix statements, then either a return-
+            // statement on the trailing expression (when the lambda returns a
+            // value) or an expression-statement + void return (when it doesn't).
+            foreach (var stmt in blockExpr.Statements)
             {
-                bodyStatements.Add(new BoundReturnStatement(syntax.Body, expression: null));
+                bodyStatements.Add(stmt);
             }
+
+            EmitTrailingExpression(bodyStatements, syntax, blockExpr.Expression, returnType);
         }
         else
         {
-            bodyStatements.Add(new BoundReturnStatement(syntax.Body, boundBody));
+            EmitTrailingExpression(bodyStatements, syntax, boundBody, returnType);
         }
 
         var bodyBlock = new BoundBlockStatement(syntax.Body, bodyStatements.ToImmutable());
-        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), returnType);
+        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), observableReturnType);
         var captured = CollectCapturedVariables(bodyBlock, synthetic.Parameters);
 
         // Issue #367 / ADR-0058: by-ref-like or managed-pointer locals cannot
@@ -602,6 +672,249 @@ internal sealed class LambdaBinder
         return element;
     }
 
+    // ADR-0076 / issue #716: synthesise the trailing return / expression-
+    // statement for an arrow-lambda body. For a void- or error-typed lambda
+    // we keep the body as an ExpressionStatement and (for void) follow it
+    // with a `return;`; for a value-returning lambda we wrap the trailing
+    // expression in a `return` statement after applying a final conversion
+    // to the inferred return type.
+    private void EmitTrailingExpression(
+        ImmutableArray<BoundStatement>.Builder bodyStatements,
+        LambdaExpressionSyntax syntax,
+        BoundExpression trailing,
+        TypeSymbol returnType)
+    {
+        // Special-case the synthetic void placeholder that BindLambdaBodyExpression
+        // injects when a block body lacks a trailing expression: it carries no
+        // observable value and the body has already terminated via explicit
+        // `return` statements, so emitting (or converting) it is redundant.
+        var isVoidPlaceholder = trailing is BoundLiteralExpression { Type: var voidLitType } && voidLitType == TypeSymbol.Void;
+        if (isVoidPlaceholder)
+        {
+            if (returnType == TypeSymbol.Void)
+            {
+                bodyStatements.Add(new BoundReturnStatement(syntax.Body, expression: null));
+            }
+
+            return;
+        }
+
+        if (returnType == TypeSymbol.Void || returnType == TypeSymbol.Error)
+        {
+            bodyStatements.Add(new BoundExpressionStatement(syntax.Body, trailing));
+
+            if (returnType == TypeSymbol.Void)
+            {
+                bodyStatements.Add(new BoundReturnStatement(syntax.Body, expression: null));
+            }
+
+            return;
+        }
+
+        var trailingConverted = trailing.Type == returnType
+            ? trailing
+            : conversions.BindConversion(syntax.Body.Location, trailing, returnType);
+        bodyStatements.Add(new BoundReturnStatement(syntax.Body, trailingConverted));
+    }
+
+    // ADR-0076 / issue #716: compute the inferred return type from the bound
+    // body and any explicit return statements it contains. The rule:
+    //   - If the body is a BoundBlockExpression and contains any return
+    //     statements, the candidate set is the trailing expression's type
+    //     (unless that trailing is the synthetic void marker) UNION the
+    //     return statements' expression types.
+    //   - Otherwise the candidate set is just the bound body's type.
+    // The common type is computed with the same widening rules as a
+    // conditional expression (ADR-0062); when there is no common type, the
+    // result is TypeSymbol.Error (a downstream conversion will fail and a
+    // diagnostic will fire on the offending return). When a target return
+    // type is provided AND every candidate is convertible to it, prefer the
+    // target.
+    private static TypeSymbol InferLambdaReturnType(
+        BoundExpression boundBody,
+        LambdaExpressionSyntax syntax,
+        FunctionTypeSymbol targetFunctionType,
+        bool isAsync)
+    {
+        if (boundBody is BoundErrorExpression)
+        {
+            return TypeSymbol.Error;
+        }
+
+        var trailingType = boundBody.Type ?? TypeSymbol.Void;
+        var collector = new ReturnTypeCollector();
+        if (boundBody is BoundBlockExpression block)
+        {
+            foreach (var stmt in block.Statements)
+            {
+                collector.Visit(stmt);
+            }
+        }
+
+        var returnTypes = collector.ReturnTypes;
+        var hasExplicitReturn = returnTypes.Count > 0;
+        var trailingIsVoidPlaceholder = boundBody is BoundBlockExpression { Expression: BoundLiteralExpression { Type: var trailingLit } }
+            && trailingLit == TypeSymbol.Void;
+
+        // ADR-0076 §3: the candidate set.
+        var candidates = new List<TypeSymbol>();
+        if (!(hasExplicitReturn && trailingIsVoidPlaceholder))
+        {
+            candidates.Add(trailingType);
+        }
+
+        candidates.AddRange(returnTypes);
+
+        // If a target return type was supplied by the caller, prefer it when
+        // every candidate is convertible to it — this handles the case where
+        // the lambda value flows into a variable whose explicit type pins the
+        // return type up-front.
+        TypeSymbol targetReturn = null;
+        if (targetFunctionType != null)
+        {
+            targetReturn = targetFunctionType.ReturnType;
+            if (isAsync)
+            {
+                // Strip the Task / Task<T> wrap so we compare against the
+                // awaited type the lambda body actually produces.
+                targetReturn = UnwrapTaskReturnType(targetReturn);
+            }
+
+            if (targetReturn != null && candidates.All(c => c == TypeSymbol.Error || Conversion.Classify(c, targetReturn).IsImplicit))
+            {
+                return targetReturn;
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return TypeSymbol.Void;
+        }
+
+        var result = candidates[0];
+        for (var i = 1; i < candidates.Count; i++)
+        {
+            result = ComputeLambdaCommonType(result, candidates[i]);
+            if (result == TypeSymbol.Error)
+            {
+                return TypeSymbol.Error;
+            }
+        }
+
+        return result ?? TypeSymbol.Error;
+    }
+
+    // ADR-0076 / issue #716: a trimmed copy of ExpressionBinder's common-
+    // type rule (ADR-0062). Kept here to avoid widening the binder API
+    // surface; the rule is intentionally identical so a lambda's return-
+    // type inference picks the same shape as a ternary expression mixing
+    // the same operand types.
+    private static TypeSymbol ComputeLambdaCommonType(TypeSymbol left, TypeSymbol right)
+    {
+        if (left == null || right == null)
+        {
+            return null;
+        }
+
+        if (left == TypeSymbol.Error || right == TypeSymbol.Error)
+        {
+            return TypeSymbol.Error;
+        }
+
+        if (ReferenceEquals(left, right))
+        {
+            return left;
+        }
+
+        if (left == TypeSymbol.Null)
+        {
+            return right;
+        }
+
+        if (right == TypeSymbol.Null)
+        {
+            return left;
+        }
+
+        var leftToRight = Conversion.Classify(left, right);
+        var rightToLeft = Conversion.Classify(right, left);
+
+        if (leftToRight.IsImplicit && !rightToLeft.IsImplicit)
+        {
+            return right;
+        }
+
+        if (rightToLeft.IsImplicit && !leftToRight.IsImplicit)
+        {
+            return left;
+        }
+
+        if (leftToRight.IsImplicit && rightToLeft.IsImplicit)
+        {
+            // Pick the left arm deterministically when both sides convert.
+            return left;
+        }
+
+        return null;
+    }
+
+    // ADR-0076 / issue #716: strips a Task / Task<T> wrap from a target
+    // function-type return slot so an async lambda's awaited type can be
+    // compared against the candidates the body produces. Returns the
+    // unwrapped type when the input is recognisably a Task shape;
+    // otherwise returns the input unchanged.
+    private static TypeSymbol UnwrapTaskReturnType(TypeSymbol returnType)
+    {
+        if (returnType?.ClrType == null)
+        {
+            return returnType;
+        }
+
+        var clr = returnType.ClrType;
+        if (clr == typeof(System.Threading.Tasks.Task))
+        {
+            return TypeSymbol.Void;
+        }
+
+        if (clr.IsGenericType && clr.GetGenericTypeDefinition() == typeof(System.Threading.Tasks.Task<>))
+        {
+            // The unwrapped awaited type lives in the generic argument slot.
+            return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
+        }
+
+        return returnType;
+    }
+
+    // ADR-0076 / issue #716: rewrites a bound lambda body so each return
+    // statement's expression is converted to the inferred return type. The
+    // rewrite is a single pass and stops at nested function literals
+    // (BoundTreeRewriter's default RewriteFunctionLiteralExpression keeps
+    // the nested body opaque).
+    private BoundExpression ApplyInferredReturnTypeConversion(
+        BoundExpression boundBody,
+        LambdaExpressionSyntax syntax,
+        TypeSymbol returnType)
+    {
+        if (returnType == TypeSymbol.Error)
+        {
+            return boundBody;
+        }
+
+        if (boundBody is BoundBlockExpression block)
+        {
+            var rewriter = new ReturnConversionRewriter(conversions, syntax, returnType);
+            var newStatements = ImmutableArray.CreateBuilder<BoundStatement>(block.Statements.Length);
+            foreach (var stmt in block.Statements)
+            {
+                newStatements.Add(rewriter.RewriteStatement(stmt));
+            }
+
+            return new BoundBlockExpression(block.Syntax, newStatements.ToImmutable(), block.Expression);
+        }
+
+        return boundBody;
+    }
+
     private static TypeSymbol GetErasedDelegateSlotType(TypeSymbol type)
     {
         return TypeSymbol.ContainsTypeParameter(type) ? TypeSymbol.Object : type;
@@ -615,6 +928,72 @@ internal sealed class LambdaBinder
         var collector = new CapturedVariableCollector(paramSet, seen, captured);
         collector.RewriteStatement(body);
         return captured.ToImmutable();
+    }
+
+    // ADR-0076 / issue #716: walks a bound block-expression body collecting
+    // the types of each `return` statement's expression. Stops at nested
+    // function literals (the body is a separate lexical scope) — the
+    // BoundTreeWalker base already treats BoundNodeKind.FunctionLiteralExpression
+    // as opaque, so nested lambdas' inner returns do not leak into the
+    // outer lambda's candidate set.
+    private sealed class ReturnTypeCollector : BoundTreeWalker
+    {
+        public List<TypeSymbol> ReturnTypes { get; } = new List<TypeSymbol>();
+
+        protected override void VisitReturnStatement(BoundReturnStatement node)
+        {
+            if (node.Expression != null)
+            {
+                ReturnTypes.Add(node.Expression.Type ?? TypeSymbol.Void);
+            }
+            else
+            {
+                ReturnTypes.Add(TypeSymbol.Void);
+            }
+        }
+    }
+
+    // ADR-0076 / issue #716: a thin BoundTreeRewriter that applies the
+    // inferred return-type conversion to every return-statement expression
+    // it encounters, without descending into nested function literals.
+    private sealed class ReturnConversionRewriter : BoundTreeRewriter
+    {
+        private readonly ConversionClassifier conversions;
+        private readonly LambdaExpressionSyntax syntax;
+        private readonly TypeSymbol returnType;
+
+        public ReturnConversionRewriter(ConversionClassifier conversions, LambdaExpressionSyntax syntax, TypeSymbol returnType)
+        {
+            this.conversions = conversions;
+            this.syntax = syntax;
+            this.returnType = returnType;
+        }
+
+        protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)
+        {
+            if (node.Expression == null)
+            {
+                return node;
+            }
+
+            // Void return type: a `return expr` carrying a value is invalid;
+            // the void inference came from a body with no value-bearing
+            // returns. Leave the node untouched so cascading shape checks
+            // surface elsewhere.
+            if (returnType == TypeSymbol.Void)
+            {
+                return node;
+            }
+
+            if (node.Expression.Type == returnType)
+            {
+                return node;
+            }
+
+            var location = node.Syntax?.Location ?? syntax.Body.Location;
+            var converted = conversions.BindConversion(location, node.Expression, returnType);
+            return new BoundReturnStatement(node.Syntax, converted, node.IsRef);
+        }
     }
 
     private sealed class ErasedFunctionLiteralAdapterRewriter : BoundTreeRewriter
