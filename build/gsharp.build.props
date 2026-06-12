@@ -25,6 +25,10 @@
     <!-- Runtime packages-->
     <MicrosoftVisualStudioValidationPackageReference Include="Microsoft.VisualStudio.Validation" Version="17.8.8" />
     <StreamJsonRpcPackageReference Include="StreamJsonRpc" Version="2.21.10" />
+    <!-- Pin transitive MessagePack to a patched version (advisory GHSA-hv8m-jj95-wg3x).
+         StreamJsonRpc 2.21.10 brings MessagePack 2.5.187, which fails NU1903 (Warning As Error)
+         on the vscode-extension Compile step. -->
+    <MessagePackPackageReference Include="MessagePack" Version="2.5.301" />
     <!-- Design-time packages -->
     <NerdbankGitVersioningPackageReference Include="Nerdbank.GitVersioning" Version="3.6.143" PrivateAssets="All" />
     <StyleCopAnalyzersPackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556">
