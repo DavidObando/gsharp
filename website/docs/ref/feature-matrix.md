@@ -103,7 +103,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Type operators | Supported | Supported | `typeof(...)` and `nameof(...)`. |
 | Smart casts / flow narrowing | Supported | Supported | ADR-0069 (+ #712 addendum). `is` / `!is` on a local, parameter, or read-only top-level `let` narrows the receiver to the tested type. Composes through `!`, `&&`, `||` (De Morgan dual), `if`/`else`, the early-exit lift, `switch` arms, and `if let` / `guard let`. Mutable receivers, fields, properties, and indexed expressions are not narrowed. |
 | Trailing `func` lambdas | Supported | Supported | `call(...) func(...) { ... }` form. |
-| Arrow trailing lambdas | Not supported | Not supported | ADR-0050 is proposed; current parser uses `->` for switch-expression arms. |
+| Arrow lambda expressions (`(x int32) -> body`) | Supported | Supported | ADR-0074 / issue #714. Parameter list is always parenthesised; body is a single expression or a brace block whose trailing expression is the value. Captures outer locals. Lambda parameter type inference and `(T) -> R` function-type syntax are tracked separately (issues #715, #716). |
 
 ## Concurrency, async, and iterators
 

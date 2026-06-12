@@ -126,10 +126,10 @@ import System
 let nums = []int32{-3, 0, 1, 5, 101}
 for n in nums {
   let label = switch n {
-    case 0 -> "zero"
-    case < 0 -> "neg"
-    case > 100 -> "huge"
-    default -> "small-pos"
+    case 0: "zero"
+    case < 0: "neg"
+    case > 100: "huge"
+    default: "small-pos"
   }
   Console.WriteLine("$n -> $label")
 }

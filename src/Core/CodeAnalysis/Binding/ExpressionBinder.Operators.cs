@@ -335,6 +335,67 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// ADR-0074 / issue #714: binds the body of an arrow lambda
+    /// <c>(p T) -&gt; body</c>. The body is either a single expression
+    /// (returned as the lambda's value) or a brace-delimited block
+    /// expression. Unlike <see cref="BindBlockExpressionValue"/>, a block
+    /// body without a trailing expression is permitted — it produces a
+    /// <see cref="TypeSymbol.Void"/>-returning lambda.
+    /// </summary>
+    /// <param name="bodySyntax">The lambda body syntax.</param>
+    /// <returns>The bound body expression. <see cref="TypeSymbol.Void"/> is
+    /// allowed; a missing-trailing-expression block lowers to a
+    /// <see cref="BoundBlockExpression"/> whose trailing expression is a
+    /// synthesized <see cref="BoundLiteralExpression"/> placeholder of type
+    /// <see cref="TypeSymbol.Void"/>.</returns>
+    internal BoundExpression BindLambdaBodyExpression(ExpressionSyntax bodySyntax)
+    {
+        if (bodySyntax is BlockExpressionSyntax block)
+        {
+            // Lambda body block: a missing trailing expression means a void
+            // lambda. Bind any prefix statements; if there is a trailing
+            // expression, use it as the value; otherwise the value is void.
+            var boundStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+            if (!block.Statements.IsDefaultOrEmpty)
+            {
+                foreach (var stmt in block.Statements)
+                {
+                    boundStatements.Add(bindStatement(stmt));
+                }
+            }
+
+            if (block.Expression == null)
+            {
+                // No trailing expression — surface as a void-returning body.
+                // Re-package the prefix statements via a BoundBlockExpression
+                // wrapping a synthetic void placeholder; the LambdaBinder
+                // treats void bodies by emitting an ExpressionStatement +
+                // void return.
+                if (boundStatements.Count == 0)
+                {
+                    // Empty body `{ }` — synthesize a no-op void expression.
+                    return new BoundLiteralExpression(bodySyntax, value: 0, TypeSymbol.Void);
+                }
+
+                return new BoundBlockExpression(
+                    bodySyntax,
+                    boundStatements.ToImmutable(),
+                    new BoundLiteralExpression(bodySyntax, value: 0, TypeSymbol.Void));
+            }
+
+            var trailing = BindExpression(block.Expression, canBeVoid: true);
+            if (boundStatements.Count == 0)
+            {
+                return trailing;
+            }
+
+            return new BoundBlockExpression(bodySyntax, boundStatements.ToImmutable(), trailing);
+        }
+
+        return BindExpression(bodySyntax, canBeVoid: true);
+    }
+
+    /// <summary>
     /// ADR-0062: chooses a common result type for two conditional branches
     /// using the following ordered rules (mirroring the ADR §2 common-type
     /// procedure):

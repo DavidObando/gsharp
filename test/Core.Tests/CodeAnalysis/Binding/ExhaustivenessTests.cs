@@ -23,7 +23,7 @@ public class ExhaustivenessTests
         var diagnostics = Bind(@"
 type Color enum { Red, Green, Blue }
 let color = Color.Red
-let label = switch color { case Color.Red -> ""red"" case Color.Green -> ""green"" case Color.Blue -> ""blue"" }
+let label = switch color { case Color.Red: ""red"" case Color.Green: ""green"" case Color.Blue: ""blue"" }
 ");
 
         Assert.Empty(diagnostics);
@@ -35,7 +35,7 @@ let label = switch color { case Color.Red -> ""red"" case Color.Green -> ""green
         var diagnostics = Bind(@"
 type Color enum { Red, Green, Blue }
 let color = Color.Red
-let label = switch color { case Color.Red -> ""red"" case Color.Green -> ""green"" }
+let label = switch color { case Color.Red: ""red"" case Color.Green: ""green"" }
 ");
 
         Assert.Contains(diagnostics, d => d.Message == "Switch expression on enum 'Color' is not exhaustive: missing 'Blue'.");
@@ -47,7 +47,7 @@ let label = switch color { case Color.Red -> ""red"" case Color.Green -> ""green
         var diagnostics = Bind(@"
 type Color enum { Red, Green, Blue }
 let color = Color.Red
-let label = switch color { case Color.Red -> ""red"" default -> ""other"" }
+let label = switch color { case Color.Red: ""red"" default: ""other"" }
 ");
 
         Assert.Empty(diagnostics);
@@ -59,7 +59,7 @@ let label = switch color { case Color.Red -> ""red"" default -> ""other"" }
         var diagnostics = Bind(@"
 type Color enum { Red, Green, Blue }
 let color = Color.Red
-let label = switch color { case Color.Red -> ""red"" case _ -> ""other"" }
+let label = switch color { case Color.Red: ""red"" case _: ""other"" }
 ");
 
         Assert.Empty(diagnostics);
@@ -73,7 +73,7 @@ type Expr sealed interface { }
 type Add class : Expr { }
 type Mul class : Expr { }
 func Label(expr Expr) string {
- return switch expr { case x is Add -> ""add"" case x is Mul -> ""mul"" }
+ return switch expr { case x is Add: ""add"" case x is Mul: ""mul"" }
 }
 ");
 
@@ -88,7 +88,7 @@ type Expr sealed interface { }
 type Add class : Expr { }
 type Mul class : Expr { }
 func Label(expr Expr) string {
- return switch expr { case x is Add -> ""add"" }
+ return switch expr { case x is Add: ""add"" }
 }
 ");
 
@@ -103,7 +103,7 @@ type Expr sealed interface { }
 type Add class : Expr { }
 type Mul class : Expr { }
 func Label(expr Expr) string {
- return switch expr { case x is Add -> ""add"" default -> ""other"" }
+ return switch expr { case x is Add: ""add"" default: ""other"" }
 }
 ");
 
@@ -115,7 +115,7 @@ func Label(expr Expr) string {
     {
         var diagnostics = Bind(@"
 let value = 1
-let label = switch value { case 1 -> ""one"" }
+let label = switch value { case 1: ""one"" }
 ");
 
         Assert.Contains(diagnostics, d => d.Message == "Switch expression must have a 'default' arm.");

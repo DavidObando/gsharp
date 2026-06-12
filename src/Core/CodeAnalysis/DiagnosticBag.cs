@@ -2543,6 +2543,19 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0301", "The null-conditional index access '?[...]' cannot appear on the left-hand side of an assignment. Guard the receiver explicitly (e.g. 'if a != nil { a[i] = v }') or use '[...]' when the receiver is known to be non-nil.");
     }
 
+    /// <summary>
+    /// ADR-0074 / issue #714: GS0302 (warning) — a switch-expression arm
+    /// used the deprecated <c>-&gt;</c> separator. The token is being
+    /// repurposed as the lambda-expression arrow; arms should use <c>:</c>.
+    /// One release of overlap is provided; the <c>-&gt;</c> form is removed
+    /// in a later release.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>-&gt;</c> token.</param>
+    public void ReportSwitchExpressionArmArrowDeprecated(TextLocation location)
+    {
+        Report(location, "GS0302", "'->' in a switch-expression arm is deprecated; use ':' instead (ADR-0074).", DiagnosticSeverity.Warning);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

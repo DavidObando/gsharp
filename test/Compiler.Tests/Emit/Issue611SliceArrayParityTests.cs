@@ -145,7 +145,7 @@ public class Issue611SliceArrayParityTests
             import System
 
             var s = []int32{1, 2, 3}
-            let r = switch s { case [1, 2, 3] -> "matched" default -> "no match" }
+            let r = switch s { case [1, 2, 3]: "matched" default: "no match" }
             Console.WriteLine(r)
             """;
 
@@ -162,7 +162,7 @@ public class Issue611SliceArrayParityTests
             import System
 
             var a = [3]int32{1, 2, 3}
-            let r = switch a { case [1, 2, 3] -> "matched" default -> "no match" }
+            let r = switch a { case [1, 2, 3]: "matched" default: "no match" }
             Console.WriteLine(r)
             """;
 

@@ -73,6 +73,7 @@ internal sealed class LambdaBinder
     private readonly Func<TypeSymbol, Type> resolveClrTypeForGenericArg;
     private readonly Func<FunctionSymbol> getCurrentFunction;
     private readonly Action<FunctionSymbol> setCurrentFunction;
+    private readonly Func<ExpressionSyntax, BoundExpression> bindLambdaBodyExpression;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LambdaBinder"/>
@@ -119,6 +120,10 @@ internal sealed class LambdaBinder
     /// <see cref="BindFunctionLiteralExpression"/> to push the
     /// synthetic lambda function for the duration of the body bind
     /// and to restore the outer function on exit.</param>
+    /// <param name="bindLambdaBodyExpression">ADR-0074 / issue #714:
+    /// optional callback that binds an arrow-lambda body expression.
+    /// Required only when <see cref="BindLambdaExpression"/> is
+    /// invoked; the function-literal pipeline does not need it.</param>
     public LambdaBinder(
         BinderContext binderCtx,
         ConversionClassifier conversions,
@@ -128,7 +133,8 @@ internal sealed class LambdaBinder
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
         Func<TypeSymbol, Type> resolveClrTypeForGenericArg,
         Func<FunctionSymbol> getCurrentFunction,
-        Action<FunctionSymbol> setCurrentFunction)
+        Action<FunctionSymbol> setCurrentFunction,
+        Func<ExpressionSyntax, BoundExpression> bindLambdaBodyExpression = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
@@ -139,6 +145,7 @@ internal sealed class LambdaBinder
         this.resolveClrTypeForGenericArg = resolveClrTypeForGenericArg ?? throw new ArgumentNullException(nameof(resolveClrTypeForGenericArg));
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
         this.setCurrentFunction = setCurrentFunction ?? throw new ArgumentNullException(nameof(setCurrentFunction));
+        this.bindLambdaBodyExpression = bindLambdaBodyExpression;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
@@ -314,6 +321,147 @@ internal sealed class LambdaBinder
         }
 
         return new BoundFunctionLiteralExpression(null, synthetic, fnType, (BoundBlockStatement)body, captured);
+    }
+
+    /// <summary>
+    /// ADR-0074 / issue #714: binds an arrow-lambda expression
+    /// <c>(p1 T1, p2 T2) -&gt; body</c> to a
+    /// <see cref="BoundFunctionLiteralExpression"/>. Reuses every piece
+    /// of <see cref="BindFunctionLiteralExpression"/>'s plumbing — scope,
+    /// synthetic function, captured-variable analysis, smart-cast
+    /// narrowing snapshot — but the body is an expression (or a
+    /// <see cref="BlockExpressionSyntax"/>) rather than a
+    /// <see cref="BlockStatementSyntax"/>. The return type is inferred
+    /// from the bound body's type; a <see cref="TypeSymbol.Void"/> body
+    /// yields a void return.
+    /// </summary>
+    /// <param name="syntax">The lambda-expression syntax node.</param>
+    /// <returns>The bound lambda as a <see cref="BoundFunctionLiteralExpression"/>.</returns>
+    public BoundExpression BindLambdaExpression(LambdaExpressionSyntax syntax)
+    {
+        if (bindLambdaBodyExpression == null)
+        {
+            throw new InvalidOperationException("LambdaBinder was constructed without a bindLambdaBodyExpression callback; arrow-lambda binding is unavailable.");
+        }
+
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.Parameters.Count);
+        var parameterSymbols = ImmutableArray.CreateBuilder<ParameterSymbol>(syntax.Parameters.Count);
+        var seen = new HashSet<string>();
+        foreach (var p in syntax.Parameters)
+        {
+            var pname = p.Identifier.Text;
+            var ptype = bindTypeClause(p.Type) ?? TypeSymbol.Error;
+            if (p.IsVariadic)
+            {
+                Diagnostics.ReportVariadicParameterNotSupportedHere(p.Location, pname);
+            }
+
+            if (!seen.Add(pname))
+            {
+                Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
+            }
+
+            var lambdaParam = new ParameterSymbol(pname, ptype, declaringSyntax: p.Identifier, isScoped: p.IsScoped);
+
+            // ADR-0063 §5: arrow-lambda parameters can also declare a default
+            // value; the conversion classifier validates the constant-folded
+            // default at bind time the same way it does for function-literal
+            // parameters.
+            conversions.BindAndAttachParameterDefaultValue(p, lambdaParam);
+            parameterSymbols.Add(lambdaParam);
+            parameterTypes.Add(ptype);
+        }
+
+        // Construct a placeholder synthetic FunctionSymbol with a Void return
+        // type while binding the body — the arrow lambda's body is an
+        // expression (not a block of statements with `return` statements),
+        // so the placeholder type is never consulted from inside the body.
+        // After the body is bound and its type is known, we materialise the
+        // final FunctionSymbol with the inferred return type.
+        var syntheticName = $"<lambda{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+        var placeholder = new FunctionSymbol(syntheticName, parameterSymbols.ToImmutable(), TypeSymbol.Void);
+        placeholder.IsAsync = false;
+
+        var outerScope = Scope;
+        var outerFunction = getCurrentFunction();
+        Scope = new BoundScope(outerScope);
+        setCurrentFunction(placeholder);
+        foreach (var ps in placeholder.Parameters)
+        {
+            Scope.TryDeclareVariable(ps);
+        }
+
+        var savedNarrowed = binderCtx.NarrowedVariables.ToList();
+        binderCtx.NarrowedVariables.Clear();
+
+        BoundExpression boundBody;
+        try
+        {
+            boundBody = bindLambdaBodyExpression(syntax.Body);
+        }
+        finally
+        {
+            binderCtx.NarrowedVariables.Clear();
+            binderCtx.NarrowedVariables.AddRange(savedNarrowed);
+        }
+
+        Scope = outerScope;
+        setCurrentFunction(outerFunction);
+
+        var returnType = boundBody is BoundErrorExpression
+            ? TypeSymbol.Error
+            : (boundBody.Type ?? TypeSymbol.Void);
+
+        // ADR-0058: a managed-pointer (*T) cannot be used as a lambda return
+        // type because CLR Func<> delegates cannot carry by-ref type arguments.
+        if (returnType is ByRefTypeSymbol)
+        {
+            Diagnostics.ReportByRefCannotEscape(
+                syntax.Body.Location,
+                "a managed pointer (*T) cannot be the return type of a lambda expression");
+            returnType = TypeSymbol.Error;
+        }
+
+        var synthetic = new FunctionSymbol(syntheticName, placeholder.Parameters, returnType);
+        synthetic.IsAsync = false;
+
+        // Synthesize the lambda's BoundBlockStatement body: for void bodies, an
+        // ExpressionStatement; for value bodies, a ReturnStatement.
+        var bodyStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (returnType == TypeSymbol.Void || returnType == TypeSymbol.Error)
+        {
+            bodyStatements.Add(new BoundExpressionStatement(syntax.Body, boundBody));
+            if (returnType == TypeSymbol.Void)
+            {
+                bodyStatements.Add(new BoundReturnStatement(syntax.Body, expression: null));
+            }
+        }
+        else
+        {
+            bodyStatements.Add(new BoundReturnStatement(syntax.Body, boundBody));
+        }
+
+        var bodyBlock = new BoundBlockStatement(syntax.Body, bodyStatements.ToImmutable());
+        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), returnType);
+        var captured = CollectCapturedVariables(bodyBlock, synthetic.Parameters);
+
+        // Issue #367 / ADR-0058: by-ref-like or managed-pointer locals cannot
+        // be captured by a closure; mirror the function-literal checks.
+        foreach (var capturedVariable in captured)
+        {
+            if (TypeSymbol.IsByRefLike(capturedVariable.Type))
+            {
+                Diagnostics.ReportByRefLikeEscape(syntax.Location, capturedVariable.Type, $"be captured by a closure (variable '{capturedVariable.Name}')");
+            }
+            else if (capturedVariable.Type is ByRefTypeSymbol)
+            {
+                Diagnostics.ReportByRefCannotEscape(
+                    syntax.Location,
+                    $"managed pointer '{capturedVariable.Name}' cannot be captured by a closure; the closure may outlive the pointed-to variable");
+            }
+        }
+
+        return new BoundFunctionLiteralExpression(syntax, synthetic, fnType, bodyBlock, captured);
     }
 
     /// <summary>

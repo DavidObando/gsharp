@@ -9,15 +9,15 @@ import System
 
 let number = 7
 let numericLabel = switch number {
-  case < 0 -> "negative"
-  case > 0 -> "positive"
-  default -> "zero"
+  case < 0: "negative"
+  case > 0: "positive"
+  default: "zero"
 }
 
 let values = []int32{1, 2, 3}
 let listLabel = switch values {
-  case [1, _, 3] -> "bookended"
-  case _ -> "other"
+  case [1, _, 3]: "bookended"
+  case _: "other"
 }
 
 Console.WriteLine("$numericLabel / $listLabel")

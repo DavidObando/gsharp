@@ -21,7 +21,7 @@ public class PatternTests
         var diagnostics = Bind(@"
 type User class { var Name string }
 let u = User{Name: ""x""}
-let a = switch u { case v is User -> v.Name default -> ""n"" }
+let a = switch u { case v is User: v.Name default: ""n"" }
 let b = v.Name
 ");
 
@@ -31,7 +31,7 @@ let b = v.Name
     [Fact]
     public void PropertyPattern_OnNonStruct_Diagnoses()
     {
-        var diagnostics = Bind(@"let x = switch 1 { case { Name: ""x"" } -> 1 default -> 0 }");
+        var diagnostics = Bind(@"let x = switch 1 { case { Name: ""x"" }: 1 default: 0 }");
         Assert.Contains(diagnostics, d => d.Message.Contains("Property pattern requires", System.StringComparison.Ordinal));
     }
 
@@ -41,7 +41,7 @@ let b = v.Name
         var diagnostics = Bind(@"
 type User class { var Name string }
 let u = User{Name: ""x""}
-let x = switch u { case { Missing: 1 } -> 1 default -> 0 }
+let x = switch u { case { Missing: 1 }: 1 default: 0 }
 ");
         Assert.Contains(diagnostics, d => d.Message.Contains("does not define a field named 'Missing'", System.StringComparison.Ordinal));
     }
@@ -49,14 +49,14 @@ let x = switch u { case { Missing: 1 } -> 1 default -> 0 }
     [Fact]
     public void RelationalPattern_UndefinedOperator_Diagnoses()
     {
-        var diagnostics = Bind("let x = switch true { case > false -> 1 default -> 0 }");
+        var diagnostics = Bind("let x = switch true { case > false: 1 default: 0 }");
         Assert.Contains(diagnostics, d => d.Message.Contains("Relational pattern operator '>' is not defined", System.StringComparison.Ordinal));
     }
 
     [Fact]
     public void ListPattern_OnNonArray_Diagnoses()
     {
-        var diagnostics = Bind("let x = switch 1 { case [1] -> 1 default -> 0 }");
+        var diagnostics = Bind("let x = switch 1 { case [1]: 1 default: 0 }");
         Assert.Contains(diagnostics, d => d.Message.Contains("List pattern requires", System.StringComparison.Ordinal));
     }
 
@@ -66,7 +66,7 @@ let x = switch u { case { Missing: 1 } -> 1 default -> 0 }
         var diagnostics = Bind(@"
 type User class { var Name string }
 let u = User{Name: ""x""}
-let x = switch u { case _ -> 1 }
+let x = switch u { case _: 1 }
 ");
         Assert.Empty(diagnostics);
     }

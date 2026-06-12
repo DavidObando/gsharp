@@ -19,7 +19,7 @@ public class PatternParserTests
     [InlineData("[1, _, 3]", SyntaxKind.ListPattern)]
     public void SwitchExpression_CaseValue_ParsesPattern(string pattern, SyntaxKind expectedKind)
     {
-        var arm = ParseFirstSwitchExpressionArm($"let x = switch v {{ case {pattern} -> 1 default -> 0 }}");
+        var arm = ParseFirstSwitchExpressionArm($"let x = switch v {{ case {pattern}: 1 default: 0 }}");
         Assert.Equal(expectedKind, arm.Value.Kind);
     }
 
@@ -32,14 +32,14 @@ public class PatternParserTests
     [InlineData("!= 0")]
     public void SwitchExpression_RelationalPatterns_Parse(string pattern)
     {
-        var arm = ParseFirstSwitchExpressionArm($"let x = switch v {{ case {pattern} -> 1 default -> 0 }}");
+        var arm = ParseFirstSwitchExpressionArm($"let x = switch v {{ case {pattern}: 1 default: 0 }}");
         Assert.Equal(SyntaxKind.RelationalPattern, arm.Value.Kind);
     }
 
     [Fact]
     public void SwitchExpression_PropertyPattern_ParsesMultipleAndNestedFields()
     {
-        var arm = ParseFirstSwitchExpressionArm("let x = switch v { case { Name: \"x\", Child: { Name: \"y\" } } -> 1 default -> 0 }");
+        var arm = ParseFirstSwitchExpressionArm("let x = switch v { case { Name: \"x\", Child: { Name: \"y\" } }: 1 default: 0 }");
         var property = Assert.IsType<PropertyPatternSyntax>(arm.Value);
         Assert.Equal(2, property.Fields.Count);
         Assert.Equal(SyntaxKind.PropertyPattern, property.Fields[1].Pattern.Kind);
@@ -50,7 +50,7 @@ public class PatternParserTests
     [InlineData("[1, _, 3]", 3)]
     public void SwitchExpression_ListPatterns_ParseElementCount(string pattern, int count)
     {
-        var arm = ParseFirstSwitchExpressionArm($"let x = switch v {{ case {pattern} -> 1 default -> 0 }}");
+        var arm = ParseFirstSwitchExpressionArm($"let x = switch v {{ case {pattern}: 1 default: 0 }}");
         var list = Assert.IsType<ListPatternSyntax>(arm.Value);
         Assert.Equal(count, list.Elements.Count);
     }

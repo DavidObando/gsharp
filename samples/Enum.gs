@@ -10,9 +10,9 @@ type Color enum { Red, Green, Blue }
 
 let color = Color.Green
 let label = switch color {
-  case Color.Red -> "red"
-  case Color.Green -> "green"
-  default -> "blue"
+  case Color.Red: "red"
+  case Color.Green: "green"
+  default: "blue"
 }
 
 Console.WriteLine(label)
