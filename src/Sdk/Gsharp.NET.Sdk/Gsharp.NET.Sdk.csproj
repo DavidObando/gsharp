@@ -50,6 +50,17 @@
     <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\gsharp-icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
   </ItemGroup>
 
+  <!-- Ensure Gsharp.Extensions is built (and its publish closure is staged) before
+       PackGsharpExtensions inspects the outputs. The project itself is referenced
+       only at pack time so consumers of this SDK csproj's compile graph are not
+       polluted with the runtime assembly. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Gsharp.Extensions\Gsharp.Extensions.csproj"
+                      Private="false"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+
   <!-- Pack the BuildTask DLL (this assembly's build output) under tools/task/. -->
   <Target Name="PackGsharpBuildTask" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
     <ItemGroup>
@@ -90,6 +101,33 @@
             Pack="true"
             PackagePath="tools\compiler\"
             Visible="false" />
+    </ItemGroup>
+  </Target>
+  <!-- Pack the Gsharp.Extensions assembly under tools/extensions/ (ADR-0082 /
+       issue #722). This is a *real* G# / .NET assembly bundled with the SDK
+       NuGet; its presence in tools/extensions/ — combined with the
+       auto-reference wired up in build/Gsharp.NET.Sdk.props — lets consumers
+       write `import Gsharp.Extensions.Go` (and later `.Optional`, `.Sequences`)
+       without ever adding a <PackageReference> for it. Mirrors the layout of
+       tools/task/ (BuildTask) and tools/compiler/ (gsc). -->
+  <Target Name="PackGsharpExtensions" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
+    <PropertyGroup>
+      <_GsharpExtensionsProject>$(MSBuildThisFileDirectory)..\Gsharp.Extensions\Gsharp.Extensions.csproj</_GsharpExtensionsProject>
+      <_GsharpExtensionsOutDir>$(IntermediateOutputPath)gsharp-extensions\</_GsharpExtensionsOutDir>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_GsharpExtensionsOutDir)" Condition="Exists('$(_GsharpExtensionsOutDir)')" />
+    <MSBuild Projects="$(_GsharpExtensionsProject)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);OutputPath=$(_GsharpExtensionsOutDir)" />
+    <ItemGroup>
+      <_GsharpExtensionsPayload Include="$(_GsharpExtensionsOutDir)Gsharp.Extensions.dll" />
+      <_GsharpExtensionsPayload Include="$(_GsharpExtensionsOutDir)Gsharp.Extensions.xml" Condition="Exists('$(_GsharpExtensionsOutDir)Gsharp.Extensions.xml')" />
+      <_GsharpExtensionsPayload Include="$(_GsharpExtensionsOutDir)Gsharp.Extensions.pdb" Condition="Exists('$(_GsharpExtensionsOutDir)Gsharp.Extensions.pdb')" />
+    </ItemGroup>
+    <Error Condition="'@(_GsharpExtensionsPayload)' == ''"
+           Text="Expected Gsharp.Extensions build output not found under '$(_GsharpExtensionsOutDir)'." />
+    <ItemGroup>
+      <None Include="@(_GsharpExtensionsPayload)" Pack="true" PackagePath="tools\extensions\" Visible="false" />
     </ItemGroup>
   </Target>
 

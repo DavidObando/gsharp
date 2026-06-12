@@ -109,11 +109,11 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 
 | Feature | Emit (`gsc`) | Interpreter | Notes |
 | --- | --- | --- | --- |
-| `go` | Supported | Supported with evaluator scheduling limits | Operand must be a call expression. |
-| `scope` structured concurrency | Supported | Supported | Child tasks are joined and failures propagate. |
-| Channels, send, receive, `close` | Supported | Supported | Backed by `System.Threading.Channels`. |
-| `select` | Supported | Supported | Receive, receive-bind, send, and default cases. |
-| `async func` and `await` | Supported | Supported by blocking | Emit has state machines; evaluator blocks on awaiters. |
+| `go` | Supported | Supported with evaluator scheduling limits | Operand must be a call expression. Per-file `import Gsharp.Extensions.Go` is required (ADR-0082, GS0316). |
+| `scope` structured concurrency | Supported | Supported | Child tasks are joined and failures propagate. Not gated. |
+| Channels, send, receive, `close` | Supported | Supported | Backed by `System.Threading.Channels`. Per-file `import Gsharp.Extensions.Go` is required (ADR-0082, GS0316). |
+| `select` | Supported | Supported | Receive, receive-bind, send, and default cases. Per-file `import Gsharp.Extensions.Go` is required (ADR-0082, GS0316). |
+| `async func` and `await` | Supported | Supported by blocking | Emit has state machines; evaluator blocks on awaiters. Not gated. |
 | Async state-machine edge cases | Partial | N/A | Unsupported emit shapes report `GS0190`. |
 | `sequence[T]` and `yield` | Supported | Supported | Sync iterator state machines in emit; evaluator collects sequence values. |
 | `async sequence[T]` and `await for` | Supported | Supported by blocking | Maps to `IAsyncEnumerable[T]`. |

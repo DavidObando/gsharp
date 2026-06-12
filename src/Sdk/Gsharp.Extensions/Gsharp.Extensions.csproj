@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ADR-0082 / issue #722. The Gsharp.Extensions assembly is the single
+    physical .dll that backs every `import Gsharp.Extensions.<X>` namespace:
+
+      * Gsharp.Extensions.Go         — gates Go-flavored concurrency
+                                       (this PR / #722) and, in a follow-up,
+                                       Go-style built-ins (#723).
+      * Gsharp.Extensions.Optional   — Option/Result helpers (#724).
+      * Gsharp.Extensions.Sequences  — LINQ-shaped sequence helpers (#724).
+
+    The assembly is bundled inside the Gsharp.NET.Sdk NuGet (Pack target in
+    Gsharp.NET.Sdk.csproj) under tools/extensions/ and is auto-referenced
+    from Sdk/Sdk.props so consumer .gsproj projects do not need an explicit
+    <PackageReference>. The import statement is what gates use — the
+    project reference is an implementation detail mirroring the implicit
+    mscorlib reference (see build/Gsharp.NET.Core.Sdk.targets).
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Gsharp.Extensions</RootNamespace>
+    <AssemblyName>Gsharp.Extensions</AssemblyName>
+
+    <!-- Library only: not packed as its own NuGet. Gsharp.NET.Sdk pulls the
+         compiled .dll into its tools/extensions/ subtree. -->
+    <IsPackable>false</IsPackable>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+
+    <!-- The pinned build infrastructure (build/gsharp.build.props) defaults
+         AssemblyName to GSharp.$(MSBuildProjectName); we override above so
+         the on-disk file is Gsharp.Extensions.dll as documented in ADR-0082.
+         Likewise force the XML doc file under the canonical assembly name. -->
+    <DocumentationFile>$(OutputPath)/$(AssemblyName).xml</DocumentationFile>
+  </PropertyGroup>
+
+</Project>

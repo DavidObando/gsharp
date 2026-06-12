@@ -2742,6 +2742,26 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Warning);
     }
 
+    /// <summary>
+    /// ADR-0082 / issue #722: GS0316 — a Go-flavored concurrency syntactic
+    /// form (<c>go</c>, <c>chan T</c>, <c>&lt;-ch</c>, <c>ch &lt;- v</c>,
+    /// <c>select</c>, <c>close(ch)</c>, <c>make(chan T)</c>) was used in a
+    /// compilation unit that does not <c>import Gsharp.Extensions.Go</c>.
+    /// The Go-flavored surface is opt-in; the production concurrency surface
+    /// is <c>scope</c> + <c>async</c> / <c>await</c>. The diagnostic names
+    /// the triggering form so users see exactly what to fix.
+    /// </summary>
+    /// <param name="location">The source location of the offending keyword or operator.</param>
+    /// <param name="form">The triggering syntactic form (e.g. <c>go</c>, <c>chan</c>, <c>&lt;-</c>, <c>select</c>, <c>close</c>, <c>make(chan)</c>).</param>
+    public void ReportGoExtensionsImportRequired(TextLocation location, string form)
+    {
+        Report(
+            location,
+            "GS0316",
+            $"'{form}' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or use 'scope' + 'async'/'await' instead (ADR-0082).",
+            DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

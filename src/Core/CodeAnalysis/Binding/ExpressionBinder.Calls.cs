@@ -309,6 +309,9 @@ internal sealed partial class ExpressionBinder
             case "close":
             {
                 // Phase 5.4 / ADR-0022: `close(ch)` marks the channel writer complete.
+                // ADR-0082 / issue #722: gate on `import Gsharp.Extensions.Go`.
+                binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.Identifier.Location, "close");
+
                 if (syntax.Arguments.Count != 1)
                 {
                     Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 1, syntax.Arguments.Count);

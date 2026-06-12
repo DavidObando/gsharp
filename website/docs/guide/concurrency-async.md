@@ -6,20 +6,26 @@ draft: false
 
 # Concurrency and async
 
-G# has two complementary concurrency models: Go-inspired channels and structured `go` scopes, and CLR-inspired `async`/`await` with task and iterator state machines.
+G# has two complementary concurrency models: the **production** model built around `scope` + `async`/`await` with task and iterator state machines, and an opt-in Go-inspired layer of channels, the `go` statement, and `select`.
+
+:::note Go-flavored syntax requires `import Gsharp.Extensions.Go`
+The Go-flavored forms — `go`, `chan T`, `<-` (send and receive), `select`, `close(ch)`, and `make(chan T)` — are gated behind a per-file `import Gsharp.Extensions.Go` (ADR-0082, issue #722). Without the import the binder emits [`GS0316`](../ref/diagnostics#go-flavored-concurrency-requires-import-gsharpextensionsgo-gs0316) for each gated form. The gate is **always opt-in**: `/noimplicitimports` does not interact with it. `scope` itself is **not** gated and works on the unannotated language; only the Go-flavored shapes used inside or outside `scope` need the import.
+:::
 
 ## `go` and `scope`
 
 `go call()` starts a function call concurrently. The binder requires the operand to be a call expression even though the parser accepts any expression. Use `scope` to structure child work: child tasks registered inside the scope are joined at scope exit and failures propagate.
 
 ```gsharp
+import Gsharp.Extensions.Go
+
 scope {
     go producer(ch)
     go consumer(ch)
 }
 ```
 
-In the interpreter, `go` is implemented with `Task.Run`; outside `scope`, exceptions can be unobserved. Some interpreter evaluation is serialized, so performance characteristics should be validated in emitted programs. The model is documented by [ADR-0002](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0002-concurrency-model.md).
+In the interpreter, `go` is implemented with `Task.Run`; outside `scope`, exceptions can be unobserved. Some interpreter evaluation is serialized, so performance characteristics should be validated in emitted programs. The model is documented by [ADR-0002](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0002-concurrency-model.md); the per-file import gate is in [ADR-0082](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0082-gsharp-extensions-go-import.md).
 
 ## Channels
 
@@ -29,6 +35,7 @@ Channels are typed with `chan T` and created with `make(chan T)` or `make(chan T
 package GSharp.Samples.Channels
 
 import System
+import Gsharp.Extensions.Go
 
 let ch = make(chan int32, 3)
 ch <- 1
@@ -61,6 +68,8 @@ Channel lowering rationale is in [ADR-0022](https://github.com/DavidObando/gshar
 `select` waits over channel operations. The implemented case forms are default, receive and discard, receive and bind, and send.
 
 ```gsharp
+import Gsharp.Extensions.Go
+
 select {
 case let value = <-ch {
     Console.WriteLine(value)

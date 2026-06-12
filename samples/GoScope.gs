@@ -7,6 +7,7 @@
 package GSharp.Samples.GoScope
 
 import System
+import Gsharp.Extensions.Go
 
 func send(value int32, ch chan int32) int32 {
     ch <- value

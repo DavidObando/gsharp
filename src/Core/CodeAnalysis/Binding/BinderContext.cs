@@ -32,6 +32,16 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 internal sealed class BinderContext
 {
     /// <summary>
+    /// ADR-0082 / issue #722. The fully-qualified namespace whose presence
+    /// in a compilation unit's import set unlocks the Go-flavored
+    /// concurrency surface (<c>go</c>, <c>chan T</c>, <c>&lt;-</c>,
+    /// <c>select</c>, <c>close(ch)</c>, <c>make(chan T)</c>) and, in
+    /// follow-up issues, Go-style built-ins (#723) and helper namespaces
+    /// (#724).
+    /// </summary>
+    public const string GoExtensionsImportTarget = "Gsharp.Extensions.Go";
+
+    /// <summary>
     /// Counter used to allocate unique <see cref="BoundLabel"/> identifiers.
     /// Mutated in place by callers (sometimes via
     /// <see cref="System.Threading.Interlocked.Increment(ref int)"/>), so it
@@ -160,4 +170,64 @@ internal sealed class BinderContext
     /// so the first lookup always misses.
     /// </summary>
     public int CachedImportedExtensionImportCount { get; set; } = -1;
+
+    /// <summary>
+    /// ADR-0082 / issue #722. Returns whether <c>import Gsharp.Extensions.Go</c>
+    /// is declared in the compilation unit that contains the given syntax
+    /// node. The check is per <see cref="Syntax.SyntaxTree"/> — multi-file
+    /// packages (ADR-0028) do not collapse import sets across files.
+    /// Implicit / compiler-synthesized imports never match: the Go-flavored
+    /// surface is always opt-in regardless of <c>/noimplicitimports</c>.
+    /// </summary>
+    /// <param name="syntax">The syntax node whose owning compilation unit is checked.</param>
+    /// <returns><c>true</c> when the same compilation unit declares <c>import Gsharp.Extensions.Go</c>; <c>false</c> otherwise.</returns>
+    public bool IsGoExtensionsImported(Syntax.SyntaxNode syntax)
+    {
+        if (syntax == null)
+        {
+            return false;
+        }
+
+        var tree = syntax.SyntaxTree;
+        if (tree == null)
+        {
+            return false;
+        }
+
+        foreach (var imp in RootScope.GetDeclaredImports())
+        {
+            if (string.Equals(imp.Target, GoExtensionsImportTarget, StringComparison.Ordinal)
+                && imp.Declaration is { SyntaxTree: var declTree }
+                && declTree == tree)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// ADR-0082 / issue #722. Convenience wrapper that reports <c>GS0316</c>
+    /// at <paramref name="location"/> when the file containing
+    /// <paramref name="syntax"/> does not import <c>Gsharp.Extensions.Go</c>.
+    /// Returns <c>true</c> when the diagnostic fired so callers can
+    /// short-circuit cosmetic recovery, but every gated binder still
+    /// produces the same bound tree it would have produced with the import
+    /// present (per ADR-0082 "Recovery").
+    /// </summary>
+    /// <param name="syntax">The syntax node whose owning compilation unit is checked.</param>
+    /// <param name="location">The location to anchor the diagnostic at (typically the keyword or operator token).</param>
+    /// <param name="form">The triggering syntactic form (<c>go</c>, <c>chan</c>, <c>&lt;-</c>, <c>select</c>, <c>close</c>, <c>make(chan)</c>).</param>
+    /// <returns><c>true</c> when GS0316 was reported.</returns>
+    public bool ReportIfGoExtensionsImportMissing(Syntax.SyntaxNode syntax, Text.TextLocation location, string form)
+    {
+        if (IsGoExtensionsImported(syntax))
+        {
+            return false;
+        }
+
+        Diagnostics.ReportGoExtensionsImportRequired(location, form);
+        return true;
+    }
 }

@@ -99,7 +99,13 @@ close(x)
 
     private static EvaluationResult Evaluate(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
+        // ADR-0082 / issue #722: every Go-flavored concurrency form is
+        // gated behind `import Gsharp.Extensions.Go`. These tests focus on
+        // bind/recv/close behaviour rather than the gate, so prepend the
+        // import once for the whole class. The dedicated
+        // Issue722GoExtensionsImportGateTests cover the gate explicitly.
+        var fullSource = "import Gsharp.Extensions.Go\n" + source;
+        var tree = SyntaxTree.Parse(SourceText.From(fullSource));
         var compilation = new Compilation(tree);
         return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }

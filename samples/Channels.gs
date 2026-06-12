@@ -8,6 +8,7 @@
 package GSharp.Samples.Channels
 
 import System
+import Gsharp.Extensions.Go
 
 let ch = make(chan int32, 3)
 ch <- 1

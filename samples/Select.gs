@@ -7,6 +7,7 @@ package GSharp.Samples.Select
 
 import System
 import System.Threading
+import Gsharp.Extensions.Go
 
 func delayedSend(ch chan int32) int32 {
     Thread.Sleep(10)

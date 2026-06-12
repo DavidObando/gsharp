@@ -18,6 +18,7 @@ package GSharp.Samples.AsyncTask
 
 import System
 import System.Threading.Tasks
+import Gsharp.Extensions.Go
 
 async func compute(n int32) int32 {
     await Task.Delay(5)

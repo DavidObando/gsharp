@@ -1532,6 +1532,11 @@ public sealed class Binder
         if (syntax.IsChannel)
         {
             // Phase 5.4 / ADR-0022: channel type clause `chan T`.
+            // ADR-0082 / issue #722: gate on `import Gsharp.Extensions.Go`.
+            // Reports GS0316 anchored at the `chan` keyword and recovers by
+            // binding the channel type as if the import were present.
+            binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.ChanKeyword.Location, "chan");
+
             var elementType = BindTypeClause(syntax.ChanElementType);
             if (elementType == null)
             {

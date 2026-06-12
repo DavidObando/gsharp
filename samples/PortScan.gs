@@ -16,6 +16,7 @@ package GSharp.Samples.PortScan
 
 import System
 import System.Threading
+import Gsharp.Extensions.Go
 
 func scan(port int32, results chan int32) int32 {
     Thread.Sleep(5)

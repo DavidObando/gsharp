@@ -178,10 +178,13 @@ let counts = map[string]int32{"g": 1, "sharp": 2}
 
 Channels are written `chan T`. A channel value is created with `make(chan T)` or `make(chan T, capacity)`. Prefix receive is `<-ch`; send statements are `ch <- value`; `select` multiplexes receive and send cases. Channels are backed by `System.Threading.Channels`.
 
+The Go-flavored channel surface — `chan T`, `<-` (send and receive), `make(chan T)`, `select`, and `close(ch)` — is gated behind a per-file `import Gsharp.Extensions.Go` (ADR-0082). Files that use any of these forms without the import get diagnostic `GS0316`.
+
 ```gsharp title="samples/Channels.gs"
 package GSharp.Samples.Channels
 
 import System
+import Gsharp.Extensions.Go
 
 let ch = make(chan int32, 3)
 ch <- 1
@@ -707,6 +710,8 @@ DeferStmt = "defer" Expression .
 
 `go expr` starts a concurrent call; binding requires the operand to be a call. `scope { ... }` is structured concurrency and joins registered child tasks at scope exit. Channel receive is a prefix expression `<-ch`; channel send is a statement `ch <- value`. `select` supports default, receive-discard, receive-bind (via `case let v = <-ch`), and send cases.
 
+The `go`, `chan T`, `<-` (send and receive), `select`, `close(ch)`, and `make(chan T)` forms are the **Go-flavored concurrency surface** and are gated behind a per-file `import Gsharp.Extensions.Go` (ADR-0082). The binder reports `GS0316` at each offending keyword/operator (`go`, `chan`, `<-`, `select`, `close`) when the import is absent in the same compilation unit. `scope` itself is **not** gated. The gate is always opt-in and is independent of `/noimplicitimports`.
+
 ```ebnf
 GoStmt     = "go" Expression .
 ScopeStmt  = "scope" Block .
@@ -741,6 +746,8 @@ AwaitForRangeStmt = "await" "for" identifier "in" Expression Block .
 `go` launches concurrent function calls. In the interpreter, `go` uses `Task.Run`; outside `scope`, exceptions can be unobserved, while inside `scope` child tasks are registered and joined when the scope exits. The interpreter serializes some evaluation through locks, so it is a correctness implementation rather than a performance model. The emit path supports channels, `go`, `scope`, and `select` through lowering and CLR primitives.
 
 Channels are typed, can be buffered, and support `close`, send, receive, and `select`. Receiving from a closed channel yields the element default value in the implemented channel path, as shown by the `Channels` sample.
+
+Per ADR-0082 (issue #722), the production concurrency surface is `scope` + `async`/`await`. The Go-flavored shapes (`go`, `chan T`, `<-` send, `<-` receive, `select`, `close(ch)`, and `make(chan T)`) remain fully supported but are opt-in: each consuming file must contain `import Gsharp.Extensions.Go`. The binder emits `GS0316` for each gated form when the import is missing.
 
 ## Async and iterators
 
