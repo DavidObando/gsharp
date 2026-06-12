@@ -125,6 +125,11 @@ scope {
     go boom()
 }
 ";
+        // ADR-0082 / issue #722: scope itself is not gated, but `go` is —
+        // prepend the import so the scoped goroutine binds successfully and
+        // the failure surfaces from the runtime, which is what this test
+        // actually exercises.
+        source = "import Gsharp.Extensions.Go\n" + source;
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
         EvaluationResult result = null;
@@ -149,7 +154,11 @@ scope {
 
     private static EvaluationResult Evaluate(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
+        // ADR-0082 / issue #722: prepend the Go-extensions import so
+        // existing scope-with-go tests continue to exercise scope
+        // semantics rather than the import gate.
+        var fullSource = "import Gsharp.Extensions.Go\n" + source;
+        var tree = SyntaxTree.Parse(SourceText.From(fullSource));
         var compilation = new Compilation(tree);
         return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }

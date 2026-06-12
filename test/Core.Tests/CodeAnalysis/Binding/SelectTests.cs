@@ -163,7 +163,12 @@ case x <- 1 { let a = 0 }
 
     private static EvaluationResult Evaluate(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
+        // ADR-0082 / issue #722: gate test fixtures auto-prepend the
+        // Go-extensions import so existing concurrency tests continue to
+        // exercise bind/lower/emit rather than the gate. Issue722-specific
+        // gate behaviour is covered by Issue722GoExtensionsImportGateTests.
+        var fullSource = "import Gsharp.Extensions.Go\n" + source;
+        var tree = SyntaxTree.Parse(SourceText.From(fullSource));
         var compilation = new Compilation(tree);
         return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }

@@ -685,4 +685,36 @@ Cause/fix:
   [ADR-0081](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0081-null-identifier-did-you-mean-nil.md)
   for the full rule, scope, and recovery rationale.
 
+## Go-flavored concurrency requires `import Gsharp.Extensions.Go` (GS0316)
+
+ADR-0082 (issue #722) pins the per-file gate on the Go-flavored
+concurrency surface. The production concurrency surface is `scope` +
+`async`/`await`; the Go-flavored shapes (`go`, `chan T`, `<-` send,
+`<-` receive, `select`, `close(ch)`, `make(chan T[, cap])`) remain
+available but are opt-in. The binder checks for `import
+Gsharp.Extensions.Go` in the current compilation unit (not the
+project) before binding any of the gated forms and emits `GS0316`
+when the import is absent. The triggering form is named in the
+message so users see exactly what to add.
+
+| ID | Severity | Message |
+|----|----------|---------|
+| GS0316 | Error | `'<form>' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or use 'scope' + 'async'/'await' instead (ADR-0082).` |
+
+Cause/fix:
+
+- **GS0316** — any use of `go`, `chan` (in a type clause or inside
+  `make`), `<-` (send or receive), `select`, or `close(ch)` in a
+  source file that does not contain `import Gsharp.Extensions.Go`.
+  Add the import at the top of the file (right after the `package`
+  declaration is canonical), or rewrite the code on the
+  `scope` + `async`/`await` surface. The diagnostic is anchored at
+  the offending keyword/operator (`go`, `chan`, `<-`, `select`,
+  `close`); each `make(chan T)` site is reported once at its inner
+  `chan` keyword. The gate is **always opt-in**: `/noimplicitimports`
+  does not interact with it, and the implicit `System` import
+  toggle has no effect on whether `Gsharp.Extensions.Go` is in scope.
+  See ADR-0082 for the full rule, recovery strategy, and packaging
+  rationale.
+
 

@@ -1168,6 +1168,7 @@ r
         // needs no receiver capture, so it should compile and run.
         var source = @"package BareStaticInGo
 import System
+import Gsharp.Extensions.Go
 
 class Bus {
     shared { var count int32 }

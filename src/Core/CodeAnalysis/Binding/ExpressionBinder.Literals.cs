@@ -27,6 +27,11 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindMakeChannelExpression(MakeChannelExpressionSyntax syntax)
     {
         // Phase 5.4 / ADR-0022: `make(chan T)` / `make(chan T, capacity)`.
+        // ADR-0082 / issue #722: the inner `chan` type clause carries the
+        // gate via BindTypeClause, so this site reports once via the
+        // `chan` form rather than once at `make` *and* once at `chan` (the
+        // user typically sees a single offending mistake — needing the
+        // import — and one diagnostic is plenty).
         var typeSymbol = bindTypeClause(syntax.ChannelTypeClause);
         if (typeSymbol is not ChannelTypeSymbol chan)
         {

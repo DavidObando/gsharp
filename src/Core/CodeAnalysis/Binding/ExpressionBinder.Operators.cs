@@ -545,6 +545,10 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindChannelReceiveExpression(UnaryExpressionSyntax syntax)
     {
+        // ADR-0082 / issue #722: gate the `<-ch` receive expression on
+        // `import Gsharp.Extensions.Go`.
+        binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.OperatorToken.Location, "<- (receive)");
+
         var operand = BindExpression(syntax.Operand);
         if (operand is BoundErrorExpression)
         {

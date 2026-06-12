@@ -2355,6 +2355,12 @@ internal sealed class StatementBinder
 
     private BoundStatement BindGoStatement(GoStatementSyntax syntax)
     {
+        // ADR-0082 / issue #722: gate the `go expr` statement on
+        // `import Gsharp.Extensions.Go`. Report GS0316 if the import is
+        // missing, then continue binding so downstream diagnostics about
+        // the operand's call-shape still surface.
+        binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.GoKeyword.Location, "go");
+
         var expression = bindExpression(syntax.Expression);
 
         if (expression is BoundErrorExpression)
@@ -2378,6 +2384,9 @@ internal sealed class StatementBinder
     private BoundStatement BindChannelSendStatement(ChannelSendStatementSyntax syntax)
     {
         // Phase 5.5 / ADR-0022: `ch <- v` send statement.
+        // ADR-0082 / issue #722: gate on `import Gsharp.Extensions.Go`.
+        binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.LeftArrowToken.Location, "<- (send)");
+
         var channel = bindExpression(syntax.Channel);
         if (channel is BoundErrorExpression)
         {
@@ -2397,6 +2406,9 @@ internal sealed class StatementBinder
     private BoundStatement BindSelectStatement(SelectStatementSyntax syntax)
     {
         // Phase 5.6 / ADR-0022: select statement orchestrating channel ops.
+        // ADR-0082 / issue #722: gate on `import Gsharp.Extensions.Go`.
+        binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.SelectKeyword.Location, "select");
+
         if (syntax.Cases.Length == 0)
         {
             Diagnostics.ReportSelectWithNoCases(syntax.SelectKeyword.Location);

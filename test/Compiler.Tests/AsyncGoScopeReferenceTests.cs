@@ -42,6 +42,7 @@ package Demo
 import System
 import System.IO
 import System.Threading.Tasks
+import Gsharp.Extensions.Go
 
 var reader = StringReader(""payload"")
 

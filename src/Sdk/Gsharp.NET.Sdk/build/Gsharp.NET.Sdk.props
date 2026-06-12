@@ -10,8 +10,27 @@
     <GsharpToolFullPath Condition=" '$(GsharpToolFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\task\Gsharp.NET.Sdk.dll</GsharpToolFullPath>
     <GsharpCompilerFullPath Condition=" '$(GsharpCompilerFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\compiler\gsc.dll</GsharpCompilerFullPath>
 
+    <!-- ADR-0082 / issue #722. The Gsharp.Extensions assembly ships inside this
+         SDK NuGet under tools/extensions/. We auto-reference it from every
+         consumer .gsproj so an `import Gsharp.Extensions.Go` (this PR),
+         `import Gsharp.Extensions.Optional` / `.Sequences` (#724), or any
+         future Gsharp.Extensions.* sub-namespace resolves without the user
+         adding a <PackageReference>. The import keyword is the user-visible
+         opt-in; the reference is an SDK-private implementation detail. -->
+    <GsharpExtensionsAssemblyFullPath Condition=" '$(GsharpExtensionsAssemblyFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\extensions\Gsharp.Extensions.dll</GsharpExtensionsAssemblyFullPath>
+
     <!-- Pull in the gsharp language targets (CoreCompile override). -->
     <LanguageTargets>$(MSBuildThisFileDirectory)Gsharp.NET.Current.Sdk.targets</LanguageTargets>
   </PropertyGroup>
+
+  <!-- ADR-0082: thread the bundled Gsharp.Extensions assembly into the
+       reference set the build task forwards to gsc. _ExplicitReference is the
+       same path used for mscorlib in Gsharp.NET.Core.Sdk.targets, so the
+       assembly participates in the ResolveAssemblyReference closure the same
+       way (and consequently shows up under @(ReferencePathWithRefAssemblies)
+       that BuildTask sends via /r:). -->
+  <ItemGroup Condition=" '$(GsharpNoExtensions)' != 'true' and Exists('$(GsharpExtensionsAssemblyFullPath)') ">
+    <_ExplicitReference Include="$(GsharpExtensionsAssemblyFullPath)" />
+  </ItemGroup>
 
 </Project>

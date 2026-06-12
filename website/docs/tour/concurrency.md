@@ -8,6 +8,10 @@ draft: false
 
 G# brings Go-inspired concurrency syntax to the CLR. The core pieces are `go` for concurrent calls, `scope` for structured joining, channels for communication, and `select` for waiting on channel operations.
 
+:::note Opt-in surface
+The Go-flavored concurrency forms — `go`, `chan T`, `<-` (send and receive), `select`, `close(ch)`, and `make(chan T)` — are gated behind a per-file `import Gsharp.Extensions.Go` (ADR-0082, issue #722). The production concurrency surface is `scope` + `async`/`await`, which is **not** gated. Files that use any of the Go-flavored forms without the import get diagnostic [`GS0316`](../ref/diagnostics#go-flavored-concurrency-requires-import-gsharpextensionsgo-gs0316).
+:::
+
 ## Go and scope
 
 `go` starts a function call concurrently. The binder requires the operand to be a call. A `scope` block tracks child tasks started inside it and waits for them before leaving the block.
@@ -16,6 +20,7 @@ G# brings Go-inspired concurrency syntax to the CLR. The core pieces are `go` fo
 package GSharp.Samples.GoScope
 
 import System
+import Gsharp.Extensions.Go
 
 func send(value int32, ch chan int32) int32 {
     ch <- value
@@ -49,6 +54,7 @@ Channels use `chan T`, are created with `make(chan T)` or `make(chan T, capacity
 package GSharp.Samples.Channels
 
 import System
+import Gsharp.Extensions.Go
 
 let ch = make(chan int32, 3)
 ch <- 1
@@ -84,6 +90,7 @@ The closed receive in this sample returns the element type's default value.
 package GSharp.Samples.Select
 
 import System
+import Gsharp.Extensions.Go
 
 let ready = make(chan int32, 1)
 ready <- 7
@@ -118,6 +125,7 @@ package GSharp.Samples.AsyncGoScopeJoin
 
 import System
 import System.Threading.Tasks
+import Gsharp.Extensions.Go
 
 async func work() {
     await Task.Delay(1)
