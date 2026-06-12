@@ -63,7 +63,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Interface implementation | Supported | Supported for checks/upcasts | Missing members and sealed-interface violations are diagnosed. |
 | Inheritance and overrides | Supported | Partially supported | Base classes must be `open`; override diagnostics are implemented. |
 | Default parameter values in G# declarations | Supported | Supported | ADR-0063. Optional parameters carry compile-time-constant defaults; rule violations report `GS0265`. |
-| Method overloading (user functions) | Supported | Supported | ADR-0063. Functions can carry overload sets differing by parameter types or ref-kinds; duplicates report `GS0264`, ambiguous calls report `GS0266`, no-applicable reports `GS0267`. |
+| Method overloading (user functions) | Supported | Supported | ADR-0063 / ADR-0088. Functions can carry overload sets differing by parameter types, ref-kinds, or generic-parameter constraints (`where T : class` / `where T : struct`); duplicates report `GS0264`, ambiguous calls report `GS0266` or `GS0160`, no-applicable reports `GS0267`. |
 | Named delegate types | Supported | Supported | ADR-0059. `type X = delegate func(...)` declares a real CLR `MulticastDelegate`-derived type; diagnostics `GS0233`–`GS0234`. |
 
 ## Statements and control flow

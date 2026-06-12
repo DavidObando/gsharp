@@ -126,90 +126,93 @@ public class SequenceExtensionsTests
         Assert.Equal(new[] { 1, 2 }, seq);
     }
 
-    // ---- FirstOrNil / FirstValueOrNil --------------------------------------
+    // ---- FirstOrNil (class and struct receiver overloads) ------------------
 
     [Fact]
-    public void FirstOrNil_NonEmpty_ReturnsHead()
+    public void FirstOrNil_RefReceiver_NonEmpty_ReturnsHead()
     {
         Assert.Equal("a", new[] { "a", "b" }.FirstOrNil());
     }
 
     [Fact]
-    public void FirstOrNil_Empty_ReturnsNull()
+    public void FirstOrNil_RefReceiver_Empty_ReturnsNull()
     {
         Assert.Null(Sequences.Empty<string>().FirstOrNil());
     }
 
     [Fact]
-    public void FirstValueOrNil_NonEmpty_ReturnsHead()
+    public void FirstOrNil_ValueReceiver_NonEmpty_ReturnsHead()
     {
-        Assert.Equal((int?)11, new[] { 11, 22 }.FirstValueOrNil());
+        // ADR-0088 / issue #750: constraint-aware overload resolution lets
+        // both the `where T : class` and `where T : struct` overloads share
+        // the `FirstOrNil` name; the binder picks the struct overload here.
+        Assert.Equal((int?)11, new[] { 11, 22 }.FirstOrNil());
     }
 
     [Fact]
-    public void FirstValueOrNil_Empty_ReturnsNull()
+    public void FirstOrNil_ValueReceiver_Empty_ReturnsNull()
     {
-        Assert.Null(Sequences.Empty<int>().FirstValueOrNil());
+        Assert.Null(Sequences.Empty<int>().FirstOrNil());
     }
 
     [Fact]
-    public void FirstValueOrNil_OnInfinite_DoesNotEnumerateAll()
+    public void FirstOrNil_ValueReceiver_OnInfinite_DoesNotEnumerateAll()
     {
-        Assert.Equal((int?)1, Sequences.Iterate(1, n => n + 1).FirstValueOrNil());
+        Assert.Equal((int?)1, Sequences.Iterate(1, n => n + 1).FirstOrNil());
     }
 
-    // ---- LastOrNil / LastValueOrNil ----------------------------------------
+    // ---- LastOrNil (class and struct receiver overloads) -------------------
 
     [Fact]
-    public void LastOrNil_NonEmpty_ReturnsTail()
+    public void LastOrNil_RefReceiver_NonEmpty_ReturnsTail()
     {
         Assert.Equal("b", new[] { "a", "b" }.LastOrNil());
     }
 
     [Fact]
-    public void LastOrNil_Empty_ReturnsNull()
+    public void LastOrNil_RefReceiver_Empty_ReturnsNull()
     {
         Assert.Null(Sequences.Empty<string>().LastOrNil());
     }
 
     [Fact]
-    public void LastValueOrNil_NonEmpty_ReturnsTail()
+    public void LastOrNil_ValueReceiver_NonEmpty_ReturnsTail()
     {
-        Assert.Equal((int?)33, new[] { 11, 22, 33 }.LastValueOrNil());
+        Assert.Equal((int?)33, new[] { 11, 22, 33 }.LastOrNil());
     }
 
     [Fact]
-    public void LastValueOrNil_Empty_ReturnsNull()
+    public void LastOrNil_ValueReceiver_Empty_ReturnsNull()
     {
-        Assert.Null(Sequences.Empty<int>().LastValueOrNil());
+        Assert.Null(Sequences.Empty<int>().LastOrNil());
     }
 
-    // ---- SingleOrNil / SingleValueOrNil ------------------------------------
+    // ---- SingleOrNil (class and struct receiver overloads) -----------------
 
     [Fact]
-    public void SingleOrNil_OneElement_Returns()
+    public void SingleOrNil_RefReceiver_OneElement_Returns()
     {
         Assert.Equal("solo", new[] { "solo" }.SingleOrNil());
     }
 
     [Fact]
-    public void SingleOrNil_EmptyOrMany_ReturnsNull()
+    public void SingleOrNil_RefReceiver_EmptyOrMany_ReturnsNull()
     {
         Assert.Null(Sequences.Empty<string>().SingleOrNil());
         Assert.Null(new[] { "a", "b" }.SingleOrNil());
     }
 
     [Fact]
-    public void SingleValueOrNil_OneElement_Returns()
+    public void SingleOrNil_ValueReceiver_OneElement_Returns()
     {
-        Assert.Equal((int?)42, new[] { 42 }.SingleValueOrNil());
+        Assert.Equal((int?)42, new[] { 42 }.SingleOrNil());
     }
 
     [Fact]
-    public void SingleValueOrNil_EmptyOrMany_ReturnsNull()
+    public void SingleOrNil_ValueReceiver_EmptyOrMany_ReturnsNull()
     {
-        Assert.Null(Sequences.Empty<int>().SingleValueOrNil());
-        Assert.Null(new[] { 1, 2 }.SingleValueOrNil());
+        Assert.Null(Sequences.Empty<int>().SingleOrNil());
+        Assert.Null(new[] { 1, 2 }.SingleOrNil());
     }
 
     // ---- ToSlice / ToMap ---------------------------------------------------

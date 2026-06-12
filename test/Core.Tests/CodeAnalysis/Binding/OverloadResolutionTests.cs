@@ -609,6 +609,132 @@ public class OverloadResolutionTests
         Assert.Equal("G_Enumerable[Int32](IEnumerable[Int32])", formatted);
     }
 
+    // ----- Issue #750 / ADR-0088: constraint-aware overload resolution -----
+
+    [Fact]
+    public void Resolve_DropsCandidate_WhenClassConstraintViolatedByValueType()
+    {
+        // ConstraintFixture.OnlyClass<T>(T x) where T : class — calling with an
+        // int argument must NOT bind. The MetadataLoadContext-style path won't
+        // throw from MakeGenericMethod, so the explicit constraint check has
+        // to drop the candidate.
+        var open = typeof(ConstraintFixture).GetMethod(nameof(ConstraintFixture.OnlyClass), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(int) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+    }
+
+    [Fact]
+    public void Resolve_DropsCandidate_WhenStructConstraintViolatedByReferenceType()
+    {
+        var open = typeof(ConstraintFixture).GetMethod(nameof(ConstraintFixture.OnlyStruct), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(string) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+    }
+
+    [Fact]
+    public void Resolve_DropsCandidate_WhenStructConstraintViolatedByNullableValueType()
+    {
+        // `where T : struct` rejects Nullable<T> — int? is not a "non-nullable
+        // value type" per ECMA-335.
+        var open = typeof(ConstraintFixture).GetMethod(nameof(ConstraintFixture.OnlyStruct), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(int?) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+    }
+
+    [Fact]
+    public void Resolve_DropsCandidate_WhenNewConstraintViolated()
+    {
+        // ConstraintFixture.OnlyNew<T>() where T : new() — string has no
+        // public parameterless ctor.
+        var open = typeof(ConstraintFixture).GetMethod(nameof(ConstraintFixture.OnlyNew), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(string) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+    }
+
+    [Fact]
+    public void Resolve_DisjointClassStructOverloads_PicksClassForReferenceType()
+    {
+        // The repro from issue #750: two extensions with identical parameter
+        // shape (modulo the receiver), disjoint class/struct constraints. The
+        // binder must pick the class overload when called with a string.
+        var both = typeof(MapLike)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Where(m => m.Name == nameof(MapLike.Map));
+        var result = OverloadResolution.Resolve(both, new[] { typeof(string), typeof(Func<string, string>) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        // Class overload's T resolves to string; struct overload couldn't infer
+        // T at all from a string receiver.
+        Assert.Equal(typeof(string), result.Best.GetGenericArguments()[0]);
+        Assert.Equal(typeof(MapLike), result.Best.DeclaringType);
+    }
+
+    [Fact]
+    public void Resolve_DisjointClassStructOverloads_PicksStructForNullableValueType()
+    {
+        var both = typeof(MapLike)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Where(m => m.Name == nameof(MapLike.Map));
+        var result = OverloadResolution.Resolve(both, new[] { typeof(int?), typeof(Func<int, int>) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        // Struct overload binds T = int.
+        Assert.Equal(typeof(int), result.Best.GetGenericArguments()[0]);
+    }
+
+    [Fact]
+    public void Resolve_ThreeWayConstraints_PrefersStructOverNone_ForValueArgument()
+    {
+        // class, struct, and no-constraint overloads of the same shape. For a
+        // non-nullable value type the struct overload wins; the unconstrained
+        // overload is dominated by constraint-specificity per ADR-0088.
+        var all = ThreeWayCandidates();
+        var result = OverloadResolution.Resolve(all, new[] { typeof(int) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(typeof(ThreeWayStruct), result.Best.DeclaringType);
+    }
+
+    [Fact]
+    public void Resolve_ThreeWayConstraints_PrefersClassOverNone_ForReferenceArgument()
+    {
+        var all = ThreeWayCandidates();
+        var result = OverloadResolution.Resolve(all, new[] { typeof(string) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(typeof(ThreeWayClass), result.Best.DeclaringType);
+    }
+
+    [Fact]
+    public void Resolve_FallsThroughToUnconstrained_WhenConstrainedCandidatesFail()
+    {
+        // Receiver is Nullable<int> — neither class (because Nullable<T> is a
+        // value type) nor struct (because the struct constraint excludes
+        // Nullable<T>) applies. The unconstrained overload survives and wins.
+        var all = ThreeWayCandidates();
+        var result = OverloadResolution.Resolve(all, new[] { typeof(int?) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(typeof(ThreeWayNone), result.Best.DeclaringType);
+    }
+
+    [Fact]
+    public void Resolve_SameSpecificityOverloads_ReportsAmbiguity()
+    {
+        // Two overloads with identical constraints from disjoint declaring
+        // classes cannot be disambiguated by the new constraint-specificity
+        // tie-break; the existing ambiguity diagnostic fires.
+        var all = new[]
+        {
+            typeof(AmbiguousSameShapeA).GetMethod(nameof(AmbiguousSameShapeA.Take), BindingFlags.Public | BindingFlags.Static),
+            typeof(AmbiguousSameShapeB).GetMethod(nameof(AmbiguousSameShapeB.Take), BindingFlags.Public | BindingFlags.Static),
+        };
+        var result = OverloadResolution.Resolve(all, new[] { typeof(string) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Ambiguous, result.Outcome);
+    }
+
+    private static IEnumerable<MethodInfo> ThreeWayCandidates()
+    {
+        yield return typeof(ThreeWayClass).GetMethod(nameof(ThreeWayClass.Choose), BindingFlags.Public | BindingFlags.Static);
+        yield return typeof(ThreeWayStruct).GetMethod(nameof(ThreeWayStruct.Choose), BindingFlags.Public | BindingFlags.Static);
+        yield return typeof(ThreeWayNone).GetMethod(nameof(ThreeWayNone.Choose), BindingFlags.Public | BindingFlags.Static);
+    }
+
     public static class Fixture
     {
         public static void F_Int(int x) { _ = x; }
@@ -716,5 +842,104 @@ public class OverloadResolutionTests
         public static void Take_IA(IA a) { _ = a; }
 
         public static void Take_IB(IB b) { _ = b; }
+    }
+
+    // ----- Issue #750 / ADR-0088 fixtures -----
+    //
+    // C# does not allow two methods in the same class to differ only by
+    // generic constraint (CS0111 — constraints are not part of the signature).
+    // The fixtures below split candidates across companion classes so the
+    // resolver still sees the same name from multiple sources, mirroring how
+    // the binder enumerates extension methods.
+
+    public static class ConstraintFixture
+    {
+        public static void OnlyClass<T>(T x)
+            where T : class
+        {
+            _ = x;
+        }
+
+        public static void OnlyStruct<T>(T x)
+            where T : struct
+        {
+            _ = x;
+        }
+
+        public static void OnlyNew<T>()
+            where T : new()
+        {
+        }
+    }
+
+    public static class MapLike
+    {
+        // Reference-typed receiver: `T? self` with `where T : class` lowers to
+        // a bare `T` parameter at the IL level (nullable annotation only).
+        public static U Map<T, U>(T self, Func<T, U> f)
+            where T : class
+            where U : class
+        {
+            return self is null ? null : f(self);
+        }
+
+        // Value-typed receiver: `T? self` with `where T : struct` lowers to
+        // a `Nullable<T>` parameter at the IL level. This is the only shape
+        // axis C# can overload on, so today both overloads coexist — but the
+        // G# binder used to drop the constraint check and pick the wrong one
+        // when the receiver type was a Nullable<value-type>.
+        public static U? Map<T, U>(T? self, Func<T, U> f)
+            where T : struct
+            where U : struct
+        {
+            return self.HasValue ? f(self.Value) : default(U?);
+        }
+    }
+
+    public static class ThreeWayClass
+    {
+        public static string Choose<T>(T x)
+            where T : class
+        {
+            _ = x;
+            return "class";
+        }
+    }
+
+    public static class ThreeWayStruct
+    {
+        public static string Choose<T>(T x)
+            where T : struct
+        {
+            _ = x;
+            return "struct";
+        }
+    }
+
+    public static class ThreeWayNone
+    {
+        public static string Choose<T>(T x)
+        {
+            _ = x;
+            return "none";
+        }
+    }
+
+    public static class AmbiguousSameShapeA
+    {
+        public static void Take<T>(T x)
+            where T : class
+        {
+            _ = x;
+        }
+    }
+
+    public static class AmbiguousSameShapeB
+    {
+        public static void Take<T>(T x)
+            where T : class
+        {
+            _ = x;
+        }
     }
 }

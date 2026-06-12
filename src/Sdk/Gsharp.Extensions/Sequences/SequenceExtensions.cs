@@ -17,24 +17,23 @@ namespace Gsharp.Extensions.Sequences;
 ///   <item>Transformers: <see cref="Windowed{T}"/>,
 ///         <see cref="Chunked{T}"/>, <see cref="Indexed{T}"/>,
 ///         <see cref="Pairwise{T}"/>, <see cref="Interleave{T}"/>.</item>
-///   <item>Safe terminals: <see cref="FirstValueOrNil{T}(IEnumerable{T})"/>,
-///         <see cref="LastValueOrNil{T}(IEnumerable{T})"/>,
-///         <see cref="SingleValueOrNil{T}(IEnumerable{T})"/> and their
-///         reference-type-receiver companions
-///         <see cref="FirstOrNil{T}"/> / <see cref="LastOrNil{T}"/> /
-///         <see cref="SingleOrNil{T}"/>.</item>
+///   <item>Safe terminals: <c>FirstOrNil</c>, <c>LastOrNil</c>,
+///         <c>SingleOrNil</c>, each provided in a
+///         <c>where T : class</c> and a <c>where T : struct</c>
+///         overload — both call sites use the same name because
+///         ADR-0088 lets the binder disambiguate by constraint.</item>
 ///   <item>Collectors: <see cref="ToSlice{T}"/>,
 ///         <see cref="ToMap{TKey, TValue}"/>,
 ///         <see cref="ToMap{T, TKey, TValue}"/>.</item>
 /// </list>
 /// </summary>
 /// <remarks>
-/// Per ADR-0084 the safe terminals
-/// (<see cref="FirstValueOrNil{T}"/>/<see cref="LastValueOrNil{T}"/>/<see cref="SingleValueOrNil{T}"/>
-/// and their <c>Ref</c> peers) and <see cref="Indexed{T}"/> are
+/// Per ADR-0084 the safe terminals and <see cref="Indexed{T}"/> are
 /// aggressive-inlined. Iterator-block transformers are not, because
 /// their bodies are compiler-generated state machines the JIT cannot
-/// inline anyway.
+/// inline anyway. Prior to ADR-0088 the value-typed terminals carried
+/// a <c>*Value</c> suffix (<c>FirstValueOrNil</c>, …); that workaround
+/// is gone now that constraint-aware overload resolution is in place.
 /// </remarks>
 public static class SequenceExtensions
 {
@@ -160,33 +159,6 @@ public static class SequenceExtensions
     }
 
     /// <summary>
-    /// Safe first-element terminal (value-type elements): returns the
-    /// first element wrapped in <see cref="Nullable{T}"/>, or
-    /// <see langword="null"/> when the sequence is empty.
-    /// </summary>
-    /// <typeparam name="T">Element type (value type).</typeparam>
-    /// <param name="source">The source sequence.</param>
-    /// <returns>The first element or <see langword="null"/>.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when
-    /// <paramref name="source"/> is <see langword="null"/>.</exception>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static T? FirstValueOrNil<T>(this IEnumerable<T> source)
-        where T : struct
-    {
-        if (source is null)
-        {
-            throw new ArgumentNullException(nameof(source));
-        }
-
-        foreach (var item in source)
-        {
-            return item;
-        }
-
-        return default(T?);
-    }
-
-    /// <summary>
     /// Safe first-element terminal for reference-typed sequences.
     /// Returns the first element, or <see langword="null"/> when empty.
     /// </summary>
@@ -213,32 +185,6 @@ public static class SequenceExtensions
     }
 
     /// <summary>
-    /// Safe last-element terminal (value-type elements).
-    /// </summary>
-    /// <typeparam name="T">Element type (value type).</typeparam>
-    /// <param name="source">The source sequence.</param>
-    /// <returns>The last element or <see langword="null"/>.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when
-    /// <paramref name="source"/> is <see langword="null"/>.</exception>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static T? LastValueOrNil<T>(this IEnumerable<T> source)
-        where T : struct
-    {
-        if (source is null)
-        {
-            throw new ArgumentNullException(nameof(source));
-        }
-
-        T? result = default(T?);
-        foreach (var item in source)
-        {
-            result = item;
-        }
-
-        return result;
-    }
-
-    /// <summary>
     /// Safe last-element terminal for reference-typed sequences.
     /// </summary>
     /// <typeparam name="T">Element type (reference type).</typeparam>
@@ -262,42 +208,6 @@ public static class SequenceExtensions
         }
 
         return result;
-    }
-
-    /// <summary>
-    /// Safe single-element terminal (value-type elements). Returns the
-    /// lone element only when the sequence contains exactly one; empty
-    /// and multi-element inputs both map to <see langword="null"/> by
-    /// design. Callers that want the throwing shape should use the BCL
-    /// <see cref="Enumerable.Single{T}(IEnumerable{T})"/>.
-    /// </summary>
-    /// <typeparam name="T">Element type (value type).</typeparam>
-    /// <param name="source">The source sequence.</param>
-    /// <returns>The lone element or <see langword="null"/>.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when
-    /// <paramref name="source"/> is <see langword="null"/>.</exception>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static T? SingleValueOrNil<T>(this IEnumerable<T> source)
-        where T : struct
-    {
-        if (source is null)
-        {
-            throw new ArgumentNullException(nameof(source));
-        }
-
-        using var enumerator = source.GetEnumerator();
-        if (!enumerator.MoveNext())
-        {
-            return default(T?);
-        }
-
-        var first = enumerator.Current;
-        if (enumerator.MoveNext())
-        {
-            return default(T?);
-        }
-
-        return first;
     }
 
     /// <summary>

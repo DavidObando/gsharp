@@ -87,11 +87,15 @@ func [T]     (self T?) IfPresent(action (T) -> void)
 func [T]     (self T?) Filter(pred (T) -> bool) T?
 ```
 
-Value-typed companions (`T : struct`) carry a `*Value` suffix
-(`MapValue`, `FlatMapValue`, `OrElseValue`, `OrComputeValue`,
-`OrThrowValue`, `IfPresentValue`, `FilterValue`). The suffix is
-the only difference between the two surfaces; see "Language gap
-L1" below for the binder reason.
+Value-typed companions (`T : struct`) share the same names as the
+reference-typed surface. The G# binder honours generic constraints
+during overload resolution (ADR-0088 / issue #750), so `Map`,
+`FlatMap`, `OrElse`, `OrCompute`, `OrThrow`, `IfPresent`, and
+`Filter` each have two overloads with disjoint `where T : class` /
+`where T : struct` constraints. The binder picks the right one
+based on the receiver type. Prior to ADR-0088 the value-typed
+overloads carried a `*Value` suffix as a workaround for the gap;
+that suffix is gone.
 
 ### Surface — `Gsharp.Extensions.Sequences`
 
@@ -119,12 +123,9 @@ func [T] (self sequence[T]) Interleave(other sequence[T]) sequence[T]
 Safe terminals:
 
 ```
-func [T] (self sequence[T]) FirstOrNil() T?       // T : class
-func [T] (self sequence[T]) LastOrNil() T?        // T : class
-func [T] (self sequence[T]) SingleOrNil() T?      // T : class
-func [T] (self sequence[T]) FirstValueOrNil() T?  // T : struct
-func [T] (self sequence[T]) LastValueOrNil() T?   // T : struct
-func [T] (self sequence[T]) SingleValueOrNil() T? // T : struct
+func [T] (self sequence[T]) FirstOrNil() T?       // T : class | T : struct
+func [T] (self sequence[T]) LastOrNil() T?        // T : class | T : struct
+func [T] (self sequence[T]) SingleOrNil() T?      // T : class | T : struct
 ```
 
 G#-shaped collectors:
@@ -196,16 +197,14 @@ hatch under `src/Sdk/Gsharp.Extensions/*.cs` works today.
 
 - **L1. Constraint-aware extension-method overload resolution.**
   ([issue #750](https://github.com/DavidObando/gsharp/issues/750))
-  The G# binder enumerates extension candidates by name and arity
-  alone; CLR-level `where T : class` / `where T : struct`
-  constraints are not consulted. When two extensions share a name
-  but differ only in their generic constraints, the binder may
-  pick the wrong overload and emit IL that fails verification at
-  runtime. Workaround in this ADR: value-typed `Optional` and
-  `Sequences` helpers carry a `*Value` suffix
-  (`MapValue`, `OrElseValue`, `FirstValueOrNil`, …) so the binder
-  never has to disambiguate. Closing this gap will let the two
-  surfaces collapse to a single name set in a follow-up PR.
+  **Closed by ADR-0088.** The G# binder now reads each candidate's
+  generic-parameter constraints (`where T : class`, `where T :
+  struct`, `where T : new()`, base / interface bounds) and rejects
+  candidates whose constraints are violated by the inferred type
+  arguments. Surviving candidates are tie-broken by a specificity
+  rule (`struct` > `class` > no constraint). This let the value-
+  typed `Optional` and `Sequences` helpers collapse to the single-
+  name surface listed above.
 - **L2. Receiver clauses on generic / nullable receiver types.**
   ([issue #751](https://github.com/DavidObando/gsharp/issues/751))
   `LooksLikeReceiverClause()` in the parser only accepts an
@@ -220,7 +219,7 @@ hatch under `src/Sdk/Gsharp.Extensions/*.cs` works today.
   emitter cannot lower the Elvis operator when the receiver is a
   nullable struct (`Nullable<T>`) — the `dup; brtrue` pattern it
   uses is invalid IL for boxed value-type stack slots. The
-  `OrElseValue` / `OrComputeValue` helpers exist partly to give
+  `OrElse` / `OrCompute` helpers exist partly to give
   callers a safe surface today; `?:` over nullable value types is
   tracked separately.
 
@@ -241,17 +240,15 @@ of that migration, not left behind as dead code.
   in the tour and the standard-library reference.
 - **Positive — dogfooding pressure.** Shipping a real assembly
   meant to be authored in G# creates direct compiler pressure to
-  close L1 / L2 / L3. Each gap is now a tracked issue with a
-  concrete callsite waiting on its fix.
+  close L2 / L3 (L1 closed by ADR-0088). Each remaining gap is now
+  a tracked issue with a concrete callsite waiting on its fix.
 - **Positive — zero-friction adoption.** Because the assembly is
   bundled with the SDK and imports are explicit but trivial
   (`import Gsharp.Extensions.Optional`), the cost to a sample or
   user project is one line per namespace.
-- **Negative — duplicated names while L1 is open.** Reference-
-  typed and value-typed helpers carry different names. We have
-  accepted this as the smaller cost than shipping a binder gap
-  workaround in the compiler, but it is a documented wart, not a
-  long-term design.
+- **Neutral — single-name surface after ADR-0088.** Reference- and
+  value-typed helpers now share one name set; the temporary
+  duplication accepted in this ADR (the original L1 wart) is gone.
 - **Neutral — assembly size.** The helpers are tiny (≈25 KB
   total) and AggressiveInlining is applied to the genuinely-hot
   paths only; no shipping-size regression is observable.

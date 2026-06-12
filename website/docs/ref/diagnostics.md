@@ -117,7 +117,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0157 | Error | Cannot find type (possibly missing import). | A package-qualified type name that resolves to nothing. |
 | GS0158 | Error | Cannot find member. | A field or property access that does not resolve. |
 | GS0159 | Error | Cannot find function. | A package-qualified function name that resolves to nothing. |
-| GS0160 | Error | Ambiguous overload. | A call that matches more than one overload equally well. |
+| GS0160 | Error | Ambiguous overload. | A call that matches more than one overload equally well. Generic candidates are filtered against their `where`-constraints (ADR-0088); the constraint-disjoint case usually resolves to one candidate, but two candidates with mutually-incomparable constraint specificity remain ambiguous and report this code. |
 | GS0161 | Error | `copy`/`with` receiver is not a `data struct`. | `.copy(…)` used on a plain `struct`. |
 | GS0162 | Error | Named arguments only supported for `data struct` `.copy(…)`. | Named arguments passed to a regular function. |
 | GS0163 | Error | Deconstruction field count mismatch. | `let (a, b) = p` where `p` is a `data struct` with three fields. |

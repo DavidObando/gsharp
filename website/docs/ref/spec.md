@@ -384,6 +384,16 @@ A function declared `func f(...) ref T` returns a managed pointer and pairs with
 
 A `;` in place of the `Block` body marks the declaration as "no managed body". Per ADR-0086, the body-less form is reserved for functions annotated with `@DllImport("libname", ...)` — see [Native interop (P/Invoke)](#native-interop-pinvoke). An unannotated `;` body is rejected with `GS0325`.
 
+#### Overload resolution and generic constraints
+
+The binder picks a callee in three steps: (1) collect every name- and arity-compatible candidate (instance methods, extension methods with a matching receiver type, and free functions); (2) filter to the **applicable** subset whose parameter types accept the supplied arguments after standard conversions; (3) rank the applicable set and pick the unique most-specific candidate, otherwise report `GS0160` (ambiguous overload).
+
+For generic candidates the filter step additionally validates the inferred (or explicitly supplied) type arguments against each generic parameter's CLR constraints — `where T : class`, `where T : struct`, `where T : new()`, and base / interface bounds. A candidate whose constraints are violated by the inferred type arguments is dropped before ranking. Constraints are checked **after** type inference: the type arguments inference picked are what the check sees. (See ADR-0088.)
+
+When multiple candidates survive parameter-shape ranking, the binder applies a final tie-break that prefers the candidate with the more specific generic-parameter constraints. The per-parameter ordering is `where T : struct` > `where T : class` > (no constraint); a candidate dominates another iff every type-parameter slot's score is greater-or-equal and at least one is strictly greater. Mutually-incomparable candidates remain ambiguous and report `GS0160`.
+
+This rule lets `Gsharp.Extensions.Optional.Map` carry two overloads — `where T : class` and `where T : struct` — under one name, with the binder picking the right one based on the receiver type.
+
 ### Type declarations
 
 ```ebnf
