@@ -201,8 +201,32 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>Gets or sets the receiver type for an extension function (Phase 3.B.6). <c>null</c> when <see cref="IsExtension"/> is false.</summary>
     public TypeSymbol ExtensionReceiverType { get; set; }
 
+#pragma warning disable SA1201
+    private ImmutableArray<TypeParameterSymbol> typeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
+#pragma warning restore SA1201
+
     /// <summary>Gets or sets the generic type parameters declared on this function (Phase 4.1 / ADR-0020). Empty for non-generic functions.</summary>
-    public ImmutableArray<TypeParameterSymbol> TypeParameters { get; set; } = ImmutableArray<TypeParameterSymbol>.Empty;
+    /// <remarks>
+    /// ADR-0087 §3 R2: setting this collection flips each parameter's
+    /// <see cref="TypeParameterSymbol.IsMethodTypeParameter"/> flag so the
+    /// emitter encodes references as <c>MVAR(idx)</c> instead of
+    /// <c>VAR(idx)</c> in signature blobs.
+    /// </remarks>
+    public ImmutableArray<TypeParameterSymbol> TypeParameters
+    {
+        get => typeParameters;
+        set
+        {
+            typeParameters = value;
+            if (!value.IsDefaultOrEmpty)
+            {
+                foreach (var tp in value)
+                {
+                    tp.IsMethodTypeParameter = true;
+                }
+            }
+        }
+    }
 
     /// <summary>Gets a value indicating whether this function declares one or more type parameters (Phase 4.1).</summary>
     public bool IsGeneric => !TypeParameters.IsDefaultOrEmpty;

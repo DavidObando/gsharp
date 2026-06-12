@@ -43,7 +43,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Events | Supported | Supported | G# and CLR event subscription paths exist. |
 | Static/shared members | Supported | Supported | Declared in a `shared { ... }` block. |
 | Function types, literals, closures | Supported | Supported | Delegate conversions are strongest on the emit path. |
-| Generics and method inference | Supported | Supported for binding/evaluation | Metadata specs plus type-erased handling for open type-parameter-containing shapes. |
+| Generics and method inference | Supported | Supported for binding/evaluation | Metadata specs plus type-erased handling for open type-parameter-containing shapes (audited and staged for elimination in [ADR-0087](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0087-reified-generics-emit-audit.md); supersedes #484). |
 | Variance and constraints | Supported semantically | Supported semantically | Diagnostics include `GS0150` through `GS0153`. |
 | By-ref and pointers | Partial | Limited/not supported | `&` / `*` / `*T` for CLR `ref`/`out`/`in` interop (ADR-0039); ref returns auto-dereference in rvalue position (ADR-0056 §1). Evaluator rejects generic address/deref execution. |
 | `ref`/`out`/`in` parameters | Supported | Supported | Declaration-site and call-site modifiers per ADR-0060; diagnostics `GS0235`–`GS0243`. Includes `out var/let/_` inline declarations. |

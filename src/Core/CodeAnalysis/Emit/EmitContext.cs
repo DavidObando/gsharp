@@ -4,6 +4,7 @@
 
 using System;
 using System.IO;
+using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -66,6 +67,7 @@ internal sealed class EmitContext
         this.IlStream = new BlobBuilder();
         this.MethodBodyStream = new MethodBodyStreamEncoder(this.IlStream);
         this.DebugInformation = new DebugInformationOptions();
+        this.PendingGenericParameters = new System.Collections.Generic.List<PendingGenericParameter>();
     }
 
     /// <summary>
@@ -99,6 +101,15 @@ internal sealed class EmitContext
     /// tables for this emit.
     /// </summary>
     public MetadataBuilder Metadata { get; }
+
+    /// <summary>
+    /// Gets the deferred buffer of <c>GenericParam</c> rows. ECMA-335 II.22.20
+    /// requires this table sorted by (Owner, Number). Because TypeDefs and
+    /// MethodDefs are emitted in different visit orders, we cannot AddGenericParameter
+    /// inline without violating the sort invariant. ADR-0087 §3 R1: deferred,
+    /// then flushed in sorted order before PE serialisation.
+    /// </summary>
+    public System.Collections.Generic.List<PendingGenericParameter> PendingGenericParameters { get; }
 
     /// <summary>
     /// Gets the IL byte stream into which method-body encoders write.

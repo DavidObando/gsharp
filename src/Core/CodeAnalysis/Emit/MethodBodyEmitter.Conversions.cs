@@ -228,6 +228,21 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // ADR-0087 §3 R4: after R2 a value of `T` lives in a real type slot
+        // (VAR/MVAR), not an erased `object`. Where the binder still emits a
+        // BoundConversionExpression bridging `T → object` (e.g. passing a
+        // generic value to a non-reified delegate parameter still bound as
+        // `object`), emit `box T` so the JIT materialises the value-or-
+        // reference boxed slot. The JIT elides the box when T resolves to a
+        // reference type at runtime, so no perf regression.
+        if (from is TypeParameterSymbol fromTp
+            && (to?.ClrType == typeof(object) || IsInterfaceTargetType(to)))
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(fromTp));
+            return;
+        }
+
         // ADR-0045 explicit unbox: `(T)objectValue` for a value type T.
         // Issue #421 P2-5: also fire when the source is an interface
         // reference (user-declared `InterfaceSymbol` or any CLR
@@ -280,10 +295,27 @@ internal sealed partial class MethodBodyEmitter
             || expectedType == null
             || expectedType == TypeSymbol.Void
             || expectedType == TypeSymbol.Error
-            || expectedType is TypeParameterSymbol
-            || TypeSymbol.ContainsTypeParameter(expectedType)
             || expectedType?.ClrType == typeof(object))
         {
+            return;
+        }
+
+        // ADR-0087 §3 R4: when the source is `object` (erased return from a
+        // non-reified call site, e.g. IList::get_Item) and the target is a
+        // type parameter or a generic-instantiation containing one, emit
+        // `unbox.any T` (or `unbox.any List<!!0>` etc.). The JIT picks the
+        // value-vs-reference shape from the instantiated `T` at call time.
+        if (expectedType is TypeParameterSymbol expectedTp)
+        {
+            this.il.OpCode(ILOpCode.Unbox_any);
+            this.il.Token(this.outer.GetElementTypeToken(expectedTp));
+            return;
+        }
+
+        if (TypeSymbol.ContainsTypeParameter(expectedType))
+        {
+            this.il.OpCode(ILOpCode.Unbox_any);
+            this.il.Token(this.outer.GetElementTypeToken(expectedType));
             return;
         }
 

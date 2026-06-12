@@ -38,4 +38,18 @@ public sealed class TypeParameterSymbol : TypeSymbol
 
     /// <summary>Gets the sealed-interface constraint, if any (Phase 4.2b / ADR-0020). When non-<c>null</c>, type arguments must implement this interface.</summary>
     public InterfaceSymbol InterfaceConstraint { get; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this type parameter is declared
+    /// on a generic method (as opposed to a generic type). When
+    /// <see langword="true"/> the emitter encodes it as
+    /// <c>MVAR(<see cref="Ordinal"/>)</c>; when <see langword="false"/> as
+    /// <c>VAR(<see cref="Ordinal"/>)</c> (ADR-0087 §3, R2).
+    /// </summary>
+    /// <remarks>
+    /// Set by the binder when the type parameter is attached to a
+    /// <c>FunctionSymbol</c>. Type-type parameters keep the default
+    /// <see langword="false"/>.
+    /// </remarks>
+    public bool IsMethodTypeParameter { get; set; }
 }

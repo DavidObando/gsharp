@@ -61,6 +61,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0021](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0021-generic-variance.md) | Generic variance modifiers — `in` / `out` on interface type parameters | Adds variance markers for interface type parameters. |
 | [0038](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0038-generic-method-inference.md) | Type-argument inference for imported open generic methods | Defines inference for imported generic method calls and associated emit fixes. |
 | [0050](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0050-trailing-arrow-lambda.md) | `->` arrow trailing-lambda syntax | Proposed shorthand for trailing lambdas; not part of the current implemented grammar. |
+| [0087](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0087-reified-generics-emit-audit.md) | Reified-generics emit — open-shape erasure audit, staged elimination plan, and v1 disposition | Implementation-status addendum to ADR-0004. Catalogues every open-generic erasure site (53 across 14 source files), specifies the target CLR metadata (`TypeDef`+`GenericParam`, `TypeSpec`/`MethodSpec`, `Var`/`MVar` encoding), stages the elimination R1–R7, and pins the v1 disposition. Supersedes issue #484. |
 
 ## Error handling and control flow
 

@@ -131,20 +131,6 @@ internal sealed partial class MethodBodyEmitter
                 {
                     var arg = call.Arguments[i];
                     this.EmitExpression(arg);
-
-                    // Phase 4 emit parity (F1, type-erased generics):
-                    // a parameter typed as an open T receives System.Object
-                    // in the emitted signature. Value-type arguments must
-                    // be boxed at the call boundary so the call's stack
-                    // shape matches the signature.
-                    if (i < call.Function.Parameters.Length
-                        && call.Function.Parameters[i].Type is TypeParameterSymbol
-                        && arg.Type is not TypeParameterSymbol
-                        && ReflectionMetadataEmitter.IsValueTypeSymbol(arg.Type))
-                    {
-                        this.il.OpCode(ILOpCode.Box);
-                        this.il.Token(this.outer.GetElementTypeToken(arg.Type));
-                    }
                 }
 
                 if (!this.outer.cache.FunctionHandles.TryGetValue(call.Function, out var fnHandle)
@@ -154,10 +140,25 @@ internal sealed partial class MethodBodyEmitter
                         $"Call to function '{call.Function.Name}' has no emitted MethodDef.");
                 }
 
-                this.il.Call(fnHandle);
+                // ADR-0087 §3 R3+R4: when the target is a generic function,
+                // every call must reference it via a MethodSpec carrying
+                // the substituted type arguments — bare MethodDef tokens
+                // would carry MVAR slots and fail ilverify against the
+                // concrete argument types.
+                EntityHandle callTokenToEmit = fnHandle;
+                if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
+                {
+                    callTokenToEmit = this.outer.BuildMethodSpecForGenericCall(fnHandle, call);
+                }
 
-                this.EmitErasedObjectReturnWidening(call.Function.Type, call.Type);
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(callTokenToEmit);
 
+                // ADR-0087 §3 R3+R4: after R2/R3, every G# call (MethodSpec'd
+                // or plain MethodDef) returns the method's reified signature.
+                // No erasure-widening is required at the call boundary; the
+                // surrounding code path (assignment, return, argument
+                // conversion) handles any further coercion.
                 break;
             case BoundImportedCallExpression impCall:
                 this.EmitImportedCallArguments(impCall.Arguments, impCall.ArgumentRefKinds);
@@ -742,16 +743,28 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitStructLiteral(BoundStructLiteralExpression literal)
     {
-        if (!this.outer.cache.StructTypeDefs.TryGetValue(literal.StructType, out var typeDef))
-        {
-            throw new InvalidOperationException(
-                $"Struct '{literal.StructType.Name}' has no emitted TypeDef.");
-        }
+        // ADR-0087 §3 R3+R4: when the literal target is a user-defined
+        // generic type, every body reference (initobj/newobj/stfld) must
+        // be routed through a TypeSpec-parented MemberRef. The box bridge
+        // that R0/R1 erasure required (`box T` before stfld) is dropped:
+        // the field's signature is VAR(idx) and resolves to the correct
+        // concrete type at the construction site.
+        var typeDef = this.outer.ResolveUserTypeToken(literal.StructType);
+        bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(literal.StructType);
 
         // Class literal: newobj <ctor>; (dup; <value>; stfld) per init.
         if (literal.StructType.IsClass)
         {
-            if (!this.outer.cache.ClassCtorHandles.TryGetValue(literal.StructType, out var ctorHandle))
+            EntityHandle ctorHandle;
+            if (isGeneric)
+            {
+                ctorHandle = this.outer.ResolveUserCtorTokenForDefault(literal.StructType);
+            }
+            else if (this.outer.cache.ClassCtorHandles.TryGetValue(literal.StructType, out var ctorDef))
+            {
+                ctorHandle = ctorDef;
+            }
+            else
             {
                 throw new InvalidOperationException(
                     $"Class '{literal.StructType.Name}' has no emitted default ctor.");
@@ -760,10 +773,18 @@ internal sealed partial class MethodBodyEmitter
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(ctorHandle);
 
-            var classDef = literal.StructType.Definition ?? literal.StructType;
             foreach (var init in literal.Initializers)
             {
-                if (!this.outer.cache.StructFieldDefs.TryGetValue(init.Field, out var fieldHandle))
+                EntityHandle fieldHandle;
+                if (isGeneric)
+                {
+                    fieldHandle = this.outer.ResolveFieldToken(literal.StructType, init.Field);
+                }
+                else if (this.outer.cache.StructFieldDefs.TryGetValue(init.Field, out var defHandle))
+                {
+                    fieldHandle = defHandle;
+                }
+                else
                 {
                     throw new InvalidOperationException(
                         $"Class field '{init.Field.Name}' has no emitted FieldDef.");
@@ -771,33 +792,6 @@ internal sealed partial class MethodBodyEmitter
 
                 this.il.OpCode(ILOpCode.Dup);
                 this.EmitExpression(init.Value);
-
-                // Phase 4 emit parity (F2, type-erased): box when the
-                // definition's field is open (T) and the assigned value
-                // is a value type. Same boundary semantics as the
-                // primary-ctor and call-site box passes.
-                if (classDef != literal.StructType)
-                {
-                    FieldSymbol df = null;
-                    foreach (var f in classDef.Fields)
-                    {
-                        if (f.Name == init.Field.Name)
-                        {
-                            df = f;
-                            break;
-                        }
-                    }
-
-                    if (df != null
-                        && df.Type is TypeParameterSymbol
-                        && init.Value.Type is not TypeParameterSymbol
-                        && ReflectionMetadataEmitter.IsValueTypeSymbol(init.Value.Type))
-                    {
-                        this.il.OpCode(ILOpCode.Box);
-                        this.il.Token(this.outer.GetElementTypeToken(init.Value.Type));
-                    }
-                }
-
                 this.il.OpCode(ILOpCode.Stfld);
                 this.il.Token(fieldHandle);
             }
@@ -819,10 +813,18 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(typeDef);
 
         // For each initializer: ldloca slot; <emit value>; stfld fieldHandle.
-        var structDef = literal.StructType.Definition ?? literal.StructType;
         foreach (var init in literal.Initializers)
         {
-            if (!this.outer.cache.StructFieldDefs.TryGetValue(init.Field, out var fieldHandle))
+            EntityHandle fieldHandle;
+            if (isGeneric)
+            {
+                fieldHandle = this.outer.ResolveFieldToken(literal.StructType, init.Field);
+            }
+            else if (this.outer.cache.StructFieldDefs.TryGetValue(init.Field, out var defHandle))
+            {
+                fieldHandle = defHandle;
+            }
+            else
             {
                 throw new InvalidOperationException(
                     $"Struct field '{init.Field.Name}' has no emitted FieldDef.");
@@ -830,29 +832,6 @@ internal sealed partial class MethodBodyEmitter
 
             this.il.LoadLocalAddress(slot);
             this.EmitExpression(init.Value);
-
-            if (structDef != literal.StructType)
-            {
-                FieldSymbol df = null;
-                foreach (var f in structDef.Fields)
-                {
-                    if (f.Name == init.Field.Name)
-                    {
-                        df = f;
-                        break;
-                    }
-                }
-
-                if (df != null
-                    && df.Type is TypeParameterSymbol
-                    && init.Value.Type is not TypeParameterSymbol
-                    && ReflectionMetadataEmitter.IsValueTypeSymbol(init.Value.Type))
-                {
-                    this.il.OpCode(ILOpCode.Box);
-                    this.il.Token(this.outer.GetElementTypeToken(init.Value.Type));
-                }
-            }
-
             this.il.OpCode(ILOpCode.Stfld);
             this.il.Token(fieldHandle);
         }

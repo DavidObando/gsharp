@@ -378,14 +378,21 @@ internal sealed class TypeDefEmitter
             baseType = this.wellKnown.ValueTypeRef;
         }
 
+        // ADR-0087 §3 R1: a generic user type's TypeDef name is mangled with
+        // backtick-arity per ECMA-335 II.10.3.1 (`Box` becomes `Box`1`) and one
+        // GenericParam row is emitted per type parameter immediately after
+        // AddTypeDefinition. Type-erased non-generic structs keep the unmangled
+        // name and have no GenericParam rows.
+        var typeDefName = MangleGenericName(structSym.Name, structSym.TypeParameters);
         var handle2 = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
             @namespace: this.emitCtx.Metadata.GetOrAddString(structSym.PackageName ?? string.Empty),
-            name: this.emitCtx.Metadata.GetOrAddString(structSym.Name),
+            name: this.emitCtx.Metadata.GetOrAddString(typeDefName),
             baseType: baseType,
             fieldList: firstField,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
         this.cache.StructTypeDefs[structSym] = handle2;
+        EmitGenericParamRows(this.emitCtx, handle2, structSym.TypeParameters);
         if (structSym.IsInline)
         {
             this.EmitIsReadOnlyAttribute(handle2);
@@ -603,14 +610,16 @@ internal sealed class TypeDefEmitter
         var typeAttrs = TypeAttributes.Interface | TypeAttributes.Abstract
             | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
             | AccessibilityMap.MapTypeAccessibility(ifaceSym.Accessibility);
+        var typeDefName = MangleGenericName(ifaceSym.Name, ifaceSym.TypeParameters);
         var handle = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
             @namespace: this.emitCtx.Metadata.GetOrAddString(ifaceSym.PackageName ?? string.Empty),
-            name: this.emitCtx.Metadata.GetOrAddString(ifaceSym.Name),
+            name: this.emitCtx.Metadata.GetOrAddString(typeDefName),
             baseType: default(EntityHandle),
             fieldList: MetadataTokens.FieldDefinitionHandle(firstFieldRow),
             methodList: MetadataTokens.MethodDefinitionHandle(firstMethodRow));
         this.cache.InterfaceTypeDefs[ifaceSym] = handle;
+        EmitGenericParamRows(this.emitCtx, handle, ifaceSym.TypeParameters);
 
         // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
         this.emitUserAttributes(handle, ifaceSym, AttributeTargetKind.Type);
@@ -904,7 +913,13 @@ internal sealed class TypeDefEmitter
             // delegate to the body-emitter callback so expressions are evaluated
             // and stored into fields after the base ctor call and primary ctor
             // parameter assignments.
-            if (!classSym.InstanceFieldInitializers.IsEmpty)
+            // ADR-0087 §3 R3: also delegate to the callback for generic
+            // user classes so the param→field stfld is routed through a
+            // TypeSpec-parented MemberRef (the callback uses
+            // ResolveFieldToken; the inline path below uses bare
+            // FieldDefs which fail ilverify on a self-instantiation).
+            if (!classSym.InstanceFieldInitializers.IsEmpty
+                || ReflectionMetadataEmitter.IsUserGenericTypeReference(classSym))
             {
                 bodyOffset = this.emitClassPrimaryConstructorBodyBytes(classSym, baseCtorToken);
             }
@@ -1309,5 +1324,119 @@ internal sealed class TypeDefEmitter
             parent: typeHandle,
             constructor: obsoleteCtorRef,
             value: this.emitCtx.Metadata.GetOrAddBlob(obsoleteBlob));
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R1: emits one <c>GenericParam</c> row per supplied
+    /// type parameter, in source order, owned by <paramref name="owner"/>
+    /// (which may be a <see cref="TypeDefinitionHandle"/> for a generic
+    /// type or a <see cref="MethodDefinitionHandle"/> for a generic method).
+    /// </summary>
+    /// <param name="emitCtx">The emit context whose pending-generic-parameter buffer the rows are queued into.</param>
+    /// <param name="owner">The owning TypeDef or MethodDef handle.</param>
+    /// <param name="typeParameters">The type parameters to emit.</param>
+    /// <remarks>
+    /// The rows are queued — not added inline — because ECMA-335 II.22.20 requires
+    /// the <c>GenericParam</c> table sorted by (Owner, Number). Because TypeDefs
+    /// and MethodDefs are emitted in interleaved visit orders, inline emission
+    /// is guaranteed to violate the sort invariant on multi-generic samples.
+    /// <see cref="FlushPendingGenericParameters"/> sorts and adds them at the end.
+    /// </remarks>
+    internal static void EmitGenericParamRows(
+        EmitContext emitCtx,
+        EntityHandle owner,
+        ImmutableArray<TypeParameterSymbol> typeParameters)
+    {
+        if (typeParameters.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        for (var i = 0; i < typeParameters.Length; i++)
+        {
+            var tp = typeParameters[i];
+            var attrs = GenericParameterAttributes.None;
+            if (tp.Variance == TypeParameterVariance.In)
+            {
+                attrs |= GenericParameterAttributes.Contravariant;
+            }
+            else if (tp.Variance == TypeParameterVariance.Out)
+            {
+                attrs |= GenericParameterAttributes.Covariant;
+            }
+
+            emitCtx.PendingGenericParameters.Add(new PendingGenericParameter(
+                Owner: owner,
+                Attributes: attrs,
+                Name: tp.Name,
+                Index: (ushort)i));
+        }
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R1: flushes deferred <c>GenericParam</c> rows in
+    /// (Owner-coded-index, Number) order. The TypeOrMethodDef coded index
+    /// uses bit 0 as tag (0=TypeDef, 1=MethodDef); the upper bits are the row id.
+    /// </summary>
+    /// <param name="emitCtx">The emit context whose pending rows are flushed.</param>
+    internal static void FlushPendingGenericParameters(EmitContext emitCtx)
+    {
+        var pending = emitCtx.PendingGenericParameters;
+        if (pending.Count == 0)
+        {
+            return;
+        }
+
+        pending.Sort((a, b) =>
+        {
+            int ka = EncodeTypeOrMethodDefCodedIndex(a.Owner);
+            int kb = EncodeTypeOrMethodDefCodedIndex(b.Owner);
+            if (ka != kb)
+            {
+                return ka.CompareTo(kb);
+            }
+
+            return a.Index.CompareTo(b.Index);
+        });
+
+        var metadata = emitCtx.Metadata;
+        for (int i = 0; i < pending.Count; i++)
+        {
+            var row = pending[i];
+            metadata.AddGenericParameter(
+                parent: row.Owner,
+                attributes: row.Attributes,
+                name: metadata.GetOrAddString(row.Name),
+                index: row.Index);
+        }
+
+        pending.Clear();
+    }
+
+    private static int EncodeTypeOrMethodDefCodedIndex(EntityHandle owner)
+    {
+        // ECMA-335 II.24.2.6: TypeOrMethodDef coded index uses tag bit 0.
+        // TypeDef tag = 0, MethodDef tag = 1.
+        int rowId = MetadataTokens.GetRowNumber(owner);
+        int tag = owner.Kind == HandleKind.TypeDefinition ? 0 : 1;
+        return (rowId << 1) | tag;
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R1: per ECMA-335 II.10.3.1 a generic TypeDef's name carries
+    /// the backtick-arity suffix so reflection round-trips <c>Box</c> as
+    /// <c>Box`1</c>. Non-generic types keep their bare name.
+    /// </summary>
+    /// <param name="name">The unmangled symbol name (e.g. <c>Box</c>).</param>
+    /// <param name="typeParameters">The type parameters declared on the type.</param>
+    /// <returns>The mangled metadata name (e.g. <c>Box`1</c>) or <paramref name="name"/> when the type is non-generic.</returns>
+    internal static string MangleGenericName(string name, ImmutableArray<TypeParameterSymbol> typeParameters)
+    {
+        if (typeParameters.IsDefaultOrEmpty)
+        {
+            return name;
+        }
+
+        return name + "`" + typeParameters.Length.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 }

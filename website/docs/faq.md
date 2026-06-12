@@ -59,7 +59,7 @@ This is a recent change — earlier docs described G# as having no parameter def
 
 ## How do generics work?
 
-G# supports generic functions and types with Go-style square brackets, such as `func Id[T any](x T) T` and `Box[int32]`. The implementation supports CLR generic metadata and inference, while some open or partially constructed shapes are handled under the repository's type-erased model in emit paths. Variance markers `in` and `out` are available where the CLR supports them, especially interfaces. See [ADR-0004](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0004-generics-scope.md), [ADR-0020](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0020-generic-brackets.md), and [ADR-0021](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0021-generic-variance.md).
+G# supports generic functions and types with Go-style square brackets, such as `func Id[T any](x T) T` and `Box[int32]`. The implementation supports CLR generic metadata and inference, while some open or partially constructed shapes are handled under the repository's type-erased model in emit paths (audited and staged for elimination in [ADR-0087](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0087-reified-generics-emit-audit.md)). Variance markers `in` and `out` are available where the CLR supports them, especially interfaces. See [ADR-0004](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0004-generics-scope.md), [ADR-0020](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0020-generic-brackets.md), and [ADR-0021](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0021-generic-variance.md).
 
 ## What is the difference between structs, classes, data structs, inline value classes, and records?
 

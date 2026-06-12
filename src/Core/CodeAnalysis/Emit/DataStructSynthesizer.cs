@@ -93,6 +93,9 @@ internal sealed class DataStructSynthesizer
     private readonly Func<TypeSymbol, EntityHandle> getElementTypeToken;
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
     private readonly Func<ParameterHandle> nextParameterHandle;
+    private readonly Func<StructSymbol, EntityHandle> resolveUserTypeToken;
+    private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken;
+    private readonly Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef;
 
     // Per-emit standalone signature cache for the >8-field GetHashCode fold
     // path's local. Mirrors the pre-refactor field on
@@ -108,7 +111,10 @@ internal sealed class DataStructSynthesizer
         Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol,
         Func<TypeSymbol, EntityHandle> getElementTypeToken,
         Func<Type, TypeReferenceHandle> getTypeReference,
-        Func<ParameterHandle> nextParameterHandle)
+        Func<ParameterHandle> nextParameterHandle,
+        Func<StructSymbol, EntityHandle> resolveUserTypeToken,
+        Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken,
+        Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -118,13 +124,16 @@ internal sealed class DataStructSynthesizer
         this.getElementTypeToken = getElementTypeToken ?? throw new ArgumentNullException(nameof(getElementTypeToken));
         this.getTypeReference = getTypeReference ?? throw new ArgumentNullException(nameof(getTypeReference));
         this.nextParameterHandle = nextParameterHandle ?? throw new ArgumentNullException(nameof(nextParameterHandle));
+        this.resolveUserTypeToken = resolveUserTypeToken ?? throw new ArgumentNullException(nameof(resolveUserTypeToken));
+        this.resolveUserFieldToken = resolveUserFieldToken ?? throw new ArgumentNullException(nameof(resolveUserFieldToken));
+        this.resolveUserMethodRef = resolveUserMethodRef ?? throw new ArgumentNullException(nameof(resolveUserMethodRef));
     }
 
     public void EmitInlineStructSynthesizedMembers(StructSymbol structSym)
     {
         var field = structSym.Fields[0];
-        var fieldHandle = this.cache.StructFieldDefs[field];
-        var typeDef = this.cache.StructTypeDefs[structSym];
+        var fieldHandle = this.resolveUserFieldToken(structSym, field);
+        var typeDef = this.resolveUserTypeToken(structSym);
         this.cache.ClassPrimaryCtorHandles[structSym] = this.EmitInlineStructConstructor(structSym, field, fieldHandle);
         this.EmitInlineEqualsObject(structSym, field, fieldHandle, typeDef);
         this.EmitInlineEqualsTyped(structSym, field, fieldHandle);
@@ -135,7 +144,7 @@ internal sealed class DataStructSynthesizer
         this.EmitInlineDeconstruct(structSym, field, fieldHandle);
     }
 
-    private MethodDefinitionHandle EmitInlineStructConstructor(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
+    private MethodDefinitionHandle EmitInlineStructConstructor(StructSymbol structSym, FieldSymbol field, EntityHandle fieldHandle)
     {
         int bodyOffset = -1;
         if (!this.emitCtx.MetadataOnly)
@@ -170,7 +179,7 @@ internal sealed class DataStructSynthesizer
         return this.emitCtx.MetadataOnly ? -1 : this.emitCtx.MethodBodyStream.AddMethodBody(il);
     }
 
-    private void EmitInlineEqualsObject(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle, TypeDefinitionHandle typeDef)
+    private void EmitInlineEqualsObject(StructSymbol structSym, FieldSymbol field, EntityHandle fieldHandle, EntityHandle typeDef)
     {
         // Issue #420 (P3-10): the IL below uses `unbox` to obtain a managed pointer
         // to the inline struct's field after `isinst`. `unbox` is only legal on
@@ -216,7 +225,7 @@ internal sealed class DataStructSynthesizer
         this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("Equals"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.nextParameterHandle());
     }
 
-    private void EmitInlineEqualsTyped(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
+    private void EmitInlineEqualsTyped(StructSymbol structSym, FieldSymbol field, EntityHandle fieldHandle)
     {
         // Issue #420 / #455 (P3-10): the emitted IL takes the receiver and the
         // typed argument by address (`ldarga`) and reads the field directly.
@@ -250,7 +259,7 @@ internal sealed class DataStructSynthesizer
         this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("Equals"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.nextParameterHandle());
     }
 
-    private void EmitInlineGetHashCode(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
+    private void EmitInlineGetHashCode(StructSymbol structSym, FieldSymbol field, EntityHandle fieldHandle)
     {
         var il = new InstructionEncoder(new BlobBuilder());
         if (!this.emitCtx.MetadataOnly)
@@ -269,7 +278,7 @@ internal sealed class DataStructSynthesizer
         this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("GetHashCode"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.nextParameterHandle());
     }
 
-    private void EmitInlineToString(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
+    private void EmitInlineToString(StructSymbol structSym, FieldSymbol field, EntityHandle fieldHandle)
     {
         var il = new InstructionEncoder(new BlobBuilder());
         if (!this.emitCtx.MetadataOnly)
@@ -292,7 +301,7 @@ internal sealed class DataStructSynthesizer
         this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("ToString"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.nextParameterHandle());
     }
 
-    private void EmitInlineEqualityOperator(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle, bool isInequality)
+    private void EmitInlineEqualityOperator(StructSymbol structSym, FieldSymbol field, EntityHandle fieldHandle, bool isInequality)
     {
         // Issue #420 / #455 (P3-10): the emitted IL uses `ldarga` on both
         // operands to read fields directly, which requires the operands to be
@@ -338,7 +347,7 @@ internal sealed class DataStructSynthesizer
         this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString(isInequality ? "op_Inequality" : "op_Equality"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.nextParameterHandle());
     }
 
-    private void EmitInlineDeconstruct(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
+    private void EmitInlineDeconstruct(StructSymbol structSym, FieldSymbol field, EntityHandle fieldHandle)
     {
         var il = new InstructionEncoder(new BlobBuilder());
         if (!this.emitCtx.MetadataOnly)
@@ -347,8 +356,21 @@ internal sealed class DataStructSynthesizer
             il.LoadArgument(0);
             il.OpCode(ILOpCode.Ldfld);
             il.Token(fieldHandle);
-            il.OpCode(ILOpCode.Stobj);
-            il.Token(this.getElementTypeToken(field.Type));
+
+            // ADR-0087 §3 R3: TypeParameterSymbol fields are now encoded
+            // as VAR(idx) (not erased to Object); the indirect store
+            // must use `Stobj` against the VAR TypeSpec, not `Stind_ref`.
+            if (field.Type is TypeParameterSymbol
+                || ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type))
+            {
+                il.OpCode(ILOpCode.Stobj);
+                il.Token(this.getElementTypeToken(field.Type));
+            }
+            else
+            {
+                il.OpCode(ILOpCode.Stind_ref);
+            }
+
             il.OpCode(ILOpCode.Ret);
         }
 
@@ -376,7 +398,7 @@ internal sealed class DataStructSynthesizer
             !structSym.Fields.IsDefaultOrEmpty,
             "Data structs must have at least one field; the binder should have rejected an empty data struct.");
 
-        var typeDef = this.cache.StructTypeDefs[structSym];
+        var typeDef = this.resolveUserTypeToken(structSym);
         var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
         this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
         this.EmitDataStructGetHashCode(structSym);
@@ -393,7 +415,7 @@ internal sealed class DataStructSynthesizer
     /// methods cannot be overridden in user code anyway, but the metadata
     /// flag communicates intent.
     /// </summary>
-    private void EmitDataStructEqualsObject(StructSymbol structSym, TypeDefinitionHandle typeDef, MethodDefinitionHandle equalsTypedHandle)
+    private void EmitDataStructEqualsObject(StructSymbol structSym, EntityHandle typeDef, MethodDefinitionHandle equalsTypedHandle)
     {
         Debug.Assert(
             !structSym.IsClass,
@@ -412,7 +434,7 @@ internal sealed class DataStructSynthesizer
             il.OpCode(ILOpCode.Unbox_any);
             il.Token(typeDef);
             il.OpCode(ILOpCode.Call);
-            il.Token(equalsTypedHandle);
+            il.Token(this.ResolveEqualsTypedToken(structSym, equalsTypedHandle));
             il.OpCode(ILOpCode.Ret);
             il.MarkLabel(retFalse);
             il.LoadConstantI4(0);
@@ -453,7 +475,7 @@ internal sealed class DataStructSynthesizer
             var retFalse = il.DefineLabel();
             foreach (var field in structSym.Fields)
             {
-                var fieldHandle = this.cache.StructFieldDefs[field];
+                var fieldHandle = this.resolveUserFieldToken(structSym, field);
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
@@ -513,7 +535,7 @@ internal sealed class DataStructSynthesizer
             {
                 foreach (var field in fields)
                 {
-                    var fieldHandle = this.cache.StructFieldDefs[field];
+                    var fieldHandle = this.resolveUserFieldToken(structSym, field);
                     il.LoadArgument(0);
                     il.OpCode(ILOpCode.Ldfld);
                     il.Token(fieldHandle);
@@ -534,7 +556,7 @@ internal sealed class DataStructSynthesizer
                 var addSpec = this.GetHashCodeAddObjectSpec();
                 foreach (var field in fields)
                 {
-                    var fieldHandle = this.cache.StructFieldDefs[field];
+                    var fieldHandle = this.resolveUserFieldToken(structSym, field);
                     il.LoadLocalAddress(0);
                     il.LoadArgument(0);
                     il.OpCode(ILOpCode.Ldfld);
@@ -604,7 +626,7 @@ internal sealed class DataStructSynthesizer
             for (int i = 0; i < fields.Length; i++)
             {
                 var field = fields[i];
-                var fieldHandle = this.cache.StructFieldDefs[field];
+                var fieldHandle = this.resolveUserFieldToken(structSym, field);
 
                 // Piece 2*i + 1: Convert.ToString(this.Fi, InvariantCulture)
                 il.OpCode(ILOpCode.Dup);
@@ -666,7 +688,7 @@ internal sealed class DataStructSynthesizer
             var retFalse = il.DefineLabel();
             foreach (var field in structSym.Fields)
             {
-                var fieldHandle = this.cache.StructFieldDefs[field];
+                var fieldHandle = this.resolveUserFieldToken(structSym, field);
                 il.LoadArgumentAddress(0);
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
@@ -722,20 +744,20 @@ internal sealed class DataStructSynthesizer
             for (int i = 0; i < fields.Length; i++)
             {
                 var field = fields[i];
-                var fieldHandle = this.cache.StructFieldDefs[field];
+                var fieldHandle = this.resolveUserFieldToken(structSym, field);
                 il.LoadArgument(i + 1);
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
 
-                // ADR-0029 Phase 4-erased generics: TypeParameterSymbol
-                // fields are encoded as System.Object (see EncodeTypeSymbol),
-                // so the indirect store must use stind.ref. Concrete value
-                // types use stobj with the value-type token; concrete
-                // reference types use stind.ref.
+                // ADR-0087 §3 R3: TypeParameterSymbol fields are now
+                // encoded as VAR(idx) (not erased to Object); the
+                // indirect store must use `Stobj` against the VAR
+                // TypeSpec, not `Stind_ref`.
                 if (field.Type is TypeParameterSymbol)
                 {
-                    il.OpCode(ILOpCode.Stind_ref);
+                    il.OpCode(ILOpCode.Stobj);
+                    il.Token(this.getElementTypeToken(field.Type));
                 }
                 else if (ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type))
                 {
@@ -771,6 +793,26 @@ internal sealed class DataStructSynthesizer
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
             parameterList: this.nextParameterHandle());
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R3: resolves the right token for the call to
+    /// <c>Equals(StructType)</c> from <c>Equals(object)</c>. Returns
+    /// the bare MethodDef for a non-generic data struct; for a generic
+    /// data struct returns a MemberRef parented at the self-instantiation
+    /// TypeSpec.
+    /// </summary>
+    private EntityHandle ResolveEqualsTypedToken(StructSymbol structSym, MethodDefinitionHandle equalsTypedHandle)
+    {
+        if (!ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym))
+        {
+            return equalsTypedHandle;
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
+        return this.resolveUserMethodRef(structSym, equalsTypedHandle, "Equals", sig);
     }
 
     /// <summary>

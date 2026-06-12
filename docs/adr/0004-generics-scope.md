@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-05-22
 - **Phase**: Phase 4 (implementation), Phase 0 (lock)
-- **Related**: gaps doc §3.2.5; execution plan §0 D4, §4; design doc D4; ADR-0020
+- **Related**: gaps doc §3.2.5; execution plan §0 D4, §4; design doc D4; ADR-0020; **ADR-0087 (implementation-status addendum — open-shape erasure audit and staged elimination)**
 
 ## Context
 
@@ -45,3 +45,15 @@ Neutral:
 - **Consumption only, indefinitely**: rejected; users cannot define their own generic data containers, which is too restrictive for any non-trivial library.
 - **Two-phase (consumption first, definition later)**: rejected to avoid migrating users across a public-surface change.
 - **Defer all generics**: rejected; without generics consumption, GSharp cannot meaningfully use `System.Collections.Generic` or `Task<T>`.
+
+## Implementation-status addendum (2026-06-12)
+
+The "Adopt CLR reified generics (no erasure)" commitment in §Decision is not yet fully delivered. The current emit pipeline carries a type-erased fallback for open generic shapes (open user-declared types, open generic methods, closed CLR generics whose type arguments mention an in-scope type parameter, and delegate shapes that bear open type parameters). See ADR-0087 for:
+
+- the complete audit of every erasure site in the binder/lowering/planner/emitter (53 sites across 14 source files in categories F1–F4 that materially affect reflection-correctness),
+- the target CLR metadata shape per category (`TypeDef`+`GenericParam`+`GenericParamConstraint` rows, `TypeSpec`/`MethodSpec` instantiations, `Var`/`MVar` signature encoding, generic-context-aware MemberRef parents),
+- the staged elimination plan (R1–R7),
+- the reflection-based golden suite that pins current behaviour so each staging phase is bisectable,
+- and the explicit deferral of the implementation phases beyond this ADR's date.
+
+Issue #484 ("Investigate path out of type erasure in the generics implementation") is superseded by issue #728 + ADR-0087.
