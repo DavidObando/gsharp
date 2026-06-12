@@ -1500,12 +1500,29 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         // === PHASE B: Emit MethodDefs in row order ===
-        // B1. Interface abstract methods.
+        // B1. Interface methods (abstract + default-interface methods).
         foreach (var i in interfaces)
         {
             foreach (var m in i.Methods)
             {
-                this.typeDefEmitter.EmitAbstractMethod(m);
+                // ADR-0085 / issue #726: a default-interface method (the
+                // method's declaring syntax carries a non-null Body) is
+                // emitted as a normal virtual MethodDef with a real body —
+                // the EmitFunction pipeline handles signature, body, and
+                // ParameterRow plumbing, and the receiver-is-interface
+                // branch above stamps it as Public | Virtual | NewSlot
+                // (no Final, no Abstract). Abstract interface methods
+                // (no body) continue to use EmitAbstractMethod.
+                if (InterfaceSymbol.HasDefaultBody(m)
+                    && this.emitCtx.Program.Functions.TryGetValue(m, out var dimBody))
+                {
+                    var emittedHandle = this.EmitFunction(m, dimBody, isEntryPoint: false);
+                    this.cache.MethodHandles[m] = emittedHandle;
+                }
+                else
+                {
+                    this.typeDefEmitter.EmitAbstractMethod(m);
+                }
             }
 
             // Issue #248: emit abstract accessor MethodDefs + PropertyDef rows for interface properties.
@@ -3644,7 +3661,19 @@ internal sealed class ReflectionMetadataEmitter
         {
             var receiverStruct = function.ReceiverType as StructSymbol;
             var receiverIsValueType = receiverStruct != null && !receiverStruct.IsClass;
-            if (!receiverIsValueType || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
+            var receiverIsInterface = function.ReceiverType is InterfaceSymbol;
+            if (receiverIsInterface)
+            {
+                // ADR-0085 / issue #726: an instance method whose receiver is
+                // an interface is a default-interface method (DIM). Emit it
+                // as Public | HideBySig | Virtual | NewSlot — NOT Final
+                // (implementers may override) and NOT Abstract (the body is
+                // emitted below). `MethodImplAttributes.IL | Managed` is
+                // already the default for EmitFunction's AddMethodDefinition
+                // call, so no further tweak is needed.
+                methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+            }
+            else if (!receiverIsValueType || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
             {
                 methodAttrs |= MethodAttributes.Virtual;
                 if (!function.IsOverride)

@@ -2078,12 +2078,15 @@ public class Parser
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
         var type = ParseOptionalTypeClause();
 
-        // ADR-0018: interface methods carry no body. Diagnose if one appears,
-        // then consume it so the rest of the body parses cleanly.
+        // ADR-0085: interface methods MAY carry a body (default-interface
+        // method). When the body is absent, the method is abstract — the
+        // current shape from ADR-0018 Phase 3. When present, the body is
+        // bound through the normal class-method body pipeline and the
+        // emitter produces a CLR DIM (virtual, non-abstract).
+        BlockStatementSyntax body = null;
         if (Current.Kind == SyntaxKind.OpenBraceToken)
         {
-            Diagnostics.ReportInterfaceMethodHasBody(identifier.Location, identifier.Text);
-            ParseBlockStatement();
+            body = ParseBlockStatement();
         }
 
         return new FunctionDeclarationSyntax(
@@ -2097,7 +2100,7 @@ public class Parser
             parameters,
             closeParenthesisToken,
             type,
-            body: null);
+            body);
     }
 
     private PropertyDeclarationSyntax ParsePropertyDeclaration(

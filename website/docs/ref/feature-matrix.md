@@ -38,7 +38,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Inline structs | Supported | Supported | Exactly one field; participates in structural equality. |
 | Classes and primary constructors | Supported | Partially supported | Evaluator supports G# classes; CLR base initializer modeling is limited. |
 | Explicit class `init` constructors | Supported | Supported | G# class constructors are parsed, bound, and evaluated. |
-| Interfaces | Supported | Supported for checking/upcasts | Interface method bodies are rejected; default interface methods are not implemented. |
+| Interfaces | Supported | Supported for checking/upcasts | Default-interface methods (ADR-0085) supported; static-virtual and private interface members deferred. |
 | Properties | Supported | Supported | Auto/computed and static/shared forms are represented. |
 | Events | Supported | Supported | G# and CLR event subscription paths exist. |
 | Static/shared members | Supported | Supported | Declared in a `shared { ... }` block. |

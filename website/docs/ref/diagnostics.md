@@ -143,7 +143,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0183 | Error | No matching open base method for `override`. | `override` keyword present but no base class defines a matching open method. |
 | GS0184 | Error | Cannot override a non-open base method. | `override` targets a method that was not declared `open`. |
 | GS0185 | Error | Override signature mismatch. | An `override` method has different parameter types or return type than the base. |
-| GS0186 | Error | Interface method may not have a body. | A method declared inside an `interface` has an implementation block. |
+| GS0186 | Error | _(historical — removed in ADR-0085)_ Interface method may not have a body. | Default-interface methods are now supported (see GS0318–GS0321). |
 | GS0187 | Error | Class does not implement interface method. | A class claims to implement an interface but a required method is absent. |
 | GS0188 | Error | Class cannot implement a sealed interface from a different package. | Implementing a `sealed interface` defined outside the current package. |
 | GS0189 | Error | The return type of an `async func(...)` type clause is implicitly wrapped in `Task`; do not write `Task[…]` explicitly. | `async func(int) Task[int]` in a type position (ADR-0043). |
@@ -772,3 +772,47 @@ Cause/fix:
   full rule and the deconfliction note with GS0316.
 
 
+
+## Default-interface-method diagnostics (GS0318–GS0321)
+
+See ADR-0085 (which supersedes the deferral in ADR-0018).
+Interfaces may now expose default-method bodies; classes that
+implement the interface inherit the default unless they declare
+their own override. The four diagnostics below cover the conflict,
+dropped-default, missing-implementer, and deferred-modifier cases.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0318 | Error | `Class '<C>' inherits conflicting default implementations of '<Name>' from interfaces '<IA>' and '<IB>'. Declare '<C>.<Name>' explicitly to disambiguate.` |
+| GS0319 | Error | `Override targets default-interface method '<Name>' that was removed in interface '<I>'.` |
+| GS0320 | Error | `Class '<C>' does not implement interface method '<I>.<Name>' and the interface does not provide a default.` |
+| GS0321 | Error | `Modifier '<modifier>' on interface method '<Name>' is not yet supported. ADR-0085 explicitly defers static-virtual, private, and sealed interface members.` |
+
+Default-interface methods (DIM) emit standard CLR DIM metadata: the
+interface's method table carries a `.method virtual` slot whose body
+lives on the interface TypeDef. Implementers inherit the default
+through normal virtual dispatch; an explicit override on the class
+replaces it. Cross-language consumers (C# / VB / F#) see the DIM as
+a regular C# 8+ default interface method.
+
+The historical GS0186 diagnostic ("Interface method may not have a
+body.") is no longer emitted; ADR-0085 unblocks default-interface
+methods. The slot is preserved for back-compat but the binder no
+longer fires it.
+
+Cause/fix:
+
+- **GS0318** — declare an explicit override on the class to pick
+  which inherited default wins, or call the desired interface's
+  default by qualifying the call site. The explicit-base call
+  syntax (`base<IFoo>.Method()`) is deferred per ADR-0085.
+- **GS0319** — reserved for the version-skew scenario where a
+  consumer's referenced library has been upgraded to drop a
+  default. Restore the default or supply a class-level override.
+- **GS0320** — provide a method body on the implementing class
+  with the matching signature, or add a default body to the
+  interface declaration.
+- **GS0321** — remove the deferred modifier. Static interface
+  members, private helper methods, and `sealed override` are
+  deferred follow-ups; instance-virtual default-interface
+  methods are the only DIM shape supported in this release.

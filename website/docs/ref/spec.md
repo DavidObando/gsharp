@@ -283,7 +283,7 @@ Console.WriteLine(q == r)
 
 ### Interfaces
 
-Interfaces are declared with `interface Name { ... }` (ADR-0078). Interfaces contain method, property, and event signatures. Although design records discuss default interface members, the current parser diagnoses interface method bodies and the symbol model treats interfaces as signatures only. Classes can implement interfaces and values can upcast to implemented interfaces. `sealed interface` declares a Kotlin-style closed hierarchy.
+Interfaces are declared with `interface Name { ... }` (ADR-0078). Interface members are method, property, and event signatures. A method signature MAY carry a body — a **default-interface method** (ADR-0085) — that classes implementing the interface inherit when they do not provide their own override. Both abstract and default methods may appear in the same interface. Classes can implement interfaces and values can upcast to implemented interfaces. `sealed interface` declares a Kotlin-style closed hierarchy. When two unrelated interfaces both supply a default body for the same signature, the implementing class must declare its own override (GS0318). Static-virtual interface members, private interface helpers, and `sealed override` of a default are explicitly deferred follow-ups (GS0321).
 
 ### Enums
 
@@ -416,7 +416,8 @@ PropertyDecl     = "prop" identifier TypeClause PropertyBody? .
 PropertyAccessor = ( "get" | "set" ( "(" identifier ")" )? ) ( Block | ";" )? .
 EventDecl        = "event" identifier TypeClause EventBody? .
 EventAccessor    = ( "add" | "remove" | "raise" ) ( Block | ";" )? .
-InterfaceBody    = "{" ( FunctionSignature | PropertyDecl | EventDecl )* "}" .
+InterfaceBody    = "{" ( InterfaceMethodDecl | PropertyDecl | EventDecl )* "}" .
+InterfaceMethodDecl = FunctionSignature Block? .
 ```
 
 ## Expressions
@@ -885,7 +886,8 @@ PropertyAccessor  ::= ('get' | 'set' ('(' identifier ')')?) (Block | ';')?
 EventDecl         ::= contextual 'event' identifier TypeClause (EventBody)?
 EventBody         ::= '{' EventAccessor* '}'
 EventAccessor     ::= ('add' | 'remove' | 'raise') (Block | ';')?
-InterfaceBody     ::= '{' (FunctionSignature | PropertyDecl | EventDecl)* '}'
+InterfaceBody     ::= '{' (InterfaceMethodDecl | PropertyDecl | EventDecl)* '}'
+InterfaceMethodDecl ::= FunctionSignature Block?
 FunctionSignature ::= 'func' identifier '(' Parameters? ')' TypeClause? Block?
 
 TypeClause        ::= identifier TypeArgList? '?'?

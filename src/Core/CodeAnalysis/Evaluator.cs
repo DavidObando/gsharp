@@ -3039,13 +3039,38 @@ public sealed class Evaluator
         // type overrides the statically-bound method, route to the override.
         var method = node.Method;
 
-        // Phase 3.B.4 + Phase 4.2b: an interface method (or a generic
-        // type-parameter's interface-constrained method) has a null
-        // ThisParameter / ReceiverType. Resolve the concrete implementation
-        // by looking up the method by name on the runtime struct type.
-        if (method.ThisParameter == null && receiverValue is StructValue ifaceSv && ifaceSv.StructType != null)
+        // ADR-0085 / issue #726 (default-interface methods): when the
+        // statically-bound method's receiver is an InterfaceSymbol, walk the
+        // runtime class's hierarchy looking for a same-name method that
+        // matches the interface signature. Fall back to the interface
+        // method itself (which now carries a default body in program.Functions
+        // when one was declared) if no implementer overrides it. This is the
+        // interpreter analogue of CLR DIM dispatch.
+        if (method.ReceiverType is Symbols.InterfaceSymbol && receiverValue is StructValue ifaceSv && ifaceSv.StructType != null)
         {
+            FunctionSymbol implMethod = null;
             for (var t = ifaceSv.StructType; t != null; t = t.BaseClass)
+            {
+                if (t.TryGetMethod(method.Name, out var candidate))
+                {
+                    implMethod = candidate;
+                    break;
+                }
+            }
+
+            if (implMethod != null)
+            {
+                method = implMethod;
+            }
+
+            // else: leave `method` pointing at the interface method symbol;
+            // its default body is registered in program.Functions (per the
+            // ADR-0085 binder pipeline) and dispatched below.
+        }
+        else if (method.ThisParameter == null && receiverValue is StructValue tpSv && tpSv.StructType != null)
+        {
+            // Phase 4.2b: generic type-parameter dispatch (interface-constrained T).
+            for (var t = tpSv.StructType; t != null; t = t.BaseClass)
             {
                 if (t.TryGetMethod(method.Name, out var implMethod))
                 {

@@ -13,11 +13,14 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 3.B.4 — <c>interface</c> declarations. Per ADR-0018 interfaces
-/// carry method signatures only (no bodies, no default impls). Classes
-/// implement interfaces via the <c>:</c> clause and the binder validates
-/// that every required method is present with a matching signature.
-/// Interface-typed receivers dispatch to the runtime type's implementation.
+/// Phase 3.B.4 — <c>interface</c> declarations. Per ADR-0085 (which
+/// supersedes ADR-0018's deferral) interfaces may carry default-method
+/// bodies in addition to abstract signatures. Classes implement interfaces
+/// via the <c>:</c> clause; the binder accepts inherited defaults when the
+/// implementer omits the method, and reports GS0318 when two unrelated
+/// interfaces provide conflicting defaults for the same signature.
+/// Interface-typed receivers dispatch to the runtime type's implementation,
+/// falling back to the interface default when no override exists.
 /// </summary>
 public class InterfaceTests
 {
@@ -34,15 +37,18 @@ interface IShape {
     }
 
     [Fact]
-    public void InterfaceMethodWithBody_ReportsDiagnostic()
+    public void InterfaceMethodWithBody_IsAcceptedAsDefaultMethod()
     {
+        // ADR-0085 / issue #726: interface methods MAY carry a body
+        // (default-interface method). The previous Phase 3 deferral
+        // diagnostic (GS0186) is no longer emitted.
         var source = @"
-interface IBad {
-    func Area() int32 { return 0 }
+interface IGreeter {
+    func Hello() string { return ""hi"" }
 }
 ";
         var result = Evaluate(source);
-        Assert.NotEmpty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics);
     }
 
     [Fact]
@@ -151,15 +157,18 @@ s.Ok()
     }
 
     [Fact]
-    public void SealedInterface_BodyOnMember_StillDiagnoses()
+    public void SealedInterface_WithDefaultBody_IsAccepted()
     {
+        // ADR-0085 / issue #726: sealed interfaces may still expose default
+        // bodies; the `sealed` modifier only restricts which packages may
+        // implement the interface — it does not preclude DIM declarations.
         var source = @"
-sealed interface IBad {
+sealed interface IGood {
     func F() int32 { return 0 }
 }
 ";
         var result = Evaluate(source);
-        Assert.NotEmpty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics);
     }
 
     [Fact]
@@ -220,6 +229,178 @@ class MyGeneric[T any] : IEnumerable[T] {
         var result = Evaluate(source);
         Assert.DoesNotContain(result.Diagnostics, d => d.Message.Contains("Cannot find type IEnumerable"));
         Assert.DoesNotContain(result.Diagnostics, d => d.Message.Contains("Cannot find type T"));
+    }
+
+    [Fact]
+    public void DefaultInterfaceMethod_InheritedByImplementer_IsCallable()
+    {
+        // ADR-0085: a class that omits a default interface method inherits
+        // the default body via virtual dispatch when invoked through either
+        // the class or the interface.
+        var source = @"
+interface IGreeter {
+    func Greet() string { return ""hello from default"" }
+}
+
+class Greeter : IGreeter {
+}
+
+var g = Greeter{}
+g.Greet()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("hello from default", result.Value);
+    }
+
+    [Fact]
+    public void DefaultInterfaceMethod_OverriddenByImplementer_CallsOverride()
+    {
+        var source = @"
+interface IGreeter {
+    func Greet() string { return ""default"" }
+}
+
+class Loud : IGreeter {
+    func Greet() string { return ""LOUD"" }
+}
+
+var g = Loud{}
+g.Greet()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("LOUD", result.Value);
+    }
+
+    [Fact]
+    public void DefaultInterfaceMethod_CalledThroughInterfaceReceiver_DispatchesCorrectly()
+    {
+        // ADR-0085: dispatch through an interface-typed receiver routes to
+        // the class override when present, otherwise to the interface default.
+        var source = @"
+interface IGreeter {
+    func Greet() string { return ""default"" }
+}
+
+class Quiet : IGreeter {
+}
+
+class Loud : IGreeter {
+    func Greet() string { return ""LOUD"" }
+}
+
+var quiet IGreeter = Quiet{}
+var loud  IGreeter = Loud{}
+quiet.Greet() + "":"" + loud.Greet()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("default:LOUD", result.Value);
+    }
+
+    [Fact]
+    public void DefaultInterfaceMethod_AbstractAndDefault_Coexist()
+    {
+        // One abstract slot, one default slot — implementer only needs to
+        // provide the abstract one.
+        var source = @"
+interface IShape {
+    func Area() int32
+    func Describe() string { return ""shape"" }
+}
+
+class Square(side int32) : IShape {
+    func Area() int32 { return side * side }
+}
+
+var s = Square(3)
+s.Area() + s.Describe().Length
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(9 + 5, result.Value);
+    }
+
+    [Fact]
+    public void ConflictingDefaults_FromTwoInterfaces_DiagnosesGS0318()
+    {
+        // ADR-0085 diamond rule: when an implementer inherits two different
+        // default bodies for the same signature it must override; otherwise
+        // the binder reports GS0318.
+        var source = @"
+interface IA {
+    func F() int32 { return 1 }
+}
+
+interface IB {
+    func F() int32 { return 2 }
+}
+
+class C : IA, IB {
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("GS0318") || d.Message.Contains("conflicting default"));
+    }
+
+    [Fact]
+    public void ConflictingDefaults_WithExplicitOverride_Compiles()
+    {
+        var source = @"
+interface IA {
+    func F() int32 { return 1 }
+}
+
+interface IB {
+    func F() int32 { return 2 }
+}
+
+class C : IA, IB {
+    func F() int32 { return 99 }
+}
+
+var c = C{}
+c.F()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(99, result.Value);
+    }
+
+    [Fact]
+    public void AbstractInterfaceMethod_NoImplementer_DiagnosesGS0320()
+    {
+        // If an interface has no default and the class fails to provide an
+        // override, the binder reports the "missing implementation" form
+        // (GS0320), not the conflict form.
+        var source = @"
+interface IMissing {
+    func Required() int32
+}
+
+class C : IMissing {
+}
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void InterfaceDefaultMethod_StaticModifier_ParserRejects()
+    {
+        // ADR-0085 explicitly defers static interface members. The G#
+        // grammar does not allow `static` at the interface member position
+        // today, so the parser reports a token-shape error. The deferral is
+        // documented in ADR-0085; if/when ADR adds a follow-up to support
+        // static-virtual interface methods this test will need to evolve.
+        var source = @"
+interface IStaticy {
+    static func F() int32 { return 1 }
+}
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
     }
 
     private static EvaluationResult Evaluate(string source)
