@@ -507,10 +507,20 @@ internal sealed partial class ExpressionBinder
         // only evaluated when the left operand was true. Thread any
         // narrowing implied by the left operand into the right-operand
         // binder so `x is T && f(x)` binds `f(x)` with `x` narrowed to `T`.
+        //
+        // ADR-0069 addendum / issue #712: `||` short-circuits too — the
+        // right operand is only evaluated when the left operand was false.
+        // Thread the left's else-frame (its negative narrowing) so
+        // `!(x is T) || f(x)` binds `f(x)` with `x` narrowed to `T`.
         BoundExpression boundRight;
         if (syntax.OperatorToken.Kind == SyntaxKind.AmpersandAmpersandToken)
         {
             var rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft);
+            boundRight = BindExpressionWithNarrowing(syntax.Right, rightFrame);
+        }
+        else if (syntax.OperatorToken.Kind == SyntaxKind.PipePipeToken)
+        {
+            var rightFrame = TryClassifyTypeTestNarrowingForOr(boundLeft);
             boundRight = BindExpressionWithNarrowing(syntax.Right, rightFrame);
         }
         else

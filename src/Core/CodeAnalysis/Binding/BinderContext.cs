@@ -127,6 +127,19 @@ internal sealed class BinderContext
         = new Dictionary<BoundIfStatement, Dictionary<VariableSymbol, TypeSymbol>>();
 
     /// <summary>
+    /// Gets the side-table that parks the post-switch narrowing frame for a
+    /// <c>switch</c> statement keyed by the resulting bound
+    /// <see cref="BoundPatternSwitchStatement"/> node identity. ADR-0069
+    /// addendum / issue #712: when every non-default arm either ends in an
+    /// unconditional exit OR contributes the same narrowing on the
+    /// discriminator (and the default arm, if any, does likewise), the
+    /// common narrowing is lifted into the enclosing block's persistent
+    /// narrowing scope so subsequent reads in the block see the narrowing.
+    /// </summary>
+    public Dictionary<BoundPatternSwitchStatement, Dictionary<VariableSymbol, TypeSymbol>> PendingSwitchExitFrames { get; }
+        = new Dictionary<BoundPatternSwitchStatement, Dictionary<VariableSymbol, TypeSymbol>>();
+
+    /// <summary>
     /// Gets or sets the type-parameter dictionary in scope while binding a
     /// generic function body. Indexed by type-parameter name. <c>null</c> when
     /// no generic context is active.
