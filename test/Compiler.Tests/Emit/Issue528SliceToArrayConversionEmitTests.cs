@@ -239,6 +239,7 @@ public class Issue528SliceToArrayConversionEmitTests
             package Probe.Tests
             import System
             import Probe.CSharp
+            import Gsharp.Extensions.Go
 
             var s []int32 = Maker.Range(4)
             var total int32 = 0
@@ -293,6 +294,7 @@ public class Issue528SliceToArrayConversionEmitTests
         var gsource = """
             package Probe.Tests
             import System
+            import Gsharp.Extensions.Go
 
             var a = []int32{1, 2, 3}
             var b []int32 = a

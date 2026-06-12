@@ -30,8 +30,8 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Numeric conversions | Supported | Supported | ADR-0044 widening lattice plus explicit conversions. |
 | `object` universal upper bound | Supported | Supported | Boxing and object equality are implemented. |
 | Nullable `T?`, `nil`, `!!`, `?:`, `?.`, `?[i]` | Supported | Supported | `!!` throws in the evaluator when the value is nil. `?[i]` (ADR-0073) short-circuits indexing to `nil` when the receiver is nil. |
-| Arrays and slices | Supported | Supported | Slices are backed by arrays; `append` copies. |
-| Maps | Supported | Supported | Backed by `Dictionary[K,V]`; `delete` and `len` are implemented. |
+| Arrays and slices | Supported | Supported | Slices are backed by arrays; `append` copies. `len` / `cap` / `append` require `import Gsharp.Extensions.Go` (ADR-0083, GS0317); the .NET-idiomatic alternative is `.Length` and (for mutable lists) `List[T].Add`. |
+| Maps | Supported | Supported | Backed by `Dictionary[K,V]`; `delete` and `len` are implemented. Both require `import Gsharp.Extensions.Go` (ADR-0083, GS0317); .NET-idiomatic alternatives are `.Remove(k)` and `.Count`. |
 | Tuples and multi-return | Supported | Supported | Multi-value return syntax is represented as tuple literals. |
 | Struct literals | Supported | Supported | Field initialization and field access are implemented. |
 | Data classes, data structs, `with`/copy | Supported | Supported | `data class` (reference) and `data struct` (value) synthesise equality, `with`-copy, and deconstruction. The `record` keyword was removed by ADR-0078 (issue #718); migrate to `data struct` (preserves value semantics) or `data class` (reference semantics). |

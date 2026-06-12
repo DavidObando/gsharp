@@ -717,4 +717,58 @@ Cause/fix:
   See ADR-0082 for the full rule, recovery strategy, and packaging
   rationale.
 
+## Go-style built-ins require `import Gsharp.Extensions.Go` (GS0317)
+
+ADR-0083 (issue #723) extends the per-file gate from ADR-0082
+to the Go-style built-in functions `len`, `cap`, `append`, and
+`delete`. The binder checks for `import Gsharp.Extensions.Go`
+in the current compilation unit before resolving any of these
+identifiers as built-ins and emits `GS0317` when the import is
+absent. The message names the offending built-in and, when there
+is a clean .NET-idiomatic replacement, names the replacement
+too — so users can fix the call site either by adding the
+import or by switching to the BCL equivalent.
+
+| ID | Severity | Message |
+|----|----------|---------|
+| GS0317 | Error | `'<name>' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or call '<suggestion>' directly (ADR-0083).` |
+
+`<suggestion>` is selected from the following table based on the
+built-in identifier and the bound type of its primary receiver:
+
+| Built-in | Receiver | `<suggestion>` |
+|----|----|----|
+| `len` | array / slice / string | `.Length` |
+| `len` | map | `.Count` |
+| `delete` | map | `.Remove(k)` |
+| `append` | slice | `List[T].Add` |
+| `cap` | any | — (import-only variant: "Add 'import Gsharp.Extensions.Go' (ADR-0083).") |
+
+The diagnostic is anchored at the built-in identifier token. The
+`close(ch)` and `make(chan T)` shapes are part of the channel
+cluster and keep firing **GS0316** (ADR-0082) rather than
+GS0317 — the suggested fix is the same import, but the message
+frames the `scope` + `async`/`await` alternative for the
+channel surface. The two diagnostics share the same
+`BinderContext.IsGoExtensionsImported` predicate, so a single
+`import Gsharp.Extensions.Go` unlocks both clusters at once.
+
+Recovery is identical to GS0316: the binder reports GS0317 and
+continues binding the call as if the import were present, so
+subsequent shape diagnostics (e.g. `GS0117` for a wrong-typed
+argument) still surface in the same pass.
+
+Cause/fix:
+
+- **GS0317** — any call to `len`, `cap`, `append`, or `delete`
+  in a source file that does not contain
+  `import Gsharp.Extensions.Go`. Add the import at the top of
+  the file (right after the `package` declaration is canonical),
+  or switch to the .NET-idiomatic alternative named in the
+  message: `array.Length` / `slice.Length` / `string.Length`
+  for `len` on length-bearing values, `map.Count` for `len` on
+  maps, `map.Remove(k)` for `delete`, and `List[T].Add` for
+  the mutable-list shape of `append`. See ADR-0083 for the
+  full rule and the deconfliction note with GS0316.
+
 

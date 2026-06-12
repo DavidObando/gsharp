@@ -234,6 +234,15 @@ internal sealed partial class ExpressionBinder
                     return true;
                 }
 
+                // ADR-0083 / issue #723: gate `len` / `cap` behind
+                // `import Gsharp.Extensions.Go`. Fired after operand
+                // binding so the receiver type drives the .NET-idiomatic
+                // suggestion (`.Length` vs `.Count`). Recovery binds the
+                // form as if the import were present, so the shape
+                // validation below still surfaces any genuine type
+                // mismatch in the same pass.
+                binderCtx.ReportIfGoBuiltinImportMissing(syntax, syntax.Identifier.Location, name, operand.Type);
+
                 var ok = operand.Type is ArrayTypeSymbol || operand.Type is SliceTypeSymbol
                     || (name == "len" && (operand.Type == TypeSymbol.String || operand.Type is MapTypeSymbol));
                 if (!ok)
@@ -265,6 +274,13 @@ internal sealed partial class ExpressionBinder
                     return true;
                 }
 
+                // ADR-0083 / issue #723: gate `append` behind
+                // `import Gsharp.Extensions.Go`. No clean .NET-idiomatic
+                // replacement exists for grow-and-copy on a slice; the
+                // GS0317 suggestion recommends the import (or `List[T].Add`
+                // when the user wants mutable semantics).
+                binderCtx.ReportIfGoBuiltinImportMissing(syntax, syntax.Identifier.Location, name, slice.Type);
+
                 if (slice.Type is not SliceTypeSymbol sliceType)
                 {
                     Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, slice.Type);
@@ -294,6 +310,11 @@ internal sealed partial class ExpressionBinder
                     return true;
                 }
 
+                // ADR-0083 / issue #723: gate `delete` behind
+                // `import Gsharp.Extensions.Go`. The GS0317 suggestion
+                // points at the BCL equivalent `.Remove(k)`.
+                binderCtx.ReportIfGoBuiltinImportMissing(syntax, syntax.Identifier.Location, name, mapExpr.Type);
+
                 if (mapExpr.Type is not MapTypeSymbol mapType)
                 {
                     Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, mapExpr.Type);
@@ -310,6 +331,10 @@ internal sealed partial class ExpressionBinder
             {
                 // Phase 5.4 / ADR-0022: `close(ch)` marks the channel writer complete.
                 // ADR-0082 / issue #722: gate on `import Gsharp.Extensions.Go`.
+                // Per ADR-0083 §"Deconfliction with close", `close(ch)` keeps the
+                // GS0316 (channel-surface) message rather than the per-builtin
+                // GS0317; the import lookup is identical so callers see one
+                // diagnostic regardless of which built-in tripped first.
                 binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.Identifier.Location, "close");
 
                 if (syntax.Arguments.Count != 1)

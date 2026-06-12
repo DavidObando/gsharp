@@ -107,7 +107,11 @@ f()
 
     private static EvaluationResult Evaluate(string source)
     {
-        var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
+        // ADR-0083 / issue #723: prepend the Go extensions import so the
+        // `len(...)` calls inside variadic-helper test sources keep
+        // binding rather than tripping the GS0317 gate. The unused import
+        // is silent when a test happens not to call any gated built-in.
+        var syntaxTree = SyntaxTree.Parse(SourceText.From("import Gsharp.Extensions.Go\n" + source));
         var compilation = new Compilation(syntaxTree);
         return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }

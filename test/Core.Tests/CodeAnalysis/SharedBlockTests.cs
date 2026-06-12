@@ -479,6 +479,8 @@ var result = Counter.increment()
     public void SharedBlock_ImplicitStaticFieldAccess_ChainedMemberAccess()
     {
         var source = @"
+import Gsharp.Extensions.Go
+
 class Holder {
     shared {
         var name string

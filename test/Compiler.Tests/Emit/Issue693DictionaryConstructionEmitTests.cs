@@ -272,6 +272,7 @@ public class Issue693DictionaryConstructionEmitTests
         var source = """
             package App
             import System
+            import Gsharp.Extensions.Go
 
             let m = map[string]int32 { "a": 1, "b": 2 }
             Console.WriteLine(len(m))

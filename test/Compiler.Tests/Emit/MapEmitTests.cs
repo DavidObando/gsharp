@@ -82,6 +82,7 @@ public class MapEmitTests
         var source = """
             package P
             import System
+            import Gsharp.Extensions.Go
 
             var m = map[string]int32{"a": 1, "b": 2, "c": 3}
             Console.WriteLine(len(m))
@@ -97,6 +98,7 @@ public class MapEmitTests
         var source = """
             package P
             import System
+            import Gsharp.Extensions.Go
 
             var m = map[string]int32{"a": 1, "b": 2}
             delete(m, "a")
@@ -115,6 +117,7 @@ public class MapEmitTests
         var source = """
             package P
             import System
+            import Gsharp.Extensions.Go
 
             var m = map[int32]string{}
             Console.WriteLine(len(m))

@@ -106,6 +106,7 @@ Console.WriteLine(pts[1].Y)
         // tuple — exercises descent into BoundTupleLiteralExpression children.
         const string Source = @"package P
 import System
+import Gsharp.Extensions.Go
 var xs = []int32{1, 2}
 var ys = []int32{10}
 xs = append(xs, 3)
@@ -124,6 +125,7 @@ Console.WriteLine(t.Item2)
     {
         const string Source = @"package P
 import System
+import Gsharp.Extensions.Go
 var xs = []int32{1, 2}
 if len(xs) > 0 {
     xs = append(xs, 99)
