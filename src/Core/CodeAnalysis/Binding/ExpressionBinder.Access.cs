@@ -654,9 +654,17 @@ internal sealed partial class ExpressionBinder
         // not-null branch (newobj `Nullable<T>::.ctor(!0)`). We allocate
         // that synthetic slot here so the emit pre-pass can give it a
         // local index alongside the capture local.
+        //
+        // ADR-0073 / issue #710: chained `?.`/`?[]` can yield a
+        // `WhenNotNull` that is itself already a `Nullable<T>`. In that
+        // case both branches still need to leave a Nullable<T> on the
+        // stack, so we MUST allocate the slot whenever the *result type's
+        // underlying* is a value type — even if `whenNotNull.Type` is
+        // already nullable. The emitter inspects `WhenNotNull.Type` to
+        // decide whether to wrap with `newobj` or pass through.
         LocalVariableSymbol resultSlot = null;
-        if (whenNotNull.Type is not NullableTypeSymbol
-            && whenNotNull.Type?.ClrType is { IsValueType: true })
+        if (resultType is NullableTypeSymbol nullableResult
+            && nullableResult.UnderlyingType?.ClrType is { IsValueType: true })
         {
             var resultSlotName = "$nres_" + binderCtx.NullConditionalCaptureCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
             resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);
@@ -1204,11 +1212,22 @@ internal sealed partial class ExpressionBinder
             // AccessorExpression. We bind the indexer's target through the
             // accessor chain so we get the correct member-rooted bound receiver,
             // then route the index resolution through the shared helper.
+            //
+            // ADR-0073 / issue #710: when the indexer is null-conditional
+            // (`a.b?[i]`, `a?.b?[i]?.c`), capture the bound receiver chain into
+            // a synthetic local first and wrap the index in a
+            // BoundNullConditionalAccessExpression — mirroring the handling of
+            // a nested `?.` accessor a few lines above.
             case IndexExpressionSyntax ix:
                 var indexTarget = BindAccessorStep(receiver, classSymbol, ix.Target);
                 if (indexTarget is BoundErrorExpression)
                 {
                     return indexTarget;
+                }
+
+                if (ix.IsNullConditional)
+                {
+                    return BindNullConditionalIndexFromBoundTarget(indexTarget, ix);
                 }
 
                 return BindIndexAgainstTarget(indexTarget, ix.Index, ix.Target.Location);
@@ -1473,8 +1492,92 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindIndexExpression(IndexExpressionSyntax syntax)
     {
+        if (syntax.IsNullConditional)
+        {
+            // ADR-0073 / issue #710: `a?[i]` evaluates `a` once; if nil, the
+            // whole expression is nil (without touching the indexer or the
+            // index operand). Otherwise it indexes the captured value once.
+            return BindNullConditionalIndexExpression(syntax);
+        }
+
         var target = BindExpression(syntax.Target);
         return BindIndexAgainstTarget(target, syntax.Index, syntax.Target.Location);
+    }
+
+    // ADR-0073 / issue #710: bind `target?[index]`. The receiver is evaluated
+    // exactly once into a synthetic capture local; the indexed access is then
+    // bound against the capture and wrapped in a
+    // BoundNullConditionalAccessExpression so the existing lowering and emit
+    // pipeline (which already handles `?.`) covers the new form for free.
+    private BoundExpression BindNullConditionalIndexExpression(IndexExpressionSyntax syntax)
+    {
+        var receiver = BindExpression(syntax.Target);
+        if (receiver is BoundErrorExpression)
+        {
+            return receiver;
+        }
+
+        return BindNullConditionalIndexFromBoundTarget(receiver, syntax);
+    }
+
+    // ADR-0073 / issue #710: shared core for `?[i]` binding. Splits the
+    // already-bound receiver into capture + indexed access so nested
+    // accessor-chain entry points (e.g. the `IndexExpressionSyntax` case in
+    // BindAccessorStep that handles `a.b?[i]`) can reuse the same logic.
+    private BoundExpression BindNullConditionalIndexFromBoundTarget(BoundExpression receiver, IndexExpressionSyntax syntax)
+    {
+        var receiverType = receiver.Type;
+        TypeSymbol underlying;
+        if (receiverType is NullableTypeSymbol nullable)
+        {
+            underlying = nullable.UnderlyingType;
+        }
+        else if (receiverType == TypeSymbol.Null)
+        {
+            // `nil?[i]` is statically nil.
+            return new BoundLiteralExpression(null, null);
+        }
+        else
+        {
+            // GS0300 (warning): the receiver of `?[...]` is non-nullable, so
+            // the null-check is dead code. Suggest the plain `[...]` form.
+            Diagnostics.ReportNullConditionalIndexReceiverNotNullable(
+                syntax.OpenBracketToken.Location,
+                receiverType);
+            underlying = receiverType;
+        }
+
+        var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: underlying);
+
+        // Push a temp scope so the capture is in scope while we bind the
+        // indexed access against it.
+        scope = new BoundScope(scope);
+        scope.TryDeclareVariable(capture);
+
+        var captureRef = new BoundVariableExpression(null, capture);
+        var whenNotNull = BindIndexAgainstTarget(captureRef, syntax.Index, syntax.Target.Location);
+
+        scope = scope.Parent;
+
+        if (whenNotNull is BoundErrorExpression || whenNotNull.Type == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var resultType = whenNotNull.Type is NullableTypeSymbol
+            ? whenNotNull.Type
+            : (TypeSymbol)NullableTypeSymbol.Get(whenNotNull.Type);
+
+        LocalVariableSymbol resultSlot = null;
+        if (resultType is NullableTypeSymbol nullableResult
+            && nullableResult.UnderlyingType?.ClrType is { IsValueType: true })
+        {
+            var resultSlotName = "$nres_" + binderCtx.NullConditionalCaptureCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);
+        }
+
+        return new BoundNullConditionalAccessExpression(null, receiver, capture, whenNotNull, resultType, resultSlot);
     }
 
     private BoundExpression BindIndexAgainstTarget(BoundExpression target, ExpressionSyntax indexSyntax, TextLocation targetLocation)
@@ -1600,8 +1703,8 @@ internal sealed partial class ExpressionBinder
                 : (TypeSymbol)NullableTypeSymbol.Get(whenNotNull.Type);
 
             LocalVariableSymbol resultSlot = null;
-            if (whenNotNull.Type is not NullableTypeSymbol
-                && whenNotNull.Type?.ClrType is { IsValueType: true })
+            if (resultType is NullableTypeSymbol nullableResult
+                && nullableResult.UnderlyingType?.ClrType is { IsValueType: true })
             {
                 var resultSlotName = "$nres_" + binderCtx.NullConditionalCaptureCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);

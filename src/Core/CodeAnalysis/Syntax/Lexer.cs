@@ -320,6 +320,16 @@ public sealed class Lexer
                     kind = SyntaxKind.QuestionColonToken;
                     position++;
                 }
+                else if (Current == '[')
+                {
+                    // ADR-0073 / issue #710: `?[` null-conditional indexing
+                    // prefix. Recognized only when `[` follows `?` with no
+                    // intervening trivia, so a ternary `cond ? [arr] : [arr]`
+                    // (where whitespace separates `?` and `[`) keeps lexing
+                    // as `QuestionToken` + `OpenSquareBracketToken`.
+                    kind = SyntaxKind.QuestionOpenBracketToken;
+                    position++;
+                }
                 else if (Current == '?' && Peek(1) == '=')
                 {
                     // ADR-0072 / issue #709: `??=` null-coalescing compound

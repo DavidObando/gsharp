@@ -2517,6 +2517,32 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0299", "The left-hand side of '??=' must be assignable: a variable, parameter, field, property, or indexer.");
     }
 
+    /// <summary>
+    /// ADR-0073 / issue #710: GS0300 (warning) — the receiver of a
+    /// null-conditional index access <c>a?[i]</c> is not of nullable type,
+    /// so the null-check is dead code. Suggest the plain <c>a[i]</c> form
+    /// to make the author's intent obvious.
+    /// </summary>
+    /// <param name="location">The source location of the offending operator.</param>
+    /// <param name="actualType">The actual (non-nullable) receiver type.</param>
+    public void ReportNullConditionalIndexReceiverNotNullable(TextLocation location, TypeSymbol actualType)
+    {
+        Report(location, "GS0300", $"The receiver of '?[...]' is of non-nullable type '{actualType}'. Use '[...]' instead.", DiagnosticSeverity.Warning);
+    }
+
+    /// <summary>
+    /// ADR-0073 / issue #710: GS0301 — the null-conditional index access
+    /// <c>a?[i]</c> cannot appear on the left-hand side of an assignment
+    /// (matching C#'s CS0131 behavior). The author probably meant
+    /// <c>if a != nil { a[i] = v }</c> or simply <c>a[i] = v</c> when the
+    /// receiver is known to be non-nil.
+    /// </summary>
+    /// <param name="location">The source location of the offending operator.</param>
+    public void ReportNullConditionalIndexAssignmentTarget(TextLocation location)
+    {
+        Report(location, "GS0301", "The null-conditional index access '?[...]' cannot appear on the left-hand side of an assignment. Guard the receiver explicitly (e.g. 'if a != nil { a[i] = v }') or use '[...]' when the receiver is known to be non-nil.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

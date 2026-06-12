@@ -29,7 +29,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Width-bearing integer names | Supported | Supported | Canonical names are `int32`, `uint64`, and related widths; no built-in `int` alias. |
 | Numeric conversions | Supported | Supported | ADR-0044 widening lattice plus explicit conversions. |
 | `object` universal upper bound | Supported | Supported | Boxing and object equality are implemented. |
-| Nullable `T?`, `nil`, `!!`, `?:`, `?.` | Supported | Supported | `!!` throws in the evaluator when the value is nil. |
+| Nullable `T?`, `nil`, `!!`, `?:`, `?.`, `?[i]` | Supported | Supported | `!!` throws in the evaluator when the value is nil. `?[i]` (ADR-0073) short-circuits indexing to `nil` when the receiver is nil. |
 | Arrays and slices | Supported | Supported | Slices are backed by arrays; `append` copies. |
 | Maps | Supported | Supported | Backed by `Dictionary[K,V]`; `delete` and `len` are implemented. |
 | Tuples and multi-return | Supported | Supported | Multi-value return syntax is represented as tuple literals. |
@@ -98,7 +98,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Conditional ref-arguments (`ref cond ? a : b`) | Supported | Supported | ADR-0061. Branches must produce same-typed lvalues. Diagnostics `GS0260`–`GS0262`. |
 | Struct, array, and map literals | Supported | Supported | Map literals bind to `Dictionary[K,V]` backing. |
 | Indexing and index assignment | Supported | Supported | Arrays, slices, maps, and imported CLR indexers. |
-| Null-conditional access | Supported | Supported | `?.` represented in the bound tree. |
+| Null-conditional access | Supported | Supported | `?.` and `?[i]` (ADR-0073) represented in the bound tree. `?[i]` covers arrays, slices, maps, and CLR indexers; non-nullable receiver warns `GS0300`; `?[i]` rejected as assignment LHS (`GS0301`). |
 | Type operators | Supported | Supported | `typeof(...)` and `nameof(...)`. |
 | Trailing `func` lambdas | Supported | Supported | `call(...) func(...) { ... }` form. |
 | Arrow trailing lambdas | Not supported | Not supported | ADR-0050 is proposed; current parser uses `->` for switch-expression arms. |

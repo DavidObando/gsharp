@@ -467,3 +467,17 @@ Cause/fix examples:
 - **GS0299** — `compute() ??= "v"`. Fix: store the call result in a variable first and `??=` into the variable, or write the conditional store by hand. `??=` requires an lvalue.
 - A read-only lvalue (`let x string? = nil; x ??= "v"`) reports the existing **GS0127** for parity with the simple-assignment path.
 
+## Null-conditional indexing diagnostics (GS0300–GS0301)
+
+ADR-0073 introduces the `a?[i]` null-conditional indexing operator. The diagnostics below cover the two shapes the binder rejects or warns up front.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0300 | Warning | The receiver of `?[]` is non-nullable, so the null check is dead. Use `[]` instead. |
+| GS0301 | Error | Null-conditional indexing `?[]` is not allowed on the left-hand side of an assignment. Use a plain `[]` after a nil-check, an `if let` binding, or the `??=` compound assignment instead. |
+
+Cause/fix examples:
+
+- **GS0300** — `var a = []int32{1,2}; var x = a?[0]`. Fix: the receiver type `[]int32` is non-nullable, so write `a[0]` directly. `?[]` is intended for receivers whose static type permits `nil`.
+- **GS0301** — `dict?["k"] = 1`. Fix: nullable receivers do not have an addressable indexed slot when the receiver is nil; check first (`if dict != nil { dict["k"] = 1 }`) or use a non-nullable local that you've already narrowed.
+

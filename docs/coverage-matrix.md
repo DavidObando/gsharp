@@ -176,6 +176,7 @@ PropertyPatternField
 PublicKeyword
 QuestionColonToken
 QuestionDotToken
+QuestionOpenBracketToken
 QuestionQuestionEqualsToken
 QuestionToken
 RangeKeyword

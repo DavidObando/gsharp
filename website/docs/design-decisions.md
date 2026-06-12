@@ -12,6 +12,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | ADR | Title | Summary |
 | --- | --- | --- |
 | [0001](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0001-null-model.md) | Absence / null model — Kotlin-style nullable types | Uses explicit nullable `T?`, `nil`, safe access, and assertion instead of a universal null. |
+| [0073](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0073-null-conditional-indexing.md) | Null-conditional indexing `a?[i]` | Adds the `?[` token; result lifts to the nullable form of the indexer's return type; receiver evaluated exactly once; rejected as assignment LHS. |
 | [0008](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0008-variable-bindings.md) | Variable bindings — keep Go's `var`/`const`/`:=`, add `let` | Keeps familiar Go declarations while adding immutable `let`. |
 | [0015](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0015-multi-target-assignment.md) | Multi-target assignment evaluation order | Evaluates all right-hand values before observable writes, matching Go swap semantics. |
 | [0016](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0016-slice-storage.md) | Slice backing storage — `T[]` | Represents slices with CLR single-dimensional zero-based arrays. |

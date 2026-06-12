@@ -961,6 +961,16 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindMemberIndexAssignmentExpression(MemberIndexAssignmentExpressionSyntax syntax)
     {
+        if (syntax.Target.IsNullConditional)
+        {
+            // ADR-0073 / issue #710: reject `a?[i] = v`. The null-conditional
+            // index expression is not a valid assignment target — mirroring
+            // C#'s CS0131 behavior on `?[]` LHS. Use `if a != nil { a[i] = v }`
+            // (or `a[i] = v` directly) instead.
+            Diagnostics.ReportNullConditionalIndexAssignmentTarget(syntax.Target.OpenBracketToken.Location);
+            return new BoundErrorExpression(syntax);
+        }
+
         return BindIndexedWriteThroughChain(
             chainBase: null,
             remainingChain: syntax.Target.Target,
@@ -1093,6 +1103,15 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindCompoundIndexAssignmentExpression(CompoundIndexAssignmentExpressionSyntax syntax)
     {
+        if (syntax.Target.IsNullConditional)
+        {
+            // ADR-0073 / issue #710: reject `a?[i] op= v` for the same reason
+            // we reject `a?[i] = v` — the null-conditional indexer cannot be
+            // an assignment target.
+            Diagnostics.ReportNullConditionalIndexAssignmentTarget(syntax.Target.OpenBracketToken.Location);
+            return new BoundErrorExpression(syntax);
+        }
+
         return BindIndexedWriteThroughChain(
             chainBase: null,
             remainingChain: syntax.Target.Target,
