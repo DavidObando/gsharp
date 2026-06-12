@@ -2762,6 +2762,36 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Error);
     }
 
+    /// <summary>
+    /// ADR-0083 / issue #723: GS0317 — a Go-style built-in function
+    /// (<c>len</c>, <c>cap</c>, <c>append</c>, <c>delete</c>) was called in
+    /// a compilation unit that does not <c>import Gsharp.Extensions.Go</c>.
+    /// The message names the built-in and, when there is a clean
+    /// .NET-idiomatic replacement (<c>.Length</c>, <c>.Count</c>,
+    /// <c>.Remove(k)</c>, <c>List[T].Add</c>), points the user at it as an
+    /// alternative to the import. The <c>close(ch)</c> built-in keeps using
+    /// <see cref="ReportGoExtensionsImportRequired"/> (GS0316) because it
+    /// shares the channel surface with <c>chan</c> / <c>&lt;-</c> /
+    /// <c>select</c>; the <c>make(chan T)</c> shape is gated through the
+    /// inner <c>chan</c> type-clause check (also GS0316), so this
+    /// diagnostic only fires for the strict built-in identifiers above.
+    /// </summary>
+    /// <param name="location">The source location of the offending built-in identifier.</param>
+    /// <param name="builtin">The triggering built-in name (e.g. <c>len</c>, <c>cap</c>, <c>append</c>, <c>delete</c>).</param>
+    /// <param name="suggestion">A short alternative form to recommend (e.g. <c>.Length</c>, <c>.Count</c>, <c>.Remove(k)</c>), or <c>null</c> when there is no clean .NET-idiomatic replacement.</param>
+    public void ReportGoBuiltinRequiresImport(TextLocation location, string builtin, string suggestion)
+    {
+        var message = suggestion is null
+            ? $"'{builtin}' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' (ADR-0083)."
+            : $"'{builtin}' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or call '{suggestion}' directly (ADR-0083).";
+
+        Report(
+            location,
+            "GS0317",
+            message,
+            DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

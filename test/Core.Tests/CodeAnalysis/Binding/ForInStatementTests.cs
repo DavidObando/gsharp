@@ -55,6 +55,7 @@ s
     {
         var source = @"
 import System.Collections.Generic
+import Gsharp.Extensions.Go
 
 var dict = Dictionary[string, int32]()
 dict[""a""] = 1

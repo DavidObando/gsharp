@@ -117,12 +117,13 @@ Console.WriteLine(px + py)
 
 ## Arrays, slices, and maps
 
-Fixed arrays use `[N]T`; slices use `[]T` and support `len`, `cap`, indexing, and `append`.
+Fixed arrays use `[N]T`; slices use `[]T` and support `len`, `cap`, indexing, and `append`. The `len`, `cap`, `append`, and `delete` built-ins are Go-style and require `import Gsharp.Extensions.Go` (ADR-0083, GS0317); the .NET-idiomatic alternative is `.Length` / `.Count` / `.Remove(k)` / `List[T].Add` on the respective receivers.
 
 ```gsharp title="Slices.gs"
 package GSharp.Example.Slices
 
 import System
+import Gsharp.Extensions.Go
 
 var nums = []int32{10, 20, 30}
 Console.WriteLine(len(nums))

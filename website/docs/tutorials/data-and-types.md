@@ -297,7 +297,7 @@ o-1
 
 ## 7. Choose arrays, slices, and maps
 
-Fixed arrays use `[N]T`. Slices use `[]T`, support `len`, `cap`, and `append`, and are backed by CLR arrays:
+Fixed arrays use `[N]T`. Slices use `[]T`, support `len`, `cap`, and `append`, and are backed by CLR arrays. The `len`, `cap`, `append`, and `delete` built-ins are Go-style and require `import Gsharp.Extensions.Go` per ADR-0083 (issue #723); the binder emits diagnostic `GS0317` when the import is missing and names the .NET-idiomatic alternative (`.Length`, `.Count`, `.Remove(k)`, `List[T].Add`) so the migration is mechanical when a file does not want the Go surface:
 
 ```gsharp title="Slices.gs"
 // file: Slices.gs
@@ -307,6 +307,7 @@ Fixed arrays use `[N]T`. Slices use `[]T`, support `len`, `cap`, and `append`, a
 package GSharp.Example.Slices
 
 import System
+import Gsharp.Extensions.Go
 
 var nums = []int32{10, 20, 30}
 Console.WriteLine(len(nums))

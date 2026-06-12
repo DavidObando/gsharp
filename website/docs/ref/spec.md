@@ -160,7 +160,7 @@ let xs = []int32{1, 2, 3}
 let ys = [3]int32{1, 2, 3}
 ```
 
-Slices are backed by CLR arrays. `len` and `cap` observe array length, and `append` allocates and copies into a new array in the current implementation.
+Slices are backed by CLR arrays. `len` and `cap` observe array length, and `append` allocates and copies into a new array in the current implementation. The `len`, `cap`, `append`, `delete`, and `make` built-ins are Go-style and require `import Gsharp.Extensions.Go` (ADR-0083); see [Go-style built-ins (`import Gsharp.Extensions.Go`)](#go-style-built-ins-import-gsharpextensionsgo) for the gate and the .NET-idiomatic alternatives (`.Length`, `.Count`, `.Remove(k)`, `List[T].Add`).
 
 ### Maps
 
@@ -208,6 +208,48 @@ Console.WriteLine(d)
 2
 3
 0
+```
+
+### Go-style built-ins (`import Gsharp.Extensions.Go`)
+
+G# inherits a small set of Go-style built-in functions —
+`len`, `cap`, `append`, `delete`, and the `make(chan T[, cap])`
+constructor — that operate on the Go-flavored collection /
+channel surface. Per ADR-0083 (issue #723), every built-in in
+this cluster is gated behind the same per-file
+`import Gsharp.Extensions.Go` as the channel surface
+(ADR-0082). Files that call any of these without the import get
+diagnostic `GS0317` (or `GS0316` for `make(chan T)`, anchored
+at the inner `chan` clause, and for `close(ch)` — see
+"Deconfliction" in ADR-0083).
+
+| Built-in | Resolves to | .NET-idiomatic alternative |
+|---|---|---|
+| `len(arr)` / `len(slice)` / `len(string)` | array / slice / string length | `arr.Length` / `s.Length` |
+| `len(map)` | map entry count | `m.Count` |
+| `cap(slice)` | underlying-storage capacity | — (use the import) |
+| `append(slice, elem)` | grow-and-copy on a slice | `List[T].Add` for mutable lists |
+| `delete(map, key)` | erase a map entry | `m.Remove(k)` |
+| `make(chan T[, cap])` | channel constructor (ADR-0022) | — (use the import) |
+| `close(ch)` | channel-writer complete | — (use the import) |
+
+The GS0317 diagnostic message names the offending built-in and,
+where a .NET-idiomatic alternative exists, names it too — so a
+file that writes `len(arr)` without the import is told "call
+'.Length' directly" instead of being forced to add the import.
+The recovery strategy is identical to ADR-0082's: the binder
+reports GS0317 once per offending site and continues binding
+the call as if the import were present, so subsequent type /
+shape diagnostics still surface in the same pass.
+
+```gsharp title="samples/Slices.gs (excerpt)"
+import Gsharp.Extensions.Go
+
+var nums = []int32{10, 20, 30}
+Console.WriteLine(len(nums))     // 3
+Console.WriteLine(cap(nums))     // 3
+nums = append(nums, 40)
+Console.WriteLine(len(nums))     // 4
 ```
 
 ### Function types

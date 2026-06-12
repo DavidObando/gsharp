@@ -88,6 +88,7 @@ public class Issue611SliceArrayParityTests
         var gsource = """
             package Probe.Tests
             import System
+            import Gsharp.Extensions.Go
 
             func Size[T any](items []T) int32 {
                 return len(items)
@@ -195,6 +196,7 @@ public class Issue611SliceArrayParityTests
         var gsource = """
             package Probe.Tests
             import System
+            import Gsharp.Extensions.Go
 
             var s = []int32{10, 20, 30, 40}
             Console.WriteLine(len(s))
@@ -211,6 +213,7 @@ public class Issue611SliceArrayParityTests
         var gsource = """
             package Probe.Tests
             import System
+            import Gsharp.Extensions.Go
 
             var a = [2]int32{5, 6}
             Console.WriteLine(len(a))
