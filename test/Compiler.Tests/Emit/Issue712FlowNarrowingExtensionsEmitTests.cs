@@ -105,10 +105,11 @@ public class Issue712FlowNarrowingExtensionsEmitTests
     {
         // ADR-0069 + issue #712: the guard-style early-exit composes through
         // `||` so the post-if region observes both `s != nil` AND `!force`.
-        // (We use the post-if lift form instead of an `else` block because the
-        // existing nil-guard ELSE-branch IL emission has a pre-existing bug —
-        // see ADR-0069 issue #735 follow-up — and that bug is unrelated to
-        // the `||` composition exercised here.)
+        // (Originally this test had to use the post-if lift form because the
+        // else-branch form tripped pre-existing if-else lowering bug #737;
+        // that bug was fixed alongside this assertion, and the else-branch
+        // companion lives in `Issue737NilGuardElseBranchEmitTests` to keep
+        // each test scoped to one regression area.)
         var source = """
             package Test
             import System

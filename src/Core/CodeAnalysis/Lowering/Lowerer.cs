@@ -178,26 +178,49 @@ public sealed class Lowerer : BoundTreeRewriter
             //
             // gotoFalse <condition> else
             // <then>
-            // goto end
+            // goto end          // omitted when <then> ends unconditionally
             // else:
             // <else>
-            // end:
+            // end:              // omitted when the `goto end` above was omitted
+            //
+            // Issue #737: the naive shape above emits a dead `goto end` and a
+            // trailing `end:` label whenever the then-arm terminates (return /
+            // throw / unconditional goto). When the if-else is the last
+            // statement of a method body AND the else-arm also terminates, the
+            // `end:` label resolves to an offset past the final `ret`. The
+            // CLR rejects any `br` to past-end-of-body with
+            // `InvalidProgramException`, so the assembly cannot JIT. Lower the
+            // then-arm first to inspect its terminator behavior, then omit
+            // both the dead `goto end` and the dangling `end:` label when the
+            // then-arm can never fall through. (The condition and else-arm
+            // are still lowered via the inner BoundBlockStatement's recursive
+            // RewriteStatement walk.)
             var elseLabel = GenerateLabel();
-            var endLabel = GenerateLabel();
-
-            var gotoFalse = new BoundConditionalGotoStatement(null, elseLabel, node.Condition, false);
-            var gotoEndStatement = new BoundGotoStatement(null, endLabel);
             var elseLabelStatement = new BoundLabelStatement(null, elseLabel);
-            var endLabelStatement = new BoundLabelStatement(null, endLabel);
-            var result = new BoundBlockStatement(
-                null,
-                ImmutableArray.Create<BoundStatement>(
-                gotoFalse,
-                node.ThenStatement,
-                gotoEndStatement,
-                elseLabelStatement,
-                node.ElseStatement,
-                endLabelStatement));
+            var gotoFalse = new BoundConditionalGotoStatement(null, elseLabel, node.Condition, false);
+
+            var loweredThen = this.RewriteStatement(node.ThenStatement);
+            var thenCanFallThrough = !EndsInUnconditionalTransfer(loweredThen);
+
+            var builder = ImmutableArray.CreateBuilder<BoundStatement>();
+            builder.Add(gotoFalse);
+            builder.Add(loweredThen);
+
+            if (thenCanFallThrough)
+            {
+                var endLabel = GenerateLabel();
+                builder.Add(new BoundGotoStatement(null, endLabel));
+                builder.Add(elseLabelStatement);
+                builder.Add(node.ElseStatement);
+                builder.Add(new BoundLabelStatement(null, endLabel));
+            }
+            else
+            {
+                builder.Add(elseLabelStatement);
+                builder.Add(node.ElseStatement);
+            }
+
+            var result = new BoundBlockStatement(null, builder.ToImmutable());
             return RewriteStatement(result);
         }
     }
@@ -1057,6 +1080,48 @@ public sealed class Lowerer : BoundTreeRewriter
             System.Reflection.FieldInfo field => TypeSymbol.FromClrType(field.FieldType),
             _ => TypeSymbol.Error,
         };
+    }
+
+    /// <summary>
+    /// Issue #737: returns <see langword="true"/> when control flow falling
+    /// off the end of <paramref name="statement"/> is unreachable because the
+    /// last (non-label) statement is an unconditional control transfer.
+    /// Conservative — only the obvious leaf shapes are recognized; a
+    /// <see langword="false"/> result is always safe (the caller emits the
+    /// trailing <c>goto end</c> + <c>end:</c> pair). The check looks past
+    /// trailing label statements because labels emit no IL of their own.
+    /// </summary>
+    /// <param name="statement">The statement to inspect.</param>
+    /// <returns><see langword="true"/> when the statement provably ends in
+    /// <c>return</c>, <c>throw</c>, or an unconditional <c>goto</c>; otherwise
+    /// <see langword="false"/>.</returns>
+    private static bool EndsInUnconditionalTransfer(BoundStatement statement)
+    {
+        switch (statement)
+        {
+            case BoundReturnStatement:
+            case BoundThrowStatement:
+            case BoundGotoStatement:
+                return true;
+            case BoundBlockStatement block:
+                {
+                    for (int i = block.Statements.Length - 1; i >= 0; i--)
+                    {
+                        var s = block.Statements[i];
+                        if (s is BoundLabelStatement)
+                        {
+                            continue;
+                        }
+
+                        return EndsInUnconditionalTransfer(s);
+                    }
+
+                    return false;
+                }
+
+            default:
+                return false;
+        }
     }
 
     private static BoundBlockStatement Flatten(BoundStatement statement)
