@@ -142,6 +142,23 @@ subscribed
 would only fire if not removed
 ```
 
+## Idiomatic helpers — `Gsharp.Extensions`
+
+The SDK bundles a `Gsharp.Extensions` assembly with two opt-in helper namespaces. Imports are always explicit — nothing under `Gsharp.Extensions.*` is auto-imported.
+
+```gsharp title="Optional and Sequences"
+import Gsharp.Extensions.Optional
+import Gsharp.Extensions.Sequences
+
+let upper = (string?)("ada").Map(func(s string) string { return s.ToUpper() })
+
+for trio in Sequences.Range(1, 6).Windowed(3) {
+    Console.WriteLine(String.Join(",", trio))
+}
+```
+
+`Optional` adds `Map` / `FlatMap` / `OrElse` / `OrCompute` / `OrThrow` / `IfPresent` / `Filter` over `T?`. `Sequences` adds builders (`Range`, `RangeStep`, `Iterate`, `Repeat`, `Of`, `Empty`), transformers (`Windowed`, `Chunked`, `Indexed`, `Pairwise`, `Interleave`), safe terminals (`FirstOrNil` and friends), and G#-shaped collectors (`ToSlice`, `ToMap`). See the [standard-library reference](/docs/ref/standard-library) and ADR-0084 for the full surface.
+
 Use emitted builds for delegate-heavy interop. The interpreter can evaluate many imported members by reflection, but it cannot marshal every G# function literal into a CLR delegate the same way an emitted assembly can.
 
 Next: [Tutorials](/docs/tutorials/getting-started), or go deeper with the [CLR interop reference](/docs/ref/clr-interop).

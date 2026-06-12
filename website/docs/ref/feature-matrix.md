@@ -134,6 +134,15 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Attributes | Supported | Semantically recognized | Includes `@Attribute` sugar and `@Obsolete`; `[DllImport]` reports `GS0211`. |
 | P/Invoke/`extern` | Not supported | Not supported | Recognized unsupported surface only. |
 
+## Gsharp.Extensions helper namespaces
+
+| Feature | Emit (`gsc`) | Interpreter | Notes |
+| --- | --- | --- | --- |
+| `Gsharp.Extensions.Optional` | Supported | Supported | Extension helpers on `T?` (`Map`, `FlatMap`, `OrElse`, `OrCompute`, `OrThrow`, `IfPresent`, `Filter`). Value-typed (`T : struct`) helpers carry a `*Value` suffix per ADR-0084 (L1). Requires `import Gsharp.Extensions.Optional`. |
+| `Gsharp.Extensions.Sequences` | Supported | Supported | Static builders (`Range`, `RangeStep`, `Iterate`, `Repeat`, `Of`, `Empty`), transformers (`Windowed`, `Chunked`, `Indexed`, `Pairwise`, `Interleave`), safe terminals (`FirstOrNil`, `LastOrNil`, `SingleOrNil` plus `*ValueOrNil` companions), and G#-shaped collectors (`ToSlice`, `ToMap`). Requires `import Gsharp.Extensions.Sequences`. |
+| `Gsharp.Extensions.Go` (gate) | Supported | Supported | Per-file `import Gsharp.Extensions.Go` unlocks the Go-flavored concurrency surface (ADR-0082) and the Go-style built-ins `len`, `cap`, `append`, `delete`, `make` (ADR-0083). |
+| No auto-import policy | N/A | N/A | Nothing under `Gsharp.Extensions.*` is auto-imported — even when implicit imports are enabled. Each namespace is opt-in per file. |
+
 ## Tooling and build
 
 | Feature | Emit (`gsc`) | Interpreter | Notes |

@@ -49,6 +49,16 @@ public class RefactoringBaselineTests
     private static readonly HashSet<string> KnownCompileFailureSamples = new(StringComparer.Ordinal)
     {
         "samples/refactoring-baseline/ClosureCaptureRefTypeField.gs",
+
+        // Samples that import Gsharp.Extensions.* — they require
+        // `/r:Gsharp.Extensions.dll` to bind, which the
+        // RefactoringBaseline compile path (a plain Compilation with no
+        // extra references) does not supply. They are exercised
+        // end-to-end by Compiler.Tests.SampleConformanceTests where the
+        // assembly is staged correctly.
+        "samples/GsharpExtensionsMixed.gs",
+        "samples/GsharpExtensionsOptional.gs",
+        "samples/GsharpExtensionsSequences.gs",
     };
 
     public static IEnumerable<object[]> Samples()

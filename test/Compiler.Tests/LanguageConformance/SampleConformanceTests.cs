@@ -95,6 +95,21 @@ public class SampleConformanceTests
         {
             var outPath = Path.Combine(tempDir, baseName + ".dll");
 
+            // Issue #724: if any source file imports Gsharp.Extensions.*, link
+            // against the shipped Gsharp.Extensions.dll and stage it next to
+            // the emitted assembly so `dotnet exec` can find it at run time.
+            var usesExtensions = sourceFiles.Any(p =>
+                File.ReadAllText(p).Contains("Gsharp.Extensions", StringComparison.Ordinal));
+            string extensionsAssemblyPath = null;
+            if (usesExtensions)
+            {
+                extensionsAssemblyPath = LocateGsharpExtensionsAssembly();
+                Assert.True(
+                    extensionsAssemblyPath != null && File.Exists(extensionsAssemblyPath),
+                    $"sample {sampleName} imports Gsharp.Extensions but Gsharp.Extensions.dll was not found in any expected location");
+                File.Copy(extensionsAssemblyPath, Path.Combine(tempDir, "Gsharp.Extensions.dll"), overwrite: true);
+            }
+
             using var compileOut = new StringWriter();
             using var compileErr = new StringWriter();
             var prevOut = Console.Out;
@@ -110,6 +125,11 @@ public class SampleConformanceTests
                     "/target:exe",
                     "/targetframework:net10.0",
                 };
+                if (extensionsAssemblyPath != null)
+                {
+                    args.Add("/r:" + extensionsAssemblyPath);
+                }
+
                 args.AddRange(sourceFiles);
                 compileExit = Program.Main(args.ToArray());
             }
@@ -122,7 +142,11 @@ public class SampleConformanceTests
             Assert.True(
                 compileExit == 0,
                 $"gsc failed for {sampleName}:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
-            IlVerifier.Verify(outPath, ignoredErrorCodes: IlVerifier.GetKnownIssuesForSample(baseName));
+            var ilVerifyAdditionalRefs = extensionsAssemblyPath != null ? new[] { extensionsAssemblyPath } : null;
+            IlVerifier.Verify(
+                outPath,
+                additionalReferences: ilVerifyAdditionalRefs,
+                ignoredErrorCodes: IlVerifier.GetKnownIssuesForSample(baseName));
             Assert.True(File.Exists(outPath), $"expected emitted assembly at {outPath}");
 
             var psi = new ProcessStartInfo("dotnet")
@@ -163,6 +187,31 @@ public class SampleConformanceTests
             if (Directory.Exists(candidate) && File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
             {
                 return candidate;
+            }
+
+            dir = dir.Parent;
+        }
+
+        return null;
+    }
+
+    private static string LocateGsharpExtensionsAssembly()
+    {
+        var dir = new DirectoryInfo(Path.GetDirectoryName(typeof(SampleConformanceTests).Assembly.Location));
+        while (dir != null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
+            {
+                foreach (var cfg in new[] { "Debug", "Release" })
+                {
+                    var candidate = Path.Combine(dir.FullName, "out", "bin", cfg, "Gsharp.Extensions", "Gsharp.Extensions.dll");
+                    if (File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+
+                return null;
             }
 
             dir = dir.Parent;

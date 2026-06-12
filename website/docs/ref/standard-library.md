@@ -101,6 +101,80 @@ The .NET `Dictionary[K,V]` type is also usable through CLR interop when you impo
 
 `sequence[T]` is the G# type-clause spelling for `IEnumerable[T]`. Iterator functions that return a sequence can use `yield expr`. `async sequence[T]` is the spelling for `IAsyncEnumerable[T]`, and `await for` iterates async streams. Sequence APIs beyond iteration come from the BCL, such as LINQ extension methods imported from `System.Linq`.
 
+## Gsharp.Extensions
+
+The `Gsharp.Extensions` assembly ships with `Gsharp.NET.Sdk` and is referenced by every G# project automatically. Per ADR-0084 it is the idiomatic helper layer over the BCL. Imports are always explicit — nothing under `Gsharp.Extensions.*` is auto-imported, even with the implicit-imports compiler option enabled. The assembly is organised by capability:
+
+- `Gsharp.Extensions.Optional` — extension methods on `T?` for projection, fallback, side-effects, and filtering.
+- `Gsharp.Extensions.Sequences` — static builders and extension transformers over `sequence[T]`.
+- `Gsharp.Extensions.Go` — Go-flavored concurrency surface and built-ins gated behind the import (ADR-0082, ADR-0083).
+
+### Gsharp.Extensions.Optional
+
+Reference-typed (`T : class`) extensions on `T?`:
+
+| Symbol | Form | One-line description |
+| --- | --- | --- |
+| `Map` | `func [T, U] (self T?) Map(f (T) -> U) U?` | Apply `f` to the present value; pass `null` through unchanged. |
+| `FlatMap` | `func [T, U] (self T?) FlatMap(f (T) -> U?) U?` | Chain a projection that itself returns a `U?`, flattening the result. |
+| `OrElse` | `func [T] (self T?) OrElse(default T) T` | Return the present value or the eager fallback `default`. |
+| `OrCompute` | `func [T] (self T?) OrCompute(default () -> T) T` | Return the present value or invoke `default()` lazily for the fallback. |
+| `OrThrow` | `func [T] (self T?) OrThrow(message string) T` | Return the present value or throw `InvalidOperationException(message)`. |
+| `IfPresent` | `func [T] (self T?) IfPresent(action (T) -> void)` | Invoke `action` only when the value is present; no-op otherwise. |
+| `Filter` | `func [T] (self T?) Filter(pred (T) -> bool) T?` | Keep the value when `pred(value)` is true; otherwise yield `null`. |
+
+Value-typed (`T : struct`) companions carry a `*Value` suffix and have identical semantics: `MapValue`, `FlatMapValue`, `OrElseValue`, `OrComputeValue`, `OrThrowValue`, `IfPresentValue`, `FilterValue`. The suffix is a workaround for the constraint-aware overload-resolution gap tracked in ADR-0084 ("Known limitations / L1"); when that gap closes the two surfaces collapse to a single name set.
+
+`Map`, `FlatMap`, `OrElse`, `OrCompute`, `IfPresent`, and `Filter` (plus their `*Value` companions) carry `[MethodImpl(MethodImplOptions.AggressiveInlining)]` so the JIT inlines them across the assembly boundary. `OrThrow` / `OrThrowValue` are intentionally **not** inlined so the failure site is preserved in stack traces.
+
+### Gsharp.Extensions.Sequences
+
+Static builders on `Sequences`:
+
+| Symbol | Form | One-line description |
+| --- | --- | --- |
+| `Range` | `func Range(start int32, count int32) sequence[int32]` | Lazy contiguous range `[start, start + count)`. |
+| `RangeStep` | `func RangeStep(start int32, end int32, step int32) sequence[int32]` | Lazy strided range stopping before `end`; `step` must be non-zero (negative for descending ranges). |
+| `Iterate` | `func Iterate[T](seed T, next (T) -> T) sequence[T]` | Infinite sequence `seed, next(seed), next(next(seed)), …` — pair with `Take(N)` to bound. |
+| `Repeat` | `func Repeat[T](value T) sequence[T]` | Infinite sequence of `value` — pair with `Take(N)` to bound. |
+| `Of` | `func Of[T](values ...T) sequence[T]` | Wrap a `params` array as a sequence. |
+| `Empty` | `func Empty[T]() sequence[T]` | The empty sequence, allocation-free. |
+
+Extension transformers on `sequence[T]`:
+
+| Symbol | Form | One-line description |
+| --- | --- | --- |
+| `Windowed` | `func [T] (self sequence[T]) Windowed(size int32) sequence[[]T]` | Sliding windows of length `size` (stride 1). Empty when source is shorter than `size`. |
+| `Chunked` | `func [T] (self sequence[T]) Chunked(size int32) sequence[[]T]` | Non-overlapping chunks of `size`; the trailing chunk may be shorter. |
+| `Indexed` | `func [T] (self sequence[T]) Indexed() sequence[(int32, T)]` | Pair every element with its zero-based index. |
+| `Pairwise` | `func [T] (self sequence[T]) Pairwise() sequence[(T, T)]` | Yield adjacent pairs `(s0, s1), (s1, s2), …`. Empty when source has fewer than two elements. |
+| `Interleave` | `func [T] (self sequence[T]) Interleave(other sequence[T]) sequence[T]` | Round-robin the two sequences; trailing elements of the longer sequence flush at the end. |
+
+Safe terminals:
+
+| Symbol | Form | One-line description |
+| --- | --- | --- |
+| `FirstOrNil` | `func [T] (self sequence[T]) FirstOrNil() T?` (`T : class`) | First reference-typed element or `null` if empty. |
+| `LastOrNil` | `func [T] (self sequence[T]) LastOrNil() T?` (`T : class`) | Last reference-typed element or `null` if empty. |
+| `SingleOrNil` | `func [T] (self sequence[T]) SingleOrNil() T?` (`T : class`) | Single reference-typed element, or `null` if empty or many. |
+| `FirstValueOrNil` | `func [T] (self sequence[T]) FirstValueOrNil() T?` (`T : struct`) | Value-typed companion to `FirstOrNil`. |
+| `LastValueOrNil` | `func [T] (self sequence[T]) LastValueOrNil() T?` (`T : struct`) | Value-typed companion to `LastOrNil`. |
+| `SingleValueOrNil` | `func [T] (self sequence[T]) SingleValueOrNil() T?` (`T : struct`) | Value-typed companion to `SingleOrNil`. |
+
+G#-shaped collectors:
+
+| Symbol | Form | One-line description |
+| --- | --- | --- |
+| `ToSlice` | `func [T] (self sequence[T]) ToSlice() []T` | Materialise the sequence into a G# slice (`T[]` under the hood). |
+| `ToMap` (tuple form) | `func [K, V] (self sequence[(K, V)]) ToMap() map[K]V` | Build a map from a sequence of key/value tuples. Throws on duplicate keys. |
+| `ToMap` (selector form) | `func [T, K, V] (self sequence[T]) ToMap(keyFn (T) -> K, valueFn (T) -> V) map[K]V` | Project each element to a `(K, V)` pair, then build the map. |
+
+`FirstOrNil` / `LastOrNil` / `SingleOrNil` (plus the `*ValueOrNil` companions), `Indexed`, `Of`, and `Empty` carry `[MethodImpl(MethodImplOptions.AggressiveInlining)]`. The iterator-block transformers (`Windowed`, `Chunked`, `Pairwise`, `Interleave`, `Range`, `RangeStep`, `Iterate`, `Repeat`) are intentionally **not** inlined — their bodies are compiler-generated state machines that the JIT does not inline.
+
+### Gsharp.Extensions.Go
+
+The Go-flavored concurrency cluster — `go`, `chan T`, `<-`, `select`, `close(ch)`, `make(chan T)` — and the Go-style built-ins `len`, `cap`, `append`, `delete`, `make` are all gated behind `import Gsharp.Extensions.Go`. See ADR-0082 and ADR-0083 for the full reference; the [Intrinsic functions](#intrinsic-functions-and-operations) table above summarises the diagnostic codes the binder emits when the import is missing.
+
 ## Functions, delegates, and closures
 
 Function values use `(P1, P2) -> R` type clauses (ADR-0075) and function literals. Compatible function literals and method groups can convert to CLR delegate types during interop. Delegate construction and invocation are documented in [CLR interop](/docs/ref/clr-interop). The legacy `func(P1, P2) R` type-clause spelling continues to parse for one release with the `GS0303` deprecation warning.
