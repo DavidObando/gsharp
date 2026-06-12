@@ -194,6 +194,12 @@ internal sealed partial class ExpressionBinder
                 return BindTupleLiteralExpression((TupleLiteralExpressionSyntax)syntax);
             case SyntaxKind.FunctionLiteralExpression:
                 return lambdas.BindFunctionLiteralExpression((FunctionLiteralExpressionSyntax)syntax);
+            case SyntaxKind.LambdaExpression:
+                // ADR-0074 / issue #714: arrow lambda expression
+                // `(x int32) -> body`. Bound to a BoundFunctionLiteralExpression
+                // so closure capture, emit, interpreter, and lowering all work
+                // through the existing function-literal pipeline.
+                return lambdas.BindLambdaExpression((LambdaExpressionSyntax)syntax);
             case SyntaxKind.AwaitExpression:
                 return BindAwaitExpression((AwaitExpressionSyntax)syntax);
             case SyntaxKind.SwitchExpression:

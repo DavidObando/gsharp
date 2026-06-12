@@ -496,3 +496,15 @@ Cause/fix examples:
 - **GS0300** — `var a = []int32{1,2}; var x = a?[0]`. Fix: the receiver type `[]int32` is non-nullable, so write `a[0]` directly. `?[]` is intended for receivers whose static type permits `nil`.
 - **GS0301** — `dict?["k"] = 1`. Fix: nullable receivers do not have an addressable indexed slot when the receiver is nil; check first (`if dict != nil { dict["k"] = 1 }`) or use a non-nullable local that you've already narrowed.
 
+## Switch-expression arm separator deprecation (GS0302)
+
+ADR-0074 makes `->` the lambda operator and migrates switch-expression arms to use `:` as the pattern/value separator. The legacy `->` arm form remains accepted for one release to ease migration, but every legacy arm produces a warning.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0302 | Warning | `->` in a switch-expression arm is deprecated; use `:` instead (ADR-0074). |
+
+Cause/fix:
+
+- **GS0302** — `let label = switch x { case 0 -> "zero"; default -> "other" }`. Fix: replace each `->` between the pattern and the arm value with `:`, e.g. `case 0: "zero"; default: "other"`. The behaviour is otherwise identical. A future release will remove the legacy form and turn it into a parse error.
+

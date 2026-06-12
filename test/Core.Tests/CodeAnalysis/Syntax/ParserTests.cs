@@ -67,7 +67,7 @@ func Main() {
     {
         const string source = @"
 let v = 1
-let x = switch v { case 1 -> ""a"" default -> ""b"" }
+let x = switch v { case 1: ""a"" default: ""b"" }
 ";
         var tree = SyntaxTree.Parse(source);
 
@@ -79,7 +79,7 @@ let x = switch v { case 1 -> ""a"" default -> ""b"" }
             .Single(v => v.Identifier.Text == "x");
         var expression = Assert.IsType<SwitchExpressionSyntax>(declaration.Initializer);
         Assert.Equal(2, expression.Arms.Length);
-        Assert.Equal(SyntaxKind.RightArrowToken, expression.Arms[0].ArrowToken.Kind);
+        Assert.Equal(SyntaxKind.ColonToken, expression.Arms[0].ArrowToken.Kind);
         Assert.True(expression.Arms[1].IsDefault);
     }
 
@@ -127,7 +127,7 @@ let x = switch v { case 1 -> ""a"" default -> ""b"" }
     [Fact]
     public void Parses_MemberAccess_On_Switch_Expression()
     {
-        const string source = "let r = switch v { case 1 -> \"a\" default -> \"b\" }.ToString()\n";
+        const string source = "let r = switch v { case 1: \"a\" default: \"b\" }.ToString()\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
         var declaration = tree.Root.Members

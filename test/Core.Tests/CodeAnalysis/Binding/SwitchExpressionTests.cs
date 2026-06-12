@@ -24,7 +24,7 @@ public class SwitchExpressionTests
     {
         var scope = BindGlobalScope(@"
 let v = 1
-let label = switch v { case 1 -> ""one"" default -> ""many"" }
+let label = switch v { case 1: ""one"" default: ""many"" }
 ");
 
         Assert.Empty(scope.Diagnostics);
@@ -36,7 +36,7 @@ let label = switch v { case 1 -> ""one"" default -> ""many"" }
     {
         var diagnostics = Bind(@"
 let v = 1
-let label = switch v { case 1 -> ""one"" }
+let label = switch v { case 1: ""one"" }
 ");
 
         Assert.Contains(diagnostics, d => d.Message == "Switch expression must have a 'default' arm.");
@@ -47,7 +47,7 @@ let label = switch v { case 1 -> ""one"" }
     {
         var diagnostics = Bind(@"
 let v = 1
-let label = switch v { default -> ""one"" default -> ""many"" }
+let label = switch v { default: ""one"" default: ""many"" }
 ");
 
         Assert.Contains(diagnostics, d => d.Message.Contains("default", System.StringComparison.OrdinalIgnoreCase));
@@ -58,7 +58,7 @@ let label = switch v { default -> ""one"" default -> ""many"" }
     {
         var diagnostics = Bind(@"
 let v = 1
-let label = switch v { case 1 -> ""one"" default -> 2 }
+let label = switch v { case 1: ""one"" default: 2 }
 ");
 
         Assert.Contains(diagnostics, d => d.Message.Contains("All switch-expression arms must produce the same type", System.StringComparison.Ordinal));
@@ -69,7 +69,7 @@ let label = switch v { case 1 -> ""one"" default -> 2 }
     {
         var diagnostics = Bind(@"
 let v = 1
-let label = switch v { case ""one"" -> ""one"" default -> ""many"" }
+let label = switch v { case ""one"": ""one"" default: ""many"" }
 ");
 
         Assert.Contains(diagnostics, d => d.Message.Contains("Switch case value", System.StringComparison.Ordinal));
@@ -83,7 +83,7 @@ let label = switch v { case ""one"" -> ""one"" default -> ""many"" }
     {
         var result = Evaluate($@"
 let v = {input}
-let label = switch v {{ case 1 -> ""one"" case 2 -> ""two"" default -> ""many"" }}
+let label = switch v {{ case 1: ""one"" case 2: ""two"" default: ""many"" }}
 label
 ");
 
@@ -96,7 +96,7 @@ label
     {
         var result = Evaluate(@"
 let v = ""b""
-let label = switch v { case ""a"" -> 1 case ""b"" -> 2 default -> 3 }
+let label = switch v { case ""a"": 1 case ""b"": 2 default: 3 }
 label
 ");
 
@@ -111,7 +111,7 @@ label
     {
         var result = Evaluate($@"
 let v = {input}
-let label = switch v {{ case true -> ""yes"" case false -> ""no"" default -> ""maybe"" }}
+let label = switch v {{ case true: ""yes"" case false: ""no"" default: ""maybe"" }}
 label
 ");
 
@@ -124,7 +124,7 @@ label
     {
         var result = Evaluate(@"
 let v = false
-let label = switch v { case true -> ""yes"" default -> ""maybe"" }
+let label = switch v { case true: ""yes"" default: ""maybe"" }
 label
 ");
 

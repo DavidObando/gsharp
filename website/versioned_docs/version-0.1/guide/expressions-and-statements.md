@@ -54,9 +54,9 @@ count += 1
 
 ```gsharp
 let label = switch n {
-case 0 -> "zero"
-case 1 -> "one"
-default -> "many"
+case 0: "zero"
+case 1: "one"
+default: "many"
 }
 ```
 

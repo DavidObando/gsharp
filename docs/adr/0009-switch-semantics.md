@@ -26,15 +26,15 @@ Kotlin's `when`: expression-first, arms can be predicates (`is`, `in`, compariso
 
 ```gs
 let label = switch x {
-  case 0 -> "zero"
-  case 1, 2, 3 -> "small"
-  case > 100 -> "huge"
-  default -> "other"
+  case 0: "zero"
+  case 1, 2, 3: "small"
+  case > 100: "huge"
+  default: "other"
 }
 
 switch shape {
-  case c is Circle -> draw_circle(c)
-  case r is Rect   -> draw_rect(r)
+  case c is Circle: draw_circle(c)
+  case r is Rect  : draw_rect(r)
 }  // exhaustive over sealed Shape — no default needed
 ```
 

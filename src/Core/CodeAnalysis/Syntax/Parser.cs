@@ -4096,6 +4096,16 @@ public class Parser
         switch (Current.Kind)
         {
             case SyntaxKind.OpenParenthesisToken:
+                // ADR-0074 / issue #714: `(p1 T1, p2 T2) -> body` is a lambda
+                // expression. Disambiguated by bounded look-ahead — see
+                // LooksLikeLambdaStart — so a parenthesised expression or
+                // tuple literal that is not followed by `->` continues to
+                // parse via the existing path.
+                if (LooksLikeLambdaStart())
+                {
+                    return ParseLambdaExpression();
+                }
+
                 return ParsePostfixChain(ParseParenthesizedExpression());
 
             case SyntaxKind.FalseKeyword:
@@ -4300,6 +4310,198 @@ public class Parser
         return new FunctionLiteralExpressionSyntax(syntaxTree, asyncModifier, funcKeyword, openParen, parameters, closeParen, returnType, body);
     }
 
+    // ADR-0074 / issue #714: bounded look-ahead for a lambda expression
+    // starting at a `(`. Returns true if the token stream looks like
+    // `() -> …` or `(ident type, …) -> …`. Otherwise the caller falls back
+    // to parsing a parenthesised expression / tuple literal.
+    private bool LooksLikeLambdaStart()
+    {
+        if (Current.Kind != SyntaxKind.OpenParenthesisToken)
+        {
+            return false;
+        }
+
+        // Walk forward counting nested grouping tokens until we find the
+        // matching `)` for the opening `(`. Bail out if we cannot match.
+        var parenDepth = 1;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var offset = 1;
+        const int maxScan = 4096;
+        while (offset < maxScan)
+        {
+            var k = Peek(offset).Kind;
+            if (k == SyntaxKind.EndOfFileToken)
+            {
+                return false;
+            }
+
+            if (k == SyntaxKind.OpenParenthesisToken)
+            {
+                parenDepth++;
+            }
+            else if (k == SyntaxKind.CloseParenthesisToken)
+            {
+                if (bracketDepth == 0 && braceDepth == 0)
+                {
+                    parenDepth--;
+                    if (parenDepth == 0)
+                    {
+                        break;
+                    }
+                }
+                else
+                {
+                    parenDepth--;
+                }
+            }
+            else if (k == SyntaxKind.OpenSquareBracketToken)
+            {
+                bracketDepth++;
+            }
+            else if (k == SyntaxKind.CloseSquareBracketToken)
+            {
+                if (bracketDepth > 0)
+                {
+                    bracketDepth--;
+                }
+            }
+            else if (k == SyntaxKind.OpenBraceToken)
+            {
+                braceDepth++;
+            }
+            else if (k == SyntaxKind.CloseBraceToken)
+            {
+                if (braceDepth > 0)
+                {
+                    braceDepth--;
+                }
+            }
+
+            offset++;
+        }
+
+        if (parenDepth != 0)
+        {
+            return false;
+        }
+
+        // Peek(offset) is the closing `)`. The lambda commit requires `->` to
+        // immediately follow at the next non-trivia token slot.
+        if (Peek(offset + 1).Kind != SyntaxKind.RightArrowToken)
+        {
+            return false;
+        }
+
+        // Empty parameter list `()`: definitively a zero-param lambda.
+        if (offset == 1)
+        {
+            return true;
+        }
+
+        // Non-empty parameter list: the first interior token must look like a
+        // parameter — i.e. an identifier (possibly preceded by `@` annotations
+        // or the contextual `scoped`/`ref`/`out`/`in` modifiers used by
+        // ParseParameter) followed by a token that could start a type clause
+        // (i.e. NOT `,`, `)`, or `=`, which would indicate a positional
+        // expression rather than a typed parameter).
+        var j = 1;
+
+        // Optional `@Annot[(args)]` annotations before the first parameter.
+        while (Peek(j).Kind == SyntaxKind.AtToken)
+        {
+            j++;
+            if (Peek(j).Kind == SyntaxKind.IdentifierToken)
+            {
+                j++;
+                while (Peek(j).Kind == SyntaxKind.DotToken && Peek(j + 1).Kind == SyntaxKind.IdentifierToken)
+                {
+                    j += 2;
+                }
+
+                if (Peek(j).Kind == SyntaxKind.OpenParenthesisToken)
+                {
+                    var innerDepth = 1;
+                    j++;
+                    while (j < offset && innerDepth > 0)
+                    {
+                        var kk = Peek(j).Kind;
+                        if (kk == SyntaxKind.OpenParenthesisToken)
+                        {
+                            innerDepth++;
+                        }
+                        else if (kk == SyntaxKind.CloseParenthesisToken)
+                        {
+                            innerDepth--;
+                        }
+
+                        j++;
+                    }
+                }
+            }
+        }
+
+        // Optional `scoped` / `ref` / `out` / `in` contextual modifier.
+        if (Peek(j).Kind == SyntaxKind.IdentifierToken
+            && (Peek(j).Text == "scoped" || Peek(j).Text == "ref" || Peek(j).Text == "out" || Peek(j).Text == "in")
+            && Peek(j + 1).Kind == SyntaxKind.IdentifierToken)
+        {
+            j++;
+        }
+
+        if (Peek(j).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        // Token after the parameter name must look like the start of a type
+        // clause — anything that ParseTypeClause can consume — and crucially
+        // NOT `,`, `)`, or `=`, which would mean the author wrote a value
+        // expression, not a typed parameter list.
+        var afterIdent = Peek(j + 1).Kind;
+        switch (afterIdent)
+        {
+            case SyntaxKind.CommaToken:
+            case SyntaxKind.CloseParenthesisToken:
+            case SyntaxKind.EqualsToken:
+            case SyntaxKind.EqualsEqualsToken:
+            case SyntaxKind.PlusToken:
+            case SyntaxKind.MinusToken:
+            case SyntaxKind.StarToken:
+            case SyntaxKind.SlashToken:
+            case SyntaxKind.PercentToken:
+            case SyntaxKind.AmpersandAmpersandToken:
+            case SyntaxKind.PipePipeToken:
+            case SyntaxKind.QuestionToken:
+            case SyntaxKind.QuestionDotToken:
+            case SyntaxKind.QuestionQuestionEqualsToken:
+            case SyntaxKind.LessToken:
+            case SyntaxKind.LessOrEqualsToken:
+            case SyntaxKind.GreaterToken:
+            case SyntaxKind.GreaterOrEqualsToken:
+            case SyntaxKind.BangEqualsToken:
+            case SyntaxKind.DotToken:
+            case SyntaxKind.SemicolonToken:
+                return false;
+            default:
+                return true;
+        }
+    }
+
+    private LambdaExpressionSyntax ParseLambdaExpression()
+    {
+        // ADR-0074 / issue #714: `(p1 T1, p2 T2) -> body` lambda expression.
+        // The opening `(` is required; an empty parameter list is permitted.
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var parameters = ParseParameterList();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var arrow = MatchToken(SyntaxKind.RightArrowToken);
+        var body = Current.Kind == SyntaxKind.OpenBraceToken
+            ? ParseBlockExpression()
+            : ParseExpression();
+        return new LambdaExpressionSyntax(syntaxTree, openParen, parameters, closeParen, arrow, body);
+    }
+
     private ExpressionSyntax ParseSwitchExpression()
     {
         var switchKeyword = MatchToken(SyntaxKind.SwitchKeyword);
@@ -4328,16 +4530,37 @@ public class Parser
         if (Current.Kind == SyntaxKind.DefaultKeyword)
         {
             var defaultKeyword = MatchToken(SyntaxKind.DefaultKeyword);
-            var defaultArrow = MatchToken(SyntaxKind.RightArrowToken);
+            var defaultArrow = MatchSwitchExpressionArmSeparator();
             var defaultResult = ParseExpression();
             return new SwitchExpressionArmSyntax(syntaxTree, defaultKeyword, value: null, defaultArrow, defaultResult);
         }
 
         var caseKeyword = MatchToken(SyntaxKind.CaseKeyword);
         var value = ParsePattern();
-        var arrow = MatchToken(SyntaxKind.RightArrowToken);
+        var arrow = MatchSwitchExpressionArmSeparator();
         var result = ParseExpression();
         return new SwitchExpressionArmSyntax(syntaxTree, caseKeyword, value, arrow, result);
+    }
+
+    // ADR-0074 / issue #714: switch-expression arms accept either `:` (new) or
+    // `->` (deprecated). On `->` the parser records GS0302 and continues —
+    // both forms produce the same SwitchExpressionArmSyntax node and the
+    // separator token's Kind tells callers which form was used.
+    private SyntaxToken MatchSwitchExpressionArmSeparator()
+    {
+        if (Current.Kind == SyntaxKind.ColonToken)
+        {
+            return MatchToken(SyntaxKind.ColonToken);
+        }
+
+        if (Current.Kind == SyntaxKind.RightArrowToken)
+        {
+            var arrow = MatchToken(SyntaxKind.RightArrowToken);
+            Diagnostics.ReportSwitchExpressionArmArrowDeprecated(arrow.Location);
+            return arrow;
+        }
+
+        return MatchToken(SyntaxKind.ColonToken);
     }
 
     private ExpressionSyntax ParseMapCreationExpression()

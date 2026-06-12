@@ -19,7 +19,7 @@ public class PatternEvaluationTests
     {
         AssertEvaluates(@"
 let v = 1
-let x = switch v { case 1 -> ""one"" default -> ""other"" }
+let x = switch v { case 1: ""one"" default: ""other"" }
 x
 ", "one");
     }
@@ -29,7 +29,7 @@ x
     {
         AssertEvaluates(@"
 let v = true
-let x = switch v { case _ -> 7 }
+let x = switch v { case _: 7 }
 x
 ", 7);
     }
@@ -40,7 +40,7 @@ x
         AssertEvaluates(@"
 type User class { var Name string }
 let u = User{Name: ""x""}
-let x = switch u { case v is User -> v.Name default -> ""n"" }
+let x = switch u { case v is User: v.Name default: ""n"" }
 x
 ", "x");
     }
@@ -51,7 +51,7 @@ x
         AssertEvaluates(@"
 type User class { var Name string var Age int32 }
 let u = User{Name: ""x"", Age: 1}
-let x = switch u { case { Name: ""x"", Age: > 0 } -> ""hit"" default -> ""miss"" }
+let x = switch u { case { Name: ""x"", Age: > 0 }: ""hit"" default: ""miss"" }
 x
 ", "hit");
     }
@@ -61,7 +61,7 @@ x
     {
         AssertEvaluates(@"
 let v = 3
-let x = switch v { case > 0 -> ""pos"" default -> ""other"" }
+let x = switch v { case > 0: ""pos"" default: ""other"" }
 x
 ", "pos");
     }
@@ -71,7 +71,7 @@ x
     {
         AssertEvaluates(@"
 let a = []int32{1, 2, 3}
-let x = switch a { case [1, _, 3] -> ""hit"" default -> ""miss"" }
+let x = switch a { case [1, _, 3]: ""hit"" default: ""miss"" }
 x
 ", "hit");
     }

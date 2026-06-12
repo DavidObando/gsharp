@@ -31,9 +31,9 @@ type Mul class : Expr {
 
 func eval(e Expr) int32 {
     return switch e {
-        case l is Lit -> l.Value
-        case a is Add -> eval(a.Left) + eval(a.Right)
-        case m is Mul -> eval(m.Left) * eval(m.Right)
+        case l is Lit: l.Value
+        case a is Add: eval(a.Left) + eval(a.Right)
+        case m is Mul: eval(m.Left) * eval(m.Right)
     }
 }
 

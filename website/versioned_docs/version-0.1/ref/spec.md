@@ -401,9 +401,9 @@ Switch expressions use `->` arms and require coverage or a default arm as enforc
 
 ```gsharp
 let description = switch value {
-case 0 -> "zero"
-case 1 -> "one"
-default -> "many"
+case 0: "zero"
+case 1: "one"
+default: "many"
 }
 ```
 

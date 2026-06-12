@@ -29,7 +29,7 @@ public class DecimalPatternEmitTests
         const string Source = @"package DecPatMatch
 import System
 let v = 1.5m
-let x = switch v { case 1.5m -> ""hit"" default -> ""miss"" }
+let x = switch v { case 1.5m: ""hit"" default: ""miss"" }
 Console.WriteLine(x)
 ";
         var output = CompileLoadInvokeCaptureStdout(Source, nameof(Switch_DecimalConstantPattern_Matches));
@@ -42,7 +42,7 @@ Console.WriteLine(x)
         const string Source = @"package DecPatMiss
 import System
 let v = 2.5m
-let x = switch v { case 1.5m -> ""hit"" default -> ""miss"" }
+let x = switch v { case 1.5m: ""hit"" default: ""miss"" }
 Console.WriteLine(x)
 ";
         var output = CompileLoadInvokeCaptureStdout(Source, nameof(Switch_DecimalConstantPattern_DoesNotMatch_FallsThroughToDefault));
@@ -56,10 +56,10 @@ Console.WriteLine(x)
 import System
 let v = 3.25m
 let x = switch v {
-    case 1.0m -> ""one""
-    case 2.0m -> ""two""
-    case 3.25m -> ""three-quarter""
-    default -> ""other""
+    case 1.0m: ""one""
+    case 2.0m: ""two""
+    case 3.25m: ""three-quarter""
+    default: ""other""
 }
 Console.WriteLine(x)
 ";

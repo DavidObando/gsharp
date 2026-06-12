@@ -61,9 +61,9 @@ greeting ??= "ignored" // no-op — RHS not evaluated
 
 ```gsharp
 let label = switch n {
-case 0 -> "zero"
-case 1 -> "one"
-default -> "many"
+case 0: "zero"
+case 1: "one"
+default: "many"
 }
 ```
 

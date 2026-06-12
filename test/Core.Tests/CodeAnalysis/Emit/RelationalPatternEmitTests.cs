@@ -32,7 +32,7 @@ public class RelationalPatternEmitTests
         const string Source = @"package P
 import System
 let v = 4294967295u
-let r = switch v { case > 1u -> ""hi"" default -> ""lo"" }
+let r = switch v { case > 1u: ""hi"" default: ""lo"" }
 Console.WriteLine(r)
 ";
         Assert.Contains("hi", CompileLoadInvokeCaptureStdout(Source, "RelPatUInt32"));
@@ -44,7 +44,7 @@ Console.WriteLine(r)
         const string Source = @"package P
 import System
 let v = 4294967295u
-let r = switch v { case >= 2u -> ""ge"" default -> ""lt"" }
+let r = switch v { case >= 2u: ""ge"" default: ""lt"" }
 Console.WriteLine(r)
 ";
         Assert.Contains("ge", CompileLoadInvokeCaptureStdout(Source, "RelPatUInt32Ge"));
@@ -57,7 +57,7 @@ Console.WriteLine(r)
         const string Source = @"package P
 import System
 let v = 18446744073709551615UL
-let r = switch v { case > 1UL -> ""hi"" default -> ""lo"" }
+let r = switch v { case > 1UL: ""hi"" default: ""lo"" }
 Console.WriteLine(r)
 ";
         Assert.Contains("hi", CompileLoadInvokeCaptureStdout(Source, "RelPatUInt64"));
@@ -71,7 +71,7 @@ Console.WriteLine(r)
         const string Source = @"package P
 import System
 let v = 1UL
-let r = switch v { case <= 18446744073709551615UL -> ""le"" default -> ""gt"" }
+let r = switch v { case <= 18446744073709551615UL: ""le"" default: ""gt"" }
 Console.WriteLine(r)
 ";
         Assert.Contains("le", CompileLoadInvokeCaptureStdout(Source, "RelPatUInt64Le"));
@@ -85,7 +85,7 @@ Console.WriteLine(r)
         const string Source = @"package P
 import System
 let c = '\uFFFE'
-let r = switch c { case > 'A' -> ""hi"" default -> ""lo"" }
+let r = switch c { case > 'A': ""hi"" default: ""lo"" }
 Console.WriteLine(r)
 ";
         Assert.Contains("hi", CompileLoadInvokeCaptureStdout(Source, "RelPatChar"));
@@ -100,10 +100,10 @@ Console.WriteLine(r)
         const string Source = @"package P
 import System
 let v = 0.0 / 0.0
-let g  = switch v { case >  0.0 -> ""gt"" default -> ""nope"" }
-let l  = switch v { case <  0.0 -> ""lt"" default -> ""nope"" }
-let ge = switch v { case >= 0.0 -> ""ge"" default -> ""nope"" }
-let le = switch v { case <= 0.0 -> ""le"" default -> ""nope"" }
+let g  = switch v { case >  0.0: ""gt"" default: ""nope"" }
+let l  = switch v { case <  0.0: ""lt"" default: ""nope"" }
+let ge = switch v { case >= 0.0: ""ge"" default: ""nope"" }
+let le = switch v { case <= 0.0: ""le"" default: ""nope"" }
 Console.WriteLine(g)
 Console.WriteLine(l)
 Console.WriteLine(ge)
@@ -119,9 +119,9 @@ Console.WriteLine(le)
         const string Source = @"package P
 import System
 let v = 0.0f / 0.0f
-let g  = switch v { case >  0.0f -> ""gt"" default -> ""nope"" }
-let ge = switch v { case >= 0.0f -> ""ge"" default -> ""nope"" }
-let le = switch v { case <= 0.0f -> ""le"" default -> ""nope"" }
+let g  = switch v { case >  0.0f: ""gt"" default: ""nope"" }
+let ge = switch v { case >= 0.0f: ""ge"" default: ""nope"" }
+let le = switch v { case <= 0.0f: ""le"" default: ""nope"" }
 Console.WriteLine(g)
 Console.WriteLine(ge)
 Console.WriteLine(le)
@@ -136,7 +136,7 @@ Console.WriteLine(le)
         const string Source = @"package P
 import System
 let v = 1.5
-let r = switch v { case > 1.0 -> ""hi"" default -> ""lo"" }
+let r = switch v { case > 1.0: ""hi"" default: ""lo"" }
 Console.WriteLine(r)
 ";
         Assert.Contains("hi", CompileLoadInvokeCaptureStdout(Source, "RelPatFloat64Pos"));
@@ -151,7 +151,7 @@ Console.WriteLine(r)
         const string Source = @"package P
 import System
 let v = -5
-let r = switch v { case < 0 -> ""neg"" default -> ""nn"" }
+let r = switch v { case < 0: ""neg"" default: ""nn"" }
 Console.WriteLine(r)
 ";
         Assert.Contains("neg", CompileLoadInvokeCaptureStdout(Source, "RelPatInt32Signed"));

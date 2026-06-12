@@ -47,7 +47,7 @@ public class NullableTypePatternEmitTests
     {
         const string Source = @"package P420
 let v = 1
-let x = switch v { case y is int32? -> 1 default -> 0 }
+let x = switch v { case y is int32?: 1 default: 0 }
 ";
         var produced = TryCompileToTempBinary(Source, out var diagnostics);
 

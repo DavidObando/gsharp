@@ -124,6 +124,7 @@ InterpolatedStringToken
 IsExpression
 IsKeyword
 LabeledStatement
+LambdaExpression
 LeftArrowToken
 LessOrEqualsToken
 LessToken

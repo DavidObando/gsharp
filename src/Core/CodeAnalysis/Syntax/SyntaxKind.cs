@@ -327,6 +327,12 @@ public enum SyntaxKind
     // only in G#; the binder validates LHS is nullable (GS0298) and
     // produces a lowered `if a == nil { a = b }` shape.
     NullCoalescingAssignmentStatement,
+
+    // ADR-0074 / issue #714: a lambda expression `(p T) -> body` (with or
+    // without parameters; body is an expression or a `{ … }` block). Bound to
+    // a `BoundFunctionLiteralExpression` so closure capture, emit, interpreter,
+    // and lowering all work without a new bound-node kind.
+    LambdaExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

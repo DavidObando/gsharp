@@ -112,7 +112,7 @@ value
         var result = Evaluate(@"
 type Color enum { Red, Green, Blue }
 let color = Color.Blue
-let label = switch color { case Color.Red -> ""red"" case Color.Green -> ""green"" default -> ""other"" }
+let label = switch color { case Color.Red: ""red"" case Color.Green: ""green"" default: ""other"" }
 label
 ");
 
@@ -142,7 +142,7 @@ func F() {
         var diagnostics = Evaluate(@"
 type Color enum { Red, Green }
 let color = Color.Red
-let label = switch color { case 0 -> ""red"" default -> ""other"" }
+let label = switch color { case 0: ""red"" default: ""other"" }
 label
 ").Diagnostics;
 

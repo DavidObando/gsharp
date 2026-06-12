@@ -385,12 +385,13 @@ Primary expressions include literals, identifiers, calls, generic calls, struct 
 
 Generic instantiation uses brackets and bounded lookahead to distinguish type arguments from indexing. Examples include `Id[int32](1)` and `Box[string]{Value: "x"}`.
 
-Function literals use `func` or `async func`. A trailing lambda can appear after an explicit call close-paren and is desugared into the final argument. There is no arrow-lambda expression today; `->` belongs to switch expressions.
+Function literals use `func` or `async func`. A trailing lambda can appear after an explicit call close-paren and is desugared into the final argument. ADR-0074 (issue #714) also introduces a dedicated arrow-lambda expression form: `(p1 T1, p2 T2) -> body`. The parameter list is always parenthesized — there is no bare-identifier shorthand. The body is either a single expression or a brace-delimited block expression whose trailing expression is the lambda value. Arrow lambdas share the function-literal capture, lowering, and emit pipeline (closures, `ldftn`/`newobj`, delegate construction).
 
 ```ebnf
 FunctionLiteral = "func" "(" Parameters? ")" TypeClause? Block
                 | "async" "func" "(" Parameters? ")" TypeClause? Block .
 TrailingLambda  = FunctionLiteral .
+LambdaExpression = "(" Parameters? ")" "->" ( Expression | Block ) .
 ```
 
 ### Accessor chains
@@ -403,17 +404,32 @@ Struct literals use `TypeName{Field: value}`. Data structs also support copy/upd
 
 ### Switch expressions and patterns
 
-Switch expressions use `->` arms and require coverage or a default arm as enforced by diagnostics.
+Switch expressions use `:` between the pattern and the arm value (per ADR-0074 / issue #714). The legacy `->` arm separator is still accepted as a one-release migration aid but emits warning `GS0302`. Switch expressions require coverage or a default arm as enforced by diagnostics.
 
 ```gsharp
 let description = switch value {
-case 0 -> "zero"
-case 1 -> "one"
-default -> "many"
+case 0: "zero"
+case 1: "one"
+default: "many"
 }
 ```
 
 Patterns include list-like patterns, property patterns, type tests with `is`, wildcard `_`, relational patterns, and expression patterns.
+
+### Lambda expressions (ADR-0074)
+
+`->` introduces a lambda expression with a parenthesized parameter list. There is no bare-identifier shorthand: `(x int32) -> x + 1` is a lambda, `x -> x + 1` is not. The body is either a single expression or a brace-delimited block whose trailing expression supplies the lambda value. Lambdas may capture outer locals; the closure machinery is shared with `func` literals.
+
+```gsharp
+let inc = (x int32) -> x + 1
+let add = (a int32, b int32) -> a + b
+let triple = (x int32) -> {
+    let doubled = x * 2
+    doubled + x
+}
+```
+
+Parameter type inference and a dedicated function-type syntax (`(T) -> R`) are tracked separately — see issues #715 and #716. Today every lambda parameter must carry an explicit type clause.
 
 ### If expressions (ADR-0064)
 
@@ -457,7 +473,7 @@ Assignment        = identifier "=" Assignment
 BinaryExpression  = PrefixExpression { BinaryOperator PrefixExpression } .
 PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" ) PrefixExpression | PostfixExpression .
 PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) Expression "]" } ( "with" "{" FieldEqualsList? "}" )? .
-PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | SwitchExpr | IfExpression | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
+PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | SwitchExpr | IfExpression | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
 (* Postfix chains apply to every PrimaryExpression except a bare numeric Literal: `42.Member` is not accepted; use `(42).Member`. See ADR-0054. *)
 Literal           = Number | String | InterpolatedString | "true" | "false" | "nil" | char .
 InterpolatedString = '"' { InterpolationText | "$$" | "$" identifier | InterpolationHole } '"' .
@@ -843,7 +859,8 @@ YieldStmt         ::= contextual 'yield' Expression
 SwitchStmt        ::= 'switch' Expression '{' SwitchCase* '}'
 SwitchCase        ::= 'case' Pattern Block | 'default' Block
 SwitchExpr        ::= 'switch' Expression '{' SwitchArm* '}'
-SwitchArm         ::= 'case' Pattern '->' Expression | 'default' '->' Expression
+SwitchArm         ::= 'case' Pattern (':' | '->') Expression | 'default' (':' | '->') Expression
+                      (* '->' is the legacy ADR-0009 form. Per ADR-0074 (#714) ':' is the preferred separator; the legacy '->' form is still accepted but emits warning GS0302. *)
 Pattern           ::= '[' Pattern (',' Pattern)* ']'
                     | '{' identifier ':' Pattern (',' identifier ':' Pattern)* '}'
                     | identifier 'is' TypeClause
@@ -877,7 +894,7 @@ Assignment        ::= identifier '=' Assignment
 BinaryExpression  ::= PrefixExpression (BinaryOperator PrefixExpression)*
 PrefixExpression  ::= ('+' | '-' | '!' | '^' | '*' | '&' | '<-' | 'await') PrefixExpression | PostfixExpression
 PostfixExpression ::= PrimaryExpression '!!'* (('.' | '?.') NameOrCall | ('[' | '?[') Expression ']')* ('with' '{' FieldEqualsList? '}')?
-PrimaryExpression ::= Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | SwitchExpr | '(' Expression ')' | TupleLiteral | MakeChannel | TypeOf | NameOf
+PrimaryExpression ::= Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | SwitchExpr | '(' Expression ')' | TupleLiteral | MakeChannel | TypeOf | NameOf
 Literal           ::= Number | String | InterpolatedString | 'true' | 'false' | 'nil' | char
 InterpolatedString ::= '"' ( InterpolationText | '$$' | '$' identifier | InterpolationHole )* '"'
 InterpolationHole ::= '${' Expression ( ',' Expression )? ( ':' FormatText )? '}'
@@ -890,6 +907,7 @@ ArrayLiteral      ::= '[' Number? ']' identifier '{' ExpressionList? '}'
 MapLiteral        ::= 'map' '[' TypeClause ']' TypeClause '{' MapEntryList? '}'
 MapEntry          ::= Expression ':' Expression
 FunctionLiteral   ::= 'func' '(' Parameters? ')' TypeClause? Block | 'async' 'func' '(' Parameters? ')' TypeClause? Block
+LambdaExpression  ::= '(' Parameters? ')' '->' ( Expression | Block )
 TrailingLambda    ::= FunctionLiteral
 MakeChannel       ::= 'make' '(' 'chan' TypeClause (',' Expression)? ')'
 TypeOf            ::= 'typeof' '(' TypeClause ')'

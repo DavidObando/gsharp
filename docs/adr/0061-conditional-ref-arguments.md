@@ -129,7 +129,7 @@ A conditional ref-argument may appear as the value of a named argument: `f(targe
 
 ### 6. Foreclosed (v1)
 
-- **Three-way or n-way conditionals.** Only the two-arm `?:` form is recognised. A switch-expression-shaped lvalue selector (`switch x { 1 -> ref a; default -> ref b }`) is a separate, larger feature.
+- **Three-way or n-way conditionals.** Only the two-arm `?:` form is recognised. A switch-expression-shaped lvalue selector (`switch x { case 1: ref a; default: ref b }`) is a separate, larger feature.
 - **Inline-declaration `out` branches** (`ref cond ? out var n : out var m`). One branch declaring a local that only conditionally exists is incoherent. Emit GS0246.
 - **General ternary expression.** This ADR does *not* introduce `cond ? a : b` as a value expression in arbitrary positions. That remains a separate decision.
 - **Mixed-modifier branches** (`ref cond ? ref x : in y`). The inner modifiers on each branch, if present, must match the outer modifier. Otherwise GS0249 (new).

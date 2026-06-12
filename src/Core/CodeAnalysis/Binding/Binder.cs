@@ -240,7 +240,8 @@ public sealed class Binder
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
             resolveClrTypeForGenericArg: ResolveClrTypeForGenericArg,
             getCurrentFunction: () => this.function,
-            setCurrentFunction: fn => this.function = fn);
+            setCurrentFunction: fn => this.function = fn,
+            bindLambdaBodyExpression: syntax => expressions.BindLambdaBodyExpression(syntax));
         statements = new StatementBinder(
             binderCtx,
             conversions,

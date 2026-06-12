@@ -1,9 +1,9 @@
 # ADR-0050: `->` arrow trailing-lambda syntax
 
-- **Status**: Proposed
+- **Status**: Superseded by [ADR-0074](0074-arrow-lambda-and-colon-switch-arms.md)
 - **Date**: 2026-05-28
 - **Phase**: Phase 7 polish
-- **Related**: issue #198, PR #74 (Phase 4.9 trailing-lambda), ADR-0023 (async state machine), ADR-0043 (`async func` type clause)
+- **Related**: issue #198, PR #74 (Phase 4.9 trailing-lambda), ADR-0023 (async state machine), ADR-0043 (`async func` type clause), [ADR-0074](0074-arrow-lambda-and-colon-switch-arms.md) (`->` repurposed as the lambda operator; this trailing-lambda-connector proposal is therefore no longer the way `->` is spent)
 
 ## Context
 
@@ -114,7 +114,7 @@ Negative:
 
 - Two syntactic spellings exist for the same thing (Phase 4.9 `func` form and `->` form), which may cause style divergence in multi-author codebases until formatter guidance is adopted.
 - Return-type inference is a new binder capability (though bounded to trailing-lambda contexts). It adds a bidirectional type-flow step: the call site's expected parameter type must be resolved before the lambda body is bound.
-- `->` was previously only seen inside switch arm bodies (`case X -> value`). Encountering it at statement/expression level is a new context that readers must learn.
+- `->` was previously only seen inside switch arm bodies (originally `case X -> value`, now `case X: value` per ADR-0074). Encountering it at statement/expression level is a new context that readers must learn.
 
 Neutral:
 

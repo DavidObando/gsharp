@@ -101,7 +101,7 @@ default { var len = s.Length }
     {
         var result = Evaluate(@"
 let s string? = ""hello""
-let len = switch s { case x is string -> s.Length default -> 0 }
+let len = switch s { case x is string: s.Length default: 0 }
 len
 ");
 
