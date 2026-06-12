@@ -1,7 +1,7 @@
 {
   "name": "vscode-gsharp",
-  "displayName": "GSharp",
-  "description": "Rich language support for GSharp (.gs files, .gsproj projects)",
+  "displayName": "G#",
+  "description": "Rich language support for G# (.gs files, .gsproj projects)",
   "version": "0.1.0",
   "publisher": "gsharplang",
   "license": "MIT",
