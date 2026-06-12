@@ -530,6 +530,16 @@ See [ADR-0077](adr/0077-drop-colon-equals-short-variable-declaration.md). The Go
 
 GS0305 fires at every parse position that previously accepted `:=` — statement scope, multi-target assignment, `for` and `await for` range and ellipsis loops, `for` / `if` simple-statement initialisers, and `select` case bindings — and recovers by synthesising the corresponding canonical token (`=` for declarations / multi-target assignment, `in` for the for-range and for-ellipsis and await-for-range forms) so subsequent binding, lowering, and emit see a well-formed tree and no cascade diagnostics fire on the same statement. The diagnostic's `Location` covers the `:=` token itself.
 
+## Owned-receiver method warning (GS0314)
+
+See [ADR-0079](adr/0079-restrict-receiver-clauses-to-non-owned-types.md). The Go-style receiver-clause method form (`func (r T) M() { ... }`) is now reserved for types this package does **not** own — imported CLR types, BCL primitives, and types declared by referenced packages. Owned-type instance methods should be declared inside the type body. The warning fires once per declaration, at the receiver-type location. Operator overloads (`func (a T) operator +(b T) T`) are exempt because operators have no in-body form today.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0314 | Warning | `Receiver-clause methods are reserved for types this package does not own; declare '<MethodName>' as a member of '<TypeName>' instead (ADR-0079).` | `class Point { var X int32 } func (p Point) Distance() int32 { ... }` — `Point` is owned by the current package; move `Distance` into the class body. Cross-package and CLR receivers (`func (sb StringBuilder) Reset() ...`) are unaffected. |
+
+GS0314 is a soft warning during a one-release grace period; a future ADR may escalate it to an error. Suppress per-project via `<NoWarn>GS0314</NoWarn>` if migration must be deferred.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

@@ -24,9 +24,10 @@ public class RefKindParameterSitesTests
     [Fact]
     public void StructInstanceMethod_RefParameter_BindsCleanly()
     {
-        // Receiver-style declaration is the supported form for struct
-        // (value-type) instance methods. Inline method bodies inside the
-        // type body are class-only as of ADR-0017.
+        // ADR-0079 (issue #719): the canonical declaration site for owned-
+        // type instance methods is the in-body form. Structs don't yet
+        // accept in-body methods, so this exercises the receiver-clause
+        // form and explicitly ignores the GS0314 warning it emits.
         var source = @"
 struct Counter {
     var Value int32
@@ -38,7 +39,7 @@ func (c Counter) Add(ref delta int32) {
 0
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
     }
 
     [Fact]

@@ -58,15 +58,26 @@ Rationale: [ADR-0008](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0
 
 ## Functions and methods
 
-A function declaration starts with `func`. `async func` declares an async function. Receiver clauses attach behavior to a receiver type and are also the canonical extension-function style.
+A function declaration starts with `func`. `async func` declares an async function. Receiver clauses attach behavior to a receiver type and are the canonical extension-function style. Per [ADR-0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md), receiver clauses are reserved for types this package does **not** own (imported CLR types, BCL primitives, types from referenced packages); methods on owned classes should be declared inside the class body. The same-package receiver-clause form emits the soft `GS0314` warning.
 
 ```gsharp
 func Add(x int32, y int32) int32 {
     return x + y
 }
 
-func (p Point) LengthSquared() int32 {
-    return p.X * p.X + p.Y * p.Y
+class Point {
+    var X int32
+    var Y int32
+
+    func LengthSquared() int32 {
+        return X * X + Y * Y
+    }
+}
+
+// Extension on a type this package does not own (a BCL primitive):
+func (value int32) Abs() int32 {
+    if value < 0 { return -value }
+    return value
 }
 ```
 

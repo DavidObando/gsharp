@@ -2699,6 +2699,27 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0313", $"Switch over sealed hierarchy '{baseTypeName}' is missing a case for '{missingCaseName}' (ADR-0078).", DiagnosticSeverity.Warning);
     }
 
+    /// <summary>
+    /// ADR-0079 / issue #719: GS0314 — a receiver-clause method targets a
+    /// type declared in the same package (the package "owns" the receiver
+    /// type). Owned-type instance methods should be declared inside the
+    /// type body; the receiver-clause form is reserved for non-owned types
+    /// (imported CLR types or types from referenced packages). Soft warning
+    /// during the one-release grace period; future tightening to error is
+    /// tracked separately.
+    /// </summary>
+    /// <param name="location">The source location of the receiver type clause.</param>
+    /// <param name="receiverTypeName">The owned receiver type name.</param>
+    /// <param name="methodName">The receiver method's name.</param>
+    public void ReportReceiverClauseOnOwnedType(TextLocation location, string receiverTypeName, string methodName)
+    {
+        Report(
+            location,
+            "GS0314",
+            $"Receiver-clause methods are reserved for types this package does not own; declare '{methodName}' as a member of '{receiverTypeName}' instead (ADR-0079).",
+            DiagnosticSeverity.Warning);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
