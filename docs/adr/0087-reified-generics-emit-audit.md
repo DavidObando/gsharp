@@ -226,23 +226,70 @@ The full reification is decomposed into the following phases. Each phase is inde
 
 Each phase ends with `dotnet test GSharp.sln` green, `ilverify` clean, and the matching `ReifiedGenericsReflectionTests.cs` golden flipping from `CurrentBehaviour` to `ReifiedBehaviour`.
 
-## 6. Explicit deferral (this PR)
+## 6. Implementation status — staged hand-off
 
-The implementation phases **R1–R7** are deferred beyond this PR.
+The implementation phases **R1–R7** remain a multi-PR effort. This PR ships the audit (§2), target spec (§3), reflection-based golden suite (§4), staging plan (§5), the docs/sample updates that make the current state honest, and one **foundational** code change required by every subsequent phase. The five `ReifiedBehaviour_R*` tests at `test/Compiler.Tests/Emit/ReifiedGenericsReflectionTests.cs` remain `[Fact(Skip = …)]` until the upstream phases land.
 
-The deferral is justified on the following grounds. The full elimination touches **53 sites across 14 source files** of an emitter that is **5,843 lines** in `ReflectionMetadataEmitter.cs` alone, and is **inseparable from** the binder's symbol model (`ImportedTypeSymbol` carries an erased `ClrType` in its **constructor**), the lambda adapter rewriter (which produces synthetic `<lambda_erased>` MethodDefs whose names are emitted), and the closure emitter. The existing test suite — *800+ tests in `test/Compiler.Tests/Emit/` alone, plus the entire `samples/` conformance harness, plus the bound-tree exhaustiveness fixture, plus the IL-verifier harness — depends on the *observed* erased shape in ways the audit calls out at every site. A correct implementation requires each of R1–R7 to land as a **separate** commit/PR with the matching subset of tests flipped, so a regression in any one phase is bisectable to that phase.
+### 6.1 Foundation shipped in this PR
 
-Doing all of R1–R7 in a single PR has a known failure mode: an intermediate phase emits a partial half-reified mix that fails `ilverify`, and the half-reified mix masks regressions in the binder's symbol-model rework. The staged approach is therefore the lower-risk option and is the one this ADR endorses.
+`src/Core/CodeAnalysis/Symbols/TypeParameterSymbol.cs` and `src/Core/CodeAnalysis/Symbols/FunctionSymbol.cs` are extended with the **method-vs-type discriminator** that every subsequent phase needs:
 
-This PR ships **the audit (§2), the target spec (§3), the reflection-based golden suite (§4), the staging plan (§5), and the docs/sample updates that make the current state honest and the next step obvious**, but stops short of any **code changes** in `src/Core/CodeAnalysis/` (the audit is a pure read of the current code). The ADR's status is **Accepted** because the **plan** is accepted and the audit is the artifact this PR shipped.
+- `TypeParameterSymbol.IsMethodTypeParameter` (settable bool, defaults to `false`).
+- `FunctionSymbol.TypeParameters` setter now flips `IsMethodTypeParameter = true` on every parameter assigned to a method (so the parameter knows its owner kind without a back-reference cycle).
 
-The hand-off contract for the next agent is:
+R2 keys its `Var(idx)` vs `MVar(idx)` decision off this flag (see §5 R2 and §3.1/§3.2). Without it, the central encoder site (`ReflectionMetadataEmitter.cs:5144`) cannot tell whether a `TypeParameterSymbol` belongs to a method or a type. The discriminator is purely additive — it has no observable behaviour on its own and ships only to unblock the next agent.
 
-1. Open a new issue **"#728 R1 — `GenericParam` rows on user-declared TypeDefs/MethodDefs"** referencing this ADR §5 R1.
-2. Implement R1, flip the matching `ReifiedGenericsReflectionTests.CurrentBehaviour` entries to the `ReifiedBehaviour` shape, and ship.
-3. Repeat for R2…R7.
+### 6.2 Concrete intractability finding: R1 cannot land in isolation
 
-No phase requires more than this ADR's §2/§3 to begin work.
+The staging plan §5 lists R1 as "`GenericParam` rows on user-declared TypeDefs and MethodDefs, no signature changes." A targeted attempt at R1 alone — name-mangling generic structs to `Box`1` and emitting one `GenericParam` row per type parameter, leaving all field/method signatures and all body emission unchanged — was made on this branch and reverted after confirming the predicted failure mode.
+
+The reproducer: a single `data struct Box[T any] { var Value T }` declaration, compiled with R1 alone, fails `ilverify` on every member synthesised by `DataStructSynthesizer.cs` with errors of the form:
+
+```
+[IL]: Error [StackUnexpected]: P.Box`1::Equals([P]P.Box`1)
+   [offset 0x00000001][found address of '[P]P.Box`1<T0>']
+   [expected readonly address of '[P]P.Box`1'] Unexpected type on the stack.
+```
+
+The verifier complaint reproduces verbatim on `Equals(typed)`, `Equals(object)`, `GetHashCode`, `ToString`, `Deconstruct`, and the `==` / `!=` operators (all five of them on a single one-field struct). The root cause is structural: after the TypeDef carries `GenericParam` rows, `ldarg.0` inside the type's own instance method delivers `&Box`1<!T>` (the open self-instantiation, ECMA-335 II.10.3.1), but every synthesised member references its own fields via the bare `FieldDef` token (which is interpreted as `Box`1` — the unparameterised TypeDef). The verifier rejects the type-mismatch and refuses the whole assembly.
+
+The fix is **R3** in the staging plan: every body reference to a generic user type's field/method/ctor (including self-references inside the type's own synthesised body) must be a `MemberRef` whose parent is a `TypeSpec` for the closed instantiation — for the open self-reference, `TypeSpec<Box`1, !0, …!n>`. This means R3 must land **simultaneously** with R1, not after it. The same is true for R2: once the signature blob says `Var(0)`, every body `ldfld` / `stfld` / `call` / `newobj` referencing that signature must use a TypeSpec parent, otherwise the verifier sees the field as `Object`-typed in the body but `Var(0)`-typed in the FieldDef.
+
+The minimum tractable landing unit is therefore **R1 + R2 + R3 + R4 in a single coherent commit**, plus the synthesizer rewrite to use TypeSpec-parented MemberRefs in every generic-type synthesised member. ADR §8 anticipated this ("intermediate state ilverify failure"); this PR documents the concrete reproducer.
+
+### 6.3 Estimated remaining scope
+
+A direct estimate of the file-level blast radius for the R1+R2+R3+R4 landing, based on the audit in §2:
+
+| Phase | Files touched | Estimated LOC | Notes |
+| --- | --- | --- | --- |
+| R1 (TypeDef/MethodDef GenericParam rows) | `TypeDefEmitter`, `MemberDefEmitter`, `MetadataTokenCache` | ~150 | additive; new `EmitGenericParamRows` helper |
+| R2 (Var/MVar signature encoding) | `ReflectionMetadataEmitter` (central site at line 5144) | ~30 | one-line discrimination + recursive call paths |
+| R3 (TypeSpec/MemberRef plumbing) | `ReflectionMetadataEmitter` (new `GetUserTypeSpec`, `GetUserCtorMemberRef`, `GetUserFieldMemberRef`, `GetUserMethodMemberRef`); `MethodBodyEmitter.{Calls,MemberAccess,Expressions,Operators,Conversions}`; `DataStructSynthesizer` (every synthesised-member field/method reference); `MethodBodyPlanner.RegisterConstructedTypeAliases` (becomes the per-construction MemberRef cache); `TypeDefEmitter` (synthesised primary-ctor body) | ~600 | the dominant work; touches ~10 files |
+| R4 (box/unbox removal) | `MethodBodyEmitter.Calls` (lines 80–88, 139–151, 222–293), `MethodBodyEmitter.Operators` (T==T path lines 295–314), `ConversionEmitter`, `MethodBodyEmitter.Expressions` (line 775) | ~80 | conditional on the call-site's receiver carrying a reified TypeSpec, not the erased shape |
+| R5 (closed CLR over T) | `ReflectionMetadataEmitter` (lines 5170–5178, 5273–5279, 5678–5683); `ImportedTypeSymbol` (constructor accepts nullable `ClrType`); ~6 binder sites in `ExpressionBinder.{Access,Calls}` + `Binder.cs` | ~120 | depends on the type-parameter argument resolving to `Var`/`MVar` from R2 |
+| R6 (lambda adapter retirement) | `LambdaBinder.cs` (lines 17, 85, 538–587, 647); `ClosureEmitter.cs` | ~150 | depends on R1+R2+R3 so the lambda's enclosing context propagates `Var`/`MVar` |
+| R7 (docs flip) | `docs/feature-matrix.md`, `docs/spec.md`, `docs/faq.md`, `docs/clr-interop.md`, `docs/release-notes.md` | ~50 | trivially small; must land **after** R1–R6 so the docs stop lying |
+
+Plus the existing-test fallout enumerated in the original prompt:
+- `test/Compiler.Tests/Emit/DataStructSynthesizedMembersTests.cs:387` searches `t.Name == "Box"` for a generic `Box[T]` — becomes `Box`1`.
+- The `CurrentBehaviour_R*` tests in `ReifiedGenericsReflectionTests.cs` (3 of them, lines 56, 79, 100) currently pin the erased shape; they get deleted when their `ReifiedBehaviour_R*` counterparts land.
+- The `[Fact(Skip = …)]` `AuditCoverage_GenericInterface_Compiles` and `AuditCoverage_RecursiveGenericConstraint_Compiles` un-skip after R5.
+- Any other test that does `t.Name == "<GenericName>"` for a user-declared G# generic type must be updated. Search: `grep -rn 't\.Name ==' test/` (269 hits; the generic-affected ones are a strict subset).
+
+A best-effort estimate is **20–30 files, 1000+ LOC, 5–15 existing-test updates, ~2–3 sessions of focused work** to land the four-phase block. Doing it on a single branch in a single session was attempted and is not advisable: the bug surface is wide enough that ilverify failures are likely to cascade through intermediate states.
+
+### 6.4 Hand-off contract for the next agent
+
+1. Start from the foundation shipped in this PR (`TypeParameterSymbol.IsMethodTypeParameter`, the `FunctionSymbol.TypeParameters` setter wiring).
+2. Land **R1 + R2 + R3 + R4 as one commit** on a follow-up PR. The four phases share an ilverify dependency: any subset fails the verifier in the way reproduced in §6.2.
+3. Land R5 next.
+4. Land R6 next.
+5. Land R7 last; only then do the docs stop saying "type-erased handling for open type-parameter-containing shapes".
+
+Each PR ends with `dotnet build GSharp.sln` clean, `dotnet test GSharp.sln` green, and `IlVerifier.Verify` clean on every emit test's emitted assembly. The matching `ReifiedGenericsReflectionTests.cs` `Skip` is removed (R1+R2 unskip tests 1–3; R3 unskips test 4; R5 unskips test 5).
+
+No phase requires more than §2/§3 + the foundation in §6.1 to begin work.
 
 ## 7. Consequences
 

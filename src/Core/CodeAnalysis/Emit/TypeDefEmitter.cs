@@ -1310,4 +1310,44 @@ internal sealed class TypeDefEmitter
             constructor: obsoleteCtorRef,
             value: this.emitCtx.Metadata.GetOrAddBlob(obsoleteBlob));
     }
+
+    /// <summary>
+    /// ADR-0087 §3 R1: emits one <c>GenericParam</c> row per supplied
+    /// type parameter, in source order, owned by <paramref name="owner"/>
+    /// (which may be a <see cref="TypeDefinitionHandle"/> for a generic
+    /// type or a <see cref="MethodDefinitionHandle"/> for a generic method).
+    /// </summary>
+    /// <param name="metadata">The metadata builder.</param>
+    /// <param name="owner">The owning TypeDef or MethodDef handle.</param>
+    /// <param name="typeParameters">The type parameters to emit.</param>
+    internal static void EmitGenericParamRows(
+        MetadataBuilder metadata,
+        EntityHandle owner,
+        ImmutableArray<TypeParameterSymbol> typeParameters)
+    {
+        if (typeParameters.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        for (var i = 0; i < typeParameters.Length; i++)
+        {
+            var tp = typeParameters[i];
+            var attrs = GenericParameterAttributes.None;
+            if (tp.Variance == TypeParameterVariance.In)
+            {
+                attrs |= GenericParameterAttributes.Contravariant;
+            }
+            else if (tp.Variance == TypeParameterVariance.Out)
+            {
+                attrs |= GenericParameterAttributes.Covariant;
+            }
+
+            metadata.AddGenericParameter(
+                parent: owner,
+                attributes: attrs,
+                name: metadata.GetOrAddString(tp.Name),
+                index: (ushort)i);
+        }
+    }
 }
