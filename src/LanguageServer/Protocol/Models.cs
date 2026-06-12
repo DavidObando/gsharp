@@ -231,6 +231,12 @@ public enum CompletionItemKind
     TypeParameter = 25,
 }
 
+public enum InsertTextFormat
+{
+    PlainText = 1,
+    Snippet = 2,
+}
+
 public sealed class CompletionItem
 {
     [JsonPropertyName("label")]
@@ -241,6 +247,26 @@ public sealed class CompletionItem
 
     [JsonPropertyName("detail")]
     public string Detail { get; set; }
+
+    [JsonPropertyName("documentation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MarkupContent Documentation { get; set; }
+
+    [JsonPropertyName("insertText")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string InsertText { get; set; }
+
+    [JsonPropertyName("insertTextFormat")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public InsertTextFormat InsertTextFormat { get; set; }
+
+    [JsonPropertyName("sortText")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string SortText { get; set; }
+
+    [JsonPropertyName("filterText")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string FilterText { get; set; }
 }
 
 public sealed class CompletionList
