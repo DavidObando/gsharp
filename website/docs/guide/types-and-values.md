@@ -12,6 +12,8 @@ G# combines Go-like aggregate and collection syntax with CLR type identity. Use 
 
 `nil` is the null literal. Nullable types are written with `?`, such as `string?`. A non-null value converts to its nullable form, and `nil` converts to nullable types. `null` is not a literal in G#. Use `?:` for null coalescing, `?.` for null-conditional access, and `!!` only when a failed assertion should throw immediately.
 
+If you type the C# spelling `null` in a value position and no symbol named `null` exists in scope, the binder reports `GS0273` ("`'null'` is not a literal in G#. Did you mean `'nil'`?") and recovers by treating the identifier as `nil`, so target-type contexts (`let x string? = null`, `Foo(null)` where `Foo` takes `T?`, `x == null`) continue to typecheck. The diagnostic is suppressed when `null` resolves to a real symbol (a function, local, or field named `null` is legal because `null` is not a keyword). See [ADR-0081](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0081-null-identifier-did-you-mean-nil.md).
+
 This model follows [ADR-0001](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0001-null-model.md).
 
 ## Primitive values

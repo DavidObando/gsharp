@@ -289,6 +289,18 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportNotAVariable(syntax.IdentifierToken.Location, name);
             }
 
+            // Issue #721 / ADR-0081: when the unresolved identifier is the
+            // literal text `null` and no symbol named `null` exists in scope,
+            // synthesise a `nil` literal so that target-type contexts (e.g.
+            // `let x string? = null`, `Foo(null)` where `Foo` takes `T?`,
+            // and `x == null`) continue to typecheck without cascading
+            // errors. The GS0273 "did you mean 'nil'?" diagnostic has
+            // already been emitted by ReportUndefinedVariable above.
+            if (name == "null" && scope.TryLookupSymbol(name) is null)
+            {
+                return new BoundLiteralExpression(syntax, value: null);
+            }
+
             return new BoundErrorExpression(null);
         }
 
