@@ -376,7 +376,7 @@ Postfix `!!`, member access `.`, null-conditional access `?.`, null-conditional 
 
 ### Primary expressions and calls
 
-Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, switch expressions, tuple literals, `make(chan ...)`, `typeof(...)`, and `nameof(...)`. Calls accept positional, named, and ref-kind-prefixed arguments:
+Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, switch expressions, if expressions (ADR-0064), tuple literals, `make(chan ...)`, `typeof(...)`, and `nameof(...)`. Calls accept positional, named, and ref-kind-prefixed arguments:
 
 - **Named arguments** — `Foo(timeout: 30, retries: 3)` (or the legacy `Foo(timeout = 30)` shape) for free functions, user methods, user constructors, user extension functions, imported CLR methods and constructors, imported extension methods, and inherited CLR instance methods (including delegate `Invoke`). Indirect calls through a function-typed or delegate-typed variable, and variadic call sites, do not accept named arguments because the call target does not preserve parameter names. Diagnostics `GS0244`–`GS0247` cover ordering, duplicates, and unknown names.
 - **Ref-kind arguments** — `f(ref x)`, `f(out var n)`, `f(in z)` (ADR-0060). The call-site modifier must match the parameter's declared kind (`GS0235`); `in` requires an explicit `in` at the call site to prevent silent spilling (`GS0242`).
@@ -413,6 +413,35 @@ default -> "many"
 
 Patterns include list-like patterns, property patterns, type tests with `is`, wildcard `_`, relational patterns, and expression patterns.
 
+### If expressions (ADR-0064)
+
+`if` can also appear in value position. The expression form is selected by the parser whenever an `if` appears where a primary expression is expected (let-init, call argument, return operand, switch-expression arm, the trailing position of a block, etc.); when an `if` is the head of a statement the existing statement form is preserved. The same `if` keyword is used for both shapes — there is no separate `if-expression` keyword.
+
+```ebnf
+IfExpression  = "if" Expression BlockExpression ( "else" ( IfExpression | BlockExpression ) )? .
+BlockExpression = "{" Statement* ( Expression )? "}" .
+```
+
+- An `if` used in value position MUST have an exhaustive `else` chain — every branch must produce a value. Missing the terminal `else` reports `GS0276`.
+- A branch is a block of the form `{ stmt* expr }`. The trailing expression (the last expression statement of the block) is the branch value; the prefix statements run for their side effects. There is no `yield` keyword on this path — the form mirrors the switch-expression arm, which has no `yield` either. A block with no trailing expression in value position reports `GS0277`.
+- `else if` chains nest right-associatively: `if c1 { a } else if c2 { b } else { c }` parses as `if c1 { a } else { if c2 { b } else { c } }`.
+- The result type is the common type of all branch tails, chosen by the same `ComputeConditionalCommonType` helper that ADR-0062 uses for the ternary (identity, one-way implicit conversion, numeric widening tie-break, nil/null compatibility). Branch tails are implicitly converted to that result type. Mismatched branch types report `GS0263` (shared with the ternary).
+- Only one arm is evaluated at runtime; the other arms are not executed. Lowers to the same `BoundConditionalExpression` that the ternary uses, so no new IL emit paths are involved.
+- `throw` is a statement in G# (the switch expression does not accept `throw` as an arm value either). To exit on the error path of an if-expression, place a `throw` statement in the prefix of the block and supply a tail expression of the chosen result type; the tail is unreachable at runtime but satisfies the binder's typing requirement. This matches the switch-expression treatment.
+
+```gsharp
+let label = if x > 0 { "positive" } else if x < 0 { "negative" } else { "zero" }
+
+let title = if user.IsAdmin {
+    log("admin route")
+    "Admin Dashboard"
+} else {
+    "Home"
+}
+```
+
+The existing if-statement form (`if cond { stmt }` with optional `else`, optional simple-statement initializer) is unchanged; the expression form is purely additive and never reached when `if` heads a statement.
+
 ### Expression grammar
 
 ```ebnf
@@ -426,7 +455,7 @@ Assignment        = identifier "=" Assignment
 BinaryExpression  = PrefixExpression { BinaryOperator PrefixExpression } .
 PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" ) PrefixExpression | PostfixExpression .
 PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) Expression "]" } ( "with" "{" FieldEqualsList? "}" )? .
-PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | SwitchExpr | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
+PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | SwitchExpr | IfExpression | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
 (* Postfix chains apply to every PrimaryExpression except a bare numeric Literal: `42.Member` is not accepted; use `(42).Member`. See ADR-0054. *)
 Literal           = Number | String | InterpolatedString | "true" | "false" | "nil" | char .
 InterpolatedString = '"' { InterpolationText | "$$" | "$" identifier | InterpolationHole } '"' .

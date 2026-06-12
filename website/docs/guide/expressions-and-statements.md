@@ -67,6 +67,23 @@ default -> "many"
 }
 ```
 
+`if` itself is also a value-producing expression (ADR-0064). In expression position the form requires an exhaustive `else` chain and uses brace blocks whose last expression is the branch value — there is no `yield`. The result type is the common type of every branch tail, computed by the same rule as the `?:` ternary. Multi-statement blocks run their prefix statements for side effects and then yield the trailing expression.
+
+```gsharp
+let label = if n > 0 { "positive" }
+           else if n < 0 { "negative" }
+           else { "zero" }
+
+let title = if user.IsAdmin {
+    log("admin route")
+    "Admin Dashboard"
+} else {
+    "Home"
+}
+```
+
+Missing the terminal `else` in value position reports `GS0276`. A block with no trailing expression in value position reports `GS0277`. Branches with no common type report `GS0263` (shared with the ternary). The existing if-statement form (`if cond { … }` with optional `else`, optional simple-statement initializer) is unchanged.
+
 ## Loops
 
 G# has infinite `for`, condition `for`, three-part `for`, `for in`, `for := range`, and ellipsis range loops. It does not implement a `while` keyword; use `for condition { ... }` for while-style control flow. `for in` is the canonical collection iteration spelling from [ADR-0031](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0031-canonical-for-in.md).

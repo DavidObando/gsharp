@@ -452,6 +452,21 @@ Cause/fix examples:
 - **GS0296** — `let s = "hi"; if let v = s { ... }`. Fix: either use a plain `let v = s` (no narrowing) or pass a nullable value. The binding only makes sense when the RHS has type `T?`.
 - **GS0297** — `guard let v = s else { var x = 1 }`. Fix: make the else block exit the enclosing scope — `return`, `throw`, `break`, or `continue`. The binding is only in scope after the guard precisely because the else cannot fall through.
 
+## If-expression diagnostics (GS0276–GS0277)
+
+ADR-0064 generalises `if` so that it can sit in value position (`let x = if cond { a } else { b }`). The diagnostics below guard the two binder rejection paths that are unique to the expression form; the branch-type-mismatch case reuses GS0263 (shared with the ADR-0062 ternary).
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0276 | Error | An if-expression in value position must have an `else` branch so that all code paths produce a value. |
+| GS0277 | Error | A block in an if-expression value position must end with a value-producing expression. |
+
+Cause/fix examples:
+
+- **GS0276** — `let x = if cond { 1 }` — the if has no `else`, so when `cond` is false there is no value to bind. Add a terminal `else { … }`, or use the statement form (`if cond { x = 1 }`). The same rule applies to chained `else if` shapes: every chain must end in a terminal `else`.
+- **GS0277** — `let x = if cond { } else { 1 }` — the then-block is empty. Replace the empty block with `{ <expr> }`, or fall through with an explicit value (`{ 0 }`). Also fires when the block's last statement is a non-expression form (`for`, `while`, etc.) and there is no trailing expression to lift out.
+- **GS0263** also covers if-expression branches with no common result type (e.g. `if cond { true } else { "no" }`). Mirrors the ternary diagnostic since both forms share `ComputeConditionalCommonType`.
+
 ## Null-coalescing compound assignment diagnostics (GS0298–GS0299)
 
 ADR-0072 introduces the `??=` null-coalescing compound assignment statement. The diagnostics below cover the two shapes the binder rejects up front.
