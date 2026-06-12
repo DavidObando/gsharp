@@ -40,84 +40,14 @@ namespace GSharp.Compiler.Tests.Emit;
 public class ReifiedGenericsReflectionTests
 {
     // -----------------------------------------------------------------
-    // CurrentBehaviour cohort
-    //
-    // These assertions describe the erased shape. Each one names the
-    // ADR-0087 staging phase that will retire it. Until that phase
-    // lands, the assertion is the contract.
+    // ReifiedBehaviour cohort (CurrentBehaviour was deleted as part of
+    // R1+R2+R3+R4 landing). Each test below describes the post-R3
+    // metadata shape and was previously Skip-tagged; the cohort is
+    // now live.
     // -----------------------------------------------------------------
 
     /// <summary>
-    /// Pre-R1: a generic G# data struct is emitted as a non-generic CLR
-    /// class. ADR-0087 §5 R1 flips this: name becomes
-    /// <c>Box`1</c> and one <c>GenericParam</c> row is added.
-    /// </summary>
-    [Fact]
-    public void CurrentBehaviour_R1_GenericDataStruct_IsEmittedAsNonGenericClrType()
-    {
-        var source = """
-            package P
-            data struct Box[T any] {
-                var Value T
-            }
-            """;
-
-        var asm = LoadCompiled(source);
-        var boxType = FindUserType(asm, "P", "Box");
-        Assert.NotNull(boxType);
-        Assert.False(boxType.IsGenericTypeDefinition, "today Box is emitted non-generic; R1 flips this");
-        Assert.Empty(boxType.GetGenericArguments());
-        Assert.DoesNotContain('`', boxType.Name);
-    }
-
-    /// <summary>
-    /// Pre-R2: a generic G# data struct's <c>T</c>-typed field is
-    /// encoded as <c>System.Object</c> in the FieldSig blob. ADR-0087
-    /// §5 R2 flips this: signature becomes <c>VAR(0)</c>.
-    /// </summary>
-    [Fact]
-    public void CurrentBehaviour_R2_TTypedField_IsEncodedAsObject()
-    {
-        var source = """
-            package P
-            data struct Box[T any] {
-                var Value T
-            }
-            """;
-
-        var asm = LoadCompiled(source);
-        var boxType = FindUserType(asm, "P", "Box");
-        var field = boxType.GetField("Value", BindingFlags.Public | BindingFlags.Instance);
-        Assert.NotNull(field);
-        Assert.Equal(typeof(object), field.FieldType);
-    }
-
-    /// <summary>
-    /// Pre-R2: a generic G# function's <c>T</c>-typed parameters and
-    /// return are encoded as <c>System.Object</c> in the MethodSig blob.
-    /// ADR-0087 §5 R2 flips this: signature becomes <c>MVAR(0)</c>.
-    /// </summary>
-    [Fact]
-    public void CurrentBehaviour_R2_GenericFunction_HasObjectSignature()
-    {
-        var source = """
-            package P
-            func Identity[T any](x T) T { return x }
-            """;
-
-        var asm = LoadCompiled(source);
-        var program = FindModuleType(asm, "P");
-        var method = program.GetMethod("Identity", BindingFlags.Public | BindingFlags.Static);
-        Assert.NotNull(method);
-        // Today the generic method is emitted non-generic: T -> object.
-        Assert.False(method.IsGenericMethodDefinition, "today the method is emitted non-generic; R1/R2 flip this");
-        Assert.Equal(typeof(object), method.ReturnType);
-        Assert.Single(method.GetParameters());
-        Assert.Equal(typeof(object), method.GetParameters()[0].ParameterType);
-    }
-
-    /// <summary>
-    /// Stability invariant: even under the erased model, the value
+    /// Stability invariant: even under the reified model, the value
     /// round-trips correctly. <c>Box[int32]{Value: 42}.Value</c> is
     /// observed as an <see cref="int"/> at runtime (box/unbox.any at
     /// the boundary). This MUST continue to hold after every staging
@@ -171,7 +101,7 @@ public class ReifiedGenericsReflectionTests
     // removed.
     // -----------------------------------------------------------------
 
-    [Fact(Skip = "ADR-0087 §5 R1 — not yet implemented")]
+    [Fact]
     public void ReifiedBehaviour_R1_GenericDataStruct_IsGenericTypeDefinition()
     {
         var source = """
@@ -188,7 +118,7 @@ public class ReifiedGenericsReflectionTests
         Assert.Single(boxType.GetGenericArguments());
     }
 
-    [Fact(Skip = "ADR-0087 §5 R2 — not yet implemented")]
+    [Fact]
     public void ReifiedBehaviour_R2_TTypedField_IsEncodedAsGenericParameter()
     {
         var source = """
@@ -206,7 +136,7 @@ public class ReifiedGenericsReflectionTests
         Assert.Equal(0, field.FieldType.GenericParameterPosition);
     }
 
-    [Fact(Skip = "ADR-0087 §5 R1+R2 — not yet implemented")]
+    [Fact]
     public void ReifiedBehaviour_R2_GenericFunction_HasGenericSignature()
     {
         var source = """
@@ -224,7 +154,7 @@ public class ReifiedGenericsReflectionTests
         Assert.True(method.GetParameters()[0].ParameterType.IsGenericMethodParameter);
     }
 
-    [Fact(Skip = "ADR-0087 §5 R3 — not yet implemented")]
+    [Fact]
     public void ReifiedBehaviour_R3_ConstructedField_RoundTripsThroughReflection()
     {
         // After R1+R2+R3: typeof(Box<int>) is a closed constructed type

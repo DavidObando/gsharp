@@ -384,12 +384,18 @@ public class DataStructSynthesizedMembersTests
             """;
 
         var assembly = CompileToAssembly(source);
-        var box = assembly.GetTypes().Single(t => t.Name == "Box");
+
+        // ADR-0087 §3 R1: a generic G# user type is now emitted as a CLR
+        // generic type definition with the mangled name `Box`1`. To
+        // instantiate it we close it with a concrete type argument.
+        var boxOpen = assembly.GetTypes().Single(t => t.Name == "Box`1");
+        var box = boxOpen.MakeGenericType(typeof(int));
 
         var a = Activator.CreateInstance(box)!;
         var b = Activator.CreateInstance(box)!;
         var c = Activator.CreateInstance(box)!;
-        // T is type-erased to object; the field's CLR type is System.Object.
+        // ADR-0087 §3 R2: Value's CLR type is now the reified `int`
+        // (not erased `object`) because Box is closed over `typeof(int)`.
         box.GetField("Value")!.SetValue(a, 42);
         box.GetField("Value")!.SetValue(b, 42);
         box.GetField("Value")!.SetValue(c, 43);
