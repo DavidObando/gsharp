@@ -1,6 +1,6 @@
 // file: FuncToSystemDelegate.gs
 //
-// Issue #323: a Func[...] (or native func(...)) value widens implicitly to
+// Issue #323: a Func[...] (or native (T) -> R) value widens implicitly to
 // System.Delegate (the common base of every delegate). This used to fail with
 // `error GS0155`. Both forms are exercised:
 //   * the var form: a named/generic delegate value assigned to a Delegate slot

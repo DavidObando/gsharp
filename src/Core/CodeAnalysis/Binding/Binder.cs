@@ -2862,6 +2862,13 @@ public sealed class Binder
                 return TypeSymbol.String;
             case "object":
                 return TypeSymbol.Object;
+            case "void":
+                // ADR-0075 / issue #715: `void` is a recognised type-clause
+                // name so the arrow-form function type clause can spell its
+                // void-returning shape `() -> void`. Downstream binder checks
+                // reject `void` in positions where it is meaningless
+                // (parameter types, variable types, generic arguments).
+                return TypeSymbol.Void;
         }
 
         if (scope.TryLookupTypeAlias(name, out var aliased))

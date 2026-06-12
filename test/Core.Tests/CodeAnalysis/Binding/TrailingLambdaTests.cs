@@ -26,7 +26,7 @@ public class TrailingLambdaTests
     public void TrailingLambda_SoleArgument_DesugarsToCallArg()
     {
         var result = Evaluate(@"
-func runIt(f func() int32) int32 { return f() }
+func runIt(f () -> int32) int32 { return f() }
 runIt() func() int32 { return 42 }
 ");
         Assert.Empty(result.Diagnostics);
@@ -37,7 +37,7 @@ runIt() func() int32 { return 42 }
     public void TrailingLambda_WithPrecedingArgs_AppendsAsLast()
     {
         var result = Evaluate(@"
-func combine(seed int32, f func(int32) int32) int32 { return f(seed) }
+func combine(seed int32, f (int32) -> int32) int32 { return f(seed) }
 combine(10) func(x int32) int32 { return x * 2 }
 ");
         Assert.Empty(result.Diagnostics);
@@ -49,7 +49,7 @@ combine(10) func(x int32) int32 { return x * 2 }
     {
         var result = Evaluate(@"
 var sum = 0
-func apply(f func()) { f() }
+func apply(f () -> void) { f() }
 apply() func() { sum = 5 }
 sum
 ");
@@ -64,7 +64,7 @@ sum
     public void TrailingLambda_MultipleParameters()
     {
         var result = Evaluate(@"
-func reduce2(a int32, b int32, op func(int32, int32) int32) int32 { return op(a, b) }
+func reduce2(a int32, b int32, op (int32, int32) -> int32) int32 { return op(a, b) }
 reduce2(3, 4) func(x int32, y int32) int32 { return x + y }
 ");
         Assert.Empty(result.Diagnostics);
@@ -107,7 +107,7 @@ takesInt(1) func() int32 { return 0 }
         // the literal from the argument list entirely).
         var result = Evaluate(@"
 async func computeAsync() int32 { return 42 }
-func runIt(f async func() int32) { f() }
+func runIt(f async () -> int32) { f() }
 runIt() async func() int32 { return await computeAsync() }
 ");
         Assert.Empty(result.Diagnostics);
@@ -118,7 +118,7 @@ runIt() async func() int32 { return await computeAsync() }
     {
         var result = Evaluate(@"
 async func double(x int32) int32 { return x * 2 }
-func combine(seed int32, f async func(int32) int32) { f(seed) }
+func combine(seed int32, f async (int32) -> int32) { f(seed) }
 combine(10) async func(x int32) int32 { return await double(x) }
 ");
         Assert.Empty(result.Diagnostics);

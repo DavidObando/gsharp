@@ -2109,6 +2109,16 @@ public class Parser
 
         if (Current.Kind == SyntaxKind.OpenParenthesisToken)
         {
+            // ADR-0075 / issue #715: the canonical function-type clause is
+            // `(T1, T2, ...) -> R`. Disambiguated from a tuple type clause by
+            // bounded look-ahead — if the matching `)` is immediately followed
+            // by `->`, we commit to the arrow function form; otherwise fall
+            // back to the long-standing tuple-type parse.
+            if (LooksLikeArrowFunctionTypeClauseStart())
+            {
+                return ParseArrowFunctionTypeClause(asyncModifier: null);
+            }
+
             return ParseTupleTypeClause();
         }
 
@@ -2317,13 +2327,20 @@ public class Parser
     private TypeClauseSyntax ParseAsyncPrefixedTypeClause()
     {
         // ADR-0042: `async sequence[T]` — alias for IAsyncEnumerable[T].
-        // ADR-0043: `async func(P) R` — alias for func(P) Task[R].
+        // ADR-0043: `async func(P) R` — alias for func(P) Task[R] (deprecated, ADR-0075).
+        // ADR-0075: `async (P) -> R` — canonical arrow-form async function type clause.
         // No other form is legal as an `async`-prefixed type clause.
         var asyncModifier = MatchToken(SyntaxKind.AsyncKeyword);
 
         if (Current.Kind == SyntaxKind.FuncKeyword)
         {
             return ParseAsyncFunctionTypeClause(asyncModifier);
+        }
+
+        // ADR-0075: arrow-form async function type clause `async (T) -> R`.
+        if (Current.Kind == SyntaxKind.OpenParenthesisToken && LooksLikeArrowFunctionTypeClauseStart())
+        {
+            return ParseArrowFunctionTypeClause(asyncModifier);
         }
 
         if (Current.Kind != SyntaxKind.SequenceKeyword)
@@ -2343,7 +2360,11 @@ public class Parser
     {
         // ADR-0043: `async func(P) R` is a synonym for `func(P) Task[R]`
         // (with carve-outs for void → Task and IAsyncEnumerable[T] → unchanged).
+        // ADR-0075 / issue #715: the `func(...)` spelling is deprecated in
+        // type position — emit GS0303 so the migrate-to-arrow-form signal
+        // surfaces uniformly.
         var funcKeyword = MatchToken(SyntaxKind.FuncKeyword);
+        Diagnostics.ReportFunctionTypeClauseFuncKeywordDeprecated(funcKeyword.Location);
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
 
@@ -2379,7 +2400,12 @@ public class Parser
     {
         // Phase 4.7: function type clause `func(T1, T2, ...) R?`. The return
         // type is optional; if absent the function returns void.
+        // ADR-0075 / issue #715: the `func(...) R` spelling is the legacy form
+        // and is being replaced by the arrow form `(T1, T2, ...) -> R`. The
+        // legacy form is still accepted during this release with a deprecation
+        // warning (GS0303).
         var funcKeyword = MatchToken(SyntaxKind.FuncKeyword);
+        Diagnostics.ReportFunctionTypeClauseFuncKeywordDeprecated(funcKeyword.Location);
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
 
@@ -2408,6 +2434,136 @@ public class Parser
             closeParen,
             returnTypeClause,
             question);
+    }
+
+    private TypeClauseSyntax ParseArrowFunctionTypeClause(SyntaxToken asyncModifier)
+    {
+        // ADR-0075 / issue #715: canonical arrow-form function type clause
+        // `[async] (T1, T2, ...) -> R [?]`. The parameter list is always
+        // parenthesised (empty is OK); the arrow is mandatory; the return
+        // type clause is required (use `void` or the legacy `func(...)`
+        // shape for void-returning function types).
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+
+        while (Current.Kind != SyntaxKind.CloseParenthesisToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseTypeClause());
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var arrow = MatchToken(SyntaxKind.RightArrowToken);
+        var returnTypeClause = ParseTypeClause();
+        var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+        if (asyncModifier != null)
+        {
+            return TypeClauseSyntax.CreateAsyncArrowFunction(
+                syntaxTree,
+                asyncModifier,
+                openParen,
+                new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
+                closeParen,
+                arrow,
+                returnTypeClause,
+                question);
+        }
+
+        return TypeClauseSyntax.CreateArrowFunction(
+            syntaxTree,
+            openParen,
+            new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
+            closeParen,
+            arrow,
+            returnTypeClause,
+            question);
+    }
+
+    // ADR-0075 / issue #715: bounded look-ahead used in type-clause slots to
+    // distinguish the arrow-form function type `(T1, T2) -> R` from a tuple
+    // type `(T1, T2)`. The scan never consumes tokens — it only inspects the
+    // shape of the parenthesised list to decide which grammar to apply.
+    private bool LooksLikeArrowFunctionTypeClauseStart()
+    {
+        if (Current.Kind != SyntaxKind.OpenParenthesisToken)
+        {
+            return false;
+        }
+
+        var parenDepth = 1;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var offset = 1;
+        const int maxScan = 4096;
+        while (offset < maxScan)
+        {
+            var k = Peek(offset).Kind;
+            if (k == SyntaxKind.EndOfFileToken)
+            {
+                return false;
+            }
+
+            if (k == SyntaxKind.OpenParenthesisToken)
+            {
+                parenDepth++;
+            }
+            else if (k == SyntaxKind.CloseParenthesisToken)
+            {
+                if (bracketDepth == 0 && braceDepth == 0)
+                {
+                    parenDepth--;
+                    if (parenDepth == 0)
+                    {
+                        break;
+                    }
+                }
+                else
+                {
+                    parenDepth--;
+                }
+            }
+            else if (k == SyntaxKind.OpenSquareBracketToken)
+            {
+                bracketDepth++;
+            }
+            else if (k == SyntaxKind.CloseSquareBracketToken)
+            {
+                if (bracketDepth > 0)
+                {
+                    bracketDepth--;
+                }
+            }
+            else if (k == SyntaxKind.OpenBraceToken)
+            {
+                braceDepth++;
+            }
+            else if (k == SyntaxKind.CloseBraceToken)
+            {
+                if (braceDepth > 0)
+                {
+                    braceDepth--;
+                }
+            }
+
+            offset++;
+        }
+
+        if (parenDepth != 0)
+        {
+            return false;
+        }
+
+        // Peek(offset) is the closing `)`. Commit to the arrow-form function
+        // type clause iff the next token is `->`.
+        return Peek(offset + 1).Kind == SyntaxKind.RightArrowToken;
     }
 
     private TypeClauseSyntax ParseOptionalTypeClause()
@@ -4811,6 +4967,118 @@ public class Parser
             }
 
             pos++;
+        }
+
+        // ADR-0075: `async (T) -> R` and `func(T) R` start a function-type clause.
+        // Handle the optional leading `async` modifier here so the next token
+        // is the actual head of the function-type clause.
+        if (Peek(pos).Kind == SyntaxKind.AsyncKeyword)
+        {
+            pos++;
+        }
+
+        // ADR-0075: `(T1, T2, ...) -> R` arrow function-type clause, or a
+        // tuple-type clause `(T1, T2, ...)`. Both start with '('.
+        if (Peek(pos).Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            pos++;
+            if (Peek(pos).Kind != SyntaxKind.CloseParenthesisToken)
+            {
+                while (true)
+                {
+                    if (!TryScanTypeClause(ref pos))
+                    {
+                        return false;
+                    }
+
+                    if (Peek(pos).Kind == SyntaxKind.CommaToken)
+                    {
+                        pos++;
+                        continue;
+                    }
+
+                    break;
+                }
+            }
+
+            if (Peek(pos).Kind != SyntaxKind.CloseParenthesisToken)
+            {
+                return false;
+            }
+
+            pos++;
+
+            // If `->` follows, this is an arrow function-type clause; scan the return type.
+            if (Peek(pos).Kind == SyntaxKind.RightArrowToken)
+            {
+                pos++;
+                if (!TryScanTypeClause(ref pos))
+                {
+                    return false;
+                }
+            }
+
+            // Optional trailing `?` for nullables (tuples and function types both support `?`).
+            if (Peek(pos).Kind == SyntaxKind.QuestionToken)
+            {
+                pos++;
+            }
+
+            return true;
+        }
+
+        // Phase 4.7: legacy `func(T) R` function-type clause.
+        if (Peek(pos).Kind == SyntaxKind.FuncKeyword)
+        {
+            pos++;
+            if (Peek(pos).Kind != SyntaxKind.OpenParenthesisToken)
+            {
+                return false;
+            }
+
+            pos++;
+            if (Peek(pos).Kind != SyntaxKind.CloseParenthesisToken)
+            {
+                while (true)
+                {
+                    if (!TryScanTypeClause(ref pos))
+                    {
+                        return false;
+                    }
+
+                    if (Peek(pos).Kind == SyntaxKind.CommaToken)
+                    {
+                        pos++;
+                        continue;
+                    }
+
+                    break;
+                }
+            }
+
+            if (Peek(pos).Kind != SyntaxKind.CloseParenthesisToken)
+            {
+                return false;
+            }
+
+            pos++;
+
+            // Optional return type for the legacy func form.
+            if (Peek(pos).Kind == SyntaxKind.IdentifierToken
+                || Peek(pos).Kind == SyntaxKind.OpenParenthesisToken)
+            {
+                if (!TryScanTypeClause(ref pos))
+                {
+                    return false;
+                }
+            }
+
+            if (Peek(pos).Kind == SyntaxKind.QuestionToken)
+            {
+                pos++;
+            }
+
+            return true;
         }
 
         if (Peek(pos).Kind != SyntaxKind.IdentifierToken)

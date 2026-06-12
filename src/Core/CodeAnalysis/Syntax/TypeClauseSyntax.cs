@@ -275,6 +275,30 @@ public sealed class TypeClauseSyntax : SyntaxNode
     }
 #pragma warning restore SA1642
 
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for the arrow-form function type clause <c>(T1, T2, ...) -&gt; R?</c> (ADR-0075 / issue #715), optionally prefixed by the <c>async</c> modifier.</summary>
+#pragma warning disable SA1642
+    private TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken asyncModifier,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        SyntaxToken closeParenToken,
+        SyntaxToken arrowToken,
+        TypeClauseSyntax returnTypeClause,
+        SyntaxToken questionToken,
+        bool isArrowFunction)
+        : base(syntaxTree)
+    {
+        AsyncModifier = asyncModifier;
+        OpenParenToken = openParenToken;
+        FunctionParameterTypes = functionParameterTypes;
+        CloseParenToken = closeParenToken;
+        ArrowToken = arrowToken;
+        ReturnTypeClause = returnTypeClause;
+        QuestionToken = questionToken;
+    }
+#pragma warning restore SA1642
+
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.TypeClause;
 
@@ -351,10 +375,13 @@ public sealed class TypeClauseSyntax : SyntaxNode
     public SeparatedSyntaxList<TypeClauseSyntax> TupleElements { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes a tuple type <c>(T1, T2, ...)</c> (Phase 4.5).</summary>
-    public bool IsTuple => OpenParenToken != null && FuncKeyword == null;
+    public bool IsTuple => OpenParenToken != null && FuncKeyword == null && ArrowToken == null;
 
     /// <summary>Gets the <c>func</c> keyword for function-type clauses, or <c>null</c>.</summary>
     public SyntaxToken FuncKeyword { get; }
+
+    /// <summary>Gets the <c>-&gt;</c> token for arrow-form function-type clauses (ADR-0075), or <c>null</c>.</summary>
+    public SyntaxToken ArrowToken { get; }
 
     /// <summary>Gets the function parameter-type clauses, or the default value.</summary>
     public SeparatedSyntaxList<TypeClauseSyntax> FunctionParameterTypes { get; }
@@ -362,8 +389,14 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets the function return-type clause, or <c>null</c> when the type is void / not a function type.</summary>
     public TypeClauseSyntax ReturnTypeClause { get; }
 
-    /// <summary>Gets a value indicating whether this clause denotes a function type <c>func(...) R?</c> (Phase 4.7).</summary>
-    public bool IsFunction => FuncKeyword != null;
+    /// <summary>Gets a value indicating whether this clause denotes a function type — either the legacy <c>func(...) R?</c> form (Phase 4.7) or the canonical arrow form <c>(...) -&gt; R?</c> (ADR-0075).</summary>
+    public bool IsFunction => FuncKeyword != null || ArrowToken != null;
+
+    /// <summary>Gets a value indicating whether this clause uses the legacy <c>func(...) R?</c> spelling. Such clauses are accepted but emit a deprecation warning (GS0303 / ADR-0075).</summary>
+    public bool IsLegacyFuncFunction => FuncKeyword != null;
+
+    /// <summary>Gets a value indicating whether this clause uses the canonical arrow-form spelling <c>(...) -&gt; R?</c> (ADR-0075).</summary>
+    public bool IsArrowFunction => ArrowToken != null;
 
     /// <summary>Gets the opening <c>[</c> of the type-argument list (Phase 4.3c), or <c>null</c>.</summary>
     public SyntaxToken TypeArgumentOpenBracketToken { get; }
@@ -434,8 +467,8 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this clause denotes an async sequence type <c>async sequence[T]</c> (ADR-0042).</summary>
     public bool IsAsyncSequence => SequenceKeyword != null && AsyncModifier != null;
 
-    /// <summary>Gets a value indicating whether this clause denotes an async function type <c>async func(...) R?</c> (ADR-0043).</summary>
-    public bool IsAsyncFunction => FuncKeyword != null && AsyncModifier != null;
+    /// <summary>Gets a value indicating whether this clause denotes an async function type <c>async func(...) R?</c> (ADR-0043) or the canonical arrow form <c>async (...) -&gt; R?</c> (ADR-0075).</summary>
+    public bool IsAsyncFunction => IsFunction && AsyncModifier != null;
 
     /// <summary>Creates a pointer type clause <c>*T</c> (ADR-0039).</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
@@ -513,5 +546,49 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, asyncModifier, funcKeyword, openParenToken, functionParameterTypes, closeParenToken, returnTypeClause, questionToken, isFunction: true);
+    }
+
+    /// <summary>Creates the canonical arrow-form function type clause <c>(T1, T2, ...) -&gt; R?</c> (ADR-0075).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="openParenToken">The opening <c>(</c> token.</param>
+    /// <param name="functionParameterTypes">The comma-separated parameter-type clauses.</param>
+    /// <param name="closeParenToken">The closing <c>)</c> token.</param>
+    /// <param name="arrowToken">The <c>-&gt;</c> token.</param>
+    /// <param name="returnTypeClause">The return-type clause (use a tuple type clause for multi-return shapes).</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    /// <returns>An arrow-form function type clause.</returns>
+    public static TypeClauseSyntax CreateArrowFunction(
+        SyntaxTree syntaxTree,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        SyntaxToken closeParenToken,
+        SyntaxToken arrowToken,
+        TypeClauseSyntax returnTypeClause,
+        SyntaxToken questionToken)
+    {
+        return new TypeClauseSyntax(syntaxTree, asyncModifier: null, openParenToken, functionParameterTypes, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction: true);
+    }
+
+    /// <summary>Creates the canonical async arrow-form function type clause <c>async (T1, T2, ...) -&gt; R?</c> (ADR-0075).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="asyncModifier">The leading <c>async</c> modifier token.</param>
+    /// <param name="openParenToken">The opening <c>(</c> token.</param>
+    /// <param name="functionParameterTypes">The comma-separated parameter-type clauses.</param>
+    /// <param name="closeParenToken">The closing <c>)</c> token.</param>
+    /// <param name="arrowToken">The <c>-&gt;</c> token.</param>
+    /// <param name="returnTypeClause">The return-type clause.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    /// <returns>An async arrow-form function type clause.</returns>
+    public static TypeClauseSyntax CreateAsyncArrowFunction(
+        SyntaxTree syntaxTree,
+        SyntaxToken asyncModifier,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        SyntaxToken closeParenToken,
+        SyntaxToken arrowToken,
+        TypeClauseSyntax returnTypeClause,
+        SyntaxToken questionToken)
+    {
+        return new TypeClauseSyntax(syntaxTree, asyncModifier, openParenToken, functionParameterTypes, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction: true);
     }
 }

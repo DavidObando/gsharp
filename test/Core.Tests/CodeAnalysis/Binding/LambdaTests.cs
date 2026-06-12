@@ -33,7 +33,7 @@ add(2, 3)
     public void FunctionTypeClause_OnLocal_AcceptsMatchingLiteral()
     {
         var result = Evaluate(@"
-let add func(int32, int32) int32 = func(a int32, b int32) int32 { return a + b }
+let add (int32, int32) -> int32 = func(a int32, b int32) int32 { return a + b }
 add(4, 5)
 ");
         Assert.Empty(result.Diagnostics);
@@ -59,7 +59,7 @@ f()
         // are intentionally not captured (read live at call time). Use a helper
         // function to exercise local-capture semantics.
         var result = Evaluate(@"
-func makeReader() func() int32 {
+func makeReader() () -> int32 {
     var n = 1
     let f = func() int32 { return n }
     n = 99
@@ -101,7 +101,7 @@ add(1)
         // compatible delegate converts to a method group — no lambda wrapper.
         var result = Evaluate(@"
 func inc(x int32) int32 { return x + 1 }
-let f func(int32) int32 = inc
+let f (int32) -> int32 = inc
 f(41)
 ");
         Assert.Empty(result.Diagnostics);
@@ -111,10 +111,10 @@ f(41)
     [Fact]
     public void MethodGroup_NamedFunction_PassedAsCallbackArgument()
     {
-        // Issue #324: a method group flows into a `func(...)`-typed parameter.
+        // Issue #324: a method group flows into a `(...) -> R`-typed parameter.
         var result = Evaluate(@"
 func twice(x int32) int32 { return x * 2 }
-func apply(g func(int32) int32, v int32) int32 { return g(v) }
+func apply(g (int32) -> int32, v int32) int32 { return g(v) }
 apply(twice, 21)
 ");
         Assert.Empty(result.Diagnostics);

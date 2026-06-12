@@ -106,12 +106,15 @@ public static class HoverComputer
             return null;
         }
 
-        // Only trigger on the three tokens that uniquely identify the two async-type
+        // Only trigger on the tokens that uniquely identify the two async-type
         // spellings — anything else (identifier, operator, punctuation) falls back to
-        // the regular symbol-resolution path.
+        // the regular symbol-resolution path. The arrow form (ADR-0075) is keyed off
+        // the `->` token; the legacy `func` keyword still triggers during the
+        // deprecation window so old sources continue to surface the same docs.
         if (token.Kind != SyntaxKind.AsyncKeyword
             && token.Kind != SyntaxKind.SequenceKeyword
-            && token.Kind != SyntaxKind.FuncKeyword)
+            && token.Kind != SyntaxKind.FuncKeyword
+            && token.Kind != SyntaxKind.RightArrowToken)
         {
             return null;
         }
@@ -123,9 +126,9 @@ public static class HoverComputer
         }
 
         string body;
-        if (enclosing.IsAsyncFunction && (token.Kind == SyntaxKind.AsyncKeyword || token.Kind == SyntaxKind.FuncKeyword))
+        if (enclosing.IsAsyncFunction && (token.Kind == SyntaxKind.AsyncKeyword || token.Kind == SyntaxKind.FuncKeyword || token.Kind == SyntaxKind.RightArrowToken))
         {
-            body = "```gsharp\nasync func(...) R\n```\n\n" + TypeClauseCompletions.AsyncFuncDocumentation;
+            body = "```gsharp\nasync (...) -> R\n```\n\n" + TypeClauseCompletions.AsyncFuncDocumentation;
         }
         else if (enclosing.IsAsyncSequence && (token.Kind == SyntaxKind.AsyncKeyword || token.Kind == SyntaxKind.SequenceKeyword))
         {

@@ -75,7 +75,7 @@ Use `select` when readiness determines control flow. Keep case bodies short and 
 
 ## Async functions and await
 
-`async func` declarations and literals produce task-returning methods in the emit path. `await expr` is a prefix expression and is diagnosed outside async contexts or on non-awaitable operands. Async function type clauses are written `async func(P) R`; spelling an explicit task type as the return in that clause is diagnosed because the async marker already supplies the task shape. Async lowering is covered by [ADR-0023](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0023-async-state-machine.md).
+`async func` declarations and literals produce task-returning methods in the emit path. `await expr` is a prefix expression and is diagnosed outside async contexts or on non-awaitable operands. Async function type clauses are written `async (P) -> R` (ADR-0075); spelling an explicit task type as the return in that clause is diagnosed because the async marker already supplies the task shape. The legacy `async func(P) R` type-clause spelling continues to parse for one release with the `GS0303` deprecation warning. Async lowering is covered by [ADR-0023](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0023-async-state-machine.md).
 
 ## Sequences and async sequences
 

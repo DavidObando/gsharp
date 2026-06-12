@@ -95,7 +95,7 @@ The .NET `Dictionary[K,V]` type is also usable through CLR interop when you impo
 
 ## Functions, delegates, and closures
 
-Function values use `func(P1, P2) R` type clauses and function literals. Compatible function literals and method groups can convert to CLR delegate types during interop. Delegate construction and invocation are documented in [CLR interop](/docs/ref/clr-interop).
+Function values use `(P1, P2) -> R` type clauses (ADR-0075) and function literals. Compatible function literals and method groups can convert to CLR delegate types during interop. Delegate construction and invocation are documented in [CLR interop](/docs/ref/clr-interop). The legacy `func(P1, P2) R` type-clause spelling continues to parse for one release with the `GS0303` deprecation warning.
 
 ## Console and legacy built-in functions
 

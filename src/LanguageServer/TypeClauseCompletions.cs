@@ -24,25 +24,28 @@ namespace GSharp.LanguageServer;
 /// </remarks>
 internal static class TypeClauseCompletions
 {
-    /// <summary>Snippet label for the <c>async func(...) R</c> form (ADR-0043).</summary>
-    public const string AsyncFuncLabel = "async func(...) R";
+    /// <summary>Snippet label for the canonical async arrow-form function-type clause <c>async (...) -&gt; R</c> (ADR-0075).</summary>
+    public const string AsyncFuncLabel = "async (...) -> R";
 
     /// <summary>Snippet label for the <c>async sequence[T]</c> form (ADR-0042).</summary>
     public const string AsyncSequenceLabel = "async sequence[T]";
 
     /// <summary>
     /// Markdown body rendered as <see cref="CompletionItem.Documentation"/> for the
-    /// <c>async func</c> snippet, and reused by <see cref="HoverComputer"/> when hovering
-    /// the <c>async</c>/<c>func</c> tokens of an async function-type clause.
+    /// async-arrow function-type snippet, and reused by <see cref="HoverComputer"/> when
+    /// hovering the <c>async</c> / <c>-&gt;</c> tokens of an async function-type clause
+    /// (or the legacy <c>func</c> keyword while the deprecation window is open).
     /// </summary>
     public const string AsyncFuncDocumentation =
-        "**`async func(P) R`** — function-type spelling for `func(P) Task[R]` (ADR-0043).\n\n" +
-        "In any type-clause position, `async func(P1, P2, ...) R` resolves to the same `FunctionTypeSymbol` as the explicit " +
-        "`func(P1, P2, ...) Task[R]` spelling — the two are freely interchangeable. " +
+        "**`async (P) -> R`** — function-type spelling for `(P) -> Task[R]` (ADR-0043 / ADR-0075).\n\n" +
+        "In any type-clause position, `async (P1, P2, ...) -> R` resolves to the same `FunctionTypeSymbol` as the explicit " +
+        "`(P1, P2, ...) -> Task[R]` spelling — the two are freely interchangeable. " +
         "Use this form to match the `async func foo() R` declaration shape at consumer sites (parameters, locals, fields, " +
         "return types). The return-slot wrap mirrors the declaration-site rules of ADR-0023; writing `Task[X]` explicitly " +
-        "inside an `async func(...)` is a diagnostic (GS0189) because the modifier already implies it.\n\n" +
-        "Special-case follower: `async sequence[T]` resolves to `IAsyncEnumerable[T]` (ADR-0042).";
+        "inside an `async (...) -> R` is a diagnostic (GS0189) because the modifier already implies it.\n\n" +
+        "Special-case follower: `async sequence[T]` resolves to `IAsyncEnumerable[T]` (ADR-0042).\n\n" +
+        "The legacy spelling `async func(P) R` is still accepted in this release but emits the deprecation " +
+        "warning GS0303 (ADR-0075); use the arrow form above instead.";
 
     /// <summary>
     /// Markdown body rendered as <see cref="CompletionItem.Documentation"/> for the
@@ -163,7 +166,7 @@ internal static class TypeClauseCompletions
     /// <c>${1:T}</c> and <c>${2:R}</c> are tab-stops for the user.
     /// </summary>
     /// <returns>The snippet body.</returns>
-    public static string BuildAsyncFuncSnippet() => "async func(${1:T}) ${2:R}";
+    public static string BuildAsyncFuncSnippet() => "async (${1:T}) -> ${2:R}";
 
     /// <summary>
     /// Builds the LSP snippet for <c>async sequence[T]</c> (ADR-0042).

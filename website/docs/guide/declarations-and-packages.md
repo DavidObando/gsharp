@@ -135,7 +135,7 @@ type Counter class {
     }
 
     prop Value int32 { get; }
-    event Changed func()
+    event Changed () -> void
 }
 ```
 
