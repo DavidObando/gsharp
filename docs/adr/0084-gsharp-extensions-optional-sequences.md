@@ -207,12 +207,32 @@ hatch under `src/Sdk/Gsharp.Extensions/*.cs` works today.
   name surface listed above.
 - **L2. Receiver clauses on generic / nullable receiver types.**
   ([issue #751](https://github.com/DavidObando/gsharp/issues/751))
-  `LooksLikeReceiverClause()` in the parser only accepts an
-  identifier or an `[N]T` / `[]T` receiver type. It rejects
-  `(self T?)`, `(self sequence[T])`, and similar — which means
-  every helper in this ADR has to be authored in C# (where the
-  receiver shape is unconstrained). When the parser accepts these
-  shapes, the helpers can migrate to native G# `.gs` sources.
+  **Parser-side closed.** `LooksLikeReceiverClause()` previously
+  only accepted an identifier or an `[N]T` / `[]T` receiver type;
+  the scanner now reads any balanced bracket region as the
+  candidate type clause, so `(self T?)`, `(self sequence[T])`,
+  `(self map[K]V)`, `(self (int32, string)?)`, and arbitrary
+  combinations are recognised by the parser and the function
+  retains its extension-method status. The binder + emit pipeline
+  also accept call-site dispatch when the receiver is *closed*
+  (concrete) — `string?`, `(int32, string)`, `[]int32?`,
+  `map[string]int32`. The remaining gap is generic-receiver
+  dispatch: when the receiver type contains a function-level type
+  parameter (`func (self sequence[T]) FirstOrNil[T]() T?`), the
+  binder still fails to bind the call site
+  (`receiver.FirstOrNil()` → GS0159) and array iteration through
+  such a receiver erases the element type to `object`. Those
+  follow-up gaps are tracked as
+  [issue #773](https://github.com/DavidObando/gsharp/issues/773)
+  (generic-receiver dispatch) and
+  [issue #774](https://github.com/DavidObando/gsharp/issues/774)
+  (open-receiver iteration). A third gap blocking the port —
+  [issue #775](https://github.com/DavidObando/gsharp/issues/775),
+  G# spelling for `class` / `struct` / `new()` constraints — was
+  also surfaced while attempting the dogfooded G# rewrite in this
+  PR. Closing #773, #774, and #775 lets the C# files under
+  `src/Sdk/Gsharp.Extensions/Optional/` and
+  `src/Sdk/Gsharp.Extensions/Sequences/` migrate to native G#.
 - **L3. Native `?:` over nullable value types.**
   ([issue #752](https://github.com/DavidObando/gsharp/issues/752))
   The current
@@ -242,6 +262,10 @@ of that migration, not left behind as dead code.
   meant to be authored in G# creates direct compiler pressure to
   close L2 / L3 (L1 closed by ADR-0088). Each remaining gap is now
   a tracked issue with a concrete callsite waiting on its fix.
+  L2's parser side closed in PR for #751; the residual binder /
+  emit gaps surfaced while attempting the port live as #773
+  (generic-receiver dispatch), #774 (open-receiver iteration),
+  and #775 (G# `class` / `struct` constraint spelling).
 - **Positive — zero-friction adoption.** Because the assembly is
   bundled with the SDK and imports are explicit but trivial
   (`import Gsharp.Extensions.Optional`), the cost to a sample or
