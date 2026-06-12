@@ -3,7 +3,8 @@
 // Gsharp.Extensions. Demonstrates Sequences.* builders (Range / RangeStep /
 // Iterate / Repeat / Of / Empty) plus the extension transformers
 // (Indexed / Windowed / Chunked / Pairwise / Interleave) and safe terminals
-// (FirstOrNil / LastOrNil / SingleOrNil and their *ValueOrNil companions),
+// (FirstOrNil / LastOrNil / SingleOrNil — single-name surface for both
+// reference- and value-typed elements after ADR-0088),
 // closing with the G#-shaped collectors ToSlice and ToMap.
 // The Gsharp.Extensions.* namespaces are explicit-import only.
 
@@ -86,19 +87,20 @@ Console.WriteLine("LastOrNil(names): " + (Sequences.Of("alpha", "beta").LastOrNi
 Console.WriteLine("SingleOrNil(one): " + (Sequences.Of("solo").SingleOrNil() ?: "<none>"))
 Console.WriteLine("SingleOrNil(many): " + (Sequences.Of("a", "b").SingleOrNil() ?: "<none>"))
 
-// Value-type terminals are split per the G# constraint-overload gap noted in
-// ADR-0084 ("Known Limitations / language gap #L1").
-let firstVal = Sequences.Of(11, 22, 33).FirstValueOrNil()
-Console.WriteLine("FirstValueOrNil: " + firstVal.OrElseValue(-1).ToString())
+// Value-type terminals share the canonical name with the reference-typed
+// surface: ADR-0088 (issue #750) lets the binder honour generic constraints
+// so `FirstOrNil` resolves to the struct overload on int sequences.
+let firstVal = Sequences.Of(11, 22, 33).FirstOrNil()
+Console.WriteLine("FirstOrNil(value): " + firstVal.OrElse(-1).ToString())
 
-let lastVal = Sequences.Of(11, 22, 33).LastValueOrNil()
-Console.WriteLine("LastValueOrNil: " + lastVal.OrElseValue(-1).ToString())
+let lastVal = Sequences.Of(11, 22, 33).LastOrNil()
+Console.WriteLine("LastOrNil(value): " + lastVal.OrElse(-1).ToString())
 
-let solo = Sequences.Of(42).SingleValueOrNil()
-Console.WriteLine("SingleValueOrNil(one): " + solo.OrElseValue(-1).ToString())
+let solo = Sequences.Of(42).SingleOrNil()
+Console.WriteLine("SingleOrNil(value, one): " + solo.OrElse(-1).ToString())
 
-let manyVals = Sequences.Of(1, 2).SingleValueOrNil()
-Console.WriteLine("SingleValueOrNil(many): " + manyVals.OrElseValue(-1).ToString())
+let manyVals = Sequences.Of(1, 2).SingleOrNil()
+Console.WriteLine("SingleOrNil(value, many): " + manyVals.OrElse(-1).ToString())
 
 // --- Collectors --------------------------------------------------------------
 

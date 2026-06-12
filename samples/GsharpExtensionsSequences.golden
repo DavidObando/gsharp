@@ -61,10 +61,10 @@ FirstOrNil(empty): <none>
 LastOrNil(names): beta
 SingleOrNil(one): solo
 SingleOrNil(many): <none>
-FirstValueOrNil: 11
-LastValueOrNil: 33
-SingleValueOrNil(one): 42
-SingleValueOrNil(many): -1
+FirstOrNil(value): 11
+LastOrNil(value): 33
+SingleOrNil(value, one): 42
+SingleOrNil(value, many): -1
 ToSlice length: 4
 ToMap(pairs)[two]: 2
 ToMap(words)[a]: 5

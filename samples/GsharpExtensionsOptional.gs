@@ -1,8 +1,11 @@
 // file: GsharpExtensionsOptional.gs
 // Issue #724 / ADR-0084: idiomatic helpers over T? from Gsharp.Extensions.
 // Demonstrates Map / FlatMap / OrElse / OrCompute / OrThrow / IfPresent /
-// Filter on reference-typed nullables, plus the value-typed *Value
-// companions (MapValue / OrElseValue / FilterValue / IfPresentValue).
+// Filter on both reference-typed and value-typed nullables. After
+// ADR-0088 / issue #750 the value-typed surface uses the same names as
+// the reference-typed surface: the G# binder honours generic constraints
+// (`where T : class` vs `where T : struct`) during overload resolution
+// and picks the correct overload based on the receiver type.
 // The Gsharp.Extensions.* namespaces are explicit-import only — nothing here
 // is auto-imported, even with the implicit-imports compiler option enabled.
 
@@ -52,20 +55,19 @@ absent.IfPresent(func(s string) {
 Console.WriteLine(name.OrThrow("name was missing"))
 
 // --- Value-typed nullables (T : struct) --------------------------------------
-// G# overload resolution does not currently honour CLR generic constraints
-// (see ADR-0084 Known Limitations / language gap #L1). Value-typed helpers
-// therefore live under the *Value name suffix.
+// ADR-0088 / issue #750: the binder picks the struct overload based on the
+// receiver's CLR shape (Nullable<T>) and the `where T : struct` constraint.
 
 let count int32? = 7
-let doubled = count.MapValue(func(n int32) int32 { return n * 2 })
-Console.WriteLine(doubled.OrElseValue(-1))
+let doubled = count.Map(func(n int32) int32 { return n * 2 })
+Console.WriteLine(doubled.OrElse(-1))
 
 let none int32? = nil
-Console.WriteLine(none.OrElseValue(-1))
+Console.WriteLine(none.OrElse(-1))
 
-let positive = count.FilterValue(func(n int32) bool { return n > 0 })
-Console.WriteLine(positive.OrElseValue(-1))
+let positive = count.Filter(func(n int32) bool { return n > 0 })
+Console.WriteLine(positive.OrElse(-1))
 
-count.IfPresentValue(func(n int32) {
+count.IfPresent(func(n int32) {
     Console.WriteLine("count present: " + n.ToString())
 })

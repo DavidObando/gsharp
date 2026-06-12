@@ -111,7 +111,7 @@ The `Gsharp.Extensions` assembly ships with `Gsharp.NET.Sdk` and is referenced b
 
 ### Gsharp.Extensions.Optional
 
-Reference-typed (`T : class`) extensions on `T?`:
+Extensions on `T?` for both reference-typed (`T : class`) and value-typed (`T : struct`) receivers. Each helper has two overloads with disjoint generic constraints; the G# binder picks the right one based on the receiver type (ADR-0088).
 
 | Symbol | Form | One-line description |
 | --- | --- | --- |
@@ -123,9 +123,9 @@ Reference-typed (`T : class`) extensions on `T?`:
 | `IfPresent` | `func [T] (self T?) IfPresent(action (T) -> void)` | Invoke `action` only when the value is present; no-op otherwise. |
 | `Filter` | `func [T] (self T?) Filter(pred (T) -> bool) T?` | Keep the value when `pred(value)` is true; otherwise yield `null`. |
 
-Value-typed (`T : struct`) companions carry a `*Value` suffix and have identical semantics: `MapValue`, `FlatMapValue`, `OrElseValue`, `OrComputeValue`, `OrThrowValue`, `IfPresentValue`, `FilterValue`. The suffix is a workaround for the constraint-aware overload-resolution gap tracked in ADR-0084 ("Known limitations / L1"); when that gap closes the two surfaces collapse to a single name set.
+Each helper carries both a `where T : class` and a `where T : struct` overload, so the same names apply to reference- and value-typed `T?`. The G# binder picks the right overload based on the receiver's shape; see ADR-0088 for the constraint-aware overload-resolution rule.
 
-`Map`, `FlatMap`, `OrElse`, `OrCompute`, `IfPresent`, and `Filter` (plus their `*Value` companions) carry `[MethodImpl(MethodImplOptions.AggressiveInlining)]` so the JIT inlines them across the assembly boundary. `OrThrow` / `OrThrowValue` are intentionally **not** inlined so the failure site is preserved in stack traces.
+`Map`, `FlatMap`, `OrElse`, `OrCompute`, `IfPresent`, and `Filter` (every overload) carry `[MethodImpl(MethodImplOptions.AggressiveInlining)]` so the JIT inlines them across the assembly boundary. `OrThrow` is intentionally **not** inlined so the failure site is preserved in stack traces.
 
 ### Gsharp.Extensions.Sequences
 
@@ -154,12 +154,9 @@ Safe terminals:
 
 | Symbol | Form | One-line description |
 | --- | --- | --- |
-| `FirstOrNil` | `func [T] (self sequence[T]) FirstOrNil() T?` (`T : class`) | First reference-typed element or `null` if empty. |
-| `LastOrNil` | `func [T] (self sequence[T]) LastOrNil() T?` (`T : class`) | Last reference-typed element or `null` if empty. |
-| `SingleOrNil` | `func [T] (self sequence[T]) SingleOrNil() T?` (`T : class`) | Single reference-typed element, or `null` if empty or many. |
-| `FirstValueOrNil` | `func [T] (self sequence[T]) FirstValueOrNil() T?` (`T : struct`) | Value-typed companion to `FirstOrNil`. |
-| `LastValueOrNil` | `func [T] (self sequence[T]) LastValueOrNil() T?` (`T : struct`) | Value-typed companion to `LastOrNil`. |
-| `SingleValueOrNil` | `func [T] (self sequence[T]) SingleValueOrNil() T?` (`T : struct`) | Value-typed companion to `SingleOrNil`. |
+| `FirstOrNil` | `func [T] (self sequence[T]) FirstOrNil() T?` (both `T : class` and `T : struct`) | First element or `null` if empty. Both reference- and value-typed overloads share the name; the binder picks the right one (ADR-0088). |
+| `LastOrNil` | `func [T] (self sequence[T]) LastOrNil() T?` (both `T : class` and `T : struct`) | Last element or `null` if empty. |
+| `SingleOrNil` | `func [T] (self sequence[T]) SingleOrNil() T?` (both `T : class` and `T : struct`) | Single element, or `null` if empty or many. |
 
 G#-shaped collectors:
 

@@ -805,6 +805,14 @@ internal static class OverloadResolution
                         return;
                     }
 
+                    // Issue #750 / ADR-0088: same constraint check as the
+                    // inference path. Required because MetadataLoadContext's
+                    // MakeGenericMethod does not validate constraints.
+                    if (!SatisfiesGenericConstraints(gmi, explicitTypeArgs.ToArray()))
+                    {
+                        return;
+                    }
+
                     candidate = (T)(MethodBase)closed;
                 }
                 else
@@ -858,6 +866,19 @@ internal static class OverloadResolution
                 catch (ArgumentException)
                 {
                     // Generic constraints not satisfied — drop this candidate.
+                    return;
+                }
+
+                // Issue #750 / ADR-0088: explicitly validate generic-parameter
+                // constraints against the inferred type arguments. The runtime
+                // overload of MakeGenericMethod throws on constraint violation,
+                // but the MetadataLoadContext overload silently accepts any
+                // closure — without this check, a `where T : class` candidate
+                // bound with T = Nullable<int> survives applicability and the
+                // resolver picks the wrong overload, emitting IL that fails
+                // verification at runtime.
+                if (!SatisfiesGenericConstraints(mi, typeArgs))
+                {
                     return;
                 }
 
@@ -969,6 +990,11 @@ internal static class OverloadResolution
                     return;
                 }
 
+                if (!SatisfiesGenericConstraints(gmi, explicitTypeArgs.ToArray()))
+                {
+                    return;
+                }
+
                 candidate = (T)(MethodBase)closed;
             }
             else
@@ -997,6 +1023,11 @@ internal static class OverloadResolution
                 closed = mi.MakeGenericMethod(typeArgs);
             }
             catch (ArgumentException)
+            {
+                return;
+            }
+
+            if (!SatisfiesGenericConstraints(mi, typeArgs))
             {
                 return;
             }
@@ -1587,6 +1618,30 @@ internal static class OverloadResolution
             }
         }
 
+        // Phase 2e — issue #750 / ADR-0088: when two open generic candidates
+        // have already been closed and both apply, prefer the one whose
+        // generic-parameter constraints are strictly more specific
+        // (struct > class > no constraint, per ADR-0088 §2). This is the
+        // pure-overload tie-break that lets `Map<T>(T?, …) where T : class`
+        // and `Map<T>(T?, …) where T : struct` co-exist on the same name —
+        // mirroring C# §11.6.4.6 which uses constraints as the final ranking
+        // axis after parameter shape and arity.
+        if (pool.Count > 1)
+        {
+            var mostConstrained = pool
+                .Where(w => pool.All(o => ReferenceEquals(w.Method, o.Method) || CompareConstraintSpecificity(w.Method, o.Method) >= 0))
+                .ToList();
+            if (mostConstrained.Count >= 1 && mostConstrained.Count < pool.Count)
+            {
+                pool = mostConstrained;
+            }
+
+            if (pool.Count == 1)
+            {
+                return Result<T>.Single(pool[0].Method, BuildMappingArray(pool[0].Mapping, argumentNames), pool[0].IsExpanded);
+            }
+        }
+
         // If nothing dominated above, report the surviving pool as ambiguous.
         var ambiguous = pool
             .Select(c => c.Method)
@@ -1789,6 +1844,266 @@ internal static class OverloadResolution
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #750 / ADR-0088: validates that <paramref name="typeArgs"/>
+    /// satisfies every CLR-level generic-parameter constraint declared on
+    /// <paramref name="openMethod"/>. The runtime overload of
+    /// <see cref="MethodInfo.MakeGenericMethod(Type[])"/> performs this
+    /// check itself and throws <see cref="ArgumentException"/> on failure,
+    /// but the <see cref="System.Reflection.MetadataLoadContext"/> overload
+    /// (used for every <c>/reference</c> assembly the binder consumes)
+    /// silently accepts any closure regardless of constraints. Without this
+    /// explicit check a <c>where T : class</c> candidate inferred with
+    /// <c>T = Nullable&lt;int&gt;</c> survives applicability and the
+    /// resolver picks the wrong overload, emitting IL that fails
+    /// verification at runtime.
+    /// </summary>
+    /// <param name="openMethod">The open generic method definition.</param>
+    /// <param name="typeArgs">The candidate type arguments in declaration order.</param>
+    /// <returns><see langword="true"/> when every constraint is satisfied.</returns>
+    private static bool SatisfiesGenericConstraints(MethodInfo openMethod, Type[] typeArgs)
+    {
+        if (openMethod is null || typeArgs is null)
+        {
+            return true;
+        }
+
+        Type[] typeParams;
+        try
+        {
+            typeParams = openMethod.GetGenericArguments();
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return true;
+        }
+
+        if (typeParams.Length != typeArgs.Length)
+        {
+            return true;
+        }
+
+        for (var i = 0; i < typeParams.Length; i++)
+        {
+            var param = typeParams[i];
+            var arg = typeArgs[i];
+            if (arg is null || arg.IsGenericParameter)
+            {
+                continue;
+            }
+
+            GenericParameterAttributes attrs;
+            try
+            {
+                attrs = param.GenericParameterAttributes;
+            }
+            catch (Exception ex) when (IsMetadataLoadFailure(ex))
+            {
+                continue;
+            }
+
+            var special = attrs & GenericParameterAttributes.SpecialConstraintMask;
+
+            if ((special & GenericParameterAttributes.ReferenceTypeConstraint) != 0)
+            {
+                // `where T : class` — arg must be a reference type (not a
+                // value type, not Nullable<T>).
+                if (arg.IsValueType)
+                {
+                    return false;
+                }
+            }
+
+            if ((special & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0)
+            {
+                // `where T : struct` — arg must be a non-nullable value type.
+                if (!arg.IsValueType || NullableLifting.IsValueTypeNullableClr(arg))
+                {
+                    return false;
+                }
+            }
+
+            if ((special & GenericParameterAttributes.DefaultConstructorConstraint) != 0
+                && (special & GenericParameterAttributes.NotNullableValueTypeConstraint) == 0)
+            {
+                // `where T : new()` — arg must have a public parameterless
+                // constructor. Value types always satisfy this implicitly;
+                // reference types require an actual ctor.
+                if (!arg.IsValueType)
+                {
+                    try
+                    {
+                        var ctor = arg.GetConstructor(Type.EmptyTypes);
+                        if (ctor is null || !ctor.IsPublic)
+                        {
+                            return false;
+                        }
+                    }
+                    catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                    {
+                        // Conservative: a load failure means we can't disprove
+                        // the constraint; keep the candidate alive.
+                    }
+                }
+            }
+
+            // Type-bound constraints — `where T : SomeBase` or
+            // `where T : ISomething`. Constraints that reference another
+            // method type parameter (e.g. `where TResult : T`) are skipped:
+            // resolving them requires substitution and is rare on the
+            // surfaces that motivated this work (ADR-0084). The dominant
+            // class/struct cases above already disambiguate the
+            // Optional/Sequences overload sets.
+            Type[] typeConstraints;
+            try
+            {
+                typeConstraints = param.GetGenericParameterConstraints();
+            }
+            catch (Exception ex) when (IsMetadataLoadFailure(ex))
+            {
+                continue;
+            }
+
+            for (var c = 0; c < typeConstraints.Length; c++)
+            {
+                var constraint = typeConstraints[c];
+                if (constraint is null || constraint.IsGenericParameter || constraint.ContainsGenericParameters)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (!ClrTypeUtilities.IsAssignableByName(constraint, arg))
+                    {
+                        return false;
+                    }
+                }
+                catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                {
+                    // Conservative — treat as satisfied on load failure.
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #750 / ADR-0088: scores a single generic parameter's special
+    /// constraints for the constraint-specificity tie-break.
+    /// <c>where T : struct</c> dominates <c>where T : class</c> dominates
+    /// no constraint. The two value-axis constraints are disjoint by
+    /// construction so a strict ordering between them is well-defined.
+    /// </summary>
+    private static int ConstraintSpecificityScore(GenericParameterAttributes attrs)
+    {
+        var special = attrs & GenericParameterAttributes.SpecialConstraintMask;
+        if ((special & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0)
+        {
+            return 2;
+        }
+
+        if ((special & GenericParameterAttributes.ReferenceTypeConstraint) != 0)
+        {
+            return 1;
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Issue #750 / ADR-0088: compares two candidates by the
+    /// constraint-specificity ordering described in ADR-0088 §2. Returns
+    /// <c>+1</c> when <paramref name="a"/> is strictly more constrained
+    /// than <paramref name="b"/> (every type-parameter slot is at least as
+    /// constrained on <paramref name="a"/> and at least one slot is
+    /// strictly more constrained), <c>-1</c> in the symmetric case, and
+    /// <c>0</c> when neither dominates. Non-generic candidates and
+    /// arity-mismatched pairs always tie — those are handled by the
+    /// non-generic-over-generic phase that runs before this one.
+    /// </summary>
+    /// <param name="a">The first candidate.</param>
+    /// <param name="b">The second candidate.</param>
+    /// <returns>+1, -1, or 0 per the description above.</returns>
+    private static int CompareConstraintSpecificity(MethodBase a, MethodBase b)
+    {
+        if (a is not MethodInfo ma || b is not MethodInfo mb)
+        {
+            return 0;
+        }
+
+        if (!ma.IsGenericMethod || !mb.IsGenericMethod)
+        {
+            return 0;
+        }
+
+        MethodInfo aOpen, bOpen;
+        try
+        {
+            aOpen = ma.IsGenericMethodDefinition ? ma : ma.GetGenericMethodDefinition();
+            bOpen = mb.IsGenericMethodDefinition ? mb : mb.GetGenericMethodDefinition();
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return 0;
+        }
+
+        Type[] aParams, bParams;
+        try
+        {
+            aParams = aOpen.GetGenericArguments();
+            bParams = bOpen.GetGenericArguments();
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return 0;
+        }
+
+        if (aParams.Length != bParams.Length)
+        {
+            return 0;
+        }
+
+        var aMore = false;
+        var bMore = false;
+        for (var i = 0; i < aParams.Length; i++)
+        {
+            int s1;
+            int s2;
+            try
+            {
+                s1 = ConstraintSpecificityScore(aParams[i].GenericParameterAttributes);
+                s2 = ConstraintSpecificityScore(bParams[i].GenericParameterAttributes);
+            }
+            catch (Exception ex) when (IsMetadataLoadFailure(ex))
+            {
+                return 0;
+            }
+
+            if (s1 > s2)
+            {
+                aMore = true;
+            }
+            else if (s2 > s1)
+            {
+                bMore = true;
+            }
+        }
+
+        if (aMore && !bMore)
+        {
+            return 1;
+        }
+
+        if (bMore && !aMore)
+        {
+            return -1;
+        }
+
+        return 0;
     }
 
     private static string FormatTypeName(Type type)

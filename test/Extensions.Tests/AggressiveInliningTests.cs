@@ -21,7 +21,9 @@ public class AggressiveInliningTests
 {
     private static readonly (System.Type Type, string Method)[] InlinedMethods = new (System.Type, string)[]
     {
-        // OptionalExtensions (T : class)
+        // OptionalExtensions — both class-receiver and struct-receiver
+        // overloads carry [AggressiveInlining] per ADR-0084. The test iterates
+        // every overload of each named method so it covers both branches.
         (typeof(OptionalExtensions), nameof(OptionalExtensions.Map)),
         (typeof(OptionalExtensions), nameof(OptionalExtensions.FlatMap)),
         (typeof(OptionalExtensions), nameof(OptionalExtensions.OrElse)),
@@ -29,21 +31,16 @@ public class AggressiveInliningTests
         (typeof(OptionalExtensions), nameof(OptionalExtensions.IfPresent)),
         (typeof(OptionalExtensions), nameof(OptionalExtensions.Filter)),
 
-        // OptionalValueExtensions (T : struct)
-        (typeof(OptionalValueExtensions), nameof(OptionalValueExtensions.MapValue)),
-        (typeof(OptionalValueExtensions), nameof(OptionalValueExtensions.FlatMapValue)),
-        (typeof(OptionalValueExtensions), nameof(OptionalValueExtensions.OrElseValue)),
-        (typeof(OptionalValueExtensions), nameof(OptionalValueExtensions.OrComputeValue)),
-        (typeof(OptionalValueExtensions), nameof(OptionalValueExtensions.IfPresentValue)),
-        (typeof(OptionalValueExtensions), nameof(OptionalValueExtensions.FilterValue)),
-
-        // SequenceExtensions safe terminals + Indexed
+        // SequenceExtensions safe terminals + Indexed. The struct-receiver
+        // overloads of First/Last/SingleOrNil live in SequenceValueExtensions
+        // (separate class because IEnumerable<T> shape is identical for class
+        // and struct T, so C# CS0111 forbids two overloads in one class).
         (typeof(SequenceExtensions), nameof(SequenceExtensions.FirstOrNil)),
         (typeof(SequenceExtensions), nameof(SequenceExtensions.LastOrNil)),
         (typeof(SequenceExtensions), nameof(SequenceExtensions.SingleOrNil)),
-        (typeof(SequenceExtensions), nameof(SequenceExtensions.FirstValueOrNil)),
-        (typeof(SequenceExtensions), nameof(SequenceExtensions.LastValueOrNil)),
-        (typeof(SequenceExtensions), nameof(SequenceExtensions.SingleValueOrNil)),
+        (typeof(SequenceValueExtensions), nameof(SequenceValueExtensions.FirstOrNil)),
+        (typeof(SequenceValueExtensions), nameof(SequenceValueExtensions.LastOrNil)),
+        (typeof(SequenceValueExtensions), nameof(SequenceValueExtensions.SingleOrNil)),
         (typeof(SequenceExtensions), nameof(SequenceExtensions.Indexed)),
 
         // Sequences builders (Of / Empty)
@@ -53,9 +50,9 @@ public class AggressiveInliningTests
 
     private static readonly (System.Type Type, string Method)[] NotInlinedMethods = new (System.Type, string)[]
     {
-        // OrThrow / OrThrowValue intentionally preserve their stack frames.
+        // OrThrow intentionally preserves its stack frame on both the class
+        // and struct overloads.
         (typeof(OptionalExtensions), nameof(OptionalExtensions.OrThrow)),
-        (typeof(OptionalValueExtensions), nameof(OptionalValueExtensions.OrThrowValue)),
 
         // Iterator-block methods are compiler-generated state machines; the
         // attribute is intentionally absent on the public entry points so the
