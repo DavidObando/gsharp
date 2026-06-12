@@ -4298,6 +4298,12 @@ public class Parser
             case SyntaxKind.AsyncKeyword when Peek(1).Kind == SyntaxKind.FuncKeyword:
                 return ParsePostfixChain(ParseFunctionLiteralExpression());
 
+            case SyntaxKind.AsyncKeyword when LooksLikeLambdaStart(startOffset: 1):
+                // ADR-0076 / issue #716: `async (...) -> body` is an async
+                // arrow lambda. The parser commits when the post-`async`
+                // tokens match a lambda shape.
+                return ParseLambdaExpression();
+
             case SyntaxKind.SwitchKeyword:
                 return ParsePostfixChain(ParseSwitchExpression());
 
@@ -4468,11 +4474,21 @@ public class Parser
 
     // ADR-0074 / issue #714: bounded look-ahead for a lambda expression
     // starting at a `(`. Returns true if the token stream looks like
-    // `() -> …` or `(ident type, …) -> …`. Otherwise the caller falls back
-    // to parsing a parenthesised expression / tuple literal.
-    private bool LooksLikeLambdaStart()
+    // `() -> …`, `(ident type, …) -> …`, or (ADR-0076 / issue #716)
+    // `(ident, …) -> …` (untyped — the binder fills the types from the
+    // target). The disambiguator commits to a lambda whenever the matching
+    // `)` is followed by `->` AND the interior either is empty or starts
+    // with a parameter-name identifier; the lone trailing `->` after `)`
+    // is unambiguously a lambda operator (it cannot be a binary expression
+    // operator outside switch-arm position).
+    //
+    // ADR-0076 / issue #716: a leading `async` keyword is recognised by
+    // the dispatcher in <see cref="ParsePrimaryExpression"/> as
+    // `AsyncKeyword + OpenParenthesisToken + LooksLikeLambdaStart(offset:1)`,
+    // so this helper takes an optional <paramref name="startOffset"/>.
+    private bool LooksLikeLambdaStart(int startOffset = 0)
     {
-        if (Current.Kind != SyntaxKind.OpenParenthesisToken)
+        if (Peek(startOffset).Kind != SyntaxKind.OpenParenthesisToken)
         {
             return false;
         }
@@ -4482,9 +4498,9 @@ public class Parser
         var parenDepth = 1;
         var bracketDepth = 0;
         var braceDepth = 0;
-        var offset = 1;
+        var offset = startOffset + 1;
         const int maxScan = 4096;
-        while (offset < maxScan)
+        while (offset - startOffset < maxScan)
         {
             var k = Peek(offset).Kind;
             if (k == SyntaxKind.EndOfFileToken)
@@ -4550,7 +4566,7 @@ public class Parser
         }
 
         // Empty parameter list `()`: definitively a zero-param lambda.
-        if (offset == 1)
+        if (offset == startOffset + 1)
         {
             return true;
         }
@@ -4558,10 +4574,12 @@ public class Parser
         // Non-empty parameter list: the first interior token must look like a
         // parameter — i.e. an identifier (possibly preceded by `@` annotations
         // or the contextual `scoped`/`ref`/`out`/`in` modifiers used by
-        // ParseParameter) followed by a token that could start a type clause
-        // (i.e. NOT `,`, `)`, or `=`, which would indicate a positional
-        // expression rather than a typed parameter).
-        var j = 1;
+        // ParseParameter). ADR-0076 / issue #716: the type clause is OPTIONAL
+        // on a lambda parameter, so the token AFTER the identifier may be
+        // `,`, `)`, `=`, or anything else — the matching `)` is already
+        // known to be followed by `->`, so the parse is unambiguously a
+        // lambda once we see an identifier-shaped first slot.
+        var j = startOffset + 1;
 
         // Optional `@Annot[(args)]` annotations before the first parameter.
         while (Peek(j).Kind == SyntaxKind.AtToken)
@@ -4605,57 +4623,128 @@ public class Parser
             j++;
         }
 
+        // The first parameter slot must be an identifier (the parameter name).
+        // Anything else (e.g. `(42)`, `(x + y)`) is treated as a parenthesized
+        // expression / tuple even though `->` follows — the parser surfaces a
+        // better diagnostic from the expression path than from the parameter
+        // path.
         if (Peek(j).Kind != SyntaxKind.IdentifierToken)
         {
             return false;
         }
 
-        // Token after the parameter name must look like the start of a type
-        // clause — anything that ParseTypeClause can consume — and crucially
-        // NOT `,`, `)`, or `=`, which would mean the author wrote a value
-        // expression, not a typed parameter list.
-        var afterIdent = Peek(j + 1).Kind;
-        switch (afterIdent)
-        {
-            case SyntaxKind.CommaToken:
-            case SyntaxKind.CloseParenthesisToken:
-            case SyntaxKind.EqualsToken:
-            case SyntaxKind.EqualsEqualsToken:
-            case SyntaxKind.PlusToken:
-            case SyntaxKind.MinusToken:
-            case SyntaxKind.StarToken:
-            case SyntaxKind.SlashToken:
-            case SyntaxKind.PercentToken:
-            case SyntaxKind.AmpersandAmpersandToken:
-            case SyntaxKind.PipePipeToken:
-            case SyntaxKind.QuestionToken:
-            case SyntaxKind.QuestionDotToken:
-            case SyntaxKind.QuestionQuestionEqualsToken:
-            case SyntaxKind.LessToken:
-            case SyntaxKind.LessOrEqualsToken:
-            case SyntaxKind.GreaterToken:
-            case SyntaxKind.GreaterOrEqualsToken:
-            case SyntaxKind.BangEqualsToken:
-            case SyntaxKind.DotToken:
-            case SyntaxKind.SemicolonToken:
-                return false;
-            default:
-                return true;
-        }
+        return true;
     }
 
     private LambdaExpressionSyntax ParseLambdaExpression()
     {
         // ADR-0074 / issue #714: `(p1 T1, p2 T2) -> body` lambda expression.
         // The opening `(` is required; an empty parameter list is permitted.
+        // ADR-0076 / issue #716: an optional leading `async` modifier marks
+        // an async arrow lambda, and parameter type clauses are optional
+        // when a target type is available to infer them (the binder reports
+        // GS0304 when no target type is in scope).
+        SyntaxToken asyncModifier = null;
+        if (Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            asyncModifier = NextToken();
+        }
+
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
-        var parameters = ParseParameterList();
+        var parameters = ParseLambdaParameterList();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         var arrow = MatchToken(SyntaxKind.RightArrowToken);
         var body = Current.Kind == SyntaxKind.OpenBraceToken
             ? ParseBlockExpression()
             : ParseExpression();
-        return new LambdaExpressionSyntax(syntaxTree, openParen, parameters, closeParen, arrow, body);
+        return new LambdaExpressionSyntax(syntaxTree, asyncModifier, openParen, parameters, closeParen, arrow, body);
+    }
+
+    // ADR-0076 / issue #716: arrow-lambda parameter lists allow each parameter's
+    // type clause to be omitted (`(x) -> body` / `(x, y) -> body`). When the
+    // binding supplies a target function type, the binder infers each missing
+    // parameter type from the target. Otherwise, GS0304 fires. Parameter
+    // default values and annotations remain supported by delegating to the
+    // shared ParseLambdaParameter helper.
+    private SeparatedSyntaxList<ParameterSyntax> ParseLambdaParameterList()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+
+        var parseNextParameter = true;
+        while (parseNextParameter &&
+               Current.Kind != SyntaxKind.CloseParenthesisToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var parameter = ParseLambdaParameter();
+            nodesAndSeparators.Add(parameter);
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                var comma = MatchToken(SyntaxKind.CommaToken);
+                nodesAndSeparators.Add(comma);
+            }
+            else
+            {
+                parseNextParameter = false;
+            }
+        }
+
+        return new SeparatedSyntaxList<ParameterSyntax>(nodesAndSeparators.ToImmutable());
+    }
+
+    // ADR-0076 / issue #716: a lambda parameter is structurally identical to
+    // an ordinary parameter except that the type clause is optional. When the
+    // type clause is absent (e.g. the parameter is `(x)`), the binder relies
+    // on the target type to fill it in; with no target type, GS0304 fires.
+    private ParameterSyntax ParseLambdaParameter()
+    {
+        // ADR-0047: parameter-level annotations precede the identifier.
+        var annotations = ParseAnnotations();
+
+        // ADR-0058 / issue #376: optional `scoped` contextual modifier.
+        SyntaxToken scopedModifier = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "scoped"
+            && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            scopedModifier = NextToken();
+        }
+
+        // ADR-0060: optional `ref`/`out`/`in` contextual modifier.
+        SyntaxToken refKindModifier = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken
+            && (Current.Text == "ref" || Current.Text == "out" || Current.Text == "in")
+            && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            refKindModifier = NextToken();
+        }
+
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        SyntaxToken ellipsis = null;
+        if (Current.Kind == SyntaxKind.EllipsisToken)
+        {
+            ellipsis = MatchToken(SyntaxKind.EllipsisToken);
+        }
+
+        // ADR-0076 / issue #716: the type clause is OPTIONAL on a lambda
+        // parameter; with no type, the binder uses the target type's
+        // corresponding slot, or reports GS0304 when no target is in scope.
+        var type = ParseOptionalTypeClause();
+
+        // ADR-0063: optional default-value clause.
+        SyntaxToken equalsToken = null;
+        ExpressionSyntax defaultValue = null;
+        if (Current.Kind == SyntaxKind.EqualsToken)
+        {
+            equalsToken = NextToken();
+            defaultValue = ParseExpression();
+        }
+
+        var parameter = new ParameterSyntax(syntaxTree, identifier, ellipsis, type).WithAnnotations(annotations);
+        parameter.ScopedModifier = scopedModifier;
+        parameter.RefKindModifier = refKindModifier;
+        parameter.EqualsToken = equalsToken;
+        parameter.DefaultValue = defaultValue;
+        return parameter;
     }
 
     private ExpressionSyntax ParseSwitchExpression()

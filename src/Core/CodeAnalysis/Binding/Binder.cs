@@ -258,7 +258,8 @@ public sealed class Binder
             isIteratorReturnType: IsIteratorReturnType,
             resolveAccessibility: ResolveAccessibility,
             bindVariableDeclarationAttributes: (annotations, positionDescription) => declarations.BindAttributes(annotations, AttributeTargetKind.Field, VariableDeclarationAllowedTargets, positionDescription, System.AttributeTargets.Field),
-            getCurrentFunction: () => this.function);
+            getCurrentFunction: () => this.function,
+            bindLambdaWithTargetType: (syntax, targetType) => lambdas.BindLambdaExpression(syntax, targetType));
         declarations = new DeclarationBinder(
             binderCtx,
             conversions,
@@ -1262,10 +1263,13 @@ public sealed class Binder
             return;
         }
 
-        if (node is FunctionLiteralExpressionSyntax)
+        if (node is FunctionLiteralExpressionSyntax or LambdaExpressionSyntax)
         {
             // ADR-0066 D2/D3: lambda bodies host their own `return`s and
             // `await`s; skip them when inferring the TLS entry point shape.
+            // ADR-0074 added arrow lambdas (LambdaExpressionSyntax); their
+            // block-body `return` statements likewise belong to the lambda's
+            // body, not the synthesized `<Main>$`.
             return;
         }
 

@@ -245,4 +245,18 @@ public sealed class FunctionSymbol : Symbol
     /// valid here; <c>out</c>/<c>in</c> are not meaningful on a return position.
     /// </summary>
     public RefKind ReturnRefKind { get; set; } = RefKind.None;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this function's return type is
+    /// being inferred (ADR-0076 / issue #716). Set to <c>true</c> on the
+    /// synthetic placeholder <see cref="FunctionSymbol"/> the arrow-lambda
+    /// binder pushes while binding a lambda body whose return type is not
+    /// declared up-front. When this flag is <c>true</c>, the return-statement
+    /// binder must skip the usual void / declared-return-type validation and
+    /// must NOT apply a target-typed conversion — the lambda binder collects
+    /// the bound return expressions, computes the inferred return type from
+    /// their common-type, and applies a single post-bind conversion pass.
+    /// Defaults to <c>false</c>.
+    /// </summary>
+    public bool IsReturnTypeInferred { get; set; }
 }

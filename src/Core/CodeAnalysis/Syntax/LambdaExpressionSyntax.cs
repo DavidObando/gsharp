@@ -6,17 +6,63 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
 /// ADR-0074 / issue #714: a lambda-expression of the form
-/// <c>(p1 T1, p2 T2) -&gt; body</c>. The parameter list is always
+/// <c>[async] (p1 T1, p2 T2) -&gt; body</c>. The parameter list is always
 /// parenthesised; the body may be either a single expression or a
 /// brace-delimited <see cref="BlockExpressionSyntax"/>. Bound to a
 /// bound function-literal node, reusing every downstream consumer
 /// (closure capture, emit, interpreter, etc.) that already handles
 /// function literals.
 /// </summary>
+/// <remarks>
+/// ADR-0076 / issue #716 extended this node in two ways:
+/// <list type="bullet">
+///   <item><description><b>Optional async modifier.</b> A leading
+///   <c>async</c> keyword marks an async arrow lambda; the binder
+///   lowers <c>async (T) -&gt; R</c> to a function type
+///   <c>(T) -&gt; Task[R]</c>, matching the long-standing
+///   <c>async func(T) R</c> behaviour.</description></item>
+///   <item><description><b>Optional parameter type clauses.</b> A
+///   lambda parameter may omit its type clause when the binding
+///   supplies a target function type from which the parameter type
+///   can be inferred (e.g.
+///   <c>let f (int32) -&gt; int32 = (x) -&gt; x + 1</c>). When no
+///   target type is available, the binder reports
+///   GS0304.</description></item>
+/// </list>
+/// </remarks>
 public sealed class LambdaExpressionSyntax : ExpressionSyntax
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="LambdaExpressionSyntax"/> class.
+    /// </summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="asyncModifier">Optional <c>async</c> modifier preceding the parameter list (ADR-0076 / issue #716). <c>null</c> when the lambda is synchronous.</param>
+    /// <param name="openParenToken">The opening <c>(</c> token of the parameter list.</param>
+    /// <param name="parameters">The (possibly empty) parenthesised parameter list.</param>
+    /// <param name="closeParenToken">The closing <c>)</c> token of the parameter list.</param>
+    /// <param name="arrowToken">The <c>-&gt;</c> token separating the parameter list from the body.</param>
+    /// <param name="body">The lambda body — a single expression, or a brace-delimited block expression.</param>
+    public LambdaExpressionSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken asyncModifier,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<ParameterSyntax> parameters,
+        SyntaxToken closeParenToken,
+        SyntaxToken arrowToken,
+        ExpressionSyntax body)
+        : base(syntaxTree)
+    {
+        AsyncModifier = asyncModifier;
+        OpenParenToken = openParenToken;
+        Parameters = parameters;
+        CloseParenToken = closeParenToken;
+        ArrowToken = arrowToken;
+        Body = body;
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="LambdaExpressionSyntax"/> class
+    /// without an async modifier (ADR-0074 / issue #714 original shape).
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="openParenToken">The opening <c>(</c> token of the parameter list.</param>
@@ -31,17 +77,18 @@ public sealed class LambdaExpressionSyntax : ExpressionSyntax
         SyntaxToken closeParenToken,
         SyntaxToken arrowToken,
         ExpressionSyntax body)
-        : base(syntaxTree)
+        : this(syntaxTree, asyncModifier: null, openParenToken, parameters, closeParenToken, arrowToken, body)
     {
-        OpenParenToken = openParenToken;
-        Parameters = parameters;
-        CloseParenToken = closeParenToken;
-        ArrowToken = arrowToken;
-        Body = body;
     }
 
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.LambdaExpression;
+
+    /// <summary>Gets the optional <c>async</c> modifier preceding the parameter list (ADR-0076 / issue #716). <c>null</c> when the lambda is synchronous.</summary>
+    public SyntaxToken AsyncModifier { get; }
+
+    /// <summary>Gets a value indicating whether the lambda carries an <c>async</c> modifier.</summary>
+    public bool IsAsync => AsyncModifier != null;
 
     /// <summary>Gets the opening <c>(</c> token of the parameter list.</summary>
     public SyntaxToken OpenParenToken { get; }

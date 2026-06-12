@@ -86,6 +86,7 @@ internal sealed class StatementBinder
     private readonly Func<SyntaxToken, Accessibility> resolveAccessibility;
     private readonly BindVariableDeclarationAttributesDelegate bindVariableDeclarationAttributes;
     private readonly Func<FunctionSymbol> getCurrentFunction;
+    private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTargetType;
 
     public StatementBinder(
         BinderContext binderCtx,
@@ -103,7 +104,8 @@ internal sealed class StatementBinder
         Func<TypeSymbol, bool> isIteratorReturnType,
         Func<SyntaxToken, Accessibility> resolveAccessibility,
         BindVariableDeclarationAttributesDelegate bindVariableDeclarationAttributes,
-        Func<FunctionSymbol> getCurrentFunction)
+        Func<FunctionSymbol> getCurrentFunction,
+        Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTargetType = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
@@ -121,6 +123,7 @@ internal sealed class StatementBinder
         this.resolveAccessibility = resolveAccessibility ?? throw new ArgumentNullException(nameof(resolveAccessibility));
         this.bindVariableDeclarationAttributes = bindVariableDeclarationAttributes ?? throw new ArgumentNullException(nameof(bindVariableDeclarationAttributes));
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
+        this.bindLambdaWithTargetType = bindLambdaWithTargetType;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
@@ -650,6 +653,21 @@ internal sealed class StatementBinder
             {
                 variableType = type;
                 convertedInitializer = bindInterpolatedStringAsFormattable(interpolatedInit, type);
+            }
+            else if (type is FunctionTypeSymbol targetFnType
+                && syntax.Initializer is LambdaExpressionSyntax targetTypedLambda
+                && bindLambdaWithTargetType != null)
+            {
+                // ADR-0076 / issue #716: when a binding has an explicit
+                // function-type and is initialised with an arrow lambda,
+                // bind the lambda with the target shape so omitted
+                // parameter type clauses are filled in from the target's
+                // slots. The conversion that follows is identity for a
+                // matching lambda shape; for a mismatch the regular
+                // conversion diagnostic still fires.
+                variableType = type;
+                var lambda = bindLambdaWithTargetType(targetTypedLambda, targetFnType);
+                convertedInitializer = conversions.BindConversion(syntax.Initializer.Location, lambda, variableType);
             }
             else
             {
@@ -3140,6 +3158,17 @@ internal sealed class StatementBinder
         if (function == null)
         {
             Diagnostics.ReportInvalidReturn(syntax.ReturnKeyword.Location);
+        }
+        else if (function.IsReturnTypeInferred)
+        {
+            // ADR-0076 / issue #716: arrow-lambda binding deferred return-type
+            // resolution to a post-bind pass. The expression has been bound,
+            // but we deliberately skip the void / declared-return-type check
+            // and the eager conversion; the lambda binder collects the bound
+            // expressions, computes the inferred return type (common-type
+            // across all return paths and the trailing block expression, if
+            // any), and applies a single conversion pass to each return-
+            // statement expression once the return type is known.
         }
         else
         {

@@ -85,6 +85,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0062](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0062-generalized-ternary-expression.md) | Generalized ternary expression | Promotes `cond ? a : b` from the narrow ADR-0061 ref form to a normal expression; retires `GS0259` in value contexts and adds `GS0263`. |
 | [0074](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0074-arrow-lambda-and-colon-switch-arms.md) | `->` for lambda expressions, `:` for switch-expression arms | Adds the arrow-lambda expression form `(x int32) -> x * x` and migrates switch-expression arms from `->` to `:` (deprecated old arm form emits `GS0302`). |
 | [0075](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0075-arrow-function-type-clause.md) | `(T) -> R` as the canonical function-type clause syntax | Function-type clauses are spelled `(T1, T2) -> R` and `async (T) -> R`. The legacy `func(T) R` and `async func(T) R` type-clause spellings stay valid for one release and emit `GS0303`. |
+| [0076](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0076-lambda-binding-type-inference.md) | Type inference for `let` / `var` lambda bindings | When a `let` / `var` binding is initialized with a lambda whose parameter types are fully spelled, the binding's type is inferred to the lambda's `(T1, ...) -> R` function type. Open lambdas (untyped params and no target type) emit `GS0304`. |
 
 ## CLR interop
 
