@@ -2542,8 +2542,22 @@ public class Parser
 
     private bool LooksLikeReceiverClause()
     {
-        // Expecting: '(' ident <type-clause> ')' ident '('
-        // type-clause is either a single identifier or '[' [number] ']' ident.
+        // Issue #751 (ADR-0084 L2): a receiver clause has the shape
+        //   '(' ident <type-clause> ')' (ident | operator) ( '(' | '[' )
+        // The original implementation hard-coded a tiny subset of type-clause
+        // spellings (bare identifier, `[N]T` / `[]T`). That excluded common
+        // shapes like `T?`, `sequence[T]`, `map[K]V`, `(int, T)`, and
+        // combinations thereof, silently demoting an extension-method
+        // declaration to a malformed regular function. Rather than mirror
+        // the entire type grammar here we scan the candidate receiver as a
+        // balanced bracket region: find the matching `)` of the outer
+        // parenthesis (bailing on a top-level `,` which would mean a
+        // multi-parameter regular parameter list, never a receiver), and
+        // then verify the trailing-token shape that distinguishes a
+        // receiver clause from a regular parameter list. The actual type
+        // grammar is validated when the receiver is parsed for real by
+        // `ParseParameter` → `ParseTypeClause` — keeping the type grammar
+        // in one place.
         if (Peek(0).Kind != SyntaxKind.OpenParenthesisToken)
         {
             return false;
@@ -2554,63 +2568,84 @@ public class Parser
             return false;
         }
 
+        var parenDepth = 1;
+        var bracketDepth = 0;
         var ahead = 2;
-        if (Peek(ahead).Kind == SyntaxKind.OpenSquareBracketToken)
+        var closeParenAhead = -1;
+        while (true)
         {
-            ahead++;
-            if (Peek(ahead).Kind == SyntaxKind.NumberToken)
-            {
-                ahead++;
-            }
-
-            if (Peek(ahead).Kind != SyntaxKind.CloseSquareBracketToken)
+            var kind = Peek(ahead).Kind;
+            if (kind == SyntaxKind.EndOfFileToken)
             {
                 return false;
             }
 
-            ahead++;
-            if (Peek(ahead).Kind != SyntaxKind.IdentifierToken)
+            // A top-level `,` means we have a multi-parameter regular
+            // parameter list, not a single-parameter receiver clause.
+            // Brackets (`[...]`) and inner parens nest freely; only
+            // commas at the outer level disqualify.
+            if (parenDepth == 1 && bracketDepth == 0 && kind == SyntaxKind.CommaToken)
             {
                 return false;
             }
 
+            switch (kind)
+            {
+                case SyntaxKind.OpenParenthesisToken:
+                    parenDepth++;
+                    break;
+                case SyntaxKind.CloseParenthesisToken:
+                    parenDepth--;
+                    if (parenDepth == 0)
+                    {
+                        closeParenAhead = ahead;
+                    }
+
+                    break;
+                case SyntaxKind.OpenSquareBracketToken:
+                    bracketDepth++;
+                    break;
+                case SyntaxKind.CloseSquareBracketToken:
+                    bracketDepth--;
+                    if (bracketDepth < 0)
+                    {
+                        return false;
+                    }
+
+                    break;
+            }
+
+            if (closeParenAhead >= 0)
+            {
+                break;
+            }
+
             ahead++;
         }
-        else if (Peek(ahead).Kind == SyntaxKind.IdentifierToken)
-        {
-            ahead++;
-        }
-        else
+
+        // After the closing `)` we must see a function name (identifier or
+        // the contextual `operator` keyword for operator-overload streams).
+        ahead = closeParenAhead + 1;
+        var afterCloseKind = Peek(ahead).Kind;
+        if (afterCloseKind != SyntaxKind.IdentifierToken && afterCloseKind != SyntaxKind.OperatorKeyword)
         {
             return false;
         }
-
-        if (Peek(ahead).Kind != SyntaxKind.CloseParenthesisToken)
-        {
-            return false;
-        }
-
-        ahead++;
-        if (Peek(ahead).Kind != SyntaxKind.IdentifierToken && Peek(ahead).Kind != SyntaxKind.OperatorKeyword)
-        {
-            return false;
-        }
-
-        ahead++;
 
         // Stream D: `operator <op>(` follows the receiver clause for operator
-        // overloads. Accept any non-`(`/non-EOF token after `operator` here —
-        // the operator-token validation happens in MatchOperatorOrIdentifier.
-        if (Peek(ahead - 1).Kind == SyntaxKind.OperatorKeyword)
+        // overloads. Accept any non-EOF token after `operator` here — the
+        // operator-token validation happens in MatchOperatorOrIdentifier.
+        if (afterCloseKind == SyntaxKind.OperatorKeyword)
         {
-            return Peek(ahead).Kind != SyntaxKind.EndOfFileToken
-                && Peek(ahead + 1).Kind == SyntaxKind.OpenParenthesisToken;
+            return Peek(ahead + 1).Kind != SyntaxKind.EndOfFileToken
+                && Peek(ahead + 2).Kind == SyntaxKind.OpenParenthesisToken;
         }
 
         // The parameter list opens with `(`, or — for a generic extension
         // function — a type-parameter list `[T]` precedes it (Phase 4.1).
-        return Peek(ahead).Kind == SyntaxKind.OpenParenthesisToken
-            || Peek(ahead).Kind == SyntaxKind.OpenSquareBracketToken;
+        var afterNameKind = Peek(ahead + 1).Kind;
+        return afterNameKind == SyntaxKind.OpenParenthesisToken
+            || afterNameKind == SyntaxKind.OpenSquareBracketToken;
     }
 
     private SeparatedSyntaxList<ParameterSyntax> ParseParameterList()
