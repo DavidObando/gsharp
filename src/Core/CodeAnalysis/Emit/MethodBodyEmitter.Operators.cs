@@ -137,7 +137,7 @@ internal sealed partial class MethodBodyEmitter
             if (b.Left.Type is NullableTypeSymbol leftNullable
                 && leftNullable.UnderlyingType?.ClrType is { IsValueType: true } innerClr)
             {
-                if (!this.receiverSpillSlots.TryGetValue(b, out var slot))
+                if (!this.nullableCoalesceSpillSlots.TryGetValue(b, out var slot))
                 {
                     throw new InvalidOperationException(
                         "No scratch slot pre-allocated for value-type Nullable<T> '?:' LHS — "
@@ -165,15 +165,17 @@ internal sealed partial class MethodBodyEmitter
                 }
                 else
                 {
-                    // Result is the underlying `T` — call `get_Value()`
+                    // Result is the underlying `T` — call `GetValueOrDefault()`
                     // off the slot's address. `HasValue == true` was just
-                    // observed, so the call cannot throw; routing through
-                    // get_Value (rather than a field-style unwrap) keeps
-                    // the IL shape consistent with the `!!` emit path
-                    // introduced in PR #541 and uses no extra slots.
+                    // observed, so the value is present; routing through
+                    // `GetValueOrDefault` (Issue #752 / ADR-0084 L3) avoids
+                    // the BCL `get_Value` property's redundant HasValue check
+                    // and throw path, producing a strictly cheaper IL shape
+                    // with no boxing and no callvirt while still leaving the
+                    // verifier-clean `T` on the stack.
                     this.il.LoadLocalAddress(slot);
                     this.il.OpCode(ILOpCode.Call);
-                    this.il.Token(this.outer.wellKnown.GetNullableGetValueReference(innerClr));
+                    this.il.Token(this.outer.wellKnown.GetNullableGetValueOrDefaultReference(innerClr));
                 }
 
                 this.il.Branch(ILOpCode.Br, end);

@@ -63,6 +63,7 @@ internal sealed partial class MethodBodyEmitter
     private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
     private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
     private readonly Dictionary<BoundExpression, int> receiverSpillSlots;
+    private readonly Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots;
     private readonly Dictionary<BoundExpression, int> indexAssignmentValueSlots;
     private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
     private readonly Dictionary<BoundBinaryExpression, LiftedBinarySlots> liftedBinarySlots;
@@ -125,6 +126,7 @@ internal sealed partial class MethodBodyEmitter
         Dictionary<BoundExpression, int> indexAssignmentValueSlots,
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
         Dictionary<BoundBinaryExpression, LiftedBinarySlots> liftedBinarySlots = null,
+        Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots = null,
         ParameterSymbol structThisParameter = null,
         Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap = null,
         Lowering.Async.AsyncStateMachinePlan asyncPlan = null,
@@ -151,6 +153,7 @@ internal sealed partial class MethodBodyEmitter
         this.indexAssignmentValueSlots = indexAssignmentValueSlots;
         this.goEnclosingScopes = goEnclosingScopes;
         this.liftedBinarySlots = liftedBinarySlots ?? new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
+        this.nullableCoalesceSpillSlots = nullableCoalesceSpillSlots ?? new Dictionary<BoundBinaryExpression, int>();
         this.structThisParameter = structThisParameter;
         this.asyncFieldMap = asyncFieldMap;
         this.asyncPlan = asyncPlan;
