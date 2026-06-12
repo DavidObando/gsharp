@@ -32,6 +32,19 @@ public sealed class Evaluator
 
     private object lastValue;
 
+    // Issue #738: control-transfer state for nested blocks (switch arms,
+    // try/catch/finally bodies, scope bodies, select cases, await-for-range
+    // bodies). Those constructs are kept as nested BoundBlockStatements after
+    // lowering, so a `return` or a `break`/`continue` (lowered to a labeled
+    // `goto` whose target lives in the enclosing function block) inside one
+    // of them used to be swallowed by the inner EvaluateStatement loop. The
+    // fields below let an inner loop signal an in-flight control transfer to
+    // outer loops, which propagate it until it either resolves at the right
+    // label or unwinds to a function boundary (where `EvaluateFunctionBody`
+    // consumes it).
+    private bool isReturning;
+    private BoundLabel pendingGotoLabel;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="Evaluator"/> class.
     /// </summary>
@@ -50,7 +63,7 @@ public sealed class Evaluator
     /// <returns>The evaluation result.</returns>
     public object Evaluate()
     {
-        return EvaluateStatement(program.Statement);
+        return EvaluateFunctionBody(program.Statement);
     }
 
     private object EvaluateStatement(BoundBlockStatement body)
@@ -69,6 +82,30 @@ public sealed class Evaluator
 
         while (index < body.Statements.Length)
         {
+            // Issue #738: a pending return or an in-flight goto (set by a
+            // nested EvaluateStatement on behalf of a switch arm / scope /
+            // try / select / await-for body) must either resolve in this
+            // block or be propagated to the enclosing one. We check before
+            // every statement so that returns/gotos triggered by the
+            // *previous* iteration's nested call are honored before any new
+            // statement runs.
+            if (isReturning)
+            {
+                return lastValue;
+            }
+
+            if (pendingGotoLabel != null)
+            {
+                if (labelToIndex.TryGetValue(pendingGotoLabel, out var pendIdx))
+                {
+                    pendingGotoLabel = null;
+                    index = pendIdx;
+                    continue;
+                }
+
+                return lastValue;
+            }
+
             var s = body.Statements[index];
 
             switch (s.Kind)
@@ -83,14 +120,37 @@ public sealed class Evaluator
                     break;
                 case BoundNodeKind.GotoStatement:
                     var gs = (BoundGotoStatement)s;
-                    index = labelToIndex[gs.Label];
+                    if (labelToIndex.TryGetValue(gs.Label, out var gsIdx))
+                    {
+                        index = gsIdx;
+                    }
+                    else
+                    {
+                        // Issue #738: target label lives in an enclosing
+                        // block (e.g. a `break`/`continue` lowered to
+                        // `goto loop_break`/`goto loop_continue` emitted
+                        // inside a switch arm body). Park the label and
+                        // bail; the outer EvaluateStatement will pick it
+                        // up via the top-of-loop check above.
+                        pendingGotoLabel = gs.Label;
+                        return lastValue;
+                    }
+
                     break;
                 case BoundNodeKind.ConditionalGotoStatement:
                     var cgs = (BoundConditionalGotoStatement)s;
                     var condition = (bool)EvaluateExpression(cgs.Condition);
                     if (condition == cgs.JumpIfTrue)
                     {
-                        index = labelToIndex[cgs.Label];
+                        if (labelToIndex.TryGetValue(cgs.Label, out var cgsIdx))
+                        {
+                            index = cgsIdx;
+                        }
+                        else
+                        {
+                            pendingGotoLabel = cgs.Label;
+                            return lastValue;
+                        }
                     }
                     else
                     {
@@ -104,6 +164,7 @@ public sealed class Evaluator
                 case BoundNodeKind.ReturnStatement:
                     var rs = (BoundReturnStatement)s;
                     lastValue = rs.Expression == null ? null : EvaluateExpression(rs.Expression);
+                    isReturning = true;
                     return lastValue;
                 case BoundNodeKind.TryStatement:
                     EvaluateTryStatement((BoundTryStatement)s);
@@ -146,6 +207,23 @@ public sealed class Evaluator
         }
 
         return lastValue;
+    }
+
+    /// <summary>
+    /// Issue #738: function-call boundary. Runs <paramref name="body"/> and
+    /// then drains any in-flight control-transfer state (a pending return
+    /// or a parked goto) so it cannot leak across the call boundary. A
+    /// parked goto reaching the boundary would mean a `break`/`continue`
+    /// escaped a function body, which the binder rejects — but we clear
+    /// defensively so a stale flag from a partially-evaluated previous
+    /// call cannot corrupt the next invocation on this evaluator.
+    /// </summary>
+    private object EvaluateFunctionBody(BoundBlockStatement body)
+    {
+        var result = EvaluateStatement(body);
+        isReturning = false;
+        pendingGotoLabel = null;
+        return result;
     }
 
     private void EvaluateVariableDeclaration(BoundVariableDeclaration node)
@@ -360,6 +438,14 @@ public sealed class Evaluator
                 var current = currentProperty.GetValue(enumerator);
                 Assign(node.ValueVariable, current);
                 EvaluateStatement((BoundBlockStatement)node.Body);
+
+                // Issue #738: honor in-arm returns / labeled gotos that
+                // escape the loop body. Without this check the iterator
+                // would keep dispatching MoveNextAsync past the transfer.
+                if (isReturning || pendingGotoLabel != null)
+                {
+                    break;
+                }
             }
         }
         finally
@@ -430,7 +516,24 @@ public sealed class Evaluator
         {
             if (node.FinallyBlock != null)
             {
+                // Issue #738: CIL semantics — finally always executes,
+                // even if try/catch left a pending return or goto. Stash
+                // the in-flight control transfer, run finally with a
+                // cleared state, then either keep the finally's own new
+                // transfer (it supersedes per ECMA-335 III.1.7.5) or
+                // restore the original.
+                var savedReturning = isReturning;
+                var savedGoto = pendingGotoLabel;
+                isReturning = false;
+                pendingGotoLabel = null;
+
                 EvaluateStatement((BoundBlockStatement)node.FinallyBlock);
+
+                if (!isReturning && pendingGotoLabel == null)
+                {
+                    isReturning = savedReturning;
+                    pendingGotoLabel = savedGoto;
+                }
             }
         }
     }
@@ -1095,7 +1198,7 @@ public sealed class Evaluator
         }
 
         this.locals.Push(frame);
-        var result = EvaluateStatement(closure.Body);
+        var result = EvaluateFunctionBody(closure.Body);
         this.locals.Pop();
         return result;
     }
@@ -1217,7 +1320,7 @@ public sealed class Evaluator
                 AllocateClrBacking(sv, node.StructType, explicitCtor.BaseInitializer);
 
                 var body = program.Functions[ctorFunction];
-                EvaluateStatement(body);
+                EvaluateFunctionBody(body);
             }
             finally
             {
@@ -1567,7 +1670,7 @@ public sealed class Evaluator
                 }
 
                 locals.Push(frame);
-                EvaluateStatement(body);
+                EvaluateFunctionBody(body);
                 locals.Pop();
             }
 
@@ -1722,7 +1825,7 @@ public sealed class Evaluator
                 // Issue #263: computed static property getter — no 'this' parameter.
                 var frame = new Dictionary<Symbols.VariableSymbol, object>();
                 locals.Push(frame);
-                var result = EvaluateStatement(staticGetterBody);
+                var result = EvaluateFunctionBody(staticGetterBody);
                 locals.Pop();
                 return result;
             }
@@ -1751,7 +1854,7 @@ public sealed class Evaluator
                 [node.Property.GetterSymbol.ThisParameter] = receiverValue,
             };
             locals.Push(frame);
-            var result = EvaluateStatement(getterBody);
+            var result = EvaluateFunctionBody(getterBody);
             locals.Pop();
             return result;
         }
@@ -1777,7 +1880,7 @@ public sealed class Evaluator
                     [node.Property.SetterSymbol.Parameters[0]] = value,
                 };
                 locals.Push(frame);
-                EvaluateStatement(staticSetterBody);
+                EvaluateFunctionBody(staticSetterBody);
                 locals.Pop();
             }
 
@@ -1825,7 +1928,7 @@ public sealed class Evaluator
                 [node.Property.SetterSymbol.Parameters[0]] = value,
             };
             locals.Push(frame);
-            EvaluateStatement(setterBody);
+            EvaluateFunctionBody(setterBody);
             locals.Pop();
             return value;
         }
@@ -2400,7 +2503,7 @@ public sealed class Evaluator
                 return iteratorResult;
             }
 
-            var result = EvaluateStatement(statement);
+            var result = EvaluateFunctionBody(statement);
 
             // ADR-0060 item #7: write the final parameter slot value back to
             // the caller's lvalue for every 'ref'/'out' parameter.
@@ -2467,7 +2570,7 @@ public sealed class Evaluator
         iteratorSinks.Push(list);
         try
         {
-            EvaluateStatement(body);
+            EvaluateFunctionBody(body);
         }
         finally
         {
@@ -3111,7 +3214,7 @@ public sealed class Evaluator
 
         locals.Push(frame);
         var statement = program.Functions[method];
-        var result = EvaluateStatement(statement);
+        var result = EvaluateFunctionBody(statement);
         locals.Pop();
 
         return result;
@@ -3675,7 +3778,7 @@ public sealed class Evaluator
             }
 
             var body = program.Functions[targetCtor.Function];
-            EvaluateStatement(body);
+            EvaluateFunctionBody(body);
         }
         finally
         {

@@ -139,6 +139,12 @@ public class Issue712FlowNarrowingExtensionsInterpreterTests
         // enclosing scope: after the switch, `a` is narrowed to `Dog`
         // because the Cat and default arms exit and the Dog arm falls
         // through with `{a → Dog}` — so `a.Bark()` resolves directly.
+        //
+        // Issue #738: previously the Cat / default arms could not be
+        // exercised on the interpreter path because `return` inside a
+        // switch arm fell through to the post-switch statements. That
+        // bug is fixed, so this test mirrors the emit counterpart and
+        // runs both a Dog and a Cat input through the same function.
         var source = AnimalHierarchy + """
 
             func Run(a Animal) {
@@ -159,9 +165,10 @@ public class Issue712FlowNarrowingExtensionsInterpreterTests
             }
 
             Run(Dog{Name: "Rex"})
+            Run(Cat{Name: "Whiskers"})
             """;
 
-        Assert.Equal("matched dog\nRex:woof\n", RunSubmission(source));
+        Assert.Equal("matched dog\nRex:woof\nmatched cat\n", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
