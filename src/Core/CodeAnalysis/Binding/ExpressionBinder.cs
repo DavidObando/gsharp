@@ -797,6 +797,25 @@ internal sealed partial class ExpressionBinder
             return clrType;
         }
 
+        // Issue #794: a generic type parameter referenced inside a generic
+        // shared method (or generic top-level func / extension) has no
+        // ClrType — it is type-erased to `System.Object` at the IL layer
+        // (ADR-0004 / #313). Surface that erasure so overload resolution
+        // against an imported instance call like `List[T]().Add(v)` picks
+        // the `Add(object)` overload instead of bailing out. The bound call
+        // re-projects the symbolic argument type back through the
+        // receiver's `TypeArguments` for emit. `T?` (nullable wrapper of a
+        // type parameter) rides through the same erasure.
+        if (typeSymbol is TypeParameterSymbol)
+        {
+            return typeof(object);
+        }
+
+        if (typeSymbol is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol })
+        {
+            return typeof(object);
+        }
+
         // User-defined G# class: provide the imported base type's CLR type
         // so that overload resolution can proceed (base-class assignability
         // and the supplementary interface check handle the rest).

@@ -1411,9 +1411,17 @@ internal sealed partial class ExpressionBinder
                         // are rare on CLR types and stay on the existing
                         // MapClrMemberType path, which preserves the
                         // ByRefTypeSymbol wrapper.
-                        var propType = prop.PropertyType.IsByRef
-                            ? MapClrMemberType(prop.PropertyType)
-                            : ClrNullability.GetPropertyTypeSymbol(prop);
+                        // Issue #794: substitute the receiver's symbolic
+                        // type arguments back through the property's open
+                        // declaring type so e.g. `Dictionary[K, V]().Keys`
+                        // surfaces as `ICollection[K]` (a generic shape
+                        // containing the in-scope `K`) instead of the
+                        // type-erased `ICollection<object>`.
+                        var receiverOverride = ResolveInstancePropertyTypeFromReceiver(receiver.Type, prop);
+                        var propType = receiverOverride
+                            ?? (prop.PropertyType.IsByRef
+                                ? MapClrMemberType(prop.PropertyType)
+                                : ClrNullability.GetPropertyTypeSymbol(prop));
                         return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrPropertyAccessExpression(null, receiver, prop, propType));
                     }
 
@@ -2029,6 +2037,63 @@ internal sealed partial class ExpressionBinder
         }
 
         return TypeSymbol.FromClrType(clrType);
+    }
+
+    /// <summary>
+    /// Issue #794: substitute the receiver's symbolic type arguments back
+    /// through a CLR property's open declaring type. The closed `clrReceiverType`
+    /// is the type-erased shape (#313 / #671), so reflection's
+    /// <see cref="PropertyInfo.PropertyType"/> reports the property's open type
+    /// closed over `object` — e.g. `Dictionary[K, V].Keys` surfaces as
+    /// `ICollection&lt;object&gt;`. Walk the open property on the receiver's
+    /// <see cref="ImportedTypeSymbol.OpenDefinition"/> and project its property
+    /// type using the receiver's <see cref="ImportedTypeSymbol.TypeArguments"/>.
+    /// Returns <see langword="null"/> when no substitution applies.
+    /// </summary>
+    private static TypeSymbol ResolveInstancePropertyTypeFromReceiver(TypeSymbol receiverType, PropertyInfo closedProperty)
+    {
+        if (receiverType is not ImportedTypeSymbol imp
+            || imp.OpenDefinition == null
+            || imp.TypeArguments.IsDefaultOrEmpty
+            || closedProperty == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            // Match by name + indexer arity to find the open counterpart.
+            // Properties on closed generic instances carry stable
+            // metadata-name overlap with their open declaration; an exact
+            // name lookup on the open type with the same instance-binding
+            // flags is sufficient for the single-name, non-indexer
+            // properties that surface real receiver-type generics.
+            var openType = closedProperty.DeclaringType != imp.ClrType && closedProperty.DeclaringType?.IsGenericType == true
+                ? imp.OpenDefinition.GetInterfaces().FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == closedProperty.DeclaringType.GetGenericTypeDefinition())
+                    ?? imp.OpenDefinition
+                : imp.OpenDefinition;
+            var openProperty = ClrTypeUtilities.SafeGetProperty(
+                openType,
+                closedProperty.Name,
+                BindingFlags.Public | BindingFlags.Instance);
+            if (openProperty == null || openProperty.GetIndexParameters().Length != 0)
+            {
+                return null;
+            }
+
+            var openPropType = openProperty.PropertyType;
+            if (openPropType == null)
+            {
+                return null;
+            }
+
+            var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openPropType, imp.OpenDefinition, imp.TypeArguments);
+            return TypeSymbol.ContainsTypeParameter(mapped) ? mapped : null;
+        }
+        catch (System.Reflection.AmbiguousMatchException)
+        {
+            return null;
+        }
     }
 
     private static bool IsReadOnlyRefReturn(PropertyInfo indexer, MethodInfo getter)

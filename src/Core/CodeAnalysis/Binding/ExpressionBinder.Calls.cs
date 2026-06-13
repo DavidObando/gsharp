@@ -895,6 +895,85 @@ internal sealed partial class ExpressionBinder
         return null;
     }
 
+    /// <summary>
+    /// Issue #794: when an instance call is dispatched against a receiver whose
+    /// <see cref="ImportedTypeSymbol"/> carries symbolic type arguments
+    /// (e.g. <c>List[T]</c>, <c>Dictionary[K, V]</c>) — including the
+    /// open in-scope type-parameter case from #313/#671 — substitute the
+    /// open declaring type's return type using the receiver's symbolic
+    /// arguments. Without this override the call's return type comes from the
+    /// type-erased closed shape (<c>List&lt;object&gt;.ToArray()</c> →
+    /// <c>object[]</c>), losing the symbolic projection (<c>T[]</c>).
+    /// Returns <see langword="null"/> when no override is needed so callers
+    /// keep their existing return-type derivation.
+    /// </summary>
+    /// <param name="receiverType">The receiver's static type symbol.</param>
+    /// <param name="closedMethod">The closed method selected by overload resolution.</param>
+    /// <returns>The override return type symbol, or <see langword="null"/>.</returns>
+    private static TypeSymbol ResolveInstanceReturnTypeFromReceiver(TypeSymbol receiverType, System.Reflection.MethodInfo closedMethod)
+    {
+        if (receiverType is not ImportedTypeSymbol imp
+            || imp.OpenDefinition == null
+            || imp.TypeArguments.IsDefaultOrEmpty
+            || closedMethod == null)
+        {
+            return null;
+        }
+
+        var openMethod = TryGetOpenInstanceMethod(imp.OpenDefinition, closedMethod);
+        if (openMethod == null)
+        {
+            return null;
+        }
+
+        var openReturn = openMethod.ReturnType;
+        if (openReturn == null || openReturn == typeof(void))
+        {
+            return null;
+        }
+
+        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openReturn, imp.OpenDefinition, imp.TypeArguments);
+        return TypeSymbol.ContainsTypeParameter(mapped) ? mapped : null;
+    }
+
+    /// <summary>
+    /// Locates the open-generic-definition counterpart of <paramref name="closedMethod"/>
+    /// on <paramref name="openDefinition"/>. Match is by metadata token + module,
+    /// which is stable for methods on a constructed generic type (the
+    /// reflection layer reports the open token regardless of the closing).
+    /// </summary>
+    /// <param name="openDefinition">The open generic type definition.</param>
+    /// <param name="closedMethod">The closed method to project.</param>
+    /// <returns>The open method, or <see langword="null"/> when no match.</returns>
+    private static System.Reflection.MethodInfo TryGetOpenInstanceMethod(System.Type openDefinition, System.Reflection.MethodInfo closedMethod)
+    {
+        if (openDefinition == null || closedMethod == null)
+        {
+            return null;
+        }
+
+        if (closedMethod.DeclaringType == openDefinition)
+        {
+            return closedMethod;
+        }
+
+        var token = closedMethod.MetadataToken;
+        var module = closedMethod.Module;
+        var bindingFlags = System.Reflection.BindingFlags.Public
+            | System.Reflection.BindingFlags.NonPublic
+            | System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.Static;
+        foreach (var candidate in openDefinition.GetMethods(bindingFlags))
+        {
+            if (candidate.MetadataToken == token && ReferenceEquals(candidate.Module, module))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
     private BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)
     {
         var methodName = ce.Identifier.Text;
@@ -1247,7 +1326,9 @@ internal sealed partial class ExpressionBinder
                     switch (resolution.Outcome)
                     {
                         case OverloadResolution.ResolutionOutcome.Resolved:
-                            var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? MapClrMemberType(resolution.Best.ReturnType);
+                            var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
+                                ?? ResolveInstanceReturnTypeFromReceiver(receiver?.Type, resolution.Best)
+                                ?? MapClrMemberType(resolution.Best.ReturnType);
                             var instParameters = resolution.Best.GetParameters();
                             var instMapping = resolution.ParameterMapping;
                             var instExpandedArgs = resolution.IsExpanded
@@ -1661,7 +1742,9 @@ internal sealed partial class ExpressionBinder
         switch (resolution.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
-                var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
+                var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
+                    ?? ResolveInstanceReturnTypeFromReceiver(receiver?.Type, resolution.Best)
+                    ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
                 var inheritedParameters = resolution.Best.GetParameters();
                 var inheritedMapping = resolution.ParameterMapping;
                 var inheritedExpandedArgs = resolution.IsExpanded
