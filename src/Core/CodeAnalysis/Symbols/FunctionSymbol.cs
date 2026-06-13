@@ -234,8 +234,8 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>Gets or sets a value indicating whether this function is declared inside a <c>shared</c> block (ADR-0053). Static functions have no receiver.</summary>
     public bool IsStatic { get; set; }
 
-    /// <summary>Gets or sets the struct/class that owns this static method (ADR-0053 / #261). <c>null</c> for non-static or top-level functions.</summary>
-    public StructSymbol StaticOwnerType { get; set; }
+    /// <summary>Gets or sets the type that owns this static method (ADR-0053 for struct/class owners; ADR-0089 for interface owners). <c>null</c> for non-static or top-level functions.</summary>
+    public TypeSymbol StaticOwnerType { get; set; }
 
     /// <summary>Gets or sets a value indicating whether this function should be emitted with <c>MethodAttributes.SpecialName</c> (e.g., event accessor methods).</summary>
     public bool IsSpecialName { get; set; }

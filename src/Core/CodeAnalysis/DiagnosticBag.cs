@@ -2999,6 +2999,92 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0329", "'@DllImport.EntryPoint' must be a non-empty string literal (ADR-0086).");
     }
 
+    /// <summary>
+    /// Reports GS0330 — ADR-0089 / issue #755: <c>static let</c> inside an
+    /// interface declaration is reserved for a future release. The minimal
+    /// static-virtual interface members feature only accepts
+    /// <c>static func</c>.
+    /// </summary>
+    /// <param name="location">The source location of the offending declaration.</param>
+    /// <param name="interfaceName">The owning interface name.</param>
+    public void ReportInterfaceStaticLetNotSupported(TextLocation location, string interfaceName)
+    {
+        Report(
+            location,
+            "GS0330",
+            $"'static let' inside interface '{interfaceName}' is not supported in this release; use 'static func' (ADR-0089).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Reports GS0331 — ADR-0089 / issue #755: a struct that declares it
+    /// implements an interface with one or more static-virtual abstract
+    /// members does not provide the matching <c>shared static func</c>
+    /// override for some of those slots.
+    /// </summary>
+    /// <param name="location">The struct declaration head location.</param>
+    /// <param name="structName">The implementer struct name.</param>
+    /// <param name="interfaceName">The interface symbol display.</param>
+    /// <param name="methodName">The unimplemented static-virtual method name.</param>
+    public void ReportStaticVirtualInterfaceMethodNotImplemented(
+        TextLocation location,
+        string structName,
+        string interfaceName,
+        string methodName)
+    {
+        Report(
+            location,
+            "GS0331",
+            $"Struct '{structName}' does not implement static-virtual interface method '{interfaceName}.{methodName}', and the interface provides no default body (ADR-0089).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Reports GS0332 — ADR-0089 / issue #755: a struct declares a
+    /// non-<c>static</c> instance method with the same name and signature
+    /// as a static-virtual interface slot. Instance methods cannot satisfy
+    /// a static-virtual contract; the implementer must declare the method
+    /// inside a <c>shared { ... }</c> block (ADR-0053) with the matching
+    /// signature.
+    /// </summary>
+    /// <param name="location">The offending instance-method declaration location.</param>
+    /// <param name="structName">The implementer struct name.</param>
+    /// <param name="interfaceName">The interface symbol display.</param>
+    /// <param name="methodName">The interface slot name.</param>
+    public void ReportNonStaticMemberForStaticVirtualSlot(
+        TextLocation location,
+        string structName,
+        string interfaceName,
+        string methodName)
+    {
+        Report(
+            location,
+            "GS0332",
+            $"Struct '{structName}' declares instance method '{methodName}' but interface '{interfaceName}.{methodName}' is static-virtual; declare it inside a 'shared {{ ... }}' block (ADR-0089).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Reports GS0333 — ADR-0089 / issue #755: the dispatch expression
+    /// <c>T.Member(...)</c> where <c>T</c> is a generic type parameter
+    /// constrained to some interface(s) refers to a name that is not a
+    /// static-virtual member on any of those interfaces.
+    /// </summary>
+    /// <param name="location">The accessor expression location.</param>
+    /// <param name="typeParameterName">The type parameter name.</param>
+    /// <param name="memberName">The looked-up static member name.</param>
+    public void ReportStaticVirtualMemberNotFoundOnTypeParameter(
+        TextLocation location,
+        string typeParameterName,
+        string memberName)
+    {
+        Report(
+            location,
+            "GS0333",
+            $"Type parameter '{typeParameterName}' has no constraint that declares a static-virtual member '{memberName}' (ADR-0089).",
+            DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

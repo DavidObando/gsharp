@@ -61,7 +61,7 @@ internal static class SymbolDocumentationIdProvider
         }
 
         var builder = new StringBuilder("M:");
-        var ownerType = function.ReceiverType as StructSymbol ?? function.StaticOwnerType;
+        var ownerType = function.ReceiverType as StructSymbol ?? function.StaticOwnerType as StructSymbol;
         if (ownerType is not null)
         {
             AppendTypeDeclarationName(builder, ownerType);

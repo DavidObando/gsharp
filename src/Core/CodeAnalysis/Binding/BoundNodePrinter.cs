@@ -136,6 +136,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ImportedInstanceCallExpression:
                 WriteImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node, writer);
                 break;
+            case BoundNodeKind.ConstrainedStaticCallExpression:
+                WriteConstrainedStaticCallExpression((BoundConstrainedStaticCallExpression)node, writer);
+                break;
             case BoundNodeKind.ArrayCreationExpression:
                 WriteArrayCreationExpression((BoundArrayCreationExpression)node, writer);
                 break;
@@ -946,6 +949,34 @@ public static class BoundNodePrinter
         node.Receiver.WriteTo(writer);
         writer.WritePunctuation(SyntaxKind.DotToken);
         writer.WriteIdentifier(node.Method.Name);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+
+        var isFirst = true;
+        foreach (var argument in node.Arguments)
+        {
+            if (isFirst)
+            {
+                isFirst = false;
+            }
+            else
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            argument.WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteConstrainedStaticCallExpression(BoundConstrainedStaticCallExpression node, IndentedTextWriter writer)
+    {
+        // ADR-0089 / issue #755: print as `T.M(args)` — the receiver is a
+        // type parameter, the slot is an interface static-virtual method.
+        writer.WriteIdentifier(node.TypeParameter.Name);
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier(node.InterfaceMethod.Name);
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
 
         var isFirst = true;

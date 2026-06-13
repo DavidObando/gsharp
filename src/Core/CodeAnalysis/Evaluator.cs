@@ -599,6 +599,7 @@ public sealed class Evaluator
                 BoundNodeKind.ConversionExpression => EvaluateConversionExpression((BoundConversionExpression)node),
                 BoundNodeKind.ImportedCallExpression => EvaluateImportedCallExpression((BoundImportedCallExpression)node),
                 BoundNodeKind.ImportedInstanceCallExpression => EvaluateImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node),
+                BoundNodeKind.ConstrainedStaticCallExpression => EvaluateConstrainedStaticCallExpression((BoundConstrainedStaticCallExpression)node),
                 BoundNodeKind.ArrayCreationExpression => EvaluateArrayCreationExpression((BoundArrayCreationExpression)node),
                 BoundNodeKind.MapLiteralExpression => EvaluateMapLiteralExpression((BoundMapLiteralExpression)node),
                 BoundNodeKind.MapDeleteExpression => EvaluateMapDeleteExpression((BoundMapDeleteExpression)node),
@@ -3217,6 +3218,117 @@ public sealed class Evaluator
         var result = EvaluateFunctionBody(statement);
         locals.Pop();
 
+        return result;
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #755: interpret a constrained static-virtual call
+    /// site of the form <c>T.M(args)</c>. The interpreter resolves the
+    /// runtime <see cref="StructSymbol"/> bound to <c>T</c> at the current
+    /// call frame using one of three strategies, in order:
+    /// 1) Inspect the first <c>T</c>-typed argument's runtime
+    ///    <see cref="StructValue.StructType"/> (the common generic-math
+    ///    pattern: arguments are themselves of type <c>T</c>),
+    /// 2) Walk the locals stack looking for any <see cref="StructValue"/>
+    ///    whose declared interfaces include
+    ///    <see cref="BoundConstrainedStaticCallExpression.InterfaceMethod"/>'s
+    ///    declaring interface, or
+    /// 3) Fall back to the interface's default body if the slot has one.
+    /// </summary>
+    private object EvaluateConstrainedStaticCallExpression(BoundConstrainedStaticCallExpression node)
+    {
+        // Evaluate arguments left-to-right (matches IL evaluation order).
+        var evaluatedArgs = new object[node.Arguments.Length];
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            evaluatedArgs[i] = EvaluateExpression(node.Arguments[i]);
+        }
+
+        var slotIface = node.InterfaceMethod.StaticOwnerType as InterfaceSymbol;
+        StructSymbol resolvedImpl = null;
+
+        // Strategy 1: argument-runtime-type sniffing — works for the
+        // canonical generic-math pattern (Add(a, b) where a, b are T).
+        for (var i = 0; i < node.Arguments.Length && resolvedImpl == null; i++)
+        {
+            if (node.Arguments[i].Type is TypeParameterSymbol tp
+                && tp == node.TypeParameter
+                && evaluatedArgs[i] is StructValue sv
+                && sv.StructType != null)
+            {
+                resolvedImpl = sv.StructType;
+            }
+        }
+
+        // Strategy 2: walk locals for any in-scope StructValue
+        // implementing the slot's interface.
+        if (resolvedImpl == null && slotIface != null)
+        {
+            foreach (var frame in locals)
+            {
+                foreach (var kv in frame)
+                {
+                    if (kv.Value is StructValue sv && sv.StructType != null)
+                    {
+                        foreach (var implIface in sv.StructType.Interfaces)
+                        {
+                            if (ReferenceEquals(implIface, slotIface)
+                                || (implIface.Definition != null && ReferenceEquals(implIface.Definition, slotIface.Definition)))
+                            {
+                                resolvedImpl = sv.StructType;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (resolvedImpl != null)
+                    {
+                        break;
+                    }
+                }
+
+                if (resolvedImpl != null)
+                {
+                    break;
+                }
+            }
+        }
+
+        // Resolve the matching static method on the implementer.
+        FunctionSymbol target = null;
+        if (resolvedImpl != null)
+        {
+            foreach (var candidate in resolvedImpl.GetStaticMethods(node.InterfaceMethod.Name))
+            {
+                if (candidate.Parameters.Length == node.InterfaceMethod.Parameters.Length)
+                {
+                    target = candidate;
+                    break;
+                }
+            }
+        }
+
+        // Strategy 3: fall back to the interface's default body.
+        if (target == null)
+        {
+            target = node.InterfaceMethod;
+        }
+
+        if (!program.Functions.TryGetValue(target, out var statement))
+        {
+            throw new InvalidOperationException(
+                $"Static-virtual interface call '{node.InterfaceMethod.Name}' has no runtime body (no implementer found and no default).");
+        }
+
+        var frame2 = new Dictionary<VariableSymbol, object>();
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            frame2[target.Parameters[i]] = evaluatedArgs[i];
+        }
+
+        locals.Push(frame2);
+        var result = EvaluateFunctionBody(statement);
+        locals.Pop();
         return result;
     }
 

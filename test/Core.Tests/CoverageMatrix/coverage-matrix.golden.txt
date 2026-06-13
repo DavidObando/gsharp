@@ -272,6 +272,7 @@ ConditionalAddressExpression
 ConditionalExpression
 ConditionalGotoStatement
 ConstantPattern
+ConstrainedStaticCallExpression
 ConstructorCallExpression
 ConstructorChainingExpression
 ConversionExpression

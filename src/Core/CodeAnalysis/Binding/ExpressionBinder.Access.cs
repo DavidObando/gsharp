@@ -572,6 +572,16 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
             }
+            else if (binderCtx.CurrentTypeParameters != null
+                && binderCtx.CurrentTypeParameters.TryGetValue(name, out var tpSym))
+            {
+                // ADR-0089 / issue #755: `T.Member(args)` where `T` is a
+                // generic type parameter with an interface constraint
+                // dispatches to a static-virtual interface member. We
+                // delegate to a helper that resolves the rightPart against
+                // the constraint interface's static-virtual table.
+                return BindTypeParameterStaticAccessorStep(tpSym, leftName, rightPart);
+            }
             else
             {
                 Diagnostics.ReportUnableToFindType(leftName.Location, name);
@@ -2100,5 +2110,110 @@ internal sealed partial class ExpressionBinder
         {
             Diagnostics.ReportValueTaskDirectGetResult(callSyntax.Identifier.Location);
         }
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #755: resolves <c>T.Method(args)</c> against the
+    /// static-virtual interface members of <paramref name="tpSym"/>'s
+    /// constraint. Produces a <see cref="BoundConstrainedStaticCallExpression"/>
+    /// at the call site; reports GS0333 when the named member is not a
+    /// static-virtual on any constraint interface.
+    /// </summary>
+    private BoundExpression BindTypeParameterStaticAccessorStep(
+        TypeParameterSymbol tpSym,
+        NameExpressionSyntax leftName,
+        ExpressionSyntax rightPart)
+    {
+        if (tpSym.InterfaceConstraint == null)
+        {
+            Diagnostics.ReportStaticVirtualMemberNotFoundOnTypeParameter(
+                leftName.Location, tpSym.Name, rightPart is CallExpressionSyntax ce0 ? ce0.Identifier.Text : (rightPart is NameExpressionSyntax ne0 ? ne0.IdentifierToken.Text : "?"));
+            return new BoundErrorExpression(null);
+        }
+
+        switch (rightPart)
+        {
+            case CallExpressionSyntax callSyntax:
+                {
+                    var methodName = callSyntax.Identifier.Text;
+                    FunctionSymbol slot = null;
+                    foreach (var candidate in tpSym.InterfaceConstraint.StaticMethods)
+                    {
+                        if (candidate.Name == methodName
+                            && candidate.Parameters.Length == callSyntax.Arguments.Count)
+                        {
+                            slot = candidate;
+                            break;
+                        }
+                    }
+
+                    if (slot == null)
+                    {
+                        Diagnostics.ReportStaticVirtualMemberNotFoundOnTypeParameter(
+                            leftName.Location, tpSym.Name, methodName);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    var boundArgs = ImmutableArray.CreateBuilder<BoundExpression>(callSyntax.Arguments.Count);
+                    for (var i = 0; i < callSyntax.Arguments.Count; i++)
+                    {
+                        boundArgs.Add(BindExpression(callSyntax.Arguments[i]));
+                    }
+
+                    // Substitute the slot's return type T → caller's T
+                    // (which is also the receiver tpSym). The slot was
+                    // bound on the open interface definition so its return
+                    // type might still mention the interface's own type
+                    // parameter symbol — translate it through the
+                    // constructed interface's TypeArguments.
+                    var returnType = SubstituteThroughConstructedInterface(slot.Type, tpSym.InterfaceConstraint);
+
+                    return new BoundConstrainedStaticCallExpression(
+                        callSyntax,
+                        tpSym,
+                        slot,
+                        boundArgs.MoveToImmutable(),
+                        returnType);
+                }
+
+            case NameExpressionSyntax ne:
+                // ADR-0089: static-virtual properties / constants are
+                // deferred (v1 is static func only). Surface GS0333 so the
+                // user gets a clear diagnostic.
+                Diagnostics.ReportStaticVirtualMemberNotFoundOnTypeParameter(
+                    leftName.Location, tpSym.Name, ne.IdentifierToken.Text);
+                return new BoundErrorExpression(null);
+
+            default:
+                return new BoundErrorExpression(null);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0089: substitute a type that may mention the constructed
+    /// interface's open type parameter with the corresponding type
+    /// argument from <paramref name="constructedIface"/>. Conservative —
+    /// only rewrites a top-level <see cref="TypeParameterSymbol"/>
+    /// reference; leaves nested/generic shapes alone (the slot's
+    /// signature is typically just <c>T</c> for the common math
+    /// pattern).
+    /// </summary>
+    private static TypeSymbol SubstituteThroughConstructedInterface(TypeSymbol type, InterfaceSymbol constructedIface)
+    {
+        if (type is TypeParameterSymbol tp
+            && constructedIface?.Definition?.TypeParameters != null
+            && !constructedIface.Definition.TypeParameters.IsDefaultOrEmpty
+            && !constructedIface.TypeArguments.IsDefaultOrEmpty)
+        {
+            for (var i = 0; i < constructedIface.Definition.TypeParameters.Length; i++)
+            {
+                if (ReferenceEquals(constructedIface.Definition.TypeParameters[i], tp))
+                {
+                    return constructedIface.TypeArguments[i];
+                }
+            }
+        }
+
+        return type;
     }
 }

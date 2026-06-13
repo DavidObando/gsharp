@@ -36,8 +36,8 @@ public sealed class TypeParameterSymbol : TypeSymbol
     /// <summary>Gets the variance modifier (Phase 4.3 / ADR-0021).</summary>
     public TypeParameterVariance Variance { get; }
 
-    /// <summary>Gets the sealed-interface constraint, if any (Phase 4.2b / ADR-0020). When non-<c>null</c>, type arguments must implement this interface.</summary>
-    public InterfaceSymbol InterfaceConstraint { get; }
+    /// <summary>Gets or sets the sealed-interface constraint, if any (Phase 4.2b / ADR-0020). When non-<c>null</c>, type arguments must implement this interface. ADR-0089 allows late patching by the binder when the constraint is a self-referential constructed generic such as <c>[T IAdd[T]]</c>.</summary>
+    public InterfaceSymbol InterfaceConstraint { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether this type parameter is declared

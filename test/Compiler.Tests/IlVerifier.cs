@@ -192,6 +192,31 @@ internal static class IlVerifier
         {
             "ReturnPtrToStack",
         };
+
+        /// <summary>
+        /// ADR-0089 / issue #755: <c>constrained.</c> + <c>call</c> on a
+        /// static-virtual interface slot trips
+        /// <c>dotnet-ilverify</c> 10.0.8's pre-C# 11 verifier rules. The
+        /// verifier hard-codes "every <c>constrained.</c> prefix must be
+        /// followed by <c>callvirt</c>" and "static <c>call</c> is not
+        /// allowed on abstract methods". Both rules predate the .NET 7
+        /// static-virtual-in-interfaces extension (ECMA-335 II.15.4.2.4 +
+        /// .NET 7 specification of static-virtual dispatch via
+        /// <c>constrained. !!T  call</c>), so the same minimal pattern
+        /// emitted by the C# 11 compiler with <c>LangVersion=preview</c>
+        /// fails the same two checks. The runtime JIT accepts the IL and
+        /// dispatches correctly.
+        ///
+        /// Track the upstream issue at
+        /// https://github.com/dotnet/runtime/issues/49558 (dotnet-ilverify
+        /// catch-up) and drop this bundle once a newer ilverify release
+        /// recognises the static-virtual pattern.
+        /// </summary>
+        public static readonly string[] StaticVirtualInterface =
+        {
+            "CallAbstract",
+            "Constrained",
+        };
     }
 
     /// <summary>
@@ -216,6 +241,12 @@ internal static class IlVerifier
     {
         // Ref struct emission: see KnownIssues.RefStruct.
         ["UserRefStruct"] = KnownIssues.RefStruct,
+
+        // ADR-0089 / issue #755: static-virtual interface dispatch emits
+        // the canonical `constrained. !!T  call <iface>::<method>` pattern
+        // that pre-C#-11 ilverify rules don't understand. Identical errors
+        // are produced by csc-emitted IL for the same C# 11 pattern.
+        ["StaticVirtualInterfaces"] = KnownIssues.StaticVirtualInterface,
     };
 
     private static (string Command, IReadOnlyList<string> LeadingArgs) LocateTool()

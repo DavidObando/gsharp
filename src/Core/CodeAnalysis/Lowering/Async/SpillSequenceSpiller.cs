@@ -257,6 +257,9 @@ public static class SpillSequenceSpiller
                 case BoundCallExpression call:
                     return SpillCall(call);
 
+                case BoundConstrainedStaticCallExpression cstatic:
+                    return SpillConstrainedStaticCall(cstatic);
+
                 case BoundImportedCallExpression importedCall:
                     return SpillImportedCall(importedCall);
 
@@ -598,6 +601,31 @@ public static class SpillSequenceSpiller
             }
 
             var value = new BoundCallExpression(null, call.Function, args.ToImmutable(), call.ReturnType);
+            return new BoundSpillSequenceExpression(
+                null,
+                locals.ToImmutable(),
+                sideEffects.ToImmutable(),
+                value);
+        }
+
+        private BoundSpillSequenceExpression SpillConstrainedStaticCall(BoundConstrainedStaticCallExpression call)
+        {
+            // ADR-0089 / issue #755: structurally identical to BoundCallExpression
+            // for spilling — no receiver expression to evaluate, just argument
+            // evaluation order needs preserving across awaits.
+            var (locals, sideEffects, args) = SpillArgumentList(call.Arguments);
+
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(call);
+            }
+
+            var value = new BoundConstrainedStaticCallExpression(
+                call.Syntax,
+                call.TypeParameter,
+                call.InterfaceMethod,
+                args.ToImmutable(),
+                call.ReturnType);
             return new BoundSpillSequenceExpression(
                 null,
                 locals.ToImmutable(),

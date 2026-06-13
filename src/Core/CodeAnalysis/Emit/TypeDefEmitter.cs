@@ -818,6 +818,49 @@ internal sealed class TypeDefEmitter
             parameterList: this.nextParameterHandle());
     }
 
+    /// <summary>
+    /// ADR-0089 / issue #755: emits a static-virtual interface
+    /// MethodDef. Carries
+    /// <c>Public | Static | Virtual | Abstract | NewSlot | HideBySig</c>
+    /// for abstract static slots, omits <c>Abstract</c> when the interface
+    /// supplied a default body, and (when a body is present) plugs in the
+    /// encoded IL via <paramref name="bodyOffset"/>.
+    /// </summary>
+    /// <param name="method">The interface static-virtual method symbol.</param>
+    /// <param name="hasBody">True if the declaration carries a default body.</param>
+    /// <param name="bodyOffset">Pre-emitted IL body offset; ignored when <paramref name="hasBody"/> is false.</param>
+    public void EmitStaticVirtualMethod(FunctionSymbol method, bool hasBody, int bodyOffset)
+    {
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
+            .Parameters(
+                method.Parameters.Length,
+                r => this.encodeReturnSymbol(r, method.Type, method.ReturnRefKind),
+                ps =>
+                {
+                    foreach (var p in method.Parameters)
+                    {
+                        this.encodeTypeSymbol(ps.AddParameter().Type(), p.Type);
+                    }
+                });
+
+        var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
+            | MethodAttributes.Static | MethodAttributes.Virtual
+            | MethodAttributes.NewSlot;
+        if (!hasBody)
+        {
+            attrs |= MethodAttributes.Abstract;
+        }
+
+        this.emitCtx.Metadata.AddMethodDefinition(
+            attributes: attrs,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.emitCtx.Metadata.GetOrAddString(method.Name),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
+            bodyOffset: hasBody ? bodyOffset : -1,
+            parameterList: this.nextParameterHandle());
+    }
+
     // Constructor emission
 
     /// <summary>

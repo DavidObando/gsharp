@@ -342,6 +342,8 @@ public abstract class BoundTreeRewriter
                 return RewriteImportedCallExpression((BoundImportedCallExpression)node);
             case BoundNodeKind.ImportedInstanceCallExpression:
                 return RewriteImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node);
+            case BoundNodeKind.ConstrainedStaticCallExpression:
+                return RewriteConstrainedStaticCallExpression((BoundConstrainedStaticCallExpression)node);
             case BoundNodeKind.ArrayCreationExpression:
                 return RewriteArrayCreationExpression((BoundArrayCreationExpression)node);
             case BoundNodeKind.MapLiteralExpression:
@@ -580,6 +582,48 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundCallExpression(null, node.Function, builder.MoveToImmutable());
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #755: rewrites a constrained static-virtual call
+    /// expression by rewriting each argument; the receiver type-parameter
+    /// and target slot are immutable.
+    /// </summary>
+    /// <param name="node">The call to rewrite.</param>
+    /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteConstrainedStaticCallExpression(BoundConstrainedStaticCallExpression node)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArgument = node.Arguments[i];
+            var newArgument = RewriteExpression(oldArgument);
+            if (newArgument != oldArgument)
+            {
+                if (builder == null)
+                {
+                    builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+
+                    for (var j = 0; j < i; j++)
+                    {
+                        builder.Add(node.Arguments[j]);
+                    }
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newArgument);
+            }
+        }
+
+        if (builder == null)
+        {
+            return node;
+        }
+
+        return new BoundConstrainedStaticCallExpression(node.Syntax, node.TypeParameter, node.InterfaceMethod, builder.MoveToImmutable(), node.ReturnType);
     }
 
     /// <summary>

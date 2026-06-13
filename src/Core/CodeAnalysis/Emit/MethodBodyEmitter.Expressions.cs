@@ -230,6 +230,9 @@ internal sealed partial class MethodBodyEmitter
                     break;
                 }
 
+            case BoundConstrainedStaticCallExpression cstatic:
+                this.EmitConstrainedStaticCall(cstatic);
+                break;
             case BoundAddressOfExpression addressOf:
                 this.EmitAddressOf(addressOf);
                 break;

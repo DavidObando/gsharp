@@ -77,7 +77,32 @@ class Loud : IGreeter {
 }
 ```
 
-`Quiet` inherits `Hello`; `Loud` overrides it. Dispatch through either a class-typed or interface-typed receiver lands on the correct body. When two unrelated interfaces both supply a default for the same signature, the implementing class MUST declare its own override — the binder reports `GS0318` ("conflicting default implementations") otherwise. The deferred-modifier diagnostic `GS0321` covers static-virtual, private, and `sealed override` interface members, which are reserved for follow-up work.
+`Quiet` inherits `Hello`; `Loud` overrides it. Dispatch through either a class-typed or interface-typed receiver lands on the correct body. When two unrelated interfaces both supply a default for the same signature, the implementing class MUST declare its own override — the binder reports `GS0318` ("conflicting default implementations") otherwise. The deferred-modifier diagnostic `GS0321` covers private and `sealed override` interface members, which are reserved for follow-up work.
+
+### Static-virtual interface members (ADR-0089)
+
+Interfaces may also expose **static-virtual** members: a `static func` declared inside an interface body. Implementers supply the static via the existing `shared { ... }` block, and generic methods constrained by the interface can dispatch through `T.M(...)`. The implementer's static method is paired to the interface slot via a CLR `MethodImpl` row (ECMA-335 II.22.27); the call site lowers to `constrained. !!T  call <iface>::<method>`. The abstract form is body-less ("static abstract"); the default form ("static virtual") carries a body that implementers may override but don't have to.
+
+```gsharp
+sealed interface IAdd {
+    static func Add(a int32, b int32) int32         // abstract
+    static func Zero() int32 { return 0 }           // default
+}
+
+class Plus : IAdd {
+    shared {
+        func Add(a int32, b int32) int32 { return a + b }
+    }
+}
+
+func Apply[T IAdd](w T, a int32, b int32) int32 {
+    return T.Add(a, b)
+}
+
+Console.WriteLine(Apply(Plus{}, 3, 4))              // 7
+```
+
+The witness-T parameter `w T` lets the type-argument-inference pipeline pick `T` from the call site; explicit type arguments (`Apply[Plus](3, 4)`) work too. Static-virtual members map directly onto the .NET runtime's "static abstract / static virtual" support (e.g. `INumber<T>`, `IParsable<T>`, `IAdditionOperators<TL, TR, TR>`), so G# generic-math code interoperates with C# 11+ assemblies on either side. Diagnostics `GS0330`–`GS0333` flag the common failure modes (unsupported `static let`, missing implementation, instance method for a static slot, dispatch on the wrong type) — see the [diagnostics reference](../ref/diagnostics.md#static-virtual-interface-member-diagnostics-gs0330gs0333).
 
 ## Enums
 
