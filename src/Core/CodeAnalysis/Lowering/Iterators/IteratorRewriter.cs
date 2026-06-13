@@ -67,6 +67,16 @@ public static class IteratorRewriter
 
     private static bool IsAsyncIteratorFunction(FunctionSymbol function)
     {
+        // Issue #798: a generic `async sequence[T]` function is an
+        // AsyncSequenceTypeSymbol whose ClrType is null for open T (the
+        // CLR projection erases the element type). Recognize the symbolic
+        // form so the sync IteratorRewriter correctly skips it and the
+        // function flows to AsyncIteratorRewriter.
+        if (function.Type is AsyncSequenceTypeSymbol)
+        {
+            return true;
+        }
+
         var clr = function.Type?.ClrType;
         if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
         {

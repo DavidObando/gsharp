@@ -402,6 +402,17 @@ public sealed class ControlFlowGraph
                         case BoundNodeKind.ScopeStatement:
                         case BoundNodeKind.AwaitForRangeStatement:
                         case BoundNodeKind.PatternSwitchStatement:
+                        case BoundNodeKind.YieldStatement:
+                            // Issue #798: `yield` (ADR-0040) participates in the
+                            // CFG as a fall-through to the next statement; the
+                            // iterator state-machine rewriter (`IteratorRewriter`
+                            // / `AsyncIteratorRewriter`) later lowers it on the
+                            // emit path. Without this arm the gsc interpreter
+                            // path (`Compilation.Evaluate`) — which runs CFG
+                            // visualization on iterator bodies prior to running
+                            // the iterator rewriter — would throw GS9998
+                            // "Unexpected statement: YieldStatement" instead of
+                            // interpreting the iterator.
                             if (isLastStatementInBlock)
                             {
                                 Connect(current, next);

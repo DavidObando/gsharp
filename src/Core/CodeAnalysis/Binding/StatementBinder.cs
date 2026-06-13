@@ -2571,6 +2571,37 @@ internal sealed class StatementBinder
             return seq.ElementType;
         }
 
+        // Issue #798: `async sequence[T]` (ADR-0041) is AsyncSequenceTypeSymbol;
+        // surface its ElementType the same way SequenceTypeSymbol does so
+        // `yield` accepts the symbolic T rather than collapsing to `object`
+        // through the type-erased ClrType.
+        if (type is AsyncSequenceTypeSymbol aseq)
+        {
+            return aseq.ElementType;
+        }
+
+        // #313 / issue #798: when the iterator return type is an
+        // `ImportedTypeSymbol` constructed over symbolic type arguments
+        // (e.g. `IEnumerable[T]` / `IAsyncEnumerable[T]` inside a generic
+        // function), prefer the symbolic TypeArguments[0] over the
+        // type-erased ClrType form (`IEnumerable<object>`). Otherwise the
+        // element type collapses to `object`, and `yield v` where `v: T`
+        // fails to bind because the binder doesn't accept the implicit
+        // `T → object` conversion ("Cannot convert type 'T' to 'object'").
+        if (type is ImportedTypeSymbol importedSym
+            && importedSym.OpenDefinition != null
+            && !importedSym.TypeArguments.IsDefaultOrEmpty)
+        {
+            var def = importedSym.OpenDefinition;
+            if (def == typeof(System.Collections.Generic.IEnumerable<>) ||
+                def == typeof(System.Collections.Generic.IEnumerator<>) ||
+                def.FullName == "System.Collections.Generic.IAsyncEnumerable`1" ||
+                def.FullName == "System.Collections.Generic.IAsyncEnumerator`1")
+            {
+                return importedSym.TypeArguments[0];
+            }
+        }
+
         var clr = type?.ClrType;
         if (clr == null)
         {
