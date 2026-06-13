@@ -2907,6 +2907,20 @@ public class Parser
             return ParseAsyncPrefixedTypeClause();
         }
 
+        // ADR-0095 / issue #761: raw function-pointer type clause
+        // `unmanaged[CC] (T1, T2, ...) -> R`. `unmanaged` is a contextual
+        // keyword — we only commit to this shape when it appears at the
+        // start of a type-clause position followed by `[` or `(`. Plain
+        // identifiers named `unmanaged` (e.g. a struct member or local)
+        // are unaffected because they never reach this parser entry.
+        if (Current.Kind == SyntaxKind.IdentifierToken
+            && Current.Text == "unmanaged"
+            && (Peek(1).Kind == SyntaxKind.OpenSquareBracketToken
+                || Peek(1).Kind == SyntaxKind.OpenParenthesisToken))
+        {
+            return ParseFunctionPointerTypeClause();
+        }
+
         // ADR-0039: pointer type `*T` in type-annotation position.
         if (Current.Kind == SyntaxKind.StarToken)
         {
@@ -3245,6 +3259,73 @@ public class Parser
             arrow,
             returnTypeClause,
             question);
+    }
+
+    /// <summary>
+    /// ADR-0095 / issue #761: parses the raw function-pointer type clause
+    /// <c>unmanaged[CC] (T1, T2, ...) -&gt; R</c>. The leading
+    /// <c>unmanaged</c> identifier is the contextual keyword; the
+    /// <c>[CC]</c> slot is required (omitting it produces GS0356 and the
+    /// parser fabricates a missing identifier so recovery continues on
+    /// the inner signature). The parameter and return type-clause grammar
+    /// is the same as the arrow-form function type clause (ADR-0075).
+    /// </summary>
+    private TypeClauseSyntax ParseFunctionPointerTypeClause()
+    {
+        // Consume the `unmanaged` identifier as the keyword token. We
+        // leave its Kind as IdentifierToken (contextual keyword); the
+        // parser's role is to record the role through the dedicated
+        // UnmanagedKeyword property on TypeClauseSyntax.
+        var unmanagedKeyword = MatchToken(SyntaxKind.IdentifierToken);
+
+        SyntaxToken openBracket = null;
+        SyntaxToken callingConvention = null;
+        SyntaxToken closeBracket = null;
+        if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+        {
+            openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+            callingConvention = MatchToken(SyntaxKind.IdentifierToken);
+            closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        }
+        else
+        {
+            // ADR-0095 §5 — GS0356: the calling-convention slot is
+            // required. Report at the `unmanaged` keyword location so the
+            // user sees both the keyword and the proposed remediation.
+            Diagnostics.ReportFunctionPointerMissingCallingConvention(unmanagedKeyword.Location);
+        }
+
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        while (Current.Kind != SyntaxKind.CloseParenthesisToken
+            && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseTypeClause());
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var arrow = MatchToken(SyntaxKind.RightArrowToken);
+        var returnTypeClause = ParseTypeClause();
+
+        return TypeClauseSyntax.CreateFunctionPointer(
+            syntaxTree,
+            unmanagedKeyword,
+            openBracket,
+            callingConvention,
+            closeBracket,
+            openParen,
+            new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
+            closeParen,
+            arrow,
+            returnTypeClause);
     }
 
     // ADR-0075 / issue #715: bounded look-ahead used in type-clause slots to

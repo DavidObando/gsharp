@@ -6483,6 +6483,23 @@ internal sealed class ReflectionMetadataEmitter
                 this.EncodeTypeSymbol(genericInst.AddArgument(), elemType);
             }
         }
+        else if (type is FunctionPointerTypeSymbol fnPtr)
+        {
+            // ADR-0095 / issue #761: a raw function-pointer type encodes
+            // as an ELEMENT_TYPE_FNPTR followed by a nested method
+            // signature (calling convention + return + parameters). The
+            // GS-level type is an address-sized integer at runtime, but
+            // the metadata blob is rendered as FNPTR for type fidelity
+            // so disassemblers and the verifier see the precise shape.
+            var fnPtrConvention = MapToSignatureCallingConvention(fnPtr.CallingConvention);
+            var fnPtrSig = encoder.FunctionPointer(fnPtrConvention, FunctionPointerAttributes.None, 0);
+            fnPtrSig.Parameters(fnPtr.ParameterTypes.Length, out var fnRetEnc, out var fnParamsEnc);
+            this.EncodeReturnSymbol(fnRetEnc, fnPtr.ReturnType);
+            for (var i = 0; i < fnPtr.ParameterTypes.Length; i++)
+            {
+                this.EncodeTypeSymbol(fnParamsEnc.AddParameter().Type(), fnPtr.ParameterTypes[i]);
+            }
+        }
         else if (type?.ClrType != null)
         {
             this.EncodeClrType(encoder, type.ClrType);
@@ -6504,6 +6521,28 @@ internal sealed class ReflectionMetadataEmitter
 
     private static bool IsAsyncUserDefinedResultType(TypeSymbol type)
         => type is StructSymbol or InterfaceSymbol or EnumSymbol;
+
+    /// <summary>
+    /// ADR-0095 / issue #761: maps the
+    /// <see cref="System.Runtime.InteropServices.CallingConvention"/>
+    /// enum (used by <c>@DllImport</c> / <c>@UnmanagedFunctionPointer</c>
+    /// declarations and by <see cref="FunctionPointerTypeSymbol"/>) to
+    /// the metadata-level
+    /// <see cref="System.Reflection.Metadata.SignatureCallingConvention"/>
+    /// enum used when encoding an ELEMENT_TYPE_FNPTR signature blob.
+    /// </summary>
+    private static System.Reflection.Metadata.SignatureCallingConvention MapToSignatureCallingConvention(System.Runtime.InteropServices.CallingConvention convention)
+    {
+        return convention switch
+        {
+            System.Runtime.InteropServices.CallingConvention.Cdecl => System.Reflection.Metadata.SignatureCallingConvention.CDecl,
+            System.Runtime.InteropServices.CallingConvention.StdCall => System.Reflection.Metadata.SignatureCallingConvention.StdCall,
+            System.Runtime.InteropServices.CallingConvention.ThisCall => System.Reflection.Metadata.SignatureCallingConvention.ThisCall,
+            System.Runtime.InteropServices.CallingConvention.FastCall => System.Reflection.Metadata.SignatureCallingConvention.FastCall,
+            System.Runtime.InteropServices.CallingConvention.Winapi => System.Reflection.Metadata.SignatureCallingConvention.StdCall,
+            _ => System.Reflection.Metadata.SignatureCallingConvention.CDecl,
+        };
+    }
 
     private static bool TryCreateSymbolicAsyncTaskType(SynthesizedStateMachineType stateMachine, out TypeSymbol taskType)
     {

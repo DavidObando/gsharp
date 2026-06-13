@@ -133,6 +133,29 @@ internal static class PInvokeBinder
                 continue;
             }
 
+            // ADR-0095 / issue #761: delegate-typed parameters must carry
+            // the `@UnmanagedFunctionPointer` attribute on the delegate
+            // declaration. The CLR keeps the delegate alive for the duration
+            // of the call, so the caller is responsible for rooting the
+            // delegate beyond the call site (typically by keeping the
+            // assigned local in scope or in a field). FunctionPointerType
+            // parameters are accepted directly — they are raw `IntPtr` /
+            // `nint`-sized values in the metadata blob (FNPTR).
+            if (parameter.Type is DelegateTypeSymbol delegateParam)
+            {
+                if (KnownAttributes.FindUnmanagedFunctionPointer(delegateParam.Attributes) == null)
+                {
+                    diagnostics.ReportPInvokeDelegateMissingUnmanagedFunctionPointer(typeLocation, parameter.Name, delegateParam.Name);
+                }
+
+                continue;
+            }
+
+            if (parameter.Type is FunctionPointerTypeSymbol)
+            {
+                continue;
+            }
+
             // ADR-0093 §3 / §4: struct values and (layout-annotated) class
             // references are validated separately so the binder can issue
             // the tailored GS0349 "not blittable" message rather than the
@@ -160,7 +183,22 @@ internal static class PInvokeBinder
         if (function.Type != TypeSymbol.Void)
         {
             var returnLocation = syntax.Type?.Location ?? identifierLocation;
-            if (IsStructOrPointerToStruct(function.Type, out var returnStruct))
+
+            // ADR-0095 / issue #761: a delegate return is rejected because
+            // the v1 runtime cannot synthesize a managed wrapper for an
+            // arbitrary native function pointer without knowing its
+            // ownership / lifetime contract. The caller should declare the
+            // return as `unmanaged[CC] (...) -> R` or `nint` and use
+            // `Marshal.GetDelegateForFunctionPointer` manually.
+            if (function.Type is DelegateTypeSymbol returnDelegate)
+            {
+                diagnostics.ReportPInvokeDelegateReturnNotSupported(returnLocation, returnDelegate.Name);
+            }
+            else if (function.Type is FunctionPointerTypeSymbol)
+            {
+                // FNPTR return is accepted directly.
+            }
+            else if (IsStructOrPointerToStruct(function.Type, out var returnStruct))
             {
                 if (returnStruct.IsClass)
                 {

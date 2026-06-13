@@ -194,6 +194,16 @@ var rc = NativeTime(ref now)
 Console.WriteLine(rc == now)   // True
 ```
 
-The runtime marshals the byref slot as `T*` to the unmanaged callee, which is the canonical shape for libc APIs that write a result through an out-pointer (`time`, `clock_gettime`, `pipe`). See the [native-interop section of the CLR interop reference](../ref/clr-interop.md#unmanaged-interop-pinvoke), ADR-0086 (issue #727), ADR-0092 (issue #758), ADR-0093 (issue #759), and ADR-0094 (issue #760) for the full attribute surface and diagnostics (GS0322–GS0329, GS0342–GS0345, GS0346–GS0351, GS0352).
+The runtime marshals the byref slot as `T*` to the unmanaged callee, which is the canonical shape for libc APIs that write a result through an out-pointer (`time`, `clock_gettime`, `pipe`). Function-pointer parameters and returns are also supported — pass a managed callback as a delegate annotated with `@UnmanagedFunctionPointer(CallingConvention.Cdecl)`, or declare the slot as a raw `unmanaged[Cdecl] (T) -> R` function pointer (ADR-0095 / issue #761):
+
+```gs
+@UnmanagedFunctionPointer(CallingConvention.Cdecl)
+type Comparer = delegate func(a nint, b nint) int32
+
+@DllImport("libc", EntryPoint: "qsort")
+func NativeQsort(base nint, nmemb nint, size nint, cmp Comparer) void;
+```
+
+See the [native-interop section of the CLR interop reference](../ref/clr-interop.md#unmanaged-interop-pinvoke), ADR-0086 (issue #727), ADR-0092 (issue #758), ADR-0093 (issue #759), ADR-0094 (issue #760), and ADR-0095 (issue #761) for the full attribute surface and diagnostics (GS0322–GS0329, GS0342–GS0345, GS0346–GS0351, GS0352, GS0353–GS0356).
 
 Next: [Tutorials](/docs/tutorials/getting-started), or go deeper with the [CLR interop reference](/docs/ref/clr-interop).

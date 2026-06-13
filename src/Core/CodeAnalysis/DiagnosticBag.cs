@@ -3185,6 +3185,80 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// ADR-0095 / issue #761: GS0353 — a delegate-typed parameter on a
+    /// P/Invoke declaration is missing the
+    /// <c>@UnmanagedFunctionPointer</c> attribute. Without that attribute
+    /// the runtime cannot synthesize a stable function-pointer thunk for
+    /// the delegate, and the call site has no way to communicate a
+    /// calling convention to the native callee. The fix is to apply
+    /// <c>@UnmanagedFunctionPointer(CallingConvention.Cdecl)</c> (or the
+    /// appropriate calling convention) to the delegate declaration.
+    /// </summary>
+    /// <param name="location">The offending parameter-type-clause location.</param>
+    /// <param name="parameterName">The parameter name (for the message).</param>
+    /// <param name="delegateTypeName">The delegate type name.</param>
+    public void ReportPInvokeDelegateMissingUnmanagedFunctionPointer(TextLocation location, string parameterName, string delegateTypeName)
+    {
+        Report(
+            location,
+            "GS0353",
+            $"Delegate-typed P/Invoke parameter '{parameterName}' of type '{delegateTypeName}' requires the delegate declaration to be annotated with '@UnmanagedFunctionPointer(CallingConvention.Cdecl)' (or a matching calling convention). Without that attribute the runtime cannot produce a stable function-pointer thunk (ADR-0095).");
+    }
+
+    /// <summary>
+    /// ADR-0095 / issue #761: GS0354 — the calling convention named in a
+    /// raw function-pointer type clause (<c>unmanaged[CC] (...) -&gt; R</c>)
+    /// is not one of the supported values. The recognised conventions are
+    /// <c>Cdecl</c>, <c>Stdcall</c>, <c>Thiscall</c>, <c>Fastcall</c>.
+    /// </summary>
+    /// <param name="location">The offending calling-convention identifier location.</param>
+    /// <param name="name">The unrecognised identifier.</param>
+    public void ReportFunctionPointerUnknownCallingConvention(TextLocation location, string name)
+    {
+        Report(
+            location,
+            "GS0354",
+            $"Unknown calling convention '{name}' on an 'unmanaged' function-pointer type clause. Use one of: Cdecl, Stdcall, Thiscall, Fastcall (ADR-0095).");
+    }
+
+    /// <summary>
+    /// ADR-0095 / issue #761: GS0355 — a delegate-typed value is being
+    /// returned from a P/Invoke declaration. Returning a managed
+    /// delegate from native code is not supported because the runtime
+    /// would have to allocate a managed wrapper without knowing the
+    /// lifetime contract of the function-pointer it received. The fix
+    /// is to declare the return as <c>unmanaged[CC] (...) -&gt; R</c>
+    /// (a raw function pointer) or <c>nint</c> (an opaque handle that
+    /// the caller can wrap manually with
+    /// <c>Marshal.GetDelegateForFunctionPointer</c>).
+    /// </summary>
+    /// <param name="location">The offending return-type-clause location.</param>
+    /// <param name="delegateTypeName">The delegate type name.</param>
+    public void ReportPInvokeDelegateReturnNotSupported(TextLocation location, string delegateTypeName)
+    {
+        Report(
+            location,
+            "GS0355",
+            $"Returning a managed delegate '{delegateTypeName}' from a P/Invoke declaration is not supported. Declare the return as 'unmanaged[CC] (...) -> R' (a raw function pointer) or 'nint' and wrap manually with 'Marshal.GetDelegateForFunctionPointer' (ADR-0095).");
+    }
+
+    /// <summary>
+    /// ADR-0095 / issue #761: GS0356 — a raw function-pointer type clause
+    /// is missing its required calling-convention slot. The syntax is
+    /// <c>unmanaged[CC] (T1, T2, ...) -&gt; R</c>; the <c>[CC]</c> bracket
+    /// list is mandatory and the convention must be one of <c>Cdecl</c>,
+    /// <c>Stdcall</c>, <c>Thiscall</c>, <c>Fastcall</c>.
+    /// </summary>
+    /// <param name="location">The offending location (typically the <c>unmanaged</c> keyword).</param>
+    public void ReportFunctionPointerMissingCallingConvention(TextLocation location)
+    {
+        Report(
+            location,
+            "GS0356",
+            "Raw function-pointer type clause is missing its calling-convention slot. Expected 'unmanaged[Cdecl|Stdcall|Thiscall|Fastcall] (...) -> R' (ADR-0095).");
+    }
+
+    /// <summary>
     /// Reports GS0330 — ADR-0089 / issue #755: <c>static let</c> inside an
     /// interface declaration is reserved for a future release. The minimal
     /// static-virtual interface members feature only accepts

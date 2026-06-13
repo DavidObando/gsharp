@@ -231,13 +231,16 @@ internal sealed class DeclarationBinder
         }
 
         // ADR-0047: annotations on a delegate declaration default to the Type
-        // target — identical to a struct/class/interface/enum.
+        // target. ADR-0095 / issue #761: the effective AttributeUsage target
+        // is `Delegate` (not `Class`) so attributes whose AttributeUsage is
+        // restricted to delegates — most importantly
+        // `[UnmanagedFunctionPointer]` — bind without GS0276.
         var delegateAttributes = BindAttributes(
             syntax.Annotations,
             AttributeTargetKind.Type,
             Binder.TypeDeclarationAllowedTargets,
             "a delegate declaration",
-            System.AttributeTargets.Class);
+            System.AttributeTargets.Delegate);
 
         var delegateSymbol = new DelegateTypeSymbol(
             name,

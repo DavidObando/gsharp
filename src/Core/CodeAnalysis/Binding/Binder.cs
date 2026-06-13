@@ -1573,6 +1573,60 @@ public sealed class Binder
             return null;
         }
 
+        if (syntax.IsFunctionPointer)
+        {
+            // ADR-0095 / issue #761: raw function-pointer type clause
+            // `unmanaged[CC] (T1, T2, ...) -> R`. Bind the inner
+            // parameter/return types eagerly so structural identity holds
+            // across declarations even when the user spells the same
+            // signature differently elsewhere.
+            var paramTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.FunctionParameterTypes.Count);
+            for (var i = 0; i < syntax.FunctionParameterTypes.Count; i++)
+            {
+                var pt = BindTypeClause(syntax.FunctionParameterTypes[i]);
+                if (pt == null)
+                {
+                    return null;
+                }
+
+                paramTypes.Add(pt);
+            }
+
+            var fpRet = syntax.ReturnTypeClause != null ? BindTypeClause(syntax.ReturnTypeClause) : TypeSymbol.Void;
+            if (fpRet == null)
+            {
+                return null;
+            }
+
+            var convention = System.Runtime.InteropServices.CallingConvention.Cdecl;
+            if (syntax.CallingConventionIdentifierToken != null)
+            {
+                var ccName = syntax.CallingConventionIdentifierToken.Text;
+                switch (ccName)
+                {
+                    case "Cdecl":
+                        convention = System.Runtime.InteropServices.CallingConvention.Cdecl;
+                        break;
+                    case "Stdcall":
+                        convention = System.Runtime.InteropServices.CallingConvention.StdCall;
+                        break;
+                    case "Thiscall":
+                        convention = System.Runtime.InteropServices.CallingConvention.ThisCall;
+                        break;
+                    case "Fastcall":
+                        convention = System.Runtime.InteropServices.CallingConvention.FastCall;
+                        break;
+                    default:
+                        Diagnostics.ReportFunctionPointerUnknownCallingConvention(
+                            syntax.CallingConventionIdentifierToken.Location,
+                            ccName);
+                        return null;
+                }
+            }
+
+            return FunctionPointerTypeSymbol.Get(convention, paramTypes.MoveToImmutable(), fpRet);
+        }
+
         if (syntax.IsFunction)
         {
             // Phase 4.7: function-type clause `func(T1, T2, ...) R?`.
