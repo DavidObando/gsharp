@@ -17,8 +17,8 @@ G# is a .NET language with Go-inspired syntax. It emits CLR assemblies, imports 
 | `static void Main()` | top-level statements or `func Main()` | SDK projects synthesize an entry point; an explicit entry point is named `Main`. |
 | `void M()` | `func M()` | Functions can be package-level or members. |
 | method declaration in a class | class-body `func M()` (canonical) or `func (r Receiver) M()` for unowned types | Per [ADR-0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md), receiver clauses on owned types emit the `GS0314` warning — declare the method inside the class body instead. |
-| `int` | `int32` | G# source names numeric widths explicitly. |
-| `long` | `int64` | CLR signatures stay obvious in source. |
+| `int` | `int32` (canonical) or `int` (alias, ADR-0098) | The friendly `int` / `long` / `byte` / `float` aliases resolve to the canonical width-bearing names at the binder; canonical spellings are preferred in public APIs. |
+| `long` | `int64` (canonical) or `long` (alias, ADR-0098) | CLR signatures stay obvious in source. |
 | `var x = ...;` | `let x = ...` or `var x = ...` | `let` is immutable; `var` is mutable. (The short `x := ...` form was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md).) |
 | object initializer `new T { F = v }` | brace initializer `T{F: v}` | Data structs also offer `.copy(F: v)` and `with` copy/update. |
 | `record struct` | `data struct` | The `record` keyword was removed by ADR-0078; `data struct Name(...)` is the canonical spelling. |
@@ -67,7 +67,7 @@ func add(a int32, b int32) int32 {
 
 ## Primitive names make CLR widths explicit
 
-C# source uses aliases such as `int` and `long`. G# spells the widths: `int32`, `int64`, `uint32`, `float64`, and so on. This makes interop signatures visually match CLR metadata.
+C# source uses aliases such as `int` and `long`. G# canonical spellings are the width-bearing `int32`, `int64`, `uint32`, `float64`, and so on — that makes interop signatures visually match CLR metadata. ADR-0098 / issue #729 additionally accepts the C#-style aliases `int`, `uint`, `long`, `ulong`, `short`, `ushort`, `byte`, `sbyte`, `float`, and `double` as a strict superset; they resolve at the binder to the canonical type, so diagnostics and IL always print the width-bearing name. Prefer the canonical spellings in public library APIs and reach for the friendly aliases inside function bodies and local code where brevity helps reading.
 
 ## Defaults, named arguments, and overloading
 

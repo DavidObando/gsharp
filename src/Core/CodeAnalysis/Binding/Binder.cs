@@ -1540,6 +1540,20 @@ public sealed class Binder
             case "char":
             case "string":
             case "object":
+            // ADR-0098 / issue #729: friendly numeric aliases are treated as
+            // reserved primitive type names so user-defined `type int = …`
+            // (etc.) is rejected with the same diagnostic that already
+            // protects canonical width-bearing names like `int32`.
+            case "byte":
+            case "sbyte":
+            case "short":
+            case "ushort":
+            case "int":
+            case "uint":
+            case "long":
+            case "ulong":
+            case "float":
+            case "double":
                 return true;
             default:
                 return false;
@@ -3317,28 +3331,42 @@ public sealed class Binder
             case "bool":
                 return TypeSymbol.Bool;
             case "uint8":
+            // ADR-0098 / issue #729: friendly numeric alias for `uint8`. Canonical
+            // remains `uint8`; the alias resolves here and the bound tree records
+            // the canonical TypeSymbol, so diagnostics, `typeof`, and `nameof`
+            // continue to print the width-bearing name.
+            case "byte":
                 return TypeSymbol.UInt8;
             case "int8":
+            case "sbyte":
                 return TypeSymbol.Int8;
             case "int16":
+            case "short":
                 return TypeSymbol.Int16;
             case "uint16":
+            case "ushort":
                 return TypeSymbol.UInt16;
             case "int32":
+            case "int":
                 return TypeSymbol.Int32;
             case "uint32":
+            case "uint":
                 return TypeSymbol.UInt32;
             case "int64":
+            case "long":
                 return TypeSymbol.Int64;
             case "uint64":
+            case "ulong":
                 return TypeSymbol.UInt64;
             case "nint":
                 return TypeSymbol.NInt;
             case "nuint":
                 return TypeSymbol.NUInt;
             case "float32":
+            case "float":
                 return TypeSymbol.Float32;
             case "float64":
+            case "double":
                 return TypeSymbol.Float64;
             case "decimal":
                 return TypeSymbol.Decimal;
