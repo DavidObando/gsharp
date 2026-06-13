@@ -1215,3 +1215,64 @@ Cross-references:
 - Issues #760 (this feature), #727 (original P/Invoke), #758
   (`@LibraryImport`), #759 (struct marshalling), #706 (native-interop
   parent).
+
+
+## P/Invoke function-pointer marshalling diagnostics (GS0353 – GS0356)
+
+See ADR-0095 (issue #761). G# now supports passing managed callbacks
+and raw unmanaged function pointers across the P/Invoke boundary via
+two complementary shapes:
+
+* **Shape A — delegate types** annotated with
+  `@UnmanagedFunctionPointer(CallingConvention.Cdecl)`. Pass an
+  instance of the delegate as a parameter; the runtime synthesizes a
+  stable C-ABI thunk and keeps the delegate alive for the duration of
+  `Marshal.GetFunctionPointerForDelegate` + the inner native call.
+* **Shape B — raw function pointers** spelled
+  `unmanaged[Cdecl] (T1, T2, ...) -> R`. Encoded as
+  `ELEMENT_TYPE_FNPTR` in the metadata blob; the runtime value is an
+  address-sized integer (interconvertible with `nint`).
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0353 | Error | Delegate-typed P/Invoke parameter `<name>` of type `<T>` requires the delegate declaration to be annotated with `@UnmanagedFunctionPointer(CallingConvention.Cdecl)` (or a matching calling convention). |
+| GS0354 | Error | Unknown calling convention `<name>` on an `unmanaged` function-pointer type clause. Use one of: `Cdecl`, `Stdcall`, `Thiscall`, `Fastcall`. |
+| GS0355 | Error | Returning a managed delegate `<T>` from a P/Invoke declaration is not supported. Declare the return as `unmanaged[CC] (...) -> R` (a raw function pointer) or `nint` and wrap manually with `Marshal.GetDelegateForFunctionPointer`. |
+| GS0356 | Error | Raw function-pointer type clause is missing its calling-convention slot. Expected `unmanaged[Cdecl|Stdcall|Thiscall|Fastcall] (...) -> R`. |
+
+Cause/fix:
+
+- **GS0353 — missing `@UnmanagedFunctionPointer`.** A G# delegate
+  passed to a native callback parameter is marshalled through a
+  runtime-synthesized thunk that needs an explicit calling
+  convention. Add `@UnmanagedFunctionPointer(CallingConvention.Cdecl)`
+  on the `type Name = delegate func(...) R` declaration.
+- **GS0354 — unknown calling convention.** Only the four CLR-defined
+  unmanaged conventions are accepted. `Cdecl` is the right choice for
+  almost all libc-style APIs; pick `Stdcall` only for the legacy
+  Win32 ABI.
+- **GS0355 — delegate-typed return.** The runtime cannot conjure a
+  managed wrapper for an arbitrary native function pointer because it
+  has no contract for who owns the pointer's lifetime. Switch the
+  return to `unmanaged[CC] (...) -> R` for a raw FNPTR, or to `nint`
+  if the caller will wrap manually.
+- **GS0356 — missing `[CC]` slot.** The `unmanaged` contextual
+  keyword always requires an immediate `[Convention]` bracket list.
+  This makes the calling convention syntactically explicit at every
+  declaration site so the metadata FNPTR signature is unambiguous.
+
+GC lifetime contract (Shape A): the CLR keeps the delegate rooted for
+the duration of `Marshal.GetFunctionPointerForDelegate` + the inner
+native call. **The caller is responsible for holding an explicit
+reference to the delegate for as long as the native side may call
+back.** The canonical pattern is to assign the delegate to a local or
+field and call `GC.KeepAlive(<delegate>)` at the end of the scope.
+
+Cross-references:
+
+- ADR-0086 — original P/Invoke / `@DllImport` ADR.
+- ADR-0092 — `@LibraryImport` source-generator-shaped P/Invoke.
+- ADR-0093 — struct and class marshalling.
+- ADR-0094 — `ref` / `out` / `in` parameter marshalling.
+- ADR-0095 — function-pointer marshalling (this feature).
+- Issues #761 (this feature), #706 (native-interop parent).

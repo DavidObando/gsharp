@@ -422,6 +422,41 @@ Both `@DllImport` and `@LibraryImport` support byref parameters with no addition
 
 The retired GS0326 ("ref/out/in parameter is not supported") no longer fires for ref-kind parameters; the diagnostic remains the umbrella for the other unsupported function shapes (async, generic, instance, extension, `shared`, ref-return). See ADR-0094 for the full pointee-blittability table.
 
+### Function-pointer marshalling
+
+ADR-0095 / issue #761 adds support for passing managed callbacks and raw unmanaged function pointers across the P/Invoke boundary. Two complementary shapes are supported:
+
+**Shape A — delegate types** annotated with `@UnmanagedFunctionPointer(CallingConvention.Cdecl)`. The G# delegate is passed by value; the runtime synthesizes a stable C-ABI thunk via `Marshal.GetFunctionPointerForDelegate`.
+
+```gs
+package P
+import System
+import System.Runtime.InteropServices
+
+@UnmanagedFunctionPointer(CallingConvention.Cdecl)
+type Int64Comparer = delegate func(a nint, b nint) int32
+
+@DllImport("libc", EntryPoint: "qsort")
+func native_qsort(base nint, nmemb nint, size nint, cmp Int64Comparer) void;
+```
+
+**Shape B — raw function pointers** spelled `unmanaged[Cdecl] (T1, T2, ...) -> R`. Encoded as `ELEMENT_TYPE_FNPTR` in the metadata blob; at runtime the value is an address-sized integer (interconvertible with `nint`). This is the right shape for declaring callbacks at the bare metal — e.g. a `dlsym` return slot, or a P/Invoke parameter that the caller already holds as a `nint`.
+
+```gs
+package P
+import System
+import System.Runtime.InteropServices
+
+@DllImport("libc", EntryPoint: "dlsym")
+func native_dlsym(handle nint, name string) unmanaged[Cdecl] () -> void;
+```
+
+Supported calling conventions are `Cdecl`, `Stdcall`, `Thiscall`, `Fastcall`. The bracketed slot after `unmanaged` is mandatory (omitting it reports GS0356). Returning a managed delegate from a P/Invoke is rejected (GS0355) because the runtime cannot infer the lifetime contract; use Shape B or `nint` + `Marshal.GetDelegateForFunctionPointer` instead.
+
+**GC lifetime contract (Shape A).** The CLR keeps the delegate rooted only for the duration of `Marshal.GetFunctionPointerForDelegate` + the inner native call. The caller is responsible for holding an explicit reference to the delegate for as long as the native side might call back; the canonical pattern is to assign the delegate to a local or field and end the scope with `GC.KeepAlive(<delegate>)`.
+
+The diagnostics introduced by this feature are GS0353 (missing `@UnmanagedFunctionPointer`), GS0354 (unknown calling convention), GS0355 (delegate return), and GS0356 (missing `[CC]` slot). See ADR-0095 for the full table.
+
 ## Unsupported interop surface
 
-The following are not yet implemented as source features: function-pointer marshalling, user-supplied custom marshallers (`StringMarshalling.Custom` and per-field `[MarshalAs]`), fixed-size buffers inside marshalled structs, `string` return types under `@LibraryImport` (GS0345), default parameter values in G# declarations, and C#-style `null` literals. Use `nil` for nullable values, import .NET APIs for library functionality, and wrap unsupported marshalling shapes behind a thin C# shim for now.
+The following are not yet implemented as source features: user-supplied custom marshallers (`StringMarshalling.Custom` and per-field `[MarshalAs]`), fixed-size buffers inside marshalled structs, `string` return types under `@LibraryImport` (GS0345), default parameter values in G# declarations, and C#-style `null` literals. Use `nil` for nullable values, import .NET APIs for library functionality, and wrap unsupported marshalling shapes behind a thin C# shim for now.

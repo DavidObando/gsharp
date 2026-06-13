@@ -299,6 +299,34 @@ public sealed class TypeClauseSyntax : SyntaxNode
     }
 #pragma warning restore SA1642
 
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for the raw function-pointer type clause <c>unmanaged[CC] (T1, T2, ...) -&gt; R</c> (ADR-0095 / issue #761).</summary>
+#pragma warning disable SA1642
+    private TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken unmanagedKeyword,
+        SyntaxToken callingConventionOpenBracketToken,
+        SyntaxToken callingConventionIdentifierToken,
+        SyntaxToken callingConventionCloseBracketToken,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        SyntaxToken closeParenToken,
+        SyntaxToken arrowToken,
+        TypeClauseSyntax returnTypeClause,
+        bool isFunctionPointer)
+        : base(syntaxTree)
+    {
+        UnmanagedKeyword = unmanagedKeyword;
+        CallingConventionOpenBracketToken = callingConventionOpenBracketToken;
+        CallingConventionIdentifierToken = callingConventionIdentifierToken;
+        CallingConventionCloseBracketToken = callingConventionCloseBracketToken;
+        OpenParenToken = openParenToken;
+        FunctionParameterTypes = functionParameterTypes;
+        CloseParenToken = closeParenToken;
+        ArrowToken = arrowToken;
+        ReturnTypeClause = returnTypeClause;
+    }
+#pragma warning restore SA1642
+
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.TypeClause;
 
@@ -375,7 +403,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
     public SeparatedSyntaxList<TypeClauseSyntax> TupleElements { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes a tuple type <c>(T1, T2, ...)</c> (Phase 4.5).</summary>
-    public bool IsTuple => OpenParenToken != null && FuncKeyword == null && ArrowToken == null;
+    public bool IsTuple => OpenParenToken != null && FuncKeyword == null && ArrowToken == null && UnmanagedKeyword == null;
 
     /// <summary>Gets the <c>func</c> keyword for function-type clauses, or <c>null</c>.</summary>
     public SyntaxToken FuncKeyword { get; }
@@ -389,14 +417,29 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets the function return-type clause, or <c>null</c> when the type is void / not a function type.</summary>
     public TypeClauseSyntax ReturnTypeClause { get; }
 
-    /// <summary>Gets a value indicating whether this clause denotes a function type — either the legacy <c>func(...) R?</c> form (Phase 4.7) or the canonical arrow form <c>(...) -&gt; R?</c> (ADR-0075).</summary>
+    /// <summary>Gets a value indicating whether this clause denotes a function type — either the legacy <c>func(...) R?</c> form (Phase 4.7), the canonical arrow form <c>(...) -&gt; R?</c> (ADR-0075), or the raw function-pointer form <c>unmanaged[CC] (...) -&gt; R</c> (ADR-0095).</summary>
     public bool IsFunction => FuncKeyword != null || ArrowToken != null;
 
     /// <summary>Gets a value indicating whether this clause uses the legacy <c>func(...) R?</c> spelling. Such clauses are accepted but emit a deprecation warning (GS0303 / ADR-0075).</summary>
     public bool IsLegacyFuncFunction => FuncKeyword != null;
 
     /// <summary>Gets a value indicating whether this clause uses the canonical arrow-form spelling <c>(...) -&gt; R?</c> (ADR-0075).</summary>
-    public bool IsArrowFunction => ArrowToken != null;
+    public bool IsArrowFunction => ArrowToken != null && UnmanagedKeyword == null;
+
+    /// <summary>Gets the <c>unmanaged</c> contextual keyword token introducing a raw function-pointer type clause (ADR-0095 / issue #761), or <c>null</c>.</summary>
+    public SyntaxToken UnmanagedKeyword { get; }
+
+    /// <summary>Gets the opening <c>[</c> of a raw function-pointer's calling-convention slot (ADR-0095), or <c>null</c>.</summary>
+    public SyntaxToken CallingConventionOpenBracketToken { get; }
+
+    /// <summary>Gets the calling-convention identifier inside the <c>[CC]</c> slot of a raw function-pointer type clause (e.g. <c>Cdecl</c>, <c>Stdcall</c>) (ADR-0095), or <c>null</c>.</summary>
+    public SyntaxToken CallingConventionIdentifierToken { get; }
+
+    /// <summary>Gets the closing <c>]</c> of a raw function-pointer's calling-convention slot (ADR-0095), or <c>null</c>.</summary>
+    public SyntaxToken CallingConventionCloseBracketToken { get; }
+
+    /// <summary>Gets a value indicating whether this clause denotes a raw function-pointer type <c>unmanaged[CC] (T) -&gt; R</c> (ADR-0095 / issue #761).</summary>
+    public bool IsFunctionPointer => UnmanagedKeyword != null;
 
     /// <summary>Gets the opening <c>[</c> of the type-argument list (Phase 4.3c), or <c>null</c>.</summary>
     public SyntaxToken TypeArgumentOpenBracketToken { get; }
@@ -590,5 +633,43 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, asyncModifier, openParenToken, functionParameterTypes, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction: true);
+    }
+
+    /// <summary>Creates the raw function-pointer type clause <c>unmanaged[CC] (T1, T2, ...) -&gt; R</c> (ADR-0095 / issue #761).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="unmanagedKeyword">The <c>unmanaged</c> contextual keyword token.</param>
+    /// <param name="callingConventionOpenBracketToken">The opening <c>[</c> of the calling-convention slot.</param>
+    /// <param name="callingConventionIdentifierToken">The calling-convention identifier (<c>Cdecl</c>, <c>Stdcall</c>, <c>Thiscall</c>, <c>Fastcall</c>).</param>
+    /// <param name="callingConventionCloseBracketToken">The closing <c>]</c> of the calling-convention slot.</param>
+    /// <param name="openParenToken">The opening <c>(</c> of the parameter-type list.</param>
+    /// <param name="functionParameterTypes">The comma-separated parameter-type clauses.</param>
+    /// <param name="closeParenToken">The closing <c>)</c> of the parameter-type list.</param>
+    /// <param name="arrowToken">The <c>-&gt;</c> token.</param>
+    /// <param name="returnTypeClause">The return-type clause.</param>
+    /// <returns>A raw function-pointer type clause.</returns>
+    public static TypeClauseSyntax CreateFunctionPointer(
+        SyntaxTree syntaxTree,
+        SyntaxToken unmanagedKeyword,
+        SyntaxToken callingConventionOpenBracketToken,
+        SyntaxToken callingConventionIdentifierToken,
+        SyntaxToken callingConventionCloseBracketToken,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        SyntaxToken closeParenToken,
+        SyntaxToken arrowToken,
+        TypeClauseSyntax returnTypeClause)
+    {
+        return new TypeClauseSyntax(
+            syntaxTree,
+            unmanagedKeyword,
+            callingConventionOpenBracketToken,
+            callingConventionIdentifierToken,
+            callingConventionCloseBracketToken,
+            openParenToken,
+            functionParameterTypes,
+            closeParenToken,
+            arrowToken,
+            returnTypeClause,
+            isFunctionPointer: true);
     }
 }

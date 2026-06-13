@@ -808,6 +808,56 @@ internal static class KnownAttributes
 
     /// <summary>
     /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Runtime.InteropServices.UnmanagedFunctionPointerAttribute"/>.
+    /// ADR-0095 / issue #761: delegate types passed to native callbacks
+    /// must carry this attribute so the CLR records the unmanaged
+    /// calling convention for the synthesized function-pointer thunk.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[UnmanagedFunctionPointer]</c>.</returns>
+    public static bool IsUnmanagedFunctionPointer(Type clrType)
+    {
+        return clrType == typeof(System.Runtime.InteropServices.UnmanagedFunctionPointerAttribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Runtime.InteropServices.UnmanagedFunctionPointerAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[UnmanagedFunctionPointer]</c>.</returns>
+    public static bool IsUnmanagedFunctionPointer(BoundAttribute attribute)
+    {
+        return IsUnmanagedFunctionPointer(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Finds the first <c>@UnmanagedFunctionPointer(...)</c> attribute on
+    /// <paramref name="attributes"/>, or <c>null</c> when none is
+    /// present. ADR-0095 / issue #761.
+    /// </summary>
+    /// <param name="attributes">The attributes attached to a symbol.</param>
+    /// <returns>The matching attribute, or <c>null</c>.</returns>
+    public static BoundAttribute FindUnmanagedFunctionPointer(ImmutableArray<BoundAttribute> attributes)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (IsUnmanagedFunctionPointer(attr))
+            {
+                return attr;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
     /// <see cref="System.Runtime.InteropServices.StructLayoutAttribute"/>.
     /// ADR-0093 / issue #759: <c>@StructLayout(LayoutKind.…)</c> is a
     /// pseudo-custom attribute — the CLR consumes its arguments to set

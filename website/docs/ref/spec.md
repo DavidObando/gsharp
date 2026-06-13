@@ -867,6 +867,27 @@ A struct or class that appears in a P/Invoke signature must be *blittable*: ever
 
 Classes follow a stricter rule: a `class` must carry an explicit `@StructLayout(LayoutKind.Sequential|Explicit)` annotation before it can appear in a P/Invoke signature (the default class layout is `Auto`), and even then it can only flow *by reference* — using a class as a P/Invoke return type is rejected with GS0351. Return a struct or `nint` instead. The full diagnostic catalogue (GS0346–GS0351) is listed in the [Diagnostics reference](./diagnostics); see ADR-0093 for the design rationale and the blittability classification rules.
 
+### Function-pointer marshalling
+
+ADR-0095 / issue #761 lifts the v1 deferral on function-typed and delegate-typed P/Invoke parameters and returns. Two shapes are supported:
+
+**Shape A — managed delegate callbacks.** A `type Name = delegate func(...) R` declaration annotated with `@UnmanagedFunctionPointer(CallingConvention.Cdecl)` (or any of `Stdcall`, `Thiscall`, `Fastcall`) may appear as a P/Invoke parameter type. The runtime synthesizes a stable C-ABI thunk via `Marshal.GetFunctionPointerForDelegate`. A delegate-typed P/Invoke parameter without `@UnmanagedFunctionPointer` is rejected with GS0353.
+
+**Shape B — raw function pointers.** A type clause of the form `unmanaged[CC] (T1, T2, ...) -> R` denotes a CLR function-pointer type (encoded as `ELEMENT_TYPE_FNPTR` in the metadata blob). The bracketed calling-convention slot is mandatory; omitting it is GS0356. The four accepted conventions are `Cdecl`, `Stdcall`, `Thiscall`, `Fastcall` — any other identifier is rejected with GS0354. Returning a managed delegate from a P/Invoke is rejected with GS0355 because the runtime cannot infer the lifetime contract; use Shape B or `nint` + `Marshal.GetDelegateForFunctionPointer` instead.
+
+```gs
+@UnmanagedFunctionPointer(CallingConvention.Cdecl)
+type Int64Comparer = delegate func(a nint, b nint) int32
+
+@DllImport("libc", EntryPoint: "qsort")
+func native_qsort(base nint, nmemb nint, size nint, cmp Int64Comparer) void;
+
+@DllImport("libc", EntryPoint: "dlsym")
+func native_dlsym(handle nint, name string) unmanaged[Cdecl] () -> void;
+```
+
+GC contract (Shape A): the CLR keeps the delegate rooted only for the duration of `Marshal.GetFunctionPointerForDelegate` + the inner native call. The caller must hold an explicit reference (and ideally call `GC.KeepAlive` at the end of the scope) for as long as the native side may invoke the callback. The full diagnostic catalogue (GS0353–GS0356) is listed in the [Diagnostics reference](./diagnostics); see ADR-0095 for the design rationale and worked examples.
+
 Interpolated strings interoperate with the CLR formatting types. By default they lower to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler` (value-type holes are not boxed); a string targeted at `IFormattable` or `FormattableString` lowers to `FormattableStringFactory.Create` for deferred, culture-aware formatting; and a parameter annotated with `[InterpolatedStringHandler]` receives the handler directly, including `[InterpolatedStringHandlerArgument]` forwarding.
 
 ## Documentation comments
