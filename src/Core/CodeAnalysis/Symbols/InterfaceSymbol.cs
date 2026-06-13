@@ -65,6 +65,12 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <summary>Gets the abstract method signatures declared on this interface. Populated by the binder via <see cref="SetMethods"/>.</summary>
     public ImmutableArray<FunctionSymbol> Methods { get; private set; }
 
+    /// <summary>Gets the static-virtual method signatures declared on this interface (ADR-0089 / issue #755). Populated by the binder via <see cref="SetStaticMethods"/>.</summary>
+    public ImmutableArray<FunctionSymbol> StaticMethods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
+
+    /// <summary>Gets a value indicating whether this interface declares at least one static-virtual member (ADR-0089).</summary>
+    public bool HasStaticVirtualMembers => !StaticMethods.IsDefaultOrEmpty;
+
     /// <summary>Gets the property signatures declared on this interface (ADR-0051). Populated by the binder via <see cref="SetProperties"/>.</summary>
     public ImmutableArray<PropertySymbol> Properties { get; private set; } = ImmutableArray<PropertySymbol>.Empty;
 
@@ -88,6 +94,57 @@ public sealed class InterfaceSymbol : TypeSymbol
     public void SetMethods(ImmutableArray<FunctionSymbol> methods)
     {
         Methods = methods;
+    }
+
+    /// <summary>Sets <see cref="StaticMethods"/>. Intended to be called once by the binder (ADR-0089 / issue #755).</summary>
+    /// <param name="methods">The bound static-virtual method signatures.</param>
+    public void SetStaticMethods(ImmutableArray<FunctionSymbol> methods)
+    {
+        StaticMethods = methods;
+    }
+
+    /// <summary>Tries to look up a static-virtual interface method by name (ADR-0089 / issue #755).</summary>
+    /// <param name="name">The method name.</param>
+    /// <param name="method">The found method on success.</param>
+    /// <returns>True if found.</returns>
+    public bool TryGetStaticMethod(string name, out FunctionSymbol method)
+    {
+        if (!StaticMethods.IsDefaultOrEmpty)
+        {
+            foreach (var m in StaticMethods)
+            {
+                if (m.Name == name)
+                {
+                    method = m;
+                    return true;
+                }
+            }
+        }
+
+        method = null;
+        return false;
+    }
+
+    /// <summary>Returns every static-virtual interface method whose name equals <paramref name="name"/> (ADR-0089).</summary>
+    /// <param name="name">The method name.</param>
+    /// <returns>The overload set; empty when none.</returns>
+    public ImmutableArray<FunctionSymbol> GetStaticMethods(string name)
+    {
+        if (StaticMethods.IsDefaultOrEmpty)
+        {
+            return ImmutableArray<FunctionSymbol>.Empty;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+        foreach (var m in StaticMethods)
+        {
+            if (m.Name == name)
+            {
+                builder.Add(m);
+            }
+        }
+
+        return builder.ToImmutable();
     }
 
     /// <summary>Sets <see cref="Properties"/>. Intended to be called once by the binder (ADR-0051).</summary>
@@ -244,6 +301,46 @@ public sealed class InterfaceSymbol : TypeSymbol
         }
 
         instance.SetMethods(substMethods.MoveToImmutable());
+
+        // ADR-0089 / issue #755: substitute the type arguments through to the
+        // interface's static-virtual methods so a call site that resolves
+        // `T.M(args)` through a closed interface (e.g. `IAdd[int32]`) sees
+        // the substituted parameter / return types.
+        if (!definition.StaticMethods.IsDefaultOrEmpty)
+        {
+            var substStaticMethods = ImmutableArray.CreateBuilder<FunctionSymbol>(definition.StaticMethods.Length);
+            foreach (var m in definition.StaticMethods)
+            {
+                var substParams = ImmutableArray.CreateBuilder<ParameterSymbol>(m.Parameters.Length);
+                foreach (var p in m.Parameters)
+                {
+                    var newParam = new ParameterSymbol(p.Name, SubstituteType(p.Type, subst), isVariadic: p.IsVariadic, isScoped: p.IsScoped, refKind: p.RefKind);
+
+                    if (p.HasExplicitDefaultValue)
+                    {
+                        newParam.SetExplicitDefaultValue(p.ExplicitDefaultValue);
+                    }
+
+                    substParams.Add(newParam);
+                }
+
+                var substReturn = SubstituteType(m.Type, subst);
+                var substStaticMethod = new FunctionSymbol(
+                    m.Name,
+                    substParams.MoveToImmutable(),
+                    substReturn,
+                    m.Declaration,
+                    m.Package,
+                    m.Accessibility,
+                    receiverType: null);
+                substStaticMethod.IsStatic = true;
+                substStaticMethod.StaticOwnerType = instance;
+                substStaticMethods.Add(substStaticMethod);
+            }
+
+            instance.SetStaticMethods(substStaticMethods.MoveToImmutable());
+        }
+
         return instance;
     }
 

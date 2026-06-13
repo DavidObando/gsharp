@@ -387,20 +387,19 @@ class C : IMissing {
     }
 
     [Fact]
-    public void InterfaceDefaultMethod_StaticModifier_ParserRejects()
+    public void InterfaceDefaultMethod_StaticModifier_NowAcceptedByParser()
     {
-        // ADR-0085 explicitly defers static interface members. The G#
-        // grammar does not allow `static` at the interface member position
-        // today, so the parser reports a token-shape error. The deferral is
-        // documented in ADR-0085; if/when ADR adds a follow-up to support
-        // static-virtual interface methods this test will need to evolve.
+        // ADR-0089 / issue #755: static-virtual interface members are now
+        // accepted by the parser (with or without a default body). This
+        // test pins the new behavior — a previously-rejected source now
+        // binds with no diagnostics.
         var source = @"
 interface IStaticy {
     static func F() int32 { return 1 }
 }
 ";
         var result = Evaluate(source);
-        Assert.NotEmpty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics);
     }
 
     private static EvaluationResult Evaluate(string source)

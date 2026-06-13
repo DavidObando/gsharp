@@ -199,6 +199,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         OpenModifier = openModifier;
         OverrideModifier = overrideModifier;
         AsyncModifier = asyncModifier;
+        StaticModifier = null;
         FunctionKeyword = functionKeyword;
         ReceiverOpenParenthesisToken = receiverOpenParenthesisToken;
         Receiver = receiver;
@@ -254,6 +255,12 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the optional <c>async</c> modifier (Phase 5.1 / ADR-0023). When non-null this function is an async function; callers see <c>Task[T]</c> (or <c>Task</c>), and the body may use <c>await</c>.</summary>
     public SyntaxToken AsyncModifier { get; }
+
+    /// <summary>Gets or sets the optional <c>static</c> contextual keyword (ADR-0089 / issue #755). Non-null when the function was declared inside <c>interface { … }</c> as a static-virtual member; the binder rejects this token on non-interface members.</summary>
+    public SyntaxToken StaticModifier { get; set; }
+
+    /// <summary>Gets a value indicating whether this function carries a <c>static</c> contextual keyword (ADR-0089).</summary>
+    public bool HasStaticModifier => StaticModifier != null;
 
     /// <summary>Gets a value indicating whether this function declares <c>async</c>.</summary>
     public bool IsAsync => AsyncModifier != null;

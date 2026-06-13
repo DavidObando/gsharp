@@ -865,6 +865,15 @@ internal sealed class ReflectionMetadataEmitter
                 this.cache.MethodHandles[m] = MetadataTokens.MethodDefinitionHandle(methodRow++);
             }
 
+            // ADR-0089 / issue #755: plan MethodDef rows for static-virtual
+            // interface members. They occupy the same MethodList run as
+            // instance interface methods so the parent TypeDef's methodList
+            // pointer correctly bounds the entire group.
+            foreach (var sm in i.StaticMethods)
+            {
+                this.cache.MethodHandles[sm] = MetadataTokens.MethodDefinitionHandle(methodRow++);
+            }
+
             // Plan accessor method rows for interface properties (issue #248).
             foreach (var prop in i.Properties)
             {
@@ -1274,6 +1283,15 @@ internal sealed class ReflectionMetadataEmitter
                 continue;
             }
 
+            // ADR-0089 / issue #755: static-virtual interface members emit
+            // as part of the interface's TypeDef, not as <Program>-hosted
+            // top-level statics. The interface's emit phase already routed
+            // these through EmitFunction.
+            if (kvp.Key.IsStatic && kvp.Key.StaticOwnerType is InterfaceSymbol)
+            {
+                continue;
+            }
+
             var owningPackage = kvp.Key.Package ?? this.emitCtx.Program.EntryPointPackage ?? packages[0];
             if (!functionsByPackage.TryGetValue(owningPackage, out var bucket))
             {
@@ -1528,6 +1546,25 @@ internal sealed class ReflectionMetadataEmitter
                 }
             }
 
+            // ADR-0089 / issue #755: emit static-virtual interface members.
+            // When the declaration carries a default body, route through
+            // EmitFunction (which handles signature + IL body + parameter
+            // rows). When there is no body, emit a Static|Virtual|Abstract
+            // MethodDef with no IL.
+            foreach (var sm in i.StaticMethods)
+            {
+                if (InterfaceSymbol.HasDefaultBody(sm)
+                    && this.emitCtx.Program.Functions.TryGetValue(sm, out var defBody))
+                {
+                    var emittedHandle = this.EmitFunction(sm, defBody, isEntryPoint: false);
+                    this.cache.MethodHandles[sm] = emittedHandle;
+                }
+                else
+                {
+                    this.typeDefEmitter.EmitStaticVirtualMethod(sm, hasBody: false, bodyOffset: -1);
+                }
+            }
+
             // Issue #248: emit abstract accessor MethodDefs + PropertyDef rows for interface properties.
             this.memberDefEmitter.EmitInterfacePropertyAccessors(i);
 
@@ -1668,6 +1705,10 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.typeDefEmitter.EmitStaticConstructor(c);
             }
+
+            // ADR-0089 / issue #755: emit MethodImpl rows for static-virtual
+            // interface members. See structs path for the same call.
+            this.EmitStaticVirtualMethodImpls(c);
         }
 
         // 4b. Non-SM struct methods.
@@ -1731,6 +1772,16 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.typeDefEmitter.EmitStaticConstructor(s);
             }
+
+            // ADR-0089 / issue #755: emit MethodImpl rows for static-virtual
+            // interface members. The CLR (per ECMA-335 §II.10.3.3 with the
+            // C# 11 / .NET 7 static-virtual extension) cannot pair an
+            // implementer's static method with an interface's static-virtual
+            // slot by name+signature alone — an explicit MethodImpl row is
+            // required so `constrained.` dispatch finds the right body. The
+            // row points the interface slot's MethodDef at the implementer's
+            // static MethodDef on the struct's TypeDef.
+            this.EmitStaticVirtualMethodImpls(s);
         }
 
         // Phase 4 emit parity (F2, type-erased): now that every generic
@@ -1738,9 +1789,7 @@ internal sealed class ReflectionMetadataEmitter
         // lookup dictionaries, walk the bound program for constructed
         // StructSymbols (Box[int], Pair[string, int], ...) and alias them
         // to their definitions' rows.
-        this.methodBodyPlanner.RegisterConstructedTypeAliases();
-
-        // B4. Per-package methods (ctor + user functions + entry).
+        this.methodBodyPlanner.RegisterConstructedTypeAliases();        // B4. Per-package methods (ctor + user functions + entry).
         foreach (var pkg in packages)
         {
             this.typeDefEmitter.EmitDefaultConstructor();
@@ -3736,6 +3785,16 @@ internal sealed class ReflectionMetadataEmitter
         else
         {
             methodAttrs |= MethodAttributes.Static;
+
+            // ADR-0089 / issue #755: a static-virtual interface method
+            // *with* a default body still needs the virtual / newslot
+            // flags so the slot remains overridable by implementers.
+            // <c>FunctionSymbol.IsStatic</c> + <c>StaticOwnerType is
+            // InterfaceSymbol</c> identifies this case.
+            if (function.IsStatic && function.StaticOwnerType is InterfaceSymbol)
+            {
+                methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+            }
         }
 
         // Issue #170 / ADR-0047 §3: emit a Parameter row per source parameter
@@ -6516,4 +6575,92 @@ internal sealed class ReflectionMetadataEmitter
     // PR-E-11: BodyEmitter promoted to top-level MethodBodyEmitter
     // (src/Core/CodeAnalysis/Emit/MethodBodyEmitter.cs and partials).
     // PR-E-2: MethodSpecSymbolKey moved into MetadataTokenCache.
+
+    /// <summary>
+    /// ADR-0089 / issue #755: emit MethodImpl rows binding each declared
+    /// static-virtual interface slot to the implementer's matching static
+    /// method on <paramref name="structSymbol"/>. Best-effort match — if
+    /// the implementer is missing the slot, the binder has already issued
+    /// GS0331/GS0332 and we skip silently here.
+    /// </summary>
+    private void EmitStaticVirtualMethodImpls(StructSymbol structSymbol)
+    {
+        if (structSymbol == null || structSymbol.Interfaces.IsDefaultOrEmpty || structSymbol.StaticMethods.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        if (!this.cache.StructTypeDefs.TryGetValue(structSymbol, out var implTypeDef))
+        {
+            return;
+        }
+
+        foreach (var iface in structSymbol.Interfaces)
+        {
+            if (iface.StaticMethods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var slot in iface.StaticMethods)
+            {
+                if (!this.cache.MethodHandles.TryGetValue(slot, out var slotHandle))
+                {
+                    continue;
+                }
+
+                FunctionSymbol implMatch = null;
+                foreach (var candidate in structSymbol.GetStaticMethods(slot.Name))
+                {
+                    if (StaticVirtualSignatureEquals(slot, candidate))
+                    {
+                        implMatch = candidate;
+                        break;
+                    }
+                }
+
+                if (implMatch == null)
+                {
+                    continue;
+                }
+
+                if (!this.cache.MethodHandles.TryGetValue(implMatch, out var implHandle))
+                {
+                    continue;
+                }
+
+                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, slotHandle);
+            }
+        }
+    }
+
+    private static bool StaticVirtualSignatureEquals(FunctionSymbol a, FunctionSymbol b)
+    {
+        if (a == null || b == null)
+        {
+            return false;
+        }
+
+        if (a.Parameters.Length != b.Parameters.Length)
+        {
+            return false;
+        }
+
+        if (!ReferenceEquals(a.Type, b.Type) && a.Type?.Name != b.Type?.Name)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < a.Parameters.Length; i++)
+        {
+            var pa = a.Parameters[i].Type;
+            var pb = b.Parameters[i].Type;
+            if (!ReferenceEquals(pa, pb) && pa?.Name != pb?.Name)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }

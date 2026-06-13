@@ -498,4 +498,44 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.GetCtorReference(ctCtor));
     }
+
+    /// <summary>
+    /// ADR-0089 / issue #755: emit a constrained static-virtual call —
+    /// <c>constrained. !!T  call !iface::Method(args)</c>. The receiver
+    /// type-parameter is encoded as a TypeSpec (VAR or MVAR); the interface
+    /// method is encoded as a MemberRef whose parent is the (constructed)
+    /// interface TypeRef/TypeSpec. ECMA-335 §III.2.1 specifies that
+    /// `constrained.` may prefix `call` (not just `callvirt`) when the
+    /// target is a static-virtual interface method.
+    /// </summary>
+    /// <param name="call">The bound call to emit.</param>
+    private void EmitConstrainedStaticCall(BoundConstrainedStaticCallExpression call)
+    {
+        // Emit arguments left-to-right.
+        for (int i = 0; i < call.Arguments.Length; i++)
+        {
+            this.EmitExpression(call.Arguments[i]);
+        }
+
+        // Resolve the constraint type-parameter element token (TypeSpec
+        // naming VAR(n) for type-type parameters, MVAR(n) for
+        // method-type parameters). GetElementTypeToken already handles
+        // both shapes via TypeParameterSymbol.IsMethodTypeParameter.
+        var typeParamToken = this.outer.GetElementTypeToken(call.TypeParameter);
+
+        // Resolve the interface static-virtual MethodDef handle. The
+        // BoundConstrainedStaticCallExpression carries the *interface
+        // slot* FunctionSymbol; MethodHandles maps interface slots to
+        // their planned MethodDef rows.
+        if (!this.outer.cache.MethodHandles.TryGetValue(call.InterfaceMethod, out var slotHandle))
+        {
+            throw new InvalidOperationException(
+                $"Static-virtual interface method '{call.InterfaceMethod.Name}' has no emitted handle.");
+        }
+
+        this.il.OpCode(ILOpCode.Constrained);
+        this.il.Token(typeParamToken);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(slotHandle);
+    }
 }

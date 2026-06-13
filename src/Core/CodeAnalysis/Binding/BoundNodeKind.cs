@@ -41,6 +41,7 @@ public enum BoundNodeKind
     ConversionExpression,
     ImportedCallExpression,
     ImportedInstanceCallExpression,
+    ConstrainedStaticCallExpression,
     ArrayCreationExpression,
     MapLiteralExpression,
     MapDeleteExpression,

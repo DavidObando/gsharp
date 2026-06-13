@@ -867,3 +867,61 @@ See ADR-0086 for the worked example, the attribute-knob table
 (`EntryPoint`, `CharSet`, `SetLastError`, `CallingConvention`,
 `ExactSpelling`, `PreserveSig`, `BestFitMapping`,
 `ThrowOnUnmappableChar`), and the deferred-features list.
+
+
+## Static-virtual interface-member diagnostics (GS0330–GS0333)
+
+See ADR-0089 (issue #755). The DIM family lands in ADR-0085;
+ADR-0089 extends interface members with the C# 11-style
+*static-virtual* shape: `static func` declared inside an
+`interface` body. Implementers supply the static via the
+existing `shared { ... }` block; generic methods can dispatch
+through `T.M(...)` and the call site resolves to the
+implementer's static method
+(`constrained. !!T  call <iface>::<method>` at the CLR level —
+ECMA-335 II.15.4.2.4 and III.2.1).
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0330 | Error | `'static let' inside an interface is not supported; the v1 ADR-0089 surface only accepts 'static func'.` |
+| GS0331 | Error | `<Kind> '<C>' does not implement static-virtual interface method '<I>.<Name>', and the interface provides no default body (ADR-0089).` |
+| GS0332 | Error | `<Kind> '<C>' declares instance method '<Name>' but interface '<I>.<Name>' is static-virtual; declare it inside a 'shared { … }' block (ADR-0089).` |
+| GS0333 | Error | `Type parameter '<T>' has no constraint that declares a static-virtual member '<Name>' (ADR-0089).` |
+
+Static-virtual interface members emit the standard CLR shape:
+the interface's MethodDef carries
+`Static | Virtual | Abstract | NewSlot` (no body, RVA = 0) for
+the abstract case, or `Static | Virtual | NewSlot` (with a body)
+for the default case. The implementer declares the method as
+`Static` (no `Virtual` / `NewSlot`) and is paired to the
+interface slot via a `MethodImpl` row (ECMA-335 II.22.27).
+
+Cause/fix:
+
+- **GS0330** — replace the `static let` with a `static func`
+  that returns the value, e.g. rewrite
+  `static let Zero int32 = 0` as
+  `static func Zero() int32 { return 0 }`. Per-implementer
+  constants are a future extension and not yet supported.
+- **GS0331** — add the missing static override inside the
+  implementer's `shared { … }` block:
+  `class Adder : IAdd { shared { func Add(a int32, b int32) int32 { return a + b } } }`,
+  **or** give the interface method a default body so
+  implementers may omit it.
+- **GS0332** — move the method into the implementer's
+  `shared { … }` block. An instance method cannot satisfy a
+  static-virtual slot because the CLR routes the call through
+  the type, not through an instance receiver.
+- **GS0333** — change the receiver to a type parameter whose
+  constraint actually declares the slot. For example,
+  `func Sum[T IAdd](xs sequence[T]) T { … T.Add(a, b) … }`
+  requires `T` to be constrained by `IAdd` — the interface that
+  declares the static-virtual `Add`.
+
+Cross-references:
+
+- ADR-0085 — default-interface methods (the DIM family parent).
+- ADR-0089 — static-virtual interface members (this feature).
+- Issue #755 (this feature), #756 (private interface members,
+  deferred), #757 (explicit-base call from interface bodies,
+  deferred).

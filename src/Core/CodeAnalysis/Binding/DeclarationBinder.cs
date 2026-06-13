@@ -1975,7 +1975,131 @@ internal sealed class DeclarationBinder
             // confirms the G# class provides a same-name, same-CLR-signature
             // method or property. Diagnostic uses the same GS0187 channel.
             VerifyClrInterfaceImplementations(syntax, structSymbol);
+
+            // ADR-0089 / issue #755: verify static-virtual interface members.
+            // For each declared interface, walk its StaticMethods. The
+            // implementer must either (a) declare a matching static method
+            // inside its `shared { ... }` block (ADR-0053) — recorded on
+            // StructSymbol.StaticMethods — or (b) inherit a default body
+            // from the interface itself (the interface method declaration
+            // carries a body). If a same-named *instance* method exists but
+            // no matching static method, GS0332 surfaces; otherwise GS0331.
+            VerifyStaticVirtualInterfaceImplementations(syntax, structSymbol);
         }
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #755: enforces that every static-virtual interface
+    /// member without a default body is matched by a same-signature static
+    /// method on the implementer. A non-static implementer member with the
+    /// same name produces GS0332; otherwise GS0331.
+    /// </summary>
+    private void VerifyStaticVirtualInterfaceImplementations(StructDeclarationSyntax syntax, StructSymbol structSymbol)
+    {
+        foreach (var iface in structSymbol.Interfaces)
+        {
+            if (iface.StaticMethods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var imethod in iface.StaticMethods)
+            {
+                var sigMatch = false;
+                var nameMatch = false;
+                foreach (var candidate in structSymbol.GetStaticMethods(imethod.Name))
+                {
+                    nameMatch = true;
+                    if (StaticVirtualSignaturesMatch(imethod, candidate))
+                    {
+                        sigMatch = true;
+                        break;
+                    }
+                }
+
+                if (sigMatch)
+                {
+                    continue;
+                }
+
+                if (!nameMatch)
+                {
+                    // Detect a non-static instance candidate with the same
+                    // name → GS0332 — instance member cannot satisfy a
+                    // static-virtual slot.
+                    foreach (var instCandidate in structSymbol.GetMethodsIncludingInherited(imethod.Name))
+                    {
+                        if (!instCandidate.IsStatic)
+                        {
+                            Diagnostics.ReportNonStaticMemberForStaticVirtualSlot(
+                                syntax.Identifier.Location,
+                                structSymbol.Name,
+                                iface.Name,
+                                imethod.Name);
+                            nameMatch = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (sigMatch || nameMatch)
+                {
+                    continue;
+                }
+
+                // No same-name candidate at all. If the interface itself
+                // provides a default body, the implementer inherits it.
+                if (InterfaceSymbol.HasDefaultBody(imethod))
+                {
+                    continue;
+                }
+
+                Diagnostics.ReportStaticVirtualInterfaceMethodNotImplemented(
+                    syntax.Identifier.Location,
+                    structSymbol.Name,
+                    iface.Name,
+                    imethod.Name);
+            }
+        }
+    }
+
+    /// <summary>
+    /// ADR-0089: shallow signature comparison for a static-virtual interface
+    /// slot vs. a candidate implementer method. Static methods have no
+    /// implicit <c>this</c>, so all parameters are direct and compared by
+    /// type identity and ref-kind.
+    /// </summary>
+    private static bool StaticVirtualSignaturesMatch(FunctionSymbol iface, FunctionSymbol impl)
+    {
+        if (iface.Parameters.Length != impl.Parameters.Length)
+        {
+            return false;
+        }
+
+        if (!System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(iface.Type, impl.Type))
+        {
+            return false;
+        }
+
+        if (iface.ReturnRefKind != impl.ReturnRefKind)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < iface.Parameters.Length; i++)
+        {
+            if (!System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(iface.Parameters[i].Type, impl.Parameters[i].Type))
+            {
+                return false;
+            }
+
+            if (iface.Parameters[i].RefKind != impl.Parameters[i].RefKind)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -2236,10 +2360,20 @@ internal sealed class DeclarationBinder
     private void BindInterfaceMembersCore(InterfaceDeclarationSyntax syntax, InterfaceSymbol interfaceSymbol, PackageSymbol package)
     {
         var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+        var staticMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
         var seenNames = new HashSet<string>();
         foreach (var methodSyntax in syntax.Methods)
         {
             var methodName = methodSyntax.Identifier.Text;
+
+            // ADR-0089 / issue #755: detect a `static` modifier early — the
+            // method is a static-virtual interface member. Static methods do
+            // not receive a `this` parameter, are not added to the dispatch
+            // table for instance calls, and live on a separate
+            // <c>InterfaceSymbol.StaticMethods</c> bucket. Both abstract and
+            // default-bodied forms are accepted; the binder uses the same
+            // body-vs-no-body discriminator as ADR-0085 to distinguish them.
+            var isStaticInterfaceMethod = methodSyntax.HasStaticModifier;
 
             // ADR-0063: overloads are allowed on interfaces; the post-bind signature
             // check below detects duplicate signatures. Name collision with a
@@ -2287,6 +2421,11 @@ internal sealed class DeclarationBinder
             // (`this` typed as the interface) so call-binder paths that
             // resolve interface dispatch work uniformly — emit then drops
             // the body when the declaration has none.
+            //
+            // ADR-0089: static-virtual interface members are not instance
+            // methods — they have no `this`. Construct a top-level-style
+            // FunctionSymbol with `IsStatic = true` and `StaticOwnerType`
+            // set to the owning InterfaceSymbol.
             var methodSymbol = new FunctionSymbol(
                 methodName,
                 parameters.ToImmutable(),
@@ -2294,18 +2433,25 @@ internal sealed class DeclarationBinder
                 methodSyntax,
                 package,
                 Accessibility.Public,
-                receiverType: (TypeSymbol)interfaceSymbol);
+                receiverType: isStaticInterfaceMethod ? null : (TypeSymbol)interfaceSymbol);
             methodSymbol.ReturnRefKind = methodReturnRefKind;
             methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
+            if (isStaticInterfaceMethod)
+            {
+                methodSymbol.IsStatic = true;
+                methodSymbol.StaticOwnerType = interfaceSymbol;
+            }
+
             Binder.AttachDocumentation(methodSymbol, methodSyntax);
 
-            // ADR-0085: reject `static` / `private` / `open` / `override`
-            // modifiers on interface members — these are tracked as
-            // deferred follow-ups (GS0321). The parser does not currently
-            // accept them on interface method signatures, but the
-            // FunctionDeclarationSyntax can carry them in principle via
-            // the constructor overload; defensively diagnose here so a
-            // future parser relaxation surfaces with a clear message.
+            // ADR-0085: reject `private` / `open` / `override` modifiers on
+            // interface members — these are tracked as deferred follow-ups
+            // (GS0321). The parser does not currently accept them on
+            // interface method signatures, but the FunctionDeclarationSyntax
+            // can carry them in principle via the constructor overload;
+            // defensively diagnose here so a future parser relaxation
+            // surfaces with a clear message. ADR-0089 reverses the rejection
+            // of `static` — it is now accepted.
             if (methodSyntax.OpenModifier != null)
             {
                 Diagnostics.ReportInterfaceMethodModifierDeferred(methodSyntax.OpenModifier.Location, "open", methodName);
@@ -2323,8 +2469,9 @@ internal sealed class DeclarationBinder
             }
 
             // ADR-0063 §11: detect duplicate-signature overloads on the interface.
+            var targetBuilder = isStaticInterfaceMethod ? staticMethodsBuilder : methodsBuilder;
             var hasDupSig = false;
-            foreach (var existingMethod in methodsBuilder)
+            foreach (var existingMethod in targetBuilder)
             {
                 if (BoundScope.FunctionSignaturesEqual(existingMethod, methodSymbol))
                 {
@@ -2340,11 +2487,12 @@ internal sealed class DeclarationBinder
             if (!hasDupSig)
             {
                 seenNames.Add(methodName);
-                methodsBuilder.Add(methodSymbol);
+                targetBuilder.Add(methodSymbol);
             }
         }
 
         interfaceSymbol.SetMethods(methodsBuilder.ToImmutable());
+        interfaceSymbol.SetStaticMethods(staticMethodsBuilder.ToImmutable());
 
         // ADR-0051: bind interface property declarations.
         if (!syntax.Properties.IsDefaultOrEmpty)
@@ -2440,13 +2588,36 @@ internal sealed class DeclarationBinder
         // Phase 4.3c / ADR-0021: variance position checking. Walk each method's
         // parameter types (contravariant position) and return type (covariant
         // position). An `out T` may only appear in covariant position; an
-        // `in T` may only appear in contravariant position.
+        // `in T` may only appear in contravariant position. ADR-0089: walk
+        // both instance and static-virtual method buckets — variance applies
+        // to both because the type parameter still flows through the
+        // signature when the interface is constructed.
         if (!interfaceSymbol.TypeParameters.IsDefaultOrEmpty)
         {
-            for (var i = 0; i < interfaceSymbol.Methods.Length; i++)
+            var instanceIdx = 0;
+            var staticIdx = 0;
+            foreach (var methodSyntax in syntax.Methods)
             {
-                var m = interfaceSymbol.Methods[i];
-                var methodSyntax = syntax.Methods[i];
+                FunctionSymbol m;
+                if (methodSyntax.HasStaticModifier)
+                {
+                    if (staticIdx >= interfaceSymbol.StaticMethods.Length)
+                    {
+                        continue;
+                    }
+
+                    m = interfaceSymbol.StaticMethods[staticIdx++];
+                }
+                else
+                {
+                    if (instanceIdx >= interfaceSymbol.Methods.Length)
+                    {
+                        continue;
+                    }
+
+                    m = interfaceSymbol.Methods[instanceIdx++];
+                }
+
                 CheckVariancePosition(m.Type, isOutput: true, methodSyntax.Type?.Location ?? methodSyntax.Identifier.Location);
                 for (var p = 0; p < m.Parameters.Length; p++)
                 {
@@ -2886,6 +3057,12 @@ internal sealed class DeclarationBinder
 
             var constraint = TypeParameterConstraint.Any;
             InterfaceSymbol interfaceConstraint = null;
+            var variance = TypeParameterVariance.None;
+            if (p.VarianceModifier != null)
+            {
+                variance = p.VarianceModifier.Text == "in" ? TypeParameterVariance.In : TypeParameterVariance.Out;
+            }
+
             if (p.Constraint != null)
             {
                 switch (p.Constraint.Text)
@@ -2901,10 +3078,84 @@ internal sealed class DeclarationBinder
                         // sealed-interface bound. The interface must exist and be sealed
                         // (since open interfaces could be implemented by unknown future
                         // types, defeating the binder's purpose).
+                        //
+                        // ADR-0089: when the constraint interface has any
+                        // static-virtual members, the sealed restriction is
+                        // relaxed — the static-virtual contract itself
+                        // enforces the dispatch shape, so sealedness adds no
+                        // safety. Likewise, when the constraint syntax
+                        // carries a generic argument list (e.g.
+                        // <c>[T IAdd[T]]</c>), we construct the closed
+                        // generic interface here so the bound is
+                        // self-referential as written.
                         var resolved = lookupType(p.Constraint.Text);
                         if (resolved is InterfaceSymbol iface)
                         {
-                            if (!iface.IsSealed)
+                            if (p.HasConstraintTypeArguments && !iface.TypeParameters.IsDefaultOrEmpty)
+                            {
+                                // Self-referential generic constraint. Each
+                                // type argument is bound in the current
+                                // scope; references to the in-flight type
+                                // parameter (name == p.Identifier.Text) are
+                                // resolved via the partially-built builder.
+                                var argsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(p.ConstraintTypeArguments.Count);
+                                foreach (var argSyntax in p.ConstraintTypeArguments)
+                                {
+                                    TypeSymbol argType = null;
+                                    if (argSyntax is TypeClauseSyntax tcs
+                                        && tcs.Identifier != null
+                                        && tcs.OpenBracketToken == null)
+                                    {
+                                        // bare identifier — could be the current type parameter or an in-scope name.
+                                        if (tcs.Identifier.Text == name)
+                                        {
+                                            // Will be patched below — we
+                                            // need the final
+                                            // TypeParameterSymbol that
+                                            // we're about to construct.
+                                            argType = null;
+                                        }
+                                        else
+                                        {
+                                            foreach (var existing in builder)
+                                            {
+                                                if (existing.Name == tcs.Identifier.Text)
+                                                {
+                                                    argType = existing;
+                                                    break;
+                                                }
+                                            }
+
+                                            argType ??= bindTypeClause(tcs);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        argType = bindTypeClause(argSyntax);
+                                    }
+
+                                    argsBuilder.Add(argType);
+                                }
+
+                                // Construct the type parameter first so
+                                // that any self-reference slot above can
+                                // be patched in.
+                                var tpSymbol = new TypeParameterSymbol(name, i, constraint, variance, iface);
+                                for (var ai = 0; ai < argsBuilder.Count; ai++)
+                                {
+                                    if (argsBuilder[ai] == null)
+                                    {
+                                        argsBuilder[ai] = tpSymbol;
+                                    }
+                                }
+
+                                interfaceConstraint = InterfaceSymbol.Construct(iface, argsBuilder.MoveToImmutable());
+                                tpSymbol.InterfaceConstraint = interfaceConstraint;
+                                builder.Add(tpSymbol);
+                                continue;
+                            }
+
+                            if (!iface.IsSealed && !iface.HasStaticVirtualMembers)
                             {
                                 Diagnostics.ReportInterfaceConstraintNotSealed(p.Constraint.Location, iface.Name);
                             }
@@ -2918,12 +3169,6 @@ internal sealed class DeclarationBinder
 
                         break;
                 }
-            }
-
-            var variance = TypeParameterVariance.None;
-            if (p.VarianceModifier != null)
-            {
-                variance = p.VarianceModifier.Text == "in" ? TypeParameterVariance.In : TypeParameterVariance.Out;
             }
 
             builder.Add(new TypeParameterSymbol(name, i, constraint, variance, interfaceConstraint));

@@ -902,7 +902,8 @@ public class Parser
             {
                 events.Add(ParseEventDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
             }
-            else if (Current.Kind == SyntaxKind.FuncKeyword)
+            else if (Current.Kind == SyntaxKind.FuncKeyword
+                    || (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "static" && Peek(1).Kind == SyntaxKind.FuncKeyword))
             {
                 methods.Add(ParseInterfaceMethodSignature());
             }
@@ -2037,7 +2038,8 @@ public class Parser
             {
                 events.Add(ParseEventDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
             }
-            else if (Current.Kind == SyntaxKind.FuncKeyword)
+            else if (Current.Kind == SyntaxKind.FuncKeyword
+                    || (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "static" && Peek(1).Kind == SyntaxKind.FuncKeyword))
             {
                 methods.Add(ParseInterfaceMethodSignature());
             }
@@ -2071,6 +2073,17 @@ public class Parser
 
     private FunctionDeclarationSyntax ParseInterfaceMethodSignature()
     {
+        // ADR-0089 / issue #755: `static` contextual keyword preceding `func`
+        // marks the method as a static-virtual interface member. The binder
+        // wires the resulting FunctionSymbol into InterfaceSymbol.StaticMethods
+        // and emits CLR `MethodAttributes.Static | Virtual | Abstract` (or
+        // `Static | Virtual` with a body for the default form).
+        SyntaxToken staticModifier = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "static" && Peek(1).Kind == SyntaxKind.FuncKeyword)
+        {
+            staticModifier = NextToken();
+        }
+
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
@@ -2082,14 +2095,16 @@ public class Parser
         // method). When the body is absent, the method is abstract — the
         // current shape from ADR-0018 Phase 3. When present, the body is
         // bound through the normal class-method body pipeline and the
-        // emitter produces a CLR DIM (virtual, non-abstract).
+        // emitter produces a CLR DIM (virtual, non-abstract). ADR-0089
+        // extends the same body-vs-no-body discriminator to static-virtual
+        // members.
         BlockStatementSyntax body = null;
         if (Current.Kind == SyntaxKind.OpenBraceToken)
         {
             body = ParseBlockStatement();
         }
 
-        return new FunctionDeclarationSyntax(
+        var decl = new FunctionDeclarationSyntax(
             syntaxTree,
             accessibilityModifier: null,
             openModifier: null,
@@ -2101,6 +2116,8 @@ public class Parser
             closeParenthesisToken,
             type,
             body);
+        decl.StaticModifier = staticModifier;
+        return decl;
     }
 
     private PropertyDeclarationSyntax ParsePropertyDeclaration(
@@ -2535,6 +2552,43 @@ public class Parser
         if (Current.Kind == SyntaxKind.IdentifierToken)
         {
             constraint = NextToken();
+
+            // ADR-0089 / issue #755: a constraint identifier may be followed by
+            // a generic type-argument list (the curiously-recurring pattern
+            // `[T IAdd[T]]` is the canonical generic-math shape required for
+            // static-virtual interface members). Parse `[ TypeClause (, TypeClause)* ]`
+            // when present; the binder constructs the closed interface from the
+            // resulting argument list.
+            if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+            {
+                var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+                var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+                var parseNext = true;
+                while (parseNext &&
+                       Current.Kind != SyntaxKind.CloseSquareBracketToken &&
+                       Current.Kind != SyntaxKind.EndOfFileToken)
+                {
+                    nodesAndSeparators.Add(ParseTypeClause());
+                    if (Current.Kind == SyntaxKind.CommaToken)
+                    {
+                        nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                    }
+                    else
+                    {
+                        parseNext = false;
+                    }
+                }
+
+                var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+                return new TypeParameterSyntax(
+                    syntaxTree,
+                    variance,
+                    identifier,
+                    constraint,
+                    openBracket,
+                    new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
+                    closeBracket);
+            }
         }
 
         return new TypeParameterSyntax(syntaxTree, variance, identifier, constraint);

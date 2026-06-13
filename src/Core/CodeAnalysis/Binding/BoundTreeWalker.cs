@@ -181,6 +181,9 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.ImportedInstanceCallExpression:
                 VisitImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node);
                 break;
+            case BoundNodeKind.ConstrainedStaticCallExpression:
+                VisitConstrainedStaticCallExpression((BoundConstrainedStaticCallExpression)node);
+                break;
             case BoundNodeKind.ArrayCreationExpression:
                 VisitArrayCreationExpression((BoundArrayCreationExpression)node);
                 break;
@@ -535,6 +538,13 @@ public abstract class BoundTreeWalker
     protected virtual void VisitImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
     {
         VisitExpression(node.Receiver);
+        VisitList(node.Arguments);
+    }
+
+    /// <summary>ADR-0089 / issue #755: visit a constrained static-virtual call.</summary>
+    /// <param name="node">The bound node.</param>
+    protected virtual void VisitConstrainedStaticCallExpression(BoundConstrainedStaticCallExpression node)
+    {
         VisitList(node.Arguments);
     }
 
