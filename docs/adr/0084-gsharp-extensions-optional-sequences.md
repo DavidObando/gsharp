@@ -320,8 +320,9 @@ of that migration, not left behind as dead code.
   inside a generic shared method)~~ (closed by issue #794), ~~no
   `default(T)` expression~~ (closed by issue #795 / ADR-0100), no
   `params` parameter declaration, ~~no `==` between `(T) -> T` /
-  `sequence[T]` values and `nil`~~ (closed by issue #796), no
-  `[MethodImpl(...)]` annotation parsing inside `shared { }` blocks,
+  `sequence[T]` values and `nil`~~ (closed by issue #796), ~~no
+  `[MethodImpl(...)]` annotation parsing inside `shared { }` blocks~~
+  (closed by issue #797),
   no `yield` inside a shared-static method that returns
   `IEnumerable[T]`. Each is filed as a focused follow-up. The C#
   escape hatch under `src/Sdk/Gsharp.Extensions/Optional/` and
@@ -361,6 +362,22 @@ of that migration, not left behind as dead code.
   shape (verifier-clean for any managed reference). No new
   `BoundNodeKind` was introduced; the change is a single predicate
   extension.
+
+  Issue #797 closed the fifth follow-up bullet: the shared-block
+  member loop in `Parser.ParseSharedBlock` did not call
+  `ParseAnnotations()`, so a leading `@MethodImpl(...)` on a
+  shared-static method was reinterpreted as the start of a field
+  declaration and rejected. The fix mirrors the instance-member
+  surface in `ParseAggregateDeclaration`: each iteration now parses
+  any leading `@Foo` lead-ins (ADR-0047 §3) and forwards the
+  collected list via `.WithAnnotations(memberAnnotations)` onto the
+  resulting field / method / property / event syntax node. The
+  binder side already consumed `syntax.Annotations` on every shared
+  member (see `DeclarationBinder` shared-block paths), so the bound
+  symbols now carry the annotation and the emitter writes the
+  expected `CustomAttribute` rows on the MethodDef / FieldDef /
+  PropertyDef. Unlocks the `Sequences.Range` / `Optional.Map` port
+  hot-path marking with `[MethodImpl(AggressiveInlining)]`.
 
 ## Consequences
 
