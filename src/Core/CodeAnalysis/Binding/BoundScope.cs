@@ -262,6 +262,23 @@ public sealed class BoundScope
     /// <summary>
     /// Tries to look up an extension function by receiver type and name (walks parent scopes).
     /// </summary>
+    /// <remarks>
+    /// Two lookup paths are tried, in order:
+    /// <list type="number">
+    /// <item><description><b>Exact-match fast path</b> — reference-equality on the
+    /// declared receiver type. This is sufficient for non-generic receivers
+    /// (<c>(self string)</c>, <c>(self int32)</c>) and for already-closed
+    /// receiver spellings.</description></item>
+    /// <item><description><b>Generic-receiver unification (issue #773)</b> —
+    /// an extension whose receiver type references its own function-level
+    /// type parameters (e.g. <c>func (self sequence[T]) FirstOrNil[T]() T?</c>
+    /// or <c>func (self IEnumerable[T]) MyFirst[T any](fb T) T</c>) must
+    /// dispatch when the call-site receiver type unifies with the open
+    /// declared receiver. Inference is delegated to
+    /// <see cref="Binder.InferTypeArguments"/>; the candidate qualifies when
+    /// every type parameter mentioned in the receiver gets bound.</description></item>
+    /// </list>
+    /// </remarks>
     /// <param name="receiverType">The static type of the call receiver.</param>
     /// <param name="name">The method name at the call site.</param>
     /// <param name="function">The matching extension function, when found.</param>
@@ -274,6 +291,43 @@ public sealed class BoundScope
             foreach (var ext in extensionFunctions)
             {
                 if (ext.Name == name && ext.ExtensionReceiverType == receiverType)
+                {
+                    function = ext;
+                    return true;
+                }
+            }
+
+            // Issue #773 / ADR-0084 §L2 follow-up: an extension whose
+            // receiver type carries one of the function's own type
+            // parameters (e.g. `(self sequence[T])`, `(self IEnumerable[T])`,
+            // `(self T?)`, `(self Dictionary[K, V])`) is never reference-
+            // equal to a concrete call-site receiver. Fall back to receiver
+            // inference: try to unify the declared open receiver with the
+            // call-site type and accept the candidate when every type
+            // parameter that appears in the receiver gets bound.
+            foreach (var ext in extensionFunctions)
+            {
+                if (ext.Name != name)
+                {
+                    continue;
+                }
+
+                if (ext.TypeParameters.IsDefaultOrEmpty)
+                {
+                    continue;
+                }
+
+                if (ext.ExtensionReceiverType == null || ext.ExtensionReceiverType == TypeSymbol.Error)
+                {
+                    continue;
+                }
+
+                if (!ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
+                {
+                    continue;
+                }
+
+                if (ReceiverUnifies(ext, receiverType))
                 {
                     function = ext;
                     return true;
@@ -587,5 +641,121 @@ public sealed class BoundScope
         }
 
         return symbols.Values.OfType<TSymbol>().ToImmutableArray();
+    }
+
+    /// <summary>
+    /// True when at least one of the extension's own type parameters
+    /// (the ones declared on the extension function itself) occurs
+    /// somewhere inside <paramref name="receiverType"/>.
+    /// </summary>
+    private static bool ReceiverMentionsAnyTypeParameter(TypeSymbol receiverType, ImmutableArray<TypeParameterSymbol> functionTypeParameters)
+    {
+        if (functionTypeParameters.IsDefaultOrEmpty || receiverType == null)
+        {
+            return false;
+        }
+
+        var collected = new HashSet<TypeParameterSymbol>();
+        CollectTypeParameters(receiverType, collected, depth: 0);
+        if (collected.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var tp in functionTypeParameters)
+        {
+            if (collected.Contains(tp))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void CollectTypeParameters(TypeSymbol type, HashSet<TypeParameterSymbol> sink, int depth)
+    {
+        if (type == null || depth > 32)
+        {
+            return;
+        }
+
+        switch (type)
+        {
+            case TypeParameterSymbol tp:
+                sink.Add(tp);
+                return;
+            case NullableTypeSymbol n:
+                CollectTypeParameters(n.UnderlyingType, sink, depth + 1);
+                return;
+            case SliceTypeSymbol s:
+                CollectTypeParameters(s.ElementType, sink, depth + 1);
+                return;
+            case ArrayTypeSymbol a:
+                CollectTypeParameters(a.ElementType, sink, depth + 1);
+                return;
+            case SequenceTypeSymbol seq:
+                CollectTypeParameters(seq.ElementType, sink, depth + 1);
+                return;
+            case AsyncSequenceTypeSymbol aseq:
+                CollectTypeParameters(aseq.ElementType, sink, depth + 1);
+                return;
+            case FunctionTypeSymbol f:
+                if (!f.ParameterTypes.IsDefaultOrEmpty)
+                {
+                    foreach (var p in f.ParameterTypes)
+                    {
+                        CollectTypeParameters(p, sink, depth + 1);
+                    }
+                }
+
+                CollectTypeParameters(f.ReturnType, sink, depth + 1);
+                return;
+            case ImportedTypeSymbol it:
+                if (!it.TypeArguments.IsDefaultOrEmpty)
+                {
+                    foreach (var arg in it.TypeArguments)
+                    {
+                        CollectTypeParameters(arg, sink, depth + 1);
+                    }
+                }
+
+                return;
+            case StructSymbol ss:
+                if (!ss.TypeArguments.IsDefaultOrEmpty)
+                {
+                    foreach (var arg in ss.TypeArguments)
+                    {
+                        CollectTypeParameters(arg, sink, depth + 1);
+                    }
+                }
+
+                return;
+            default:
+                return;
+        }
+    }
+
+    private static bool ReceiverUnifies(FunctionSymbol extension, TypeSymbol receiverType)
+    {
+        var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        Binder.InferTypeArguments(extension.ExtensionReceiverType, receiverType, substitution);
+
+        // Every type parameter actually mentioned in the receiver type must
+        // have been bound by inference. Parameters that appear only in the
+        // body or in the non-receiver parameters of the extension may still
+        // be inferred at the call site (`BindExtensionFunctionCall` does its
+        // own argument-driven inference), so we do not require those here.
+        var mentioned = new HashSet<TypeParameterSymbol>();
+        CollectTypeParameters(extension.ExtensionReceiverType, mentioned, depth: 0);
+        foreach (var tp in mentioned)
+        {
+            if (!substitution.ContainsKey(tp))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

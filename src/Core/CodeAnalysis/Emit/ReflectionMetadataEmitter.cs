@@ -6437,6 +6437,32 @@ internal sealed class ReflectionMetadataEmitter
         {
             EncodeTypeSymbol(encoder.SZArray(), slice.ElementType);
         }
+        else if (type is SequenceTypeSymbol openSeq && openSeq.ClrType == null)
+        {
+            // Issue #773: an open `sequence[T]` (where T is an in-scope
+            // type parameter) has no closed CLR type yet. Encode it as
+            // `GENERICINST<IEnumerable`1><T>` so the resulting method
+            // signature carries an honest `IEnumerable<MVar/Var>` slot
+            // — same pattern as ADR-0087 §3 R2 for `ImportedTypeSymbol`
+            // with `HasTypeParameterArgument`.
+            var enumerableOpen = typeof(System.Collections.Generic.IEnumerable<>);
+            var giSeq = encoder.GenericInstantiation(
+                this.GetTypeReference(enumerableOpen),
+                1,
+                isValueType: false);
+            this.EncodeTypeSymbol(giSeq.AddArgument(), openSeq.ElementType);
+        }
+        else if (type is AsyncSequenceTypeSymbol openAseq && openAseq.ClrType == null)
+        {
+            // Mirror of the synchronous-sequence open-T encoding for
+            // `async sequence[T]` (== IAsyncEnumerable<T>).
+            var asyncEnumerableOpen = typeof(System.Collections.Generic.IAsyncEnumerable<>);
+            var giAseq = encoder.GenericInstantiation(
+                this.GetTypeReference(asyncEnumerableOpen),
+                1,
+                isValueType: false);
+            this.EncodeTypeSymbol(giAseq.AddArgument(), openAseq.ElementType);
+        }
         else if (type is StructSymbol structSym)
         {
             // ADR-0087 §3 R2: a user-declared generic struct encodes as
