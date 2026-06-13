@@ -289,7 +289,32 @@ public sealed class BoundBinaryOperator
 
     private static bool IsNullCompare(TypeSymbol nullableOrUnderlying, TypeSymbol nullCandidate)
     {
-        return nullCandidate == TypeSymbol.Null && (nullableOrUnderlying is NullableTypeSymbol || nullableOrUnderlying == TypeSymbol.Null);
+        if (nullCandidate != TypeSymbol.Null)
+        {
+            return false;
+        }
+
+        if (nullableOrUnderlying == TypeSymbol.Null || nullableOrUnderlying is NullableTypeSymbol)
+        {
+            return true;
+        }
+
+        // Issue #796: extend `== nil` / `!= nil` to reference-shaped types
+        // whose CLR representation is a managed reference. The binder
+        // already accepts `T? == nil` for any nullable wrapper; the
+        // language has no `T?` spelling for these structural shapes,
+        // so allow the comparison directly. Emit falls through to the
+        // generic `ldnull; ceq` path (verifier-clean for any reference).
+        //
+        // Covered shapes (all reference-typed at the CLR level):
+        //   * `(T) -> R` / `func(T) U` — FunctionTypeSymbol, lowered to a
+        //     System.MulticastDelegate-derived closure.
+        //   * Named delegate types declared with `delegate` — DelegateTypeSymbol.
+        //   * `sequence[T]` / `asyncSequence[T]` — IEnumerable<T> / IAsyncEnumerable<T>.
+        return nullableOrUnderlying is FunctionTypeSymbol
+            || nullableOrUnderlying is DelegateTypeSymbol
+            || nullableOrUnderlying is SequenceTypeSymbol
+            || nullableOrUnderlying is AsyncSequenceTypeSymbol;
     }
 
     private static BoundBinaryOperator[] BuildSupportedOperators()

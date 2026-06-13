@@ -317,9 +317,10 @@ of that migration, not left behind as dead code.
   hits several smaller, previously undocumented G# language gaps —
   ~~generic-method type-parameter threading through generic
   instance-method calls (`List[T]().ToArray()` returns `object[]`
-  inside a generic shared method)~~ (closed by issue #794), no
-  `default(T)` expression, no `params` parameter declaration, no
-  `==` between `(T) -> T` / `sequence[T]` values and `nil`, no
+  inside a generic shared method)~~ (closed by issue #794), ~~no
+  `default(T)` expression~~ (closed by issue #795 / ADR-0100), no
+  `params` parameter declaration, ~~no `==` between `(T) -> T` /
+  `sequence[T]` values and `nil`~~ (closed by issue #796), no
   `[MethodImpl(...)]` annotation parsing inside `shared { }` blocks,
   no `yield` inside a shared-static method that returns
   `IEnumerable[T]`. Each is filed as a focused follow-up. The C#
@@ -344,6 +345,22 @@ of that migration, not left behind as dead code.
   only — no `BoundNodeKind` was added, and emit/IL-verify run
   green end-to-end through the existing #765 / R5 reified-generics
   path.
+
+  Issue #796 closed the fourth follow-up bullet: the binder's
+  `IsNullCompare` arm (in `BoundBinaryOperator.cs`) previously
+  accepted `== nil` / `!= nil` only when the non-null side was a
+  `NullableTypeSymbol` (`T?` wrapper). Function-typed
+  (`(T) -> R` / legacy `func(T) U` / `DelegateTypeSymbol`) and
+  sequence-typed (`sequence[T]` / `asyncSequence[T]`) values are
+  managed references at the CLR layer but have no `T?` spelling in
+  the language, so the guard rejected the only legal way to spell
+  "is this delegate / iterable nil?". The arm now accepts
+  `FunctionTypeSymbol`, `DelegateTypeSymbol`,
+  `SequenceTypeSymbol`, and `AsyncSequenceTypeSymbol` on the
+  non-null side; emit falls through to the generic `ldnull; ceq`
+  shape (verifier-clean for any managed reference). No new
+  `BoundNodeKind` was introduced; the change is a single predicate
+  extension.
 
 ## Consequences
 
