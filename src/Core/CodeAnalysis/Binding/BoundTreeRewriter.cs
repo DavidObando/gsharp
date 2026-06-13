@@ -368,6 +368,8 @@ public abstract class BoundTreeRewriter
                 return RewriteConstructorCallExpression((BoundConstructorCallExpression)node);
             case BoundNodeKind.UserInstanceCallExpression:
                 return RewriteUserInstanceCallExpression((BoundUserInstanceCallExpression)node);
+            case BoundNodeKind.BaseInterfaceCallExpression:
+                return RewriteBaseInterfaceCallExpression((BoundBaseInterfaceCallExpression)node);
             case BoundNodeKind.FieldAccessExpression:
                 return RewriteFieldAccessExpression((BoundFieldAccessExpression)node);
             case BoundNodeKind.FieldAssignmentExpression:
@@ -1669,6 +1671,45 @@ public abstract class BoundTreeRewriter
         // because the inner async member's task never visibly completed from
         // the caller's perspective.
         return new BoundUserInstanceCallExpression(null, receiver, node.Method, builder?.ToImmutable() ?? node.Arguments, node.Type);
+    }
+
+    /// <summary>Rewrites an explicit-base interface call (ADR-0091).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteBaseInterfaceCallExpression(BoundBaseInterfaceCallExpression node)
+    {
+        var receiver = RewriteExpression(node.Receiver);
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArg = node.Arguments[i];
+            var newArg = RewriteExpression(oldArg);
+            if (newArg != oldArg && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Arguments[j]);
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newArg);
+            }
+        }
+
+        if (receiver == node.Receiver && builder == null)
+        {
+            return node;
+        }
+
+        return new BoundBaseInterfaceCallExpression(
+            null,
+            receiver,
+            node.Interface,
+            node.Method,
+            builder?.ToImmutable() ?? node.Arguments);
     }
 
     /// <summary>Rewrites a field read.</summary>

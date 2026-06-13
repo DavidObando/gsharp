@@ -248,6 +248,13 @@ internal sealed partial class ExpressionBinder
                 return BindIsExpression((IsExpressionSyntax)syntax);
             case SyntaxKind.AsExpression:
                 return BindAsExpression((AsExpressionSyntax)syntax);
+            case SyntaxKind.BaseInterfaceCallExpression:
+                // ADR-0091 / issue #757: explicit-base interface call
+                // `base[IFoo].M(args)`. Binds inside any instance member of
+                // a class/struct that implements `IFoo`; the resulting
+                // BoundBaseInterfaceCallExpression emits a non-virtual call
+                // into the interface's default body.
+                return BindBaseInterfaceCallExpression((BaseInterfaceCallExpressionSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }

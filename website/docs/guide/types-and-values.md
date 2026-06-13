@@ -127,6 +127,29 @@ Console.WriteLine(c.Triple(5))    // 15
 
 A `private` interface method MUST carry a body (`GS0335` otherwise — abstract private helpers do not make sense because no implementer can supply them). External code calling the helper through an interface receiver triggers `GS0334`. An implementer attempting to declare a same-signature method clashing with the helper triggers `GS0336`. Both modifier orderings parse: `private static func` and `static private func`. See the [diagnostics reference](../ref/diagnostics.md#private-interface-helper-diagnostics-gs0334gs0337) for the full GS0334–GS0337 family.
 
+### Explicit-base interface calls (ADR-0091)
+
+When two unrelated interfaces both supply a default body for the same signature, the implementing class must declare its own override and choose. ADR-0091 (issue #757) lets the override delegate to one — or both — of the inherited defaults via the **explicit-base interface call** syntax `base[IFoo].Method(args)`. The emit shape is a non-virtual `call instance R IFoo::Method(...)` so the inherited body is invoked directly rather than re-dispatched through the v-table (which would re-enter the override and recurse).
+
+```gsharp
+interface ILeft {
+    func Tag() string { return "L" }
+}
+
+interface IRight {
+    func Tag() string { return "R" }
+}
+
+class Combined : ILeft, IRight {
+    func Tag() string {
+        // Diamond disambiguation: combine both inherited defaults.
+        return base[ILeft].Tag() + base[IRight].Tag()
+    }
+}
+```
+
+`base[IFoo]` may be used inside any instance member of a class that implements `IFoo` — including private members and non-conflicting overrides ("default + extra logic"). Private interface helpers (ADR-0090) remain unreachable across the implementer / interface boundary by design (`GS0341`). The full GS0338–GS0341 diagnostic family is documented in the [diagnostics reference](../ref/diagnostics.md#explicit-base-interface-call-diagnostics-gs0338gs0341).
+
 ## Enums
 
 Enums are closed sets of named values. They cannot be generic and must contain at least one member. Equality and switch exhaustiveness diagnostics understand enum members.

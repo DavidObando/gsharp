@@ -181,6 +181,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.UserInstanceCallExpression:
                 WriteUserInstanceCallExpression((BoundUserInstanceCallExpression)node, writer);
                 break;
+            case BoundNodeKind.BaseInterfaceCallExpression:
+                WriteBaseInterfaceCallExpression((BoundBaseInterfaceCallExpression)node, writer);
+                break;
             case BoundNodeKind.FieldAccessExpression:
                 WriteFieldAccessExpression((BoundFieldAccessExpression)node, writer);
                 break;
@@ -1359,6 +1362,29 @@ public static class BoundNodePrinter
     private static void WriteUserInstanceCallExpression(BoundUserInstanceCallExpression node, IndentedTextWriter writer)
     {
         node.Receiver.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier(node.Method.Name);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Arguments[i].WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteBaseInterfaceCallExpression(BoundBaseInterfaceCallExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword("base");
+        writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
+        writer.WriteIdentifier(node.Interface.Name);
+        writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
         writer.WritePunctuation(SyntaxKind.DotToken);
         writer.WriteIdentifier(node.Method.Name);
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);

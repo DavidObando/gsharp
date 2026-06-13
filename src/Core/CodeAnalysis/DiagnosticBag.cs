@@ -3171,6 +3171,90 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Error);
     }
 
+    /// <summary>
+    /// ADR-0091 / issue #757: GS0338 — a <c>base[IFoo].M(...)</c> call
+    /// expression refers to an interface that is not in the enclosing
+    /// type's implemented-interface set, or the call appears outside any
+    /// instance member of a user-declared class/struct.
+    /// </summary>
+    /// <param name="location">The source location of the offending expression.</param>
+    /// <param name="enclosingTypeName">The display name of the enclosing class/struct, or a placeholder for non-member contexts.</param>
+    /// <param name="interfaceName">The interface name as it appears in <c>base[…]</c>.</param>
+    public void ReportBaseInterfaceCallTypeDoesNotImplementInterface(
+        TextLocation location,
+        string enclosingTypeName,
+        string interfaceName)
+    {
+        Report(
+            location,
+            "GS0338",
+            $"'base[{interfaceName}]' is not valid here: enclosing type '{enclosingTypeName}' does not implement interface '{interfaceName}' (ADR-0091). Use 'base[IFoo]' only inside an instance member of a type that lists 'IFoo' in its base-type list.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0091 / issue #757: GS0339 — a <c>base[IFoo].M(...)</c> call
+    /// expression names a member <c>M</c> that does not exist on
+    /// <c>IFoo</c>.
+    /// </summary>
+    /// <param name="location">The source location of the method identifier.</param>
+    /// <param name="interfaceName">The interface that lacks the member.</param>
+    /// <param name="methodName">The missing member name.</param>
+    public void ReportBaseInterfaceCallMemberNotFound(
+        TextLocation location,
+        string interfaceName,
+        string methodName)
+    {
+        Report(
+            location,
+            "GS0339",
+            $"Interface '{interfaceName}' does not declare a member named '{methodName}' (ADR-0091).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0091 / issue #757: GS0340 — a <c>base[IFoo].M(...)</c> call
+    /// expression refers to an interface member that <em>is</em> declared
+    /// on <c>IFoo</c> but is abstract (no default body); there is nothing
+    /// to delegate to.
+    /// </summary>
+    /// <param name="location">The source location of the method identifier.</param>
+    /// <param name="interfaceName">The interface name.</param>
+    /// <param name="methodName">The abstract member name.</param>
+    public void ReportBaseInterfaceCallMemberIsAbstract(
+        TextLocation location,
+        string interfaceName,
+        string methodName)
+    {
+        Report(
+            location,
+            "GS0340",
+            $"Interface member '{interfaceName}.{methodName}' is abstract and has no default body to delegate to via 'base[{interfaceName}]' (ADR-0091). Implement the method directly or delegate to a different interface that supplies a default.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0091 / issue #757: GS0341 — a <c>base[IFoo].M(...)</c> call
+    /// expression targets a <c>private</c> helper on <c>IFoo</c>. Private
+    /// interface helpers (ADR-0090) are intentionally invisible to
+    /// implementers; the explicit-base call form does not bypass that
+    /// restriction.
+    /// </summary>
+    /// <param name="location">The source location of the method identifier.</param>
+    /// <param name="interfaceName">The owning interface name.</param>
+    /// <param name="methodName">The private helper name.</param>
+    public void ReportBaseInterfaceCallTargetsPrivateHelper(
+        TextLocation location,
+        string interfaceName,
+        string methodName)
+    {
+        Report(
+            location,
+            "GS0341",
+            $"'base[{interfaceName}].{methodName}' cannot target the private interface helper '{interfaceName}.{methodName}'; private helpers are invisible to implementers (ADR-0090 / ADR-0091).",
+            DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

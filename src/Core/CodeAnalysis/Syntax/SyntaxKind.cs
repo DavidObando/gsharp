@@ -333,6 +333,14 @@ public enum SyntaxKind
     // a `BoundFunctionLiteralExpression` so closure capture, emit, interpreter,
     // and lowering all work without a new bound-node kind.
     LambdaExpression,
+
+    // ADR-0091 / issue #757: explicit-base interface call expression
+    // `base[IFoo].Method(args)`. Disambiguates between inherited default
+    // bodies in a DIM diamond and lets non-conflicting overrides delegate
+    // to (and augment) the inherited default. Bound to
+    // BoundBaseInterfaceCallExpression; emitted as a non-virtual `call`
+    // into the interface's MethodDef.
+    BaseInterfaceCallExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

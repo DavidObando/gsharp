@@ -2041,4 +2041,218 @@ internal sealed partial class ExpressionBinder
 
         return false;
     }
+
+    /// <summary>
+    /// ADR-0091 / issue #757: bind an explicit-base interface call
+    /// <c>base[IFoo].M(args)</c>. Validates that:
+    /// <list type="number">
+    ///   <item>the enclosing function is an instance member of a class or struct,</item>
+    ///   <item>the interface resolves and is in the enclosing type's interface set (GS0338),</item>
+    ///   <item>the named member exists on the interface (GS0339),</item>
+    ///   <item>the member has a default body (GS0340), and</item>
+    ///   <item>the member is not a <c>private</c> helper (GS0341 — preserves ADR-0090).</item>
+    /// </list>
+    /// On success, returns a <see cref="BoundBaseInterfaceCallExpression"/>
+    /// whose receiver is the enclosing method's <c>this</c> parameter.
+    /// </summary>
+    private BoundExpression BindBaseInterfaceCallExpression(BaseInterfaceCallExpressionSyntax syntax)
+    {
+        // Bind the user arguments unconditionally — even on the failure paths
+        // below we want any nested binder diagnostics (unknown name in arg
+        // position, etc.) to surface in the same pass.
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+        for (var i = 0; i < syntax.Arguments.Count; i++)
+        {
+            boundArguments.Add(BindExpression(syntax.Arguments[i]));
+        }
+
+        // Resolve the interface selector inside the brackets. Type-clause
+        // binding already reports the relevant "type not found" diagnostic
+        // (GS0046) when resolution fails; no need to duplicate it.
+        var ifaceType = bindTypeClause(syntax.InterfaceTypeClause);
+        if (ifaceType is null || ifaceType == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        // The selector must denote an interface.
+        if (ifaceType is not InterfaceSymbol ifaceSym)
+        {
+            Diagnostics.ReportBaseInterfaceCallTypeDoesNotImplementInterface(
+                syntax.InterfaceTypeClause.Location,
+                EnclosingTypeDisplayName(),
+                ifaceType.Name);
+            return new BoundErrorExpression(null);
+        }
+
+        // The call site must live in an instance member of a class/struct
+        // that implements `ifaceSym`. A top-level function, a `shared` static,
+        // or a generic-typeparameter-receiver call all fail this test.
+        var enclosingType = function?.ReceiverType as StructSymbol;
+        if (enclosingType == null || function?.ThisParameter == null)
+        {
+            Diagnostics.ReportBaseInterfaceCallTypeDoesNotImplementInterface(
+                syntax.BaseKeyword.Location,
+                "<top-level>",
+                ifaceSym.Name);
+            return new BoundErrorExpression(null);
+        }
+
+        if (!EnclosingTypeImplements(enclosingType, ifaceSym))
+        {
+            Diagnostics.ReportBaseInterfaceCallTypeDoesNotImplementInterface(
+                syntax.InterfaceTypeClause.Location,
+                enclosingType.Name,
+                ifaceSym.Name);
+            return new BoundErrorExpression(null);
+        }
+
+        // Generic-method type arguments on the selector are reserved for a
+        // future ADR-0091 follow-up — reject for now with the "member is
+        // abstract"-shaped diagnostic name so users get a clear pointer.
+        if (syntax.MethodTypeArgumentList != null)
+        {
+            Diagnostics.ReportBaseInterfaceCallMemberNotFound(
+                syntax.MethodIdentifier.Location,
+                ifaceSym.Name,
+                syntax.MethodIdentifier.Text + "[…]");
+            return new BoundErrorExpression(null);
+        }
+
+        var methodName = syntax.MethodIdentifier.Text;
+
+        // Private helpers (ADR-0090) are intentionally invisible to
+        // implementers; calling one through base[IFoo] would defeat that
+        // encapsulation. Check first so the diagnostic distinguishes the
+        // private case from a generic "no such member".
+        var privateMatches = ifaceSym.GetPrivateMethods(methodName);
+        if (privateMatches.Length > 0)
+        {
+            Diagnostics.ReportBaseInterfaceCallTargetsPrivateHelper(
+                syntax.MethodIdentifier.Location,
+                ifaceSym.Name,
+                methodName);
+            return new BoundErrorExpression(null);
+        }
+
+        // Look up the named method on the interface's public contract. Pick
+        // the overload whose callable arity matches the call site; if no
+        // overload matches at all, fall back to "member not found" — when
+        // overload-by-arity finds a match but its body is abstract, fall to
+        // GS0340 below. For a constructed generic interface, the method we
+        // find is the substituted one; we map it back to its open definition
+        // (preserved on InterfaceSymbol.Definition.Methods at the same
+        // index) so the emitter and interpreter can resolve through the
+        // single MethodHandles / program.Functions slot.
+        FunctionSymbol arityMatch = null;
+        FunctionSymbol anyMatch = null;
+        int matchIndex = -1;
+        var overloads = ifaceSym.Methods;
+        for (var i = 0; i < overloads.Length; i++)
+        {
+            var candidate = overloads[i];
+            if (candidate.Name != methodName)
+            {
+                continue;
+            }
+
+            anyMatch = candidate;
+            var calleeOffset = candidate.ExplicitReceiverParameter == null ? 0 : 1;
+            var callableParameterCount = candidate.Parameters.Length - calleeOffset;
+            if (callableParameterCount == boundArguments.Count)
+            {
+                arityMatch = candidate;
+                matchIndex = i;
+                break;
+            }
+        }
+
+        if (anyMatch == null)
+        {
+            Diagnostics.ReportBaseInterfaceCallMemberNotFound(
+                syntax.MethodIdentifier.Location,
+                ifaceSym.Name,
+                methodName);
+            return new BoundErrorExpression(null);
+        }
+
+        if (arityMatch == null)
+        {
+            // Member exists but no overload accepts this many arguments;
+            // report a wrong-arg-count diagnostic against the first overload
+            // for ergonomic recovery (the user will fix the arg count and
+            // re-bind).
+            var calleeOffset = anyMatch.ExplicitReceiverParameter == null ? 0 : 1;
+            var callableParameterCount = anyMatch.Parameters.Length - calleeOffset;
+            Diagnostics.ReportWrongArgumentCount(syntax.MethodIdentifier.Location, methodName, callableParameterCount, boundArguments.Count);
+            return new BoundErrorExpression(null);
+        }
+
+        // Map the substituted method on a constructed generic interface back
+        // to its open MethodDef slot (cache.MethodHandles is keyed on the
+        // open definition). CreateConstructed preserves declaration order
+        // 1:1, so the same index identifies the open slot.
+        var openMethod = arityMatch;
+        if (ifaceSym.Definition != null && !ReferenceEquals(ifaceSym.Definition, ifaceSym) && matchIndex >= 0 && matchIndex < ifaceSym.Definition.Methods.Length)
+        {
+            openMethod = ifaceSym.Definition.Methods[matchIndex];
+        }
+
+        if (!InterfaceSymbol.HasDefaultBody(openMethod))
+        {
+            Diagnostics.ReportBaseInterfaceCallMemberIsAbstract(
+                syntax.MethodIdentifier.Location,
+                ifaceSym.Name,
+                methodName);
+            return new BoundErrorExpression(null);
+        }
+
+        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        return new BoundBaseInterfaceCallExpression(
+            syntax,
+            receiver,
+            ifaceSym,
+            openMethod,
+            boundArguments.ToImmutable());
+    }
+
+    /// <summary>
+    /// ADR-0091 / issue #757: returns true when <paramref name="enclosingType"/>
+    /// (or any of its base classes) appears in <paramref name="ifaceSym"/>'s
+    /// implementer set. Constructed generic interfaces compare by
+    /// <see cref="InterfaceSymbol.Definition"/> identity to allow
+    /// <c>base[IFoo[int]]</c> from a class declared as <c>: IFoo[int]</c>.
+    /// </summary>
+    private static bool EnclosingTypeImplements(StructSymbol enclosingType, InterfaceSymbol ifaceSym)
+    {
+        var ifaceDef = ifaceSym.Definition ?? ifaceSym;
+        for (var t = enclosingType; t != null; t = t.BaseClass)
+        {
+            foreach (var iface in t.Interfaces)
+            {
+                var candidateDef = iface.Definition ?? iface;
+                if (ReferenceEquals(candidateDef, ifaceDef))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// ADR-0091: produces a human-readable display name for the enclosing
+    /// receiver type used in GS0338 messages. Falls back to a placeholder
+    /// when the call site is not inside an instance member.
+    /// </summary>
+    private string EnclosingTypeDisplayName()
+    {
+        if (function?.ReceiverType is { } recv)
+        {
+            return recv.Name;
+        }
+
+        return "<top-level>";
+    }
 }

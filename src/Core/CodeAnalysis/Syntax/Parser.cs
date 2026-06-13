@@ -5236,6 +5236,16 @@ public class Parser
             case SyntaxKind.IfKeyword:
                 return ParsePostfixChain(ParseIfExpression());
 
+            case SyntaxKind.IdentifierToken
+                when Current.Text == "base" && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken:
+                // ADR-0091 / issue #757: explicit-base interface call
+                // `base[IFoo].M(args)`. `base` is recognized as a contextual
+                // keyword only when followed by `[`; every other position
+                // continues to lex it as a plain identifier (so existing
+                // shapes like `init(x) : base(x)` and `var base = 5` are
+                // unaffected).
+                return ParsePostfixChain(ParseBaseInterfaceCallExpression());
+
             case SyntaxKind.IdentifierToken:
             default:
                 return ParseNameOrCallExpression();
@@ -6161,6 +6171,50 @@ public class Parser
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         arguments = MaybeAppendTrailingLambda(arguments);
         return new CallExpressionSyntax(syntaxTree, identifier, typeArguments, openParen, arguments, closeParen);
+    }
+
+    /// <summary>
+    /// ADR-0091 / issue #757: parses an explicit-base interface call
+    /// <c>base[IFoo].Method(args)</c>. Commit is decided by the caller in
+    /// <see cref="ParsePrimaryExpression"/> when the current identifier is
+    /// the contextual <c>base</c> keyword and the next token is <c>[</c>.
+    /// The optional generic type-argument list on the method identifier is
+    /// parsed but is rejected by the binder in this PR (reserved for a
+    /// future explicit-base generic-method extension).
+    /// </summary>
+    private ExpressionSyntax ParseBaseInterfaceCallExpression()
+    {
+        // Consume the `base` identifier token. We synthesize a fresh token to
+        // make sure the kind stays IdentifierToken (avoiding any keyword
+        // re-classification down the line).
+        var baseKeyword = MatchToken(SyntaxKind.IdentifierToken);
+        var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+        var interfaceTypeClause = ParseTypeClause();
+        var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        var dot = MatchToken(SyntaxKind.DotToken);
+        var methodIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+
+        TypeArgumentListSyntax methodTypeArgumentList = null;
+        if (Current.Kind == SyntaxKind.OpenSquareBracketToken && LooksLikeGenericCallSite(0))
+        {
+            methodTypeArgumentList = ParseTypeArgumentList();
+        }
+
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var arguments = ParseArguments();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new BaseInterfaceCallExpressionSyntax(
+            syntaxTree,
+            baseKeyword,
+            openBracket,
+            interfaceTypeClause,
+            closeBracket,
+            dot,
+            methodIdentifier,
+            methodTypeArgumentList,
+            openParen,
+            arguments,
+            closeParen);
     }
 
     private TypeArgumentListSyntax ParseTypeArgumentList()

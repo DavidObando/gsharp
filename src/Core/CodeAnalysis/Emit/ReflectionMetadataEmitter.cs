@@ -4735,6 +4735,8 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<StructSymbol, EntityHandle> userStructTypeSpecCache = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<(StructSymbol Containing, FieldSymbol DefField), EntityHandle> userStructFieldRefCache = new();
     private readonly Dictionary<(StructSymbol Containing, EntityHandle OpenMember), EntityHandle> userStructMethodRefCache = new();
+    private readonly Dictionary<InterfaceSymbol, EntityHandle> userInterfaceTypeSpecCache = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<(InterfaceSymbol Containing, EntityHandle OpenMember), EntityHandle> userInterfaceMethodRefCache = new();
 
     /// <summary>
     /// ADR-0087 §3 R3: returns <see langword="true"/> when
@@ -4955,6 +4957,113 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return this.GetUserStructMethodRef(containingType, openDef, method.Name, this.EncodeOpenMethodSignature(method));
+    }
+
+    /// <summary>
+    /// ADR-0091: returns <see langword="true"/> when
+    /// <paramref name="ifaceSym"/> is a user-declared generic interface
+    /// reference whose method references must be parented at a
+    /// <c>TypeSpec</c> rather than the bare TypeDef row.
+    /// </summary>
+    internal static bool IsUserGenericInterfaceReference(InterfaceSymbol ifaceSym)
+    {
+        if (ifaceSym == null)
+        {
+            return false;
+        }
+
+        if (!ifaceSym.TypeArguments.IsDefaultOrEmpty)
+        {
+            return true;
+        }
+
+        var def = ifaceSym.Definition ?? ifaceSym;
+        return !def.TypeParameters.IsDefaultOrEmpty;
+    }
+
+    /// <summary>
+    /// ADR-0091: returns a <c>TypeSpec</c> EntityHandle for a
+    /// user-declared generic interface — analogue of
+    /// <see cref="GetUserStructTypeSpec"/> for <see cref="InterfaceSymbol"/>.
+    /// </summary>
+    internal EntityHandle GetUserInterfaceTypeSpec(InterfaceSymbol ifaceSym)
+    {
+        if (this.userInterfaceTypeSpecCache.TryGetValue(ifaceSym, out var cached))
+        {
+            return cached;
+        }
+
+        var def = ifaceSym.Definition ?? ifaceSym;
+        if (!this.cache.InterfaceTypeDefs.TryGetValue(def, out var defHandle))
+        {
+            throw new InvalidOperationException(
+                $"User generic interface '{def.Name}' has no emitted TypeDef when constructing TypeSpec.");
+        }
+
+        ImmutableArray<TypeSymbol> typeArgs;
+        if (!ifaceSym.TypeArguments.IsDefaultOrEmpty)
+        {
+            typeArgs = ifaceSym.TypeArguments;
+        }
+        else
+        {
+            var defTps = def.TypeParameters;
+            var bld = ImmutableArray.CreateBuilder<TypeSymbol>(defTps.Length);
+            foreach (var tp in defTps)
+            {
+                bld.Add(tp);
+            }
+
+            typeArgs = bld.MoveToImmutable();
+        }
+
+        var sigBlob = new BlobBuilder();
+        var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
+        var gi = encoder.GenericInstantiation(defHandle, typeArgs.Length, isValueType: false);
+        foreach (var arg in typeArgs)
+        {
+            this.EncodeTypeSymbol(gi.AddArgument(), arg);
+        }
+
+        var spec = (EntityHandle)this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.userInterfaceTypeSpecCache[ifaceSym] = spec;
+        return spec;
+    }
+
+    /// <summary>
+    /// ADR-0091: returns the right token for an instance call into a
+    /// user-declared interface from a derived (implementing) type — used
+    /// for the <c>base[IFoo].M(...)</c> explicit-base call. Returns the
+    /// bare <c>MethodDef</c> for a non-generic interface, or a
+    /// <c>MemberRef</c> parented at the constructed (or self-)
+    /// <c>TypeSpec</c> for a generic interface.
+    /// </summary>
+    internal EntityHandle ResolveUserInterfaceInstanceMethodToken(InterfaceSymbol containingInterface, FunctionSymbol openMethod)
+    {
+        if (!this.cache.MethodHandles.TryGetValue(openMethod, out var openDef))
+        {
+            throw new InvalidOperationException(
+                $"Interface method '{openMethod.Name}' on '{containingInterface?.Name}' has no emitted handle.");
+        }
+
+        if (!IsUserGenericInterfaceReference(containingInterface))
+        {
+            return openDef;
+        }
+
+        var key = (containingInterface, openDef);
+        if (this.userInterfaceMethodRefCache.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        var parent = this.GetUserInterfaceTypeSpec(containingInterface);
+        var memberRef = (EntityHandle)this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(openMethod.Name),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(this.EncodeOpenMethodSignature(openMethod)));
+        this.userInterfaceMethodRefCache[key] = memberRef;
+        return memberRef;
     }
 
     /// <summary>

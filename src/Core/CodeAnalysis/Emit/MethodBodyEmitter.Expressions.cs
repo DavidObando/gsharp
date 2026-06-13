@@ -352,6 +352,9 @@ internal sealed partial class MethodBodyEmitter
             case BoundUserInstanceCallExpression uic:
                 this.EmitUserInstanceCall(uic);
                 break;
+            case BoundBaseInterfaceCallExpression bic:
+                this.EmitBaseInterfaceCall(bic);
+                break;
             case BoundFieldAccessExpression fa:
                 this.EmitFieldAccess(fa);
                 break;

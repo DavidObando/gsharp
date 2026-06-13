@@ -538,4 +538,37 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(slotHandle);
     }
+
+    /// <summary>
+    /// ADR-0091: emits an explicit-base interface call
+    /// <c>base[IFoo].M(args)</c>. The receiver is the implicit
+    /// <c>this</c> (the implementing class); the call uses
+    /// <c>call instance</c> (non-virtual) so the inherited
+    /// default body on <c>IFoo</c> is invoked directly rather
+    /// than re-dispatched through the v-table (which would re-enter
+    /// the override and cause infinite recursion).
+    /// </summary>
+    /// <param name="call">The bound base-interface call to emit.</param>
+    private void EmitBaseInterfaceCall(BoundBaseInterfaceCallExpression call)
+    {
+        // Load `this` (the implementing class instance).
+        this.EmitInstanceReceiver(call.Receiver);
+
+        // Evaluate each argument left-to-right.
+        foreach (var arg in call.Arguments)
+        {
+            this.EmitExpression(arg);
+        }
+
+        // Resolve the right token for the interface's default-body MethodDef.
+        // Non-generic interfaces: bare MethodDef. Generic interfaces:
+        // MemberRef parented at the constructed TypeSpec.
+        var methodToken = this.outer.ResolveUserInterfaceInstanceMethodToken(call.Interface, call.Method);
+
+        // ADR-0091: non-virtual `call`, NOT `callvirt`. Using callvirt would
+        // re-dispatch through the v-table and re-enter the same override
+        // that issued the base-call.
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(methodToken);
+    }
 }
