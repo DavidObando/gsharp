@@ -91,13 +91,17 @@ A P/Invoke parameter or return type is **valid in v1** if and only if it falls i
 
 Any **unknown named argument** falls through to the standard "no matching property" diagnostic from the existing attribute-arg binder (GS0207). Type mismatches use the existing GS0205/GS0206 codes.
 
-### 4. `@LibraryImport` — deferred to a follow-up
+### 4. `@LibraryImport` — implemented in ADR-0092 (issue #758)
 
-The modern C# 11+ source-generator attribute (`[LibraryImport]`) produces an equivalent — and in places safer — managed/unmanaged transition than `[DllImport]`. v1 of G# P/Invoke ships with `@DllImport` only; `@LibraryImport` is filed as a follow-up issue. Rationale:
+The modern C# 11+ source-generator attribute (`[LibraryImport]`) produces an equivalent — and in places safer — managed/unmanaged transition than `[DllImport]`. v1 of G# P/Invoke shipped with `@DllImport` only; **ADR-0092** (issue #758) supersedes this deferral and adds `@LibraryImport` support: the binder accepts the source-generator-shaped attribute, the emitter generates an explicit managed marshalling stub (outer method) that calls a hidden blittable inner P/Invoke, and the IL is verifiable. The runtime never auto-marshals strings for an `@LibraryImport` declaration. See **ADR-0092** for the marshalling rules, generated-stub IL shape, and diagnostics GS0342–GS0345.
+
+The original rationale for deferring `@LibraryImport` is preserved here for historical context:
 
 - `LibraryImport` is itself implemented in C# as a source generator that emits a `DllImport`-flavored unmanaged callee plus a managed wrapper. G# would need to model both layers, including the `MarshalAs` shapes that surface on the wrapper's parameters. That is substantially larger than the v1 surface area.
 - Every benefit of `LibraryImport` (no runtime marshalling stub generation, AOT-friendly) is also achievable, in principle, by emitting `DllImport` with a `PreserveSig`-true / `SetLastError`-driven shape that does not require runtime IL stubs. v1's emitted P/Invoke metadata is AOT-publishable.
 - Punting `LibraryImport` keeps the v1 diagnostic surface small (8 codes) and the emitter delta to a single `AddMethodImport` call.
+
+ADR-0092 picks up exactly this two-layer (outer wrapper + inner unmanaged callee) shape: the outer is generated in IL by the compiler rather than by a separate source generator, and the `MarshalAs` surface is narrowed to the explicit `StringMarshalling` enum so the v1 marshalling table extension is small.
 
 ### 5. Diagnostic catalogue (new)
 
@@ -130,7 +134,7 @@ For each well-formed P/Invoke function `F`:
 - **Sample.** `samples/PInvoke.gs` calls `libc.getpid` (cross-platform on Linux and macOS, with a `RuntimeInformation.IsOSPlatform`-gated skip on Windows). The sample is added to `samples/CoverageMatrix` so it is exercised by the matrix regression test.
 - **Spec.** A new "Native interop (P/Invoke)" section is added under the spec; the lexical grammar gets the optional `;` body marker on `func` declarations. The diagnostics reference (`website/docs/ref/diagnostics.md` mirror) lists every new code.
 - **Follow-ups (filed under parent #706):**
-  - `@LibraryImport` source-generator attribute support (issue #729).
+  - `@LibraryImport` source-generator attribute support — **completed by ADR-0092 (issue #758).**
   - `out` / `ref` primitive parameter marshalling for P/Invoke (issue #728).
   - Struct-by-value and `[StructLayout]` marshalling (issue #730).
   - Function-pointer / delegate parameter marshalling (issue #731).

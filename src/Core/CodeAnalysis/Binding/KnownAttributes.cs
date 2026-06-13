@@ -754,4 +754,55 @@ internal static class KnownAttributes
 
         return false;
     }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Runtime.InteropServices.LibraryImportAttribute"/>.
+    /// ADR-0092 / issue #758: <c>@LibraryImport(...)</c> is the modern
+    /// source-generator-shaped P/Invoke attribute. Recognition is
+    /// type-identity based so renaming or shadowing the source-level name
+    /// cannot bypass the rule.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[LibraryImport]</c>.</returns>
+    public static bool IsLibraryImport(Type clrType)
+    {
+        return clrType == typeof(System.Runtime.InteropServices.LibraryImportAttribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Runtime.InteropServices.LibraryImportAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[LibraryImport]</c>.</returns>
+    public static bool IsLibraryImport(BoundAttribute attribute)
+    {
+        return IsLibraryImport(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Finds the first <c>@LibraryImport(...)</c> attribute on
+    /// <paramref name="attributes"/>, or <c>null</c> when none is present.
+    /// Recognition is type-identity based (ADR-0092 / issue #758).
+    /// </summary>
+    /// <param name="attributes">The attributes attached to a function symbol.</param>
+    /// <returns>The matching attribute, or <c>null</c>.</returns>
+    public static BoundAttribute FindLibraryImport(ImmutableArray<BoundAttribute> attributes)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (IsLibraryImport(attr))
+            {
+                return attr;
+            }
+        }
+
+        return null;
+    }
 }

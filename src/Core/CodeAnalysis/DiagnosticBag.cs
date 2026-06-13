@@ -3000,6 +3000,72 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// ADR-0092 / issue #758: GS0342 — a function carries both
+    /// <c>@DllImport</c> and <c>@LibraryImport</c>. The two P/Invoke
+    /// attribute shapes are mutually exclusive on the same declaration.
+    /// </summary>
+    /// <param name="location">The location of the offending function identifier.</param>
+    /// <param name="functionName">The function name.</param>
+    public void ReportPInvokeMixedDllAndLibraryImport(TextLocation location, string functionName)
+    {
+        Report(
+            location,
+            "GS0342",
+            $"Function '{functionName}' carries both '@DllImport' and '@LibraryImport'; the two P/Invoke attribute shapes are mutually exclusive — choose one (ADR-0092).");
+    }
+
+    /// <summary>
+    /// ADR-0092 / issue #758: GS0343 — a <c>StringMarshalling:</c> argument
+    /// to <c>@LibraryImport</c> is not a valid
+    /// <see cref="System.Runtime.InteropServices.StringMarshalling"/> member
+    /// value (<c>Utf8</c>, <c>Utf16</c>, or <c>Custom</c>).
+    /// </summary>
+    /// <param name="location">The argument location.</param>
+    /// <param name="value">The supplied raw value (display string).</param>
+    public void ReportLibraryImportInvalidStringMarshalling(TextLocation location, string value)
+    {
+        Report(
+            location,
+            "GS0343",
+            $"StringMarshalling value '{value}' is not a valid 'StringMarshalling' member (expected 'Utf8', 'Utf16', or 'Custom'). See ADR-0092.");
+    }
+
+    /// <summary>
+    /// ADR-0092 / issue #758: GS0344 — an <c>@LibraryImport</c> function
+    /// uses a <c>string</c> parameter or return type without specifying
+    /// <c>StringMarshalling: StringMarshalling.Utf8</c> or
+    /// <c>StringMarshalling.Utf16</c>. Unlike <c>@DllImport</c>,
+    /// <c>@LibraryImport</c> does not infer a default; the stub generator
+    /// must know which encoding to emit.
+    /// </summary>
+    /// <param name="location">The location of the offending function identifier.</param>
+    /// <param name="functionName">The function name.</param>
+    public void ReportLibraryImportRequiresStringMarshalling(TextLocation location, string functionName)
+    {
+        Report(
+            location,
+            "GS0344",
+            $"'@LibraryImport' function '{functionName}' uses a 'string' parameter or return type but does not specify 'StringMarshalling'; pass 'StringMarshalling: StringMarshalling.Utf8' (or 'Utf16') (ADR-0092).");
+    }
+
+    /// <summary>
+    /// ADR-0092 / issue #758: GS0345 — an <c>@LibraryImport</c> function
+    /// returns a <c>string</c>, which the v1 stub generator cannot
+    /// safely free. Use a non-string return (e.g. <c>nint</c>) and call
+    /// the appropriate <c>Marshal.PtrToString</c> helper at the call
+    /// site instead.
+    /// </summary>
+    /// <param name="location">The location of the offending return-type clause.</param>
+    /// <param name="functionName">The function name.</param>
+    public void ReportLibraryImportStringReturnNotSupported(TextLocation location, string functionName)
+    {
+        Report(
+            location,
+            "GS0345",
+            $"'@LibraryImport' function '{functionName}' returns 'string'; the v1 stub generator does not yet support string return marshalling — return 'nint' and use 'Marshal.PtrToStringUTF8' at the call site (ADR-0092).");
+    }
+
+    /// <summary>
     /// Reports GS0330 — ADR-0089 / issue #755: <c>static let</c> inside an
     /// interface declaration is reserved for a future release. The minimal
     /// static-virtual interface members feature only accepts
