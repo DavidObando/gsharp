@@ -701,6 +701,13 @@ internal sealed class DeclarationBinder
             syntax.IsClass ? "a class declaration" : "a struct declaration",
             syntax.IsClass ? System.AttributeTargets.Class : System.AttributeTargets.Struct));
 
+        // ADR-0093 / issue #759: parse `@StructLayout(LayoutKind.…)` on
+        // the type and `@FieldOffset(N)` on each field; write the resolved
+        // values onto the struct/field symbols so the emitter can pick
+        // the right CLR TypeAttributes flag and emit the matching
+        // ClassLayout / FieldLayout rows.
+        StructLayoutBinder.ResolveLayoutAndFieldOffsets(structSymbol, Diagnostics);
+
         if (hasAttributeSugar && syntax.IsClass)
         {
             // Phase 4 of #141 / ADR-0047 §5: tag the class so the emitter

@@ -191,6 +191,16 @@ internal sealed class TypeDefEmitter
 
             this.cache.StructFieldDefs[field] = handle;
 
+            // ADR-0093 §5: a field declared with @FieldOffset(N) inside an
+            // explicit-layout type produces a `FieldLayout` row pointing at
+            // the field's FieldDef. The @FieldOffset attribute itself is
+            // pseudo-custom and is filtered out of the CustomAttribute pass
+            // by KnownAttributes.IsPseudoCustomAttribute.
+            if (field.ExplicitOffset is int offset)
+            {
+                this.emitCtx.Metadata.AddFieldLayout(handle, offset);
+            }
+
             // Issue #186 / ADR-0047 §3: route any @-annotations bound onto
             // the field symbol onto the FieldDef row so attributes like
             // @Obsolete round-trip into CustomAttribute rows.
@@ -339,7 +349,7 @@ internal sealed class TypeDefEmitter
             // Base is either the user-declared base class (if any) or
             // System.Object.
             var classAttrs = TypeAttributes.Class
-                | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
+                | ResolveClassLayoutFlag(structSym) | TypeAttributes.AnsiClass
                 | TypeAttributes.BeforeFieldInit
                 | AccessibilityMap.MapTypeAccessibility(structSym.Accessibility);
             if (!structSym.IsOpen && !structSym.IsSealedHierarchy)
@@ -372,7 +382,7 @@ internal sealed class TypeDefEmitter
         }
         else
         {
-            typeAttrs = TypeAttributes.SequentialLayout | TypeAttributes.Sealed
+            typeAttrs = ResolveStructLayoutFlag(structSym) | TypeAttributes.Sealed
                 | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
                 | AccessibilityMap.MapTypeAccessibility(structSym.Accessibility);
             baseType = this.wellKnown.ValueTypeRef;
@@ -403,6 +413,11 @@ internal sealed class TypeDefEmitter
             // Issue #367: mark user-declared `ref struct` types as by-ref-like.
             this.EmitIsByRefLikeAttribute(handle2);
         }
+
+        // ADR-0093 §5: when @StructLayout supplies Pack or Size, write the
+        // matching ClassLayout row. A null/0 pack with a 0 size results in
+        // no ClassLayout row at all — the runtime defaults apply.
+        EmitClassLayout(this.emitCtx, handle2, structSym.LayoutMetadata);
 
         // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
         this.emitUserAttributes(handle2, structSym, AttributeTargetKind.Type);
@@ -1481,5 +1496,88 @@ internal sealed class TypeDefEmitter
         }
 
         return name + "`" + typeParameters.Length.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// ADR-0093 §5: resolves the <see cref="TypeAttributes"/> layout flag
+    /// for a user struct. Defaults to <see cref="TypeAttributes.SequentialLayout"/>
+    /// when no <c>@StructLayout(LayoutKind.…)</c> annotation is present —
+    /// the historical struct layout. When the annotation requests
+    /// <see cref="System.Runtime.InteropServices.LayoutKind.Explicit"/>,
+    /// the emitter writes the matching <see cref="TypeAttributes.ExplicitLayout"/>
+    /// flag instead so the runtime honours the per-field
+    /// <see cref="MetadataBuilder.AddFieldLayout"/> rows.
+    /// </summary>
+    /// <param name="structSym">The struct symbol being emitted.</param>
+    /// <returns>The chosen layout flag.</returns>
+    internal static TypeAttributes ResolveStructLayoutFlag(StructSymbol structSym)
+    {
+        var meta = structSym.LayoutMetadata;
+        if (meta == null)
+        {
+            return TypeAttributes.SequentialLayout;
+        }
+
+        return meta.Layout switch
+        {
+            System.Runtime.InteropServices.LayoutKind.Explicit => TypeAttributes.ExplicitLayout,
+            System.Runtime.InteropServices.LayoutKind.Auto => TypeAttributes.AutoLayout,
+            _ => TypeAttributes.SequentialLayout,
+        };
+    }
+
+    /// <summary>
+    /// ADR-0093 §5: resolves the <see cref="TypeAttributes"/> layout flag
+    /// for a user class. Defaults to <see cref="TypeAttributes.AutoLayout"/>
+    /// when no <c>@StructLayout(LayoutKind.…)</c> annotation is present —
+    /// the historical class layout and the C# default. When the annotation
+    /// is supplied, the chosen layout flag matches the requested
+    /// <see cref="System.Runtime.InteropServices.LayoutKind"/> so the class
+    /// can participate in P/Invoke as a by-reference parameter.
+    /// </summary>
+    /// <param name="structSym">The class symbol being emitted.</param>
+    /// <returns>The chosen layout flag.</returns>
+    internal static TypeAttributes ResolveClassLayoutFlag(StructSymbol structSym)
+    {
+        var meta = structSym.LayoutMetadata;
+        if (meta == null)
+        {
+            return TypeAttributes.AutoLayout;
+        }
+
+        return meta.Layout switch
+        {
+            System.Runtime.InteropServices.LayoutKind.Explicit => TypeAttributes.ExplicitLayout,
+            System.Runtime.InteropServices.LayoutKind.Sequential => TypeAttributes.SequentialLayout,
+            _ => TypeAttributes.AutoLayout,
+        };
+    }
+
+    /// <summary>
+    /// ADR-0093 §5: writes the optional ClassLayout row for a type that
+    /// carries an explicit <c>Pack</c> or <c>Size</c> on its
+    /// <c>@StructLayout(LayoutKind.…)</c> annotation. A null
+    /// <paramref name="metadata"/> or one with both fields unset produces
+    /// no ClassLayout row — the runtime defaults apply.
+    /// </summary>
+    /// <param name="emitCtx">The current emit context.</param>
+    /// <param name="typeDefHandle">The TypeDef handle the layout applies to.</param>
+    /// <param name="metadata">The resolved layout metadata, or <c>null</c>.</param>
+    internal static void EmitClassLayout(EmitContext emitCtx, TypeDefinitionHandle typeDefHandle, StructLayoutMetadata metadata)
+    {
+        if (metadata == null)
+        {
+            return;
+        }
+
+        if (!metadata.Pack.HasValue && !metadata.Size.HasValue)
+        {
+            return;
+        }
+
+        emitCtx.Metadata.AddTypeLayout(
+            type: typeDefHandle,
+            packingSize: (ushort)(metadata.Pack ?? 0),
+            size: (uint)(metadata.Size ?? 0));
     }
 }

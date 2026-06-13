@@ -280,6 +280,16 @@ public sealed class StructSymbol : TypeSymbol
     public BaseConstructorInitializer BaseConstructorInitializer { get; private set; }
 
     /// <summary>
+    /// Gets the resolved <see cref="StructLayoutMetadata"/> derived from a
+    /// <c>@StructLayout(LayoutKind.…)</c> annotation on the declaration, or
+    /// <c>null</c> when no annotation was supplied. ADR-0093 / issue #759:
+    /// the emitter consults this property to pick the correct CLR
+    /// <see cref="System.Reflection.TypeAttributes"/> layout flag and to
+    /// write the optional <c>ClassLayout</c> row.
+    /// </summary>
+    public StructLayoutMetadata LayoutMetadata { get; private set; }
+
+    /// <summary>
     /// Gets the standalone user-defined constructor (<c>init(...)</c>) declared on
     /// this class (issue #306), or <c>null</c> when the class has none. When non-null
     /// the emitter materializes exactly one <c>.ctor</c> (this constructor) and
@@ -507,6 +517,19 @@ public sealed class StructSymbol : TypeSymbol
     public void SetIsAttributeClass()
     {
         IsAttributeClass = true;
+    }
+
+    /// <summary>
+    /// Sets the resolved <see cref="LayoutMetadata"/>. Intended to be
+    /// called once by the binder after attributes have been bound; the
+    /// <see cref="StructLayoutBinder"/> helper writes the resolved
+    /// metadata onto the symbol so the emitter can consume it. ADR-0093
+    /// / issue #759.
+    /// </summary>
+    /// <param name="metadata">The validated layout metadata.</param>
+    public void SetLayoutMetadata(StructLayoutMetadata metadata)
+    {
+        LayoutMetadata = metadata;
     }
 
     /// <summary>Walks the base chain looking for a method with the given name. Returns the most-derived overridable definition (the binder narrows further on overload match).</summary>

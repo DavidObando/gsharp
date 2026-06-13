@@ -588,6 +588,45 @@ ADR-0086 / issue #727 introduces `@DllImport`-annotated function declarations wh
 
 See ADR-0086 for the complete attribute-knob table, supported marshalling types, and a worked example.
 
+## `@LibraryImport` P/Invoke diagnostics (GS0342–GS0345)
+
+ADR-0092 / issue #758 adds the modern source-generator-shaped `@LibraryImport`
+attribute. The compiler emits an explicit managed marshalling stub that calls
+a hidden blittable inner P/Invoke, so the runtime never auto-marshals at the
+unmanaged boundary. The attribute reuses the body-shape, library-name, and
+unsupported-type checks above (GS0322–GS0329); the codes below cover the
+surface unique to `@LibraryImport`.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0342 | Error | Function `{name}` is annotated with both `@DllImport` and `@LibraryImport`; choose one. |
+| GS0343 | Error | `StringMarshalling` value `{value}` is not a valid `StringMarshalling` member; use `Utf8` or `Utf16`. |
+| GS0344 | Error | `@LibraryImport` function `{name}` has a `string` surface and must specify `StringMarshalling: StringMarshalling.Utf8` or `StringMarshalling.Utf16`. |
+| GS0345 | Error | `@LibraryImport` function `{name}` has a `string` return type; v1 supports `string` only as a parameter type (see ADR-0092 §2). |
+
+See ADR-0092 for the full design rationale.
+
+## Struct / class P/Invoke marshalling diagnostics (GS0346–GS0351)
+
+ADR-0093 / issue #759 adds `@StructLayout(LayoutKind.…)` on `struct` / `class`
+declarations and `@FieldOffset(N)` on the fields of `Explicit`-layout types.
+Both are CLR *pseudo-custom attributes* — the runtime reconstructs them at
+reflection time from the `ClassLayout` / `FieldLayout` metadata-table rows,
+so the emitter writes those rows directly and skips the normal
+`CustomAttribute` encoding.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0346 | Error | `@StructLayout(LayoutKind.{value})` is not supported; v1 accepts only `LayoutKind.Sequential` and `LayoutKind.Explicit`. `LayoutKind.Auto` is rejected because the CLR may reorder fields, breaking ABI. |
+| GS0347 | Error | Field `{field}` of explicit-layout struct `{type}` is missing a `@FieldOffset(N)` annotation; every field of an `Explicit`-layout type must carry one. |
+| GS0348 | Error | `@FieldOffset` on field `{field}` of `{type}` is only valid inside an `Explicit`-layout type; declare `@StructLayout(LayoutKind.Explicit)` on the enclosing struct or drop the annotation. |
+| GS0349 | Error | Type `{type}` is not blittable and cannot appear in a P/Invoke signature without per-field `@MarshalAs` (deferred); rewrite the type to use blittable fields only. |
+| GS0350 | Error | `@FieldOffset({value})` value is not a valid non-negative `int32`. |
+| GS0351 | Error | Class `{type}` cannot be used as the return type of a P/Invoke function; return a struct or `nint` instead. |
+
+See ADR-0093 for the full blittability rules, interaction with ADR-0086 /
+ADR-0092, and the class-by-reference policy.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

@@ -106,6 +106,7 @@ internal static class PInvokeBinder
         // squiggles land on the offending type, not the function name.
         var parameterSyntaxes = syntax.Parameters;
         var hasStringParameter = false;
+        var blittableDetector = new BlittableDetector();
         for (var i = 0; i < function.Parameters.Length; i++)
         {
             var parameter = function.Parameters[i];
@@ -114,25 +115,57 @@ internal static class PInvokeBinder
                 hasStringParameter = true;
             }
 
-            if (IsSupportedMarshallingType(parameter.Type))
-            {
-                continue;
-            }
-
             TextLocation typeLocation = identifierLocation;
             if (i < parameterSyntaxes.Count && parameterSyntaxes[i].Type != null)
             {
                 typeLocation = parameterSyntaxes[i].Type.Location;
             }
 
+            // ADR-0093 §3 / §4: struct values and (layout-annotated) class
+            // references are validated separately so the binder can issue
+            // the tailored GS0349 "not blittable" message rather than the
+            // generic GS0323. Pointers to structs (`*S`) likewise route
+            // through the blittable check.
+            if (IsStructOrPointerToStruct(parameter.Type, out var structType))
+            {
+                if (!blittableDetector.IsBlittable(structType))
+                {
+                    diagnostics.ReportPInvokeNonBlittableType(typeLocation, structType.Name);
+                }
+
+                continue;
+            }
+
+            if (IsSupportedMarshallingType(parameter.Type))
+            {
+                continue;
+            }
+
             diagnostics.ReportPInvokeUnsupportedMarshallingType(typeLocation, parameter.Type?.Name ?? "?");
         }
 
         var returnIsString = function.Type == TypeSymbol.String;
-        if (function.Type != TypeSymbol.Void && !IsSupportedMarshallingType(function.Type))
+        if (function.Type != TypeSymbol.Void)
         {
             var returnLocation = syntax.Type?.Location ?? identifierLocation;
-            diagnostics.ReportPInvokeUnsupportedMarshallingType(returnLocation, function.Type?.Name ?? "?");
+            if (IsStructOrPointerToStruct(function.Type, out var returnStruct))
+            {
+                if (returnStruct.IsClass)
+                {
+                    // ADR-0093 §4 — classes are not supported as P/Invoke
+                    // return values; the user must declare a struct or
+                    // return `nint` for opaque handles.
+                    diagnostics.ReportPInvokeClassReturnNotSupported(returnLocation, returnStruct.Name);
+                }
+                else if (!blittableDetector.IsBlittable(returnStruct))
+                {
+                    diagnostics.ReportPInvokeNonBlittableType(returnLocation, returnStruct.Name);
+                }
+            }
+            else if (!IsSupportedMarshallingType(function.Type))
+            {
+                diagnostics.ReportPInvokeUnsupportedMarshallingType(returnLocation, function.Type?.Name ?? "?");
+            }
         }
 
         // ADR-0092 §4 — the v1 LibraryImport stub generator cannot safely
@@ -209,6 +242,33 @@ internal static class PInvokeBinder
             || type == TypeSymbol.NUInt
             || type == TypeSymbol.Float32
             || type == TypeSymbol.Float64;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="type"/> is either a user
+    /// <see cref="StructSymbol"/> directly, or a pointer (<c>*S</c>) to
+    /// one. The matched struct symbol is returned via
+    /// <paramref name="structSymbol"/>. ADR-0093 / issue #759: this
+    /// classifier separates the struct / class marshalling path from the
+    /// generic <see cref="IsSupportedMarshallingType"/> set so the
+    /// blittability check can produce a tailored diagnostic.
+    /// </summary>
+    private static bool IsStructOrPointerToStruct(TypeSymbol type, out StructSymbol structSymbol)
+    {
+        if (type is StructSymbol direct)
+        {
+            structSymbol = direct;
+            return true;
+        }
+
+        if (type is ByRefTypeSymbol byRef && byRef.PointeeType is StructSymbol pointee)
+        {
+            structSymbol = pointee;
+            return true;
+        }
+
+        structSymbol = null;
+        return false;
     }
 
     private static PInvokeMetadata ExtractDllImportMetadata(

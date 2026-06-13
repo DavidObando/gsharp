@@ -40,4 +40,26 @@ public sealed class FieldSymbol : Symbol
 
     /// <summary>Gets a value indicating whether this field is declared inside a <c>shared</c> block (ADR-0053).</summary>
     public bool IsStatic { get; }
+
+    /// <summary>
+    /// Gets the explicit byte offset declared via <c>@FieldOffset(N)</c>
+    /// (ADR-0093 / issue #759), or <c>null</c> when the field uses the
+    /// default sequential layout. Only valid on fields of types declared
+    /// with <c>@StructLayout(LayoutKind.Explicit)</c>; the binder enforces
+    /// the mutual constraint (GS0347 / GS0348) and writes the resolved
+    /// offset onto the symbol so the emitter can produce a matching
+    /// <c>FieldLayout</c> row.
+    /// </summary>
+    public int? ExplicitOffset { get; private set; }
+
+    /// <summary>
+    /// Sets the resolved <see cref="ExplicitOffset"/>. Intended to be
+    /// called once by the binder after attribute binding when the field
+    /// carries a well-formed <c>@FieldOffset(N)</c> annotation.
+    /// </summary>
+    /// <param name="offset">The non-negative byte offset.</param>
+    public void SetExplicitOffset(int offset)
+    {
+        ExplicitOffset = offset;
+    }
 }
