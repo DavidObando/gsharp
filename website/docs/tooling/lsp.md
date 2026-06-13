@@ -55,7 +55,7 @@ The server capability factory enables the following:
 | Completion | `textDocument/completion`, triggered on `.`. In a type-clause position (parameter, local, field, return type, generic argument, etc.) the list includes ready-to-use snippets for `async (T) -> R` (ADR-0075 / ADR-0043) and `async sequence[T]` (ADR-0042), with Markdown documentation rendered from the same prose hover surfaces on the corresponding tokens. |
 | Signature help | `textDocument/signatureHelp`, triggered by `(` and `,`. |
 | Rename | `textDocument/prepareRename` and `textDocument/rename`. |
-| Code actions | `textDocument/codeAction`, currently refactor/rewrite-style actions. |
+| Code actions | `textDocument/codeAction`, exposing project-wide refactorings (e.g. `Sort imports`) and quick fixes for the nil-related diagnostics covered in [Quick fixes](#quick-fixes-textdocumentcodeaction) below (ADR-0099). |
 | Code lenses | `textDocument/codeLens`, currently reference-count lenses for declarations. |
 | Semantic tokens | Full and range semantic tokens. |
 | Inlay hints | `textDocument/inlayHint`, currently parameter-name hints at call sites. |
@@ -74,6 +74,22 @@ During `initialize`, the server attempts best-effort workspace discovery from th
 - Formatting is a lexer-based whole-document formatter with a canonical whitespace pass; current implementation uses two-space indentation internally.
 - Rename, linked editing, references, CodeLens, implementation, and type-definition results are computed from the compiler's semantic lookup model and are strongest for symbols in the current project/document model.
 - The server serializes handlers through a single gate so edits and reads are processed in order, not incrementally in parallel.
+
+## Quick fixes (textDocument/codeAction)
+
+The server returns a mix of whole-document refactorings and diagnostic-driven quick fixes from `textDocument/codeAction`. Refactorings (such as `Sort imports`) surface whenever they apply; quick fixes only surface when the request range overlaps the originating diagnostic's span.
+
+The current quick-fix set targets the nil-related diagnostics introduced by ADR-0099 / issue #730. Each diagnostic maps to one or more rewrites, returned as LSP `TextEdit`s so they compose with concurrent client edits without server-side re-parsing:
+
+| Diagnostic | Trigger | Offered rewrites |
+| --- | --- | --- |
+| `GS0158` (`Cannot find member X.`) | A `.` member access whose left-part is statically nullable (chained `?.`, literal `nil`, or a local/parameter/field whose declared type-clause text ends with `?`). | `Use null-conditional access '?.'` — rewrites the dot token to `?.`. |
+| `GS0154` (`Parameter 'p' requires a value of type 'T' but was given a value of type 'T?'.`) | Any argument of type `T?` passed to a parameter typed `T`. | `Provide default with '?: <literal>'` and `Assert non-nil with '!!'`. |
+| `GS0155` (`Cannot convert type 'T?' to 'T'.`) | Any expression of type `T?` used where `T` is required (assignment, return, conditional arm, …). | Same as GS0154. |
+| `GS0156` (`Cannot convert type 'T?' to 'T'. An explicit conversion exists ...`) | Same shape as GS0155 with an explicit conversion available. | Same as GS0154. |
+| `GS0274` (`'nil' cannot be assigned to parameter 'p' of non-nullable type 'T'; …`) | Literal `nil` flowing to a non-nullable parameter. | No quick fix — the diagnostic message already carries the canonical suggestion (make the parameter nullable). |
+
+The Elvis rewrite picks a sensible default literal per primitive target type (`""` for `string`, `0` for the numeric primitives, `false` for `bool`, `default` otherwise) so the inserted snippet parses and type-checks immediately; the user is expected to replace it with a real default. Both the Elvis and the null-assertion rewrite wrap the original expression in parentheses, so the replacement is syntactically self-contained regardless of the surrounding operator precedence.
 
 ## Connecting an editor
 
