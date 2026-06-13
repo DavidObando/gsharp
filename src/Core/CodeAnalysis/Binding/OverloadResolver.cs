@@ -2600,7 +2600,13 @@ internal sealed class OverloadResolver
                 && parameter.Type is FunctionTypeSymbol openFunctionParameter
                 && tryGetFunctionLiteral(argument, out var functionLiteralArgument))
             {
-                boundArguments[i] = createErasedFunctionLiteralAdapter(functionLiteralArgument, openFunctionParameter);
+                // ADR-0087 §3 R6: substitute the open target before
+                // routing through the adapter so the identity-check
+                // inside the adapter can drop the wrapper when the
+                // literal already matches.
+                var substitutedOpenTarget = (substituteType(openFunctionParameter, substitution) as FunctionTypeSymbol)
+                    ?? openFunctionParameter;
+                boundArguments[i] = createErasedFunctionLiteralAdapter(functionLiteralArgument, substitutedOpenTarget);
                 continue;
             }
 
@@ -2859,7 +2865,12 @@ internal sealed class OverloadResolver
                 if (paramType is FunctionTypeSymbol openFunctionParameter
                     && tryGetFunctionLiteral(permutedArguments[i], out var functionLiteralArgument))
                 {
-                    convertedArgs.Add(createErasedFunctionLiteralAdapter(functionLiteralArgument, openFunctionParameter));
+                    // ADR-0087 §3 R6: substitute the open target so the
+                    // identity-check inside the adapter drops the
+                    // wrapper when the literal already matches.
+                    var substitutedOpenTarget = (substituteType(openFunctionParameter, substitution) as FunctionTypeSymbol)
+                        ?? openFunctionParameter;
+                    convertedArgs.Add(createErasedFunctionLiteralAdapter(functionLiteralArgument, substitutedOpenTarget));
                     continue;
                 }
 
@@ -3017,7 +3028,12 @@ internal sealed class OverloadResolver
             {
                 if (paramType is FunctionTypeSymbol openFunctionParameter)
                 {
-                    convertedArgs.Add(createErasedFunctionLiteralAdapter(functionLiteralArgument, openFunctionParameter));
+                    // ADR-0087 §3 R6: substitute the open target so the
+                    // identity-check inside the adapter drops the
+                    // wrapper when the literal already matches.
+                    var substitutedOpenTarget = (substituteType(openFunctionParameter, substitution) as FunctionTypeSymbol)
+                        ?? openFunctionParameter;
+                    convertedArgs.Add(createErasedFunctionLiteralAdapter(functionLiteralArgument, substitutedOpenTarget));
                     continue;
                 }
 

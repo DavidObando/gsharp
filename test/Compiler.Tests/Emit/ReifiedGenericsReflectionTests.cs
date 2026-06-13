@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Metadata;
 using System.Runtime.Loader;
 using Xunit;
 
@@ -427,8 +428,247 @@ public class ReifiedGenericsReflectionTests
     }
 
     // -----------------------------------------------------------------
+    // ADR-0087 §3 R6: lambda-adapter retirement
+    //
+    // Before R6, a delegate over a type-parameter (e.g. `func(T) U`)
+    // was emitted as `System.Func<object, object>` and dispatched via
+    // `System.Delegate.DynamicInvoke`, with binder-side
+    // `<lambda_erasedN>` adapters boxing arguments / unboxing returns.
+    // After R6 the encoder emits a reified
+    // `GENERICINST<Func`N><...>` with `Var(idx)` / `MVar(idx)` slots,
+    // delegate ctors / Invoke dispatch route through MemberRefs
+    // parented at that TypeSpec, and `DynamicInvoke` no longer appears
+    // in emitted user IL for generic-over-T lambda call sites.
+    // -----------------------------------------------------------------
+
+    /// <summary>
+    /// ADR-0087 §3 R6: the parameter type of a generic method whose
+    /// signature carries a delegate over a type parameter
+    /// (<c>func Apply[T,U](x T, f (T) -> U) U</c>) round-trips as a
+    /// constructed <c>System.Func`2&lt;!!0, !!1&gt;</c> through
+    /// reflection — both type arguments report
+    /// <see cref="Type.IsGenericMethodParameter"/>. Previously the
+    /// parameter erased to <c>System.Func`2&lt;object, object&gt;</c>.
+    /// </summary>
+    [Fact]
+    public void R6_GenericMethod_DelegateParam_HasReifiedFuncShape()
+    {
+        var source = """
+            package P
+            import System
+            func Apply[T any, U any](x T, f (T) -> U) U {
+                return f(x)
+            }
+            """;
+        var asm = LoadCompiled(source);
+        var moduleType = FindModuleType(asm, "P");
+        var apply = moduleType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .First(m => m.Name == "Apply");
+
+        var fParam = apply.GetParameters()[1].ParameterType;
+        Assert.True(fParam.IsGenericType, "delegate parameter must be a constructed generic type");
+        Assert.False(fParam.IsGenericTypeDefinition);
+
+        var def = fParam.GetGenericTypeDefinition();
+        Assert.Equal("System.Func`2", def.FullName);
+
+        var args = fParam.GetGenericArguments();
+        Assert.Equal(2, args.Length);
+        Assert.True(args[0].IsGenericMethodParameter, "Func arg 0 must be method-generic Var");
+        Assert.True(args[1].IsGenericMethodParameter, "Func arg 1 must be method-generic Var");
+        Assert.NotEqual(typeof(object), args[0]);
+        Assert.NotEqual(typeof(object), args[1]);
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R6: a generic <c>class Box[TItem]</c> with a
+    /// <c>func Map[TResult](f (TItem) -> TResult) TResult</c> exposes
+    /// <c>f</c> as <c>System.Func`2&lt;!0, !!0&gt;</c> — class-generic
+    /// <c>Var(0)</c> for <c>TItem</c>, method-generic <c>MVar(0)</c>
+    /// for <c>TResult</c>. Pre-R6 both slots were <see cref="object"/>.
+    /// </summary>
+    [Fact]
+    public void R6_GenericClass_GenericMethod_MixedSlots_RoundTrip()
+    {
+        var source = """
+            package P
+            import System
+            class Box[TItem] {
+                var Value TItem
+                func Map[TResult](f (TItem) -> TResult) TResult { return f(this.Value) }
+            }
+            """;
+        var asm = LoadCompiled(source);
+        var box = FindUserType(asm, "P", "Box`1");
+        Assert.NotNull(box);
+        Assert.True(box.IsGenericTypeDefinition);
+
+        var map = box.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .First(m => m.Name == "Map");
+        var fParam = map.GetParameters().Single().ParameterType;
+        Assert.Equal("System.Func`2", fParam.GetGenericTypeDefinition().FullName);
+        var args = fParam.GetGenericArguments();
+        Assert.True(args[0].IsGenericTypeParameter, "TItem must be class-generic Var");
+        Assert.True(args[1].IsGenericMethodParameter, "TResult must be method-generic MVar");
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R6: emitted user IL for a generic-over-T lambda
+    /// call site contains no <c>System.Delegate::DynamicInvoke</c>
+    /// MemberRef and no <c>callvirt System.Delegate::DynamicInvoke</c>
+    /// instruction. Dispatch goes through a normal
+    /// <c>callvirt Func`N::Invoke</c> on the reified TypeSpec.
+    /// </summary>
+    [Fact]
+    public void R6_EmittedIL_HasNoDynamicInvokeForGenericLambdaSites()
+    {
+        var source = """
+            package P
+            import System
+            class Box[TItem] {
+                var Value TItem
+                func Map[TResult](f (TItem) -> TResult) TResult { return f(this.Value) }
+            }
+            var b = Box[int32]{Value: 7}
+            Console.WriteLine(b.Map[int32](func(x int32) int32 { return x + 1 }))
+            """;
+        var dllPath = CompileToDll(source, asExe: true);
+        using var pe = new System.Reflection.PortableExecutable.PEReader(
+            new MemoryStream(File.ReadAllBytes(dllPath), writable: false));
+        var md = pe.GetMetadataReader();
+
+        foreach (var handle in md.MemberReferences)
+        {
+            var mr = md.GetMemberReference(handle);
+            var name = md.GetString(mr.Name);
+            if (!string.Equals(name, "DynamicInvoke", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            string parentName;
+            switch (mr.Parent.Kind)
+            {
+                case HandleKind.TypeReference:
+                    var tr = md.GetTypeReference((TypeReferenceHandle)mr.Parent);
+                    parentName = md.GetString(tr.Namespace) + "." + md.GetString(tr.Name);
+                    break;
+                default:
+                    parentName = mr.Parent.Kind.ToString();
+                    break;
+            }
+
+            Assert.Fail($"R6: emitted assembly still references {parentName}::{name}");
+        }
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R6 end-to-end: a generic <c>Map</c> passes its
+    /// typed lambda to a second generic helper <c>Pipe</c>. Pre-R6
+    /// this routed both delegate slots through `DynamicInvoke`;
+    /// post-R6 it is two `callvirt Func`2::Invoke` dispatches.
+    /// </summary>
+    [Fact]
+    public void R6_EndToEnd_GenericMethodForwardsLambdaToAnotherGeneric()
+    {
+        var stdout = CompileAndRun("""
+            package P
+            import System
+            func Pipe[A any, B any](x A, f (A) -> B) B { return f(x) }
+            func Map[T any, U any](x T, f (T) -> U) U {
+                return Pipe[T, U](x, f)
+            }
+            Console.WriteLine(Map[int32, int32](21, func(n int32) int32 { return n * 2 }))
+            Console.WriteLine(Map[int32, string](7, func(n int32) string { return "n=" }))
+            """);
+        Assert.Equal("42\nn=\n", stdout);
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R6 end-to-end: an open-generic delegate flows
+    /// through a CLR <see cref="System.Collections.Generic.List{T}"/>
+    /// and is invoked at the indexer site. Pre-R6 each invocation
+    /// boxed/`DynamicInvoke`d; post-R6 it is a normal
+    /// `callvirt Func`2::Invoke` on the constructed TypeSpec.
+    /// </summary>
+    [Fact]
+    public void R6_EndToEnd_OpenGenericDelegateInList()
+    {
+        var stdout = CompileAndRun("""
+            package P
+            import System
+            import System.Collections.Generic
+            func ApplyThree[T any](fs List[(T) -> T], seed T) T {
+                let a = fs[0]
+                let b = fs[1]
+                let c = fs[2]
+                return c(b(a(seed)))
+            }
+            var fs = List[(int32) -> int32]()
+            fs.Add(func(x int32) int32 { return x + 1 })
+            fs.Add(func(x int32) int32 { return x * 2 })
+            fs.Add(func(x int32) int32 { return x - 3 })
+            Console.WriteLine(ApplyThree[int32](fs, 10))
+            """);
+        Assert.Equal("19", stdout.Trim());
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R6: mixed value-type and reference-type T through
+    /// the same generic delegate site. Sanity-checks both runtime
+    /// resolution paths off the same TypeSpec'd Invoke MemberRef.
+    /// </summary>
+    [Fact]
+    public void R6_EndToEnd_MixedValueAndReferenceTypeArgs()
+    {
+        var stdout = CompileAndRun("""
+            package P
+            import System
+            func Twice[T any](x T, f (T) -> T) T { return f(f(x)) }
+            Console.WriteLine(Twice[int32](2, func(n int32) int32 { return n + n }))
+            Console.WriteLine(Twice[string]("a", func(s string) string { return s + s }))
+            """);
+        Assert.Equal("8\naaaa\n", stdout);
+    }
+
+    // -----------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------
+
+    private static string CompileToDll(string source, bool asExe)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_reified_il_").FullName;
+        var srcPath = Path.Combine(tempDir, "test.gs");
+        var outPath = Path.Combine(tempDir, asExe ? "test.exe" : "test.dll");
+        File.WriteAllText(srcPath, source);
+
+        using var compileOut = new StringWriter();
+        using var compileErr = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(compileOut);
+        Console.SetError(compileErr);
+        int compileExit;
+        try
+        {
+            compileExit = Program.Main(new[]
+            {
+                "/out:" + outPath,
+                "/target:" + (asExe ? "exe" : "library"),
+                "/targetframework:net10.0",
+                srcPath,
+            });
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+        }
+
+        Assert.True(compileExit == 0, $"compile failed ({compileExit}): {compileOut}{compileErr}");
+        IlVerifier.Verify(outPath);
+        return outPath;
+    }
 
     private static Assembly LoadCompiled(string source)
     {

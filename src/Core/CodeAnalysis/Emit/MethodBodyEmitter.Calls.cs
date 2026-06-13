@@ -318,18 +318,23 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        // Phase 4 emit parity (F1, type-erased generics): a delegate whose
-        // parameter or return types reference open type parameters (e.g.
-        // `func(T) U`) is encoded as `System.Func<object, object>`, but the
-        // runtime instance is a concrete delegate (e.g. `Func<int, int>`).
-        // Invoking it through `Func<object, object>.Invoke` would feed the
-        // concrete target boxed objects it cannot unbox, corrupting memory.
-        // Route the call through `System.Delegate.DynamicInvoke`, which
-        // marshals boxing / unboxing of value-type arguments and the return
-        // value correctly across the erased boundary.
+        // ADR-0087 §3 R6: a delegate whose parameter or return types
+        // reference open type parameters (e.g. `func(T) U`) is now
+        // encoded as a reified `GENERICINST<Func`N><…>` shape. Dispatch
+        // through a MemberRef parented at that TypeSpec — the runtime
+        // delegate (e.g. `Func<int, int>`) resolves the MemberRef to
+        // its concrete `Invoke` slot, so no `Delegate.DynamicInvoke`
+        // marshalling is needed.
         if (call.FunctionType.ClrType == null)
         {
-            this.EmitOpenDelegateDynamicInvoke(call);
+            this.EmitExpression(call.Target);
+            foreach (var arg in call.Arguments)
+            {
+                this.EmitExpression(arg);
+            }
+
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetFunctionDelegateInvokeRef(call.FunctionType));
             return;
         }
 
@@ -349,73 +354,14 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(this.outer.GetMethodReference(invoke));
     }
 
-    // Invoke a type-erased open delegate (func(T) U over open type
-    // parameters) via System.Delegate.DynamicInvoke(object[]). Builds a
-    // boxed-argument array, calls DynamicInvoke, and leaves the boxed
-    // result (System.Object) on the stack; the caller's existing erased
-    // return handling unboxes when the substituted return is a value type.
-    private void EmitOpenDelegateDynamicInvoke(BoundIndirectCallExpression call)
-    {
-        this.EmitExpression(call.Target);
-
-        this.il.LoadConstantI4(call.Arguments.Length);
-        this.il.OpCode(ILOpCode.Newarr);
-        this.il.Token(this.outer.wellKnown.ObjectTypeRef);
-
-        for (int i = 0; i < call.Arguments.Length; i++)
-        {
-            var arg = call.Arguments[i];
-            this.il.OpCode(ILOpCode.Dup);
-            this.il.LoadConstantI4(i);
-            this.EmitExpression(arg);
-
-            // Value-type arguments must be boxed into the object[] slot.
-            // ADR-0087 §3 R4: after R2 a `T` value lives in a real
-            // VAR/MVAR slot, not an erased object. Boxing is now
-            // mandatory to land it in the `object[]` cell — the JIT
-            // elides the box if T resolves to a reference type.
-            if (arg.Type is TypeParameterSymbol || ReflectionMetadataEmitter.IsValueTypeSymbol(arg.Type))
-            {
-                this.il.OpCode(ILOpCode.Box);
-                this.il.Token(this.outer.GetElementTypeToken(arg.Type));
-            }
-
-            this.il.OpCode(ILOpCode.Stelem_ref);
-        }
-
-        var delegateClrType = this.outer.emitCtx.References.GetCoreType("System.Delegate");
-        var dynamicInvoke = delegateClrType.GetMethod("DynamicInvoke")
-            ?? throw new InvalidOperationException(
-                "System.Delegate has no DynamicInvoke method.");
-
-        this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(dynamicInvoke));
-
-        // Issue #418 (P1-6): Delegate.DynamicInvoke always returns object.
-        // For an erased void-returning delegate (`func(T)` with no return),
-        // the BoundIndirectCallExpression.Type is Void, so the surrounding
-        // BoundExpressionStatement skips its usual Pop and the boxed result
-        // would linger on the stack, producing invalid IL at the next
-        // ret/leave. Absorb the unused object here.
-        if (call.FunctionType.ReturnType == TypeSymbol.Void)
-        {
-            this.il.OpCode(ILOpCode.Pop);
-            return;
-        }
-
-        // ADR-0087 §3 R4: DynamicInvoke returns object; coerce back to the
-        // reified return slot when the consumer expects a real T (e.g. a
-        // type-parameter or instantiation containing one). For consumers
-        // expecting `object` we leave the boxed value on the stack
-        // unchanged — historical delegate-over-erased-T paths rely on the
-        // boxed shape and explicit `unbox.any` would NRE on a null result
-        // from a delegate binding to a lambda whose runtime return type
-        // is a value type bound to a `Func<object>`-shaped open delegate.
-        if (call.Type is TypeParameterSymbol || TypeSymbol.ContainsTypeParameter(call.Type))
-        {
-            this.EmitErasedObjectReturnWidening(TypeSymbol.Object, call.Type);
-        }
-    }
+    // ADR-0087 §3 R6: `EmitOpenDelegateDynamicInvoke` retired. Every
+    // call site over an open-bearing `FunctionTypeSymbol` now dispatches
+    // through a `callvirt` to a MemberRef parented at the reified
+    // `Func<...>` / `Action<...>` TypeSpec (see EmitIndirectCall and
+    // ReflectionMetadataEmitter.GetFunctionDelegateInvokeRef). The
+    // runtime delegate's concrete `Invoke` slot is resolved by the CLR
+    // when the substituted Var/MVar slots become concrete, so the
+    // historical `Delegate.DynamicInvoke` adapter is no longer required.
 
     /// <summary>ADR-0039: Emits arguments for an imported call, respecting <see cref="RefKind"/>.</summary>
     private void EmitImportedCallArguments(ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> refKinds)

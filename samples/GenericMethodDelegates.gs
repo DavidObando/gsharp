@@ -1,10 +1,11 @@
 // file: GenericMethodDelegates.gs
-// Issue #312 follow-up: a method (or free) type parameter used as a generic
-// argument of a delegate type — e.g. `func Map[TResult](f (TItem) -> TResult)`
-// — now binds and emits. The type-erased generic model encodes the open
-// delegate as System.Func<object, object> and invokes it through
-// System.Delegate.DynamicInvoke so value-type arguments and returns round-trip
-// correctly across the erased boundary.
+// Issue #312 follow-up, ADR-0087 §3 R6: a method (or free) type parameter
+// used as a generic argument of a delegate type — e.g.
+// `func Map[TResult](f (TItem) -> TResult)` — now binds and emits as a
+// reified `System.Func<!TItem, !TResult>` (with VAR/MVAR slots that the
+// runtime substitutes against the call site). Dispatch goes through the
+// normal `callvirt Func<...>::Invoke` MemberRef on a constructed TypeSpec,
+// not `System.Delegate.DynamicInvoke`.
 
 package GSharp.Example.GenericMethodDelegates
 

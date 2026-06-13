@@ -44,7 +44,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// <c>EmitFunctionLiteralToNamedDelegate</c>,
 /// <c>EmitMethodGroupToNamedDelegate</c>,
 /// <c>EmitClrEventSubscription</c>, <c>EmitUserEventSubscription</c>,
-/// <c>EmitCapturedVariableLoad</c>, <c>EmitOpenDelegateDynamicInvoke</c>)
+/// <c>EmitCapturedVariableLoad</c>)
 /// that reference <c>BodyEmitter</c>'s private <c>il</c>, <c>outer</c>,
 /// <c>locals</c>, <c>parameters</c>, <c>enclosingClosure</c> fields and
 /// call back into <c>EmitExpression</c> / <c>EmitLoadVariable</c> for every
