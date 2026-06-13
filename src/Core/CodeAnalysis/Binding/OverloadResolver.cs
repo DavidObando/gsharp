@@ -2469,7 +2469,35 @@ internal sealed class OverloadResolver
             {
                 for (var i = 0; i < function.Parameters.Length && i < boundArguments.Count; i++)
                 {
-                    inferTypeArguments(function.Parameters[i].Type, boundArguments[i].Type, substitution);
+                    var paramType = function.Parameters[i].Type;
+
+                    // ADR-0101 / issue #799: when the trailing parameter is
+                    // variadic (`name ...T`), inference must consider every
+                    // packed argument against the element type — *unless* the
+                    // caller supplied a single trailing argument whose type
+                    // already matches the slice (the C# `params` pass-through
+                    // case), in which case the slice itself drives inference.
+                    if (i == function.Parameters.Length - 1
+                        && function.Parameters[i].IsVariadic
+                        && paramType is SliceTypeSymbol variadicSlice)
+                    {
+                        var trailingCount = boundArguments.Count - i;
+                        if (trailingCount == 1 && boundArguments[i].Type is SliceTypeSymbol)
+                        {
+                            inferTypeArguments(paramType, boundArguments[i].Type, substitution);
+                        }
+                        else
+                        {
+                            for (var j = i; j < boundArguments.Count; j++)
+                            {
+                                inferTypeArguments(variadicSlice.ElementType, boundArguments[j].Type, substitution);
+                            }
+                        }
+
+                        break;
+                    }
+
+                    inferTypeArguments(paramType, boundArguments[i].Type, substitution);
                 }
 
                 foreach (var tp in function.TypeParameters)
@@ -2674,37 +2702,57 @@ internal sealed class OverloadResolver
 
         // Phase 4.8: type-check trailing variadic arguments against the slice
         // element type, then pack them into a single slice-typed argument.
+        // ADR-0101 / issue #799: a single trailing argument whose type already
+        // matches the variadic slice type is passed through unchanged
+        // (parity with the C# `params T[]` call-site semantics so the
+        // dogfooded `Sequences.Of` port accepts `Sequences.Of(arr)`).
         if (isVariadic)
         {
             var variadicParam = function.Parameters[function.Parameters.Length - 1];
-            var sliceType = (SliceTypeSymbol)variadicParam.Type;
+            var paramSliceType = (SliceTypeSymbol)variadicParam.Type;
+            var sliceType = substitution != null
+                ? (SliceTypeSymbol)substituteType(paramSliceType, substitution)
+                : paramSliceType;
             var elementType = sliceType.ElementType;
-            for (var i = fixedParamCount; i < syntax.Arguments.Count; i++)
-            {
-                var argument = boundArguments[i];
-                if (argument.Type != elementType && argument.Type != TypeSymbol.Error)
-                {
-                    Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, variadicParam.Name, elementType, argument.Type);
-                    hasErrors = true;
-                }
-            }
+            var trailingCount = syntax.Arguments.Count - fixedParamCount;
 
-            if (!hasErrors)
+            bool passThrough = trailingCount == 1
+                && boundArguments[fixedParamCount].Type == sliceType;
+
+            if (passThrough)
             {
-                var packed = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count - fixedParamCount);
+                // Single trailing []T argument — keep as-is. boundArguments
+                // already has the correct shape (fixedParamCount + 1 entries).
+            }
+            else
+            {
                 for (var i = fixedParamCount; i < syntax.Arguments.Count; i++)
                 {
-                    packed.Add(boundArguments[i]);
+                    var argument = boundArguments[i];
+                    if (argument.Type != elementType && argument.Type != TypeSymbol.Error)
+                    {
+                        Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, variadicParam.Name, elementType, argument.Type);
+                        hasErrors = true;
+                    }
                 }
 
-                var finalArgs = ImmutableArray.CreateBuilder<BoundExpression>(fixedParamCount + 1);
-                for (var i = 0; i < fixedParamCount; i++)
+                if (!hasErrors)
                 {
-                    finalArgs.Add(boundArguments[i]);
-                }
+                    var packed = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count - fixedParamCount);
+                    for (var i = fixedParamCount; i < syntax.Arguments.Count; i++)
+                    {
+                        packed.Add(boundArguments[i]);
+                    }
 
-                finalArgs.Add(new BoundArrayCreationExpression(syntax, sliceType, packed.MoveToImmutable()));
-                boundArguments = finalArgs;
+                    var finalArgs = ImmutableArray.CreateBuilder<BoundExpression>(fixedParamCount + 1);
+                    for (var i = 0; i < fixedParamCount; i++)
+                    {
+                        finalArgs.Add(boundArguments[i]);
+                    }
+
+                    finalArgs.Add(new BoundArrayCreationExpression(syntax, sliceType, packed.MoveToImmutable()));
+                    boundArguments = finalArgs;
+                }
             }
         }
 

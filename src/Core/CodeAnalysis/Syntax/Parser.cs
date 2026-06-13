@@ -2958,6 +2958,20 @@ public class Parser
             refKindModifier = NextToken();
         }
 
+        // ADR-0101 / issue #799: the C# `params` keyword is intentionally NOT
+        // part of the G# parameter grammar — the canonical variadic spelling
+        // is `name ...T` (Go-style). Detect the C# pattern `params <ident>`
+        // and emit a focused diagnostic (GS0363) before recovering by
+        // skipping the keyword and continuing to parse the rest as a regular
+        // parameter. This stops the user from hitting a cryptic "expected
+        // identifier" error and points them at the canonical spelling.
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "params"
+            && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            var paramsToken = NextToken();
+            Diagnostics.ReportParamsKeywordNotSupported(paramsToken.Location);
+        }
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         SyntaxToken ellipsis = null;
         if (Current.Kind == SyntaxKind.EllipsisToken)

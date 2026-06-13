@@ -2892,9 +2892,24 @@ internal sealed class DeclarationBinder
             }
 
             // Phase 4.8: validate `...T` appears only on the last syntactic parameter.
-            for (var i = 0; i < syntax.Parameters.Count - 1; i++)
+            // ADR-0101 / issue #799: also flag the (rare) case where more than one
+            // parameter is variadic — the second and later occurrences get GS0364
+            // in addition to the "must-be-last" diagnostic on the earlier one(s).
+            var firstVariadicSeen = false;
+            for (var i = 0; i < syntax.Parameters.Count; i++)
             {
-                if (syntax.Parameters[i].IsVariadic)
+                if (!syntax.Parameters[i].IsVariadic)
+                {
+                    continue;
+                }
+
+                if (firstVariadicSeen)
+                {
+                    Diagnostics.ReportMultipleVariadicParameters(syntax.Parameters[i].Location, syntax.Parameters[i].Identifier.Text);
+                }
+
+                firstVariadicSeen = true;
+                if (i < syntax.Parameters.Count - 1)
                 {
                     Diagnostics.ReportVariadicParameterMustBeLast(syntax.Parameters[i].Location, syntax.Parameters[i].Identifier.Text);
                 }
