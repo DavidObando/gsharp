@@ -2569,6 +2569,74 @@ public sealed class Binder
             // handles this differently because both map to CLR T[], but at the
             // GSharp semantic level they are distinct types.
         }
+        else if (parameterType is SequenceTypeSymbol pseq)
+        {
+            // Issue #773 / ADR-0084 §L2: an extension declared as
+            // `func (self sequence[T]) ...` must infer T from any
+            // call-site receiver whose static type is sequence-compatible —
+            // another `sequence[U]`, a `[]U` slice, a fixed `[N]U` array,
+            // or any CLR type that implements `IEnumerable<U>`.
+            switch (argumentType)
+            {
+                case SequenceTypeSymbol aseq:
+                    InferTypeArguments(pseq.ElementType, aseq.ElementType, substitution);
+                    break;
+                case SliceTypeSymbol asl:
+                    InferTypeArguments(pseq.ElementType, asl.ElementType, substitution);
+                    break;
+                case ArrayTypeSymbol aarr:
+                    InferTypeArguments(pseq.ElementType, aarr.ElementType, substitution);
+                    break;
+                default:
+                    var argClrSeq = argumentType?.ClrType;
+                    var openIEnumerable = typeof(System.Collections.Generic.IEnumerable<>);
+                    if (argClrSeq != null)
+                    {
+                        var matchedSeq = argClrSeq.IsGenericType && argClrSeq.GetGenericTypeDefinition() == openIEnumerable
+                            ? argClrSeq
+                            : FindMatchingInterface(argClrSeq, openIEnumerable);
+                        if (matchedSeq != null)
+                        {
+                            var args = matchedSeq.GetGenericArguments();
+                            if (args.Length == 1)
+                            {
+                                InferTypeArguments(pseq.ElementType, TypeSymbol.FromClrType(args[0]), substitution);
+                            }
+                        }
+                    }
+
+                    break;
+            }
+        }
+        else if (parameterType is AsyncSequenceTypeSymbol paseq)
+        {
+            // Mirror of the synchronous-sequence inference for `async sequence[T]`.
+            switch (argumentType)
+            {
+                case AsyncSequenceTypeSymbol aaseq:
+                    InferTypeArguments(paseq.ElementType, aaseq.ElementType, substitution);
+                    break;
+                default:
+                    var argClrAseq = argumentType?.ClrType;
+                    var openIAsyncEnumerable = typeof(System.Collections.Generic.IAsyncEnumerable<>);
+                    if (argClrAseq != null)
+                    {
+                        var matchedAseq = argClrAseq.IsGenericType && argClrAseq.GetGenericTypeDefinition() == openIAsyncEnumerable
+                            ? argClrAseq
+                            : FindMatchingInterface(argClrAseq, openIAsyncEnumerable);
+                        if (matchedAseq != null)
+                        {
+                            var args = matchedAseq.GetGenericArguments();
+                            if (args.Length == 1)
+                            {
+                                InferTypeArguments(paseq.ElementType, TypeSymbol.FromClrType(args[0]), substitution);
+                            }
+                        }
+                    }
+
+                    break;
+            }
+        }
         else if (parameterType is FunctionTypeSymbol pf && argumentType is FunctionTypeSymbol af
             && pf.ParameterTypes.Length == af.ParameterTypes.Length)
         {
@@ -2702,6 +2770,22 @@ public sealed class Binder
         {
             var inner = SubstituteType(a.ElementType, substitution);
             return ReferenceEquals(inner, a.ElementType) ? type : ArrayTypeSymbol.Get(inner, a.Length);
+        }
+
+        if (type is SequenceTypeSymbol seq)
+        {
+            // Issue #773: substitute through `sequence[T]` so the open
+            // receiver of a generic extension lowers to a concrete
+            // `sequence[U]` at the call site (and downstream
+            // `BindExtensionFunctionCall` sees a matching parameter type).
+            var inner = SubstituteType(seq.ElementType, substitution);
+            return ReferenceEquals(inner, seq.ElementType) ? type : SequenceTypeSymbol.Get(inner);
+        }
+
+        if (type is AsyncSequenceTypeSymbol aseq)
+        {
+            var inner = SubstituteType(aseq.ElementType, substitution);
+            return ReferenceEquals(inner, aseq.ElementType) ? type : AsyncSequenceTypeSymbol.Get(inner);
         }
 
         if (type is FunctionTypeSymbol fn)
