@@ -465,6 +465,38 @@ internal sealed class MemberLookup
             return TypeSymbol.FromClrType(openClr);
         }
 
+        // Issue #794: an open generic type's instance member can return an
+        // array of an open parameter (e.g. `List<T>.ToArray()` → `T[]`). The
+        // CLR `Type` reports `IsArray` for those, not `IsGenericType`. Recurse
+        // on the element type and surface a G# slice (`[]T`) so the call site
+        // sees the symbolic projection rather than the erased `object[]`.
+        if (openClr.IsArray && openClr.GetArrayRank() == 1)
+        {
+            var openElement = openClr.GetElementType();
+            var mappedElement = MapOpenClrTypeToSymbolic(openElement, openDefinition, typeArguments);
+            if (TypeSymbol.ContainsTypeParameter(mappedElement))
+            {
+                return SliceTypeSymbol.Get(mappedElement);
+            }
+
+            return TypeSymbol.FromClrType(openClr);
+        }
+
+        // Issue #794: a managed pointer return (e.g. `List<T>.this[int]` on
+        // `Span<T>`) reports `IsByRef`. Recurse on the pointee and wrap with
+        // `ByRefTypeSymbol` to mirror the open-shape's contract.
+        if (openClr.IsByRef)
+        {
+            var openPointee = openClr.GetElementType();
+            var mappedPointee = MapOpenClrTypeToSymbolic(openPointee, openDefinition, typeArguments);
+            if (TypeSymbol.ContainsTypeParameter(mappedPointee))
+            {
+                return ByRefTypeSymbol.Get(mappedPointee);
+            }
+
+            return TypeSymbol.FromClrType(openClr);
+        }
+
         if (openClr.IsGenericType && !openClr.IsGenericTypeDefinition)
         {
             var openArgs = openClr.GetGenericArguments();

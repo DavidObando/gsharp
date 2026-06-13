@@ -315,20 +315,35 @@ of that migration, not left behind as dead code.
   **Source-port side: deferred.** While porting `Optional.gs` and
   `Sequences.gs` it became clear that the public API surface still
   hits several smaller, previously undocumented G# language gaps —
-  generic-method type-parameter threading through generic
+  ~~generic-method type-parameter threading through generic
   instance-method calls (`List[T]().ToArray()` returns `object[]`
-  inside a generic shared method), no `default(T)` expression, no
-  `params` parameter declaration, no `==` between `(T) -> T` /
-  `sequence[T]` values and `nil`, no `[MethodImpl(...)]` annotation
-  parsing inside `shared { }` blocks, no `yield` inside a
-  shared-static method that returns `IEnumerable[T]`. Each is filed
-  as a focused follow-up. The C# escape hatch under
-  `src/Sdk/Gsharp.Extensions/Optional/` and
+  inside a generic shared method)~~ (closed by issue #794), no
+  `default(T)` expression, no `params` parameter declaration, no
+  `==` between `(T) -> T` / `sequence[T]` values and `nil`, no
+  `[MethodImpl(...)]` annotation parsing inside `shared { }` blocks,
+  no `yield` inside a shared-static method that returns
+  `IEnumerable[T]`. Each is filed as a focused follow-up. The C#
+  escape hatch under `src/Sdk/Gsharp.Extensions/Optional/` and
   `src/Sdk/Gsharp.Extensions/Sequences/` remains in place; the
   Extensions test suite (107 tests) continues to run against it
   unchanged. Once those follow-ups close the actual G# port becomes
   mechanical — the bootstrap + `[Extension]` emit make it a flag
   flip rather than an infrastructure project.
+
+  Issue #794 specifically closed the first follow-up bullet: when a
+  receiver carries symbolic type arguments (`ImportedTypeSymbol`
+  with `OpenDefinition` + `TypeArguments`, the #313 / #671
+  shape), every instance call and property read on that receiver
+  now reprojects through the open declaring type's signature so the
+  result symbol carries the in-scope `T` / `K` / `V` rather than the
+  type-erased `object`. `List[T]().ToArray()` is `[]T`,
+  `Dictionary[K, V]().Keys` is `ICollection[K]`, and
+  `List[T]().Add(v)` binds when `v` is typed `T` (the binder
+  treats type-parameter args as `object` for overload resolution
+  against an erased receiver). The fix lives at the binder layer
+  only — no `BoundNodeKind` was added, and emit/IL-verify run
+  green end-to-end through the existing #765 / R5 reified-generics
+  path.
 
 ## Consequences
 
