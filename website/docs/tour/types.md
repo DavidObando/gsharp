@@ -159,6 +159,10 @@ Console.WriteLine(counts["gsharp"])
 
 A composite literal with no fields uses the zero value for each field. A `var` declaration with an explicit type and no initializer also starts at the type's zero value: `0` for numeric types, `False` for `bool`, empty for `string`, and `nil` for nullable values.
 
+## Friendly numeric aliases
+
+G# also accepts ten friendly aliases for the canonical width-bearing numeric primitives: `int` → `int32`, `uint` → `uint32`, `long` → `int64`, `ulong` → `uint64`, `short` → `int16`, `ushort` → `uint16`, `byte` → `uint8`, `sbyte` → `int8`, `float` → `float32`, and `double` → `float64`. The alias resolves to the canonical type at the binder, so `let x int = 1` and `let x int32 = 1` are equivalent — diagnostics, `typeof`, hover, and IL always display the canonical width-bearing name. See [ADR-0098](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0098-friendly-numeric-type-aliases.md).
+
 ## A note on `nil` vs `null`
 
 The null literal in G# is spelled `nil`, not `null`. Coming from C#, Kotlin, Java, or TypeScript? Your fingers will reach for `null` — and the compiler will catch it for you. Typing `null` in a value position reports `GS0273` ("`'null'` is not a literal in G#. Did you mean `'nil'`?") and the binder treats it as `nil` so the rest of the expression still typechecks. The diagnostic only fires when nothing in scope is named `null`; the identifier itself is not a keyword, so a function or local named `null` is legal and resolves normally. See [ADR-0081](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0081-null-identifier-did-you-mean-nil.md).

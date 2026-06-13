@@ -133,7 +133,7 @@ VariableDecl = ( "const" | "let" | "var" ) identifier TypeClause? "=" Expression
 
 ### Predeclared types
 
-The predeclared primitive and special type names are `bool`, `uint8`, `int8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, `uint64`, `nint`, `nuint`, `float32`, `float64`, `decimal`, `char`, `string`, `object`, `void`, and the special literal type `nil`. Width-bearing integer names are canonical; older aliases such as `int`, `uint`, `long`, and `byte` are not built-in G# primitive names.
+The predeclared primitive and special type names are `bool`, `uint8`, `int8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, `uint64`, `nint`, `nuint`, `float32`, `float64`, `decimal`, `char`, `string`, `object`, `void`, and the special literal type `nil`. Width-bearing integer names are canonical. ADR-0098 / issue #729 additionally accepts the friendly numeric aliases `int` (→ `int32`), `uint` (→ `uint32`), `long` (→ `int64`), `ulong` (→ `uint64`), `short` (→ `int16`), `ushort` (→ `uint16`), `byte` (→ `uint8`), `sbyte` (→ `int8`), `float` (→ `float32`), and `double` (→ `float64`) in every type-clause position; the alias resolves to the canonical `TypeSymbol` at the binder, so diagnostics, `typeof`, `nameof`, hover, and IL always print the canonical name. Aliases are reserved type names — a `type` / `struct` / `class` / `enum` / `delegate` declaration that tries to shadow one is rejected with `GS0102`.
 
 ### Boolean types
 

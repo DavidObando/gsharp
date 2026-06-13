@@ -21,6 +21,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0045](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0045-object-universal-upper-bound.md) | `object` as the universal upper bound | Makes `object` the top type for assignment compatibility, boxing, and object equality. |
 | [0046](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0046-char-literal-grammar.md) | `'c'` character literal grammar | Specifies character literal grammar, escapes, static type, and diagnostics. |
 | [0049](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0049-width-bearing-integer-names.md) | Width-bearing integer keyword names | Chooses explicit names such as `int32` and `uint64` over ambiguous aliases. |
+| [0098](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0098-friendly-numeric-type-aliases.md) | Friendly numeric type aliases | Adds `int` / `uint` / `long` / `ulong` / `short` / `ushort` / `byte` / `sbyte` / `float` / `double` as binder-resolved aliases on top of the canonical width-bearing names; diagnostics and IL keep the canonical spelling. |
 
 ## Concurrency, async, and resource scope
 

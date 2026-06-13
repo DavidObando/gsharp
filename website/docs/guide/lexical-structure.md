@@ -28,7 +28,7 @@ Integer suffixes are case-insensitive: `L` for `int64`, `U` for `uint32`, and `U
 
 Floating literals are decimal only. Valid forms include `1.5`, `.5`, `1e10`, and `1.5e-3`. The current lexer does not treat `1.` as a float because the dot would conflict with member access. Floating suffixes are `F` for `float32`, `D` for `float64`, and `M` for `decimal`.
 
-The numeric design is grounded in [ADR-0044](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0044-numeric-primitive-coverage.md) and [ADR-0049](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0049-width-bearing-integer-names.md).
+The numeric design is grounded in [ADR-0044](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0044-numeric-primitive-coverage.md), [ADR-0049](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0049-width-bearing-integer-names.md), and [ADR-0098](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0098-friendly-numeric-type-aliases.md) (friendly numeric aliases on top of the canonical width-bearing names).
 
 ## Characters and strings
 

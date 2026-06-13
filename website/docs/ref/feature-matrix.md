@@ -26,7 +26,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Feature | Emit (`gsc`) | Interpreter | Notes |
 | --- | --- | --- | --- |
 | Primitive types and numeric operators | Supported | Mostly supported | Evaluator implements primitive arithmetic; address/deref unary operators are limited. |
-| Width-bearing integer names | Supported | Supported | Canonical names are `int32`, `uint64`, and related widths; no built-in `int` alias. |
+| Width-bearing integer names | Supported | Supported | Canonical names are `int32`, `uint64`, and related widths. ADR-0098 / issue #729 additionally accepts the friendly aliases `int`, `uint`, `long`, `ulong`, `short`, `ushort`, `byte`, `sbyte`, `float`, and `double`; they resolve to the canonical `TypeSymbol` at the binder, so diagnostics, `typeof`, hover, and IL print the canonical name. |
 | Numeric conversions | Supported | Supported | ADR-0044 widening lattice plus explicit conversions. |
 | `object` universal upper bound | Supported | Supported | Boxing and object equality are implemented. |
 | Nullable `T?`, `nil`, `!!`, `?:`, `?.`, `?[i]` | Supported | Supported | `!!` throws in the evaluator when the value is nil. `?[i]` (ADR-0073) short-circuits indexing to `nil` when the receiver is nil. |

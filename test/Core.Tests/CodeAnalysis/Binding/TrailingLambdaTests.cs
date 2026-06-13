@@ -116,10 +116,14 @@ runIt() async func() int32 { return await computeAsync() }
     [Fact]
     public void TrailingLambda_AsyncWithPrecedingArgs_BindsWithoutDiagnostics()
     {
+        // ADR-0098 / issue #729 reserved `double` as a friendly alias for
+        // `float64`, so `double(x)` is now an explicit conversion rather
+        // than a function call. Rename the helper to `twice` to keep this
+        // test isolated to the trailing-lambda parser behaviour it covers.
         var result = Evaluate(@"
-async func double(x int32) int32 { return x * 2 }
+async func twice(x int32) int32 { return x * 2 }
 func combine(seed int32, f async (int32) -> int32) { f(seed) }
-combine(10) async func(x int32) int32 { return await double(x) }
+combine(10) async func(x int32) int32 { return await twice(x) }
 ");
         Assert.Empty(result.Diagnostics);
     }

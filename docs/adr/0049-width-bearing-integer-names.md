@@ -1,6 +1,6 @@
 # ADR-0049: Width-bearing integer keyword names
 
-- **Status**: Accepted
+- **Status**: Accepted (Note: the "no alias" subset of this decision is superseded by [ADR-0098](0098-friendly-numeric-type-aliases.md), which re-introduces the C#-style names as binder-resolved aliases on top of the canonical width-bearing names. The canonical-name decision and rename of `int` → `int32` etc. stand unchanged.)
 - **Date**: 2026-05-28
 - **Phase**: Phase 8 — numeric cleanup
 - **Related**: ADR-0044 (numeric primitive coverage), issue #201

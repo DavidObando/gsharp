@@ -30,6 +30,25 @@ Use short, descriptive package names and exported surface names that explain dom
 
 Prefer width-bearing primitive names such as `int32`, `uint64`, and `float64` in public signatures. They are the canonical built-ins and avoid ambiguity across CLR platforms.
 
+## Naming numeric types
+
+G# accepts ten friendly aliases on top of the canonical width-bearing names (ADR-0098 / issue #729): `int` → `int32`, `uint` → `uint32`, `long` → `int64`, `ulong` → `uint64`, `short` → `int16`, `ushort` → `uint16`, `byte` → `uint8`, `sbyte` → `int8`, `float` → `float32`, and `double` → `float64`. The alias resolves to the canonical `TypeSymbol` at the binder, so diagnostics, `typeof`, `nameof`, hover, and emitted IL always print the canonical name regardless of which spelling you wrote.
+
+Prefer the canonical width-bearing spellings in documentation, public library APIs, and conformance samples — the explicit width keeps cross-library readability stable as a project grows. The friendly aliases are appropriate inside function bodies, lambdas, and local examples where brevity helps reading.
+
+```gsharp
+// Public API: prefer the canonical width-bearing names.
+func Encode(values []int32) []uint8 { ... }
+
+// Local code: the friendly aliases are appropriate.
+let count int = 0
+for x in values {
+    count = count + 1
+}
+```
+
+The formatter does not rewrite either spelling — author intent wins. Aliases are reserved type names: `type int = string` (and the equivalent `struct` / `class` / `enum` / `delegate` forms) is rejected with `GS0102` the same way `type int32 = string` already is.
+
 ## Choose `let`, `var`, and `const` deliberately
 
 Use `let` when a binding should not be reassigned, `var` when mutation is part of the algorithm, and `const` for compile-time constants. The short `name := expr` form was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md); spell `let name = expr` for a one-line immutable introduction and `var name = expr` when the value is rebound. Use explicit types at API boundaries and for zero-value `var` declarations.
