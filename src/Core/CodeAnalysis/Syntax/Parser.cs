@@ -1926,6 +1926,12 @@ public class Parser
         {
             var startToken = Current;
 
+            // Issue #797: each shared-block member may be preceded by
+            // Kotlin-style `@Foo` annotations (ADR-0047 §3), mirroring the
+            // instance-member surface in ParseAggregateDeclaration. The default
+            // target follows the member kind (field/method/property/event).
+            var memberAnnotations = ParseAnnotations();
+
             SyntaxToken memberAccessibility = null;
             if (Current.Kind == SyntaxKind.PublicKeyword ||
                 Current.Kind == SyntaxKind.InternalKeyword ||
@@ -1965,7 +1971,9 @@ public class Parser
                     Diagnostics.ReportUnexpectedToken(sharedMemberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
                 }
 
-                properties.Add(ParsePropertyDeclaration(memberAccessibility, null, null));
+                var property = ParsePropertyDeclaration(memberAccessibility, null, null);
+                property.WithAnnotations(memberAnnotations);
+                properties.Add(property);
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "event")
             {
@@ -1974,11 +1982,15 @@ public class Parser
                     Diagnostics.ReportUnexpectedToken(sharedMemberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
                 }
 
-                events.Add(ParseEventDeclaration(memberAccessibility, null, null));
+                var eventDecl = ParseEventDeclaration(memberAccessibility, null, null);
+                eventDecl.WithAnnotations(memberAnnotations);
+                events.Add(eventDecl);
             }
             else if (Current.Kind == SyntaxKind.FuncKeyword)
             {
-                methods.Add((FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, openModifier: null, overrideModifier: null, sharedMemberAsyncModifier));
+                var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, openModifier: null, overrideModifier: null, sharedMemberAsyncModifier);
+                method.WithAnnotations(memberAnnotations);
+                methods.Add(method);
             }
             else
             {
@@ -1987,7 +1999,7 @@ public class Parser
                     Diagnostics.ReportUnexpectedToken(sharedMemberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
                 }
 
-                fields.Add(ParseFieldDeclaration());
+                fields.Add(ParseFieldDeclaration().WithAnnotations(memberAnnotations));
             }
 
             if (Current == startToken)
