@@ -210,6 +210,8 @@ internal sealed partial class ExpressionBinder
                 return BindTypeOfExpression((TypeOfExpressionSyntax)syntax);
             case SyntaxKind.NameOfExpression:
                 return BindNameOfExpression((NameOfExpressionSyntax)syntax);
+            case SyntaxKind.DefaultExpression:
+                return BindDefaultExpression((DefaultExpressionSyntax)syntax);
             case SyntaxKind.FieldAssignmentExpression:
                 return BindFieldAssignmentExpression((FieldAssignmentExpressionSyntax)syntax);
             case SyntaxKind.EventSubscriptionExpression:

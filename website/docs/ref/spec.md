@@ -116,6 +116,14 @@ Malformed interpolation is reported by dedicated diagnostics: `GS0220` (non-cons
 
 `true` and `false` are boolean literals. `nil` is the null literal. `null` is not a keyword or literal in G#. When the identifier `null` appears in a value-expression position and no symbol named `null` exists in scope, the binder reports `GS0273` ("`'null'` is not a literal in G#. Did you mean `'nil'`?") and recovers by treating the identifier as `nil`, so target-type contexts continue to typecheck (ADR-0081). Declarations may legally name a symbol `null` (e.g. `func null() { ... }` or `let null = "hi"`); identifier resolution wins over the recovery in that case.
 
+### `default` expressions (ADR-0100)
+
+`default(T)` evaluates to the zero-initialised value of any type `T`: `0`/`false`/`0.0` for built-in value types, `nil` for reference types and `T?`, field-wise zero for user structs, and the runtime substitution of `T` for an unconstrained type parameter (so `default(T)` in a generic function emits `initobj T` and Just Works for both reference- and value-type substitutions per ADR-0087).
+
+The bare `default` literal is valid in *target-typed* positions and takes its type from the surrounding context: the initializer of a `let`/`var` with an explicit type clause, the value of a `return` when the enclosing function has a known declared return type, an argument bound against a parameter of known type, and a branch of a conditional expression typed by its sibling. A bare `default` used where no target type is available is reported as `GS0362`.
+
+The arm-leader use of `default` inside `switch`/`select` is unchanged — the parser recognises the arm leader before attempting expression parsing.
+
 ## Constants and variables
 
 G# has `const`, `let`, and `var` declarations. A constant or `let` binding requires an initializer. A `var` binding may either have an initializer or name a type for a zero/default value.
@@ -465,7 +473,7 @@ Postfix `!!`, member access `.`, null-conditional access `?.`, null-conditional 
 
 ### Primary expressions and calls
 
-Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, switch expressions, if expressions (ADR-0064), tuple literals, `make(chan ...)`, `typeof(...)`, and `nameof(...)`. Calls accept positional, named, and ref-kind-prefixed arguments:
+Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, switch expressions, if expressions (ADR-0064), tuple literals, `make(chan ...)`, `typeof(...)`, `nameof(...)`, and `default(...)` (ADR-0100). Calls accept positional, named, and ref-kind-prefixed arguments:
 
 - **Named arguments** — `Foo(timeout: 30, retries: 3)` for free functions, user methods, user constructors, user extension functions, imported CLR methods and constructors, imported extension methods, and inherited CLR instance methods (including delegate `Invoke`). The canonical separator is `:`; the legacy `Foo(timeout = 30)` spelling is deprecated and emits the `GS0315` warning ([ADR-0080](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0080-deprecate-equals-named-arguments.md), issue #720). Both spellings parse for one release; the `=` form is removed in a later release. Indirect calls through a function-typed or delegate-typed variable, and variadic call sites, do not accept named arguments because the call target does not preserve parameter names. Diagnostics `GS0244`–`GS0247` cover ordering, duplicates, and unknown names; `GS0315` covers the deprecated `=` separator.
 - **Ref-kind arguments** — `f(ref x)`, `f(out var n)`, `f(in z)` (ADR-0060). The call-site modifier must match the parameter's declared kind (`GS0235`); `in` requires an explicit `in` at the call site to prevent silent spilling (`GS0242`).

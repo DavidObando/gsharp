@@ -204,8 +204,47 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindConditionalExpression(ConditionalExpressionSyntax syntax)
     {
         var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
-        var whenTrue = BindExpression(syntax.WhenTrue);
-        var whenFalse = BindExpression(syntax.WhenFalse);
+
+        // ADR-0100 / issue #795: a bare `default` branch takes its type
+        // from the sibling branch. Bind whichever branch is typed first so
+        // we have a concrete target type for the bare default. When both
+        // branches are bare `default` the common type is unknown and the
+        // expression is invalid.
+        var trueIsBareDefault = syntax.WhenTrue is DefaultExpressionSyntax tDef && tDef.TypeClause == null;
+        var falseIsBareDefault = syntax.WhenFalse is DefaultExpressionSyntax fDef && fDef.TypeClause == null;
+
+        BoundExpression whenTrue;
+        BoundExpression whenFalse;
+        if (trueIsBareDefault && falseIsBareDefault)
+        {
+            Diagnostics.ReportBareDefaultNoTargetType(((DefaultExpressionSyntax)syntax.WhenTrue).DefaultKeyword.Location);
+            return new BoundErrorExpression(null);
+        }
+        else if (trueIsBareDefault)
+        {
+            whenFalse = BindExpression(syntax.WhenFalse);
+            if (whenFalse is BoundErrorExpression)
+            {
+                return new BoundErrorExpression(null);
+            }
+
+            whenTrue = new BoundDefaultExpression(syntax.WhenTrue, whenFalse.Type);
+        }
+        else if (falseIsBareDefault)
+        {
+            whenTrue = BindExpression(syntax.WhenTrue);
+            if (whenTrue is BoundErrorExpression)
+            {
+                return new BoundErrorExpression(null);
+            }
+
+            whenFalse = new BoundDefaultExpression(syntax.WhenFalse, whenTrue.Type);
+        }
+        else
+        {
+            whenTrue = BindExpression(syntax.WhenTrue);
+            whenFalse = BindExpression(syntax.WhenFalse);
+        }
 
         if (condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression)
         {

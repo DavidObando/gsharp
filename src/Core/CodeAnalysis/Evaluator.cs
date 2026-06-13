@@ -2875,10 +2875,15 @@ public sealed class Evaluator
         // for the `GetAsyncEnumerator` token; more generally, BoundDefaultExpression
         // should produce the type's default value when interpreted.
         //
-        // Prefer the language's Go-style zero values (string -> "", structs and
-        // enums -> zeroed) so a bare `var x T` declaration matches the rest of
-        // the interpreter; fall back to CLR value-type instantiation for
-        // imported value types (e.g. CancellationToken) and null for references.
+        // ADR-0100 / issue #795: align with the IL emit path. `EmitDefault`
+        // produces `ldnull` for reference types (e.g. `string`), zero for
+        // primitive value types, and `initobj` for arbitrary value types.
+        // The interpreter mirrors this:
+        //   - reference types and nullable types → nil
+        //   - value types → zero / zeroed struct
+        // Prior to ADR-0100 the interpreter returned `""` for
+        // `default(string)` (the Go-style zero), which diverged from the
+        // compiled behaviour. Both shapes now produce `nil`.
 
         // Issue #504: a NullableTypeSymbol's default is `nil`, not the
         // underlying type's zero. The binder lowers `nil → Nullable<T>`
@@ -2887,6 +2892,16 @@ public sealed class Evaluator
         // interpreter must mirror that by producing the absent-value sentinel
         // (null) so `?:`, `!!`, and equality checks see a missing value.
         if (node.Type is Symbols.NullableTypeSymbol)
+        {
+            return null;
+        }
+
+        // ADR-0100 / issue #795: reference types (including string) default
+        // to nil. This matches `EmitDefault` (which emits `ldnull` for any
+        // non-value-type that isn't a generic type parameter) and the C#
+        // `default(T)` semantics requested by the issue.
+        var clrForRefCheck = node.Type?.ClrType;
+        if (clrForRefCheck != null && !clrForRefCheck.IsValueType)
         {
             return null;
         }

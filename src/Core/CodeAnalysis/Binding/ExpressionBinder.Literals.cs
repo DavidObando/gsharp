@@ -60,6 +60,41 @@ internal sealed partial class ExpressionBinder
         return new BoundTypeOfExpression(null, typeSymbol, systemType);
     }
 
+    internal BoundExpression BindDefaultExpression(DefaultExpressionSyntax syntax)
+    {
+        // ADR-0100 / issue #795: `default(T)` and bare `default`.
+        //
+        // The explicit form (`default(T)`) carries its type directly.
+        //
+        // The bare form has no type clause; its concrete type is supplied
+        // by the surrounding target-typed position. To compose with the
+        // existing bind-then-convert pipeline (StatementBinder for
+        // let/var/return, OverloadResolver for call arguments,
+        // ExpressionBinder.BindConditionalExpression for `?:`), we emit
+        // a placeholder `BoundDefaultExpression(syntax, TypeSymbol.Error)`
+        // here and let `ConversionClassifier.BindConversion` materialise
+        // the concrete-typed default at the use site. The dedicated
+        // `BindConversion(ExpressionSyntax, TypeSymbol)` overload already
+        // intercepts the bare-default syntax before this dispatcher
+        // fires, so the placeholder is only observed when the bare form
+        // surfaces via the eager `BindExpression(syntax)` path used by
+        // argument binding and overload resolution. If the placeholder
+        // ever leaks to a position without a target type (e.g.
+        // `var x = default`), the conversion step reports GS0362.
+        if (syntax.TypeClause == null)
+        {
+            return new BoundDefaultExpression(syntax, TypeSymbol.Error);
+        }
+
+        var typeSymbol = bindTypeClause(syntax.TypeClause);
+        if (typeSymbol == null || typeSymbol == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        return new BoundDefaultExpression(syntax, typeSymbol);
+    }
+
     private BoundExpression BindNameOfExpression(NameOfExpressionSyntax syntax)
     {
         // Issue #143: `nameof(expr)` is folded to a compile-time string of

@@ -157,7 +157,9 @@ Console.WriteLine(counts["gsharp"])
 
 ## Zero values
 
-A composite literal with no fields uses the zero value for each field. A `var` declaration with an explicit type and no initializer also starts at the type's zero value: `0` for numeric types, `False` for `bool`, empty for `string`, and `nil` for nullable values.
+A composite literal with no fields uses the zero value for each field. A `var` declaration with an explicit type and no initializer also starts at the type's zero value: `0` for numeric types, `False` for `bool`, `nil` for reference types (including `string`), and `nil` for nullable values.
+
+The same zero value can be spelled directly as `default(T)` for any type `T` — including unconstrained type parameters inside generic functions, where `default(T)` lowers to `initobj T` so both reference-type and value-type substitutions Just Work. The bare `default` literal (without `(T)`) is accepted wherever the target type is known from context: in a `let`/`var` with an explicit type clause (`let x int32 = default`), in `return default` when the function's return type is known, as an argument to a typed parameter, and as a conditional branch typed by its sibling. See [ADR-0100](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0100-default-expression.md).
 
 ## Friendly numeric aliases
 
