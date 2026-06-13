@@ -104,6 +104,29 @@ Console.WriteLine(Apply(Plus{}, 3, 4))              // 7
 
 The witness-T parameter `w T` lets the type-argument-inference pipeline pick `T` from the call site; explicit type arguments (`Apply[Plus](3, 4)`) work too. Static-virtual members map directly onto the .NET runtime's "static abstract / static virtual" support (e.g. `INumber<T>`, `IParsable<T>`, `IAdditionOperators<TL, TR, TR>`), so G# generic-math code interoperates with C# 11+ assemblies on either side. Diagnostics `GS0330`–`GS0333` flag the common failure modes (unsupported `static let`, missing implementation, instance method for a static slot, dispatch on the wrong type) — see the [diagnostics reference](../ref/diagnostics.md#static-virtual-interface-member-diagnostics-gs0330gs0333).
 
+### Private interface helper methods (ADR-0090)
+
+Interfaces may also declare `private` helper methods — instance or `private static` — that participate in the interface's own implementation but are NOT part of its public contract. A sibling default method on the same interface may call the helper (via implicit `this` or implicit static-self); implementers cannot see it and cannot override it. The helper carries an IL body on the interface TypeDef with `MethodAttributes.Private | HideBySig` (plus `Static` when combined with ADR-0089's static form) — it is non-virtual and never participates in the v-table.
+
+```gsharp
+interface ICalculator {
+    func Double(x int32) int32 { return Helper(x) + Helper(x) }
+    func Triple(x int32) int32 { return Helper(x) + Helper(x) + Helper(x) }
+
+    // Visible only to sibling default methods on ICalculator.
+    private func Helper(x int32) int32 { return x }
+}
+
+class Calc : ICalculator {
+}                       // inherits Double / Triple; cannot see Helper
+
+var c = Calc{}
+Console.WriteLine(c.Double(5))    // 10
+Console.WriteLine(c.Triple(5))    // 15
+```
+
+A `private` interface method MUST carry a body (`GS0335` otherwise — abstract private helpers do not make sense because no implementer can supply them). External code calling the helper through an interface receiver triggers `GS0334`. An implementer attempting to declare a same-signature method clashing with the helper triggers `GS0336`. Both modifier orderings parse: `private static func` and `static private func`. See the [diagnostics reference](../ref/diagnostics.md#private-interface-helper-diagnostics-gs0334gs0337) for the full GS0334–GS0337 family.
+
 ## Enums
 
 Enums are closed sets of named values. They cannot be generic and must contain at least one member. Equality and switch exhaustiveness diagnostics understand enum members.

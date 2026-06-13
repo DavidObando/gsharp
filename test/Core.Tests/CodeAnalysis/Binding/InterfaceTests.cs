@@ -402,6 +402,125 @@ interface IStaticy {
         Assert.Empty(result.Diagnostics);
     }
 
+    // -------------------------------------------------------------------
+    // ADR-0090 / issue #756: `private` interface helper methods.
+    // -------------------------------------------------------------------
+
+    [Fact]
+    public void PrivateInterfaceHelper_AcceptedByParser_AndCalledFromSiblingDefault()
+    {
+        // ADR-0090: a `private func` inside an `interface` is accepted by
+        // the parser; another default method on the same interface may call
+        // the helper unqualified (implicit `this` dispatch).
+        var source = @"
+interface ICalc {
+    func Double(x int32) int32 { return Helper(x) + Helper(x) }
+    private func Helper(x int32) int32 { return x }
+}
+
+class C : ICalc {
+}
+
+var c = C{}
+c.Double(3)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(6, result.Value);
+    }
+
+    [Fact]
+    public void PrivateInterfaceHelper_PrivateStaticModifierOrderAccepted()
+    {
+        // ADR-0090: `private static` and `static private` both parse.
+        var source = @"
+interface IStatics {
+    static func Get() int32 { return 7 }
+    private static func H() int32 { return 1 }
+    static private func K() int32 { return 2 }
+}
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void PrivateInterfaceHelper_ExternalCallRejected_GS0334()
+    {
+        // ADR-0090: external code (a class instance) cannot see the private
+        // helper through an interface-typed receiver. GS0334 fires.
+        var source = @"
+interface ICalc {
+    func Double(x int32) int32 { return x + x }
+    private func Helper(x int32) int32 { return x }
+}
+
+class C : ICalc {
+}
+
+var c ICalc = C{}
+c.Helper(3)
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0334");
+    }
+
+    [Fact]
+    public void PrivateInterfaceHelper_WithoutBody_DiagnosesGS0335()
+    {
+        // ADR-0090: a `private` interface method must carry a body —
+        // private helpers are part of the interface's own implementation.
+        var source = @"
+interface IBad {
+    private func Helper(x int32) int32
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0335");
+    }
+
+    [Fact]
+    public void PrivateInterfaceHelper_ImplementerSameSignature_DiagnosesGS0336()
+    {
+        // ADR-0090: an implementer cannot override a `private` interface
+        // helper — its v-table slot is interface-internal.
+        var source = @"
+interface ICalc {
+    func Double(x int32) int32 { return x + x }
+    private func Helper(x int32) int32 { return x }
+}
+
+class C : ICalc {
+    func Helper(x int32) int32 { return x * 10 }
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0336");
+    }
+
+    [Fact]
+    public void PrivateInterfaceHelper_NotPartOfImplementerContract()
+    {
+        // ADR-0090: implementer-contract verification (GS0187 / GS0320)
+        // is unaffected by private helpers. A class that omits a private
+        // helper is still a valid implementer.
+        var source = @"
+interface IThing {
+    func Public() int32 { return 1 }
+    private func Internal() int32 { return 99 }
+}
+
+class T : IThing {
+}
+
+var t = T{}
+t.Public()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

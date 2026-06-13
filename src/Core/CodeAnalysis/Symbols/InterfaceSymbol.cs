@@ -68,6 +68,26 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <summary>Gets the static-virtual method signatures declared on this interface (ADR-0089 / issue #755). Populated by the binder via <see cref="SetStaticMethods"/>.</summary>
     public ImmutableArray<FunctionSymbol> StaticMethods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
 
+    /// <summary>
+    /// Gets the <c>private</c> instance helper methods declared on this interface (ADR-0090 / issue #756).
+    /// Private helpers are part of the interface's own implementation, not its
+    /// public contract; the binder routes them here so the
+    /// <see cref="Methods"/> set continues to drive implementer-contract
+    /// verification (GS0187 / GS0320) unaffected. Populated by the binder via
+    /// <see cref="SetPrivateMethods"/>.
+    /// </summary>
+    public ImmutableArray<FunctionSymbol> PrivateMethods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
+
+    /// <summary>
+    /// Gets the <c>private static</c> helper methods declared on this interface (ADR-0090 / issue #756).
+    /// (Combined private + ADR-0089 static-virtual surface.) Static-virtual
+    /// dispatch through type-parameter constraints continues to use
+    /// <see cref="StaticMethods"/>; private static helpers are never part of
+    /// that dispatch table. Populated by the binder via
+    /// <see cref="SetStaticPrivateMethods"/>.
+    /// </summary>
+    public ImmutableArray<FunctionSymbol> StaticPrivateMethods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
+
     /// <summary>Gets a value indicating whether this interface declares at least one static-virtual member (ADR-0089).</summary>
     public bool HasStaticVirtualMembers => !StaticMethods.IsDefaultOrEmpty;
 
@@ -101,6 +121,70 @@ public sealed class InterfaceSymbol : TypeSymbol
     public void SetStaticMethods(ImmutableArray<FunctionSymbol> methods)
     {
         StaticMethods = methods;
+    }
+
+    /// <summary>Sets <see cref="PrivateMethods"/>. Intended to be called once by the binder (ADR-0090 / issue #756).</summary>
+    /// <param name="methods">The bound private instance helper signatures.</param>
+    public void SetPrivateMethods(ImmutableArray<FunctionSymbol> methods)
+    {
+        PrivateMethods = methods;
+    }
+
+    /// <summary>Sets <see cref="StaticPrivateMethods"/>. Intended to be called once by the binder (ADR-0090 / issue #756).</summary>
+    /// <param name="methods">The bound private static helper signatures.</param>
+    public void SetStaticPrivateMethods(ImmutableArray<FunctionSymbol> methods)
+    {
+        StaticPrivateMethods = methods;
+    }
+
+    /// <summary>
+    /// ADR-0090 / issue #756: returns every <c>private</c> instance helper whose name equals <paramref name="name"/>.
+    /// Used by call-site visibility checks: callers inside the same interface
+    /// declaration see this overload set; external callers do not.
+    /// </summary>
+    /// <param name="name">The helper name.</param>
+    /// <returns>The overload set; empty when none.</returns>
+    public ImmutableArray<FunctionSymbol> GetPrivateMethods(string name)
+    {
+        if (PrivateMethods.IsDefaultOrEmpty)
+        {
+            return ImmutableArray<FunctionSymbol>.Empty;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+        foreach (var m in PrivateMethods)
+        {
+            if (m.Name == name)
+            {
+                builder.Add(m);
+            }
+        }
+
+        return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// ADR-0090 / issue #756: returns every <c>private static</c> helper whose name equals <paramref name="name"/>.
+    /// </summary>
+    /// <param name="name">The helper name.</param>
+    /// <returns>The overload set; empty when none.</returns>
+    public ImmutableArray<FunctionSymbol> GetStaticPrivateMethods(string name)
+    {
+        if (StaticPrivateMethods.IsDefaultOrEmpty)
+        {
+            return ImmutableArray<FunctionSymbol>.Empty;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+        foreach (var m in StaticPrivateMethods)
+        {
+            if (m.Name == name)
+            {
+                builder.Add(m);
+            }
+        }
+
+        return builder.ToImmutable();
     }
 
     /// <summary>Tries to look up a static-virtual interface method by name (ADR-0089 / issue #755).</summary>
@@ -339,6 +423,79 @@ public sealed class InterfaceSymbol : TypeSymbol
             }
 
             instance.SetStaticMethods(substStaticMethods.MoveToImmutable());
+        }
+
+        // ADR-0090 / issue #756: substitute private instance helpers through
+        // the closed instance too. Sibling-only callers (default bodies on the
+        // same interface) that go through the constructed instance must see
+        // helpers whose parameter / return types are substituted to match.
+        if (!definition.PrivateMethods.IsDefaultOrEmpty)
+        {
+            var substPrivateMethods = ImmutableArray.CreateBuilder<FunctionSymbol>(definition.PrivateMethods.Length);
+            foreach (var m in definition.PrivateMethods)
+            {
+                var substParams = ImmutableArray.CreateBuilder<ParameterSymbol>(m.Parameters.Length);
+                foreach (var p in m.Parameters)
+                {
+                    var newParam = new ParameterSymbol(p.Name, SubstituteType(p.Type, subst), isVariadic: p.IsVariadic, isScoped: p.IsScoped, refKind: p.RefKind);
+
+                    if (p.HasExplicitDefaultValue)
+                    {
+                        newParam.SetExplicitDefaultValue(p.ExplicitDefaultValue);
+                    }
+
+                    substParams.Add(newParam);
+                }
+
+                var substReturn = SubstituteType(m.Type, subst);
+                var substPrivateMethod = new FunctionSymbol(
+                    m.Name,
+                    substParams.MoveToImmutable(),
+                    substReturn,
+                    m.Declaration,
+                    m.Package,
+                    m.Accessibility,
+                    receiverType: instance);
+                substPrivateMethods.Add(substPrivateMethod);
+            }
+
+            instance.SetPrivateMethods(substPrivateMethods.MoveToImmutable());
+        }
+
+        // ADR-0090 / issue #756: substitute private static helpers too.
+        if (!definition.StaticPrivateMethods.IsDefaultOrEmpty)
+        {
+            var substStaticPrivateMethods = ImmutableArray.CreateBuilder<FunctionSymbol>(definition.StaticPrivateMethods.Length);
+            foreach (var m in definition.StaticPrivateMethods)
+            {
+                var substParams = ImmutableArray.CreateBuilder<ParameterSymbol>(m.Parameters.Length);
+                foreach (var p in m.Parameters)
+                {
+                    var newParam = new ParameterSymbol(p.Name, SubstituteType(p.Type, subst), isVariadic: p.IsVariadic, isScoped: p.IsScoped, refKind: p.RefKind);
+
+                    if (p.HasExplicitDefaultValue)
+                    {
+                        newParam.SetExplicitDefaultValue(p.ExplicitDefaultValue);
+                    }
+
+                    substParams.Add(newParam);
+                }
+
+                var substReturn = SubstituteType(m.Type, subst);
+                var substStaticPrivateMethod = new FunctionSymbol(
+                    m.Name,
+                    substParams.MoveToImmutable(),
+                    substReturn,
+                    m.Declaration,
+                    m.Package,
+                    m.Accessibility,
+                    receiverType: null);
+                substStaticPrivateMethod.IsStatic = true;
+                substStaticPrivateMethod.StaticOwnerType = instance;
+                substStaticPrivateMethods.Add(substStaticPrivateMethod);
+            }
+
+            instance.SetStaticPrivateMethods(substStaticPrivateMethods.MoveToImmutable());
         }
 
         return instance;

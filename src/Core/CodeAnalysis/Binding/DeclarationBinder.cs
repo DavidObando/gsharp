@@ -1985,6 +1985,68 @@ internal sealed class DeclarationBinder
             // carries a body). If a same-named *instance* method exists but
             // no matching static method, GS0332 surfaces; otherwise GS0331.
             VerifyStaticVirtualInterfaceImplementations(syntax, structSymbol);
+
+            // ADR-0090 / issue #756: verify that the implementer does not
+            // attempt to override a `private` interface helper. Private
+            // helpers are part of the interface's own implementation and
+            // are not part of the public contract; an implementer that
+            // happens to declare a same-signature method clashes with the
+            // helper at the implementation level.
+            VerifyPrivateInterfaceHelpersNotOverridden(syntax, structSymbol);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0090 / issue #756: rejects implementers that attempt to declare a
+    /// method whose signature matches one of the private helpers on an
+    /// implemented interface. Private interface helpers are not part of the
+    /// public contract — implementers cannot see them — but a same-shape
+    /// declaration would create an ambiguous v-table slot if we did not
+    /// surface a diagnostic.
+    /// </summary>
+    /// <param name="syntax">The implementer's declaring syntax (for location).</param>
+    /// <param name="structSymbol">The class symbol whose interfaces are checked.</param>
+    private void VerifyPrivateInterfaceHelpersNotOverridden(StructDeclarationSyntax syntax, StructSymbol structSymbol)
+    {
+        foreach (var iface in structSymbol.Interfaces)
+        {
+            if (!iface.PrivateMethods.IsDefaultOrEmpty)
+            {
+                foreach (var imethod in iface.PrivateMethods)
+                {
+                    foreach (var candidate in structSymbol.GetMethodsIncludingInherited(imethod.Name))
+                    {
+                        if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind))
+                        {
+                            Diagnostics.ReportImplementerOverridesPrivateInterfaceMember(
+                                syntax.Identifier.Location,
+                                structSymbol.Name,
+                                iface.Name,
+                                imethod.Name);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!iface.StaticPrivateMethods.IsDefaultOrEmpty)
+            {
+                foreach (var imethod in iface.StaticPrivateMethods)
+                {
+                    foreach (var candidate in structSymbol.GetStaticMethods(imethod.Name))
+                    {
+                        if (StaticVirtualSignaturesMatch(imethod, candidate))
+                        {
+                            Diagnostics.ReportImplementerOverridesPrivateInterfaceMember(
+                                syntax.Identifier.Location,
+                                structSymbol.Name,
+                                iface.Name,
+                                imethod.Name);
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2361,6 +2423,8 @@ internal sealed class DeclarationBinder
     {
         var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
         var staticMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+        var privateMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+        var staticPrivateMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
         var seenNames = new HashSet<string>();
         foreach (var methodSyntax in syntax.Methods)
         {
@@ -2374,6 +2438,20 @@ internal sealed class DeclarationBinder
             // default-bodied forms are accepted; the binder uses the same
             // body-vs-no-body discriminator as ADR-0085 to distinguish them.
             var isStaticInterfaceMethod = methodSyntax.HasStaticModifier;
+
+            // ADR-0090 / issue #756: detect a `private` accessibility modifier
+            // on the interface method. Private helpers route into the
+            // separate <see cref="InterfaceSymbol.PrivateMethods"/> bucket
+            // (or <see cref="InterfaceSymbol.StaticPrivateMethods"/> when
+            // also <c>static</c>) so the public <c>Methods</c> contract used
+            // by implementer-verification is unaffected. The CLR shape is
+            // <c>MethodAttributes.Private | HideBySig</c> (plus
+            // <c>Static</c> when combined with ADR-0089). The helper is
+            // non-virtual; implementers cannot see it (GS0336 fires when an
+            // implementer declares a same-signature method on a type that
+            // implements the owning interface).
+            var isPrivateInterfaceMethod = methodSyntax.AccessibilityModifier != null
+                && string.Equals(methodSyntax.AccessibilityModifier.Text, "private", System.StringComparison.Ordinal);
 
             // ADR-0063: overloads are allowed on interfaces; the post-bind signature
             // check below detects duplicate signatures. Name collision with a
@@ -2426,13 +2504,20 @@ internal sealed class DeclarationBinder
             // methods — they have no `this`. Construct a top-level-style
             // FunctionSymbol with `IsStatic = true` and `StaticOwnerType`
             // set to the owning InterfaceSymbol.
+            //
+            // ADR-0090: private helpers get the same shape — the receiver
+            // type is the InterfaceSymbol (so sibling default bodies on the
+            // same interface dispatch correctly), but Accessibility is set
+            // to Private so the emit pipeline produces the
+            // MethodAttributes.Private flag.
+            var methodAccessibility = isPrivateInterfaceMethod ? Accessibility.Private : Accessibility.Public;
             var methodSymbol = new FunctionSymbol(
                 methodName,
                 parameters.ToImmutable(),
                 returnType,
                 methodSyntax,
                 package,
-                Accessibility.Public,
+                methodAccessibility,
                 receiverType: isStaticInterfaceMethod ? null : (TypeSymbol)interfaceSymbol);
             methodSymbol.ReturnRefKind = methodReturnRefKind;
             methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
@@ -2444,14 +2529,16 @@ internal sealed class DeclarationBinder
 
             Binder.AttachDocumentation(methodSymbol, methodSyntax);
 
-            // ADR-0085: reject `private` / `open` / `override` modifiers on
-            // interface members — these are tracked as deferred follow-ups
-            // (GS0321). The parser does not currently accept them on
-            // interface method signatures, but the FunctionDeclarationSyntax
-            // can carry them in principle via the constructor overload;
-            // defensively diagnose here so a future parser relaxation
-            // surfaces with a clear message. ADR-0089 reverses the rejection
-            // of `static` — it is now accepted.
+            // ADR-0085: reject `open` / `override` modifiers on interface
+            // members — these are tracked as deferred follow-ups (GS0321).
+            // The parser does not currently accept them on interface method
+            // signatures, but the FunctionDeclarationSyntax can carry them
+            // in principle via the constructor overload; defensively
+            // diagnose here so a future parser relaxation surfaces with a
+            // clear message. ADR-0089 reverses the rejection of `static` —
+            // it is now accepted. ADR-0090 reverses the rejection of
+            // `private` — it is now accepted (and routed into the private
+            // helpers bucket).
             if (methodSyntax.OpenModifier != null)
             {
                 Diagnostics.ReportInterfaceMethodModifierDeferred(methodSyntax.OpenModifier.Location, "open", methodName);
@@ -2462,14 +2549,25 @@ internal sealed class DeclarationBinder
                 Diagnostics.ReportInterfaceMethodModifierDeferred(methodSyntax.OverrideModifier.Location, "override", methodName);
             }
 
-            if (methodSyntax.AccessibilityModifier != null
-                && string.Equals(methodSyntax.AccessibilityModifier.Text, "private", System.StringComparison.Ordinal))
+            // ADR-0090 / issue #756: a `private` interface method must
+            // carry a body. The helper is part of the interface's own
+            // implementation — no implementer can supply it.
+            if (isPrivateInterfaceMethod && methodSyntax.Body == null)
             {
-                Diagnostics.ReportInterfaceMethodModifierDeferred(methodSyntax.AccessibilityModifier.Location, "private", methodName);
+                Diagnostics.ReportPrivateInterfaceMemberRequiresBody(methodSyntax.Identifier.Location, methodName);
             }
 
             // ADR-0063 §11: detect duplicate-signature overloads on the interface.
-            var targetBuilder = isStaticInterfaceMethod ? staticMethodsBuilder : methodsBuilder;
+            ImmutableArray<FunctionSymbol>.Builder targetBuilder;
+            if (isPrivateInterfaceMethod)
+            {
+                targetBuilder = isStaticInterfaceMethod ? staticPrivateMethodsBuilder : privateMethodsBuilder;
+            }
+            else
+            {
+                targetBuilder = isStaticInterfaceMethod ? staticMethodsBuilder : methodsBuilder;
+            }
+
             var hasDupSig = false;
             foreach (var existingMethod in targetBuilder)
             {
@@ -2493,6 +2591,8 @@ internal sealed class DeclarationBinder
 
         interfaceSymbol.SetMethods(methodsBuilder.ToImmutable());
         interfaceSymbol.SetStaticMethods(staticMethodsBuilder.ToImmutable());
+        interfaceSymbol.SetPrivateMethods(privateMethodsBuilder.ToImmutable());
+        interfaceSymbol.SetStaticPrivateMethods(staticPrivateMethodsBuilder.ToImmutable());
 
         // ADR-0051: bind interface property declarations.
         if (!syntax.Properties.IsDefaultOrEmpty)
@@ -2591,31 +2691,60 @@ internal sealed class DeclarationBinder
         // `in T` may only appear in contravariant position. ADR-0089: walk
         // both instance and static-virtual method buckets — variance applies
         // to both because the type parameter still flows through the
-        // signature when the interface is constructed.
+        // signature when the interface is constructed. ADR-0090: walk private
+        // helper buckets too — variance rules apply regardless of accessibility.
         if (!interfaceSymbol.TypeParameters.IsDefaultOrEmpty)
         {
             var instanceIdx = 0;
             var staticIdx = 0;
+            var privateInstanceIdx = 0;
+            var privateStaticIdx = 0;
             foreach (var methodSyntax in syntax.Methods)
             {
+                var isPrivate = methodSyntax.AccessibilityModifier != null
+                    && string.Equals(methodSyntax.AccessibilityModifier.Text, "private", System.StringComparison.Ordinal);
                 FunctionSymbol m;
                 if (methodSyntax.HasStaticModifier)
                 {
-                    if (staticIdx >= interfaceSymbol.StaticMethods.Length)
+                    if (isPrivate)
                     {
-                        continue;
-                    }
+                        if (privateStaticIdx >= interfaceSymbol.StaticPrivateMethods.Length)
+                        {
+                            continue;
+                        }
 
-                    m = interfaceSymbol.StaticMethods[staticIdx++];
+                        m = interfaceSymbol.StaticPrivateMethods[privateStaticIdx++];
+                    }
+                    else
+                    {
+                        if (staticIdx >= interfaceSymbol.StaticMethods.Length)
+                        {
+                            continue;
+                        }
+
+                        m = interfaceSymbol.StaticMethods[staticIdx++];
+                    }
                 }
                 else
                 {
-                    if (instanceIdx >= interfaceSymbol.Methods.Length)
+                    if (isPrivate)
                     {
-                        continue;
-                    }
+                        if (privateInstanceIdx >= interfaceSymbol.PrivateMethods.Length)
+                        {
+                            continue;
+                        }
 
-                    m = interfaceSymbol.Methods[instanceIdx++];
+                        m = interfaceSymbol.PrivateMethods[privateInstanceIdx++];
+                    }
+                    else
+                    {
+                        if (instanceIdx >= interfaceSymbol.Methods.Length)
+                        {
+                            continue;
+                        }
+
+                        m = interfaceSymbol.Methods[instanceIdx++];
+                    }
                 }
 
                 CheckVariancePosition(m.Type, isOutput: true, methodSyntax.Type?.Location ?? methodSyntax.Identifier.Location);

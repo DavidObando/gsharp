@@ -3150,7 +3150,12 @@ public sealed class Evaluator
         // method itself (which now carries a default body in program.Functions
         // when one was declared) if no implementer overrides it. This is the
         // interpreter analogue of CLR DIM dispatch.
-        if (method.ReceiverType is Symbols.InterfaceSymbol && receiverValue is StructValue ifaceSv && ifaceSv.StructType != null)
+        //
+        // ADR-0090 / issue #756: private interface helpers are not part of
+        // the v-table — never look on the runtime class. The helper's body
+        // is registered in program.Functions and dispatched directly.
+        if (method.ReceiverType is Symbols.InterfaceSymbol && receiverValue is StructValue ifaceSv && ifaceSv.StructType != null
+            && method.Accessibility != Accessibility.Private)
         {
             FunctionSymbol implMethod = null;
             for (var t = ifaceSv.StructType; t != null; t = t.BaseClass)
