@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-05-22
 - **Phase**: Phase 4 (implementation), Phase 0 (lock)
-- **Related**: gaps doc §3.2.5; execution plan §0 D4, §4; design doc D4; ADR-0020; **ADR-0087 (implementation-status addendum — open-shape erasure audit and staged elimination)**
+- **Related**: gaps doc §3.2.5; execution plan §0 D4, §4; design doc D4; ADR-0020; **ADR-0087 (implementation-status addendum — reified-generics emit, R1–R7 implemented)**
 
 ## Context
 
@@ -46,14 +46,16 @@ Neutral:
 - **Two-phase (consumption first, definition later)**: rejected to avoid migrating users across a public-surface change.
 - **Defer all generics**: rejected; without generics consumption, GSharp cannot meaningfully use `System.Collections.Generic` or `Task<T>`.
 
-## Implementation-status addendum (2026-06-12)
+## Implementation-status addendum (2026-06-12) — superseded by ADR-0087 R1–R7 (2026-06-13)
 
-The "Adopt CLR reified generics (no erasure)" commitment in §Decision is not yet fully delivered. The current emit pipeline carries a type-erased fallback for open generic shapes (open user-declared types, open generic methods, closed CLR generics whose type arguments mention an in-scope type parameter, and delegate shapes that bear open type parameters). See ADR-0087 for:
+At ADR-0087's authoring (2026-06-12) the "Adopt CLR reified generics (no erasure)" commitment in §Decision was not yet fully delivered. The emit pipeline carried a type-erased fallback for open generic shapes (open user-declared types, open generic methods, closed CLR generics whose type arguments mention an in-scope type parameter, and delegate shapes that bear open type parameters). ADR-0087 catalogued every erasure site, specified the target reified metadata, and staged the elimination across phases R1–R7.
 
-- the complete audit of every erasure site in the binder/lowering/planner/emitter (53 sites across 14 source files in categories F1–F4 that materially affect reflection-correctness),
-- the target CLR metadata shape per category (`TypeDef`+`GenericParam`+`GenericParamConstraint` rows, `TypeSpec`/`MethodSpec` instantiations, `Var`/`MVar` signature encoding, generic-context-aware MemberRef parents),
-- the staged elimination plan (R1–R7),
-- the reflection-based golden suite that pins current behaviour so each staging phase is bisectable,
-- and the explicit deferral of the implementation phases beyond this ADR's date.
+**Status (2026-06-13): the addendum is closed.** All seven phases (R1–R7) have shipped. The commitment in §Decision is fully delivered:
 
-Issue #484 ("Investigate path out of type erasure in the generics implementation") is superseded by issue #728 + ADR-0087.
+- User-declared generic types and methods emit `TypeDef` + `GenericParam` + `GenericParamConstraint` rows; reflection round-trips them exactly as a C#-defined equivalent does.
+- Field, parameter, return, and local signatures over `T` encode `Var(idx)` / `MVar(idx)`.
+- Closed CLR generics over an in-scope type parameter (`List[T]`, `Dictionary[string, T]`) encode as honest `GenericInstantiation` blobs.
+- Open-bearing delegate shapes (`func(T) U`) emit as a reified `Func<!T, !U>` and dispatch through normal `callvirt Func`N::Invoke` MemberRefs parented at a constructed `TypeSpec` — no `Delegate.DynamicInvoke`, no box/unbox at the boundary.
+- The previous "type-erased handling for open type-parameter-containing shapes" caveat is gone from the feature matrix, spec, FAQ, and `clr-interop.md`.
+
+See ADR-0087 §3 (target metadata), §5 (staging plan as implemented), and §6 (closing status). Issue #484 ("Investigate path out of type erasure in the generics implementation") was superseded by issue #728 + ADR-0087 and is closed.

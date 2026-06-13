@@ -313,7 +313,7 @@ func Identity[T any](value T) T {
 let x = Identity[int32](42)
 ```
 
-The implementation emits metadata specs for generic types and methods, but open or partially constructed shapes containing type parameters are erased to `object` in some emit paths under the current type-erased generic model. The complete audit of every erasure site, the target CLR metadata shape per category, and the staged elimination plan are recorded in ADR-0087. Generic method inference is implemented for supported cases.
+The implementation emits **reified CLR generic metadata** for user-declared and imported generic types and methods: `TypeDef` carries `GenericParam` rows, signatures over `T` encode `Var(idx)`/`MVar(idx)`, closed CLR generics that mention an in-scope type parameter (`List[T]`) emit as honest `GenericInstantiation` blobs, and open-bearing delegate shapes (`func(T) U`) dispatch through reified `Func`N` MemberRefs on constructed `TypeSpec`. The full audit, target metadata, and the R1–R7 staging that delivered this state are recorded in ADR-0087. Generic method inference is implemented for supported cases.
 
 ### Type syntax
 

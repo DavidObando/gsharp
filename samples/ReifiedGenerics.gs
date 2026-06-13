@@ -9,10 +9,10 @@
 //   - closed CLR generic over a user-defined generic instance (List[Box[int32]])
 //   - generic identity over a value type and a reference type
 //
-// The sample runs unchanged under the current type-erased model and is
-// designed to keep producing the same golden output after each ADR-0087
-// staging phase lands. It is the sample-side stability invariant the
-// reified-generics work measures itself against.
+// The sample runs unchanged under the reified emit (ADR-0087 R1–R7, all
+// implemented) and was designed to keep producing the same golden output
+// across every staging phase. It remains the sample-side stability invariant
+// the reified-generics work measured itself against.
 
 package GSharp.Example.ReifiedGenerics
 

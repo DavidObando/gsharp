@@ -4,9 +4,11 @@
 // expected — parameter, return, local, and nested positions. Previously the
 // binder rejected `List[T]` with `GS0149: Type 'T' is not generic`.
 //
-// Generics follow the type-erased model (ADR-0004): `List[T]` is erased to
-// `List<object>` at emit, with the symbolic `[T]` preserved on the symbol so
-// inference and substitution recover the concrete type at call sites.
+// Generics emit as reified CLR generics (ADR-0004; staging plan ADR-0087
+// R1–R7, all implemented): `List[T]` is encoded as a real
+// `GenericInstantiation` whose argument is the in-scope type parameter slot
+// (`Var`/`MVar`), so reflection round-trips the type arguments and there is
+// no `box`/`unbox.any` at the boundary.
 
 package GSharp.Example.GenericTypeParameterAsTypeArgument
 

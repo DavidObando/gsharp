@@ -58,11 +58,13 @@ This is why SDK builds pass the complete reference assembly closure through `/r:
 
 When debug information is enabled, `ReflectionMetadataEmitter` collaborates with `PortablePdbEmitter`. The PDB records document rows, SHA-256 hashes of raw source bytes, sequence points, local scopes, local variables, embedded source, Source Link, compilation options, and PE debug-directory data. ADR-0048 records the PDB policy decisions.
 
-## Type-erased generics model
+## Reified generics model
 
-G# supports generic syntax and binding, but the implementation model is intentionally CLR-oriented. Generic type parameters are represented in symbols and metadata, constraints are bound by name, and emitted assemblies rely on the CLR's runtime generic representation rather than C++-style monomorphization. At runtime, generic type arguments are not duplicated into separate method or type bodies per closed instantiation.
+G# generics are emitted as **CLR reified generics**, end-to-end. A user-declared generic type (`data struct Box[T]`, `class Pair[A, B]`, etc.) becomes a `TypeDef` with `GenericParam` rows; backtick-arity is part of the name (`Box`\``1`). Generic methods carry their own `MVar` slots; field, parameter, return, and local signatures over an in-scope `T` encode `Var(idx)` / `MVar(idx)`. Closed CLR generics that mention an in-scope type parameter (`List[T]`, `Dictionary[string, T]`) emit as honest `GenericInstantiation` blobs. Open-bearing delegate shapes (`func(T) U`) emit as a constructed `Func<!T, !U>` (or `Action<…>`) and dispatch through normal `callvirt Func`N::Invoke` MemberRefs parented at the constructed `TypeSpec`.
 
-This keeps the language aligned with .NET interop: G# generic types and methods can be represented in managed metadata and consumed by other CLR languages.
+Constraints (`any`, `comparable`, sealed-interface bounds) round-trip as `GenericParamConstraint` rows. Variance markers (`in`/`out`) on interface type parameters per ADR-0021 are emitted as the matching `GenericParam` variance flags. C# / F# consumers see the same shape they would see from a C#-defined equivalent: `GetGenericArguments()` returns the type parameters, `GetField("Value").FieldType` returns the parameter type, and there is no `box`/`unbox.any` boundary at member access.
+
+The full audit, target metadata, staging plan (R1–R7, all implemented), and reflection-based golden suite live in ADR-0087.
 
 ## Contributor file map
 

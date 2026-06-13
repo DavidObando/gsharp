@@ -1,10 +1,10 @@
 // file: GenericEquality.gs
-// Issue #312 follow-up: type-erased generic `==` / `!=` over a type parameter
-// must use value semantics. Each open type parameter is encoded as
-// System.Object, so a raw reference comparison would report equal value types
-// as unequal. The emitter dispatches `==` / `!=` over open type parameters
-// through System.Object.Equals(object, object), which routes to the boxed
-// value's Equals override.
+// Issue #312 follow-up: generic `==` / `!=` over a type parameter must use
+// value semantics. Under the reified emit (ADR-0087 R1–R7) generic methods
+// carry their own `MVar` slots, so `a == b` over `T` lowers through the
+// constraint-driven equality path rather than the previous boxed
+// `Object.Equals(object, object)` route. Value types compare by value;
+// reference types keep working through the normal reference path.
 
 package GSharp.Example.GenericEquality
 

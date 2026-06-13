@@ -7,28 +7,30 @@
 - **Implements (in part)**: Issue #728 (Fix open-generic erasure → fully reified bodies); parent issue #706 §6.6 item 24
 - **Related**: ADR-0004 (generics scope), ADR-0020 (generic-brackets syntax), ADR-0021 (generic variance), ADR-0038 (generic-method inference), ADR-0027 (bespoke `System.Reflection.Metadata` emitter), ADR-0056 (closed value-type generics in field position), ADR-0029 (`data struct` synthesized members)
 
+> **Implementation status (R7 landed, 2026-06-13).** All seven staging phases R1–R7 have shipped. ADR-0004's "CLR reified generics (no erasure)" commitment is now fully delivered: user-declared generic types and methods carry `GenericParam` rows, signatures encode `Var(idx)`/`MVar(idx)`, closed-CLR-over-`T` shapes (`List[T]`) round-trip as honest `GenericInstantiation` blobs, the open-delegate shape (`func(T) U`) emits as a reified `Func<!T, !U>`, the boundary box/unbox/castclass churn is gone, and the spec/FAQ/feature-matrix/`clr-interop.md` describe the reified behavior. The historical Context, Audit, Target, Staging, and Hand-off sections below are retained verbatim as the implementation record; treat the "current" framing as describing the pre-R1 state. The user-visible breaking-change paragraph from §3.7 is now part of the release notes for the phase that shipped it.
+
 ## Context
 
-ADR-0004 commits G# to **CLR reified generics**: every generic type and generic method should round-trip through reflection exactly as a C#-defined equivalent does. The current implementation falls short of that promise. The feature matrix, spec, FAQ, and `clr-interop.md` all admit it in nearly identical wording:
+ADR-0004 commits G# to **CLR reified generics**: every generic type and generic method should round-trip through reflection exactly as a C#-defined equivalent does. At the time this ADR was originally written (2026-06-12), the implementation fell short of that promise. The feature matrix, spec, FAQ, and `clr-interop.md` all admitted it in nearly identical wording:
 
 > *"Metadata specs plus type-erased handling for open type-parameter-containing shapes."*
 
-In practice every G# user-defined generic type or function (and every closed CLR generic whose type arguments mention an in-scope G# type parameter) is **emitted under a type-erased model**:
+In practice every G# user-defined generic type or function (and every closed CLR generic whose type arguments mention an in-scope G# type parameter) was at that time **emitted under a type-erased model**:
 
-- A `data struct Box[T]` is emitted as a non-generic CLR `class Box` (no `GenericParam` rows on its `TypeDef`).
-- Field, method, and signature blobs that mention `T` encode `System.Object` rather than a `GenericTypeParameter(idx)`/`GenericMethodTypeParameter(idx)` slot.
-- Closed CLR generics whose arguments are in-scope type parameters (e.g. `List[T]`) are encoded as `List<object>` and the value-typed boundary is bridged by inserted `box` / `unbox.any` / `castclass`.
-- Generic G# functions (`func Map[T, U any]`) are emitted as non-generic CLR methods (no `MVar` slots, no `MethodSpec` at call sites); the closure is monomorphic and parameter/return slots are `object`.
-- A delegate of open-bearing shape (`func(T) U`) is encoded as `Func<object, object>`; `Invoke` round-trips through `box`/`unbox.any` for value-type arguments.
+- A `data struct Box[T]` was emitted as a non-generic CLR `class Box` (no `GenericParam` rows on its `TypeDef`).
+- Field, method, and signature blobs that mention `T` encoded `System.Object` rather than a `GenericTypeParameter(idx)`/`GenericMethodTypeParameter(idx)` slot.
+- Closed CLR generics whose arguments are in-scope type parameters (e.g. `List[T]`) were encoded as `List<object>` and the value-typed boundary was bridged by inserted `box` / `unbox.any` / `castclass`.
+- Generic G# functions (`func Map[T, U any]`) were emitted as non-generic CLR methods (no `MVar` slots, no `MethodSpec` at call sites); the closure was monomorphic and parameter/return slots were `object`.
+- A delegate of open-bearing shape (`func(T) U`) was encoded as `Func<object, object>`; `Invoke` round-tripped through `box`/`unbox.any` for value-type arguments.
 
-This is **internally consistent** — every emitted assembly passes `ilverify` today, and existing G# programs that consume their own generics behave correctly at runtime — but it leaks at the reflection/interop boundary:
+That state was **internally consistent** — every emitted assembly passed `ilverify`, and existing G# programs that consumed their own generics behaved correctly at runtime — but it leaked at the reflection/interop boundary:
 
-- `typeof(Box<>)` does not exist in metadata. There is only a non-generic `Box`.
-- `typeof(Box).GetGenericArguments()` returns an empty array.
-- A C# consumer cannot write `Box<int>` against a G#-defined generic; the only path is to consume `Box` as a non-generic type whose fields are `object`.
-- `Box[int]{Value: 42}.Value.GetType()` returns `Int32` (because the value round-trips through `box`/`unbox.any`), but `typeof(Box).GetField("Value").FieldType` returns `Object`.
+- `typeof(Box<>)` did not exist in metadata. There was only a non-generic `Box`.
+- `typeof(Box).GetGenericArguments()` returned an empty array.
+- A C# consumer could not write `Box<int>` against a G#-defined generic; the only path was to consume `Box` as a non-generic type whose fields were `object`.
+- `Box[int]{Value: 42}.Value.GetType()` returned `Int32` (because the value round-tripped through `box`/`unbox.any`), but `typeof(Box).GetField("Value").FieldType` returned `Object`.
 
-Issue #728 directs us to **eliminate** the erasure end-to-end. Issue #484 captured the same idea earlier without committing to a plan. This ADR is the audit, the plan, and the v1 disposition.
+Issue #728 directed us to **eliminate** the erasure end-to-end. Issue #484 had captured the same idea earlier without committing to a plan. This ADR is the audit, the plan, and the v1 disposition. All five behavioural bullets above are now obsolete: after R1–R7 the reified shape supplants them per §3.
 
 ## Decision
 
@@ -185,13 +187,13 @@ If, during implementation, a corner case appears that genuinely cannot round-tri
 
 ### 3.7 Breaking runtime behaviour
 
-The erasure boundary today silently boxes value-typed `T` and silently allows `T` to be cast to `object`. After reification:
+The pre-R1 erasure boundary silently boxed value-typed `T` and silently allowed `T` to be cast to `object`. **These changes shipped with the R1–R6 landings**; the bullets below are the user-visible deltas as they reached release notes:
 
-- `T` is **no longer** identity-convertible to `object`. A program that wrote `let o: object = some_T_value` previously compiled (because both sides were `object` under the erased model) and now requires an explicit `as object` / `box` conversion to be source-legal. The diagnostic is the existing `GS0023` (no implicit conversion). The exact source-level shape may need a clarifying re-spell, tracked in a follow-up.
-- `Type.GetType` against the previously-emitted non-generic name (e.g. `Box`) returns `null` after reification because the name is now `Box`\``1`. Any G# program that round-tripped `Box` by name through reflection breaks. No production G# program is known to do this; the regression test for this case is added in §4.
-- The erased `<lambda_erasedN>` synthetic method names disappear; consumers that pattern-matched those names (none known) will need to update.
+- `T` is **no longer** identity-convertible to `object`. A program that wrote `let o: object = some_T_value` previously compiled (because both sides were `object` under the erased model) and now requires an explicit `as object` / `box` conversion to be source-legal. The diagnostic is the existing `GS0023` (no implicit conversion).
+- `Type.GetType` against the previously-emitted non-generic name (e.g. `Box`) returns `null` because the name is now `Box`\``1`. Any G# program that round-tripped `Box` by name through reflection breaks. No production G# program is known to do this; the regression test for this case is in §4.
+- The erased `<lambda_erasedN>` synthetic method names disappeared; consumers that pattern-matched those names (none known) needed to update.
 
-These are documented as a single **observable-breaking-change paragraph** in `release-notes.md` when the implementing phase ships.
+These are documented as the **observable-breaking-change paragraph** in `release-notes.md` for the phase that shipped each.
 
 ## 4. Reflection-based test approach
 
@@ -214,23 +216,23 @@ The audit-coverage matrix (one row per type-parameter use site discovered in the
 
 ## 5. Staging
 
-The full reification is decomposed into the following phases. Each phase is independently shippable and preserves IL-verifiability between phases.
+The full reification was decomposed into the following phases. Each phase was independently shippable and preserved IL-verifiability between phases. **All phases R1–R7 are now implemented**; the phase descriptions below are retained as the historical record of how the work was carried.
 
-- **R1 — `GenericParam` rows on user-declared TypeDefs and MethodDefs**, no signature changes. Type names get backtick-arity. Reflection now reports the right number of type parameters; field/method types still read as `Object`. (Touches: `TypeDefEmitter`, `MemberDefEmitter`, `ReflectionMetadataEmitter` cache.)
-- **R2 — Field/method signature reification.** `T`-typed fields/parameters/returns encode `Var(idx)`/`MVar(idx)`. Box/unbox is preserved at boundaries that still see an erased shape upstream; assemblies stay verifiable. (Touches: `ReflectionMetadataEmitter.EncodeTypeSymbol` central site.)
-- **R3 — `TypeSpec`/`MethodSpec` at constructed call sites.** MemberRefs parented at `TypeSpec`; `MethodSpec` blobs at generic-method calls. (Touches: `MethodBodyEmitter.Calls`, `MethodBodyEmitter.MemberAccess`, `MethodBodyEmitter.Expressions`.)
-- **R4 — Boundary marshalling removal.** Box/unbox/castclass deletions where the metadata now obviates them. (Touches: `MethodBodyEmitter.*`, `ConversionEmitter`, `DataStructSynthesizer`.)
-- **R5 — Closed-CLR-over-T encoding (`List[T]` → real `GenericInstantiation`).** Removes the F3 cluster. (Touches: `ImportedTypeSymbol`, `ReflectionMetadataEmitter`, multiple binder sites.)
-- **R6 — Lambda-adapter retirement.** Replace `<lambda_erasedN>` synthesizer with reified lambda MethodDefs whose signatures use the enclosing context. (Touches: `LambdaBinder`, `ClosureEmitter`.)
-- **R7 — Spec / docs flip.** Feature matrix / spec / FAQ / `clr-interop.md` lose the "type-erased handling" qualifier; release-notes paragraph for the breaking behaviour from §3.7.
+- **R1 — `GenericParam` rows on user-declared TypeDefs and MethodDefs**, no signature changes. Type names get backtick-arity. Reflection now reports the right number of type parameters; field/method types still read as `Object`. (Touches: `TypeDefEmitter`, `MemberDefEmitter`, `ReflectionMetadataEmitter` cache.) **Status: implemented (PR #764, part of the R1–R4 landing block).**
+- **R2 — Field/method signature reification.** `T`-typed fields/parameters/returns encode `Var(idx)`/`MVar(idx)`. Box/unbox is preserved at boundaries that still see an erased shape upstream; assemblies stay verifiable. (Touches: `ReflectionMetadataEmitter.EncodeTypeSymbol` central site.) **Status: implemented (PR #764, part of the R1–R4 landing block).**
+- **R3 — `TypeSpec`/`MethodSpec` at constructed call sites.** MemberRefs parented at `TypeSpec`; `MethodSpec` blobs at generic-method calls. (Touches: `MethodBodyEmitter.Calls`, `MethodBodyEmitter.MemberAccess`, `MethodBodyEmitter.Expressions`.) **Status: implemented (PR #764, part of the R1–R4 landing block).**
+- **R4 — Boundary marshalling removal.** Box/unbox/castclass deletions where the metadata now obviates them. (Touches: `MethodBodyEmitter.*`, `ConversionEmitter`, `DataStructSynthesizer`.) **Status: implemented (PR #764, part of the R1–R4 landing block).**
+- **R5 — Closed-CLR-over-T encoding (`List[T]` → real `GenericInstantiation`).** Removes the F3 cluster. (Touches: `ImportedTypeSymbol`, `ReflectionMetadataEmitter`, multiple binder sites.) **Status: implemented (issue #765).**
+- **R6 — Lambda-adapter retirement.** Replace `<lambda_erasedN>` synthesizer with reified lambda MethodDefs whose signatures use the enclosing context. (Touches: `LambdaBinder`, `ClosureEmitter`.) **Status: implemented (issue #766).**
+- **R7 — Spec / docs flip.** Feature matrix / spec / FAQ / `clr-interop.md` lose the "type-erased handling" qualifier; release-notes paragraph for the breaking behaviour from §3.7. **Status: implemented (issue #767).**
 
-Each phase ends with `dotnet test GSharp.sln` green, `ilverify` clean, and the matching `ReifiedGenericsReflectionTests.cs` golden flipping from `CurrentBehaviour` to `ReifiedBehaviour`.
+Each phase ended with `dotnet test GSharp.sln` green, `ilverify` clean, and the matching `ReifiedGenericsReflectionTests.cs` golden flipping from `CurrentBehaviour` to `ReifiedBehaviour`.
 
 ## 6. Implementation status — staged hand-off
 
-The implementation phases **R1–R7** remain a multi-PR effort. This PR ships the audit (§2), target spec (§3), reflection-based golden suite (§4), staging plan (§5), the docs/sample updates that make the current state honest, and one **foundational** code change required by every subsequent phase. The five `ReifiedBehaviour_R*` tests at `test/Compiler.Tests/Emit/ReifiedGenericsReflectionTests.cs` remain `[Fact(Skip = …)]` until the upstream phases land.
+The implementation phases **R1–R7 are now complete** across the multi-PR rollout that began with this ADR. This ADR shipped the audit (§2), target spec (§3), reflection-based golden suite (§4), staging plan (§5), the docs/sample updates that made the (then-)current state honest, and one **foundational** code change required by every subsequent phase. The `ReifiedBehaviour_R*` tests at `test/Compiler.Tests/Emit/ReifiedGenericsReflectionTests.cs` have been flipped from `[Fact(Skip = …)]` to live assertions as their phases landed.
 
-> **Status update (issue #766 / R6 landed).** R1+R2+R3+R4 shipped in PR #764 (issue #728). **R5 closed** by issue #765. **R6 is now closed** by issue #766: G# lambdas over type parameters (`func(T) U`) emit as reified `System.Func<!T, !U>` (with `Var`/`MVar` slots) instead of the previous erased `System.Func<object, object>`, and dispatch through normal `callvirt Func`N::Invoke` MemberRefs parented at the constructed `TypeSpec`. The `<lambda_erasedN>` binder adapter is now identity-skipped when pre-substitution renders it a no-op; the `EmitOpenDelegateDynamicInvoke` emit path was retired entirely. The `TypeParameterSymbol → CoreObjectType` erasure in `ResolveDelegateArgClrType` is gone; `GetElementTypeToken` now tokenises open-bearing `FunctionTypeSymbol` as a reified `TypeSpec`. Six new R6 tests in `test/Compiler.Tests/Emit/ReifiedGenericsReflectionTests.cs` cover the reflection round-trip, the no-`DynamicInvoke` IL invariant, and three end-to-end cases (generic method forwards typed lambda; open-generic delegate in `List`; mixed value/reference `T`). Only **R7 (docs flip)** remains.
+> **Status update (issue #767 / R7 landed).** R1+R2+R3+R4 shipped in PR #764 (issue #728). **R5 closed** by issue #765. **R6 closed** by issue #766: G# lambdas over type parameters (`func(T) U`) emit as reified `System.Func<!T, !U>` (with `Var`/`MVar` slots) instead of the previous erased `System.Func<object, object>`, and dispatch through normal `callvirt Func`N::Invoke` MemberRefs parented at the constructed `TypeSpec`. The `<lambda_erasedN>` binder adapter is identity-skipped when pre-substitution renders it a no-op; the `EmitOpenDelegateDynamicInvoke` emit path was retired entirely. The `TypeParameterSymbol → CoreObjectType` erasure in `ResolveDelegateArgClrType` is gone; `GetElementTypeToken` tokenises open-bearing `FunctionTypeSymbol` as a reified `TypeSpec`. Six R6 tests in `test/Compiler.Tests/Emit/ReifiedGenericsReflectionTests.cs` cover the reflection round-trip, the no-`DynamicInvoke` IL invariant, and three end-to-end cases (generic method forwards typed lambda; open-generic delegate in `List`; mixed value/reference `T`). **R7 (docs flip)** is now closed by issue #767: ADR-0004, ADR-0087, the feature matrix, spec, FAQ, `clr-interop.md`, the compiler-architecture doc, the design-decisions index, and the sample headers all describe the reified emit; the historical "type-erased" framing is retained only in this ADR's audit and in ADR-0004's now-resolved addendum.
 
 ### 6.1 Foundation shipped in this PR
 
@@ -261,7 +263,7 @@ The minimum tractable landing unit is therefore **R1 + R2 + R3 + R4 in a single 
 
 ### 6.3 Estimated remaining scope
 
-> **Status update (post-R6).** R1–R6 are now landed (PR #764 + issue #765 + issue #766). The remaining work in this section is R7 (docs flip).
+> **Status update (post-R7).** R1–R7 are now landed (PR #764 + issue #765 + issue #766 + issue #767). No phases remain; the table below is preserved as the historical estimate that drove the rollout.
 
 A direct estimate of the file-level blast radius for the R1+R2+R3+R4 landing, based on the audit in §2:
 
@@ -300,29 +302,25 @@ A best-effort estimate is **20–30 files, 1000+ LOC, 5–15 existing-test updat
    - `src/Core/CodeAnalysis/Emit/ReflectionMetadataEmitter.cs`: `EncodeTypeSymbol`'s `FunctionTypeSymbol openFn` branch now emits a reified `GENERICINST<Func`N or Action`N><args>` blob via a new `EncodeFunctionTypeSymbol` helper that recurses through `EncodeTypeSymbol` for each argument (so type-parameter slots resolve to `Var(idx)` / `MVar(idx)`). New `GetFunctionDelegateTypeSpec` / `GetFunctionDelegateCtorRef` / `GetFunctionDelegateInvokeRef` helpers (modeled on `GetUserStructTypeSpec` / `GetUserStructMethodRef`) produce the TypeSpec parent and the canonical `(object, IntPtr) → void` ctor / VAR-slotted `Invoke` MemberRefs. `GetElementTypeToken` learned to tokenise an open `FunctionTypeSymbol` via the same TypeSpec helper. The `TypeParameterSymbol → CoreObjectType` erasure inside `ResolveDelegateArgClrType` is gone.
    - `src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Calls.cs`: `EmitIndirectCall`'s `FunctionType.ClrType == null` branch now dispatches through the new `GetFunctionDelegateInvokeRef` MemberRef with a normal `callvirt`. `EmitOpenDelegateDynamicInvoke` (and the boxing array-build code path) is deleted; `Delegate.DynamicInvoke` no longer appears in emitted user IL for generic-over-T lambda call sites.
    - `src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Closures.cs`: `EmitFunctionLiteral` (capture-bearing and capture-free branches) and `EmitMethodGroup` use `GetFunctionDelegateCtorRef` when the literal/group's delegate shape carries type-parameter slots and `overrideDelegateType == null`.
-5. Land R7 last; only then do the docs stop saying "type-erased handling for open type-parameter-containing shapes".
+5. R7 (docs flip) is the closing phase: it lands once R1–R6 are in place so the docs stop saying "type-erased handling for open type-parameter-containing shapes". **(Landed by issue #767.)** R7 rewrote ADR-0004's addendum, ADR-0087 §3/§5/§6, `website/docs/ref/feature-matrix.md`, `website/docs/ref/spec.md`, `website/docs/ref/clr-interop.md`, `website/docs/faq.md`, `website/docs/tooling/compiler-architecture.md`, `website/docs/design-decisions.md`, and the headers of `samples/ReifiedGenerics.gs` / `samples/GenericTypeParameterAsTypeArgument.gs` / `samples/GenericEquality.gs` / `samples/GenericMethodDelegates.gs` so the reified behaviour is the live narrative; the historical "type-erased" framing is retained only in this ADR's audit, in ADR-0004's superseded addendum, and in the historical context of older ADRs that referenced the boundary.
 
-Each PR ends with `dotnet build GSharp.sln` clean, `dotnet test GSharp.sln` green, and `IlVerifier.Verify` clean on every emit test's emitted assembly. The matching `ReifiedGenericsReflectionTests.cs` `Skip` is removed (R1+R2 unskip tests 1–3; R3 unskips test 4; R5 unskips test 5).
+Each PR ended with `dotnet build GSharp.sln` clean, `dotnet test GSharp.sln` green, and `IlVerifier.Verify` clean on every emit test's emitted assembly. The matching `ReifiedGenericsReflectionTests.cs` `Skip` was removed (R1+R2 unskipped tests 1–3; R3 unskipped test 4; R5 unskipped test 5).
 
-No phase requires more than §2/§3 + the foundation in §6.1 to begin work.
+No phase required more than §2/§3 + the foundation in §6.1 to begin work.
 
 ## 7. Consequences
 
 Positive:
 
-- The audit is complete and concrete. Every grep-discovered erasure site has a category, a target metadata shape, and a phase number. The next implementer does not need to re-discover the surface.
-- The golden suite documents the user-visible *current* behaviour, so any future implementation step that breaks an unintended reflection contract is caught by a failing test rather than a downstream user report.
-- ADR-0004 stops over-promising. Spec/FAQ/feature-matrix/`clr-interop.md` now point at this ADR and describe the erasure honestly.
-- Issue #484 (year-old "investigate" issue) is closed as superseded.
-
-Negative:
-
-- This PR does not yet ship the metadata changes. The user-visible reflection behaviour is unchanged.
-- The negative item above is the explicit reason for §6.
+- The audit was complete and concrete. Every grep-discovered erasure site had a category, a target metadata shape, and a phase number. The next implementer did not need to re-discover the surface.
+- The golden suite documented the user-visible *pre-reification* behaviour, so each staging phase was bisectable.
+- ADR-0004 stopped over-promising. Spec/FAQ/feature-matrix/`clr-interop.md` first pointed at this ADR and described the erasure honestly, then (under R7) flipped to describe the reified shape directly.
+- Issue #484 (year-old "investigate" issue) was closed as superseded.
+- After R7 the entire user-visible reflection contract matches what C#/F# consumers expect from a generic `TypeDef`/`MethodDef`: `GetGenericArguments()` returns the type parameters, field types read as the substituted `T`, and there is no `box`/`unbox.any` boundary on value-type `T` access. The breaking changes enumerated in §3.7 shipped with the phase that introduced them.
 
 Neutral:
 
-- The ECMA-335 `Var`/`MVar` encoding is already implemented for *imported* CLR generics (the `GenericTypeParameter(idx)` / `GenericMethodTypeParameter(idx)` calls at `ReflectionMetadataEmitter.cs` lines 5497, 5501). The R2 phase reuses the same encoder calls for *user-declared* generics. No new emitter infrastructure is required.
+- The ECMA-335 `Var`/`MVar` encoding was already implemented for *imported* CLR generics (the `GenericTypeParameter(idx)` / `GenericMethodTypeParameter(idx)` calls at `ReflectionMetadataEmitter.cs` lines 5497, 5501). The R2 phase reused the same encoder calls for *user-declared* generics. No new emitter infrastructure was required.
 
 ## 8. Alternatives considered
 
