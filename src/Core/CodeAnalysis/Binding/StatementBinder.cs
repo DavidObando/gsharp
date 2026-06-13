@@ -2717,6 +2717,40 @@ internal sealed class StatementBinder
                 }
 
                 break;
+
+            // Issue #774: an open generic receiver such as `IEnumerable[T]`,
+            // `Dictionary[K, V]`, or a user `MyList[T]` carries symbolic
+            // type arguments on the ImportedTypeSymbol while its ClrType is
+            // erased to the corresponding `<object>` shape. Probe the
+            // OpenDefinition for the enumerable / dictionary shape and map
+            // each open CLR type argument back to the symbolic argument so
+            // the loop variable's type is the user's `T` (not `object`).
+            case ImportedTypeSymbol openImp when openImp.HasTypeParameterArgument && openImp.OpenDefinition != null:
+                if (MemberLookup.TryGetClrDictionaryTypes(openImp.OpenDefinition, out var openDKey, out var openDVal))
+                {
+                    iterationKind = ForRangeKind.Dictionary;
+                    keyType = MapOpenClrTypeToSymbolic(openDKey, openImp);
+                    valueType = MapOpenClrTypeToSymbolic(openDVal, openImp);
+                }
+                else if (MemberLookup.TryGetClrEnumerableElementType(openImp.OpenDefinition, out var openElemType))
+                {
+                    iterationKind = ForRangeKind.Enumerable;
+                    keyType = TypeSymbol.Int32;
+                    valueType = MapOpenClrTypeToSymbolic(openElemType, openImp);
+                }
+                else if (MemberLookup.TryGetClrPatternEnumerableElementType(openImp.OpenDefinition, out var openPatternElemType))
+                {
+                    iterationKind = ForRangeKind.PatternEnumerator;
+                    keyType = TypeSymbol.Int32;
+                    valueType = MapOpenClrTypeToSymbolic(openPatternElemType, openImp);
+                }
+                else
+                {
+                    Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
+                    return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+                }
+
+                break;
             case ImportedTypeSymbol imp when imp.ClrType != null:
                 // Issue #520: CLR SZ arrays (`T[]`) — see the matching note in the
                 // NullabilityAnnotatedTypeSymbol branch above. Detect first and
@@ -2805,6 +2839,45 @@ internal sealed class StatementBinder
 
         return new BoundForRangeStatement(originatingSyntax, keyVariable, valueVariable, collection, iterationKind, body, breakLabel, continueLabel);
     }
+
+    /// <summary>
+    /// Issue #774: maps an open generic CLR <see cref="Type"/> (such as the
+    /// element type extracted from <c>IEnumerable&lt;TParam&gt;</c>) back to
+    /// the symbolic <see cref="TypeSymbol"/> carried on
+    /// <paramref name="openImp"/>'s <see cref="ImportedTypeSymbol.TypeArguments"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a generic parameter declared on <see cref="ImportedTypeSymbol.OpenDefinition"/>,
+    /// the result is the symbolic argument at the same ordinal — e.g. the
+    /// <c>T</c> in <c>IEnumerable[T]</c> becomes the function-level
+    /// <see cref="TypeParameterSymbol"/> <c>T</c>.
+    /// </para>
+    /// <para>
+    /// For a constructed generic type whose arguments transitively reference
+    /// open parameters (e.g. <c>KeyValuePair&lt;TKey, TValue&gt;</c> on
+    /// <c>Dictionary&lt;TKey, TValue&gt;</c>), the helper recurses and
+    /// reconstructs the closed shape via <see cref="ImportedTypeSymbol.GetConstructed"/>
+    /// so downstream emit keeps the symbolic projection.
+    /// </para>
+    /// <para>
+    /// For anything else (closed primitive, unrelated CLR type, unmapped
+    /// parameter), falls back to <see cref="TypeSymbol.FromClrType"/>.
+    /// </para>
+    /// </remarks>
+    /// <summary>
+    /// Issue #774: maps an open generic CLR <see cref="Type"/> back to the
+    /// matching symbolic <see cref="TypeSymbol"/> on
+    /// <paramref name="openImp"/>. Thin local wrapper kept so the existing
+    /// case body reads cleanly; the implementation lives on
+    /// <see cref="MemberLookup"/> so the lowerer can reuse it when
+    /// synthesising symbolic enumerator types.
+    /// </summary>
+    /// <param name="openClr">The open CLR type to map.</param>
+    /// <param name="openImp">The receiver carrying symbolic type arguments.</param>
+    /// <returns>The mapped <see cref="TypeSymbol"/>.</returns>
+    private static TypeSymbol MapOpenClrTypeToSymbolic(Type openClr, ImportedTypeSymbol openImp)
+        => MemberLookup.MapOpenClrTypeToSymbolic(openClr, openImp);
 
     private BoundStatement BindForConditionStatement(ForConditionStatementSyntax syntax)
     {

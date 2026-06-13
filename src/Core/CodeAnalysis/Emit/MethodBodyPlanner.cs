@@ -422,9 +422,18 @@ internal sealed class MethodBodyPlanner
 
         // BoundDefaultExpression for non-primitive value types needs a temp local
         // for the ldloca/initobj/ldloc pattern (push-as-value path).
+        // Issue #774: type-parameter and erased open-generic defaults also need
+        // a slot — at compile time we don't know whether the substituted
+        // argument is a reference or value type, and `ldnull` is invalid for
+        // any value-type instantiation. The `ldloca tmp; initobj T; ldloc tmp`
+        // shape zero-inits the storage uniformly (null for ref types, zeroed
+        // bytes for value types) and IL-verifies for every closed argument.
         foreach (var def in this.CollectDefaultExpressions(body))
         {
-            if (!ReflectionMetadataEmitter.IsValueTypeSymbol(def.Type))
+            var needsSlot = ReflectionMetadataEmitter.IsValueTypeSymbol(def.Type)
+                || def.Type is TypeParameterSymbol
+                || (def.Type is ImportedTypeSymbol erasedGen && erasedGen.HasTypeParameterArgument);
+            if (!needsSlot)
             {
                 continue;
             }

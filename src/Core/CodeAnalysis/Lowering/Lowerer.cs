@@ -740,10 +740,27 @@ public sealed class Lowerer : BoundTreeRewriter
 
         if (isDictionary)
         {
-            var kvpClr = currentAccess.Type.ClrType;
+            // Issue #774: when `currentAccess.Type` is a symbolic open
+            // KeyValuePair[K, V] (because the receiver was an open
+            // `Dictionary[K, V]`), the closed CLR `Key`/`Value` properties
+            // both report `object`. Honour the symbolic arguments so the
+            // synthesised key/value declarations carry the user's `K`/`V`.
+            var kvpType = currentAccess.Type;
+            var kvpClr = kvpType.ClrType;
             var keyProp = kvpClr.GetProperty("Key");
             var valueProp = kvpClr.GetProperty("Value");
-            var kvpSymbol = new LocalVariableSymbol("$kvp", isReadOnly: true, type: TypeSymbol.FromClrType(kvpClr));
+
+            TypeSymbol keyAccessType = TypeSymbol.FromClrType(keyProp.PropertyType);
+            TypeSymbol valueAccessType = TypeSymbol.FromClrType(valueProp.PropertyType);
+            if (kvpType is ImportedTypeSymbol kvpImp
+                && kvpImp.HasTypeParameterArgument
+                && kvpImp.TypeArguments.Length == 2)
+            {
+                keyAccessType = kvpImp.TypeArguments[0];
+                valueAccessType = kvpImp.TypeArguments[1];
+            }
+
+            var kvpSymbol = new LocalVariableSymbol("$kvp", isReadOnly: true, type: kvpType);
             statements.Add(new BoundVariableDeclaration(node.Syntax, kvpSymbol, currentAccess));
             var kvpExpr = new BoundVariableExpression(node.Syntax, kvpSymbol);
 
@@ -752,13 +769,13 @@ public sealed class Lowerer : BoundTreeRewriter
                 statements.Add(new BoundVariableDeclaration(
                     node.Syntax,
                     node.KeyVariable,
-                    new BoundClrPropertyAccessExpression(node.Syntax, kvpExpr, keyProp, TypeSymbol.FromClrType(keyProp.PropertyType))));
+                    new BoundClrPropertyAccessExpression(node.Syntax, kvpExpr, keyProp, keyAccessType)));
             }
 
             statements.Add(new BoundVariableDeclaration(
                 node.Syntax,
                 node.ValueVariable,
-                new BoundClrPropertyAccessExpression(node.Syntax, kvpExpr, valueProp, TypeSymbol.FromClrType(valueProp.PropertyType))));
+                new BoundClrPropertyAccessExpression(node.Syntax, kvpExpr, valueProp, valueAccessType)));
         }
         else
         {
@@ -907,6 +924,20 @@ public sealed class Lowerer : BoundTreeRewriter
         out BoundExpression getEnumeratorCall,
         out TypeSymbol enumeratorType)
     {
+        // Issue #774: when the receiver is an open generic shape carrying an
+        // in-scope type parameter (e.g. `IEnumerable[T]`, `sequence[T]`,
+        // `Dictionary[K, V]`), the closed CLR shape is erased to `object` and
+        // its native `GetEnumerator()` would yield `IEnumerator<object>` /
+        // a struct enumerator typed against `object`. That collapses the loop
+        // variable to `object` and forces a verifier-broken `unbox.any` on
+        // every `Current` read. Synthesize a symbolic
+        // `IEnumerator[ElementSym]` enumerator instead so the rest of the
+        // loop lowers with the user's `T` (or `KeyValuePair[K, V]`) intact.
+        if (TryBuildSymbolicOpenGetEnumeratorCall(collection, out getEnumeratorCall, out enumeratorType))
+        {
+            return true;
+        }
+
         var clrType = collection.Type.ClrType;
         if (clrType != null)
         {
@@ -940,6 +971,96 @@ public sealed class Lowerer : BoundTreeRewriter
         getEnumeratorCall = null;
         enumeratorType = null;
         return false;
+    }
+
+    /// <summary>
+    /// Issue #774: builds a <c>GetEnumerator()</c> call against a symbolic
+    /// open-generic receiver (a <see cref="SequenceTypeSymbol"/> /
+    /// <see cref="AsyncSequenceTypeSymbol"/> with a null <c>ClrType</c>, or an
+    /// <see cref="ImportedTypeSymbol"/> with
+    /// <see cref="ImportedTypeSymbol.HasTypeParameterArgument"/>). Produces a
+    /// symbolic <c>IEnumerator[ElementSym]</c> typed
+    /// <see cref="ImportedTypeSymbol"/> so the rest of the loop lowering
+    /// (Current access, key/value extraction) carries the user's symbolic
+    /// argument instead of the erased <c>object</c> shape.
+    /// </summary>
+    private static bool TryBuildSymbolicOpenGetEnumeratorCall(
+        BoundExpression collection,
+        out BoundExpression getEnumeratorCall,
+        out TypeSymbol enumeratorType)
+    {
+        getEnumeratorCall = null;
+        enumeratorType = null;
+
+        var collectionType = collection.Type;
+        System.Type openDef;
+        ImmutableArray<TypeSymbol> typeArguments;
+
+        switch (collectionType)
+        {
+            case SequenceTypeSymbol seq when seq.ClrType == null:
+                openDef = typeof(System.Collections.Generic.IEnumerable<>);
+                typeArguments = ImmutableArray.Create<TypeSymbol>(seq.ElementType);
+                break;
+            case ImportedTypeSymbol imp when imp.HasTypeParameterArgument && imp.OpenDefinition != null:
+                openDef = imp.OpenDefinition;
+                typeArguments = imp.TypeArguments;
+                break;
+            default:
+                return false;
+        }
+
+        // Determine the IEnumerable<X> element CLR type from the open
+        // definition. For Dictionary[K, V] we deliberately route through
+        // IEnumerable<KeyValuePair<TKey, TValue>>.GetEnumerator() instead of
+        // Dictionary<,>.GetEnumerator() (which returns a nested struct
+        // Enumerator that complicates symbolic emit on every Current/Key/Value
+        // read). The minor allocation cost is acceptable; correctness wins.
+        System.Type openElementClr;
+        if (openDef == typeof(System.Collections.Generic.IEnumerable<>))
+        {
+            openElementClr = openDef.GetGenericArguments()[0];
+        }
+        else if (!MemberLookup.TryGetClrEnumerableElementType(openDef, out openElementClr))
+        {
+            return false;
+        }
+
+        var elementSym = MemberLookup.MapOpenClrTypeToSymbolic(openElementClr, openDef, typeArguments);
+        if (elementSym == TypeSymbol.Error)
+        {
+            return false;
+        }
+
+        // Resolve GetEnumerator() on the closed `IEnumerable<object>` shape;
+        // the symbolic MemberRef helper on the emit side re-encodes the
+        // parent TypeSpec against the symbolic element so the runtime call
+        // dispatches to `IEnumerable<TElement>::GetEnumerator()`.
+        var enumerableClosed = typeof(System.Collections.Generic.IEnumerable<object>);
+        var getEnumerator = enumerableClosed.GetMethod(
+            "GetEnumerator",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+            binder: null,
+            types: System.Type.EmptyTypes,
+            modifiers: null);
+        if (getEnumerator == null)
+        {
+            return false;
+        }
+
+        var enumeratorClosed = typeof(System.Collections.Generic.IEnumerator<object>);
+        enumeratorType = ImportedTypeSymbol.GetConstructed(
+            enumeratorClosed,
+            typeof(System.Collections.Generic.IEnumerator<>),
+            ImmutableArray.Create<TypeSymbol>(elementSym));
+
+        getEnumeratorCall = new BoundImportedInstanceCallExpression(
+            null,
+            collection,
+            getEnumerator,
+            enumeratorType,
+            ImmutableArray<BoundExpression>.Empty);
+        return true;
     }
 
     /// <summary>
@@ -1037,6 +1158,24 @@ public sealed class Lowerer : BoundTreeRewriter
                 ?? typeof(System.Collections.IEnumerator).GetProperty("Current");
             if (moveNext != null && currentMember != null)
             {
+                // Issue #774: when iterating an open generic receiver the
+                // synthesised enumerator type is the symbolic
+                // `IEnumerator[ElementSym]` whose ClrType is erased to
+                // `IEnumerator<object>`. The closed `Current` getter reports
+                // `object`, which would collapse the loop variable's type and
+                // re-introduce the bug we fixed in the binder. Use the
+                // enumerator's symbolic type argument instead so the
+                // BoundClrPropertyAccessExpression carries the user's `T`.
+                TypeSymbol currentType = null;
+                if (enumeratorType is ImportedTypeSymbol enumImp
+                    && enumImp.HasTypeParameterArgument
+                    && !enumImp.TypeArguments.IsDefaultOrEmpty)
+                {
+                    currentType = enumImp.TypeArguments[0];
+                }
+
+                currentType ??= GetClrMemberType(currentMember);
+
                 moveNextCallFactory = receiver => new BoundImportedInstanceCallExpression(
                     null,
                     receiver,
@@ -1047,7 +1186,7 @@ public sealed class Lowerer : BoundTreeRewriter
                     null,
                     receiver,
                     currentMember,
-                    GetClrMemberType(currentMember));
+                    currentType);
                 return true;
             }
         }

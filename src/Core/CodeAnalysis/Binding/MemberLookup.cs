@@ -398,6 +398,128 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Issue #774: maps an open generic CLR <see cref="Type"/> (such as the
+    /// element type extracted from <c>IEnumerable&lt;TParam&gt;</c>) back to
+    /// the symbolic <see cref="TypeSymbol"/> carried on
+    /// <paramref name="openImp"/>'s <see cref="ImportedTypeSymbol.TypeArguments"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a generic parameter declared on <see cref="ImportedTypeSymbol.OpenDefinition"/>,
+    /// the result is the symbolic argument at the same ordinal — e.g. the
+    /// <c>T</c> in <c>IEnumerable[T]</c> becomes the function-level
+    /// <see cref="TypeParameterSymbol"/> <c>T</c>.
+    /// </para>
+    /// <para>
+    /// For a constructed generic type whose arguments transitively reference
+    /// open parameters (e.g. <c>KeyValuePair&lt;TKey, TValue&gt;</c> on
+    /// <c>Dictionary&lt;TKey, TValue&gt;</c>), the helper recurses and
+    /// reconstructs the closed shape via <see cref="ImportedTypeSymbol.GetConstructed"/>
+    /// so downstream emit keeps the symbolic projection.
+    /// </para>
+    /// <para>
+    /// For anything else (closed primitive, unrelated CLR type, unmapped
+    /// parameter), falls back to <see cref="TypeSymbol.FromClrType"/>.
+    /// </para>
+    /// </remarks>
+    /// <param name="openClr">The open CLR type to map.</param>
+    /// <param name="openImp">The receiver carrying symbolic type arguments.</param>
+    /// <returns>The symbolic <see cref="TypeSymbol"/> projection.</returns>
+    public static TypeSymbol MapOpenClrTypeToSymbolic(Type openClr, ImportedTypeSymbol openImp)
+        => MapOpenClrTypeToSymbolic(openClr, openImp?.OpenDefinition, openImp?.TypeArguments ?? ImmutableArray<TypeSymbol>.Empty);
+
+    /// <summary>
+    /// Generalised entry point for <see cref="MapOpenClrTypeToSymbolic(Type, ImportedTypeSymbol)"/>
+    /// that accepts the open definition and symbolic arguments directly so
+    /// callers can pull them from any container shape
+    /// (<see cref="ImportedTypeSymbol"/>, <see cref="SequenceTypeSymbol"/>,
+    /// <see cref="AsyncSequenceTypeSymbol"/>).
+    /// </summary>
+    /// <param name="openClr">The open CLR type to map.</param>
+    /// <param name="openDefinition">The open generic definition that <paramref name="openClr"/>'s parameters bind against.</param>
+    /// <param name="typeArguments">The symbolic arguments at the same ordinals as <paramref name="openDefinition"/>'s generic parameters.</param>
+    /// <returns>The symbolic <see cref="TypeSymbol"/> projection.</returns>
+    public static TypeSymbol MapOpenClrTypeToSymbolic(Type openClr, Type openDefinition, ImmutableArray<TypeSymbol> typeArguments)
+    {
+        if (openClr == null)
+        {
+            return TypeSymbol.Error;
+        }
+
+        if (openClr.IsGenericParameter)
+        {
+            var declaring = openClr.DeclaringType;
+            if (declaring != null && openDefinition != null && !typeArguments.IsDefaultOrEmpty)
+            {
+                var declaringDef = declaring.IsGenericTypeDefinition ? declaring : (declaring.IsGenericType ? declaring.GetGenericTypeDefinition() : declaring);
+                if (declaringDef == openDefinition)
+                {
+                    var pos = openClr.GenericParameterPosition;
+                    if ((uint)pos < (uint)typeArguments.Length)
+                    {
+                        return typeArguments[pos];
+                    }
+                }
+            }
+
+            return TypeSymbol.FromClrType(openClr);
+        }
+
+        if (openClr.IsGenericType && !openClr.IsGenericTypeDefinition)
+        {
+            var openArgs = openClr.GetGenericArguments();
+            var symbolic = ImmutableArray.CreateBuilder<TypeSymbol>(openArgs.Length);
+            var anyParam = false;
+            foreach (var a in openArgs)
+            {
+                var mapped = MapOpenClrTypeToSymbolic(a, openDefinition, typeArguments);
+                symbolic.Add(mapped);
+                if (TypeSymbol.ContainsTypeParameter(mapped))
+                {
+                    anyParam = true;
+                }
+            }
+
+            var openDef = openClr.GetGenericTypeDefinition();
+            if (!anyParam)
+            {
+                return TypeSymbol.FromClrType(openClr);
+            }
+
+            // Construct the type-erased closed shape (`<object, object, …>`) so
+            // the resulting symbol mirrors the existing convention used by
+            // ImportedTypeSymbol.GetConstructed callers (#313 / #671): ClrType
+            // remains a real closed `Type` that reflection can probe for
+            // members, while TypeArguments carries the symbolic projection.
+            var openParams = openDef.GetGenericArguments();
+            var erasedArgs = new Type[openParams.Length];
+            for (int i = 0; i < openParams.Length; i++)
+            {
+                erasedArgs[i] = typeof(object);
+            }
+
+            Type erasedClosed;
+            try
+            {
+                erasedClosed = openDef.MakeGenericType(erasedArgs);
+            }
+            catch
+            {
+                // Fallback: if the type-erased construction violates a
+                // declared constraint (e.g. a `where T : struct` parameter
+                // that rejects `object`), fall back to the original open
+                // shape — downstream emit still encodes correctly via the
+                // OpenDefinition + TypeArguments.
+                erasedClosed = openClr;
+            }
+
+            return ImportedTypeSymbol.GetConstructed(erasedClosed, openDef, symbolic.MoveToImmutable());
+        }
+
+        return TypeSymbol.FromClrType(openClr);
+    }
+
+    /// <summary>
     /// Probes a user-defined <see cref="StructSymbol"/> for the
     /// duck-typed enumerable shape (<c>GetEnumerator() → MoveNext() / Current</c>).
     /// </summary>
