@@ -229,20 +229,29 @@ hatch under `src/Sdk/Gsharp.Extensions/*.cs` works today.
   `async sequence[T]` parameter slot as
   `GENERICINST<IEnumerable\`1><MVar>` /
   `GENERICINST<IAsyncEnumerable\`1><MVar>` so the produced IL
-  passes verification end-to-end. The remaining gaps blocking the
-  full dogfooded port are
-  [issue #774](https://github.com/DavidObando/gsharp/issues/774)
-  (open-receiver iteration erases element type to `object`) and
+  passes verification end-to-end. The remaining gap blocking the
+  full dogfooded port is
   [issue #775](https://github.com/DavidObando/gsharp/issues/775)
-  (G# spelling for `class` / `struct` / `new()` constraints). A
-  further emit gap surfaced while writing the IL-verified emit
-  tests for #773: an extension with an unconstrained `(self T?)`
-  receiver type compiles cleanly *only* when the body avoids
-  comparing `self` to `nil` or unwrapping with `!!`, because the
-  type-erased emit cannot statically choose between the
-  reference-typed `T` and value-typed `Nullable<T>` shapes. The
-  binder + interpreter accept the full surface; the emit-side
-  body-lowering fix lives with #774/#775 as part of the
+  (G# spelling for `class` / `struct` / `new()` constraints);
+  [issue #774](https://github.com/DavidObando/gsharp/issues/774)
+  (open-receiver iteration erases element type to `object`) is
+  **closed** — the binder now maps an open `IEnumerable[T]` /
+  `sequence[T]` / `Dictionary[K, V]` receiver to a symbolic
+  enumerator whose `Current` returns `T` (or the symbolic
+  `KeyValuePair[K, V]`), the lowerer threads those symbolic
+  element types through the `for v in self` reduction, and the
+  reflection-metadata emitter encodes the enumerator's `MoveNext`
+  / `Dispose` against their non-generic declaring interfaces while
+  keeping `get_Current` / `get_Key` / `get_Value` substituted with
+  the symbolic generic arguments so the produced IL verifies.
+  A separate, smaller emit gap surfaced while writing the
+  IL-verified emit tests for #773: an extension with an
+  unconstrained `(self T?)` receiver type compiles cleanly *only*
+  when the body avoids comparing `self` to `nil` or unwrapping
+  with `!!`, because the type-erased emit cannot statically choose
+  between the reference-typed `T` and value-typed `Nullable<T>`
+  shapes. The binder + interpreter accept the full surface; the
+  emit-side body-lowering fix lives with #775 as part of the
   open-receiver workstream.
 - **L3. Native `?:` over nullable value types.**
   ([issue #752](https://github.com/DavidObando/gsharp/issues/752))
@@ -279,9 +288,9 @@ of that migration, not left behind as dead code.
   concrete callsite waiting on its fix. L1 closed by ADR-0088,
   L3 closed by issue #752, L2's parser side closed in the PR
   for #751, and L2's binder side closed by #773; the residual
-  emit gaps surfaced while attempting the port live as #774
-  (open-receiver iteration) and #775 (G# `class` / `struct`
-  constraint spelling). The dogfooded G# port of
+  emit gap surfaced while attempting the port lives as #775
+  (G# `class` / `struct` constraint spelling); #774
+  (open-receiver iteration) is now closed. The dogfooded G# port of
   `Gsharp.Extensions.Optional` and `Gsharp.Extensions.Sequences`
   remains blocked on a fourth, structural, factor: the SDK
   bootstrap cycle. `Gsharp.Extensions.dll` is auto-referenced by

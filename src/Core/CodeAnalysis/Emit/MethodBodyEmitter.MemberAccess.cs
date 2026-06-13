@@ -712,6 +712,20 @@ internal sealed partial class MethodBodyEmitter
                     : this.outer.GetMethodEntityHandle(getter, access.Receiver.Type);
                 this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
                 this.il.Token(getterRef);
+
+                // Issue #774: when the receiver is a symbolic open container,
+                // the symbolic MemberRef encodes the call against the open
+                // generic property — the runtime stack value is therefore the
+                // substituted symbolic type, not the closed CLR `object` that
+                // `getter.ReturnType` reports. Skip widening so we don't emit
+                // a verifier-breaking `unbox.any T` against a value type T
+                // (the stack already holds the substituted `!!0`).
+                if (!isStatic
+                    && this.outer.TryGetSymbolicSubstitutedPropertyReturn(access.Receiver.Type, property, out _))
+                {
+                    break;
+                }
+
                 this.EmitErasedObjectReturnWidening(
                     TypeSymbol.FromClrType(getter.ReturnType),
                     access.Type);

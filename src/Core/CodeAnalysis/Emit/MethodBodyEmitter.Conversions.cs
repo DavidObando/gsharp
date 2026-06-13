@@ -638,8 +638,17 @@ internal sealed partial class MethodBodyEmitter
     {
         var type = node.Type;
 
+        // Issue #774: a type parameter or erased open generic (e.g. `T` or
+        // `List[T]`) may close to either a reference type or a value type
+        // at runtime; `ldnull` is invalid for the value-type case. Always
+        // route through the slot-based `ldloca; initobj; ldloc` shape — it
+        // zero-inits the storage uniformly (null for ref types, zeroed
+        // bytes for value types) and IL-verifies for any instantiation.
+        var typeParamLike = type is TypeParameterSymbol
+            || (type is ImportedTypeSymbol erasedGen && erasedGen.HasTypeParameterArgument);
+
         // Reference types: ldnull
-        if (!ReflectionMetadataEmitter.IsValueTypeSymbol(type))
+        if (!typeParamLike && !ReflectionMetadataEmitter.IsValueTypeSymbol(type))
         {
             this.il.OpCode(ILOpCode.Ldnull);
             return;
@@ -652,7 +661,8 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        // Arbitrary value type: ldloca temp; initobj T; ldloc temp
+        // Arbitrary value type (or type-parameter / erased open generic):
+        // ldloca temp; initobj T; ldloc temp
         if (!this.defaultExpressionSlots.TryGetValue(node, out var slot))
         {
             throw new InvalidOperationException(

@@ -5794,18 +5794,73 @@ internal sealed class ReflectionMetadataEmitter
     {
         handle = default;
         if (method == null
-            || containingTypeSymbol is not ImportedTypeSymbol imported
-            || imported.OpenDefinition == null
-            || imported.TypeArguments.IsDefaultOrEmpty
-            || !(imported.HasTypeParameterArgument || imported.TypeArguments.Any(ArgIsSymbolicUserDefined)))
+            || !TryNormalizeToSymbolicContainer(containingTypeSymbol, out var openDefinition, out var typeArguments)
+            || typeArguments.IsDefaultOrEmpty
+            || !(typeArguments.Any(TypeSymbol.ContainsTypeParameter) || typeArguments.Any(ArgIsSymbolicUserDefined)))
         {
             return false;
         }
 
+        // Issue #774: when the method is declared on a non-generic base
+        // (e.g. `IEnumerator.MoveNext()` inherited via `IEnumerator<T>`, or
+        // `IDisposable.Dispose()` on the same enumerator), encoding a
+        // symbolic generic parent TypeSpec produces a verifier-rejected
+        // MemberRef (`MoveNext` is not declared on `IEnumerator<>`). Let the
+        // plain MemberRef path encode the parent as the actual non-generic
+        // declaring type by short-circuiting here.
+        var methodDecl = method.DeclaringType;
+        if (methodDecl != null && !methodDecl.IsGenericType && methodDecl != openDefinition)
+        {
+            return false;
+        }
+
+        // Issue #774: when the method is declared on a generic interface or
+        // base type that the receiver's openDefinition implements (e.g.
+        // `IEnumerable<object>.GetEnumerator()` called on a
+        // `Dictionary[K, V]`), the parent TypeSpec must be the substituted
+        // interface — not the receiver's own openDefinition. Otherwise
+        // ResolveMethodOnOpenDefinition would pick the receiver's hiding
+        // method (e.g. Dictionary's struct-returning GetEnumerator) and the
+        // verifier would see a struct value where an interface reference is
+        // expected.
+        if (methodDecl != null
+            && methodDecl.IsGenericType
+            && openDefinition != null)
+        {
+            var methodDeclOpen = methodDecl.IsGenericTypeDefinition ? methodDecl : methodDecl.GetGenericTypeDefinition();
+            if (methodDeclOpen != openDefinition)
+            {
+                if (TryFindImplementedInterfaceInstantiation(openDefinition, methodDeclOpen, out var ifaceInstantiation))
+                {
+                    var ifaceArgs = ifaceInstantiation.GetGenericArguments();
+                    var symbolicIfaceArgs = ImmutableArray.CreateBuilder<TypeSymbol>(ifaceArgs.Length);
+                    foreach (var ifa in ifaceArgs)
+                    {
+                        symbolicIfaceArgs.Add(MemberLookup.MapOpenClrTypeToSymbolic(ifa, openDefinition, typeArguments));
+                    }
+
+                    openDefinition = methodDeclOpen;
+                    typeArguments = symbolicIfaceArgs.MoveToImmutable();
+                }
+            }
+        }
+
+        // Synthesize an ImportedTypeSymbol view of the receiver so the
+        // parent TypeSpec encoder reaches the existing
+        // `ImportedTypeSymbol with HasTypeParameterArgument` branch in
+        // EncodeTypeSymbol uniformly — regardless of whether the actual
+        // receiver was an ImportedTypeSymbol, a SequenceTypeSymbol with
+        // null ClrType (issue #774), or an AsyncSequenceTypeSymbol with
+        // null ClrType.
+        var symbolicView = ImportedTypeSymbol.GetConstructed(
+            openDefinition.MakeGenericType(GetErasedObjectArgs(openDefinition)),
+            openDefinition,
+            typeArguments);
+
         var parentBlob = new BlobBuilder();
-        this.EncodeTypeSymbol(new BlobEncoder(parentBlob).TypeSpecificationSignature(), imported);
+        this.EncodeTypeSymbol(new BlobEncoder(parentBlob).TypeSpecificationSignature(), symbolicView);
         var parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob));
-        var openMethod = ResolveMethodOnOpenDefinition(imported.OpenDefinition, method);
+        var openMethod = ResolveMethodOnOpenDefinition(openDefinition, method);
         var openForMethodGenerics = openMethod.IsGenericMethod
             ? openMethod.GetGenericMethodDefinition()
             : openMethod;
@@ -5840,6 +5895,82 @@ internal sealed class ReflectionMetadataEmitter
         return true;
     }
 
+    /// <summary>
+    /// Walks <paramref name="openDefinition"/>'s implemented interfaces and
+    /// returns the constructed instance that uses
+    /// <paramref name="targetOpenInterface"/> as its open definition. The
+    /// returned <see cref="Type"/>'s generic arguments are still in terms of
+    /// <paramref name="openDefinition"/>'s generic parameters so they can be
+    /// substituted via <see cref="MemberLookup.MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol})"/>.
+    /// </summary>
+    private static bool TryFindImplementedInterfaceInstantiation(Type openDefinition, Type targetOpenInterface, out Type instantiation)
+    {
+        foreach (var iface in openDefinition.GetInterfaces())
+        {
+            if (iface.IsGenericType && iface.GetGenericTypeDefinition() == targetOpenInterface)
+            {
+                instantiation = iface;
+                return true;
+            }
+
+            if (!iface.IsGenericType && iface == targetOpenInterface)
+            {
+                instantiation = iface;
+                return true;
+            }
+        }
+
+        instantiation = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #774: normalises any receiver type that carries open generic
+    /// arguments (an <see cref="ImportedTypeSymbol"/> with
+    /// <see cref="ImportedTypeSymbol.OpenDefinition"/>, a
+    /// <see cref="SequenceTypeSymbol"/> with no <see cref="TypeSymbol.ClrType"/>,
+    /// or its async counterpart) into the open CLR definition plus the
+    /// symbolic argument list. Lets the symbolic-container MemberRef path
+    /// fire uniformly for all three shapes.
+    /// </summary>
+    private static bool TryNormalizeToSymbolicContainer(
+        TypeSymbol containingTypeSymbol,
+        out Type openDefinition,
+        out ImmutableArray<TypeSymbol> typeArguments)
+    {
+        switch (containingTypeSymbol)
+        {
+            case ImportedTypeSymbol imp when imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty:
+                openDefinition = imp.OpenDefinition;
+                typeArguments = imp.TypeArguments;
+                return true;
+            case SequenceTypeSymbol seq when seq.ClrType == null:
+                openDefinition = typeof(System.Collections.Generic.IEnumerable<>);
+                typeArguments = ImmutableArray.Create<TypeSymbol>(seq.ElementType);
+                return true;
+            case AsyncSequenceTypeSymbol aseq when aseq.ClrType == null:
+                openDefinition = typeof(System.Collections.Generic.IAsyncEnumerable<>);
+                typeArguments = ImmutableArray.Create<TypeSymbol>(aseq.ElementType);
+                return true;
+            default:
+                openDefinition = null;
+                typeArguments = default;
+                return false;
+        }
+    }
+
+    private static Type[] GetErasedObjectArgs(Type openDefinition)
+    {
+        var parameters = openDefinition.GetGenericArguments();
+        var result = new Type[parameters.Length];
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            result[i] = typeof(object);
+        }
+
+        return result;
+    }
+
     private static MethodInfo ResolveMethodOnOpenDefinition(Type openDefinition, MethodInfo method)
     {
         if (openDefinition == null)
@@ -5867,6 +5998,71 @@ internal sealed class ReflectionMetadataEmitter
                 && candidate.IsGenericMethod == method.IsGenericMethod
                 && candidate.GetParameters().Length == method.GetParameters().Length);
         return fallback ?? method;
+    }
+
+    private static PropertyInfo ResolvePropertyOnOpenDefinition(Type openDefinition, PropertyInfo property)
+    {
+        if (openDefinition == null)
+        {
+            return property;
+        }
+
+        if (property.DeclaringType == openDefinition)
+        {
+            return property;
+        }
+
+        foreach (var candidate in openDefinition.GetProperties(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.MetadataToken == property.MetadataToken && candidate.Module == property.Module)
+            {
+                return candidate;
+            }
+        }
+
+        return openDefinition.GetProperty(
+            property.Name,
+            BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+    }
+
+    /// <summary>
+    /// Issue #774: when emitting a property read on a symbolic open-generic
+    /// receiver (e.g. <c>IEnumerator[T].Current</c> or
+    /// <c>KeyValuePair[K, V].Key</c>), the runtime stack value after the
+    /// symbolic getter MemberRef call is the substituted symbolic type, not
+    /// the closed CLR <c>object</c> that the type-erased getter declares.
+    /// Returning that symbolic type to the body emitter lets the widening
+    /// short-circuit, avoiding a verifier-breaking <c>unbox.any</c> on a
+    /// value-type <c>T</c>.
+    /// </summary>
+    /// <param name="receiverType">The receiver's type as seen by the body emitter.</param>
+    /// <param name="property">The closed-CLR property selected by the lowerer.</param>
+    /// <param name="substitutedReturn">The substituted symbolic return type, on success.</param>
+    /// <returns><see langword="true"/> when the receiver is a symbolic
+    /// open-generic container and the substituted return differs from the
+    /// closed CLR <c>object</c> shape.</returns>
+    internal bool TryGetSymbolicSubstitutedPropertyReturn(
+        TypeSymbol receiverType,
+        PropertyInfo property,
+        out TypeSymbol substitutedReturn)
+    {
+        substitutedReturn = null;
+        if (property == null
+            || !TryNormalizeToSymbolicContainer(receiverType, out var openDef, out var typeArguments)
+            || typeArguments.IsDefaultOrEmpty
+            || !(typeArguments.Any(TypeSymbol.ContainsTypeParameter) || typeArguments.Any(ArgIsSymbolicUserDefined)))
+        {
+            return false;
+        }
+
+        var openProp = ResolvePropertyOnOpenDefinition(openDef, property);
+        if (openProp == null)
+        {
+            return false;
+        }
+
+        substitutedReturn = MemberLookup.MapOpenClrTypeToSymbolic(openProp.PropertyType, openDef, typeArguments);
+        return substitutedReturn != null && substitutedReturn != TypeSymbol.Error;
     }
 
     /// <summary>
