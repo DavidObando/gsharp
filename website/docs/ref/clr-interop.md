@@ -391,11 +391,36 @@ func AcceptPoint(p Point) int32;
 
 Supported `LayoutKind` values: `Sequential` (default for blittable structs) and `Explicit`. `LayoutKind.Auto` is rejected (GS0346) because the CLR may reorder fields, which breaks the bit-for-bit ABI contract. `Pack` and `Size` are accepted as named arguments and forwarded to the `ClassLayout` row when present.
 
-A struct or class appearing in a P/Invoke signature must be *blittable*: every field is a primitive integer/float, an `nint` / `nuint`, a pointer (`*T`), or a blittable nested struct. `bool`, `char`, `string`, `decimal`, slices, sequences, and unannotated classes are non-blittable in v1; the binder reports GS0349 with the offending type's name. Per-field `[MarshalAs]` for non-blittable fields is filed as a follow-up (#760).
+A struct or class appearing in a P/Invoke signature must be *blittable*: every field is a primitive integer/float, an `nint` / `nuint`, a pointer (`*T`), or a blittable nested struct. `bool`, `char`, `string`, `decimal`, slices, sequences, and unannotated classes are non-blittable in v1; the binder reports GS0349 with the offending type's name. Per-field `[MarshalAs]` for non-blittable fields is filed as a follow-up (#762).
 
 Classes are special-cased: a `class` must carry an explicit `@StructLayout(LayoutKind.Sequential|Explicit)` annotation before it can appear in a P/Invoke signature (the default class layout is `Auto`), and even then it can only flow *by reference* — using a class as a P/Invoke return type is rejected with GS0351. Return a struct or `nint` instead. See ADR-0093 §4 for the rationale.
 
 The diagnostics introduced by this feature are GS0346 (invalid `LayoutKind`), GS0347 (missing `@FieldOffset` on an explicit-layout field), GS0348 (`@FieldOffset` on a non-explicit type), GS0349 (non-blittable type in a P/Invoke signature), GS0350 (invalid `@FieldOffset` value), and GS0351 (class as P/Invoke return type). See the [Diagnostics reference](./diagnostics) and ADR-0093 for the full table and worked examples.
+
+### Byref parameters (`ref` / `out` / `in`)
+
+ADR-0094 / issue #760 lifts the v1 blanket rejection of `ref`, `out`, and `in` parameters on a P/Invoke declaration. The runtime marshals the byref slot as a managed pointer `T*` to the unmanaged callee — the canonical shape for libc APIs that write a result through an out-pointer (`time(time_t *)`, `clock_gettime(int, struct timespec *)`, `pipe(int [2])`, `posix_memalign(void **, size_t, size_t)`).
+
+```gs
+package P
+import System
+import System.Runtime.InteropServices
+
+@DllImport("libc", EntryPoint: "time")
+func native_time(ref t int64) int64;
+
+var t = 0L
+var rc = native_time(ref t)
+Console.WriteLine(rc == t)   // True
+```
+
+The pointee type `T` must be blittable. Accepted pointees: the blittable primitives (`int8`–`int64`, `uint8`–`uint64`, `nint`, `nuint`, `float32`, `float64`) and `@StructLayout(LayoutKind.Sequential|Explicit)`-annotated structs whose fields are all blittable per ADR-0093 §2. Rejected pointees: `bool`, `char`, `string`, `object`, `decimal`, slices, sequences, classes (which already flow by reference), and nullable value types (`T?`) — each produces the new GS0352 diagnostic with a tailored message. Non-blittable struct pointees continue to use GS0349 because the remediation ("add `@StructLayout` / fix field blittability") is identical to the by-value struct case.
+
+The `ref string` case in particular needs an explicit `ref nint` + `Marshal.PtrToStringUTF8` / `Marshal.StringToCoTaskMemUTF8` round trip — the runtime cannot infer the unmanaged encoding (or the buffer-ownership contract) for a byref string slot. `ref bool` / `ref char` likewise need an explicit `ref uint8` (POSIX) or `ref int32` (Windows) declaration plus user-side widening, because the unmanaged width of `BOOL` / `char` depends on the surrounding `@MarshalAs` — accepting a byref slot silently would produce inconsistent bit-widths across platforms.
+
+Both `@DllImport` and `@LibraryImport` support byref parameters with no additional knobs. The `@LibraryImport` outer/inner stub pair (ADR-0092) forwards the byref slot through both halves — no allocation or free is required for byref-blittable parameters since the address is the caller's managed slot. Byref parameters mix freely with `string` parameters in `@LibraryImport`: the string still routes through the existing CoTaskMem allocate / free in the outer wrapper's `try / finally`, while the byref slot flows straight through.
+
+The retired GS0326 ("ref/out/in parameter is not supported") no longer fires for ref-kind parameters; the diagnostic remains the umbrella for the other unsupported function shapes (async, generic, instance, extension, `shared`, ref-return). See ADR-0094 for the full pointee-blittability table.
 
 ## Unsupported interop surface
 

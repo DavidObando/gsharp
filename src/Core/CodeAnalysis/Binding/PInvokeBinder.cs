@@ -91,15 +91,11 @@ internal static class PInvokeBinder
             diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "ref-returning functions are not supported");
         }
 
-        // Validate parameter ref-kinds — v1 does not support ref/out/in primitive
-        // marshalling (filed as follow-up #728).
-        foreach (var parameter in function.Parameters)
-        {
-            if (parameter.RefKind != RefKind.None)
-            {
-                diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, $"ref/out/in parameter '{parameter.Name}' is not supported");
-            }
-        }
+        // ADR-0094 / issue #760: parameter ref-kinds (`ref`/`out`/`in`) are now
+        // supported on P/Invoke declarations. The pointee type must be
+        // byref-marshalling-compatible (blittable primitive or a blittable
+        // struct). Validation runs inside the per-parameter loop below so
+        // GS0352 anchors to the offending type clause.
 
         // Validate parameter types against the supported marshalling table.
         // Use the parameter-syntax type-clause location for diagnostics so
@@ -119,6 +115,22 @@ internal static class PInvokeBinder
             if (i < parameterSyntaxes.Count && parameterSyntaxes[i].Type != null)
             {
                 typeLocation = parameterSyntaxes[i].Type.Location;
+            }
+
+            // ADR-0094 / issue #760: a ref/out/in parameter passes the
+            // declared type by managed pointer; the runtime marshals it as
+            // `T*` for the unmanaged callee, so the pointee must be
+            // blittable. Struct pointees route through the existing GS0349
+            // path; everything else (string / object / nullable / etc.)
+            // routes through the new GS0352 diagnostic with a tailored
+            // message. ParameterSymbol keeps the pointee type in `Type`
+            // (the RefKind on the symbol is what makes the parameter a
+            // byref); we re-form the ByRefTypeSymbol here so the rule
+            // lives in a single helper.
+            if (parameter.RefKind != RefKind.None)
+            {
+                ValidateByRefPInvokeParameter(parameter, ByRefTypeSymbol.Get(parameter.Type), typeLocation, blittableDetector, diagnostics);
+                continue;
             }
 
             // ADR-0093 §3 / §4: struct values and (layout-annotated) class
@@ -215,7 +227,14 @@ internal static class PInvokeBinder
 
         if (type is ByRefTypeSymbol byRef)
         {
-            return IsSupportedPrimitive(byRef.PointeeType);
+            // ADR-0094 / issue #760: byref pointees must be blittable. The
+            // call site (PInvokeBinder loop) already routes byref parameters
+            // through ValidateByRefPInvokeParameter for a tailored
+            // diagnostic; this fallback applies when classification is
+            // requested from an ad hoc context. Restrict to the strict
+            // blittable-primitive set so `ref bool` / `ref char` do not
+            // sneak through.
+            return IsBlittablePrimitive(byRef.PointeeType);
         }
 
         if (type is SliceTypeSymbol slice)
@@ -242,6 +261,78 @@ internal static class PInvokeBinder
             || type == TypeSymbol.NUInt
             || type == TypeSymbol.Float32
             || type == TypeSymbol.Float64;
+    }
+
+    /// <summary>
+    /// ADR-0094 / issue #760: the strict blittable-primitive set permitted
+    /// as a byref pointee on a P/Invoke parameter. Excludes <c>bool</c>
+    /// and <c>char</c> because their unmanaged representation depends on
+    /// the surrounding <c>CharSet</c> / <c>MarshalAs</c> annotation, which
+    /// v1 does not surface for byref slots — accepting them silently would
+    /// produce inconsistent bit-widths across platforms.
+    /// </summary>
+    private static bool IsBlittablePrimitive(TypeSymbol type)
+    {
+        return type == TypeSymbol.Int8
+            || type == TypeSymbol.UInt8
+            || type == TypeSymbol.Int16
+            || type == TypeSymbol.UInt16
+            || type == TypeSymbol.Int32
+            || type == TypeSymbol.UInt32
+            || type == TypeSymbol.Int64
+            || type == TypeSymbol.UInt64
+            || type == TypeSymbol.NInt
+            || type == TypeSymbol.NUInt
+            || type == TypeSymbol.Float32
+            || type == TypeSymbol.Float64;
+    }
+
+    /// <summary>
+    /// ADR-0094 / issue #760: validates a single P/Invoke parameter whose
+    /// ref-kind is <c>ref</c>, <c>out</c>, or <c>in</c>. The pointee type
+    /// must be one of:
+    /// <list type="bullet">
+    /// <item>A blittable primitive (<c>int8…int64</c>, <c>uint8…uint64</c>,
+    /// <c>nint</c>, <c>nuint</c>, <c>float32</c>, <c>float64</c>).</item>
+    /// <item>A user struct whose blittability is established by
+    /// <see cref="BlittableDetector"/> (issued GS0349 otherwise).</item>
+    /// </list>
+    /// Every other pointee — <c>bool</c>, <c>char</c>, <c>string</c>,
+    /// <c>object</c>, <c>decimal</c>, slices, sequences, nullable types —
+    /// is rejected with the new GS0352 diagnostic. <c>ref string</c> is the
+    /// canonical user mistake the diagnostic message coaches against
+    /// (recommend an explicit <c>nint</c> + Marshal.PtrToStringUTF8 round
+    /// trip instead).
+    /// </summary>
+    private static void ValidateByRefPInvokeParameter(
+        ParameterSymbol parameter,
+        ByRefTypeSymbol byRef,
+        TextLocation typeLocation,
+        BlittableDetector blittableDetector,
+        DiagnosticBag diagnostics)
+    {
+        var pointee = byRef.PointeeType;
+        if (pointee == null || pointee == TypeSymbol.Error)
+        {
+            return;
+        }
+
+        if (IsBlittablePrimitive(pointee))
+        {
+            return;
+        }
+
+        if (pointee is StructSymbol pointeeStruct)
+        {
+            if (!blittableDetector.IsBlittable(pointeeStruct))
+            {
+                diagnostics.ReportPInvokeNonBlittableType(typeLocation, pointeeStruct.Name);
+            }
+
+            return;
+        }
+
+        diagnostics.ReportPInvokeNonBlittableByRefPointee(typeLocation, parameter.Name, pointee.Name);
     }
 
     /// <summary>

@@ -1153,7 +1153,65 @@ Cross-references:
 - ADR-0086 — original P/Invoke / `@DllImport` ADR.
 - ADR-0092 — `@LibraryImport` source-generator-shaped P/Invoke.
 - ADR-0093 — struct and class marshalling (this feature).
+- ADR-0094 — `ref` / `out` / `in` parameter marshalling (closes #760).
 - Issues #759 (this feature), #727 (original P/Invoke), #758
-  (`@LibraryImport`), #706 (native-interop parent), #760 / #761 / #762
-  (planned follow-ups: per-field `[MarshalAs]`, fixed-size buffers,
-  marshal-by-reference classes).
+  (`@LibraryImport`), #760 (`ref` / `out` / `in`), #706 (native-interop
+  parent), #761 / #762 (planned follow-ups: function-pointer marshalling,
+  per-field `[MarshalAs]` / custom marshallers).
+
+
+## P/Invoke `ref` / `out` / `in` parameter diagnostic (GS0352)
+
+See ADR-0094 (issue #760). G# now accepts `ref T`, `out T`, and `in T`
+parameters on a `@DllImport` or `@LibraryImport` declaration, provided
+the pointee type `T` is blittable. The runtime marshals the byref slot
+as `T*` to the unmanaged callee, which is the canonical shape for libc
+APIs like `time(time_t *)`, `clock_gettime(int, struct timespec *)`,
+and `pipe(int [2])`.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0352 | Error | `'ref'/'out'/'in'` parameter `<name>` requires a blittable pointee; `<T>` is not blittable. Use a blittable primitive (`int8`…`int64`, `nint`/`nuint`, `float32`/`float64`), or a struct annotated with `@StructLayout(LayoutKind.Sequential)`. |
+
+Cause/fix:
+
+- **`ref bool` / `ref char` is rejected.** The unmanaged width of `BOOL`
+  is 4 bytes on Windows and 1 byte on POSIX; `char` is 1 byte natively
+  but 2 in the CLR. There is no portable byref encoding without an
+  explicit `@MarshalAs` (#762 follow-up). Declare the parameter as
+  `ref uint8` (POSIX) or `ref int32` (Windows) and widen in user code.
+- **`ref string` is rejected.** Strings need an explicit CoTaskMem
+  allocate-before / free-after round trip; the byref slot would carry
+  ownership ambiguity. Use `ref nint` together with
+  `Marshal.StringToCoTaskMemUTF8` and `Marshal.PtrToStringUTF8`.
+- **`ref T?` (nullable) is rejected.** The `Nullable<T>` layout
+  (`{ T value; bool hasValue }`) is not blittable; passing the address
+  would expose the `hasValue` byte to the unmanaged side, which has no
+  contract for it.
+- **`ref C` for a class `C` is rejected.** Classes already flow as
+  pointers (per ADR-0093 §4) when annotated with `@StructLayout`. Adding
+  a ref-kind on top produces a double indirection (`<TypeDef>**`) that
+  the runtime marshaller cannot handle. Drop the ref-kind on a class
+  parameter.
+
+When the pointee is a struct, blittability is checked by the same
+`BlittableDetector` used for the by-value struct path (ADR-0093 §2) and
+the diagnostic falls through to GS0349 instead — the remediation is
+identical (add `@StructLayout(LayoutKind.Sequential)` and confirm every
+field is blittable).
+
+The historical GS0326 ("ref/out/in parameter is not supported") path
+for ref-kind parameters is retired. GS0326 still fires for the remaining
+function-shape constraints (async / generic / instance / extension /
+`shared` / ref-return).
+
+Cross-references:
+
+- ADR-0086 — original P/Invoke / `@DllImport` ADR.
+- ADR-0092 — `@LibraryImport` source-generator-shaped P/Invoke.
+- ADR-0093 — struct and class marshalling.
+- ADR-0094 — `ref` / `out` / `in` parameter marshalling (this feature).
+- ADR-0060 — `ref` / `out` / `in` parameter and argument syntax.
+- Issues #760 (this feature), #727 (original P/Invoke), #758
+  (`@LibraryImport`), #759 (struct marshalling), #706 (native-interop
+  parent).
