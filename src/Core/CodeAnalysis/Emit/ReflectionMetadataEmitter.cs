@@ -1532,6 +1532,40 @@ internal sealed class ReflectionMetadataEmitter
             programTypeDefHandles[pkg] = programHandle;
         }
 
+        // Issue #792 / ADR-0084. Stamp [ExtensionAttribute] on every
+        // <Program> TypeDef that hosts at least one top-level extension
+        // function. C# extension-method discovery (ECMA-334 §13.6.9)
+        // requires both the host static class and each candidate static
+        // method to carry the marker; the per-method marker lands in
+        // EmitFunction.
+        foreach (var pkg in packages)
+        {
+            if (!programTypeDefHandles.TryGetValue(pkg, out var programHandle))
+            {
+                continue;
+            }
+
+            if (!functionsByPackage.TryGetValue(pkg, out var pkgFuncs))
+            {
+                continue;
+            }
+
+            var hostsAnyExtension = false;
+            foreach (var f in pkgFuncs)
+            {
+                if (f.IsExtension && !f.IsInstanceMethod)
+                {
+                    hostsAnyExtension = true;
+                    break;
+                }
+            }
+
+            if (hostsAnyExtension)
+            {
+                this.EmitExtensionAttribute(programHandle);
+            }
+        }
+
         // SM class TypeDefs (sync iterators + async iterators).
         foreach (var c in smClasses)
         {
@@ -3992,7 +4026,41 @@ internal sealed class ReflectionMetadataEmitter
             this.customAttrEncoder.EmitUserAttributes(paramHandle, paramSym, AttributeTargetKind.Param);
         }
 
+        // Issue #792 / ADR-0084. Stamp [ExtensionAttribute] on every G#-
+        // authored extension MethodDef so C#/F# call-site lookup picks them
+        // up via the standard ECMA-334 §13.6.9 extension-method discovery
+        // (which scans for [Extension] static methods on [Extension] static
+        // classes). The host TypeDef is stamped in EmitProgramExtensionMarker.
+        if (function.IsExtension && !function.IsInstanceMethod)
+        {
+            this.EmitExtensionAttribute(handle);
+        }
+
         return handle;
+    }
+
+    /// <summary>
+    /// Issue #792 / ADR-0084. Attaches the parameterless
+    /// <c>[System.Runtime.CompilerServices.ExtensionAttribute]</c> to the
+    /// supplied entity (MethodDef row for an extension method, or a TypeDef
+    /// row for the static class that hosts the extension methods).
+    /// </summary>
+    private void EmitExtensionAttribute(EntityHandle parent)
+    {
+        var ctorRef = this.wellKnown.GetExtensionAttributeCtorRef();
+        if (ctorRef.IsNil)
+        {
+            return;
+        }
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001); // Prolog
+        valueBlob.WriteUInt16(0);      // NumNamed
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: parent,
+            constructor: ctorRef,
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>

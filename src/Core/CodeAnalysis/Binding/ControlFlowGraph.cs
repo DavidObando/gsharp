@@ -71,7 +71,17 @@ public sealed class ControlFlowGraph
         foreach (var branch in graph.End.Incoming)
         {
             var lastStatement = branch.From.Statements.LastOrDefault();
-            if (lastStatement == null || lastStatement.Kind != BoundNodeKind.ReturnStatement)
+            if (lastStatement == null)
+            {
+                return false;
+            }
+
+            // A `throw` statement transfers control out of the function (either
+            // up to a catch handler or off the frame entirely) and is therefore
+            // a legitimate terminator for the "all paths return" check — the
+            // path simply never falls off the end of the function.
+            if (lastStatement.Kind != BoundNodeKind.ReturnStatement
+                && lastStatement.Kind != BoundNodeKind.ThrowStatement)
             {
                 return false;
             }
