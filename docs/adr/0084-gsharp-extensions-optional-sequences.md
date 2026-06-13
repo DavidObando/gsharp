@@ -286,6 +286,50 @@ migrate to native G# sources and the C# files under
 `src/Sdk/Gsharp.Extensions/Sequences/` should be deleted as part
 of that migration, not left behind as dead code.
 
+- **L5. SDK ↔ Extensions bootstrap cycle.**
+  ([issue #792](https://github.com/DavidObando/gsharp/issues/792))
+  **Build-system side closed.**
+  The bootstrap was the *last* infrastructure prerequisite for
+  authoring `Gsharp.Extensions` in G#: `Gsharp.NET.Sdk` ships
+  `Gsharp.Extensions.dll` inside its NuGet (`tools/extensions/`) and
+  auto-references it from every consumer `.gsproj`, so a G#-authored
+  `Gsharp.Extensions.gsproj` would self-reference at build time. The
+  new `src/Sdk/Gsharp.NET.Sdk.Bootstrap/` ships a single `.targets`
+  file that is *equivalent* to the consumer SDK in every respect
+  (same `BuildTask`, same `CoreCompile` shape, same `gsc.dll`
+  invocation) except that it deliberately *omits* the
+  `Gsharp.Extensions.dll` auto-reference — and resolves `gsc.dll` +
+  the BuildTask DLL from in-tree `out/bin/$(Configuration)/...` so it
+  needs no packed stage-0 NuGet. A `.gsproj` for `Gsharp.Extensions`
+  can therefore consume the bootstrap without participating in the
+  cycle.
+  In parallel, the reflection metadata emitter
+  (`ReflectionMetadataEmitter.cs`) now stamps
+  `[System.Runtime.CompilerServices.ExtensionAttribute]` on every
+  G#-authored extension method's MethodDef *and* on the `<Program>`
+  TypeDef that hosts it, so C# / F# call-site lookup (ECMA-334
+  §13.6.9) sees `.Map(...)` / `.FlatMap(...)` / etc. as proper
+  extension methods. Without that emit, the existing C# test surface
+  (`test/Extensions.Tests/*.cs`) would not bind against a G#-built
+  `Gsharp.Extensions.dll`.
+  **Source-port side: deferred.** While porting `Optional.gs` and
+  `Sequences.gs` it became clear that the public API surface still
+  hits several smaller, previously undocumented G# language gaps —
+  generic-method type-parameter threading through generic
+  instance-method calls (`List[T]().ToArray()` returns `object[]`
+  inside a generic shared method), no `default(T)` expression, no
+  `params` parameter declaration, no `==` between `(T) -> T` /
+  `sequence[T]` values and `nil`, no `[MethodImpl(...)]` annotation
+  parsing inside `shared { }` blocks, no `yield` inside a
+  shared-static method that returns `IEnumerable[T]`. Each is filed
+  as a focused follow-up. The C# escape hatch under
+  `src/Sdk/Gsharp.Extensions/Optional/` and
+  `src/Sdk/Gsharp.Extensions/Sequences/` remains in place; the
+  Extensions test suite (107 tests) continues to run against it
+  unchanged. Once those follow-ups close the actual G# port becomes
+  mechanical — the bootstrap + `[Extension]` emit make it a flag
+  flip rather than an infrastructure project.
+
 ## Consequences
 
 - **Positive — uniform G# feel.** Samples that previously had to
@@ -298,36 +342,29 @@ of that migration, not left behind as dead code.
 - **Positive — dogfooding pressure.** Shipping a real assembly
   meant to be authored in G# creates direct compiler pressure to
   close the open language gaps. Each gap is tracked with a
-  concrete callsite waiting on its fix. **All four documented
-  language gaps are now closed**: L1 closed by ADR-0088, L3
+  concrete callsite waiting on its fix. **All four originally
+  documented language gaps are closed**: L1 closed by ADR-0088, L3
   closed by issue #752, L2's parser side closed in the PR for
   #751, L2's binder side closed by #773, the open-receiver
   iteration emit gap closed by #774, and the G# spelling for
   `class` / `struct` / `new()` constraints closed by ADR-0097
-  (#775). The dogfooded G# port of `Gsharp.Extensions.Optional`
-  and `Gsharp.Extensions.Sequences` is no longer blocked by the
-  language; what remains is purely an SDK *bootstrap cycle*.
-  `Gsharp.Extensions.dll` is auto-referenced by every `.gsproj`
-  build via `Gsharp.NET.Sdk`, but the SDK itself pulls in
-  `Gsharp.Extensions.csproj` as a dependency at pack time (see
-  `src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj`). Re-authoring
-  `Gsharp.Extensions` as a `.gsproj` would require the SDK to
-  already exist in order to compile the `.gs` sources, which in
-  turn would require `Gsharp.Extensions.dll` to already exist.
-  Until that cycle is broken (e.g. by a staged bootstrap that
-  builds a minimal compiler-only payload, packs a stage-0 SDK
-  without `tools/extensions/Gsharp.Extensions.dll`, builds the
-  new `Gsharp.Extensions.gsproj` against the stage-0 SDK, and
-  then re-packs the SDK NuGet with the freshly built extensions
-  DLL bundled), the C# escape hatch under
-  `src/Sdk/Gsharp.Extensions/Optional/` and
-  `src/Sdk/Gsharp.Extensions/Sequences/` stays in place. The
-  test suite (`test/Extensions.Tests/`, 107 tests) runs against
-  the C# implementation unchanged. ADR-0097 §"Why the Extensions
-  stdlib port is staged" sketches the bootstrap fix sequence;
-  the language closure shipped in #775 unblocks any *user*
-  project that wants to author class/struct/new() constraints in
-  G# today.
+  (#775). **The SDK ↔ Extensions bootstrap cycle (L5) is now
+  broken** by issue #792: `src/Sdk/Gsharp.NET.Sdk.Bootstrap/`
+  ships a build-time-only mirror of the consumer SDK that compiles
+  `.gs` sources against the in-tree `gsc.dll` + BuildTask *without*
+  the `Gsharp.Extensions.dll` auto-reference, and the reflection
+  metadata emitter now stamps
+  `[System.Runtime.CompilerServices.ExtensionAttribute]` on every
+  G#-authored extension method's MethodDef and on its containing
+  `<Program>` TypeDef so the existing C# test surface against
+  `Gsharp.Extensions.dll` would continue to bind against a
+  G#-built replacement. What remains is the actual source-side
+  port of `Optional` and `Sequences`, which surfaced the
+  follow-up language gaps catalogued in §L5 above. The C# escape
+  hatch under `src/Sdk/Gsharp.Extensions/Optional/` and
+  `src/Sdk/Gsharp.Extensions/Sequences/` therefore stays in place
+  for one more turn; the test suite (`test/Extensions.Tests/`,
+  107 tests) runs against the C# implementation unchanged.
 - **Positive — zero-friction adoption.** Because the assembly is
   bundled with the SDK and imports are explicit but trivial
   (`import Gsharp.Extensions.Optional`), the cost to a sample or

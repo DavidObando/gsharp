@@ -330,9 +330,19 @@ same way ADR-0088 collapsed the CLR-imported side.
 
 ## Follow-ups
 
-- **SDK bootstrap cycle.** File the staged-bootstrap fix described
-  above so the dogfooded G# port of `Gsharp.Extensions.Optional` /
-  `.Sequences` can finally land.
+- **SDK bootstrap cycle.** **Build-system side closed by issue #792.**
+  The `src/Sdk/Gsharp.NET.Sdk.Bootstrap/` targets file mirrors the
+  consumer SDK on every axis except the `Gsharp.Extensions.dll`
+  auto-reference and resolves `gsc.dll` + the BuildTask from in-tree
+  `out/bin/$(Configuration)/...`, so a G#-authored
+  `Gsharp.Extensions.gsproj` can consume it without participating in
+  the cycle. The actual source port of `Optional` / `Sequences` is
+  staged in the follow-ups filed from #792 — the remaining work is
+  language-side (generic-method type-parameter threading in generic
+  instance-method calls, `default(T)`, `params`, `==` between
+  function-typed values and `nil`, `[MethodImpl(...)]` parsing in
+  `shared { }`, `yield` in shared-static methods returning
+  `IEnumerable[T]`).
 - **`unmanaged` constraint.** Track separately; not required for the
   Extensions port.
 - **Fix-it tooling.** The language server could offer a

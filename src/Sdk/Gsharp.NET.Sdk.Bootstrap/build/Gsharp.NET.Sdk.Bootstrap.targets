@@ -1,0 +1,100 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <!--
+    Issue #792 / ADR-0084. Bootstrap MSBuild targets compiling .gs sources
+    against the IN-TREE Compiler.csproj + Gsharp.NET.Sdk.csproj outputs
+    (gsc.dll + BuildTask.dll). Imported by Gsharp.Extensions.gsproj AFTER
+    Microsoft.NET.Sdk's Sdk.targets so the CoreCompile override below
+    replaces the default csc-driven CoreCompile.
+
+    DIFFERENCES from src/Sdk/Gsharp.NET.Sdk/build/Gsharp.NET.Core.Sdk.targets:
+      * GsharpToolFullPath / GsharpCompilerFullPath resolve from the in-tree
+        out/bin/$(Configuration)/... layout instead of the packed tools/task/ +
+        tools/compiler/ subtrees of an installed NuGet.
+      * NO <_ExplicitReference Include=".../Gsharp.Extensions.dll" />.
+        That auto-reference is exactly the cycle this bootstrap exists to
+        break: Gsharp.Extensions.dll cannot reference itself while being
+        built.
+      * NO consumer pack hooks (this assembly is not packed standalone;
+        Gsharp.NET.Sdk.csproj reaches in and bundles the output into its
+        own NuGet's tools/extensions/ subtree).
+  -->
+
+  <PropertyGroup>
+    <!-- Resolve the build infrastructure from the in-tree per-project output
+         directories. Directory.Build.props (build/gsharp.build.props) pins
+         those to $(OutRoot)/bin/$(Configuration)/$(MSBuildProjectName); we
+         replicate the same layout here so the bootstrap and the consumer SDK
+         pack agree byte-for-byte. -->
+    <GsharpBootstrapRepoRoot Condition=" '$(GsharpBootstrapRepoRoot)' == '' ">$(MSBuildThisFileDirectory)..\..\..\..\</GsharpBootstrapRepoRoot>
+    <GsharpBootstrapBinDir Condition=" '$(GsharpBootstrapBinDir)' == '' ">$(GsharpBootstrapRepoRoot)out\bin\$(Configuration)\</GsharpBootstrapBinDir>
+
+    <GsharpToolFullPath Condition=" '$(GsharpToolFullPath)' == '' ">$(GsharpBootstrapBinDir)Gsharp.NET.Sdk\Gsharp.NET.Sdk.dll</GsharpToolFullPath>
+    <GsharpCompilerFullPath Condition=" '$(GsharpCompilerFullPath)' == '' ">$(GsharpBootstrapBinDir)Compiler\gsc.dll</GsharpCompilerFullPath>
+
+    <!-- Take ownership of CoreCompile; the only dependency is the standard
+         _ComputeNonExistentFileProperty helper. -->
+    <CoreCompileDependsOn>_ComputeNonExistentFileProperty</CoreCompileDependsOn>
+  </PropertyGroup>
+
+  <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.BuildTask" Condition="Exists('$(GsharpToolFullPath)')" />
+
+  <!-- mscorlib resolution — same as the consumer SDK. -->
+  <ItemGroup Condition=" '$(NoStdLib)' != 'true' ">
+    <_ExplicitReference Include="$(FrameworkPathOverride)\mscorlib.dll" Condition=" '$(FrameworkPathOverride)' != '' " />
+  </ItemGroup>
+
+  <Target Name="CoreCompile"
+          Inputs="$(MSBuildAllProjects);@(Compile);@(ReferencePathWithRefAssemblies)"
+          Outputs="@(IntermediateAssembly)"
+          DependsOnTargets="$(CoreCompileDependsOn)">
+
+    <Error Condition="!Exists('$(GsharpCompilerFullPath)')"
+           Text="Gsharp.NET.Sdk.Bootstrap: gsc.dll not found at '$(GsharpCompilerFullPath)'. Build src/Compiler/Compiler.csproj first." />
+    <Error Condition="!Exists('$(GsharpToolFullPath)')"
+           Text="Gsharp.NET.Sdk.Bootstrap: BuildTask DLL not found at '$(GsharpToolFullPath)'. Build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj first." />
+
+    <PropertyGroup>
+      <_GsharpRefAssemblyPath Condition=" '$(ProduceReferenceAssembly)' == 'true' ">@(IntermediateRefAssembly)</_GsharpRefAssemblyPath>
+    </PropertyGroup>
+
+    <BuildTask
+        GsharpCompilerFullPath="$(GsharpCompilerFullPath)"
+        OutputPath="$(IntermediateOutputPath)"
+        OutputName="$(TargetName)"
+        TempOutputPath="$(IntermediateOutputPath)"
+        TargetFramework="$(TargetFramework)"
+        BasePath="$(MSBuildProjectDirectory)"
+        Optimization="$(Optimize)"
+        DebugType="$(DebugType)"
+        PdbFile="@(_DebugSymbolsIntermediatePath)"
+        DocumentationFile="$(DocumentationFile)"
+        SourceLink="$(SourceLink)"
+        EmbedAllSources="$(EmbedAllSources)"
+        Deterministic="$(Deterministic)"
+        Version="$(Version)"
+        OutputType="$(OutputType)"
+        RefAssembly="$(_GsharpRefAssemblyPath)"
+        NoWarn="$(NoWarn)"
+        TreatWarningsAsErrors="$(TreatWarningsAsErrors)"
+        WarningsAsErrors="$(WarningsAsErrors)"
+        Compile="@(Compile)"
+        References="@(ReferencePathWithRefAssemblies)"
+        ResponseFilePath="$(IntermediateOutputPath)$(TargetName).rsp" />
+
+    <ItemGroup>
+      <FileWrites Include="$(IntermediateOutputPath)$(TargetName)$(TargetExt)" />
+      <FileWrites Include="$(_GsharpRefAssemblyPath)" Condition=" '$(_GsharpRefAssemblyPath)' != '' " />
+      <FileWrites Include="$(DocumentationFile)" Condition=" '$(DocumentationFile)' != '' " />
+      <FileWrites Include="@(_DebugSymbolsIntermediatePath)"
+                  Condition=" '@(_DebugSymbolsIntermediatePath)' != '' and
+                              '$(DebugType)' != ''                       and
+                              '$(DebugType)' != 'none'                   and
+                              '$(DebugType)' != 'embedded' " />
+    </ItemGroup>
+  </Target>
+
+  <!-- Required by Common.targets; defer to C# semantics. -->
+  <Target Name="CreateManifestResourceNames" />
+
+</Project>
