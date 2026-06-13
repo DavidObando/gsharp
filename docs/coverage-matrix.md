@@ -25,6 +25,7 @@ BadToken
 BangBangToken
 BangEqualsToken
 BangToken
+BaseInterfaceCallExpression
 BinaryExpression
 BlockExpression
 BlockStatement
@@ -249,6 +250,7 @@ AwaitExpression
 AwaitForRangeStatement
 AwaitResumePoint
 AwaitYieldPoint
+BaseInterfaceCallExpression
 BinaryExpression
 BlockExpression
 BlockStatement

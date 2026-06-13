@@ -987,3 +987,59 @@ Cross-references:
 - ADR-0090 — `private` interface helper methods (this feature).
 - Issue #756 (this feature), #726 (DIM parent), #755
   (static-virtual interfaces), #706 (advanced-interfaces parent).
+
+
+## Explicit-base interface call diagnostics (GS0338–GS0341)
+
+See ADR-0091 (issue #757). ADR-0091 introduces the
+explicit-base call syntax `base[IFoo].Method(args)` for disambiguating
+default-interface-method (DIM) diamonds. The override may delegate to
+one — or both — of the inherited defaults rather than re-implement
+them. The emit shape is a non-virtual `call instance R IFoo::Method(...)`
+so the inherited body is invoked directly rather than re-dispatched
+through the v-table.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0338 | Error | `'base[<I>]' is not allowed here; the enclosing type does not implement '<I>'.` |
+| GS0339 | Error | `Interface '<I>' does not declare a member named '<Name>' reachable via 'base[<I>]'.` |
+| GS0340 | Error | `Interface member '<I>.<Name>' is abstract; there is no default implementation to delegate to via 'base[<I>]'.` |
+| GS0341 | Error | `Interface member '<I>.<Name>' is a private helper (ADR-0090) and is not reachable via 'base[<I>]'.` |
+
+`base[IFoo]` may be used inside any instance member (public, private,
+override, or non-conflicting) of a class that implements `IFoo`. It is
+not a statement and never appears outside an instance-member body.
+Private interface helpers (ADR-0090) are interface-internal and never
+exposed through `base[IFoo]`; that boundary is enforced by GS0341
+rather than the helper visibility diagnostic GS0334.
+
+Cause/fix:
+
+- **GS0338** — either add the interface to the enclosing type's
+  implementation set (`class C : IFoo { ... }`) or remove the
+  `base[IFoo]` call. A top-level function has no enclosing type and
+  cannot use the syntax.
+- **GS0339** — check the spelling, arity, or visibility of the member.
+  `base[IFoo]` reaches only members declared on `IFoo` itself (not
+  inherited from another interface and not on a base class).
+- **GS0340** — the interface declares the slot but did not supply a
+  default body. There is nothing to delegate to. Either supply a
+  default body on the interface, or implement the body inline in the
+  class.
+- **GS0341** — private interface helpers are an internal interface
+  detail (ADR-0090). They are not part of the contract that
+  implementers see and cannot be invoked across the
+  implementer / interface boundary, even via `base[IFoo]`. Add a
+  public default on the interface that wraps the helper if you need
+  to expose the functionality.
+
+Cross-references:
+
+- ADR-0085 — default-interface methods (the DIM family parent).
+- ADR-0089 — static-virtual interface members (sibling).
+- ADR-0090 — `private` interface helper methods (GS0341 boundary).
+- ADR-0091 — explicit-base interface call syntax (this feature).
+- Issue #757 (this feature), #726 (DIM parent), #755 (static-virtual
+  interfaces), #756 (private interface helpers), #706
+  (advanced-interfaces parent).
+

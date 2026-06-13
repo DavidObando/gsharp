@@ -139,6 +139,12 @@ public enum BoundNodeKind
     // `convenience init(...)` body. Emitted as a `call .ctor(this, args)`
     // chained CIL call to another constructor in the same class.
     ConstructorChainingExpression,
+
+    // ADR-0091 / issue #757: explicit-base call into an inherited interface
+    // default body — `base[IFoo].Method(args)`. Emitted as a non-virtual
+    // `call instance R IFoo::Method(...)` so the inherited default runs
+    // without re-dispatching through the implementer's v-table.
+    BaseInterfaceCallExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented
