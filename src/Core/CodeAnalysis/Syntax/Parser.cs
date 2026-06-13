@@ -5441,6 +5441,15 @@ public class Parser
                 // unaffected).
                 return ParsePostfixChain(ParseBaseInterfaceCallExpression());
 
+            case SyntaxKind.DefaultKeyword:
+                // ADR-0100 / issue #795: `default(T)` and bare `default`
+                // expressions. The arm-leading `default` of a switch/select
+                // case is matched earlier in ParseSwitchCase /
+                // ParseSelectCase / ParseSwitchExpressionArm before reaching
+                // primary-expression dispatch, so by the time we land here
+                // the keyword is in a value position.
+                return ParsePostfixChain(ParseDefaultExpression());
+
             case SyntaxKind.IdentifierToken:
             default:
                 return ParseNameOrCallExpression();
@@ -6594,6 +6603,27 @@ public class Parser
         var typeClause = ParseTypeClause();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         return new TypeOfExpressionSyntax(syntaxTree, typeOfIdentifier, openParen, typeClause, closeParen);
+    }
+
+    private DefaultExpressionSyntax ParseDefaultExpression()
+    {
+        // ADR-0100 / issue #795: `default(T)` and bare `default` expression.
+        // Both shapes start with the `default` keyword. The optional
+        // `(TypeClause)` makes the form explicit; the bare form leaves the
+        // type to be supplied by the surrounding target-type context
+        // (let/var initializer with explicit type, `return`, typed call
+        // argument, sibling branch of `?:`). Bare-form bind-time errors
+        // are surfaced as GS0362.
+        var defaultKeyword = MatchToken(SyntaxKind.DefaultKeyword);
+        if (Current.Kind != SyntaxKind.OpenParenthesisToken)
+        {
+            return new DefaultExpressionSyntax(syntaxTree, defaultKeyword, openParenthesis: null, typeClause: null, closeParenthesis: null);
+        }
+
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var typeClause = ParseTypeClause();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new DefaultExpressionSyntax(syntaxTree, defaultKeyword, openParen, typeClause, closeParen);
     }
 
     private ExpressionSyntax ParseNameOfExpression()

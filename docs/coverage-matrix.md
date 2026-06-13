@@ -56,6 +56,7 @@ ConstantPattern
 ConstructorDeclaration
 ContinueKeyword
 ContinueStatement
+DefaultExpression
 DefaultKeyword
 DeferKeyword
 DeferStatement

@@ -228,6 +228,22 @@ internal sealed class ConversionClassifier
             return bindInterpolatedStringAsFormattable(interpolated, type);
         }
 
+        // ADR-0100 / issue #795: bare `default` (no type clause) takes its
+        // type from the surrounding target type. The explicit `default(T)`
+        // form is bound through the regular dispatcher because its type
+        // comes from the type-clause argument and overload resolution
+        // should see a typed expression.
+        if (syntax is DefaultExpressionSyntax defaultExpr && defaultExpr.TypeClause == null)
+        {
+            if (type == null || type == TypeSymbol.Error)
+            {
+                Diagnostics.ReportBareDefaultNoTargetType(defaultExpr.DefaultKeyword.Location);
+                return new BoundErrorExpression(defaultExpr);
+            }
+
+            return new BoundDefaultExpression(defaultExpr, type);
+        }
+
         var expression = bindExpression(syntax);
         return BindConversion(syntax.Location, expression, type, allowExplicit);
     }
@@ -249,6 +265,27 @@ internal sealed class ConversionClassifier
     /// <returns>The shaped bound expression.</returns>
     public BoundExpression BindConversion(TextLocation diagnosticLocation, BoundExpression expression, TypeSymbol type, bool allowExplicit = false)
     {
+        // ADR-0100 / issue #795: a typeless bare-`default` placeholder
+        // (produced by ExpressionBinder.BindDefaultExpression when the
+        // syntax has no type-clause) takes its concrete type from the
+        // target. When the target is missing or itself in error, surface
+        // GS0362 instead of the generic "cannot convert ? → ?"
+        // diagnostic. The explicit `default(T)` form is already typed and
+        // flows through the regular conversion machinery below.
+        if (expression is BoundDefaultExpression placeholderDefault
+            && placeholderDefault.Type == TypeSymbol.Error
+            && placeholderDefault.Syntax is DefaultExpressionSyntax barePlaceholder
+            && barePlaceholder.TypeClause == null)
+        {
+            if (type == null || type == TypeSymbol.Error)
+            {
+                Diagnostics.ReportBareDefaultNoTargetType(barePlaceholder.DefaultKeyword.Location);
+                return new BoundErrorExpression(barePlaceholder);
+            }
+
+            return new BoundDefaultExpression(barePlaceholder, type);
+        }
+
         // Issue #337: a CLR member method group has no fixed type until the
         // target delegate signature drives overload selection. Resolve it here,
         // where the expected type is known, before classifying conversions.

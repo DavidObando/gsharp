@@ -341,6 +341,18 @@ public enum SyntaxKind
     // BoundBaseInterfaceCallExpression; emitted as a non-virtual `call`
     // into the interface's MethodDef.
     BaseInterfaceCallExpression,
+
+    // ADR-0100 / issue #795: `default(T)` and bare `default` expressions.
+    // `default(T)` yields the zero/null value of any type clause T. The
+    // bare `default` literal is valid in target-typed positions (let/var
+    // initializer with explicit type, `return` when the enclosing
+    // function's return type is known, argument to a typed parameter, and
+    // ternary `?:` branches typed by the sibling branch). Both shapes bind
+    // to BoundDefaultExpression. The `default` keyword's existing role as
+    // a switch-arm leader is preserved: those forms are recognized in the
+    // case-parsing path before primary-expression dispatch, so this kind
+    // only fires for true value-position uses.
+    DefaultExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

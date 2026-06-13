@@ -44,15 +44,20 @@ b
     }
 
     [Fact]
-    public void BareVarDeclaration_String_DefaultsToEmpty()
+    public void BareVarDeclaration_String_DefaultsToNil()
     {
+        // ADR-0100 / issue #795: `default(T)` aligned the interpreter
+        // with the IL emit path. Reference types (including `string`)
+        // default to `nil` rather than the Go-style empty value. Both
+        // bare `var s string` (which lowers to `BoundDefaultExpression`)
+        // and explicit `default(string)` now produce the same value.
         var source = @"
 var s string
 s
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        Assert.Equal(string.Empty, result.Value);
+        Assert.Null(result.Value);
     }
 
     [Fact]

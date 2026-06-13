@@ -669,6 +669,18 @@ internal sealed class StatementBinder
                 var lambda = bindLambdaWithTargetType(targetTypedLambda, targetFnType);
                 convertedInitializer = conversions.BindConversion(syntax.Initializer.Location, lambda, variableType);
             }
+            else if (type != null && syntax.Initializer is DefaultExpressionSyntax defaultInit && defaultInit.TypeClause == null)
+            {
+                // ADR-0100 / issue #795: bare `default` initializer takes
+                // its type from the declared variable type. We bind to a
+                // BoundDefaultExpression of that type directly so the
+                // emitter sees the value-type zero-init shape and the
+                // interpreter mirrors it. The eager
+                // `bindExpression(syntax.Initializer)` path would report
+                // GS0362 because the kind dispatch has no target type.
+                variableType = type;
+                convertedInitializer = new BoundDefaultExpression(defaultInit, variableType);
+            }
             else
             {
                 var initializer = bindExpression(syntax.Initializer);
@@ -3211,7 +3223,27 @@ internal sealed class StatementBinder
             return new BoundReturnStatement(syntax, bindInterpolatedStringAsFormattable(interpolatedReturn, function.Type));
         }
 
-        var expression = syntax.Expression == null ? null : bindExpression(syntax.Expression);
+        // ADR-0100 / issue #795: a bare `return default` takes its type
+        // from the enclosing function's declared return type. We special-
+        // case it here so the kind dispatcher does not see a bare default
+        // without a target and report GS0362. Inferred-return lambdas
+        // (function.IsReturnTypeInferred) cannot resolve a target yet, so
+        // GS0362 still fires there — the user must write the explicit
+        // `default(T)` form when the lambda's return type is being
+        // inferred.
+        BoundExpression expression;
+        if (syntax.Expression is DefaultExpressionSyntax bareReturnDefault
+            && bareReturnDefault.TypeClause == null
+            && function != null
+            && !function.IsReturnTypeInferred
+            && function.Type != TypeSymbol.Void)
+        {
+            expression = new BoundDefaultExpression(bareReturnDefault, function.Type);
+        }
+        else
+        {
+            expression = syntax.Expression == null ? null : bindExpression(syntax.Expression);
+        }
 
         // Issue #490 (ADR-0060 follow-up): validate the `return ref` / `return` form
         // against the function's declared return ref-kind. Then, for ref returns, wrap

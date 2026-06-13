@@ -2504,6 +2504,24 @@ internal sealed class OverloadResolver
             var parameter = function.Parameters[i];
             var expectedType = substitution != null ? substituteType(parameter.Type, substitution) : parameter.Type;
 
+            // ADR-0100 / issue #795: materialise a bare-`default`
+            // placeholder argument (BoundDefaultExpression with Error
+            // type and bare DefaultExpressionSyntax) against the
+            // expected parameter type. The placeholder originates in
+            // ExpressionBinder.BindDefaultExpression when the bare form
+            // is encountered through the eager argument-binding loop
+            // above; by this point we know the target type and can pin
+            // it down.
+            if (argument is BoundDefaultExpression bareDefArg
+                && argument.Type == TypeSymbol.Error
+                && argument.Syntax is DefaultExpressionSyntax bareDefArgSyntax
+                && bareDefArgSyntax.TypeClause == null
+                && expectedType != null
+                && expectedType != TypeSymbol.Error)
+            {
+                boundArguments[i] = argument = new BoundDefaultExpression(bareDefArgSyntax, expectedType);
+            }
+
             // ADR-0060: ref-kind argument matching. The argument's syntax must
             // carry the same `ref`/`out`/`in` modifier as the parameter; for `in`
             // the modifier is required (warning GS0242 is reported when omitted).

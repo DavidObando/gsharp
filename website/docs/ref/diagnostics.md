@@ -1372,3 +1372,31 @@ Cross-references:
   case for disjoint `class` vs `struct` overloads).
 - Issues #775 (this feature), #706 (Oats cleanup parent), #724
   (Extensions stdlib parent).
+
+## Target-typed bare `default` literal diagnostic (GS0362)
+
+ADR-0100 / issue #795. The bare `default` literal (without an
+accompanying `(T)` type clause) takes its type from the surrounding
+target-typed position: the initializer of `let`/`var` with an explicit
+type clause, the value of `return` when the enclosing function has a
+known return type, an argument to a parameter of known type, and a
+conditional branch typed by its sibling. When no target type is
+available, GS0362 fires.
+
+| Code | Severity | Message |
+|----|----------|-------------|
+| GS0362 | Error | The bare `default` literal can only be used where its type is known from context. Use `default(T)` to spell the default value of an explicit type. |
+
+Cause/fix:
+
+- **`var x = default` with no type clause and no initializer-typed sibling.** Either add a type clause (`var x int32 = default`) or use the typed form (`var x = default(int32)`).
+- **`Console.WriteLine(default)` against an overloaded method.** Pick the overload by writing `default(T)`, where `T` matches the parameter type you want, or assign the value to a typed local first.
+- **`return default` from a function whose return type cannot be inferred.** Annotate the function's return type, or use `return default(T)` directly.
+
+Cross-references:
+
+- ADR-0100 — `default(T)` and target-typed bare `default` expression.
+- ADR-0081 — `nil` literal (the source-level spelling for reference null; `default(T)` for a reference-type `T` is equivalent to `nil`).
+- ADR-0087 — reified generics (`initobj T` for unconstrained `T`).
+- Issues #795 (this feature), #792 (dogfooded `Optional`/`Sequences` port), #706 (parent tracker).
+

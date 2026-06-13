@@ -3375,6 +3375,27 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports GS0362 — ADR-0100 / issue #795: a bare <c>default</c>
+    /// literal appears in a position where no target type can be
+    /// inferred. The bare form is only valid in target-typed positions:
+    /// the initializer of a <c>let</c>/<c>var</c>/<c>const</c> binding
+    /// that names a type, the operand of <c>return</c> when the
+    /// enclosing function's return type is known, an argument to a
+    /// typed parameter, or a branch of a <c>?:</c> typed by the sibling
+    /// branch. Outside these contexts, write the explicit form
+    /// <c>default(T)</c>.
+    /// </summary>
+    /// <param name="location">The offending bare-<c>default</c> location.</param>
+    public void ReportBareDefaultNoTargetType(TextLocation location)
+    {
+        Report(
+            location,
+            "GS0362",
+            "Bare 'default' has no target type in this context. Write 'default(T)' with an explicit type clause, or use the bare form in a target-typed position (let/var initializer with explicit type, 'return' when the return type is known, an argument to a typed parameter, or a branch of '?:' typed by the sibling branch).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Reports GS0330 — ADR-0089 / issue #755: <c>static let</c> inside an
     /// interface declaration is reserved for a future release. The minimal
     /// static-virtual interface members feature only accepts
