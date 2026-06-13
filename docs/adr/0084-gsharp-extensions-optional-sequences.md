@@ -230,9 +230,18 @@ hatch under `src/Sdk/Gsharp.Extensions/*.cs` works today.
   `GENERICINST<IEnumerable\`1><MVar>` /
   `GENERICINST<IAsyncEnumerable\`1><MVar>` so the produced IL
   passes verification end-to-end. The remaining gap blocking the
-  full dogfooded port is
+  full dogfooded port —
   [issue #775](https://github.com/DavidObando/gsharp/issues/775)
-  (G# spelling for `class` / `struct` / `new()` constraints);
+  (G# spelling for `class` / `struct` / `new()` constraints) — is
+  **closed by ADR-0097**. The new bracket-position flag spelling
+  (`[T class]`, `[T struct]`, `[T new()]`, plus combinations like
+  `[T class new()]`) maps directly to the matching
+  `GenericParameterAttributes` flag bits at emit time, and the
+  binder's `BoundScope.TryLookupExtensionFunction` now filters
+  same-name unifiable extensions by constraint and prefers the
+  most specific surviving candidate (`struct > class > none`) so
+  the canonical `Map[T class]` / `Map[T struct]` overload pair
+  dispatches correctly without renaming.
   [issue #774](https://github.com/DavidObando/gsharp/issues/774)
   (open-receiver iteration erases element type to `object`) is
   **closed** — the binder now maps an open `IEnumerable[T]` /
@@ -251,8 +260,12 @@ hatch under `src/Sdk/Gsharp.Extensions/*.cs` works today.
   with `!!`, because the type-erased emit cannot statically choose
   between the reference-typed `T` and value-typed `Nullable<T>`
   shapes. The binder + interpreter accept the full surface; the
-  emit-side body-lowering fix lives with #775 as part of the
-  open-receiver workstream.
+  emit-side body-lowering fix lives with the open-receiver
+  workstream — once the dogfooded port lands it will need both an
+  explicit `[T class]` overload (no-op for `Nullable<T>`) and an
+  explicit `[T struct]` overload (HasValue-aware lowering), at
+  which point each path is statically chosen and the emit fix
+  becomes mechanical.
 - **L3. Native `?:` over nullable value types.**
   ([issue #752](https://github.com/DavidObando/gsharp/issues/752))
   **Closed.** Issue #519 introduced the HasValue-based lowering
@@ -285,28 +298,36 @@ of that migration, not left behind as dead code.
 - **Positive — dogfooding pressure.** Shipping a real assembly
   meant to be authored in G# creates direct compiler pressure to
   close the open language gaps. Each gap is tracked with a
-  concrete callsite waiting on its fix. L1 closed by ADR-0088,
-  L3 closed by issue #752, L2's parser side closed in the PR
-  for #751, and L2's binder side closed by #773; the residual
-  emit gap surfaced while attempting the port lives as #775
-  (G# `class` / `struct` constraint spelling); #774
-  (open-receiver iteration) is now closed. The dogfooded G# port of
-  `Gsharp.Extensions.Optional` and `Gsharp.Extensions.Sequences`
-  remains blocked on a fourth, structural, factor: the SDK
-  bootstrap cycle. `Gsharp.Extensions.dll` is auto-referenced by
-  every `.gsproj` build via `Gsharp.NET.Sdk`, but the SDK itself
-  pulls in `Gsharp.Extensions.csproj` as a dependency at pack
-  time (see `src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj`).
-  Re-authoring `Gsharp.Extensions` as a `.gsproj` would require
-  the SDK to already exist in order to compile the `.gs`
-  sources, which in turn would require `Gsharp.Extensions.dll`
-  to already exist. Until that cycle is broken (e.g. by a
-  staged bootstrap that builds a minimal compiler-only payload
-  before `Gsharp.Extensions`), the C# escape hatch under
+  concrete callsite waiting on its fix. **All four documented
+  language gaps are now closed**: L1 closed by ADR-0088, L3
+  closed by issue #752, L2's parser side closed in the PR for
+  #751, L2's binder side closed by #773, the open-receiver
+  iteration emit gap closed by #774, and the G# spelling for
+  `class` / `struct` / `new()` constraints closed by ADR-0097
+  (#775). The dogfooded G# port of `Gsharp.Extensions.Optional`
+  and `Gsharp.Extensions.Sequences` is no longer blocked by the
+  language; what remains is purely an SDK *bootstrap cycle*.
+  `Gsharp.Extensions.dll` is auto-referenced by every `.gsproj`
+  build via `Gsharp.NET.Sdk`, but the SDK itself pulls in
+  `Gsharp.Extensions.csproj` as a dependency at pack time (see
+  `src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj`). Re-authoring
+  `Gsharp.Extensions` as a `.gsproj` would require the SDK to
+  already exist in order to compile the `.gs` sources, which in
+  turn would require `Gsharp.Extensions.dll` to already exist.
+  Until that cycle is broken (e.g. by a staged bootstrap that
+  builds a minimal compiler-only payload, packs a stage-0 SDK
+  without `tools/extensions/Gsharp.Extensions.dll`, builds the
+  new `Gsharp.Extensions.gsproj` against the stage-0 SDK, and
+  then re-packs the SDK NuGet with the freshly built extensions
+  DLL bundled), the C# escape hatch under
   `src/Sdk/Gsharp.Extensions/Optional/` and
   `src/Sdk/Gsharp.Extensions/Sequences/` stays in place. The
   test suite (`test/Extensions.Tests/`, 107 tests) runs against
-  the C# implementation unchanged.
+  the C# implementation unchanged. ADR-0097 §"Why the Extensions
+  stdlib port is staged" sketches the bootstrap fix sequence;
+  the language closure shipped in #775 unblocks any *user*
+  project that wants to author class/struct/new() constraints in
+  G# today.
 - **Positive — zero-friction adoption.** Because the assembly is
   bundled with the SDK and imports are explicit but trivial
   (`import Gsharp.Extensions.Optional`), the cost to a sample or

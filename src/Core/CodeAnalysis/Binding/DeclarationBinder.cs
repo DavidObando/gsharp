@@ -3326,7 +3326,37 @@ internal sealed class DeclarationBinder
                 }
             }
 
-            builder.Add(new TypeParameterSymbol(name, i, constraint, variance, interfaceConstraint));
+            // ADR-0097 / issue #775: consume the `class` / `struct` / `new()`
+            // flag-style constraints. Disjoint combinations (`class struct`,
+            // `struct new()`) are rejected as GS0361. The order is determined
+            // by the syntax — combining class + new() is legal and produces
+            // both CLR flag bits.
+            var hasRefType = p.HasClassConstraint;
+            var hasValueType = p.HasStructConstraint;
+            var hasDefaultCtor = p.HasNewConstraint;
+
+            if (hasRefType && hasValueType)
+            {
+                Diagnostics.ReportTypeParameterConstraintConflict(p.StructConstraintKeyword.Location, name, "class", "struct");
+                hasValueType = false;
+            }
+
+            if (hasValueType && hasDefaultCtor)
+            {
+                // `struct` already implies `new()` at the CLR level (ECMA-335 II.10.1.7);
+                // emitting both would be redundant and would force callers to
+                // remember an arbitrary order. Flag the explicit `new()`.
+                Diagnostics.ReportTypeParameterConstraintConflict(p.NewConstraintKeyword.Location, name, "struct", "new()");
+                hasDefaultCtor = false;
+            }
+
+            var symbol = new TypeParameterSymbol(name, i, constraint, variance, interfaceConstraint)
+            {
+                HasReferenceTypeConstraint = hasRefType,
+                HasValueTypeConstraint = hasValueType,
+                HasDefaultConstructorConstraint = hasDefaultCtor,
+            };
+            builder.Add(symbol);
         }
 
         return builder.MoveToImmutable();

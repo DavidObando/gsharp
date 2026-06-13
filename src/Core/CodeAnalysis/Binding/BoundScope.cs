@@ -305,6 +305,19 @@ public sealed class BoundScope
             // inference: try to unify the declared open receiver with the
             // call-site type and accept the candidate when every type
             // parameter that appears in the receiver gets bound.
+            //
+            // ADR-0097 / issue #775: when multiple candidates unify against
+            // the same receiver type (e.g. one carrying `[T class]` and one
+            // carrying `[T struct]`), the constraint check decides the
+            // winner. We collect every unifiable candidate, drop those
+            // whose constraints are violated by the inferred substitution,
+            // and prefer the most specific (struct > class > unconstrained)
+            // surviving candidate. Mutually-incomparable cases fall through
+            // to the first declared candidate so the call site is not
+            // silently ambiguous (the existing GS0160 will surface from the
+            // call-binding path if applicable).
+            FunctionSymbol candidate = null;
+            int candidateSpecificity = -1;
             foreach (var ext in extensionFunctions)
             {
                 if (ext.Name != name)
@@ -327,11 +340,22 @@ public sealed class BoundScope
                     continue;
                 }
 
-                if (ReceiverUnifies(ext, receiverType))
+                if (!TryUnifyAndCheckConstraints(ext, receiverType, out var specificity))
                 {
-                    function = ext;
-                    return true;
+                    continue;
                 }
+
+                if (candidate == null || specificity > candidateSpecificity)
+                {
+                    candidate = ext;
+                    candidateSpecificity = specificity;
+                }
+            }
+
+            if (candidate != null)
+            {
+                function = candidate;
+                return true;
             }
         }
 
@@ -736,23 +760,46 @@ public sealed class BoundScope
         }
     }
 
-    private static bool ReceiverUnifies(FunctionSymbol extension, TypeSymbol receiverType)
+    /// <summary>
+    /// ADR-0097 / issue #775: tries to unify the declared open receiver type
+    /// with the call-site receiver and — when unification succeeds —
+    /// validates that every receiver-mentioned type parameter's
+    /// <c>class</c> / <c>struct</c> / <c>new()</c> constraint is satisfied
+    /// by the inferred type argument. Returns the candidate's
+    /// constraint-specificity score so the caller can prefer the most
+    /// specific surviving overload.
+    /// </summary>
+    /// <param name="extension">The extension-method candidate.</param>
+    /// <param name="receiverType">The call-site receiver type.</param>
+    /// <param name="specificity">The cumulative specificity score (struct=2, class=1, none=0) summed across the receiver-mentioned type parameters.</param>
+    /// <returns><see langword="true"/> when unification succeeds and every constraint is satisfied; otherwise <see langword="false"/>.</returns>
+    private static bool TryUnifyAndCheckConstraints(FunctionSymbol extension, TypeSymbol receiverType, out int specificity)
     {
+        specificity = 0;
         var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
         Binder.InferTypeArguments(extension.ExtensionReceiverType, receiverType, substitution);
 
-        // Every type parameter actually mentioned in the receiver type must
-        // have been bound by inference. Parameters that appear only in the
-        // body or in the non-receiver parameters of the extension may still
-        // be inferred at the call site (`BindExtensionFunctionCall` does its
-        // own argument-driven inference), so we do not require those here.
         var mentioned = new HashSet<TypeParameterSymbol>();
         CollectTypeParameters(extension.ExtensionReceiverType, mentioned, depth: 0);
         foreach (var tp in mentioned)
         {
-            if (!substitution.ContainsKey(tp))
+            if (!substitution.TryGetValue(tp, out var arg))
             {
                 return false;
+            }
+
+            if (!Binder.SatisfiesConstraint(arg, tp))
+            {
+                return false;
+            }
+
+            if (tp.HasValueTypeConstraint)
+            {
+                specificity += 2;
+            }
+            else if (tp.HasReferenceTypeConstraint)
+            {
+                specificity += 1;
             }
         }
 

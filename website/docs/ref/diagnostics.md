@@ -1339,3 +1339,36 @@ Cross-references:
 - ADR-0095 — function-pointer marshalling.
 - ADR-0096 — `@MarshalAs` parameter overrides (this feature).
 - Issues #762 (this feature), #706 (native-interop parent).
+
+## Type-parameter `class` / `struct` / `new()` constraint diagnostic (GS0361)
+
+ADR-0097 / issue #775. The new bracket-position flag-style
+constraints (`[T class]`, `[T struct]`, `[T new()]`, plus combinations
+like `[T class new()]` and `[T IFoo class]`) compose freely with each
+other and with the legacy single-slot `any` / `comparable` /
+sealed-interface bound — except for two combinations that are rejected
+as mutually exclusive:
+
+| Code | Severity | Message |
+|----|----------|-------------|
+| GS0361 | Error | Type parameter `<T>` carries the mutually exclusive constraints `<first>` and `<second>`. The two combinations that fire today are `class struct` (a type cannot simultaneously be a reference type and a value type) and `struct new()` (the `new()` flag is redundant because the CLR's `NotNullableValueTypeConstraint` already implies `DefaultConstructorConstraint` per ECMA-335 II.10.1.7). |
+
+Cause/fix:
+
+- **`class struct` combo.** Pick one. Reference-type-only callers want
+  `[T class]`; value-type-only callers want `[T struct]`. If you really
+  want "any type", drop both and use `[T]` (or `[T any]`).
+- **`struct new()` combo.** Drop the explicit `new()` — `struct`
+  already requires every type argument to expose a public parameterless
+  constructor at the CLR level. The emitter sets both flag bits
+  whenever it sees `struct`, so the explicit `new()` adds nothing.
+
+Cross-references:
+
+- ADR-0097 — G# spelling for `class` / `struct` / `new()` constraints.
+- ADR-0088 — constraint-aware overload resolution (the consumption side
+  that reads CLR `GenericParameterAttributes` from imported types).
+- ADR-0084 — Gsharp.Extensions Optional/Sequences (the canonical use
+  case for disjoint `class` vs `struct` overloads).
+- Issues #775 (this feature), #706 (Oats cleanup parent), #724
+  (Extensions stdlib parent).

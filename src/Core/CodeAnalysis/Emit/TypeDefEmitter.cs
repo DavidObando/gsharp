@@ -1423,6 +1423,26 @@ internal sealed class TypeDefEmitter
                 attrs |= GenericParameterAttributes.Covariant;
             }
 
+            // ADR-0097 / issue #775: project G# `class` / `struct` / `new()`
+            // constraints onto the matching CLR GenericParam flag bits.
+            // ECMA-335 II.10.1.7 mandates that the value-type constraint
+            // implies the default-constructor constraint — the emitter
+            // forces both bits whenever `struct` is set.
+            if (tp.HasReferenceTypeConstraint)
+            {
+                attrs |= GenericParameterAttributes.ReferenceTypeConstraint;
+            }
+
+            if (tp.HasValueTypeConstraint)
+            {
+                attrs |= GenericParameterAttributes.NotNullableValueTypeConstraint;
+                attrs |= GenericParameterAttributes.DefaultConstructorConstraint;
+            }
+            else if (tp.HasDefaultConstructorConstraint)
+            {
+                attrs |= GenericParameterAttributes.DefaultConstructorConstraint;
+            }
+
             emitCtx.PendingGenericParameters.Add(new PendingGenericParameter(
                 Owner: owner,
                 Attributes: attrs,
