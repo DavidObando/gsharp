@@ -1276,3 +1276,66 @@ Cross-references:
 - ADR-0094 — `ref` / `out` / `in` parameter marshalling.
 - ADR-0095 — function-pointer marshalling (this feature).
 - Issues #761 (this feature), #706 (native-interop parent).
+
+
+## P/Invoke `@MarshalAs` parameter override diagnostics (GS0357 – GS0360)
+
+See ADR-0096 (issue #762). G# now honours `@MarshalAs(UnmanagedType.…)`
+on a P/Invoke parameter (`@DllImport` or `@LibraryImport`), emitting a
+CLR `FieldMarshal` table row per ECMA-335 II.23.4 so the runtime
+marshaller picks up the explicit override at the unmanaged boundary.
+The v1 supported `UnmanagedType` set is: `LPStr`, `LPWStr`,
+`LPUTF8Str`, `BStr`, `LPArray`, `SafeArray`, `I1`, `U1`, `I2`, `U2`,
+`I4`, `U4`, `I8`, `U8`, `Bool`, `VariantBool`, `SysInt`, `SysUInt`,
+`Struct`, `ByValTStr`, `ByValArray`. Anything else (`CustomMarshaler`,
+`IUnknown`, `IDispatch`, `FunctionPtr`, `Currency`, `LPStruct`) is
+rejected.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0357 | Error | `@MarshalAs` UnmanagedType `<value>` is not in the v1 supported set. Use one of: `LPStr`, `LPWStr`, `LPUTF8Str`, `BStr`, `LPArray`, `SafeArray`, `I1`, `U1`, `I2`, `U2`, `I4`, `U4`, `I8`, `U8`, `Bool`, `VariantBool`, `SysInt`, `SysUInt`, `Struct`, `ByValTStr`, `ByValArray`. |
+| GS0358 | Error | `@MarshalAs(UnmanagedType.<X>)` is not valid on parameter `<name>` of type `<T>`. The per-UnmanagedType type-compatibility table (ADR-0096 §3) defines which G# types each marshaller accepts. |
+| GS0359 | Error | `@MarshalAs(UnmanagedType.<X>)` on parameter `<name>` requires the `<arg>` named argument. `ByValTStr` and `ByValArray` require `SizeConst:`; `LPArray` requires `SizeConst:` and/or `SizeParamIndex:`. |
+| GS0360 | Error | `@MarshalAs` on parameter `<name>` is not supported: `<reason>`. Two reasons fire today — the enclosing function is not a P/Invoke declaration, or the parameter is a `string` on a `@LibraryImport`. |
+
+Cause/fix:
+
+- **GS0357 — unsupported UnmanagedType.** Pick a value from the v1
+  supported set above. `CustomMarshaler` and `IUnknown`-style COM
+  interop are deliberately deferred; raw function pointers already
+  have first-class syntax (`unmanaged[CC] (...) -> R`, ADR-0095).
+- **GS0358 — type mismatch.** Each `UnmanagedType` only accepts a
+  narrow set of G# parameter types — strings for `LPStr` /
+  `LPWStr` / `LPUTF8Str` / `BStr` / `ByValTStr`; integers (or
+  `bool` / `char`) for `I1`…`U8`; slices for `LPArray` /
+  `SafeArray` / `ByValArray`; struct values for `Struct`. Either
+  change the parameter type to match the marshaller, or drop the
+  `@MarshalAs` and let the default ADR-0086 marshalling rule apply.
+- **GS0359 — missing required knob.** Inline / sized forms need a
+  compile-time element count. `ByValTStr(SizeConst: N)`,
+  `ByValArray(SizeConst: N)`, `LPArray(SizeConst: N)` or
+  `LPArray(SizeParamIndex: i)`.
+- **GS0360 — rejected combination.** `@MarshalAs` has no meaning on
+  a managed (non-P/Invoke) function — the runtime never reads
+  `FieldMarshal` rows for managed methods. On `@LibraryImport`
+  string parameters, the function-wide `StringMarshalling:` knob is
+  the only lever — `@LibraryImport(StringMarshalling:
+  StringMarshalling.Utf8)` (or `Utf16`) replaces a per-parameter
+  `@MarshalAs(UnmanagedType.LPUTF8Str)` / `LPWStr`.
+
+Pseudo-custom attribute (ADR-0096 §5): `@MarshalAs` is encoded
+exclusively as a `FieldMarshal` table row + the `HasFieldMarshal`
+flag on the Param row. The emitter does *not* also write a
+`CustomAttribute` row for it — this matches C#'s `[MarshalAs]`
+treatment and keeps the metadata byte-for-byte interoperable with
+`ildasm`, ILSpy, and decompilers.
+
+Cross-references:
+
+- ADR-0086 — original P/Invoke / `@DllImport` ADR.
+- ADR-0092 — `@LibraryImport` source-generator-shaped P/Invoke.
+- ADR-0093 — struct and class marshalling.
+- ADR-0094 — `ref` / `out` / `in` parameter marshalling.
+- ADR-0095 — function-pointer marshalling.
+- ADR-0096 — `@MarshalAs` parameter overrides (this feature).
+- Issues #762 (this feature), #706 (native-interop parent).

@@ -204,6 +204,20 @@ type Comparer = delegate func(a nint, b nint) int32
 func NativeQsort(base nint, nmemb nint, size nint, cmp Comparer) void;
 ```
 
-See the [native-interop section of the CLR interop reference](../ref/clr-interop.md#unmanaged-interop-pinvoke), ADR-0086 (issue #727), ADR-0092 (issue #758), ADR-0093 (issue #759), ADR-0094 (issue #760), and ADR-0095 (issue #761) for the full attribute surface and diagnostics (GS0322–GS0329, GS0342–GS0345, GS0346–GS0351, GS0352, GS0353–GS0356).
+Per-parameter `@MarshalAs(UnmanagedType.…)` overrides let you opt into a different unmanaged form — typically a Windows `…W` Unicode entry-point, a modern UTF-8 C API, or a C function that takes an `int`-sized boolean flag (ADR-0096 / issue #762):
+
+```gs
+@DllImport("user32", EntryPoint: "MessageBoxW")
+func MessageBoxW(
+    hWnd nint,
+    @MarshalAs(UnmanagedType.LPWStr) lpText string,
+    @MarshalAs(UnmanagedType.LPWStr) lpCaption string,
+    uType uint32) int32;
+
+@DllImport("libfoo", EntryPoint: "set_flag")
+func native_set_flag(@MarshalAs(UnmanagedType.I4) on bool) int32;
+```
+
+See the [native-interop section of the CLR interop reference](../ref/clr-interop.md#unmanaged-interop-pinvoke), ADR-0086 (issue #727), ADR-0092 (issue #758), ADR-0093 (issue #759), ADR-0094 (issue #760), ADR-0095 (issue #761), and ADR-0096 (issue #762) for the full attribute surface and diagnostics (GS0322–GS0329, GS0342–GS0345, GS0346–GS0351, GS0352, GS0353–GS0356, GS0357–GS0360).
 
 Next: [Tutorials](/docs/tutorials/getting-started), or go deeper with the [CLR interop reference](/docs/ref/clr-interop).

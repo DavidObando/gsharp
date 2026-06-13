@@ -863,7 +863,7 @@ struct LargeInteger {
 
 Both `@StructLayout` and `@FieldOffset` are CLR *pseudo-custom attributes* — the runtime reconstructs them at reflection time from the `ClassLayout` and `FieldLayout` metadata-table rows, so the emitter writes those rows directly and skips the normal `CustomAttribute` encoding (decompilers therefore see exactly one `[StructLayout]` per type, not two).
 
-A struct or class that appears in a P/Invoke signature must be *blittable*: every field is a primitive integer/float, an `nint` / `nuint`, a pointer (`*T`), or a blittable nested struct. `bool`, `char`, `string`, `decimal`, slices, sequences, and unannotated classes are non-blittable in v1; the binder rejects them with GS0349. Per-field `[MarshalAs]` for non-blittable fields is filed as a follow-up (issue #762).
+A struct or class that appears in a P/Invoke signature must be *blittable*: every field is a primitive integer/float, an `nint` / `nuint`, a pointer (`*T`), or a blittable nested struct. `bool`, `char`, `string`, `decimal`, slices, sequences, and unannotated classes are non-blittable in v1; the binder rejects them with GS0349. Per-field `[MarshalAs]` for non-blittable fields remains a follow-up.
 
 Classes follow a stricter rule: a `class` must carry an explicit `@StructLayout(LayoutKind.Sequential|Explicit)` annotation before it can appear in a P/Invoke signature (the default class layout is `Auto`), and even then it can only flow *by reference* — using a class as a P/Invoke return type is rejected with GS0351. Return a struct or `nint` instead. The full diagnostic catalogue (GS0346–GS0351) is listed in the [Diagnostics reference](./diagnostics); see ADR-0093 for the design rationale and the blittability classification rules.
 
@@ -887,6 +887,31 @@ func native_dlsym(handle nint, name string) unmanaged[Cdecl] () -> void;
 ```
 
 GC contract (Shape A): the CLR keeps the delegate rooted only for the duration of `Marshal.GetFunctionPointerForDelegate` + the inner native call. The caller must hold an explicit reference (and ideally call `GC.KeepAlive` at the end of the scope) for as long as the native side may invoke the callback. The full diagnostic catalogue (GS0353–GS0356) is listed in the [Diagnostics reference](./diagnostics); see ADR-0095 for the design rationale and worked examples.
+
+### Per-parameter `@MarshalAs` overrides
+
+ADR-0096 / issue #762 lets a P/Invoke parameter opt into a custom unmanaged marshalling form via `@MarshalAs(UnmanagedType.…)`. Without `@MarshalAs`, each parameter is marshalled using the implicit ADR-0086 rule for its G# type; `@MarshalAs` is the override.
+
+```gs
+@DllImport("user32", EntryPoint: "MessageBoxW")
+func MessageBoxW(
+    hWnd nint,
+    @MarshalAs(UnmanagedType.LPWStr) lpText string,
+    @MarshalAs(UnmanagedType.LPWStr) lpCaption string,
+    uType uint32) int32;
+
+@DllImport("libfoo", EntryPoint: "sum_buf")
+func native_sum_buf(
+    @MarshalAs(UnmanagedType.LPArray, SizeParamIndex: 1) buf []int32,
+    count int32) int64;
+
+@DllImport("libfoo", EntryPoint: "set_flag")
+func native_set_flag(@MarshalAs(UnmanagedType.I4) on bool) int32;
+```
+
+The v1 supported `UnmanagedType` set is `LPStr`, `LPWStr`, `LPUTF8Str`, `BStr`, `LPArray`, `SafeArray`, `I1`, `U1`, `I2`, `U2`, `I4`, `U4`, `I8`, `U8`, `Bool`, `VariantBool`, `SysInt`, `SysUInt`, `Struct`, `ByValTStr` (requires `SizeConst:`), `ByValArray` (requires `SizeConst:`). `LPArray` requires `SizeConst:` and/or `SizeParamIndex:`. Anything outside the set (`CustomMarshaler`, `IUnknown`, `IDispatch`, `FunctionPtr`, `Currency`, `LPStruct`) is rejected with GS0357. The binder enforces a per-UnmanagedType / G#-type compatibility table; mismatches surface as GS0358. Missing required knobs (`SizeConst:` for inline forms, `SizeParamIndex:` for `LPArray`) surface as GS0359. `@MarshalAs` on a non-P/Invoke function — or on a `@LibraryImport` *string* parameter, which is governed by the function-wide `StringMarshalling:` knob — surfaces as GS0360.
+
+`@MarshalAs` is encoded as a CLR `FieldMarshal` table row (ECMA-335 II.23.4) and the `HasFieldMarshal` flag on the Param row; the emitter does not also write a `CustomAttribute` row, matching C#'s `[MarshalAs]` shape. The full diagnostic catalogue (GS0357–GS0360) is listed in the [Diagnostics reference](./diagnostics); see ADR-0096 for the design rationale, the FieldMarshal blob byte tables, and the LibraryImport-string interaction.
 
 Interpolated strings interoperate with the CLR formatting types. By default they lower to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler` (value-type holes are not boxed); a string targeted at `IFormattable` or `FormattableString` lowers to `FormattableStringFactory.Create` for deferred, culture-aware formatting; and a parameter annotated with `[InterpolatedStringHandler]` receives the handler directly, including `[InterpolatedStringHandlerArgument]` forwarding.
 
