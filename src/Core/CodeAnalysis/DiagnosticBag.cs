@@ -3163,6 +3163,28 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// ADR-0094 / issue #760: GS0352 — a <c>ref</c>/<c>out</c>/<c>in</c>
+    /// parameter on a P/Invoke declaration uses a pointee type that is not
+    /// byref-marshalling-compatible. The runtime marshals the parameter as
+    /// <c>T*</c>, which requires the pointee to be blittable. The fix is
+    /// to use a blittable primitive (e.g. <c>int32</c>, <c>int64</c>,
+    /// <c>nint</c>) or a struct annotated with <c>@StructLayout</c> whose
+    /// fields are all blittable. <c>ref string</c> in particular needs an
+    /// explicit <c>nint</c> + <c>Marshal.PtrToStringUTF8</c> round trip;
+    /// the runtime cannot infer the unmanaged encoding for a byref slot.
+    /// </summary>
+    /// <param name="location">The offending parameter-type-clause location.</param>
+    /// <param name="parameterName">The parameter name (for the message).</param>
+    /// <param name="pointeeTypeName">The unsupported pointee type display name.</param>
+    public void ReportPInvokeNonBlittableByRefPointee(TextLocation location, string parameterName, string pointeeTypeName)
+    {
+        Report(
+            location,
+            "GS0352",
+            $"'ref'/'out'/'in' parameter '{parameterName}' requires a blittable pointee; '{pointeeTypeName}' is not blittable. Use a blittable primitive (e.g. 'int32', 'int64', 'nint'), or a struct annotated with '@StructLayout(LayoutKind.Sequential)' (ADR-0094).");
+    }
+
+    /// <summary>
     /// Reports GS0330 — ADR-0089 / issue #755: <c>static let</c> inside an
     /// interface declaration is reserved for a future release. The minimal
     /// static-virtual interface members feature only accepts

@@ -627,6 +627,26 @@ so the emitter writes those rows directly and skips the normal
 See ADR-0093 for the full blittability rules, interaction with ADR-0086 /
 ADR-0092, and the class-by-reference policy.
 
+## P/Invoke `ref` / `out` / `in` parameter diagnostic (GS0352)
+
+ADR-0094 / issue #760 lifts the v1 blanket rejection of `ref`/`out`/`in`
+parameters on a P/Invoke declaration (the old GS0326 path) and routes
+unsupported pointee types through the tailored GS0352 diagnostic. The
+rule is "the pointee must be blittable": blittable primitives
+(`int8`…`int64`, `nint`/`nuint`, `float32`/`float64`) and
+`@StructLayout`-annotated structs are accepted; `bool`, `char`,
+`string`, `object`, decimal, slices, sequences, classes, and nullable
+value types are rejected.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0352 | Error | `ref`/`out`/`in` parameter `{name}` requires a blittable pointee; `{type}` is not blittable. Use a blittable primitive (e.g. `int32`, `int64`, `nint`), or a struct annotated with `@StructLayout(LayoutKind.Sequential)`. |
+
+The struct-pointee path continues to use GS0349 (same remediation as the
+by-value struct case). GS0326 still fires for the remaining function-shape
+constraints (async / generic / instance / extension / `shared` / ref-return).
+See ADR-0094 for the full pointee table and worked examples.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

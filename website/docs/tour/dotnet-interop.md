@@ -183,6 +183,17 @@ Console.WriteLine(StrLenDll("Hello, world!"))   // 13
 Console.WriteLine(StrLenLib("Hello, world!"))   // 13
 ```
 
-Pick `@DllImport` for the smallest possible declaration (the runtime handles marshalling), or `@LibraryImport` when you want an AOT-friendly explicit stub. Either way the v1 marshalling table is the same: primitives, `nint`/`nuint`, `string`, `*T` byref-style pointers (`T` primitive), and slices of primitives. See the [native-interop section of the CLR interop reference](../ref/clr-interop.md#unmanaged-interop-pinvoke), ADR-0086 (issue #727), and ADR-0092 (issue #758) for the full attribute surface and diagnostics (GS0322–GS0329 and GS0342–GS0345).
+Pick `@DllImport` for the smallest possible declaration (the runtime handles marshalling), or `@LibraryImport` when you want an AOT-friendly explicit stub. Either way the v1 marshalling table is the same: primitives, `nint`/`nuint`, `string`, `*T` byref-style pointers (`T` primitive), and slices of primitives. Blittable structs and classes are also marshalled when annotated with `@StructLayout(LayoutKind.Sequential|Explicit)` (ADR-0093 / issue #759), and `ref` / `out` / `in` parameters with a blittable pointee are accepted on both attribute forms (ADR-0094 / issue #760):
+
+```gs
+@DllImport("libc", EntryPoint: "time")
+func NativeTime(ref t int64) int64;
+
+var now = 0L
+var rc = NativeTime(ref now)
+Console.WriteLine(rc == now)   // True
+```
+
+The runtime marshals the byref slot as `T*` to the unmanaged callee, which is the canonical shape for libc APIs that write a result through an out-pointer (`time`, `clock_gettime`, `pipe`). See the [native-interop section of the CLR interop reference](../ref/clr-interop.md#unmanaged-interop-pinvoke), ADR-0086 (issue #727), ADR-0092 (issue #758), ADR-0093 (issue #759), and ADR-0094 (issue #760) for the full attribute surface and diagnostics (GS0322–GS0329, GS0342–GS0345, GS0346–GS0351, GS0352).
 
 Next: [Tutorials](/docs/tutorials/getting-started), or go deeper with the [CLR interop reference](/docs/ref/clr-interop).
