@@ -40,6 +40,37 @@ public sealed class TypeParameterSymbol : TypeSymbol
     public InterfaceSymbol InterfaceConstraint { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether this type parameter carries a
+    /// reference-type (<c>class</c>) constraint (ADR-0097 / issue #775).
+    /// Type arguments must be a reference type
+    /// (<c>!IsValueType</c> at the CLR level). Maps to
+    /// <see cref="System.Reflection.GenericParameterAttributes.ReferenceTypeConstraint"/>
+    /// in emitted IL.
+    /// </summary>
+    public bool HasReferenceTypeConstraint { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this type parameter carries a
+    /// value-type (<c>struct</c>) constraint (ADR-0097 / issue #775).
+    /// Type arguments must be a non-nullable value type. Maps to
+    /// <see cref="System.Reflection.GenericParameterAttributes.NotNullableValueTypeConstraint"/>
+    /// in emitted IL. A <c>struct</c> constraint implies the
+    /// <c>new()</c> (default-constructor) flag at the CLR level — the
+    /// emitter sets both bits automatically per ECMA-335 II.10.1.7.
+    /// </summary>
+    public bool HasValueTypeConstraint { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this type parameter carries
+    /// the default-constructor (<c>new()</c>) constraint (ADR-0097 /
+    /// issue #775). Type arguments must either be a value type or expose a
+    /// public parameterless constructor. Maps to
+    /// <see cref="System.Reflection.GenericParameterAttributes.DefaultConstructorConstraint"/>
+    /// in emitted IL.
+    /// </summary>
+    public bool HasDefaultConstructorConstraint { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether this type parameter is declared
     /// on a generic method (as opposed to a generic type). When
     /// <see langword="true"/> the emitter encodes it as

@@ -2562,9 +2562,9 @@ public class Parser
     private bool LooksLikeTypeParameterList()
     {
         // We are positioned at `[`. A type parameter list looks like
-        // `[ Ident (Ident)? ( , ... )* ]`. Crucially the *first* token after `[`
-        // is an identifier (not a number, ']', or another '['). That alone is
-        // enough to disambiguate against `[]T` (slice) and `[N]T` (array shape)
+        // `[ Ident (Ident|class|struct|new())? ( , ... )* ]`. Crucially the *first*
+        // token after `[` is an identifier (not a number, ']', or another '['). That
+        // alone is enough to disambiguate against `[]T` (slice) and `[N]T` (array shape)
         // which appear in type positions, not after declaration names anyway.
         if (Peek(1).Kind != SyntaxKind.IdentifierToken)
         {
@@ -2576,10 +2576,31 @@ public class Parser
         // (e.g. `[ Ident ] Ident` -> slice/array shape used somewhere we
         // shouldn't be). At a declaration header the follow-set after the TP
         // list is `(`, so we just look for that.
+        //
+        // ADR-0097 / issue #775: also skip `class`, `struct`, and `new()`
+        // constraint tokens that may appear after the type-parameter name.
         var ahead = 2;
-        while (Peek(ahead).Kind == SyntaxKind.IdentifierToken)
+        while (true)
         {
-            ahead++;
+            var k = Peek(ahead).Kind;
+            if (k == SyntaxKind.IdentifierToken || k == SyntaxKind.ClassKeyword || k == SyntaxKind.StructKeyword)
+            {
+                // `new` is lexed as an identifier; consume an optional `()` pair
+                // when this identifier is the contextual `new` constraint keyword.
+                if (k == SyntaxKind.IdentifierToken
+                    && Peek(ahead).Text == "new"
+                    && Peek(ahead + 1).Kind == SyntaxKind.OpenParenthesisToken
+                    && Peek(ahead + 2).Kind == SyntaxKind.CloseParenthesisToken)
+                {
+                    ahead += 3;
+                    continue;
+                }
+
+                ahead++;
+                continue;
+            }
+
+            break;
         }
 
         if (Peek(ahead).Kind == SyntaxKind.CommaToken)
@@ -2624,49 +2645,142 @@ public class Parser
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         SyntaxToken constraint = null;
+        SyntaxToken openBracket = null;
+        SeparatedSyntaxList<TypeClauseSyntax> constraintTypeArgs = default;
+        SyntaxToken closeBracket = null;
+
         if (Current.Kind == SyntaxKind.IdentifierToken)
         {
-            constraint = NextToken();
-
-            // ADR-0089 / issue #755: a constraint identifier may be followed by
-            // a generic type-argument list (the curiously-recurring pattern
-            // `[T IAdd[T]]` is the canonical generic-math shape required for
-            // static-virtual interface members). Parse `[ TypeClause (, TypeClause)* ]`
-            // when present; the binder constructs the closed interface from the
-            // resulting argument list.
-            if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+            // Reserve the `class`/`struct`/`new` constraints (handled below
+            // as their own keyword tokens / `new`-contextual identifier) so
+            // that we don't accidentally bind them as the legacy
+            // any/comparable/interface-name slot.
+            if (!IsAdditionalConstraintStart(Current))
             {
-                var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
-                var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
-                var parseNext = true;
-                while (parseNext &&
-                       Current.Kind != SyntaxKind.CloseSquareBracketToken &&
-                       Current.Kind != SyntaxKind.EndOfFileToken)
-                {
-                    nodesAndSeparators.Add(ParseTypeClause());
-                    if (Current.Kind == SyntaxKind.CommaToken)
-                    {
-                        nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
-                    }
-                    else
-                    {
-                        parseNext = false;
-                    }
-                }
+                constraint = NextToken();
 
-                var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
-                return new TypeParameterSyntax(
-                    syntaxTree,
-                    variance,
-                    identifier,
-                    constraint,
-                    openBracket,
-                    new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
-                    closeBracket);
+                // ADR-0089 / issue #755: a constraint identifier may be followed by
+                // a generic type-argument list (the curiously-recurring pattern
+                // `[T IAdd[T]]` is the canonical generic-math shape required for
+                // static-virtual interface members). Parse `[ TypeClause (, TypeClause)* ]`
+                // when present; the binder constructs the closed interface from the
+                // resulting argument list.
+                if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+                {
+                    openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+                    var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+                    var parseNext = true;
+                    while (parseNext &&
+                           Current.Kind != SyntaxKind.CloseSquareBracketToken &&
+                           Current.Kind != SyntaxKind.EndOfFileToken)
+                    {
+                        nodesAndSeparators.Add(ParseTypeClause());
+                        if (Current.Kind == SyntaxKind.CommaToken)
+                        {
+                            nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                        }
+                        else
+                        {
+                            parseNext = false;
+                        }
+                    }
+
+                    closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+                    constraintTypeArgs = new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable());
+                }
             }
         }
 
-        return new TypeParameterSyntax(syntaxTree, variance, identifier, constraint);
+        // ADR-0097 / issue #775: consume any of `class`, `struct`, `new()`
+        // constraints in any order. The binder validates illegal
+        // combinations (e.g. `class struct`).
+        SyntaxToken classKw = null;
+        SyntaxToken structKw = null;
+        SyntaxToken newKw = null;
+        SyntaxToken newOpenParen = null;
+        SyntaxToken newCloseParen = null;
+        while (true)
+        {
+            if (Current.Kind == SyntaxKind.ClassKeyword)
+            {
+                if (classKw == null)
+                {
+                    classKw = NextToken();
+                }
+                else
+                {
+                    break;
+                }
+            }
+            else if (Current.Kind == SyntaxKind.StructKeyword)
+            {
+                if (structKw == null)
+                {
+                    structKw = NextToken();
+                }
+                else
+                {
+                    break;
+                }
+            }
+            else if (Current.Kind == SyntaxKind.IdentifierToken
+                     && Current.Text == "new"
+                     && Peek(1).Kind == SyntaxKind.OpenParenthesisToken
+                     && Peek(2).Kind == SyntaxKind.CloseParenthesisToken)
+            {
+                if (newKw == null)
+                {
+                    newKw = NextToken();
+                    newOpenParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+                    newCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+                }
+                else
+                {
+                    break;
+                }
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        return new TypeParameterSyntax(
+            syntaxTree,
+            variance,
+            identifier,
+            constraint,
+            openBracket,
+            constraintTypeArgs,
+            closeBracket,
+            classKw,
+            structKw,
+            newKw,
+            newOpenParen,
+            newCloseParen);
+    }
+
+    /// <summary>
+    /// ADR-0097 / issue #775: returns <see langword="true"/> when
+    /// <paramref name="token"/> begins a flag-style constraint
+    /// (<c>class</c>, <c>struct</c>, or <c>new(</c>). These are handled
+    /// in a dedicated post-loop after the legacy single-identifier
+    /// constraint slot is parsed (<c>any</c>, <c>comparable</c>, or a
+    /// sealed-interface name).
+    /// </summary>
+    private bool IsAdditionalConstraintStart(SyntaxToken token)
+    {
+        if (token.Kind == SyntaxKind.ClassKeyword || token.Kind == SyntaxKind.StructKeyword)
+        {
+            return true;
+        }
+
+        if (token.Kind == SyntaxKind.IdentifierToken && token.Text == "new" && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private bool LooksLikeReceiverClause()

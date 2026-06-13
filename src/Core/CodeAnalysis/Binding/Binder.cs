@@ -2889,7 +2889,190 @@ public sealed class Binder
             return false;
         }
 
+        // ADR-0097 / issue #775: enforce the `class` / `struct` / `new()`
+        // flag-style constraints introduced by the G# spelling.
+        if (tp.HasReferenceTypeConstraint && !IsReferenceTypeForConstraint(typeArgument))
+        {
+            return false;
+        }
+
+        if (tp.HasValueTypeConstraint && !IsNonNullableValueTypeForConstraint(typeArgument))
+        {
+            return false;
+        }
+
+        if (tp.HasDefaultConstructorConstraint && !HasDefaultConstructorForConstraint(typeArgument))
+        {
+            return false;
+        }
+
         return true;
+    }
+
+    /// <summary>
+    /// ADR-0097: returns <see langword="true"/> when <paramref name="type"/>
+    /// satisfies a <c>where T : class</c> constraint — i.e. it is a reference
+    /// type at the CLR level. Includes G# interfaces and reference-shaped
+    /// classes, plus the special case of another type parameter that itself
+    /// carries the <c>class</c> bit (constraint propagation).
+    /// </summary>
+    /// <param name="type">The candidate type argument.</param>
+    /// <returns><see langword="true"/> when the type satisfies <c>class</c>.</returns>
+    internal static bool IsReferenceTypeForConstraint(TypeSymbol type)
+    {
+        if (type is null)
+        {
+            return false;
+        }
+
+        if (type is NullableTypeSymbol)
+        {
+            // T? is the nullable-annotated form of an underlying reference
+            // type; the constraint check fires on the *unannotated* T.
+            return false;
+        }
+
+        if (type is TypeParameterSymbol tp)
+        {
+            // Propagate: if the source type parameter carries `class`, so
+            // does this substitution.
+            return tp.HasReferenceTypeConstraint;
+        }
+
+        if (type is StructSymbol structSym)
+        {
+            return structSym.IsClass;
+        }
+
+        if (type is InterfaceSymbol || type is FunctionTypeSymbol || type is DelegateTypeSymbol
+            || type is ArrayTypeSymbol || type is SliceTypeSymbol || type is MapTypeSymbol
+            || type is ChannelTypeSymbol || type is SequenceTypeSymbol || type is AsyncSequenceTypeSymbol)
+        {
+            return true;
+        }
+
+        if (type == TypeSymbol.String)
+        {
+            return true;
+        }
+
+        if (type is ImportedTypeSymbol it && it.ClrType is { } clr)
+        {
+            return !clr.IsValueType;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// ADR-0097: returns <see langword="true"/> when <paramref name="type"/>
+    /// satisfies a <c>where T : struct</c> constraint — i.e. it is a
+    /// non-nullable value type at the CLR level.
+    /// </summary>
+    /// <param name="type">The candidate type argument.</param>
+    /// <returns><see langword="true"/> when the type satisfies <c>struct</c>.</returns>
+    internal static bool IsNonNullableValueTypeForConstraint(TypeSymbol type)
+    {
+        if (type is null || type is NullableTypeSymbol)
+        {
+            return false;
+        }
+
+        if (type is TypeParameterSymbol tp)
+        {
+            return tp.HasValueTypeConstraint;
+        }
+
+        if (type is StructSymbol structSym)
+        {
+            return !structSym.IsClass;
+        }
+
+        if (type == TypeSymbol.Int32 || type == TypeSymbol.Bool)
+        {
+            return true;
+        }
+
+        if (type is ImportedTypeSymbol it && it.ClrType is { } clr)
+        {
+            return clr.IsValueType && !NullableLifting.IsValueTypeNullableClr(clr);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// ADR-0097: returns <see langword="true"/> when <paramref name="type"/>
+    /// satisfies a <c>where T : new()</c> constraint. Value types satisfy it
+    /// implicitly; reference types must expose a public parameterless
+    /// constructor.
+    /// </summary>
+    /// <param name="type">The candidate type argument.</param>
+    /// <returns><see langword="true"/> when the type satisfies <c>new()</c>.</returns>
+    internal static bool HasDefaultConstructorForConstraint(TypeSymbol type)
+    {
+        if (type is null)
+        {
+            return false;
+        }
+
+        if (IsNonNullableValueTypeForConstraint(type))
+        {
+            return true;
+        }
+
+        if (type is TypeParameterSymbol tp)
+        {
+            return tp.HasDefaultConstructorConstraint || tp.HasValueTypeConstraint;
+        }
+
+        if (type is StructSymbol structSym)
+        {
+            // G# structs are value types (already handled above); G# classes
+            // expose a public parameterless ctor unless the user provided
+            // one with parameters. Iterate explicit ctors; if any has zero
+            // parameters, the constraint is satisfied; if the class has no
+            // explicit ctors at all, the synthesized one is public.
+            if (!structSym.IsClass)
+            {
+                return true;
+            }
+
+            if (structSym.ExplicitConstructors.IsDefaultOrEmpty)
+            {
+                return !structSym.HasPrimaryConstructor || structSym.PrimaryConstructorParameters.Length == 0;
+            }
+
+            foreach (var ctor in structSym.ExplicitConstructors)
+            {
+                if (ctor.Parameters.Length == 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        if (type is ImportedTypeSymbol it && it.ClrType is { } clr)
+        {
+            if (clr.IsValueType)
+            {
+                return true;
+            }
+
+            try
+            {
+                var ctor = clr.GetConstructor(System.Type.EmptyTypes);
+                return ctor != null && ctor.IsPublic;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     internal static bool ImplementsInterface(TypeSymbol typeArgument, InterfaceSymbol iface)
@@ -2945,17 +3128,40 @@ public sealed class Binder
 
     internal static string DescribeConstraint(TypeParameterSymbol tp)
     {
+        // ADR-0097 / issue #775: include the flag-style constraints in the
+        // human-readable description so diagnostics are unambiguous.
+        var flags = new System.Collections.Generic.List<string>();
         if (tp.InterfaceConstraint != null)
         {
-            return tp.InterfaceConstraint.Name;
+            flags.Add(tp.InterfaceConstraint.Name);
         }
 
-        return tp.Constraint switch
+        if (tp.Constraint == TypeParameterConstraint.Comparable)
         {
-            TypeParameterConstraint.Any => "any",
-            TypeParameterConstraint.Comparable => "comparable",
-            _ => tp.Constraint.ToString().ToLowerInvariant(),
-        };
+            flags.Add("comparable");
+        }
+
+        if (tp.HasReferenceTypeConstraint)
+        {
+            flags.Add("class");
+        }
+
+        if (tp.HasValueTypeConstraint)
+        {
+            flags.Add("struct");
+        }
+
+        if (tp.HasDefaultConstructorConstraint && !tp.HasValueTypeConstraint)
+        {
+            flags.Add("new()");
+        }
+
+        if (flags.Count == 0)
+        {
+            return "any";
+        }
+
+        return string.Join(" ", flags);
     }
 
     // Issue #507 follow-up: shared core for binding a `?.<rhs>` access against

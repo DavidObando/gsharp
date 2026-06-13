@@ -3352,6 +3352,29 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports GS0361 — ADR-0097 / issue #775: a type-parameter constraint
+    /// list combines mutually exclusive flag constraints. The forbidden
+    /// combinations are <c>class struct</c> (a type cannot simultaneously
+    /// be a reference type and a value type) and <c>struct new()</c> (the
+    /// <c>new()</c> flag is implied by — and redundant with — <c>struct</c>
+    /// at the CLR level; ECMA-335 II.10.1.7 already forces both bits
+    /// whenever the value-type constraint is set, so the explicit
+    /// <c>new()</c> is rejected to keep the surface unambiguous).
+    /// </summary>
+    /// <param name="location">The offending constraint location.</param>
+    /// <param name="typeParameterName">The type-parameter name (e.g. <c>T</c>).</param>
+    /// <param name="first">The first constraint keyword (e.g. <c>class</c>).</param>
+    /// <param name="second">The second constraint keyword (e.g. <c>struct</c>).</param>
+    public void ReportTypeParameterConstraintConflict(TextLocation location, string typeParameterName, string first, string second)
+    {
+        Report(
+            location,
+            "GS0361",
+            $"Type parameter '{typeParameterName}' carries the mutually exclusive constraints '{first}' and '{second}' (ADR-0097).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Reports GS0330 — ADR-0089 / issue #755: <c>static let</c> inside an
     /// interface declaration is reserved for a future release. The minimal
     /// static-virtual interface members feature only accepts

@@ -303,12 +303,16 @@ The parser desugars each payload-bearing case into a class deriving from a seale
 
 ### Generics
 
-Generic declarations and instantiations use brackets rather than angle brackets. Type parameters can have variance markers `in` and `out` and a named constraint.
+Generic declarations and instantiations use brackets rather than angle brackets. Type parameters can have variance markers `in` and `out` and zero or more constraints inside the same bracket section: the legacy single-identifier slot accepts `any`, `comparable`, or a sealed-interface name (optionally generic-instantiated as `[T IAdd[T]]` per ADR-0089), and ADR-0097 (#775) adds three repeatable flag-style constraints — `class`, `struct`, and `new()` — that may appear in any order after the legacy slot. The flag constraints map directly to the matching CLR `GenericParameterAttributes` bits (`ReferenceTypeConstraint`, `NotNullableValueTypeConstraint` + the implied `DefaultConstructorConstraint`, and `DefaultConstructorConstraint` respectively). Mutually exclusive combinations (`class struct`, `struct new()`) are rejected as **GS0361**.
 
 ```gsharp
 func Identity[T any](value T) T {
     return value
 }
+
+func Map[T class, U class](self T?, f (T) -> U) U?         { /* class-typed Optional.Map */ }
+func Map[T struct, U struct](self T?, f (T) -> U) U?       { /* struct-typed Optional.Map */ }
+func Make[T class new()]() T { return T() }                 // class + new() combine
 
 let x = Identity[int32](42)
 ```
