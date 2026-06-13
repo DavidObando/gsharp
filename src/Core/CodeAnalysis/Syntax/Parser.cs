@@ -902,8 +902,7 @@ public class Parser
             {
                 events.Add(ParseEventDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
             }
-            else if (Current.Kind == SyntaxKind.FuncKeyword
-                    || (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "static" && Peek(1).Kind == SyntaxKind.FuncKeyword))
+            else if (IsInterfaceMethodSignatureStart())
             {
                 methods.Add(ParseInterfaceMethodSignature());
             }
@@ -2038,8 +2037,7 @@ public class Parser
             {
                 events.Add(ParseEventDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
             }
-            else if (Current.Kind == SyntaxKind.FuncKeyword
-                    || (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "static" && Peek(1).Kind == SyntaxKind.FuncKeyword))
+            else if (IsInterfaceMethodSignatureStart())
             {
                 methods.Add(ParseInterfaceMethodSignature());
             }
@@ -2071,17 +2069,94 @@ public class Parser
             closeBrace);
     }
 
+    /// <summary>
+    /// ADR-0090 / issue #756: returns true if the current token starts an
+    /// interface method signature. The recognised starts are:
+    /// <list type="bullet">
+    ///   <item><c>func</c></item>
+    ///   <item><c>static func</c> (ADR-0089)</item>
+    ///   <item><c>private func</c> (this ADR)</item>
+    ///   <item><c>private static func</c> / <c>static private func</c></item>
+    /// </list>
+    /// </summary>
+    private bool IsInterfaceMethodSignatureStart()
+    {
+        if (Current.Kind == SyntaxKind.FuncKeyword)
+        {
+            return true;
+        }
+
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "static")
+        {
+            if (Peek(1).Kind == SyntaxKind.FuncKeyword)
+            {
+                return true;
+            }
+
+            if (Peek(1).Kind == SyntaxKind.PrivateKeyword && Peek(2).Kind == SyntaxKind.FuncKeyword)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        if (Current.Kind == SyntaxKind.PrivateKeyword)
+        {
+            if (Peek(1).Kind == SyntaxKind.FuncKeyword)
+            {
+                return true;
+            }
+
+            if (Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "static" && Peek(2).Kind == SyntaxKind.FuncKeyword)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private FunctionDeclarationSyntax ParseInterfaceMethodSignature()
     {
+        // ADR-0090 / issue #756: an optional `private` accessibility modifier
+        // may precede the (optional) `static` / `func` tokens. The binder
+        // wires private interface members into
+        // <c>InterfaceSymbol.PrivateMethods</c> (or
+        // <c>StaticPrivateMethods</c>) and emits
+        // <c>MethodAttributes.Private | HideBySig</c> (plus <c>Static</c> when
+        // combined with ADR-0089). `private` and `static` may appear in
+        // either order, mirroring the class-member parser shape.
+        //
         // ADR-0089 / issue #755: `static` contextual keyword preceding `func`
         // marks the method as a static-virtual interface member. The binder
         // wires the resulting FunctionSymbol into InterfaceSymbol.StaticMethods
         // and emits CLR `MethodAttributes.Static | Virtual | Abstract` (or
         // `Static | Virtual` with a body for the default form).
+        SyntaxToken accessibilityModifier = null;
         SyntaxToken staticModifier = null;
-        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "static" && Peek(1).Kind == SyntaxKind.FuncKeyword)
+        while (true)
         {
-            staticModifier = NextToken();
+            if (accessibilityModifier == null
+                && Current.Kind == SyntaxKind.PrivateKeyword
+                && (Peek(1).Kind == SyntaxKind.FuncKeyword
+                    || (Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "static" && Peek(2).Kind == SyntaxKind.FuncKeyword)))
+            {
+                accessibilityModifier = NextToken();
+                continue;
+            }
+
+            if (staticModifier == null
+                && Current.Kind == SyntaxKind.IdentifierToken
+                && Current.Text == "static"
+                && (Peek(1).Kind == SyntaxKind.FuncKeyword
+                    || (Peek(1).Kind == SyntaxKind.PrivateKeyword && Peek(2).Kind == SyntaxKind.FuncKeyword)))
+            {
+                staticModifier = NextToken();
+                continue;
+            }
+
+            break;
         }
 
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
@@ -2106,7 +2181,7 @@ public class Parser
 
         var decl = new FunctionDeclarationSyntax(
             syntaxTree,
-            accessibilityModifier: null,
+            accessibilityModifier,
             openModifier: null,
             overrideModifier: null,
             functionKeyword,

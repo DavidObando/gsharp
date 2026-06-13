@@ -935,6 +935,60 @@ public sealed class Binder
             }
         }
 
+        // ADR-0090 / issue #756: bind bodies on private interface helper
+        // methods (both instance and static). Private helpers are required
+        // to carry a body (GS0335 fires when the body is omitted), so a
+        // missing body here is an already-diagnosed surface error — we
+        // simply skip it rather than re-diagnose.
+        foreach (var ifaceSym in globalScope.Interfaces)
+        {
+            if (!ifaceSym.PrivateMethods.IsDefaultOrEmpty)
+            {
+                foreach (var method in ifaceSym.PrivateMethods)
+                {
+                    if (method?.Declaration?.Body == null)
+                    {
+                        continue;
+                    }
+
+                    var binder = new Binder(parentScope, method);
+                    var body = binder.statements.BindStatement(method.Declaration.Body);
+                    var loweredBody = Lowerer.Lower(body);
+
+                    if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
+                    {
+                        binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+                    }
+
+                    functionBodies.Add(method, loweredBody);
+                    diagnostics.AddRange(binder.Diagnostics);
+                }
+            }
+
+            if (!ifaceSym.StaticPrivateMethods.IsDefaultOrEmpty)
+            {
+                foreach (var method in ifaceSym.StaticPrivateMethods)
+                {
+                    if (method?.Declaration?.Body == null)
+                    {
+                        continue;
+                    }
+
+                    var binder = new Binder(parentScope, method);
+                    var body = binder.statements.BindStatement(method.Declaration.Body);
+                    var loweredBody = Lowerer.Lower(body);
+
+                    if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
+                    {
+                        binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+                    }
+
+                    functionBodies.Add(method, loweredBody);
+                    diagnostics.AddRange(binder.Diagnostics);
+                }
+            }
+        }
+
         // Issue #306: bind standalone user-defined constructor bodies. Like
         // instance methods, the constructor body sees `this`, the constructor
         // parameters, and the class's fields (via bare names). The body is keyed

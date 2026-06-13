@@ -1014,6 +1014,39 @@ internal sealed partial class ExpressionBinder
             if (receiver != null && receiver.Type is InterfaceSymbol ifaceRecv)
             {
                 var ifaceOverloads = ifaceRecv.GetMethods(methodName);
+
+                // ADR-0090 / issue #756: private interface helpers are visible
+                // ONLY when the call is made from inside another member of the
+                // same interface declaration. Both instance and static
+                // members of the same interface qualify (a private static
+                // helper can be called from a static-virtual default body on
+                // the same interface, etc.). When the current function's
+                // ReceiverType / StaticOwnerType points at the same
+                // InterfaceSymbol — including the generic-definition or any
+                // constructed instance — widen the candidate set with the
+                // private overloads.
+                var owningIfaceDef = ifaceRecv.Definition ?? ifaceRecv;
+                if (IsInsideSameInterface(owningIfaceDef))
+                {
+                    var privateOverloads = ifaceRecv.GetPrivateMethods(methodName);
+                    if (privateOverloads.Length > 0)
+                    {
+                        ifaceOverloads = ifaceOverloads.AddRange(privateOverloads);
+                    }
+                }
+                else if (ifaceOverloads.Length == 0)
+                {
+                    // Probe the private bucket so we can give a precise
+                    // visibility diagnostic instead of the generic "method
+                    // not found" channel.
+                    var probePriv = ifaceRecv.GetPrivateMethods(methodName);
+                    if (probePriv.Length > 0)
+                    {
+                        Diagnostics.ReportPrivateInterfaceMemberNotAccessible(ce.Location, owningIfaceDef.Name, methodName);
+                        return new BoundErrorExpression(null);
+                    }
+                }
+
                 if (ifaceOverloads.Length > 0)
                 {
                     var ifaceMethod = overloads.SelectInstanceOverloadOrReport(ifaceOverloads, arguments, ce, methodName, argumentNames);
@@ -1311,6 +1344,44 @@ internal sealed partial class ExpressionBinder
     /// the first matching candidate so that diagnostics are not duplicated
     /// at every call site.
     /// </summary>
+    /// <summary>
+    /// ADR-0090 / issue #756: returns <c>true</c> when the current function
+    /// being bound (the enclosing default-method body) belongs to the same
+    /// interface declaration as <paramref name="ifaceDef"/>. Used at call
+    /// sites that resolve through an interface receiver to decide whether
+    /// the private-helper bucket is in scope.
+    /// </summary>
+    /// <param name="ifaceDef">The interface generic definition (callers
+    /// pass <c>InterfaceSymbol.Definition</c>) being targeted.</param>
+    /// <returns>True when the enclosing function's owning interface is the
+    /// same definition.</returns>
+    private bool IsInsideSameInterface(InterfaceSymbol ifaceDef)
+    {
+        var current = function;
+        if (current == null || ifaceDef == null)
+        {
+            return false;
+        }
+
+        InterfaceSymbol ownerIface = null;
+        if (current.ReceiverType is InterfaceSymbol ri)
+        {
+            ownerIface = ri;
+        }
+        else if (current.StaticOwnerType is InterfaceSymbol si)
+        {
+            ownerIface = si;
+        }
+
+        if (ownerIface == null)
+        {
+            return false;
+        }
+
+        var ownerDef = ownerIface.Definition ?? ownerIface;
+        return ReferenceEquals(ownerDef, ifaceDef);
+    }
+
     private FunctionSymbol TryFindDefaultInterfaceMethod(
         StructSymbol receiverClass,
         string methodName,

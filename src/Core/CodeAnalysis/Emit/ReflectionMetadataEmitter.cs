@@ -874,6 +874,25 @@ internal sealed class ReflectionMetadataEmitter
                 this.cache.MethodHandles[sm] = MetadataTokens.MethodDefinitionHandle(methodRow++);
             }
 
+            // ADR-0090 / issue #756: plan MethodDef rows for private interface
+            // helper methods (instance + static). They live inside the same
+            // interface TypeDef methodList run so the bounds remain correct.
+            if (!i.PrivateMethods.IsDefaultOrEmpty)
+            {
+                foreach (var pm in i.PrivateMethods)
+                {
+                    this.cache.MethodHandles[pm] = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
+            }
+
+            if (!i.StaticPrivateMethods.IsDefaultOrEmpty)
+            {
+                foreach (var spm in i.StaticPrivateMethods)
+                {
+                    this.cache.MethodHandles[spm] = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
+            }
+
             // Plan accessor method rows for interface properties (issue #248).
             foreach (var prop in i.Properties)
             {
@@ -1562,6 +1581,33 @@ internal sealed class ReflectionMetadataEmitter
                 else
                 {
                     this.typeDefEmitter.EmitStaticVirtualMethod(sm, hasBody: false, bodyOffset: -1);
+                }
+            }
+
+            // ADR-0090 / issue #756: emit private interface helper methods
+            // (instance and static). These always carry a body (GS0335
+            // enforces this); skip if for some reason the body is missing.
+            if (!i.PrivateMethods.IsDefaultOrEmpty)
+            {
+                foreach (var pm in i.PrivateMethods)
+                {
+                    if (this.emitCtx.Program.Functions.TryGetValue(pm, out var pBody))
+                    {
+                        var emittedHandle = this.EmitFunction(pm, pBody, isEntryPoint: false);
+                        this.cache.MethodHandles[pm] = emittedHandle;
+                    }
+                }
+            }
+
+            if (!i.StaticPrivateMethods.IsDefaultOrEmpty)
+            {
+                foreach (var spm in i.StaticPrivateMethods)
+                {
+                    if (this.emitCtx.Program.Functions.TryGetValue(spm, out var sBody))
+                    {
+                        var emittedHandle = this.EmitFunction(spm, sBody, isEntryPoint: false);
+                        this.cache.MethodHandles[spm] = emittedHandle;
+                    }
                 }
             }
 
@@ -3757,7 +3803,7 @@ internal sealed class ReflectionMetadataEmitter
             var receiverStruct = function.ReceiverType as StructSymbol;
             var receiverIsValueType = receiverStruct != null && !receiverStruct.IsClass;
             var receiverIsInterface = function.ReceiverType is InterfaceSymbol;
-            if (receiverIsInterface)
+            if (receiverIsInterface && function.Accessibility != Accessibility.Private)
             {
                 // ADR-0085 / issue #726: an instance method whose receiver is
                 // an interface is a default-interface method (DIM). Emit it
@@ -3767,6 +3813,16 @@ internal sealed class ReflectionMetadataEmitter
                 // already the default for EmitFunction's AddMethodDefinition
                 // call, so no further tweak is needed.
                 methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+            }
+            else if (receiverIsInterface)
+            {
+                // ADR-0090 / issue #756: a `private` interface helper is NOT
+                // part of the v-table — it does not get Virtual / NewSlot /
+                // Final. It is emitted as Private | HideBySig (instance) with
+                // a body and is callable only from sibling members of the
+                // same interface. Visibility was set above via AccessibilityMap.
+                //
+                // Fall through — no further attribute stamping needed.
             }
             else if (!receiverIsValueType || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
             {
@@ -3791,7 +3847,11 @@ internal sealed class ReflectionMetadataEmitter
             // flags so the slot remains overridable by implementers.
             // <c>FunctionSymbol.IsStatic</c> + <c>StaticOwnerType is
             // InterfaceSymbol</c> identifies this case.
-            if (function.IsStatic && function.StaticOwnerType is InterfaceSymbol)
+            //
+            // ADR-0090 / issue #756: a `private static` interface helper is
+            // NOT virtual — it is private-by-default and the type-parameter
+            // dispatch table does not include it. Suppress Virtual / NewSlot.
+            if (function.IsStatic && function.StaticOwnerType is InterfaceSymbol && function.Accessibility != Accessibility.Private)
             {
                 methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
             }

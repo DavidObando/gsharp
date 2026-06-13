@@ -788,6 +788,13 @@ dropped-default, missing-implementer, and deferred-modifier cases.
 | GS0320 | Error | `Class '<C>' does not implement interface method '<I>.<Name>' and the interface does not provide a default.` |
 | GS0321 | Error | `Modifier '<modifier>' on interface method '<Name>' is not yet supported. ADR-0085 explicitly defers static-virtual, private, and sealed interface members.` |
 
+Note: as of ADR-0090 (issue #756) the `private` modifier on an interface
+method is no longer deferred and no longer fires GS0321. See the
+"Private interface helper diagnostics" section below for the GS0334–GS0337
+codes that govern private-helper visibility and override-clash detection.
+The `static` modifier is also accepted (ADR-0089 / issue #755); GS0321
+now only fires for `open` and `override` on interface methods.
+
 Default-interface methods (DIM) emit standard CLR DIM metadata: the
 interface's method table carries a `.method virtual` slot whose body
 lives on the interface TypeDef. Implementers inherit the default
@@ -922,6 +929,61 @@ Cross-references:
 
 - ADR-0085 — default-interface methods (the DIM family parent).
 - ADR-0089 — static-virtual interface members (this feature).
+- ADR-0090 — `private` interface helper methods (the GS0334–GS0337 family).
 - Issue #755 (this feature), #756 (private interface members,
-  deferred), #757 (explicit-base call from interface bodies,
-  deferred).
+  delivered in ADR-0090), #757 (explicit-base call from interface
+  bodies, deferred).
+
+
+## Private interface helper diagnostics (GS0334–GS0337)
+
+See ADR-0090 (issue #756). The DIM family lands in ADR-0085;
+ADR-0090 extends it with C# 8-style `private` helper methods
+inside an `interface` body. A private helper is part of the
+interface's own implementation — only sibling members of the
+same interface may call it. Implementers cannot see the helper
+and cannot supply an override; the helper is non-virtual and
+not part of the interface's v-table.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0334 | Error | `Private interface member '<I>.<Name>' is not accessible from this context; private helpers are visible only to sibling members of the same interface (ADR-0090).` |
+| GS0335 | Error | `Private interface method '<I>.<Name>' must declare a body; abstract private helpers are not allowed (ADR-0090).` |
+| GS0336 | Error | `<Kind> '<C>' declares method '<Name>' that clashes with private interface helper '<I>.<Name>'; private interface helpers are interface-internal and cannot be overridden by implementers (ADR-0090).` |
+| GS0337 | Error | `Modifier 'private' on interface member '<Name>' of kind '<Kind>' is not supported by ADR-0090. The v1 surface accepts 'private' only on instance / static methods.` |
+
+Private interface helpers emit the standard CLR shape:
+`MethodAttributes.Private | HideBySig` (instance), plus
+`MethodAttributes.Static` when combined with ADR-0089's
+static form. The helper is **not** stamped `Virtual` /
+`NewSlot` / `Abstract` and carries an IL body on the interface
+TypeDef. Sibling default bodies dispatch to the helper via
+implicit `this` (instance) or implicit static-self (static).
+
+Cause/fix:
+
+- **GS0334** — remove the call site outside the interface,
+  or expose the helper functionality by adding a public default
+  method on the interface that wraps it. Implementers cannot
+  invoke private helpers because they were never part of the
+  contract; the helper is an implementation detail.
+- **GS0335** — supply a body for the helper:
+  `private func Helper(x int32) int32 { return x + 1 }`.
+  Abstract private helpers do not make sense — implementers
+  cannot satisfy them.
+- **GS0336** — rename the implementer's method, or fold the
+  logic into a public method on the interface. The CLR slot
+  the implementer was trying to override is private to the
+  interface and not part of the public contract.
+- **GS0337** — restrict `private` to method members. The v1
+  ADR-0090 surface defers `private` on properties / events to
+  a follow-up.
+
+Cross-references:
+
+- ADR-0085 — default-interface methods (the DIM family parent).
+- ADR-0089 — static-virtual interface members (interaction with
+  private static helpers).
+- ADR-0090 — `private` interface helper methods (this feature).
+- Issue #756 (this feature), #726 (DIM parent), #755
+  (static-virtual interfaces), #706 (advanced-interfaces parent).

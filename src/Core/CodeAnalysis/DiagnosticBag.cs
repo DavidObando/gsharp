@@ -3085,6 +3085,92 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Error);
     }
 
+    /// <summary>
+    /// ADR-0090 / issue #756: GS0334 — external code attempted to call a
+    /// <c>private</c> helper on an interface from outside the interface's
+    /// own declaration. The helper is part of the interface's
+    /// implementation, not its contract; only sibling members may call it.
+    /// </summary>
+    /// <param name="location">The offending call expression location.</param>
+    /// <param name="interfaceName">The owning interface's display name.</param>
+    /// <param name="methodName">The private helper's name.</param>
+    public void ReportPrivateInterfaceMemberNotAccessible(
+        TextLocation location,
+        string interfaceName,
+        string methodName)
+    {
+        Report(
+            location,
+            "GS0334",
+            $"Cannot access private interface member '{interfaceName}.{methodName}' from outside the interface declaration (ADR-0090).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0090 / issue #756: GS0335 — a <c>private</c> interface method was
+    /// declared without a body. A private helper is part of the interface's
+    /// own implementation and must therefore supply one; no implementer is
+    /// allowed to satisfy the contract because no implementer is allowed to
+    /// see the slot.
+    /// </summary>
+    /// <param name="location">The offending method-identifier location.</param>
+    /// <param name="methodName">The helper's name.</param>
+    public void ReportPrivateInterfaceMemberRequiresBody(
+        TextLocation location,
+        string methodName)
+    {
+        Report(
+            location,
+            "GS0335",
+            $"Private interface method '{methodName}' must have a body (ADR-0090).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0090 / issue #756: GS0336 — an implementing class or struct
+    /// declared a method whose name + signature matches a <c>private</c>
+    /// helper on one of its implemented interfaces. Private helpers are
+    /// invisible to implementers; declaring a same-name method is almost
+    /// always an unintentional clash.
+    /// </summary>
+    /// <param name="location">The offending member's identifier location.</param>
+    /// <param name="implementerName">The implementing class / struct name.</param>
+    /// <param name="interfaceName">The interface owning the helper.</param>
+    /// <param name="methodName">The clashing method name.</param>
+    public void ReportImplementerOverridesPrivateInterfaceMember(
+        TextLocation location,
+        string implementerName,
+        string interfaceName,
+        string methodName)
+    {
+        Report(
+            location,
+            "GS0336",
+            $"'{implementerName}.{methodName}' clashes with private interface helper '{interfaceName}.{methodName}'; private interface helpers are invisible to implementers and cannot be overridden or satisfied (ADR-0090). Rename '{methodName}' on '{implementerName}'.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0090 / issue #756: GS0337 — a <c>private</c> modifier appears on
+    /// an interface property or event declaration. ADR-0090 deliberately
+    /// keeps the surface to <c>private func</c>; private interface
+    /// properties / events are out of scope for this release.
+    /// </summary>
+    /// <param name="location">The offending modifier's source location.</param>
+    /// <param name="memberKind">The offending member kind (<c>property</c> / <c>event</c>).</param>
+    /// <param name="memberName">The owning member's name.</param>
+    public void ReportPrivateInterfaceMemberKindNotSupported(
+        TextLocation location,
+        string memberKind,
+        string memberName)
+    {
+        Report(
+            location,
+            "GS0337",
+            $"'private' is not supported on interface {memberKind} '{memberName}'; ADR-0090 only allows 'private' on interface methods.",
+            DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

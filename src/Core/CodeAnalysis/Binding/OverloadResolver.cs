@@ -2140,6 +2140,71 @@ internal sealed class OverloadResolver
                 }
             }
 
+            // ADR-0085 / ADR-0090 implicit `this` inside an interface default
+            // method body. The body's enclosing function is a DIM whose
+            // ReceiverType is the owning InterfaceSymbol; an unqualified call
+            // (`Helper(args)`) should resolve to a sibling method on the same
+            // interface. The visibility rule from ADR-0090 applies: callers
+            // inside the interface see both the public surface and the
+            // private helpers; external callers go through the receiver-typed
+            // path which does its own GS0334 check.
+            if (getCurrentFunction()?.ThisParameter != null
+                && getCurrentFunction().ReceiverType is InterfaceSymbol implicitReceiverIface)
+            {
+                var implicitIfaceOverloads = implicitReceiverIface.GetMethods(syntax.Identifier.Text);
+                var implicitPrivateIfaceOverloads = implicitReceiverIface.GetPrivateMethods(syntax.Identifier.Text);
+                if (implicitPrivateIfaceOverloads.Length > 0)
+                {
+                    implicitIfaceOverloads = implicitIfaceOverloads.AddRange(implicitPrivateIfaceOverloads);
+                }
+
+                if (implicitIfaceOverloads.Length > 0)
+                {
+                    var implicitIfaceMethod = SelectInstanceOverloadOrReport(implicitIfaceOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.Text, argumentNames);
+                    if (implicitIfaceMethod == null)
+                    {
+                        return new BoundErrorExpression(null);
+                    }
+
+                    var implicitReceiver = new BoundVariableExpression(null, getCurrentFunction().ThisParameter);
+                    return BindUserInstanceCall(implicitReceiver, implicitIfaceMethod, boundArguments.ToImmutable(), syntax, argumentNames);
+                }
+            }
+
+            // ADR-0089 / ADR-0090: implicit static-self dispatch inside a
+            // static-virtual or private-static interface helper body. The
+            // enclosing function has no `this` parameter but
+            // <c>StaticOwnerType</c> set to the owning InterfaceSymbol. An
+            // unqualified call resolves against the interface's static
+            // (public + private) buckets.
+            if (getCurrentFunction()?.ThisParameter == null
+                && getCurrentFunction()?.StaticOwnerType is InterfaceSymbol implicitStaticIface)
+            {
+                var implicitStaticOverloads = implicitStaticIface.GetStaticMethods(syntax.Identifier.Text);
+                var implicitStaticPrivateOverloads = implicitStaticIface.GetStaticPrivateMethods(syntax.Identifier.Text);
+                if (implicitStaticPrivateOverloads.Length > 0)
+                {
+                    implicitStaticOverloads = implicitStaticOverloads.AddRange(implicitStaticPrivateOverloads);
+                }
+
+                if (implicitStaticOverloads.Length > 0)
+                {
+                    var implicitStaticMethod = SelectInstanceOverloadOrReport(implicitStaticOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.Text, argumentNames);
+                    if (implicitStaticMethod == null)
+                    {
+                        return new BoundErrorExpression(null);
+                    }
+
+                    var convertedStaticArgs = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+                    for (var ai = 0; ai < syntax.Arguments.Count; ai++)
+                    {
+                        convertedStaticArgs.Add(conversions.BindConversion(syntax.Arguments[ai].Location, boundArguments[ai], implicitStaticMethod.Parameters[ai].Type));
+                    }
+
+                    return new BoundCallExpression(null, implicitStaticMethod, convertedStaticArgs.MoveToImmutable());
+                }
+            }
+
             Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.Text);
             return new BoundErrorExpression(null);
         }
