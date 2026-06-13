@@ -250,7 +250,7 @@ func firstLen(w Window) int32 {
 }
 ```
 
-Such a field is emitted with its real layout (`valuetype ReadOnlySpan<int32>`, never erased to `System.Object`), and instance-member calls on the field receiver take its address correctly. Type erasure (see [Generics interop](#generics-interop)) applies only to *open*, type-parameter-bearing shapes; closed value-type generics in field position carry real layout.
+Such a field is emitted with its real layout (`valuetype ReadOnlySpan<int32>`, never as `System.Object`), and instance-member calls on the field receiver take its address correctly. The closed value-type field invariant from ADR-0056 was the original carve-out around the (now superseded) open-shape erasure boundary; under the reified emit (ADR-0087 R1–R7) all generic shapes — open and closed, value and reference — carry real metadata, so the value-type field path is the same path everything else takes.
 
 ### Limitations
 
@@ -266,7 +266,7 @@ import System.Collections.Generic
 var xs = List[int32]()
 ```
 
-G# emits metadata specs for constructed generic types and methods, supports type-argument inference for imported open generic methods, and supports variance markers and constraints in its own type parameter model. The current implementation also has a type-erased generic model for some open or partially constructed shapes that contain type parameters; those shapes may be represented as `object` in emit paths. Closed constructed generic *value* types (e.g. `ReadOnlySpan[int32]`, `Nullable[int32]`) are an exception: in field position they carry their real layout and are never erased (see [Spans and `ref struct` types](#spans-and-ref-struct-types)). Treat the open-shape erasure as an implementation constraint rather than a source-level API. The complete audit of every erasure site (53 across 14 source files in the categories that materially affect reflection-correctness), the target CLR metadata shape, and the staged elimination plan are recorded in ADR-0087.
+G# emits **reified CLR generic metadata** end-to-end: constructed generic types and methods become honest `TypeSpec`/`MethodSpec` blobs, type-argument inference for imported open generic methods is supported, and variance markers and constraints in G#'s own type parameter model round-trip as `GenericParam` variance flags and `GenericParamConstraint` rows. User-declared generic types (`data struct Box[T]`, `class Pair[A, B]`, generic interfaces, generic delegates) carry the matching `GenericParam` rows on their `TypeDef`, signatures over `T` encode `Var(idx)`, generic-method signatures use `MVar(idx)`, and closed CLR generics that mention an in-scope type parameter (`List[T]`, `Dictionary[string, T]`) emit as real `GenericInstantiation` blobs. C# / F# consumers see `GetGenericArguments()` return the type parameters, `GetField` / `GetMethod` return the parameter type, and there is no `box`/`unbox.any` at the call/access boundary. Closed constructed generic *value* types (e.g. `ReadOnlySpan[int32]`, `Nullable[int32]`) in field position have always carried their real layout (see [Spans and `ref struct` types](#spans-and-ref-struct-types)) and continue to do so. The complete audit of the prior open-shape erasure model (53 sites across 14 source files; superseded by the reified emit), the target CLR metadata shape, and the R1–R7 staging plan that delivered this state are recorded in ADR-0087.
 
 ## Interpolated strings and formatting
 
