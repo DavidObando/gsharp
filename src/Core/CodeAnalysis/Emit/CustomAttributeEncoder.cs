@@ -137,6 +137,14 @@ internal sealed class CustomAttributeEncoder
     /// Attributes whose CLR type can't be resolved or whose ctor cannot be
     /// matched are silently skipped — the binder owns user-facing diagnostics.
     /// </summary>
+    /// <remarks>
+    /// Pseudo-custom attributes (<c>@DllImport</c>, <c>@LibraryImport</c>,
+    /// <c>@StructLayout</c>, <c>@FieldOffset</c>) are always skipped — they
+    /// are written into dedicated metadata-table rows (ImplMap,
+    /// ClassLayout, FieldLayout) by other emit paths, and duplicating them
+    /// as <c>CustomAttribute</c> rows would create a misleading reflection
+    /// view (see <see cref="KnownAttributes.IsPseudoCustomAttribute"/>).
+    /// </remarks>
     /// <param name="parent">The metadata entity (TypeDef / MethodDef / ...) to attach the attribute to.</param>
     /// <param name="symbol">The symbol carrying the bound annotation list.</param>
     /// <param name="filter">Only attributes whose <see cref="BoundAttribute.Target"/> equals this kind are emitted.</param>
@@ -154,17 +162,24 @@ internal sealed class CustomAttributeEncoder
                 continue;
             }
 
+            if (KnownAttributes.IsPseudoCustomAttribute(attr))
+            {
+                continue;
+            }
+
             this.EmitBoundAttribute(parent, attr);
         }
     }
 
     /// <summary>
     /// Variant of <see cref="EmitUserAttributes"/> that skips any attribute
-    /// matching <paramref name="excludePredicate"/>. Used by the P/Invoke
-    /// emitter (ADR-0086 / issue #727) to elide the <c>@DllImport</c>
-    /// attribute itself — it is fully consumed by the ImplMap row and
-    /// duplicating it as a CustomAttribute would create a misleading
-    /// reflection view (matching C#'s emit shape).
+    /// matching <paramref name="excludePredicate"/>. Used historically by
+    /// the P/Invoke emitter (ADR-0086 / issue #727) to elide the
+    /// <c>@DllImport</c> attribute itself; the universal pseudo-custom
+    /// filter on <see cref="EmitUserAttributes"/> now covers
+    /// <c>@DllImport</c>, <c>@LibraryImport</c>, <c>@StructLayout</c>, and
+    /// <c>@FieldOffset</c> automatically, so this overload is retained
+    /// only for callers that need additional, narrower exclusion logic.
     /// </summary>
     /// <param name="parent">The metadata entity (TypeDef / MethodDef / ...) to attach the attributes to.</param>
     /// <param name="symbol">The symbol carrying the bound annotation list.</param>
@@ -180,6 +195,11 @@ internal sealed class CustomAttributeEncoder
         foreach (var attr in symbol.Attributes)
         {
             if (attr.Target != filter)
+            {
+                continue;
+            }
+
+            if (KnownAttributes.IsPseudoCustomAttribute(attr))
             {
                 continue;
             }

@@ -1095,3 +1095,65 @@ Cross-references:
   feature).
 - Issues #758 (this feature), #727 (original P/Invoke), #706
   (native-interop parent).
+
+
+## Struct / class P/Invoke marshalling diagnostics (GS0346–GS0351)
+
+See ADR-0093 (issue #759). G# accepts `@StructLayout(LayoutKind.…)` on
+`struct` and `class` declarations, and `@FieldOffset(N)` on the fields
+of an `Explicit`-layout type. Both attributes are CLR
+*pseudo-custom attributes* — the runtime reconstructs them at reflection
+time from the `ClassLayout` and `FieldLayout` metadata-table rows, so
+the emitter writes those rows directly and skips the normal
+`CustomAttribute` round-trip. The diagnostics below cover the surface
+unique to struct / class marshalling; existing P/Invoke type-check codes
+(GS0322–GS0329 for `@DllImport`, GS0342–GS0345 for `@LibraryImport`)
+continue to apply for the surrounding signature.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0346 | Error | `@StructLayout(LayoutKind.<value>)` is not supported; v1 P/Invoke marshalling accepts only `LayoutKind.Sequential` and `LayoutKind.Explicit`. |
+| GS0347 | Error | Field `<field>` of explicit-layout struct `<type>` is missing a `@FieldOffset(N)` annotation; every field of an `Explicit`-layout type must carry one. |
+| GS0348 | Error | `@FieldOffset` on field `<field>` of `<type>` is only valid inside an `Explicit`-layout type; declare `@StructLayout(LayoutKind.Explicit)` on the enclosing struct or drop the annotation. |
+| GS0349 | Error | Type `<type>` is not blittable and cannot appear in a P/Invoke signature without per-field `@MarshalAs` (deferred); rewrite the type to use blittable fields only. |
+| GS0350 | Error | `@FieldOffset(<value>)` value is not a valid non-negative `int32`. |
+| GS0351 | Error | Class `<type>` cannot be used as the return type of a P/Invoke function; return a struct or `nint` instead. |
+
+Cause/fix:
+
+- **GS0346** — `LayoutKind.Auto` is rejected because the CLR is free to
+  reorder fields, which breaks the bit-for-bit ABI contract the native
+  side relies on. Pick `Sequential` for "matches the C declaration
+  order" or `Explicit` for "I'm describing a union or padded layout".
+- **GS0347** — Explicit layout means *every* field's offset is your
+  responsibility; an unannotated field would land at offset 0 by
+  default and silently alias the first explicitly-placed field. Add the
+  intended `@FieldOffset(N)`.
+- **GS0348** — `@FieldOffset` only has a defined meaning inside an
+  `Explicit`-layout type. On a `Sequential`-layout type the CLR
+  computes offsets from the declaration order and `Pack` setting;
+  carrying the attribute would be misleading.
+- **GS0349** — blittability is checked recursively per ADR-0093 §2: a
+  type is blittable iff every field is a primitive integer / float, a
+  pointer (`*T`), or a blittable nested struct. `bool`, `char`,
+  `string`, `decimal`, slices, sequences, and unannotated classes are
+  non-blittable in v1. Per-field `[MarshalAs]` is deferred to a
+  follow-up.
+- **GS0350** — `@FieldOffset` accepts a non-negative `int32` literal
+  (typically `0`, `4`, `8`, …); other forms (negative, non-integer,
+  expression) are rejected.
+- **GS0351** — classes can only be marshalled *by reference* across the
+  P/Invoke boundary; returning a managed object reference from a native
+  function requires a deallocator contract that v1 does not surface.
+  Return a struct or pass an `nint` and reconstruct the object on the
+  managed side.
+
+Cross-references:
+
+- ADR-0086 — original P/Invoke / `@DllImport` ADR.
+- ADR-0092 — `@LibraryImport` source-generator-shaped P/Invoke.
+- ADR-0093 — struct and class marshalling (this feature).
+- Issues #759 (this feature), #727 (original P/Invoke), #758
+  (`@LibraryImport`), #706 (native-interop parent), #760 / #761 / #762
+  (planned follow-ups: per-field `[MarshalAs]`, fixed-size buffers,
+  marshal-by-reference classes).

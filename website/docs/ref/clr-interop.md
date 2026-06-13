@@ -367,6 +367,36 @@ Knobs that exist on `@DllImport` but **not** on `@LibraryImport` (matching the B
 
 The diagnostics unique to `@LibraryImport` are GS0342 (mixing with `@DllImport`), GS0343 (invalid `StringMarshalling`), GS0344 (string surface without `StringMarshalling`), and GS0345 (`string` return type). The existing GS0322–GS0329 codes continue to apply where relevant. See the [Diagnostics reference](./diagnostics) and ADR-0092 for the full table.
 
+### Struct and class marshalling (`@StructLayout` / `@FieldOffset`)
+
+ADR-0093 / issue #759 lifts the v1 deferral on struct- and class-marshalling. A `struct` or `class` declaration carries an optional `@StructLayout(LayoutKind.Sequential)` or `@StructLayout(LayoutKind.Explicit)` annotation; an explicit-layout type's fields each carry an `@FieldOffset(N)` annotation. Both attributes are CLR *pseudo-custom attributes* — the runtime reconstructs them at reflection time from the `ClassLayout` and `FieldLayout` metadata-table rows, so the emitter writes those rows directly and skips the normal `CustomAttribute` encoding (decompilers therefore see exactly one `[StructLayout]` per type, not two).
+
+```gs
+@StructLayout(LayoutKind.Sequential)
+struct Point {
+    var X int32
+    var Y int32
+}
+
+@StructLayout(LayoutKind.Explicit, Size: 8)
+struct LargeInteger {
+    @FieldOffset(0) var LowPart  uint32
+    @FieldOffset(4) var HighPart int32
+    @FieldOffset(0) var QuadPart int64
+}
+
+@DllImport("libc", EntryPoint: "some_native")
+func AcceptPoint(p Point) int32;
+```
+
+Supported `LayoutKind` values: `Sequential` (default for blittable structs) and `Explicit`. `LayoutKind.Auto` is rejected (GS0346) because the CLR may reorder fields, which breaks the bit-for-bit ABI contract. `Pack` and `Size` are accepted as named arguments and forwarded to the `ClassLayout` row when present.
+
+A struct or class appearing in a P/Invoke signature must be *blittable*: every field is a primitive integer/float, an `nint` / `nuint`, a pointer (`*T`), or a blittable nested struct. `bool`, `char`, `string`, `decimal`, slices, sequences, and unannotated classes are non-blittable in v1; the binder reports GS0349 with the offending type's name. Per-field `[MarshalAs]` for non-blittable fields is filed as a follow-up (#760).
+
+Classes are special-cased: a `class` must carry an explicit `@StructLayout(LayoutKind.Sequential|Explicit)` annotation before it can appear in a P/Invoke signature (the default class layout is `Auto`), and even then it can only flow *by reference* — using a class as a P/Invoke return type is rejected with GS0351. Return a struct or `nint` instead. See ADR-0093 §4 for the rationale.
+
+The diagnostics introduced by this feature are GS0346 (invalid `LayoutKind`), GS0347 (missing `@FieldOffset` on an explicit-layout field), GS0348 (`@FieldOffset` on a non-explicit type), GS0349 (non-blittable type in a P/Invoke signature), GS0350 (invalid `@FieldOffset` value), and GS0351 (class as P/Invoke return type). See the [Diagnostics reference](./diagnostics) and ADR-0093 for the full table and worked examples.
+
 ## Unsupported interop surface
 
-The following are not yet implemented as source features: struct / class marshalling across the P/Invoke boundary, function-pointer marshalling, user-supplied custom marshallers (`StringMarshalling.Custom` and `[MarshalAs]`), `string` return types under `@LibraryImport` (GS0345), default parameter values in G# declarations, and C#-style `null` literals. Use `nil` for nullable values, import .NET APIs for library functionality, and wrap unsupported marshalling shapes behind a thin C# shim for now.
+The following are not yet implemented as source features: function-pointer marshalling, user-supplied custom marshallers (`StringMarshalling.Custom` and per-field `[MarshalAs]`), fixed-size buffers inside marshalled structs, `string` return types under `@LibraryImport` (GS0345), default parameter values in G# declarations, and C#-style `null` literals. Use `nil` for nullable values, import .NET APIs for library functionality, and wrap unsupported marshalling shapes behind a thin C# shim for now.

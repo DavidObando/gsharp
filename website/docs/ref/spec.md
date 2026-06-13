@@ -840,6 +840,31 @@ A P/Invoke declaration may not be `async`, generic, an extension method, an inst
 
 The modern source-generator-shaped `@LibraryImport(...)` form is also accepted on `;`-bodied `func` declarations, alongside `@DllImport`. Under `@LibraryImport`, the compiler generates an explicit managed marshalling stub (outer wrapper) that calls a hidden blittable inner P/Invoke — the runtime never auto-marshals at the unmanaged boundary, which makes the resulting assemblies AOT-friendly and verifiable under `ilverify`. The attribute knobs are `EntryPoint`, `SetLastError`, `StringMarshalling`, and `StringMarshallingCustomType`; `CharSet` and `CallingConvention` do not exist on `@LibraryImport`. Whenever a `string` parameter is present, `StringMarshalling: StringMarshalling.Utf8` or `StringMarshalling.Utf16` must be specified explicitly (GS0344). `string` return values are rejected in v1 (GS0345). Mixing `@DllImport` and `@LibraryImport` on the same declaration is GS0342. See ADR-0092 and the [Diagnostics reference](./diagnostics) for the full surface.
 
+### Struct and class marshalling
+
+ADR-0093 / issue #759 lifts the v1 deferral on struct- and class-marshalling. A `struct` or `class` declaration may carry an `@StructLayout(LayoutKind.Sequential)` or `@StructLayout(LayoutKind.Explicit)` annotation, and the fields of an `Explicit`-layout type each carry an `@FieldOffset(N)` annotation. `LayoutKind.Auto` is rejected (GS0346) — the CLR may reorder fields under `Auto`, which breaks the bit-for-bit ABI contract that P/Invoke relies on. The optional `Pack` and `Size` named arguments are forwarded to the emitted `ClassLayout` row.
+
+```gs
+@StructLayout(LayoutKind.Sequential)
+struct Point {
+    var X int32
+    var Y int32
+}
+
+@StructLayout(LayoutKind.Explicit, Size: 8)
+struct LargeInteger {
+    @FieldOffset(0) var LowPart  uint32
+    @FieldOffset(4) var HighPart int32
+    @FieldOffset(0) var QuadPart int64
+}
+```
+
+Both `@StructLayout` and `@FieldOffset` are CLR *pseudo-custom attributes* — the runtime reconstructs them at reflection time from the `ClassLayout` and `FieldLayout` metadata-table rows, so the emitter writes those rows directly and skips the normal `CustomAttribute` encoding (decompilers therefore see exactly one `[StructLayout]` per type, not two).
+
+A struct or class that appears in a P/Invoke signature must be *blittable*: every field is a primitive integer/float, an `nint` / `nuint`, a pointer (`*T`), or a blittable nested struct. `bool`, `char`, `string`, `decimal`, slices, sequences, and unannotated classes are non-blittable in v1; the binder rejects them with GS0349. Per-field `[MarshalAs]` for non-blittable fields is filed as a follow-up (issue #760).
+
+Classes follow a stricter rule: a `class` must carry an explicit `@StructLayout(LayoutKind.Sequential|Explicit)` annotation before it can appear in a P/Invoke signature (the default class layout is `Auto`), and even then it can only flow *by reference* — using a class as a P/Invoke return type is rejected with GS0351. Return a struct or `nint` instead. The full diagnostic catalogue (GS0346–GS0351) is listed in the [Diagnostics reference](./diagnostics); see ADR-0093 for the design rationale and the blittability classification rules.
+
 Interpolated strings interoperate with the CLR formatting types. By default they lower to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler` (value-type holes are not boxed); a string targeted at `IFormattable` or `FormattableString` lowers to `FormattableStringFactory.Create` for deferred, culture-aware formatting; and a parameter annotated with `[InterpolatedStringHandler]` receives the handler directly, including `[InterpolatedStringHandlerArgument]` forwarding.
 
 ## Documentation comments

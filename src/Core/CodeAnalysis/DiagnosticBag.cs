@@ -3066,6 +3066,103 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// ADR-0093 / issue #759: GS0346 — a <c>@StructLayout(...)</c>
+    /// annotation supplies a <see cref="System.Runtime.InteropServices.LayoutKind"/>
+    /// value other than <c>Sequential</c> or <c>Explicit</c>. <c>Auto</c>
+    /// is rejected because Auto-layout types are not portable across
+    /// the P/Invoke boundary (field reordering is permitted at load time).
+    /// </summary>
+    /// <param name="location">The argument location.</param>
+    /// <param name="value">The supplied raw value (display string).</param>
+    public void ReportStructLayoutInvalidLayoutKind(TextLocation location, string value)
+    {
+        Report(
+            location,
+            "GS0346",
+            $"'@StructLayout(LayoutKind.{value})' is not supported; use 'LayoutKind.Sequential' or 'LayoutKind.Explicit' (ADR-0093).");
+    }
+
+    /// <summary>
+    /// ADR-0093 / issue #759: GS0347 — a field of a type declared with
+    /// <c>@StructLayout(LayoutKind.Explicit)</c> is missing the required
+    /// <c>@FieldOffset(N)</c> annotation. Every field of an Explicit-layout
+    /// type must declare its byte offset.
+    /// </summary>
+    /// <param name="location">The field-identifier location.</param>
+    /// <param name="fieldName">The field name.</param>
+    /// <param name="typeName">The owning struct or class name.</param>
+    public void ReportFieldOffsetRequiredOnExplicitLayout(TextLocation location, string fieldName, string typeName)
+    {
+        Report(
+            location,
+            "GS0347",
+            $"Field '{fieldName}' of explicit-layout type '{typeName}' must declare an '@FieldOffset(N)' (ADR-0093).");
+    }
+
+    /// <summary>
+    /// ADR-0093 / issue #759: GS0348 — a field carries a <c>@FieldOffset</c>
+    /// annotation but its declaring type is not declared with
+    /// <c>@StructLayout(LayoutKind.Explicit)</c>. Field offsets are only
+    /// meaningful inside Explicit-layout types.
+    /// </summary>
+    /// <param name="location">The <c>@FieldOffset</c> annotation location.</param>
+    /// <param name="fieldName">The field name.</param>
+    /// <param name="typeName">The owning struct or class name.</param>
+    public void ReportFieldOffsetInvalidOnNonExplicitLayout(TextLocation location, string fieldName, string typeName)
+    {
+        Report(
+            location,
+            "GS0348",
+            $"'@FieldOffset' on field '{fieldName}' of type '{typeName}' is only valid when the declaring type is declared with '@StructLayout(LayoutKind.Explicit)' (ADR-0093).");
+    }
+
+    /// <summary>
+    /// ADR-0093 / issue #759: GS0349 — a struct or class type used in a
+    /// P/Invoke parameter or return position is not blittable. The user
+    /// must add <c>@StructLayout(LayoutKind.Sequential)</c> (or
+    /// <c>Explicit</c>) and ensure every field has a blittable type.
+    /// </summary>
+    /// <param name="location">The offending type-clause location.</param>
+    /// <param name="typeName">The display name of the offending type.</param>
+    public void ReportPInvokeNonBlittableType(TextLocation location, string typeName)
+    {
+        Report(
+            location,
+            "GS0349",
+            $"Type '{typeName}' is not blittable and cannot appear in a P/Invoke signature in v1; declare it with '@StructLayout(LayoutKind.Sequential)' (or 'Explicit') and ensure every field has a blittable type (ADR-0093).");
+    }
+
+    /// <summary>
+    /// ADR-0093 / issue #759: GS0350 — the integer argument of
+    /// <c>@FieldOffset(N)</c> is not a non-negative <c>int32</c> constant.
+    /// </summary>
+    /// <param name="location">The argument location.</param>
+    /// <param name="value">The supplied raw value (display string).</param>
+    public void ReportFieldOffsetInvalidValue(TextLocation location, string value)
+    {
+        Report(
+            location,
+            "GS0350",
+            $"'@FieldOffset' requires a non-negative 'int32' constant; got '{value}' (ADR-0093).");
+    }
+
+    /// <summary>
+    /// ADR-0093 / issue #759: GS0351 — a class type is used as the return
+    /// type of a P/Invoke function. v1 supports class types only as
+    /// parameters (passed by reference); the return-value ownership /
+    /// allocation contract is deferred to a future ADR.
+    /// </summary>
+    /// <param name="location">The return-type clause location.</param>
+    /// <param name="typeName">The class display name.</param>
+    public void ReportPInvokeClassReturnNotSupported(TextLocation location, string typeName)
+    {
+        Report(
+            location,
+            "GS0351",
+            $"Class type '{typeName}' is not supported as a P/Invoke return value; only struct values (or 'nint' for opaque handles) are permitted (ADR-0093).");
+    }
+
+    /// <summary>
     /// Reports GS0330 — ADR-0089 / issue #755: <c>static let</c> inside an
     /// interface declaration is reserved for a future release. The minimal
     /// static-virtual interface members feature only accepts

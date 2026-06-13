@@ -805,4 +805,124 @@ internal static class KnownAttributes
 
         return null;
     }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Runtime.InteropServices.StructLayoutAttribute"/>.
+    /// ADR-0093 / issue #759: <c>@StructLayout(LayoutKind.…)</c> is a
+    /// pseudo-custom attribute — the CLR consumes its arguments to set
+    /// the <c>TypeAttributes</c> layout flag and to write a
+    /// <c>ClassLayout</c> row, so the emitter must NOT also write it as
+    /// a <c>CustomAttribute</c> row.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[StructLayout]</c>.</returns>
+    public static bool IsStructLayout(Type clrType)
+    {
+        return clrType == typeof(System.Runtime.InteropServices.StructLayoutAttribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Runtime.InteropServices.StructLayoutAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[StructLayout]</c>.</returns>
+    public static bool IsStructLayout(BoundAttribute attribute)
+    {
+        return IsStructLayout(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Finds the first <c>@StructLayout(...)</c> attribute on
+    /// <paramref name="attributes"/>, or <c>null</c> when none is present
+    /// (ADR-0093 / issue #759).
+    /// </summary>
+    /// <param name="attributes">The attributes attached to a struct or class symbol.</param>
+    /// <returns>The matching attribute, or <c>null</c>.</returns>
+    public static BoundAttribute FindStructLayout(ImmutableArray<BoundAttribute> attributes)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (IsStructLayout(attr))
+            {
+                return attr;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Runtime.InteropServices.FieldOffsetAttribute"/>.
+    /// ADR-0093 / issue #759: <c>@FieldOffset(N)</c> is the per-field
+    /// peer of <c>@StructLayout</c> — also a pseudo-custom attribute that
+    /// the emitter encodes via <c>AddFieldLayout</c> rather than as a
+    /// <c>CustomAttribute</c> row.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[FieldOffset]</c>.</returns>
+    public static bool IsFieldOffset(Type clrType)
+    {
+        return clrType == typeof(System.Runtime.InteropServices.FieldOffsetAttribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Runtime.InteropServices.FieldOffsetAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[FieldOffset]</c>.</returns>
+    public static bool IsFieldOffset(BoundAttribute attribute)
+    {
+        return IsFieldOffset(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Finds the first <c>@FieldOffset(N)</c> attribute on
+    /// <paramref name="attributes"/>, or <c>null</c> when none is present.
+    /// </summary>
+    /// <param name="attributes">The attributes attached to a field symbol.</param>
+    /// <returns>The matching attribute, or <c>null</c>.</returns>
+    public static BoundAttribute FindFieldOffset(ImmutableArray<BoundAttribute> attributes)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (IsFieldOffset(attr))
+            {
+                return attr;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is a CLR
+    /// pseudo-custom attribute whose state lives in dedicated metadata
+    /// rows rather than a <c>CustomAttribute</c> row. The emitter elides
+    /// these from the user-attribute pass to avoid producing a
+    /// duplicate / misleading reflection view (ADR-0086 §6,
+    /// ADR-0092 §6, ADR-0093 §5).
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is pseudo-custom.</returns>
+    public static bool IsPseudoCustomAttribute(BoundAttribute attribute)
+    {
+        return IsDllImport(attribute)
+            || IsLibraryImport(attribute)
+            || IsStructLayout(attribute)
+            || IsFieldOffset(attribute);
+    }
 }
