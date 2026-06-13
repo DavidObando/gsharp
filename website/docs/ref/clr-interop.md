@@ -457,6 +457,38 @@ Supported calling conventions are `Cdecl`, `Stdcall`, `Thiscall`, `Fastcall`. Th
 
 The diagnostics introduced by this feature are GS0353 (missing `@UnmanagedFunctionPointer`), GS0354 (unknown calling convention), GS0355 (delegate return), and GS0356 (missing `[CC]` slot). See ADR-0095 for the full table.
 
+### Per-parameter `@MarshalAs` overrides
+
+ADR-0096 / issue #762 adds per-parameter `@MarshalAs(UnmanagedType.…)` overrides on P/Invoke declarations. Without `@MarshalAs`, each parameter is marshalled using the implicit ADR-0086 rule for its G# type (`string` ⇒ `LPSTR` per `CharSet`, `bool` ⇒ `BOOL`, `[]T` ⇒ `LPArray`, …). `@MarshalAs` lets you opt the parameter into a different unmanaged form — typically a Windows `…W` Unicode entry-point, a modern UTF-8 C API, or a C function that takes an `int`-sized boolean flag.
+
+```gs
+package P
+import System.Runtime.InteropServices
+
+@DllImport("user32", EntryPoint: "MessageBoxW")
+func MessageBoxW(
+    hWnd nint,
+    @MarshalAs(UnmanagedType.LPWStr) lpText string,
+    @MarshalAs(UnmanagedType.LPWStr) lpCaption string,
+    uType uint32) int32;
+
+@DllImport("libfoo", EntryPoint: "sum_buf")
+func native_sum_buf(
+    @MarshalAs(UnmanagedType.LPArray, SizeParamIndex: 1) buf []int32,
+    count int32) int64;
+
+@DllImport("libfoo", EntryPoint: "set_flag")
+func native_set_flag(@MarshalAs(UnmanagedType.I4) on bool) int32;
+```
+
+The v1 supported `UnmanagedType` values are `LPStr`, `LPWStr`, `LPUTF8Str`, `BStr`, `LPArray`, `SafeArray`, `I1`, `U1`, `I2`, `U2`, `I4`, `U4`, `I8`, `U8`, `Bool`, `VariantBool`, `SysInt`, `SysUInt`, `Struct`, `ByValTStr` (requires `SizeConst:`), and `ByValArray` (requires `SizeConst:`). `LPArray` requires `SizeConst:` and/or `SizeParamIndex:`. Anything else (`CustomMarshaler`, `IUnknown`, `IDispatch`, `FunctionPtr`, `Currency`, `LPStruct`) is rejected with GS0357.
+
+The annotation is a CLR *pseudo-custom* attribute: the binder validates the combination, the emitter writes a `FieldMarshal` table row (ECMA-335 II.23.4) plus `ParameterAttributes.HasFieldMarshal` on the Param row, and no `CustomAttribute` row is added. This matches C#'s `[MarshalAs]` shape exactly and round-trips through `ildasm` / ILSpy.
+
+**Interaction with `@LibraryImport`.** `@MarshalAs` on a non-string `@LibraryImport` parameter is honoured by writing the FieldMarshal row on the outer Param. `@MarshalAs` on a `@LibraryImport` *string* parameter is rejected with GS0360 — the function-wide `StringMarshalling:` knob is the canonical per-call lever for string encoding under the source-generator-shaped P/Invoke.
+
+The diagnostics introduced by this feature are GS0357 (unsupported `UnmanagedType`), GS0358 (type mismatch), GS0359 (missing required knob), and GS0360 (rejected combination). See ADR-0096 for the full table.
+
 ## Unsupported interop surface
 
 The following are not yet implemented as source features: user-supplied custom marshallers (`StringMarshalling.Custom` and per-field `[MarshalAs]`), fixed-size buffers inside marshalled structs, `string` return types under `@LibraryImport` (GS0345), default parameter values in G# declarations, and C#-style `null` literals. Use `nil` for nullable values, import .NET APIs for library functionality, and wrap unsupported marshalling shapes behind a thin C# shim for now.

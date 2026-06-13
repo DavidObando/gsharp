@@ -647,6 +647,28 @@ by-value struct case). GS0326 still fires for the remaining function-shape
 constraints (async / generic / instance / extension / `shared` / ref-return).
 See ADR-0094 for the full pointee table and worked examples.
 
+## P/Invoke `@MarshalAs` parameter override diagnostics (GS0357 – GS0360)
+
+ADR-0096 / issue #762 adds per-parameter `@MarshalAs(UnmanagedType.…)`
+overrides on `@DllImport` and `@LibraryImport` declarations. The
+binder validates each annotation against a strict UnmanagedType /
+parameter-type compatibility table; mis-use surfaces through four
+dedicated diagnostics so a malformed `@MarshalAs` never reaches the
+emitter.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0357 | Error | `@MarshalAs` UnmanagedType `{value}` is not in the v1 supported set. Supported values: `LPStr`, `LPWStr`, `LPUTF8Str`, `BStr`, `LPArray`, `SafeArray`, `I1`, `U1`, `I2`, `U2`, `I4`, `U4`, `I8`, `U8`, `Bool`, `VariantBool`, `SysInt`, `SysUInt`, `Struct`, `ByValTStr`, `ByValArray`. |
+| GS0358 | Error | `@MarshalAs(UnmanagedType.{X})` is not valid on parameter `{name}` of type `{T}`. The per-UnmanagedType type-compatibility table (ADR-0096 §3) defines which G# types each marshaller accepts. |
+| GS0359 | Error | `@MarshalAs(UnmanagedType.{X})` on parameter `{name}` requires the `{arg}` named argument. `ByValTStr` and `ByValArray` require `SizeConst:`; `LPArray` requires `SizeConst:` and/or `SizeParamIndex:`. |
+| GS0360 | Error | `@MarshalAs` on parameter `{name}` is not supported: `{reason}`. Two reasons fire today — the enclosing function is not a P/Invoke declaration, or the parameter is a `string` on a `@LibraryImport` (use the function-wide `StringMarshalling:` knob instead). |
+
+See ADR-0096 for the full UnmanagedType / G#-type compatibility table,
+the ECMA-335 II.23.4 FieldMarshal blob encoding for each accepted form,
+and the interaction with ADR-0086 (`@DllImport`), ADR-0092
+(`@LibraryImport`), ADR-0093 (struct marshalling), ADR-0094 (ref/out/in),
+and ADR-0095 (function pointers).
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |
