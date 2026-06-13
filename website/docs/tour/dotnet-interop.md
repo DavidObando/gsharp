@@ -161,4 +161,28 @@ for trio in Sequences.Range(1, 6).Windowed(3) {
 
 Use emitted builds for delegate-heavy interop. The interpreter can evaluate many imported members by reflection, but it cannot marshal every G# function literal into a CLR delegate the same way an emitted assembly can.
 
+## Native interop (`@DllImport` / `@LibraryImport`)
+
+G# also speaks the unmanaged CLR boundary. A `func` declaration whose body is the single token `;` and which carries an `@DllImport(...)` or `@LibraryImport(...)` annotation is bound as a P/Invoke stub and emitted as a CLR `PinvokeImpl` method. No `extern` keyword is needed.
+
+```gsharp
+import System
+import System.Runtime.InteropServices
+
+// Classic runtime-marshalled P/Invoke (ADR-0086).
+@DllImport("libc", EntryPoint: "strlen", CharSet: CharSet.Ansi)
+func StrLenDll(text string) nint;
+
+// Source-generator-shaped P/Invoke with an explicit IL stub (ADR-0092).
+// AOT-friendly: the compiler emits the marshalling wrapper inline,
+// so the runtime never auto-marshals strings at the boundary.
+@LibraryImport("libc", EntryPoint: "strlen", StringMarshalling: StringMarshalling.Utf8)
+func StrLenLib(text string) nuint;
+
+Console.WriteLine(StrLenDll("Hello, world!"))   // 13
+Console.WriteLine(StrLenLib("Hello, world!"))   // 13
+```
+
+Pick `@DllImport` for the smallest possible declaration (the runtime handles marshalling), or `@LibraryImport` when you want an AOT-friendly explicit stub. Either way the v1 marshalling table is the same: primitives, `nint`/`nuint`, `string`, `*T` byref-style pointers (`T` primitive), and slices of primitives. See the [native-interop section of the CLR interop reference](../ref/clr-interop.md#unmanaged-interop-pinvoke), ADR-0086 (issue #727), and ADR-0092 (issue #758) for the full attribute surface and diagnostics (GS0322–GS0329 and GS0342–GS0345).
+
 Next: [Tutorials](/docs/tutorials/getting-started), or go deeper with the [CLR interop reference](/docs/ref/clr-interop).

@@ -336,6 +336,37 @@ Every primitive integer (`int8`/`16`/`32`/`64`, `uint8`/`16`/`32`/`64`), `nint`/
 
 `GS0322`–`GS0329` cover every malformed P/Invoke shape — missing library name, body present, unsupported marshalling type, unsupported function shape (async / generic / extension / `shared` / ref-returning), bad `CharSet` / `CallingConvention` / `EntryPoint` values, and `;` body without `@DllImport`. The historical `GS0211` blanket-rejection is retired. See the [Diagnostics reference](./diagnostics) for the full table.
 
+### Source-generator-shaped P/Invoke (`@LibraryImport`)
+
+ADR-0092 / issue #758 adds the modern `@LibraryImport(...)` attribute, the source-generator-shaped sibling of `@DllImport`. The syntax is identical (`;`-bodied `func`, attribute on the declaration), but the emitter generates an explicit managed marshalling stub (outer wrapper) that calls a hidden blittable inner P/Invoke. The runtime never auto-marshals at the unmanaged boundary, which makes the resulting assemblies AOT-friendly and verifiable under `ilverify`.
+
+```gsharp
+package P
+import System
+import System.Runtime.InteropServices
+
+@LibraryImport("libc", EntryPoint: "getpid")
+func GetPid() int32;
+
+@LibraryImport("libc", EntryPoint: "strlen", StringMarshalling: StringMarshalling.Utf8)
+func NativeStrLen(text string) nuint;
+
+Console.WriteLine(GetPid())
+Console.WriteLine(NativeStrLen("Hello, world!"))     // prints 13
+```
+
+| Name | Type | Default | Notes |
+| --- | --- | --- | --- |
+| Library name (positional) | `string` | required | Same `ModuleRef` cache as `@DllImport`. |
+| `EntryPoint` | `string` | function name | Native symbol to resolve. |
+| `SetLastError` | `bool` | `false` | Threaded through to the inner blittable P/Invoke. |
+| `StringMarshalling` | `System.Runtime.InteropServices.StringMarshalling` | required when a `string` is present (GS0344) | `Utf8` or `Utf16`. `Custom` is rejected with GS0343 in v1. |
+| `StringMarshallingCustomType` | `Type` | reserved | Accepted only with `Custom`, which v1 rejects. |
+
+Knobs that exist on `@DllImport` but **not** on `@LibraryImport` (matching the BCL surface): `CharSet` (superseded by per-call `StringMarshalling`), `CallingConvention` (overridden via the separate `[UnmanagedCallConv]` attribute in C#; not exposed in v1), `PreserveSig`, `BestFitMapping`, `ThrowOnUnmappableChar`.
+
+The diagnostics unique to `@LibraryImport` are GS0342 (mixing with `@DllImport`), GS0343 (invalid `StringMarshalling`), GS0344 (string surface without `StringMarshalling`), and GS0345 (`string` return type). The existing GS0322–GS0329 codes continue to apply where relevant. See the [Diagnostics reference](./diagnostics) and ADR-0092 for the full table.
+
 ## Unsupported interop surface
 
-The following are not yet implemented as source features: the modern `@LibraryImport` source-generator form (deferred per ADR-0086 §4 to a follow-up), struct / class marshalling across the P/Invoke boundary, function-pointer marshalling, user-supplied custom marshallers, default parameter values in G# declarations, and C#-style `null` literals. Use `nil` for nullable values, import .NET APIs for library functionality, and wrap unsupported marshalling shapes behind a thin C# shim for now.
+The following are not yet implemented as source features: struct / class marshalling across the P/Invoke boundary, function-pointer marshalling, user-supplied custom marshallers (`StringMarshalling.Custom` and `[MarshalAs]`), `string` return types under `@LibraryImport` (GS0345), default parameter values in G# declarations, and C#-style `null` literals. Use `nil` for nullable values, import .NET APIs for library functionality, and wrap unsupported marshalling shapes behind a thin C# shim for now.

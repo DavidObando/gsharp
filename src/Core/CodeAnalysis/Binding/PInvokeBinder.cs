@@ -11,37 +11,51 @@ using GSharp.Core.CodeAnalysis.Text;
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
-/// Helpers for validating and extracting <c>@DllImport</c> (P/Invoke)
-/// metadata from a function declaration (ADR-0086 / issue #727).
+/// Helpers for validating and extracting P/Invoke metadata from a function
+/// declaration. Recognises both the classic <c>@DllImport</c> shape
+/// (ADR-0086 / issue #727) and the modern <c>@LibraryImport</c>
+/// source-generator-flavored shape (ADR-0092 / issue #758).
 /// </summary>
 internal static class PInvokeBinder
 {
     /// <summary>
-    /// When <paramref name="function"/> carries an <c>@DllImport</c>
-    /// annotation, validates the shape and produces a
-    /// <see cref="PInvokeMetadata"/> attached to the symbol. Reports
-    /// GS0322–GS0329 on any malformed input.
+    /// When <paramref name="function"/> carries an <c>@DllImport</c> or
+    /// <c>@LibraryImport</c> annotation, validates the shape and produces
+    /// a <see cref="PInvokeMetadata"/> attached to the symbol. Reports
+    /// GS0322–GS0329 (DllImport) and GS0342–GS0345 (LibraryImport) on any
+    /// malformed input.
     /// </summary>
     /// <param name="function">The function symbol being declared.</param>
     /// <param name="syntax">The originating function declaration syntax.</param>
     /// <param name="diagnostics">The diagnostics bag for this binder.</param>
-    /// <returns><c>true</c> when the function is a P/Invoke (with or without errors); <c>false</c> when no <c>@DllImport</c> is present.</returns>
+    /// <returns><c>true</c> when the function is a P/Invoke (with or without errors); <c>false</c> when no recognised P/Invoke attribute is present.</returns>
     internal static bool TryAttachPInvokeMetadata(
         FunctionSymbol function,
         FunctionDeclarationSyntax syntax,
         DiagnosticBag diagnostics)
     {
         var dllImport = KnownAttributes.FindDllImport(function.Attributes);
-        if (dllImport == null)
+        var libraryImport = KnownAttributes.FindLibraryImport(function.Attributes);
+        if (dllImport == null && libraryImport == null)
         {
             return false;
         }
 
         var identifierLocation = syntax.Identifier.Location;
 
+        // ADR-0092 / issue #758: the two attribute shapes are mutually exclusive.
+        if (dllImport != null && libraryImport != null)
+        {
+            diagnostics.ReportPInvokeMixedDllAndLibraryImport(identifierLocation, function.Name);
+        }
+
+        var isLibraryImport = libraryImport != null && dllImport == null;
+        var attribute = isLibraryImport ? libraryImport : (dllImport ?? libraryImport);
+
         // Validate function shape: no body, no instance/static-receiver,
         // no async, no generic, no extension, no ref-return. These rules
-        // mirror ADR-0086 §1 / the v1 surface area.
+        // mirror ADR-0086 §1 / ADR-0092 §1 — the v1 surface area is identical
+        // across the two attribute shapes.
         if (syntax.Body != null)
         {
             diagnostics.ReportPInvokeMustNotHaveBody(syntax.Body.Location, function.Name);
@@ -91,9 +105,15 @@ internal static class PInvokeBinder
         // Use the parameter-syntax type-clause location for diagnostics so
         // squiggles land on the offending type, not the function name.
         var parameterSyntaxes = syntax.Parameters;
+        var hasStringParameter = false;
         for (var i = 0; i < function.Parameters.Length; i++)
         {
             var parameter = function.Parameters[i];
+            if (parameter.Type == TypeSymbol.String)
+            {
+                hasStringParameter = true;
+            }
+
             if (IsSupportedMarshallingType(parameter.Type))
             {
                 continue;
@@ -108,14 +128,26 @@ internal static class PInvokeBinder
             diagnostics.ReportPInvokeUnsupportedMarshallingType(typeLocation, parameter.Type?.Name ?? "?");
         }
 
+        var returnIsString = function.Type == TypeSymbol.String;
         if (function.Type != TypeSymbol.Void && !IsSupportedMarshallingType(function.Type))
         {
             var returnLocation = syntax.Type?.Location ?? identifierLocation;
             diagnostics.ReportPInvokeUnsupportedMarshallingType(returnLocation, function.Type?.Name ?? "?");
         }
 
+        // ADR-0092 §4 — the v1 LibraryImport stub generator cannot safely
+        // free CLR-owned string returns. Reject them with a tailored
+        // diagnostic so users reach for `nint` + `Marshal.PtrToStringUTF8`.
+        if (isLibraryImport && returnIsString)
+        {
+            var returnLocation = syntax.Type?.Location ?? identifierLocation;
+            diagnostics.ReportLibraryImportStringReturnNotSupported(returnLocation, function.Name);
+        }
+
         // Extract metadata from the attribute arguments.
-        var metadata = ExtractMetadata(dllImport, syntax, function, diagnostics);
+        var metadata = isLibraryImport
+            ? ExtractLibraryImportMetadata(libraryImport, function, hasStringParameter || returnIsString, diagnostics)
+            : ExtractDllImportMetadata(dllImport, syntax, function, diagnostics);
         if (metadata != null)
         {
             function.PInvokeMetadata = metadata;
@@ -179,7 +211,7 @@ internal static class PInvokeBinder
             || type == TypeSymbol.Float64;
     }
 
-    private static PInvokeMetadata ExtractMetadata(
+    private static PInvokeMetadata ExtractDllImportMetadata(
         BoundAttribute attribute,
         FunctionDeclarationSyntax syntax,
         FunctionSymbol function,
@@ -315,6 +347,120 @@ internal static class PInvokeBinder
             preserveSig,
             bestFitMapping,
             throwOnUnmappableChar);
+    }
+
+    /// <summary>
+    /// Extracts the resolved metadata for an <c>@LibraryImport</c> attribute
+    /// (ADR-0092 / issue #758). <c>@LibraryImport</c> exposes a deliberately
+    /// smaller surface than <c>@DllImport</c>: only <c>LibraryName</c>
+    /// (positional), <c>EntryPoint</c>, <c>SetLastError</c>,
+    /// <c>StringMarshalling</c>, and <c>StringMarshallingCustomType</c>.
+    /// The remaining knobs (CharSet, CallingConvention, PreserveSig,
+    /// BestFitMapping, ThrowOnUnmappableChar) are not part of the attribute
+    /// — calling-convention overrides live on a separate
+    /// <c>@UnmanagedCallConv</c> attribute, which v1 does not support.
+    /// </summary>
+    private static PInvokeMetadata ExtractLibraryImportMetadata(
+        BoundAttribute attribute,
+        FunctionSymbol function,
+        bool hasStringSurface,
+        DiagnosticBag diagnostics)
+    {
+        // 1) Required positional library name.
+        string libraryName = null;
+        if (!attribute.PositionalArguments.IsDefaultOrEmpty
+            && attribute.PositionalArguments[0].Value is string s
+            && !string.IsNullOrEmpty(s))
+        {
+            libraryName = s;
+        }
+
+        if (libraryName == null)
+        {
+            diagnostics.ReportDllImportMissingLibraryName(attribute.Syntax.Location);
+            return null;
+        }
+
+        // 2) Named arguments. Defaults match LibraryImportAttribute itself:
+        //    EntryPoint defaults to the function name, StringMarshalling
+        //    defaults to Custom (which fails GS0344 for string-bearing
+        //    signatures because no explicit encoding was given).
+        string entryPoint = function.Name;
+        var setLastError = false;
+        var stringMarshalling = StringMarshalling.Custom;
+
+        foreach (var named in attribute.NamedArguments)
+        {
+            var argSyntax = FindNamedArgSyntax(attribute.Syntax, named.Name) ?? attribute.Syntax;
+            switch (named.Name)
+            {
+                case "EntryPoint":
+                    if (named.Value is string entryString && !string.IsNullOrEmpty(entryString))
+                    {
+                        entryPoint = entryString;
+                    }
+                    else
+                    {
+                        diagnostics.ReportDllImportInvalidEntryPoint(argSyntax.Location);
+                    }
+
+                    break;
+
+                case "SetLastError":
+                    if (named.Value is bool sle)
+                    {
+                        setLastError = sle;
+                    }
+
+                    break;
+
+                case "StringMarshalling":
+                    if (KnownAttributes.TryConvertAttributeEnum<StringMarshalling>(named.Value, out var sm))
+                    {
+                        stringMarshalling = sm;
+                    }
+                    else
+                    {
+                        diagnostics.ReportLibraryImportInvalidStringMarshalling(argSyntax.Location, named.Value?.ToString() ?? "<null>");
+                    }
+
+                    break;
+
+                case "StringMarshallingCustomType":
+                    // v1: accepted in source for forward compatibility but the
+                    // stub generator does not honour it. A future ADR will lift
+                    // this restriction once custom marshaller types are bound.
+                    break;
+
+                default:
+                    // Unknown named arguments fall through to the attribute-arg
+                    // binder's "no matching property" diagnostic (GS0207).
+                    break;
+            }
+        }
+
+        // ADR-0092 §3 — a string-bearing signature requires an explicit
+        // StringMarshalling value of Utf8 or Utf16. Custom is reserved for
+        // a future ADR; Custom + a string parameter is an error today.
+        if (hasStringSurface
+            && stringMarshalling != StringMarshalling.Utf8
+            && stringMarshalling != StringMarshalling.Utf16)
+        {
+            diagnostics.ReportLibraryImportRequiresStringMarshalling(function.Declaration.Identifier.Location, function.Name);
+        }
+
+        return new PInvokeMetadata(
+            libraryName,
+            entryPoint,
+            CharSet.None,
+            setLastError,
+            CallingConvention.Winapi,
+            exactSpelling: true,
+            preserveSig: true,
+            bestFitMapping: null,
+            throwOnUnmappableChar: null,
+            isLibraryImport: true,
+            stringMarshalling: stringMarshalling);
     }
 
     private static SyntaxNode FindNamedArgSyntax(AnnotationSyntax annotation, string name)

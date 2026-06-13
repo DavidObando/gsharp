@@ -161,6 +161,17 @@ internal sealed class MetadataTokenCache
         = new Dictionary<string, ModuleReferenceHandle>(StringComparer.Ordinal);
 
     /// <summary>
+    /// Gets the cache mapping an <c>@LibraryImport</c> function symbol
+    /// (ADR-0092 / issue #758) to the <see cref="MethodDefinitionHandle"/>
+    /// of the synthesized blittable inner P/Invoke method. The outer
+    /// managed stub (which lives in <see cref="FunctionHandles"/>) calls
+    /// into this inner method after performing explicit string
+    /// marshalling.
+    /// </summary>
+    public Dictionary<FunctionSymbol, MethodDefinitionHandle> LibraryImportInnerHandles { get; }
+        = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
+
+    /// <summary>
     /// Gets the cache mapping a user struct/class <see cref="StructSymbol"/>
     /// to its emitted <see cref="TypeDefinitionHandle"/>.
     /// </summary>

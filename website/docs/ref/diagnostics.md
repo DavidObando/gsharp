@@ -845,6 +845,14 @@ blanket-rejection at GS0211 has been retired.
 | GS0328 | Error | `@DllImport` `CallingConvention` value `<value>` is not recognised. |
 | GS0329 | Error | `@DllImport` `EntryPoint` must be a non-empty string. |
 
+> The codes above also fire for the modern `@LibraryImport` attribute
+> wherever they apply (`@LibraryImport` reuses the same library-name,
+> body-shape, unsupported-type, and `EntryPoint` checks). `CharSet`
+> (GS0327) and `CallingConvention` (GS0328) cannot fire under
+> `@LibraryImport` because those knobs do not exist on the attribute —
+> use `StringMarshalling:` (GS0343 / GS0344) and `[UnmanagedCallConv]`
+> instead.
+
 The supported v1 marshalling table is: every primitive integer
 (`int8`/`16`/`32`/`64`, `uint8`/`16`/`32`/`64`), `nint`/`nuint`,
 `float32`/`float64`, `bool`, `char`, `string` (governed by
@@ -1043,3 +1051,47 @@ Cross-references:
   interfaces), #756 (private interface helpers), #706
   (advanced-interfaces parent).
 
+
+
+## `@LibraryImport` P/Invoke diagnostics (GS0342–GS0345)
+
+See ADR-0092 (issue #758). G# accepts the modern
+source-generator-shaped `@LibraryImport(...)` attribute on `;`-bodied
+`func` declarations. The compiler emits an explicit managed marshalling
+stub (outer wrapper) that calls a hidden blittable inner P/Invoke, so
+the runtime never auto-marshals at the unmanaged boundary. The
+attribute reuses the same library-name, body-shape, unsupported-type,
+and `EntryPoint` checks as `@DllImport` (GS0322–GS0329); the codes below
+cover the surface that is unique to `@LibraryImport`.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0342 | Error | Function `<name>` is annotated with both `@DllImport` and `@LibraryImport`; choose one. |
+| GS0343 | Error | `StringMarshalling` value `<value>` is not a valid `StringMarshalling` member; use `Utf8` or `Utf16`. |
+| GS0344 | Error | `@LibraryImport` function `<name>` has a `string` surface and must specify `StringMarshalling: StringMarshalling.Utf8` or `StringMarshalling.Utf16`. |
+| GS0345 | Error | `@LibraryImport` function `<name>` has a `string` return type; v1 supports `string` only as a parameter type (see ADR-0092 §2). |
+
+Cause/fix:
+
+- **GS0342** — pick exactly one P/Invoke attribute per declaration.
+  `@DllImport` and `@LibraryImport` express the same intent through two
+  different emit pipelines; mixing them is ambiguous.
+- **GS0343** — only `StringMarshalling.Utf8` and `StringMarshalling.Utf16`
+  are accepted in v1. `Custom` (and `StringMarshallingCustomType`) is
+  reserved for a future custom-marshaller ADR.
+- **GS0344** — supply an explicit `StringMarshalling` argument whenever
+  any `string` parameter is present. Unlike `@DllImport`, the modern
+  attribute does not assume a default encoding.
+- **GS0345** — declare an out-of-band buffer or use `nint` and call
+  `Marshal.PtrToStringUTF8` from G# instead. Returning a managed
+  `string` from `@LibraryImport` requires a deallocator contract that
+  v1 does not surface.
+
+Cross-references:
+
+- ADR-0086 — original P/Invoke / `@DllImport` ADR (the `@LibraryImport`
+  deferral in §4 is superseded by ADR-0092).
+- ADR-0092 — `@LibraryImport` source-generator-shaped P/Invoke (this
+  feature).
+- Issues #758 (this feature), #727 (original P/Invoke), #706
+  (native-interop parent).

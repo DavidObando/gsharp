@@ -26,6 +26,7 @@ using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Lowering;
@@ -1375,6 +1376,14 @@ internal sealed class ReflectionMetadataEmitter
             foreach (var fn in functionsByPackage[pkg])
             {
                 this.cache.FunctionHandles[fn] = MetadataTokens.MethodDefinitionHandle(nextRow++);
+
+                // ADR-0092 / issue #758: a LibraryImport function emits TWO
+                // MethodDef rows — the user-visible managed stub (handle above)
+                // and a hidden blittable inner P/Invoke that the stub calls.
+                if (fn.IsPInvoke && fn.PInvokeMetadata.IsLibraryImport)
+                {
+                    this.cache.LibraryImportInnerHandles[fn] = MetadataTokens.MethodDefinitionHandle(nextRow++);
+                }
             }
 
             if (this.emitCtx.Program.EntryPoint is not null && pkg == entryPointPackage)
@@ -3509,10 +3518,18 @@ internal sealed class ReflectionMetadataEmitter
 
     private MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
     {
-        // ADR-0086 / issue #727: P/Invoke functions skip body emission and
-        // route through the ImplMap / ModuleRef path instead.
+        // ADR-0086 / issue #727 + ADR-0092 / issue #758: P/Invoke functions
+        // skip body emission. Classic @DllImport functions route through the
+        // ImplMap / ModuleRef path; @LibraryImport functions route through
+        // the explicit-stub path that emits a managed marshalling wrapper
+        // plus a hidden blittable inner P/Invoke.
         if (function.IsPInvoke)
         {
+            if (function.PInvokeMetadata.IsLibraryImport)
+            {
+                return this.EmitLibraryImportFunction(function);
+            }
+
             return this.EmitPInvokeFunction(function);
         }
 
@@ -4121,6 +4138,304 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return attrs;
+    }
+
+    /// <summary>
+    /// ADR-0092 / issue #758: emits an <c>@LibraryImport</c> function as a
+    /// pair of MethodDef rows — the user-visible managed stub (planned at
+    /// <c>cache.FunctionHandles[function]</c>) and a hidden blittable inner
+    /// P/Invoke (planned at <c>cache.LibraryImportInnerHandles[function]</c>).
+    /// The stub:
+    /// <list type="bullet">
+    ///   <item>For each <c>string</c> parameter, marshals it explicitly into
+    ///         a CoTaskMem buffer (UTF-8 or UTF-16 per the resolved
+    ///         <see cref="System.Runtime.InteropServices.StringMarshalling"/>
+    ///         mode) and stores the resulting <c>IntPtr</c> in a local.</item>
+    ///   <item>Calls the inner P/Invoke inside a <c>try</c> block, passing
+    ///         the marshalled <c>IntPtr</c> in place of each <c>string</c>
+    ///         parameter.</item>
+    ///   <item>Frees the marshalled buffers in a <c>finally</c> block via
+    ///         <see cref="Marshal.FreeCoTaskMem(IntPtr)"/>, which is a no-op
+    ///         on <see cref="IntPtr.Zero"/>.</item>
+    /// </list>
+    /// The result is verifiable IL that has no runtime marshalling stub —
+    /// every transition is explicit and AOT-publishable.
+    /// </summary>
+    /// <param name="function">The <c>@LibraryImport</c> function symbol.</param>
+    /// <returns>The handle of the emitted outer managed stub.</returns>
+    private MethodDefinitionHandle EmitLibraryImportFunction(FunctionSymbol function)
+    {
+        var pInvoke = function.PInvokeMetadata;
+
+        // Plan which parameters need string marshalling. Indices are into
+        // the function's parameter list.
+        var stringParamIndices = new List<int>();
+        for (var i = 0; i < function.Parameters.Length; i++)
+        {
+            if (function.Parameters[i].Type == TypeSymbol.String)
+            {
+                stringParamIndices.Add(i);
+            }
+        }
+
+        var innerMethodRef = this.cache.LibraryImportInnerHandles[function];
+
+        // === Outer managed stub ===
+        var outerSigBlob = new BlobBuilder();
+        new BlobEncoder(outerSigBlob).MethodSignature(isInstanceMethod: false)
+            .Parameters(
+                function.Parameters.Length,
+                r => EncodeReturnSymbol(r, function.Type, function.ReturnRefKind),
+                ps =>
+                {
+                    foreach (var p in function.Parameters)
+                    {
+                        EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                    }
+                });
+
+        var outerVisibility = AccessibilityMap.ToMethodVisibility(function.Accessibility);
+        var outerMethodAttrs = outerVisibility | MethodAttributes.HideBySig | MethodAttributes.Static;
+        var outerImplAttrs = MethodImplAttributes.IL | MethodImplAttributes.Managed;
+
+        // Allocate outer Parameter rows BEFORE the inner ones so they
+        // line up with the outer MethodDef row.
+        var outerFirstParam = this.customAttrEncoder.NextParameterHandle();
+        var outerParamHandles = new List<(ParameterSymbol Symbol, ParameterHandle Handle)>();
+        var outerSeq = 1;
+        foreach (var p in function.Parameters)
+        {
+            var paramHandle = this.emitCtx.Metadata.AddParameter(
+                attributes: ParameterAttributes.None,
+                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
+                sequenceNumber: outerSeq++);
+            outerParamHandles.Add((p, paramHandle));
+        }
+
+        // Build the IL body of the outer stub.
+        var (outerBodyOffset, outerLocalsSig) = EmitLibraryImportOuterBody(function, stringParamIndices, innerMethodRef);
+
+        var outerMethodHandle = this.emitCtx.Metadata.AddMethodDefinition(
+            attributes: outerMethodAttrs,
+            implAttributes: outerImplAttrs,
+            name: this.emitCtx.Metadata.GetOrAddString(function.Name),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(outerSigBlob),
+            bodyOffset: outerBodyOffset,
+            parameterList: outerFirstParam);
+
+        // Surface user-written method-target attributes other than the
+        // @LibraryImport itself (which is fully consumed by the inner
+        // ImplMap row — duplicating it as a CustomAttribute would create
+        // a misleading reflection view).
+        this.customAttrEncoder.EmitUserAttributesExcept(outerMethodHandle, function, AttributeTargetKind.Method, KnownAttributes.IsLibraryImport);
+
+        foreach (var (paramSym, paramHandle) in outerParamHandles)
+        {
+            this.customAttrEncoder.EmitUserAttributes(paramHandle, paramSym, AttributeTargetKind.Param);
+        }
+
+        // === Inner blittable P/Invoke ===
+        var innerSigBlob = new BlobBuilder();
+        new BlobEncoder(innerSigBlob).MethodSignature(isInstanceMethod: false)
+            .Parameters(
+                function.Parameters.Length,
+                r => EncodeReturnSymbol(r, function.Type, function.ReturnRefKind),
+                ps =>
+                {
+                    foreach (var p in function.Parameters)
+                    {
+                        var slot = ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None);
+                        if (p.Type == TypeSymbol.String)
+                        {
+                            // Marshal-as-IntPtr — the blittable form the
+                            // outer stub passes after explicit marshalling.
+                            slot.IntPtr();
+                        }
+                        else
+                        {
+                            EncodeTypeSymbol(slot, p.Type);
+                        }
+                    }
+                });
+
+        // The inner method is private static, PinvokeImpl, PreserveSig.
+        // No body. PinvokeImpl with no managed IL: bodyOffset = -1, IL +
+        // Managed + PreserveSig (matching the @DllImport emit shape).
+        var innerMethodAttrs = MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.Static | MethodAttributes.PinvokeImpl;
+        var innerImplAttrs = MethodImplAttributes.IL | MethodImplAttributes.Managed | MethodImplAttributes.PreserveSig;
+
+        var innerFirstParam = this.customAttrEncoder.NextParameterHandle();
+        var innerSeq = 1;
+        foreach (var p in function.Parameters)
+        {
+            this.emitCtx.Metadata.AddParameter(
+                attributes: ParameterAttributes.None,
+                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
+                sequenceNumber: innerSeq++);
+        }
+
+        var innerName = "<" + function.Name + ">g__PInvoke|0_0";
+        var innerMethodHandle = this.emitCtx.Metadata.AddMethodDefinition(
+            attributes: innerMethodAttrs,
+            implAttributes: innerImplAttrs,
+            name: this.emitCtx.Metadata.GetOrAddString(innerName),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(innerSigBlob),
+            bodyOffset: -1,
+            parameterList: innerFirstParam);
+
+        // Sanity check: the planned row must match the row we just emitted.
+        if (innerMethodHandle != innerMethodRef)
+        {
+            throw new InvalidOperationException(
+                $"LibraryImport inner-method row mismatch for '{function.Name}': planned {MetadataTokens.GetRowNumber(innerMethodRef)}, emitted {MetadataTokens.GetRowNumber(innerMethodHandle)}.");
+        }
+
+        // ModuleRef (deduplicated by library name, same cache as @DllImport).
+        if (!this.cache.PInvokeModuleRefs.TryGetValue(pInvoke.LibraryName, out var moduleRef))
+        {
+            moduleRef = this.emitCtx.Metadata.AddModuleReference(this.emitCtx.Metadata.GetOrAddString(pInvoke.LibraryName));
+            this.cache.PInvokeModuleRefs[pInvoke.LibraryName] = moduleRef;
+        }
+
+        var importAttrs = MapPInvokeImportAttributes(pInvoke);
+        this.emitCtx.Metadata.AddMethodImport(
+            innerMethodHandle,
+            importAttrs,
+            this.emitCtx.Metadata.GetOrAddString(pInvoke.EntryPoint ?? function.Name),
+            moduleRef);
+
+        return outerMethodHandle;
+    }
+
+    /// <summary>
+    /// Emits the IL body of an <c>@LibraryImport</c> outer managed stub
+    /// and returns the body offset + the locals-signature handle.
+    /// </summary>
+    private (int BodyOffset, StandaloneSignatureHandle LocalsSignature) EmitLibraryImportOuterBody(
+        FunctionSymbol function,
+        IReadOnlyList<int> stringParamIndices,
+        MethodDefinitionHandle innerMethodHandle)
+    {
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+
+        // Locals plan: one IntPtr per string parameter, in order; an
+        // optional result local when the function returns a value (so we
+        // can ret AFTER the finally that frees the marshalled buffers).
+        var stringLocalIndex = new Dictionary<int, int>(stringParamIndices.Count);
+        var localTypes = new List<TypeSymbol>();
+        foreach (var idx in stringParamIndices)
+        {
+            stringLocalIndex[idx] = localTypes.Count;
+            localTypes.Add(TypeSymbol.NInt);
+        }
+
+        var hasResult = function.Type != TypeSymbol.Void;
+        int resultLocalIndex = -1;
+        if (hasResult)
+        {
+            resultLocalIndex = localTypes.Count;
+            localTypes.Add(function.Type);
+        }
+
+        // Resolve the Marshal-helper MemberRefs lazily based on the
+        // configured StringMarshalling mode. Both helpers are no-ops on
+        // null / IntPtr.Zero respectively, so the stub does not need null
+        // guards.
+        MemberReferenceHandle convertRef = default;
+        MemberReferenceHandle freeRef = default;
+        if (stringParamIndices.Count > 0)
+        {
+            var marshalType = typeof(Marshal);
+            var convertName = function.PInvokeMetadata.StringMarshalling == StringMarshalling.Utf16
+                ? "StringToCoTaskMemUni"
+                : "StringToCoTaskMemUTF8";
+            var convertMethod = marshalType.GetMethod(convertName, new[] { typeof(string) })
+                ?? throw new InvalidOperationException($"Cannot resolve Marshal.{convertName}(string).");
+            var freeMethod = marshalType.GetMethod("FreeCoTaskMem", new[] { typeof(IntPtr) })
+                ?? throw new InvalidOperationException("Cannot resolve Marshal.FreeCoTaskMem(IntPtr).");
+            convertRef = this.GetMethodReference(convertMethod);
+            freeRef = this.GetMethodReference(freeMethod);
+        }
+
+        // 1) Marshal each string argument to a CoTaskMem IntPtr before the try.
+        foreach (var idx in stringParamIndices)
+        {
+            il.LoadArgument(idx);
+            il.OpCode(ILOpCode.Call);
+            il.Token(convertRef);
+            il.StoreLocal(stringLocalIndex[idx]);
+        }
+
+        var tryStart = il.DefineLabel();
+        var finallyStart = il.DefineLabel();
+        var finallyEnd = il.DefineLabel();
+
+        il.MarkLabel(tryStart);
+
+        // 2) Push each argument onto the eval stack — IntPtr for strings,
+        //    plain arg for everything else — then call the inner P/Invoke.
+        for (var i = 0; i < function.Parameters.Length; i++)
+        {
+            if (stringLocalIndex.TryGetValue(i, out var localIdx))
+            {
+                il.LoadLocal(localIdx);
+            }
+            else
+            {
+                il.LoadArgument(i);
+            }
+        }
+
+        il.OpCode(ILOpCode.Call);
+        il.Token(innerMethodHandle);
+
+        if (hasResult)
+        {
+            il.StoreLocal(resultLocalIndex);
+        }
+
+        il.Branch(ILOpCode.Leave, finallyEnd);
+
+        // 3) Finally: free every marshalled buffer.
+        il.MarkLabel(finallyStart);
+        foreach (var idx in stringParamIndices)
+        {
+            il.LoadLocal(stringLocalIndex[idx]);
+            il.OpCode(ILOpCode.Call);
+            il.Token(freeRef);
+        }
+
+        il.OpCode(ILOpCode.Endfinally);
+        il.MarkLabel(finallyEnd);
+
+        if (stringParamIndices.Count > 0)
+        {
+            il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
+        }
+
+        if (hasResult)
+        {
+            il.LoadLocal(resultLocalIndex);
+        }
+
+        il.OpCode(ILOpCode.Ret);
+
+        // Encode locals signature.
+        StandaloneSignatureHandle localsSig = default;
+        if (localTypes.Count > 0)
+        {
+            var localsSigBlob = new BlobBuilder();
+            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
+            foreach (var t in localTypes)
+            {
+                EncodeLocalVariableType(encoder.AddVariable(), t);
+            }
+
+            localsSig = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
+        }
+
+        var offset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSig);
+        return (offset, localsSig);
     }
 
     private bool NeedsRvalueReceiverSpill(
