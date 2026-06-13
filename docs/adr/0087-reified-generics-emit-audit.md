@@ -230,6 +230,8 @@ Each phase ends with `dotnet test GSharp.sln` green, `ilverify` clean, and the m
 
 The implementation phases **R1–R7** remain a multi-PR effort. This PR ships the audit (§2), target spec (§3), reflection-based golden suite (§4), staging plan (§5), the docs/sample updates that make the current state honest, and one **foundational** code change required by every subsequent phase. The five `ReifiedBehaviour_R*` tests at `test/Compiler.Tests/Emit/ReifiedGenericsReflectionTests.cs` remain `[Fact(Skip = …)]` until the upstream phases land.
 
+> **Status update (issue #765 / R5 landed).** R1+R2+R3+R4 shipped in PR #764 (issue #728). **R5 is now closed** by issue #765: closed CLR generics constructed over user-declared generic types (`List[Box[T]]`, `Dictionary[string, Box[int32]]`, `Box[List[int32]]`, recursive `Box[Box[Box[int32]]]`, generic methods over `List[Box[T]]`, and user-defined generic interfaces such as `IBox[int32]`) now resolve, encode, and ilverify cleanly. All three previously skipped tests (`ReifiedBehaviour_R5_ListOfUserGeneric_DispatchesCorrectly`, `AuditCoverage_GenericInterface_Compiles`, `AuditCoverage_RecursiveGenericConstraint_Compiles`) are un-skipped and pass, plus six new reflection-based R5 regression tests in `test/Compiler.Tests/Emit/ReifiedGenericsReflectionTests.cs` cover the matrix end-to-end. Only R6 (lambda adapter retirement) and R7 (docs flip) remain.
+
 ### 6.1 Foundation shipped in this PR
 
 `src/Core/CodeAnalysis/Symbols/TypeParameterSymbol.cs` and `src/Core/CodeAnalysis/Symbols/FunctionSymbol.cs` are extended with the **method-vs-type discriminator** that every subsequent phase needs:
@@ -259,6 +261,8 @@ The minimum tractable landing unit is therefore **R1 + R2 + R3 + R4 in a single 
 
 ### 6.3 Estimated remaining scope
 
+> **Status update (post-R5).** R1–R5 are now landed (PR #764 + issue #765). The remaining work in this section is R6 (lambda adapter retirement) and R7 (docs flip).
+
 A direct estimate of the file-level blast radius for the R1+R2+R3+R4 landing, based on the audit in §2:
 
 | Phase | Files touched | Estimated LOC | Notes |
@@ -282,8 +286,15 @@ A best-effort estimate is **20–30 files, 1000+ LOC, 5–15 existing-test updat
 ### 6.4 Hand-off contract for the next agent
 
 1. Start from the foundation shipped in this PR (`TypeParameterSymbol.IsMethodTypeParameter`, the `FunctionSymbol.TypeParameters` setter wiring).
-2. Land **R1 + R2 + R3 + R4 as one commit** on a follow-up PR. The four phases share an ilverify dependency: any subset fails the verifier in the way reproduced in §6.2.
-3. Land R5 next.
+2. Land **R1 + R2 + R3 + R4 as one commit** on a follow-up PR. The four phases share an ilverify dependency: any subset fails the verifier in the way reproduced in §6.2. **(Landed in PR #764.)**
+3. Land R5 next. **(Landed by issue #765.)** Concrete changes:
+   - `src/Core/CodeAnalysis/Symbols/InterfaceSymbol.cs`: constructed interface instances defer member substitution and resolve lazily, because `InterfaceSymbol.Construct(...)` runs during class base-type binding before `BindInterfaceMembers` populates the open definition's methods. New `EnsureMembersResolved` / `TryResolveMembers` are invoked from every method accessor; `CreateConstructed` no longer eagerly substitutes.
+   - `src/Core/CodeAnalysis/Emit/ReflectionMetadataEmitter.cs`:
+     - `TryCreateMemberReferenceForConstructedSymbolicContainer` and `TryCreateCtorMemberReferenceForConstructedSymbolicContainer` now also fire when `imported.HasTypeParameterArgument` is true (open type-parameter args such as `List[T]` inside a generic method body), not only for fully closed user-type arguments.
+     - `EncodeTypeSymbol` interface branch emits `GENERICINST<def><args>` for constructed user-defined generic interfaces, mirroring the existing `StructSymbol` path.
+     - The `InterfaceImpl` row for a class implementing a constructed user-defined generic interface now references the TypeSpec via `GetUserInterfaceTypeSpec(iface)` rather than a TypeDef lookup keyed by the constructed instance.
+   - `src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Calls.cs`: `EmitUserInstanceCall` now handles `InterfaceSymbol` receivers, bridging the substituted method back to the open definition via a new `ResolveOpenInterfaceMethod` helper so the MemberRef is parented at the constructed TypeSpec.
+   - `src/Core/CodeAnalysis/Binding/ExpressionBinder.cs`, `ConversionClassifier.cs`, `ExpressionBinder.Calls.cs`: overload resolution and CLR-parameter conversion classification treat user-defined `StructSymbol` / `InterfaceSymbol` / `DelegateTypeSymbol` arguments as `object` for matching purposes and avoid spurious box conversions when the target parameter is a substituted user type.
 4. Land R6 next.
 5. Land R7 last; only then do the docs stop saying "type-erased handling for open type-parameter-containing shapes".
 

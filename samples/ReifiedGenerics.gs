@@ -54,11 +54,16 @@ let nested = Box[Box[int32]]{Value: Box[int32]{Value: 5}}
 Console.WriteLine(nested.Value.Value)
 
 // Closed CLR generic over a user-defined generic instance (List[Box[int32]])
-// is one of the audit's F3 cases — receiver-method dispatch over the erased
-// inner type does not currently resolve under the type-erased model, so the
-// sample exercises the closed CLR generic over a built-in scalar instead.
-// ADR-0087 §5 R5 widens this to the user-defined shape.
+// is the audit's F3 case: receiver-method dispatch over the inner user-defined
+// generic now resolves through reified MemberRefs after ADR-0087 R5 landed
+// (issue #765). The sample exercises both the original built-in shape and the
+// R5 shape so the golden output covers the full matrix.
 let strings = List[string]()
 strings.Add("a")
 strings.Add("b")
 Console.WriteLine(strings.Count)
+
+let boxes = List[Box[int32]]()
+boxes.Add(Box[int32]{Value: 1})
+boxes.Add(Box[int32]{Value: 2})
+Console.WriteLine(boxes.Count)

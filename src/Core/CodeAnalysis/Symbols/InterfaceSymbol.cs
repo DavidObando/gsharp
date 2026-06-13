@@ -19,6 +19,19 @@ public sealed class InterfaceSymbol : TypeSymbol
 {
     private static readonly ConcurrentDictionary<(InterfaceSymbol Def, string Args), InterfaceSymbol> ConstructedCache = new();
 
+    private ImmutableArray<FunctionSymbol> methods;
+    private ImmutableArray<FunctionSymbol> staticMethods = ImmutableArray<FunctionSymbol>.Empty;
+    private ImmutableArray<FunctionSymbol> privateMethods = ImmutableArray<FunctionSymbol>.Empty;
+    private ImmutableArray<FunctionSymbol> staticPrivateMethods = ImmutableArray<FunctionSymbol>.Empty;
+
+    // ADR-0087 R5 / issue #765: constructed instances of a generic interface
+    // may be created (e.g. as a base type on a class declaration) BEFORE the
+    // definition's member-binding pass has run. <see cref="EnsureMembersResolved"/>
+    // detects the staleness on the accessor hot-paths and re-substitutes
+    // lazily so call-site dispatch through a constructed interface
+    // (e.g. <c>IBox[int32].Get()</c>) succeeds.
+    private bool membersResolved;
+
     /// <summary>Initializes a new instance of the <see cref="InterfaceSymbol"/> class.</summary>
     /// <param name="name">The interface type name.</param>
     /// <param name="accessibility">The interface's CLR accessibility.</param>
@@ -63,10 +76,28 @@ public sealed class InterfaceSymbol : TypeSymbol
     public bool IsSealed => Declaration?.IsSealed ?? false;
 
     /// <summary>Gets the abstract method signatures declared on this interface. Populated by the binder via <see cref="SetMethods"/>.</summary>
-    public ImmutableArray<FunctionSymbol> Methods { get; private set; }
+    public ImmutableArray<FunctionSymbol> Methods
+    {
+        get
+        {
+            EnsureMembersResolved();
+            return methods;
+        }
+
+        private set => methods = value;
+    }
 
     /// <summary>Gets the static-virtual method signatures declared on this interface (ADR-0089 / issue #755). Populated by the binder via <see cref="SetStaticMethods"/>.</summary>
-    public ImmutableArray<FunctionSymbol> StaticMethods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
+    public ImmutableArray<FunctionSymbol> StaticMethods
+    {
+        get
+        {
+            EnsureMembersResolved();
+            return staticMethods;
+        }
+
+        private set => staticMethods = value;
+    }
 
     /// <summary>
     /// Gets the <c>private</c> instance helper methods declared on this interface (ADR-0090 / issue #756).
@@ -76,7 +107,16 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// verification (GS0187 / GS0320) unaffected. Populated by the binder via
     /// <see cref="SetPrivateMethods"/>.
     /// </summary>
-    public ImmutableArray<FunctionSymbol> PrivateMethods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
+    public ImmutableArray<FunctionSymbol> PrivateMethods
+    {
+        get
+        {
+            EnsureMembersResolved();
+            return privateMethods;
+        }
+
+        private set => privateMethods = value;
+    }
 
     /// <summary>
     /// Gets the <c>private static</c> helper methods declared on this interface (ADR-0090 / issue #756).
@@ -86,7 +126,16 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// that dispatch table. Populated by the binder via
     /// <see cref="SetStaticPrivateMethods"/>.
     /// </summary>
-    public ImmutableArray<FunctionSymbol> StaticPrivateMethods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
+    public ImmutableArray<FunctionSymbol> StaticPrivateMethods
+    {
+        get
+        {
+            EnsureMembersResolved();
+            return staticPrivateMethods;
+        }
+
+        private set => staticPrivateMethods = value;
+    }
 
     /// <summary>Gets a value indicating whether this interface declares at least one static-virtual member (ADR-0089).</summary>
     public bool HasStaticVirtualMembers => !StaticMethods.IsDefaultOrEmpty;
@@ -146,6 +195,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <returns>The overload set; empty when none.</returns>
     public ImmutableArray<FunctionSymbol> GetPrivateMethods(string name)
     {
+        EnsureMembersResolved();
         if (PrivateMethods.IsDefaultOrEmpty)
         {
             return ImmutableArray<FunctionSymbol>.Empty;
@@ -170,6 +220,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <returns>The overload set; empty when none.</returns>
     public ImmutableArray<FunctionSymbol> GetStaticPrivateMethods(string name)
     {
+        EnsureMembersResolved();
         if (StaticPrivateMethods.IsDefaultOrEmpty)
         {
             return ImmutableArray<FunctionSymbol>.Empty;
@@ -193,6 +244,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <returns>True if found.</returns>
     public bool TryGetStaticMethod(string name, out FunctionSymbol method)
     {
+        EnsureMembersResolved();
         if (!StaticMethods.IsDefaultOrEmpty)
         {
             foreach (var m in StaticMethods)
@@ -214,6 +266,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <returns>The overload set; empty when none.</returns>
     public ImmutableArray<FunctionSymbol> GetStaticMethods(string name)
     {
+        EnsureMembersResolved();
         if (StaticMethods.IsDefaultOrEmpty)
         {
             return ImmutableArray<FunctionSymbol>.Empty;
@@ -258,6 +311,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <returns>True if found.</returns>
     public bool TryGetMethod(string name, out FunctionSymbol method)
     {
+        EnsureMembersResolved();
         foreach (var m in Methods)
         {
             if (m.Name == name)
@@ -278,6 +332,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <returns>The overload set; empty if none.</returns>
     public ImmutableArray<FunctionSymbol> GetMethods(string name)
     {
+        EnsureMembersResolved();
         if (Methods.IsDefaultOrEmpty)
         {
             return ImmutableArray<FunctionSymbol>.Empty;
@@ -340,12 +395,6 @@ public sealed class InterfaceSymbol : TypeSymbol
 
     private static InterfaceSymbol CreateConstructed(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
     {
-        var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(definition.TypeParameters.Length);
-        for (var i = 0; i < definition.TypeParameters.Length; i++)
-        {
-            subst[definition.TypeParameters[i]] = typeArguments[i];
-        }
-
         var argParts = new string[typeArguments.Length];
         for (var i = 0; i < typeArguments.Length; i++)
         {
@@ -355,150 +404,142 @@ public sealed class InterfaceSymbol : TypeSymbol
         var constructedName = $"{definition.Name}[{string.Join(", ", argParts)}]";
         var instance = new InterfaceSymbol(definition, typeArguments, constructedName);
 
-        var substMethods = ImmutableArray.CreateBuilder<FunctionSymbol>(definition.Methods.Length);
-        foreach (var m in definition.Methods)
-        {
-            var substParams = ImmutableArray.CreateBuilder<ParameterSymbol>(m.Parameters.Length);
-            foreach (var p in m.Parameters)
-            {
-                var newParam = new ParameterSymbol(p.Name, SubstituteType(p.Type, subst), isVariadic: p.IsVariadic, isScoped: p.IsScoped, refKind: p.RefKind);
-
-                // ADR-0063: propagate explicit default values across generic substitution.
-                if (p.HasExplicitDefaultValue)
-                {
-                    newParam.SetExplicitDefaultValue(p.ExplicitDefaultValue);
-                }
-
-                substParams.Add(newParam);
-            }
-
-            var substReturn = SubstituteType(m.Type, subst);
-            var substMethod = new FunctionSymbol(
-                m.Name,
-                substParams.MoveToImmutable(),
-                substReturn,
-                m.Declaration,
-                m.Package,
-                m.Accessibility,
-                receiverType: null);
-            substMethods.Add(substMethod);
-        }
-
-        instance.SetMethods(substMethods.MoveToImmutable());
-
-        // ADR-0089 / issue #755: substitute the type arguments through to the
-        // interface's static-virtual methods so a call site that resolves
-        // `T.M(args)` through a closed interface (e.g. `IAdd[int32]`) sees
-        // the substituted parameter / return types.
-        if (!definition.StaticMethods.IsDefaultOrEmpty)
-        {
-            var substStaticMethods = ImmutableArray.CreateBuilder<FunctionSymbol>(definition.StaticMethods.Length);
-            foreach (var m in definition.StaticMethods)
-            {
-                var substParams = ImmutableArray.CreateBuilder<ParameterSymbol>(m.Parameters.Length);
-                foreach (var p in m.Parameters)
-                {
-                    var newParam = new ParameterSymbol(p.Name, SubstituteType(p.Type, subst), isVariadic: p.IsVariadic, isScoped: p.IsScoped, refKind: p.RefKind);
-
-                    if (p.HasExplicitDefaultValue)
-                    {
-                        newParam.SetExplicitDefaultValue(p.ExplicitDefaultValue);
-                    }
-
-                    substParams.Add(newParam);
-                }
-
-                var substReturn = SubstituteType(m.Type, subst);
-                var substStaticMethod = new FunctionSymbol(
-                    m.Name,
-                    substParams.MoveToImmutable(),
-                    substReturn,
-                    m.Declaration,
-                    m.Package,
-                    m.Accessibility,
-                    receiverType: null);
-                substStaticMethod.IsStatic = true;
-                substStaticMethod.StaticOwnerType = instance;
-                substStaticMethods.Add(substStaticMethod);
-            }
-
-            instance.SetStaticMethods(substStaticMethods.MoveToImmutable());
-        }
-
-        // ADR-0090 / issue #756: substitute private instance helpers through
-        // the closed instance too. Sibling-only callers (default bodies on the
-        // same interface) that go through the constructed instance must see
-        // helpers whose parameter / return types are substituted to match.
-        if (!definition.PrivateMethods.IsDefaultOrEmpty)
-        {
-            var substPrivateMethods = ImmutableArray.CreateBuilder<FunctionSymbol>(definition.PrivateMethods.Length);
-            foreach (var m in definition.PrivateMethods)
-            {
-                var substParams = ImmutableArray.CreateBuilder<ParameterSymbol>(m.Parameters.Length);
-                foreach (var p in m.Parameters)
-                {
-                    var newParam = new ParameterSymbol(p.Name, SubstituteType(p.Type, subst), isVariadic: p.IsVariadic, isScoped: p.IsScoped, refKind: p.RefKind);
-
-                    if (p.HasExplicitDefaultValue)
-                    {
-                        newParam.SetExplicitDefaultValue(p.ExplicitDefaultValue);
-                    }
-
-                    substParams.Add(newParam);
-                }
-
-                var substReturn = SubstituteType(m.Type, subst);
-                var substPrivateMethod = new FunctionSymbol(
-                    m.Name,
-                    substParams.MoveToImmutable(),
-                    substReturn,
-                    m.Declaration,
-                    m.Package,
-                    m.Accessibility,
-                    receiverType: instance);
-                substPrivateMethods.Add(substPrivateMethod);
-            }
-
-            instance.SetPrivateMethods(substPrivateMethods.MoveToImmutable());
-        }
-
-        // ADR-0090 / issue #756: substitute private static helpers too.
-        if (!definition.StaticPrivateMethods.IsDefaultOrEmpty)
-        {
-            var substStaticPrivateMethods = ImmutableArray.CreateBuilder<FunctionSymbol>(definition.StaticPrivateMethods.Length);
-            foreach (var m in definition.StaticPrivateMethods)
-            {
-                var substParams = ImmutableArray.CreateBuilder<ParameterSymbol>(m.Parameters.Length);
-                foreach (var p in m.Parameters)
-                {
-                    var newParam = new ParameterSymbol(p.Name, SubstituteType(p.Type, subst), isVariadic: p.IsVariadic, isScoped: p.IsScoped, refKind: p.RefKind);
-
-                    if (p.HasExplicitDefaultValue)
-                    {
-                        newParam.SetExplicitDefaultValue(p.ExplicitDefaultValue);
-                    }
-
-                    substParams.Add(newParam);
-                }
-
-                var substReturn = SubstituteType(m.Type, subst);
-                var substStaticPrivateMethod = new FunctionSymbol(
-                    m.Name,
-                    substParams.MoveToImmutable(),
-                    substReturn,
-                    m.Declaration,
-                    m.Package,
-                    m.Accessibility,
-                    receiverType: null);
-                substStaticPrivateMethod.IsStatic = true;
-                substStaticPrivateMethod.StaticOwnerType = instance;
-                substStaticPrivateMethods.Add(substStaticPrivateMethod);
-            }
-
-            instance.SetStaticPrivateMethods(substStaticPrivateMethods.MoveToImmutable());
-        }
-
+        // ADR-0087 R5 / issue #765: defer the actual member substitution
+        // (Methods / StaticMethods / PrivateMethods / StaticPrivateMethods)
+        // to first access through <see cref="EnsureMembersResolved"/>.
+        // Eager substitution at construction time produced stale-empty lists
+        // when the constructed instance is built before the definition's
+        // member-binding pass has populated them (e.g. when a class
+        // declaration's base-type clause references `IBox[int32]` before
+        // `BindInterfaceMembers` runs on `IBox`). Lazy resolution keeps the
+        // construction cheap and self-heals once the definition is complete.
+        instance.TryResolveMembers();
         return instance;
+    }
+
+    private static FunctionSymbol SubstituteMethod(
+        FunctionSymbol m,
+        Dictionary<TypeParameterSymbol, TypeSymbol> subst,
+        InterfaceSymbol instance,
+        bool isStatic,
+        bool isPrivate)
+    {
+        var substParams = ImmutableArray.CreateBuilder<ParameterSymbol>(m.Parameters.Length);
+        foreach (var p in m.Parameters)
+        {
+            var newParam = new ParameterSymbol(p.Name, SubstituteType(p.Type, subst), isVariadic: p.IsVariadic, isScoped: p.IsScoped, refKind: p.RefKind);
+            if (p.HasExplicitDefaultValue)
+            {
+                newParam.SetExplicitDefaultValue(p.ExplicitDefaultValue);
+            }
+
+            substParams.Add(newParam);
+        }
+
+        var substReturn = SubstituteType(m.Type, subst);
+        var substMethod = new FunctionSymbol(
+            m.Name,
+            substParams.MoveToImmutable(),
+            substReturn,
+            m.Declaration,
+            m.Package,
+            m.Accessibility,
+            receiverType: isPrivate ? instance : null);
+        if (isStatic)
+        {
+            substMethod.IsStatic = true;
+            substMethod.StaticOwnerType = instance;
+        }
+
+        return substMethod;
+    }
+
+    private void TryResolveMembers()
+    {
+        // Only constructed instances need substitution. Definitions return
+        // their own pre-populated member lists.
+        if (Definition == null || ReferenceEquals(Definition, this))
+        {
+            membersResolved = true;
+            return;
+        }
+
+        var defMethods = Definition.Methods;
+        var defStatic = Definition.StaticMethods;
+        var defPriv = Definition.PrivateMethods;
+        var defStaticPriv = Definition.StaticPrivateMethods;
+
+        // Members aren't populated yet on the definition; try again later.
+        var defHasAnything = (!defMethods.IsDefaultOrEmpty)
+            || (!defStatic.IsDefaultOrEmpty)
+            || (!defPriv.IsDefaultOrEmpty)
+            || (!defStaticPriv.IsDefaultOrEmpty);
+        if (!defHasAnything)
+        {
+            return;
+        }
+
+        var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(Definition.TypeParameters.Length);
+        for (var i = 0; i < Definition.TypeParameters.Length; i++)
+        {
+            subst[Definition.TypeParameters[i]] = TypeArguments[i];
+        }
+
+        if (!defMethods.IsDefaultOrEmpty)
+        {
+            var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defMethods.Length);
+            foreach (var m in defMethods)
+            {
+                builder.Add(SubstituteMethod(m, subst, this, isStatic: false, isPrivate: false));
+            }
+
+            Methods = builder.MoveToImmutable();
+        }
+
+        if (!defStatic.IsDefaultOrEmpty)
+        {
+            var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defStatic.Length);
+            foreach (var m in defStatic)
+            {
+                builder.Add(SubstituteMethod(m, subst, this, isStatic: true, isPrivate: false));
+            }
+
+            StaticMethods = builder.MoveToImmutable();
+        }
+
+        if (!defPriv.IsDefaultOrEmpty)
+        {
+            var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defPriv.Length);
+            foreach (var m in defPriv)
+            {
+                builder.Add(SubstituteMethod(m, subst, this, isStatic: false, isPrivate: true));
+            }
+
+            PrivateMethods = builder.MoveToImmutable();
+        }
+
+        if (!defStaticPriv.IsDefaultOrEmpty)
+        {
+            var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defStaticPriv.Length);
+            foreach (var m in defStaticPriv)
+            {
+                builder.Add(SubstituteMethod(m, subst, this, isStatic: true, isPrivate: true));
+            }
+
+            StaticPrivateMethods = builder.MoveToImmutable();
+        }
+
+        membersResolved = true;
+    }
+
+    private void EnsureMembersResolved()
+    {
+        if (membersResolved)
+        {
+            return;
+        }
+
+        TryResolveMembers();
     }
 
     private static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> subst)

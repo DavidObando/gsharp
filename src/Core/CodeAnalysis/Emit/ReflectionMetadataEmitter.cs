@@ -1197,7 +1197,18 @@ internal sealed class ReflectionMetadataEmitter
             {
                 foreach (var iface in c.Interfaces)
                 {
-                    if (this.cache.InterfaceTypeDefs.TryGetValue(iface, out var ifaceHandle))
+                    // ADR-0087 R5 / issue #765: when the implemented user
+                    // interface is a constructed instance (e.g. `IBox[int32]`),
+                    // the InterfaceImpl row must reference a TypeSpec built
+                    // from the constructed shape; the bare TypeDef key only
+                    // resolves the open definition.
+                    if (ReflectionMetadataEmitter.IsUserGenericInterfaceReference(iface))
+                    {
+                        this.emitCtx.Metadata.AddInterfaceImplementation(
+                            this.cache.StructTypeDefs[c],
+                            this.GetUserInterfaceTypeSpec(iface));
+                    }
+                    else if (this.cache.InterfaceTypeDefs.TryGetValue(iface, out var ifaceHandle))
                     {
                         this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[c], ifaceHandle);
                     }
@@ -5776,8 +5787,7 @@ internal sealed class ReflectionMetadataEmitter
             || containingTypeSymbol is not ImportedTypeSymbol imported
             || imported.OpenDefinition == null
             || imported.TypeArguments.IsDefaultOrEmpty
-            || imported.HasTypeParameterArgument
-            || !imported.TypeArguments.Any(ArgIsSymbolicUserDefined))
+            || !(imported.HasTypeParameterArgument || imported.TypeArguments.Any(ArgIsSymbolicUserDefined)))
         {
             return false;
         }
@@ -5945,8 +5955,7 @@ internal sealed class ReflectionMetadataEmitter
             || containingTypeSymbol is not ImportedTypeSymbol imported
             || imported.OpenDefinition == null
             || imported.TypeArguments.IsDefaultOrEmpty
-            || imported.HasTypeParameterArgument
-            || !imported.TypeArguments.Any(ArgIsSymbolicUserDefined))
+            || !(imported.HasTypeParameterArgument || imported.TypeArguments.Any(ArgIsSymbolicUserDefined)))
         {
             return false;
         }
@@ -6478,12 +6487,50 @@ internal sealed class ReflectionMetadataEmitter
             // Phase D: user-defined interface as a signature type. The
             // CLR encodes interfaces with the same CLASS bit as a reference
             // type (isValueType: false).
-            if (!this.cache.InterfaceTypeDefs.TryGetValue(ifaceSym, out var ifaceDef))
+            //
+            // ADR-0087 R5 / issue #765: when this is a constructed instance
+            // of a user-declared generic interface (`IBox[int32]`), or the
+            // open generic definition referenced as a signature type, emit
+            // a GENERICINST against the definition's TypeDef. Mirrors the
+            // StructSymbol branch above so member dispatch through
+            // `let b IBox[int32] = …` (TypeSpec-parented MemberRef) and
+            // signature encoding of an open `IBox[T]` parameter both
+            // round-trip under IL verification.
+            var ifaceDefSym = ifaceSym.Definition ?? ifaceSym;
+            if (!this.cache.InterfaceTypeDefs.TryGetValue(ifaceDefSym, out var ifaceDef))
             {
-                throw new InvalidOperationException($"Interface '{ifaceSym.Name}' has no emitted TypeDef.");
+                throw new InvalidOperationException($"Interface '{ifaceDefSym.Name}' has no emitted TypeDef.");
             }
 
-            encoder.Type(ifaceDef, isValueType: false);
+            if (IsUserGenericInterfaceReference(ifaceSym))
+            {
+                ImmutableArray<TypeSymbol> ifaceTypeArgs;
+                if (!ifaceSym.TypeArguments.IsDefaultOrEmpty)
+                {
+                    ifaceTypeArgs = ifaceSym.TypeArguments;
+                }
+                else
+                {
+                    var ifaceDefTps = ifaceDefSym.TypeParameters;
+                    var ifaceBld = ImmutableArray.CreateBuilder<TypeSymbol>(ifaceDefTps.Length);
+                    foreach (var defTp in ifaceDefTps)
+                    {
+                        ifaceBld.Add(defTp);
+                    }
+
+                    ifaceTypeArgs = ifaceBld.MoveToImmutable();
+                }
+
+                var ifaceGi = encoder.GenericInstantiation(ifaceDef, ifaceTypeArgs.Length, isValueType: false);
+                foreach (var arg in ifaceTypeArgs)
+                {
+                    this.EncodeTypeSymbol(ifaceGi.AddArgument(), arg);
+                }
+            }
+            else
+            {
+                encoder.Type(ifaceDef, isValueType: false);
+            }
         }
         else if (type is DelegateTypeSymbol delegateSym)
         {

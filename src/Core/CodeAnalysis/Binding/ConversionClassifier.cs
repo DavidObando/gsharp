@@ -356,13 +356,26 @@ internal sealed class ConversionClassifier
     /// <param name="receiverArgCount">Number of leading argument slots
     /// reserved for a synthesised receiver (0 for plain calls, 1 for
     /// imported extension calls).</param>
+    /// <param name="method">Optional resolved CLR method whose declaring type
+    /// may be a constructed generic with symbolic user-defined type
+    /// arguments (ADR-0087 §3 R5 / issue #765). When supplied alongside
+    /// <paramref name="receiverType"/>, parameter targets whose open-def
+    /// position is a generic type parameter substitute to the receiver's
+    /// symbolic argument so an identity argument (a user-defined struct
+    /// passed to <c>List[Box[int32]]::Add</c>) is not boxed at the bind
+    /// boundary.</param>
+    /// <param name="receiverType">Optional receiver type carrying the
+    /// symbolic type arguments referenced by <paramref name="method"/>'s
+    /// declaring generic.</param>
     /// <returns>The (possibly rebound) argument array.</returns>
     public ImmutableArray<BoundExpression> BindClrParameterConversions(
         ImmutableArray<BoundExpression> arguments,
         ParameterInfo[] parameters,
         CallExpressionSyntax call,
         ImmutableArray<int> parameterMapping = default,
-        int receiverArgCount = 0)
+        int receiverArgCount = 0,
+        MethodInfo method = null,
+        TypeSymbol receiverType = null)
     {
         ImmutableArray<BoundExpression>.Builder builder = null;
         for (var i = 0; i < arguments.Length; i++)
@@ -375,10 +388,25 @@ internal sealed class ConversionClassifier
                 var parameterType = parameters[paramIndex].ParameterType;
                 if (!parameterType.IsByRef && argument.Type != TypeSymbol.Error)
                 {
-                    var targetType = TypeSymbol.FromClrType(parameterType);
+                    // ADR-0087 §3 R5 / issue #765: when the call dispatches
+                    // through a constructed CLR generic whose type arguments
+                    // include user-defined symbolic types (e.g. xs.Add(...)
+                    // where xs: List[Box[int32]] and Box is user-defined),
+                    // the parameter's open-def type may be a generic type
+                    // parameter slot. The closed CLR shape erases that slot
+                    // to System.Object, but at emit the receiver materialises
+                    // a TypeSpec for `List<Box`1<int32>>` whose Add(!0) really
+                    // accepts a Box[int32]. Substitute receiver type-args
+                    // into the open parameter so an identity argument is not
+                    // boxed at the bind boundary (which would leave a
+                    // verifier-rejecting `box T → !0 expected value` IL
+                    // sequence at the call site).
+                    var substituted = TrySubstituteParameterTypeFromReceiver(
+                        method, paramIndex, receiverType);
+                    var targetType = substituted ?? TypeSymbol.FromClrType(parameterType);
                     if (argument.Type != targetType
                         && Conversion.Classify(argument.Type, targetType).Exists
-                        && NeedsBindClrParameterConversion(argument.Type, parameterType))
+                        && NeedsBindClrParameterConversion(argument.Type, parameterType, substituted))
                     {
                         // Issue #506: the source-argument list may not align with
                         // the bound-argument list when a synthesised receiver
@@ -450,6 +478,77 @@ internal sealed class ConversionClassifier
 
         converted = argument;
         return false;
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R5 / issue #765: when a method is invoked on a constructed
+    /// generic whose type arguments include user-defined symbolic types,
+    /// return the substituted symbolic parameter type for the call site so
+    /// the binder does not insert a box conversion to the type-erased
+    /// <see cref="object"/> shape. Returns <see langword="null"/> when no
+    /// substitution applies.
+    /// </summary>
+    /// <param name="method">The resolved CLR method (may be null).</param>
+    /// <param name="paramIndex">Zero-based index into the method's parameter list.</param>
+    /// <param name="receiverType">The receiver's bound type symbol.</param>
+    /// <returns>The substituted target symbol or <see langword="null"/>.</returns>
+    public static TypeSymbol TrySubstituteParameterTypeFromReceiver(
+        MethodInfo method,
+        int paramIndex,
+        TypeSymbol receiverType)
+    {
+        if (method == null
+            || receiverType is not ImportedTypeSymbol imported
+            || imported.TypeArguments.IsDefaultOrEmpty
+            || !imported.TypeArguments.Any(arg =>
+                arg is StructSymbol
+                || arg is InterfaceSymbol
+                || arg is EnumSymbol
+                || arg is DelegateTypeSymbol
+                || (arg is ImportedTypeSymbol nested && nested.HasTypeParameterArgument == false
+                    && !nested.TypeArguments.IsDefaultOrEmpty)))
+        {
+            return null;
+        }
+
+        var declaring = method.DeclaringType;
+        if (declaring == null || !declaring.IsConstructedGenericType)
+        {
+            return null;
+        }
+
+        var openDef = declaring.GetGenericTypeDefinition();
+        MethodInfo openMethod = null;
+        foreach (var candidate in openDef.GetMethods(
+            BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.MetadataToken == method.MetadataToken && candidate.Module == method.Module)
+            {
+                openMethod = candidate;
+                break;
+            }
+        }
+
+        if (openMethod == null)
+        {
+            return null;
+        }
+
+        var openParams = openMethod.GetParameters();
+        if (paramIndex < 0 || paramIndex >= openParams.Length)
+        {
+            return null;
+        }
+
+        var openParamType = openParams[paramIndex].ParameterType;
+        if (openParamType.IsGenericParameter
+            && openParamType.DeclaringMethod == null
+            && openParamType.GenericParameterPosition < imported.TypeArguments.Length)
+        {
+            return imported.TypeArguments[openParamType.GenericParameterPosition];
+        }
+
+        return null;
     }
 
     // ----- Method-group → delegate conversions -----
@@ -1038,10 +1137,25 @@ internal sealed class ConversionClassifier
     /// </summary>
     /// <param name="from">The bound argument's static type.</param>
     /// <param name="targetParameterType">The CLR parameter type.</param>
+    /// <param name="substitutedTarget">Optional substituted target type
+    /// recovered from the receiver's symbolic type arguments
+    /// (ADR-0087 §3 R5 / issue #765). When non-null and equal to
+    /// <paramref name="from"/>, the conversion is treated as identity.</param>
     /// <returns>Whether a rebinding conversion is required.</returns>
-    private static bool NeedsBindClrParameterConversion(TypeSymbol from, Type targetParameterType)
+    private static bool NeedsBindClrParameterConversion(TypeSymbol from, Type targetParameterType, TypeSymbol substitutedTarget = null)
     {
         if (from == null || targetParameterType == null)
+        {
+            return false;
+        }
+
+        // ADR-0087 §3 R5 / issue #765: if the call's emit-time target is
+        // recovered from receiver type-args (e.g. List[Box[int32]]::Add
+        // really targets `!0` which is `Box[int32]`), an argument whose
+        // static type already matches that substituted target is identity
+        // — no conversion required.
+        _ = substitutedTarget;
+        if (substitutedTarget != null && from == substitutedTarget)
         {
             return false;
         }

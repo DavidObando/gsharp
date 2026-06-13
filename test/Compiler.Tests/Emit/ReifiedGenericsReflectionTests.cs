@@ -174,7 +174,7 @@ public class ReifiedGenericsReflectionTests
         Assert.Equal(typeof(int), field.FieldType);
     }
 
-    [Fact(Skip = "ADR-0087 §5 R5 — closed CLR generic over user type not yet supported")]
+    [Fact]
     public void ReifiedBehaviour_R5_ListOfUserGeneric_DispatchesCorrectly()
     {
         // After R5 the audit's F3 cluster collapses: a List[Box[int32]]
@@ -251,8 +251,7 @@ public class ReifiedGenericsReflectionTests
             """);
     }
 
-    [Fact(Skip = "ADR-0087 §2.1 F5: type-annotated `let x: T` binding for a generic interface type "
-               + "currently parses incorrectly under the erased model. Re-enable when R5 lands.")]
+    [Fact]
     public void AuditCoverage_GenericInterface_Compiles()
     {
         CompileAndRun("""
@@ -264,7 +263,7 @@ public class ReifiedGenericsReflectionTests
             class IntBox(value int32) : IBox[int32] {
                 func Get() int32 { return value }
             }
-            let b: IBox[int32] = IntBox(7)
+            let b IBox[int32] = IntBox(7)
             Console.WriteLine(b.Get())
             """);
     }
@@ -281,15 +280,13 @@ public class ReifiedGenericsReflectionTests
             """);
     }
 
-    [Fact(Skip = "ADR-0087 §2 F3: a generic G# function whose return type is a closed CLR generic "
-               + "over an in-scope type parameter (`List[T]`) currently emits as `List<object>`. "
-               + "The runtime cast at the call site (`MakeList[int32]()` -> `List<int32>`) therefore "
-               + "fails with InvalidCastException. R5 fixes this; re-enable then.")]
+    [Fact]
     public void AuditCoverage_RecursiveGenericConstraint_Compiles()
     {
-        // The recursive shape is a closed CLR generic over an in-scope
-        // type parameter (F3 in the audit). Today this compiles but
-        // throws at runtime by virtue of the erased List<object> shape.
+        // After R5 a generic G# function whose return type is a closed CLR
+        // generic over an in-scope type parameter (F3 in the audit) emits
+        // with reified `List`1<!!0>`, so the runtime cast at the call site
+        // (`MakeList[int32]()` -> `List<int32>`) succeeds.
         CompileAndRun("""
             package P
             import System
@@ -299,6 +296,134 @@ public class ReifiedGenericsReflectionTests
             xs.Add(1)
             Console.WriteLine(xs.Count)
             """);
+    }
+
+    // -----------------------------------------------------------------
+    // ADR-0087 R5 additional coverage (issue #765): closed CLR generic
+    // over a user-declared generic type, plus the new "lazy interface
+    // member substitution" + "constructed-interface emit" support that
+    // the audit lists alongside R5. Each test compiles, IL-verifies, and
+    // runs end-to-end to keep the F2/F3/F5 surface honest.
+    // -----------------------------------------------------------------
+
+    [Fact]
+    public void R5_ListOfUserStruct_AddRoundTrips()
+    {
+        var stdout = CompileAndRun("""
+            package P
+            import System
+            import System.Collections.Generic
+            data struct Box[T any] { var Value T }
+            let xs = List[Box[int32]]()
+            xs.Add(Box[int32]{Value: 7})
+            xs.Add(Box[int32]{Value: 42})
+            Console.WriteLine(xs.Count)
+            """);
+        Assert.Equal("2", stdout.Trim());
+    }
+
+    [Fact]
+    public void R5_DictionaryOfStringToUserStruct_AddRoundTrips()
+    {
+        var stdout = CompileAndRun("""
+            package P
+            import System
+            import System.Collections.Generic
+            data struct Box[T any] { var Value T }
+            let d = Dictionary[string, Box[int32]]()
+            d.Add("a", Box[int32]{Value: 7})
+            d.Add("b", Box[int32]{Value: 42})
+            Console.WriteLine(d.Count)
+            """);
+        Assert.Equal("2", stdout.Trim());
+    }
+
+    [Fact]
+    public void R5_UserStructWrappingClrGeneric_RoundTrips()
+    {
+        // Box[List[int32]] — a user-defined generic struct whose argument
+        // is itself a closed CLR generic. The member access `b.Value.Add`
+        // dispatches through the CLR generic's concrete shape.
+        var stdout = CompileAndRun("""
+            package P
+            import System
+            import System.Collections.Generic
+            data struct Box[T any] { var Value T }
+            let b = Box[List[int32]]{Value: List[int32]()}
+            b.Value.Add(7)
+            b.Value.Add(11)
+            Console.WriteLine(b.Value.Count)
+            """);
+        Assert.Equal("2", stdout.Trim());
+    }
+
+    [Fact]
+    public void R5_TripleNestedUserStruct_RoundTrips()
+    {
+        // Box[Box[Box[int32]]] — deep recursive nesting of the same user
+        // generic type. Every level encodes as a reified
+        // `GENERICINST<Box`1><…>` so field-access chains down to the
+        // primitive payload without erasure-induced casts.
+        var stdout = CompileAndRun("""
+            package P
+            import System
+            data struct Box[T any] { var Value T }
+            let b = Box[Box[Box[int32]]]{Value: Box[Box[int32]]{Value: Box[int32]{Value: 9}}}
+            Console.WriteLine(b.Value.Value.Value)
+            """);
+        Assert.Equal("9", stdout.Trim());
+    }
+
+    [Fact]
+    public void R5_GenericMethodOverClrListOfUserStruct_RoundTrips()
+    {
+        // `func Process[T any](xs List[Box[T]]) int32` — a G# generic
+        // method whose parameter is a closed CLR generic over the
+        // method's open type parameter wrapped in a user generic.
+        // After R5 the method-spec for Process[int32] resolves to the
+        // proper closed shape and the call site dispatches without an
+        // erasure-induced cast.
+        var stdout = CompileAndRun("""
+            package P
+            import System
+            import System.Collections.Generic
+            data struct Box[T any] { var Value T }
+            func Process[T any](xs List[Box[T]]) int32 {
+                return xs.Count
+            }
+            let xs = List[Box[int32]]()
+            xs.Add(Box[int32]{Value: 1})
+            xs.Add(Box[int32]{Value: 2})
+            xs.Add(Box[int32]{Value: 3})
+            Console.WriteLine(Process[int32](xs))
+            """);
+        Assert.Equal("3", stdout.Trim());
+    }
+
+    [Fact]
+    public void R5_GenericInterfaceImpl_DispatchesAcrossClosedClass()
+    {
+        // ADR-0087 R5 interface counterpart: a user-defined generic
+        // interface `IBox[T]` implemented by `IntBox : IBox[int32]`,
+        // accessed through a type-annotated `let b IBox[int32] = …`.
+        // Validates that:
+        //   * the InterfaceImpl row references the constructed TypeSpec
+        //     (so `IntBox` actually implements `IBox`1<int32>`);
+        //   * `b.Get()` dispatches through a MemberRef parented at the
+        //     constructed TypeSpec rather than the bare TypeDef.
+        var stdout = CompileAndRun("""
+            package P
+            import System
+            interface IBox[T any] {
+                func Get() T
+            }
+            class IntBox(value int32) : IBox[int32] {
+                func Get() int32 { return value }
+            }
+            let b IBox[int32] = IntBox(99)
+            Console.WriteLine(b.Get())
+            """);
+        Assert.Equal("99", stdout.Trim());
     }
 
     // -----------------------------------------------------------------
