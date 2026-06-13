@@ -1400,3 +1400,39 @@ Cross-references:
 - ADR-0087 — reified generics (`initobj T` for unconstrained `T`).
 - Issues #795 (this feature), #792 (dogfooded `Optional`/`Sequences` port), #706 (parent tracker).
 
+## Variadic-parameter diagnostics (GS0363, GS0364)
+
+ADR-0101 / issue #799. The canonical G# spelling for a variadic
+parameter is `name ...T` (Go-style: the ellipsis sits between the
+parameter identifier and the element type); inside the body the
+parameter has type `[]T`. A signature may declare **at most one**
+variadic parameter and it must be the **last** parameter
+(see `GS0145` above). Variadic declarations are accepted only on
+top-level `func` declarations in this ADR; other declaration sites
+report `GS0146` (see above).
+
+| Code | Severity | Message |
+|----|----------|-------------|
+| GS0363 | Error | The C# `params` keyword is not supported in G#. Use the canonical variadic spelling `name ...T` (Go-style); inside the function body the parameter has type `[]T`. |
+| GS0364 | Error | A function signature may declare at most one variadic parameter. |
+
+Cause/fix:
+
+- **GS0363 — `params` keyword.** Replace `params values []T` with `values ...T`. The lowering and call-site behaviour are identical; this is purely a spelling decision (ADR-0101 §"Structural rules" explains why the alias was rejected).
+- **GS0364 — multiple variadic parameters.** Pick the one parameter that should accept the parameter pack and drop the `...` from the others. The remaining variadic must be the last parameter (`GS0145`).
+
+Caller-side semantics — the binder packs trailing positional arguments
+into a fresh `[]T` array; if the caller supplies exactly one trailing
+`[]T` argument (after generic substitution), it is forwarded
+unwrapped, preserving array identity. The emitted MethodDef carries
+`[System.ParamArrayAttribute]` on the variadic parameter so C# / F# /
+VB consumers see it as `params T[]`.
+
+Cross-references:
+
+- ADR-0101 — variadic (`...T`) parameter declarations.
+- ADR-0084 — slice type `[]T` (the body-visible type of a variadic parameter).
+- ADR-0063 — overload resolution & generic inference.
+- Issues #799 (this feature), #792 (dogfooded `Optional`/`Sequences` port), #706 (parent tracker).
+
+

@@ -127,6 +127,28 @@ internal sealed class CustomAttributeEncoder
     }
 
     /// <summary>
+    /// ADR-0101 / issue #799: emits a parameter-level
+    /// <see cref="System.ParamArrayAttribute"/> row using the well-known ctor
+    /// reference. Stamped on the last (variadic) parameter of every
+    /// G#-authored variadic function so the metadata signature is
+    /// indistinguishable from a C#-authored <c>params T[]</c> method.
+    /// </summary>
+    /// <param name="paramHandle">The Param row to attach the attribute to.</param>
+    public void EmitParamArrayAttributeOnParameter(ParameterHandle paramHandle)
+    {
+        var ctorRef = this.wellKnown.GetParamArrayAttributeCtorRef();
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteUInt16(0);
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: paramHandle,
+            constructor: ctorRef,
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
+
+    /// <summary>
     /// Phase 3 of #141 / ADR-0047 §3: emits a <c>CustomAttribute</c> row for
     /// every bound user annotation on <paramref name="symbol"/> whose target
     /// matches <paramref name="filter"/>. Resolves the attribute type to a

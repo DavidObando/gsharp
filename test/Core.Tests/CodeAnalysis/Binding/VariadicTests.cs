@@ -105,6 +105,93 @@ f()
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    // ADR-0101 / issue #799 — issue repro: `Sequences.Of`-shaped generic
+    // variadic. Declared in source as `func Of[T](values ...T) []T` so the
+    // test exercises every branch (multi-arg pack, single-array pass-through,
+    // empty pack) without depending on the C#-authored helper.
+
+    [Fact]
+    public void Variadic_Generic_PacksTrailingArgs()
+    {
+        var result = Evaluate(@"
+func Of[T](values ...T) []T { return values }
+let xs = Of(1, 2, 3)
+len(xs)
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void Variadic_Generic_SingleArrayPassesThrough()
+    {
+        // Issue #799 §3 (call-site semantics): when the caller supplies a
+        // single trailing argument already typed `[]T`, it must be passed
+        // through as-is — no double-wrap.
+        var result = Evaluate(@"
+func Of[T](values ...T) []T { return values }
+let arr = []int32{10, 20, 30}
+let xs = Of(arr)
+len(xs)
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void Variadic_Generic_EmptyCall_ProducesEmptySlice()
+    {
+        var result = Evaluate(@"
+func Of[T](values ...T) []T { return values }
+let xs = Of[int32]()
+len(xs)
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
+    public void Variadic_Generic_PassThrough_PreservesIdentity()
+    {
+        // The pass-through path means the body sees the SAME array the
+        // caller supplied — index 1 of the returned slice equals the
+        // value the caller stored at index 1 of the input.
+        var result = Evaluate(@"
+func Of[T](values ...T) []T { return values }
+let arr = []int32{100, 200, 300}
+let xs = Of(arr)
+xs[1]
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(200, result.Value);
+    }
+
+    [Fact]
+    public void Variadic_MultipleVariadicParameters_Diagnostic()
+    {
+        // ADR-0101 / issue #799: at most one variadic param per signature.
+        var result = Evaluate(@"
+func bad(xs ...int32, ys ...int32) int32 { return 0 }
+bad(1)
+");
+        Assert.NotEmpty(result.Diagnostics);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0364");
+    }
+
+    [Fact]
+    public void Variadic_ParamsKeyword_Rejected()
+    {
+        // ADR-0101 / issue #799: the C# `params` keyword is intentionally
+        // not part of the G# grammar. The parser flags the spelling
+        // and points the user at the canonical `...T` form.
+        var result = Evaluate(@"
+func bad(params values []int32) int32 { return 0 }
+bad()
+");
+        Assert.NotEmpty(result.Diagnostics);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0363");
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         // ADR-0083 / issue #723: prepend the Go extensions import so the

@@ -3980,6 +3980,16 @@ internal sealed class ReflectionMetadataEmitter
                 this.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter(paramHandle);
             }
 
+            // ADR-0101 / issue #799: emit [ParamArrayAttribute] on the
+            // trailing variadic parameter so C#/F# consumers expand the
+            // argument list at the call site exactly as they would for a
+            // C# `params T[]` method. The variadic flag is propagated
+            // through the ParameterSymbol by DeclarationBinder.
+            if (p.IsVariadic)
+            {
+                this.customAttrEncoder.EmitParamArrayAttributeOnParameter(paramHandle);
+            }
+
             // ADR-0063 §10: emit the Constant row carrying the default value.
             if (p.HasExplicitDefaultValue)
             {

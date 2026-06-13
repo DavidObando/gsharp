@@ -3396,6 +3396,39 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports GS0363 — ADR-0101 / issue #799: the C# <c>params</c> keyword is
+    /// not part of the G# parameter grammar. The canonical G# spelling for a
+    /// variadic parameter is <c>name ...T</c> (where <c>T</c> is the element
+    /// type — inside the body the parameter has type <c>[]T</c>).
+    /// </summary>
+    /// <param name="location">The location of the rejected <c>params</c> keyword.</param>
+    public void ReportParamsKeywordNotSupported(TextLocation location)
+    {
+        Report(
+            location,
+            "GS0363",
+            "The C# 'params' keyword is not supported in G#. Use the canonical variadic spelling 'name ...T' (Go-style); inside the function body the parameter has type '[]T'.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Reports GS0364 — ADR-0101 / issue #799: more than one variadic
+    /// parameter (<c>...T</c>) appeared in the same parameter list. A signature
+    /// may declare at most one variadic parameter, and it must be the last
+    /// parameter.
+    /// </summary>
+    /// <param name="location">The location of the second (or later) variadic parameter.</param>
+    /// <param name="name">The offending parameter name.</param>
+    public void ReportMultipleVariadicParameters(TextLocation location, string name)
+    {
+        Report(
+            location,
+            "GS0364",
+            $"At most one variadic parameter is allowed in a signature; '{name}' is the second.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Reports GS0330 — ADR-0089 / issue #755: <c>static let</c> inside an
     /// interface declaration is reserved for a future release. The minimal
     /// static-virtual interface members feature only accepts

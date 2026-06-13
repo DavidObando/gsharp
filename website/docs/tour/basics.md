@@ -93,6 +93,38 @@ Console.WriteLine(sum)
 10
 ```
 
+### Variadic parameters
+
+A parameter declared with an ellipsis between its name and its element type — `name ...T` — accepts any number of trailing arguments. Inside the body the parameter is a slice (`[]T`); the call site can pass either positional arguments (which are packed into a fresh slice) or a single `[]T` value (which is forwarded unwrapped). At most one variadic parameter is allowed per signature and it must be the last parameter.
+
+```gsharp title="Variadic.gs"
+package GSharp.Example.Variadic
+
+import System
+
+func sum(nums ...int32) int32 {
+    var total = 0
+    for v in nums {
+        total = total + v
+    }
+    return total
+}
+
+Console.WriteLine(sum(1, 2, 3, 4, 5))
+Console.WriteLine(sum())
+
+let arr = []int32{10, 20, 30}
+Console.WriteLine(sum(arr))
+```
+
+```text
+15
+0
+60
+```
+
+The emitted method carries `[System.ParamArrayAttribute]` so it is consumable from C# / F# / VB as if it had been declared with `params T[]`. See [ADR-0101](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0101-variadic-params.md).
+
 ## Basic types
 
 The primitive names are explicit about width: `bool`, `int32`, `uint32`, `int64`, `uint64`, `float32`, `float64`, `decimal`, `char`, `string`, and `object` are common examples. Older aliases such as `int`, `uint`, `long`, and `byte` are not G# built-in primitive names.

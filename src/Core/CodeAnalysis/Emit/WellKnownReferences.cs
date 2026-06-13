@@ -79,6 +79,12 @@ internal sealed class WellKnownReferences
     private MemberReferenceHandle? isByRefLikeAttributeCtorRef;
     private MemberReferenceHandle? obsoleteAttributeStringBoolCtorRef;
 
+    // ADR-0101 / issue #799: cached MemberRef for the parameterless
+    // System.ParamArrayAttribute ctor. Stamped on every G#-authored
+    // variadic parameter so C#/F# consumers see the parameter as `params`
+    // at the call site and expand argument lists accordingly.
+    private MemberReferenceHandle? paramArrayAttributeCtorRef;
+
     // Issue #792 / ADR-0084: cached MemberRef for the parameterless
     // System.Runtime.CompilerServices.ExtensionAttribute ctor. Used to mark
     // every G#-authored extension method (and its host TypeDef) so C#/F#
@@ -317,6 +323,38 @@ internal sealed class WellKnownReferences
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
             this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
         return this.isReadOnlyAttributeCtorRef.Value;
+    }
+
+    /// <summary>
+    /// ADR-0101 / issue #799: returns the cached MemberRef for the
+    /// parameterless <c>System.ParamArrayAttribute</c> constructor. Stamped
+    /// on every G#-authored variadic parameter so the resulting metadata
+    /// reads as a C# <c>params</c> array — C# / F# consumers expand
+    /// argument lists at the call site as they would for any other
+    /// params method.
+    /// </summary>
+    /// <returns>The cached <see cref="MemberReferenceHandle"/>.</returns>
+    public MemberReferenceHandle GetParamArrayAttributeCtorRef()
+    {
+        if (this.paramArrayAttributeCtorRef.HasValue)
+        {
+            return this.paramArrayAttributeCtorRef.Value;
+        }
+
+        var attrType = this.emitCtx.References.TryResolveType("System.ParamArrayAttribute", out var resolved)
+            ? resolved
+            : typeof(System.ParamArrayAttribute);
+        var attrTypeRef = this.getTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        this.paramArrayAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.paramArrayAttributeCtorRef.Value;
     }
 
     public MemberReferenceHandle GetIsByRefLikeAttributeCtorRef()
