@@ -964,7 +964,7 @@ internal static class KnownAttributes
     /// rows rather than a <c>CustomAttribute</c> row. The emitter elides
     /// these from the user-attribute pass to avoid producing a
     /// duplicate / misleading reflection view (ADR-0086 §6,
-    /// ADR-0092 §6, ADR-0093 §5).
+    /// ADR-0092 §6, ADR-0093 §5, ADR-0096 §5).
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is pseudo-custom.</returns>
@@ -973,6 +973,59 @@ internal static class KnownAttributes
         return IsDllImport(attribute)
             || IsLibraryImport(attribute)
             || IsStructLayout(attribute)
-            || IsFieldOffset(attribute);
+            || IsFieldOffset(attribute)
+            || IsMarshalAs(attribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Runtime.InteropServices.MarshalAsAttribute"/>.
+    /// ADR-0096 / issue #762: <c>@MarshalAs(UnmanagedType.…)</c> is a
+    /// pseudo-custom attribute — its state is encoded into a
+    /// <c>FieldMarshal</c> table row and the
+    /// <c>ParameterAttributes.HasFieldMarshal</c> bit, so the emitter
+    /// must NOT also write it as a <c>CustomAttribute</c> row.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[MarshalAs]</c>.</returns>
+    public static bool IsMarshalAs(Type clrType)
+    {
+        return clrType == typeof(System.Runtime.InteropServices.MarshalAsAttribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Runtime.InteropServices.MarshalAsAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[MarshalAs]</c>.</returns>
+    public static bool IsMarshalAs(BoundAttribute attribute)
+    {
+        return IsMarshalAs(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Finds the first <c>@MarshalAs(...)</c> attribute on
+    /// <paramref name="attributes"/>, or <c>null</c> when none is present
+    /// (ADR-0096 / issue #762).
+    /// </summary>
+    /// <param name="attributes">The attributes attached to a parameter symbol.</param>
+    /// <returns>The matching attribute, or <c>null</c>.</returns>
+    public static BoundAttribute FindMarshalAs(ImmutableArray<BoundAttribute> attributes)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (IsMarshalAs(attr))
+            {
+                return attr;
+            }
+        }
+
+        return null;
     }
 }

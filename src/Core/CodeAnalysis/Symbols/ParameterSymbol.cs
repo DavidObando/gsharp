@@ -78,6 +78,18 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     public object ExplicitDefaultValue { get; private set; }
 
     /// <summary>
+    /// Gets the resolved <c>@MarshalAs(UnmanagedType.…)</c> override for
+    /// this parameter (ADR-0096 / issue #762), or <see langword="null"/>
+    /// when the parameter has no such annotation. Attached by
+    /// <see cref="Binding.PInvokeBinder"/> on P/Invoke declarations after
+    /// per-parameter validation; consumed by the emitter to write a
+    /// <c>FieldMarshal</c> table row and stamp
+    /// <see cref="System.Reflection.ParameterAttributes.HasFieldMarshal"/>
+    /// on the Param row.
+    /// </summary>
+    public MarshalAsMetadata MarshalAsMetadata { get; private set; }
+
+    /// <summary>
     /// Records the constant default value for this parameter (ADR-0063). Called exactly
     /// once by the binder when the parameter syntax includes a <c>= constant</c> clause
     /// and the constant has passed all ADR-0063 §3 restrictions.
@@ -87,5 +99,18 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     {
         HasExplicitDefaultValue = true;
         ExplicitDefaultValue = value;
+    }
+
+    /// <summary>
+    /// Attaches the resolved <see cref="MarshalAsMetadata"/> for this
+    /// parameter (ADR-0096 / issue #762). Called exactly once by the
+    /// P/Invoke binder after the <c>@MarshalAs</c> annotation has been
+    /// validated against the parameter type and the rest of the
+    /// P/Invoke shape.
+    /// </summary>
+    /// <param name="metadata">The resolved override. Must not be <see langword="null"/>.</param>
+    public void SetMarshalAsMetadata(MarshalAsMetadata metadata)
+    {
+        MarshalAsMetadata = metadata;
     }
 }

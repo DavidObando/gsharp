@@ -3070,6 +3070,12 @@ internal sealed class DeclarationBinder
                 }
 
                 methodReceiverStruct.AddMethods(ImmutableArray.Create(function));
+
+                // ADR-0096 / issue #762: a receiver-clause method is
+                // never a P/Invoke (GS0326 would also fire for the
+                // shape), so any `@MarshalAs` on a parameter is rejected
+                // with GS0360 to make the misuse explicit.
+                PInvokeBinder.ReportMarshalAsOnNonPInvokeFunction(syntax, Diagnostics);
                 return;
             }
 
@@ -3089,6 +3095,16 @@ internal sealed class DeclarationBinder
             if (!isPInvoke && syntax.HasSemicolonBody)
             {
                 Diagnostics.ReportSemicolonBodyRequiresDllImport(syntax.Identifier.Location, function.Name);
+            }
+
+            // ADR-0096 / issue #762: `@MarshalAs` on a non-P/Invoke
+            // parameter has no CLR-defined meaning (it is a pseudo-custom
+            // attribute encoded into a FieldMarshal table row, but the
+            // managed-call ABI does not consult that row). Report GS0360
+            // so the misuse is not silently elided.
+            if (!isPInvoke)
+            {
+                PInvokeBinder.ReportMarshalAsOnNonPInvokeFunction(syntax, Diagnostics);
             }
 
             if (syntax.IsExtension)

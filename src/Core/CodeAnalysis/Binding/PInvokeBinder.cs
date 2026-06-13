@@ -2,6 +2,11 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#pragma warning disable SA1201 // Elements should appear in the correct order — the new ADR-0096 helpers (SupportedUnmanagedTypes, TryAttachMarshalAsMetadata, …) are grouped together at the bottom for diff locality; keeping the layout means StyleCop would reject the field-after-method order.
+#pragma warning disable SA1202 // 'public' / 'internal' members should come before 'private' — the new ADR-0096 internal helper (ReportMarshalAsOnNonPInvokeFunction) lives next to its private helpers so the file stays one feature per block.
+
+using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -14,7 +19,9 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// Helpers for validating and extracting P/Invoke metadata from a function
 /// declaration. Recognises both the classic <c>@DllImport</c> shape
 /// (ADR-0086 / issue #727) and the modern <c>@LibraryImport</c>
-/// source-generator-flavored shape (ADR-0092 / issue #758).
+/// source-generator-flavored shape (ADR-0092 / issue #758). Also owns the
+/// per-parameter <c>@MarshalAs(UnmanagedType.…)</c> validation pass
+/// (ADR-0096 / issue #762).
 /// </summary>
 internal static class PInvokeBinder
 {
@@ -116,6 +123,14 @@ internal static class PInvokeBinder
             {
                 typeLocation = parameterSyntaxes[i].Type.Location;
             }
+
+            // ADR-0096 / issue #762: extract and validate the optional
+            // `@MarshalAs(UnmanagedType.…)` override before the per-shape
+            // checks below. The marshal-as metadata never relaxes the
+            // shape rules (`ref string` is still rejected by the byref
+            // path), it only overrides how a supported parameter type
+            // is marshalled at the unmanaged boundary.
+            TryAttachMarshalAsMetadata(parameter, i, function, isLibraryImport, parameterSyntaxes, diagnostics);
 
             // ADR-0094 / issue #760: a ref/out/in parameter passes the
             // declared type by managed pointer; the runtime marshals it as
@@ -668,5 +683,321 @@ internal static class PInvokeBinder
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// ADR-0096 / issue #762: the v1 supported <see cref="UnmanagedType"/>
+    /// values. Everything else (custom marshallers, <c>IUnknown</c>,
+    /// <c>FunctionPtr</c>, …) is rejected with GS0357 so users do not
+    /// accidentally encode an unsupported descriptor into the
+    /// <c>FieldMarshal</c> blob.
+    /// </summary>
+    private static readonly HashSet<UnmanagedType> SupportedUnmanagedTypes = new()
+    {
+        UnmanagedType.LPStr,
+        UnmanagedType.LPWStr,
+        UnmanagedType.LPUTF8Str,
+        UnmanagedType.BStr,
+        UnmanagedType.LPArray,
+        UnmanagedType.SafeArray,
+        UnmanagedType.I1,
+        UnmanagedType.U1,
+        UnmanagedType.I2,
+        UnmanagedType.U2,
+        UnmanagedType.I4,
+        UnmanagedType.U4,
+        UnmanagedType.I8,
+        UnmanagedType.U8,
+        UnmanagedType.Bool,
+        UnmanagedType.VariantBool,
+        UnmanagedType.SysInt,
+        UnmanagedType.SysUInt,
+        UnmanagedType.Struct,
+        UnmanagedType.ByValTStr,
+        UnmanagedType.ByValArray,
+    };
+
+    /// <summary>
+    /// ADR-0096 / issue #762: extracts a <c>@MarshalAs(UnmanagedType.…)</c>
+    /// annotation from <paramref name="parameter"/>, validates it
+    /// against the parameter's G# type, and attaches the resolved
+    /// <see cref="MarshalAsMetadata"/> on success. Reports GS0357
+    /// (unsupported <see cref="UnmanagedType"/>), GS0358 (type
+    /// incompatibility), GS0359 (missing required knob), and GS0360
+    /// (rejected on <c>@LibraryImport</c> string surface).
+    /// </summary>
+    /// <param name="parameter">The parameter symbol being validated.</param>
+    /// <param name="parameterIndex">Its zero-based ordinal in the function's parameter list.</param>
+    /// <param name="function">The enclosing function symbol.</param>
+    /// <param name="isLibraryImport">Whether the enclosing function is a <c>@LibraryImport</c> declaration.</param>
+    /// <param name="parameterSyntaxes">The parameter syntaxes; supplies the annotation location for diagnostics.</param>
+    /// <param name="diagnostics">The diagnostics bag for this binder.</param>
+    private static void TryAttachMarshalAsMetadata(
+        ParameterSymbol parameter,
+        int parameterIndex,
+        FunctionSymbol function,
+        bool isLibraryImport,
+        SeparatedSyntaxList<ParameterSyntax> parameterSyntaxes,
+        DiagnosticBag diagnostics)
+    {
+        var attr = KnownAttributes.FindMarshalAs(parameter.Attributes);
+        if (attr == null)
+        {
+            return;
+        }
+
+        var annotationLocation = attr.Syntax?.Location
+            ?? (parameterIndex < parameterSyntaxes.Count ? parameterSyntaxes[parameterIndex].Location : function.Declaration.Identifier.Location);
+
+        // ADR-0096 §3 — @MarshalAs on a string parameter under
+        // @LibraryImport collides with the function-wide
+        // StringMarshalling knob, which is the canonical per-call lever.
+        // Reject with GS0360 rather than silently honour one or the other.
+        if (isLibraryImport && parameter.Type == TypeSymbol.String)
+        {
+            diagnostics.ReportMarshalAsRejected(
+                annotationLocation,
+                parameter.Name,
+                "@LibraryImport string parameters take their encoding from the function-wide StringMarshalling knob; use @LibraryImport(StringMarshalling: StringMarshalling.Utf8) (or Utf16) instead");
+            return;
+        }
+
+        // 1) Required positional UnmanagedType.
+        UnmanagedType unmanagedType;
+        if (attr.PositionalArguments.IsDefaultOrEmpty
+            || !KnownAttributes.TryConvertAttributeEnum<UnmanagedType>(attr.PositionalArguments[0].Value, out unmanagedType))
+        {
+            diagnostics.ReportMarshalAsUnsupportedUnmanagedType(
+                annotationLocation,
+                attr.PositionalArguments.IsDefaultOrEmpty ? "<missing>" : attr.PositionalArguments[0].Value?.ToString() ?? "<null>");
+            return;
+        }
+
+        if (!SupportedUnmanagedTypes.Contains(unmanagedType))
+        {
+            diagnostics.ReportMarshalAsUnsupportedUnmanagedType(annotationLocation, unmanagedType.ToString());
+            return;
+        }
+
+        // 2) Named arguments.
+        UnmanagedType? arraySubType = null;
+        VarEnum? safeArraySubType = null;
+        int? sizeConst = null;
+        int? sizeParamIndex = null;
+        foreach (var named in attr.NamedArguments)
+        {
+            switch (named.Name)
+            {
+                case "ArraySubType":
+                    if (KnownAttributes.TryConvertAttributeEnum<UnmanagedType>(named.Value, out var ast))
+                    {
+                        arraySubType = ast;
+                    }
+
+                    break;
+
+                case "SafeArraySubType":
+                    if (KnownAttributes.TryConvertAttributeEnum<VarEnum>(named.Value, out var sast))
+                    {
+                        safeArraySubType = sast;
+                    }
+
+                    break;
+
+                case "SizeConst":
+                    if (TryReadInt32(named.Value, out var sc) && sc >= 0)
+                    {
+                        sizeConst = sc;
+                    }
+
+                    break;
+
+                case "SizeParamIndex":
+                    if (TryReadInt32(named.Value, out var spi) && spi >= 0)
+                    {
+                        sizeParamIndex = spi;
+                    }
+
+                    break;
+
+                default:
+                    // Unknown named arguments fall through to the attribute-arg
+                    // binder's generic "no matching property" path; v1 ignores
+                    // the rest of the MarshalAs surface (IidParameterIndex,
+                    // MarshalCookie, MarshalType, MarshalTypeRef).
+                    break;
+            }
+        }
+
+        // 3) Per-UnmanagedType compatibility check against the
+        // parameter's G# type. The byref case is handled by stripping
+        // the ref-kind: a `@MarshalAs(...)` on `ref int32` validates
+        // against `int32` (the pointee), since the marshalling rule
+        // applies to the pointed-at unmanaged form.
+        var effectiveType = parameter.Type;
+        if (!IsCompatibleMarshalAs(unmanagedType, effectiveType))
+        {
+            diagnostics.ReportMarshalAsIncompatibleType(
+                annotationLocation,
+                parameter.Name,
+                effectiveType?.Name ?? "?",
+                unmanagedType.ToString());
+            return;
+        }
+
+        // 4) Required-knob checks for the size-bearing forms.
+        if (unmanagedType == UnmanagedType.ByValTStr && !sizeConst.HasValue)
+        {
+            diagnostics.ReportMarshalAsMissingRequiredArgument(annotationLocation, parameter.Name, unmanagedType.ToString(), "SizeConst");
+            return;
+        }
+
+        if (unmanagedType == UnmanagedType.ByValArray && !sizeConst.HasValue)
+        {
+            diagnostics.ReportMarshalAsMissingRequiredArgument(annotationLocation, parameter.Name, unmanagedType.ToString(), "SizeConst");
+            return;
+        }
+
+        if (unmanagedType == UnmanagedType.LPArray && !sizeConst.HasValue && !sizeParamIndex.HasValue)
+        {
+            diagnostics.ReportMarshalAsMissingRequiredArgument(annotationLocation, parameter.Name, unmanagedType.ToString(), "SizeConst or SizeParamIndex");
+            return;
+        }
+
+        parameter.SetMarshalAsMetadata(new MarshalAsMetadata(unmanagedType, arraySubType, safeArraySubType, sizeConst, sizeParamIndex));
+    }
+
+    /// <summary>
+    /// ADR-0096 / issue #762: the per-UnmanagedType compatibility
+    /// table. Returns <c>true</c> when <paramref name="unmanagedType"/>
+    /// is a valid override for a parameter of <paramref name="paramType"/>.
+    /// The rules are deliberately strict so misuse surfaces at compile
+    /// time rather than at runtime through a <c>TypeLoadException</c>
+    /// or a silently corrupted blob.
+    /// </summary>
+    private static bool IsCompatibleMarshalAs(UnmanagedType unmanagedType, TypeSymbol paramType)
+    {
+        if (paramType == null || paramType == TypeSymbol.Error)
+        {
+            return true; // already reported as a separate diagnostic
+        }
+
+        switch (unmanagedType)
+        {
+            case UnmanagedType.LPStr:
+            case UnmanagedType.LPWStr:
+            case UnmanagedType.LPUTF8Str:
+            case UnmanagedType.BStr:
+            case UnmanagedType.ByValTStr:
+                return paramType == TypeSymbol.String;
+
+            case UnmanagedType.Bool:
+            case UnmanagedType.VariantBool:
+                return paramType == TypeSymbol.Bool;
+
+            case UnmanagedType.I1:
+            case UnmanagedType.U1:
+            case UnmanagedType.I2:
+            case UnmanagedType.U2:
+            case UnmanagedType.I4:
+            case UnmanagedType.U4:
+            case UnmanagedType.I8:
+            case UnmanagedType.U8:
+                // Accepted on bool (the canonical "C function takes int
+                // but G# parameter is bool" case) and on any integer
+                // primitive. Width mismatches are the user's
+                // responsibility — the runtime will reinterpret.
+                return paramType == TypeSymbol.Bool
+                    || IsIntegerOrNativeInteger(paramType)
+                    || paramType == TypeSymbol.Char;
+
+            case UnmanagedType.SysInt:
+            case UnmanagedType.SysUInt:
+                return IsIntegerOrNativeInteger(paramType);
+
+            case UnmanagedType.Struct:
+                return paramType is StructSymbol;
+
+            case UnmanagedType.LPArray:
+            case UnmanagedType.SafeArray:
+            case UnmanagedType.ByValArray:
+                return paramType is SliceTypeSymbol;
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool IsIntegerOrNativeInteger(TypeSymbol t)
+    {
+        return t == TypeSymbol.Int8 || t == TypeSymbol.UInt8
+            || t == TypeSymbol.Int16 || t == TypeSymbol.UInt16
+            || t == TypeSymbol.Int32 || t == TypeSymbol.UInt32
+            || t == TypeSymbol.Int64 || t == TypeSymbol.UInt64
+            || t == TypeSymbol.NInt || t == TypeSymbol.NUInt;
+    }
+
+    private static bool TryReadInt32(object value, out int result)
+    {
+        result = 0;
+        if (value is int i)
+        {
+            result = i;
+            return true;
+        }
+
+        try
+        {
+            result = Convert.ToInt32(value);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// ADR-0096 / issue #762: walks the parameter symbols of a
+    /// non-P/Invoke function and reports GS0360 for every parameter
+    /// that carries a <c>@MarshalAs(...)</c> annotation. Called from
+    /// <see cref="DeclarationBinder"/> after a function declaration has
+    /// been confirmed to lack an <c>@DllImport</c> / <c>@LibraryImport</c>.
+    /// </summary>
+    /// <param name="syntax">The originating function declaration.</param>
+    /// <param name="diagnostics">The diagnostics bag for this binder.</param>
+    internal static void ReportMarshalAsOnNonPInvokeFunction(
+        FunctionDeclarationSyntax syntax,
+        DiagnosticBag diagnostics)
+    {
+        if (syntax?.Parameters == null)
+        {
+            return;
+        }
+
+        foreach (var ps in syntax.Parameters)
+        {
+            if (ps.Annotations.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var ann in ps.Annotations)
+            {
+                if (ann.NameSegments.IsDefaultOrEmpty)
+                {
+                    continue;
+                }
+
+                var lastSegment = ann.NameSegments[ann.NameSegments.Length - 1].Text;
+                if (lastSegment == "MarshalAs" || lastSegment == "MarshalAsAttribute")
+                {
+                    diagnostics.ReportMarshalAsRejected(
+                        ann.Location,
+                        ps.Identifier.Text,
+                        "the enclosing function is not a P/Invoke declaration (`@DllImport` or `@LibraryImport`)");
+                }
+            }
+        }
     }
 }

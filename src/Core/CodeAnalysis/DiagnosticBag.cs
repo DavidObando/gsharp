@@ -3259,6 +3259,99 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// ADR-0096 / issue #762: GS0357 — the <c>UnmanagedType</c> value
+    /// passed to <c>@MarshalAs(...)</c> is not in the v1 supported set.
+    /// The supported values are <c>LPStr</c>, <c>LPWStr</c>,
+    /// <c>LPUTF8Str</c>, <c>BStr</c>, <c>LPArray</c>, <c>SafeArray</c>,
+    /// <c>I1</c>, <c>U1</c>, <c>I2</c>, <c>U2</c>, <c>I4</c>, <c>U4</c>,
+    /// <c>I8</c>, <c>U8</c>, <c>Bool</c>, <c>VariantBool</c>,
+    /// <c>SysInt</c>, <c>SysUInt</c>, <c>Struct</c>, <c>ByValTStr</c>,
+    /// and <c>ByValArray</c>. Everything else (custom marshallers,
+    /// <c>IUnknown</c>, <c>FunctionPtr</c>, …) is filed as a follow-up.
+    /// </summary>
+    /// <param name="location">The offending <c>@MarshalAs(...)</c> argument location.</param>
+    /// <param name="value">The display text of the rejected value.</param>
+    public void ReportMarshalAsUnsupportedUnmanagedType(TextLocation location, string value)
+    {
+        Report(
+            location,
+            "GS0357",
+            $"'@MarshalAs' UnmanagedType '{value}' is not in the v1 supported set. Use one of: LPStr, LPWStr, LPUTF8Str, BStr, LPArray, SafeArray, I1, U1, I2, U2, I4, U4, I8, U8, Bool, VariantBool, SysInt, SysUInt, Struct, ByValTStr, ByValArray (ADR-0096).");
+    }
+
+    /// <summary>
+    /// ADR-0096 / issue #762: GS0358 — the resolved
+    /// <see cref="System.Runtime.InteropServices.UnmanagedType"/> is
+    /// not compatible with the parameter's G# type. Examples:
+    /// <c>LPWStr</c> on an <c>int32</c>, <c>LPArray</c> on a
+    /// <c>string</c>, <c>I4</c> on a <c>string</c>. The message
+    /// includes the rejected pair so users can pick a compatible
+    /// override from the table in ADR-0096 §3.
+    /// </summary>
+    /// <param name="location">The offending parameter type-clause location.</param>
+    /// <param name="parameterName">The parameter name.</param>
+    /// <param name="parameterType">The display name of the G# parameter type.</param>
+    /// <param name="unmanagedType">The display name of the <see cref="System.Runtime.InteropServices.UnmanagedType"/> override.</param>
+    public void ReportMarshalAsIncompatibleType(TextLocation location, string parameterName, string parameterType, string unmanagedType)
+    {
+        Report(
+            location,
+            "GS0358",
+            $"'@MarshalAs(UnmanagedType.{unmanagedType})' is not valid on parameter '{parameterName}' of type '{parameterType}'. See ADR-0096 §3 for the parameter-type ↔ UnmanagedType compatibility table.");
+    }
+
+    /// <summary>
+    /// ADR-0096 / issue #762: GS0359 — the <c>@MarshalAs(...)</c>
+    /// annotation is missing a knob that is mandatory for the chosen
+    /// <see cref="System.Runtime.InteropServices.UnmanagedType"/>.
+    /// Examples: <c>ByValTStr</c> requires <c>SizeConst</c>;
+    /// <c>ByValArray</c> requires <c>SizeConst</c>; <c>LPArray</c>
+    /// requires at least one of <c>SizeConst</c> or <c>SizeParamIndex</c>
+    /// for the runtime to know the element count.
+    /// </summary>
+    /// <param name="location">The offending <c>@MarshalAs(...)</c> annotation location.</param>
+    /// <param name="parameterName">The parameter name.</param>
+    /// <param name="unmanagedType">The display name of the <see cref="System.Runtime.InteropServices.UnmanagedType"/> override.</param>
+    /// <param name="missingArgument">The display name of the missing knob (e.g. <c>SizeConst</c>).</param>
+    public void ReportMarshalAsMissingRequiredArgument(TextLocation location, string parameterName, string unmanagedType, string missingArgument)
+    {
+        Report(
+            location,
+            "GS0359",
+            $"'@MarshalAs(UnmanagedType.{unmanagedType})' on parameter '{parameterName}' requires the '{missingArgument}' named argument (ADR-0096 §3).");
+    }
+
+    /// <summary>
+    /// ADR-0096 / issue #762: GS0360 — <c>@MarshalAs</c> is rejected on
+    /// the offending P/Invoke parameter. The two cases reported under
+    /// this code are:
+    /// <list type="bullet">
+    /// <item>The enclosing function is not a P/Invoke
+    /// (<c>@DllImport</c> or <c>@LibraryImport</c>) declaration —
+    /// <c>@MarshalAs</c> on a managed function's parameter has no
+    /// CLR-defined meaning and is rejected to avoid silently dropping
+    /// the user's intent.</item>
+    /// <item>The enclosing function is a <c>@LibraryImport</c> stub and
+    /// the offending parameter is a <c>string</c>. The outer marshalling
+    /// stub uses the function-wide <c>StringMarshalling</c> knob to pick
+    /// its encoding; a per-parameter override would require generating
+    /// per-parameter outer-stub code, which v1.0 of <c>@LibraryImport</c>
+    /// does not surface. Use <c>StringMarshalling</c> on the
+    /// <c>@LibraryImport(...)</c> annotation instead.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="location">The offending <c>@MarshalAs(...)</c> annotation location.</param>
+    /// <param name="parameterName">The parameter name.</param>
+    /// <param name="reason">The case-specific reason (one of the bullets above).</param>
+    public void ReportMarshalAsRejected(TextLocation location, string parameterName, string reason)
+    {
+        Report(
+            location,
+            "GS0360",
+            $"'@MarshalAs' on parameter '{parameterName}' is not supported: {reason} (ADR-0096 §3).");
+    }
+
+    /// <summary>
     /// Reports GS0330 — ADR-0089 / issue #755: <c>static let</c> inside an
     /// interface declaration is reserved for a future release. The minimal
     /// static-virtual interface members feature only accepts
