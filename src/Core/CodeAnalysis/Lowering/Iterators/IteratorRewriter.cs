@@ -103,6 +103,19 @@ public static class IteratorRewriter
             return seq.ElementType;
         }
 
+        // Issue #810: prefer the symbolic type argument when the function's
+        // return type is a constructed `ImportedTypeSymbol` (e.g.
+        // `IEnumerable[T]` with `T` an open method type parameter). The
+        // ClrType path below erases T to `object` and loses the
+        // generic-parameter identity we need for the state-machine class.
+        if (type is ImportedTypeSymbol imported
+            && !imported.TypeArguments.IsDefaultOrEmpty
+            && imported.OpenDefinition != null
+            && (imported.OpenDefinition == typeof(IEnumerable<>) || imported.OpenDefinition == typeof(IEnumerator<>)))
+        {
+            return imported.TypeArguments[0];
+        }
+
         var clr = type?.ClrType;
         if (clr == null)
         {

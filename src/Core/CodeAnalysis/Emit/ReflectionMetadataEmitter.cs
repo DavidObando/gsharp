@@ -295,6 +295,69 @@ internal sealed class ReflectionMetadataEmitter
     // PR-E-11: widened to internal so the promoted MethodBodyEmitter can read it.
     internal StateMachineEmitter stateMachines;
 
+    // Issue #810: when emitting a member of a generic iterator state-machine
+    // class (the SM's own field-defs, MoveNext body, get_Current signature,
+    // interface impls, etc.), the body and signatures still reference the
+    // OUTER method's `TypeParameterSymbol` instances (which carry
+    // `IsMethodTypeParameter=true`). The state-machine class is itself
+    // generic over class-level type parameters (Var(0..N-1)) that mirror the
+    // outer method's TPs. EncodeTypeSymbol consults this remap to translate
+    // each outer-method TP reference into a `Var(classOrdinal)` slot. The
+    // remap is pushed by StateMachineEmitter around each SM-member emit
+    // boundary (TypeDef, FieldDefs, interface impls, MethodDefs) and popped
+    // afterward, so non-SM code paths see the normal Var/MVar discrimination.
+    internal Dictionary<TypeParameterSymbol, int> activeIteratorStateMachineRemap;
+
+    // Issue #810: per-SM-class remap, populated when SynthesizeIteratorStateMachines
+    // creates each generic state-machine. Used to auto-push the remap inside
+    // GetUserStructFieldRef when the containing type is a generic SM class
+    // (so its field-signature MemberRef matches the FieldDef blob exactly).
+    internal readonly Dictionary<StructSymbol, Dictionary<TypeParameterSymbol, int>> iteratorStateMachineRemapsByClass = new Dictionary<StructSymbol, Dictionary<TypeParameterSymbol, int>>();
+
+    /// <summary>
+    /// Issue #810: push the SM remap for <paramref name="smClass"/> so that
+    /// every <see cref="EncodeTypeSymbol"/> call made before the returned
+    /// disposable is disposed translates outer-method type-parameter
+    /// references into the SM class's own type-parameter slots
+    /// (Var(idx) instead of MVar(idx)). Calls are nestable; on dispose the
+    /// previous remap (or <see langword="null"/>) is restored.
+    /// </summary>
+    internal SmRemapScope PushSmRemap(StructSymbol smClass)
+    {
+        if (smClass == null
+            || !this.iteratorStateMachineRemapsByClass.TryGetValue(smClass, out var remap)
+            || remap == null)
+        {
+            return new SmRemapScope(this, null, restore: false);
+        }
+
+        var prev = this.activeIteratorStateMachineRemap;
+        this.activeIteratorStateMachineRemap = remap;
+        return new SmRemapScope(this, prev, restore: true);
+    }
+
+    internal readonly struct SmRemapScope : IDisposable
+    {
+        private readonly ReflectionMetadataEmitter owner;
+        private readonly Dictionary<TypeParameterSymbol, int> previous;
+        private readonly bool restore;
+
+        public SmRemapScope(ReflectionMetadataEmitter owner, Dictionary<TypeParameterSymbol, int> previous, bool restore)
+        {
+            this.owner = owner;
+            this.previous = previous;
+            this.restore = restore;
+        }
+
+        public void Dispose()
+        {
+            if (this.restore)
+            {
+                this.owner.activeIteratorStateMachineRemap = this.previous;
+            }
+        }
+    }
+
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
         this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
@@ -471,7 +534,8 @@ internal sealed class ReflectionMetadataEmitter
             this.slotPlanner,
             this.lambdaBodies,
             this.GetTypeReference,
-            this.GetTypeHandleForMember);
+            this.GetTypeHandleForMember,
+            this.EncodeTypeSymbol);
 
         // PR-E-5: now that wellKnown is materialised, wire ConversionEmitter.
         // GetElementTypeToken is passed as a delegate (same pattern as
@@ -626,6 +690,20 @@ internal sealed class ReflectionMetadataEmitter
         this.stateMachines.SynthesizeIteratorStateMachines(hostPackageGuess);
         this.stateMachines.SynthesizeAsyncIteratorStateMachines(hostPackageGuess);
         this.stateMachines.SynthesizeAsyncLambdaStateMachines(lambdaLiterals, hostPackageGuess);
+
+        // Issue #810: register per-SM-class outer-method TP → class-TP-ordinal
+        // remaps so that EncodeTypeSymbol can auto-translate outer-method
+        // type-parameter references into the SM's own class type-parameter
+        // slots when emitting field signatures and method signatures for
+        // generic iterator state-machine classes.
+        foreach (var kvp in this.stateMachines.IteratorStateMachineInfos)
+        {
+            var remap = kvp.Value.BuildRemap();
+            if (remap != null)
+            {
+                this.iteratorStateMachineRemapsByClass[kvp.Key] = remap;
+            }
+        }
 
         // Phase 3.B.4: user-defined interface TypeDefs (planned below).
         // Synthesized closure classes are appended after user aggregates so
@@ -1569,16 +1647,24 @@ internal sealed class ReflectionMetadataEmitter
         // SM class TypeDefs (sync iterators + async iterators).
         foreach (var c in smClasses)
         {
-            this.typeDefEmitter.EmitNestedStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
-
-            if (this.stateMachines.IteratorStateMachineInfos.TryGetValue(c, out var iteratorInfo))
+            // Issue #810: when the iterator state-machine class is generic
+            // over the outer method's type parameters, push the per-SM
+            // remap so EncodeTypeSymbol translates outer-method TP
+            // references to the SM class's own TP slots (Var(idx)) while
+            // encoding field signatures and interface implementations.
+            using (this.PushSmRemap(c))
             {
-                this.methodBodyPlanner.AddIteratorInterfaceImplementations(c, iteratorInfo);
-            }
+                this.typeDefEmitter.EmitNestedStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
 
-            if (this.stateMachines.AsyncIteratorInfos.TryGetValue(c, out var asyncIterPlan))
-            {
-                this.methodBodyPlanner.AddAsyncIteratorInterfaceImplementations(c, asyncIterPlan);
+                if (this.stateMachines.IteratorStateMachineInfos.TryGetValue(c, out var iteratorInfo))
+                {
+                    this.methodBodyPlanner.AddIteratorInterfaceImplementations(c, iteratorInfo);
+                }
+
+                if (this.stateMachines.AsyncIteratorInfos.TryGetValue(c, out var asyncIterPlan))
+                {
+                    this.methodBodyPlanner.AddAsyncIteratorInterfaceImplementations(c, asyncIterPlan);
+                }
             }
         }
 
@@ -1914,26 +2000,33 @@ internal sealed class ReflectionMetadataEmitter
         // B5. SM class method bodies (ctors + instance methods).
         foreach (var c in smClasses)
         {
-            var ctorHandle = this.typeDefEmitter.EmitClassDefaultConstructor(c);
-            this.cache.ClassCtorHandles[c] = ctorHandle;
-
-            if (c.HasPrimaryConstructor)
+            // Issue #810: push the SM's outer-method-TP → class-TP remap so
+            // that method signatures (return type, parameter types) and
+            // bodies emitted for SM members translate outer-method TP
+            // references to the SM class's own TP slots (Var(idx)).
+            using (this.PushSmRemap(c))
             {
-                var primaryHandle = this.typeDefEmitter.EmitClassPrimaryConstructor(c);
-                this.cache.ClassPrimaryCtorHandles[c] = primaryHandle;
-            }
+                var ctorHandle = this.typeDefEmitter.EmitClassDefaultConstructor(c);
+                this.cache.ClassCtorHandles[c] = ctorHandle;
 
-            if (!c.Methods.IsDefaultOrEmpty)
-            {
-                foreach (var m in c.Methods)
+                if (c.HasPrimaryConstructor)
                 {
-                    if (!this.emitCtx.Program.Functions.TryGetValue(m, out var body))
-                    {
-                        body = this.lambdaBodies[m];
-                    }
+                    var primaryHandle = this.typeDefEmitter.EmitClassPrimaryConstructor(c);
+                    this.cache.ClassPrimaryCtorHandles[c] = primaryHandle;
+                }
 
-                    var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
-                    this.cache.MethodHandles[m] = emittedHandle;
+                if (!c.Methods.IsDefaultOrEmpty)
+                {
+                    foreach (var m in c.Methods)
+                    {
+                        if (!this.emitCtx.Program.Functions.TryGetValue(m, out var body))
+                        {
+                            body = this.lambdaBodies[m];
+                        }
+
+                        var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
+                        this.cache.MethodHandles[m] = emittedHandle;
+                    }
                 }
             }
         }
@@ -4783,7 +4876,16 @@ internal sealed class ReflectionMetadataEmitter
             // MVAR(idx).
             var sigBlob = new BlobBuilder();
             var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
-            if (tpSym.IsMethodTypeParameter)
+
+            // Issue #810: inside an iterator state-machine method body,
+            // outer-method TPs are remapped to the SM class's own TPs.
+            if (this.activeIteratorStateMachineRemap != null
+                && tpSym.IsMethodTypeParameter
+                && this.activeIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd))
+            {
+                encoder.GenericTypeParameter(smClassOrd);
+            }
+            else if (tpSym.IsMethodTypeParameter)
             {
                 encoder.GenericMethodTypeParameter(tpSym.Ordinal);
             }
@@ -5141,6 +5243,26 @@ internal sealed class ReflectionMetadataEmitter
             return TryUnify(fa.ElementType, aa.ElementType, tp, out inferred);
         }
 
+        // Issue #810: unify open-generic iterator returns of
+        // `sequence[T]` / `async sequence[T]` against their substituted
+        // counterparts so the MethodSpec for a call like
+        // `Sequences.Empty[int32]()` can be built when no parameters
+        // mention `T`.
+        if (formal is SequenceTypeSymbol fseq && actual is SequenceTypeSymbol aseq)
+        {
+            return TryUnify(fseq.ElementType, aseq.ElementType, tp, out inferred);
+        }
+
+        if (formal is AsyncSequenceTypeSymbol faseq && actual is AsyncSequenceTypeSymbol aaseq)
+        {
+            return TryUnify(faseq.ElementType, aaseq.ElementType, tp, out inferred);
+        }
+
+        if (formal is NullableTypeSymbol fnu && actual is NullableTypeSymbol anu)
+        {
+            return TryUnify(fnu.UnderlyingType, anu.UnderlyingType, tp, out inferred);
+        }
+
         var formalArgs = GetGenericTypeArguments(formal);
         var actualArgs = GetGenericTypeArguments(actual);
         if (!formalArgs.IsDefaultOrEmpty && !actualArgs.IsDefaultOrEmpty
@@ -5315,7 +5437,17 @@ internal sealed class ReflectionMetadataEmitter
 
         var parent = this.GetUserStructTypeSpec(containingType);
         var sigBlob = new BlobBuilder();
-        this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), defField.Type);
+
+        // Issue #810: when the containing type is a generic iterator
+        // state-machine class, the FieldDef's signature was encoded with
+        // outer-method TPs translated to Var(idx). The MemberRef sig
+        // MUST match — push the SM's remap so EncodeTypeSymbol routes
+        // the same TPs through the same Var(idx) slots here.
+        using (this.PushSmRemap(containingType.Definition ?? containingType))
+        {
+            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), defField.Type);
+        }
+
         var memberRef = (EntityHandle)this.emitCtx.Metadata.AddMemberReference(
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(defField.Name),
@@ -5572,7 +5704,11 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     internal EntityHandle ResolveUserCtorTokenForDefault(StructSymbol structType)
     {
-        if (!this.cache.ClassCtorHandles.TryGetValue(structType, out var defaultDef))
+        // Issue #810: the kickoff body may pass a CONSTRUCTED StructSymbol
+        // (e.g. `<Empty>d__1<MVar(0)>`); the ctor's MethodDef is keyed by
+        // the OPEN definition, so look up via Definition when present.
+        var ctorKey = structType.Definition ?? structType;
+        if (!this.cache.ClassCtorHandles.TryGetValue(ctorKey, out var defaultDef))
         {
             throw new InvalidOperationException($"Type '{structType.Name}' has no emitted default ctor.");
         }
@@ -6651,6 +6787,21 @@ internal sealed class ReflectionMetadataEmitter
         }
         else if (type is TypeParameterSymbol tp)
         {
+            // Issue #810: when emitting a state-machine method (or the
+            // state-machine class itself), references to the OUTER
+            // method's type parameters are encoded as the SM class's
+            // own type parameters (Var(i)). This mirrors how Roslyn
+            // emits `<Empty>d__0<T>` where the body's `!!0` becomes
+            // `!0` on the SM class. The remap is pushed by
+            // EmitIteratorStateMachineMember and is keyed by the
+            // method TP's instance identity.
+            if (this.activeIteratorStateMachineRemap != null
+                && tp.IsMethodTypeParameter
+                && this.activeIteratorStateMachineRemap.TryGetValue(tp, out var classOrdinal))
+            {
+                encoder.GenericTypeParameter(classOrdinal);
+            }
+
             // ADR-0087 §3 R2: a user-declared open type parameter encodes as
             // GenericTypeParameter(idx) (`Var(idx)`) when it belongs to a
             // generic type, or as GenericMethodTypeParameter(idx) (`MVar(idx)`)
@@ -6658,7 +6809,7 @@ internal sealed class ReflectionMetadataEmitter
             // TypeParameterSymbol.IsMethodTypeParameter flag, set by the
             // FunctionSymbol.TypeParameters setter, discriminates the owner
             // kind without a back-reference cycle.
-            if (tp.IsMethodTypeParameter)
+            else if (tp.IsMethodTypeParameter)
             {
                 encoder.GenericMethodTypeParameter(tp.Ordinal);
             }

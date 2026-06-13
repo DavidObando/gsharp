@@ -408,11 +408,46 @@ of that migration, not left behind as dead code.
   `BoundNodeKind.YieldStatement` to the CFG fall-through.
   Shared-static iterators that yield concrete (non-generic-method)
   values now bind, lower, emit verifier-clean IL, and execute
-  through the interpreter. Generic-iterator IL emission (the SM
-  class being generic over the outer method's type parameters) is
-  a deeper, pre-existing emitter limitation tracked as a separate
-  follow-up; binder-level acceptance of the generic shapes is
-  proven by the issue-specific binder tests.
+  through the interpreter.
+
+  Issue #810 closed the seventh and final §L5 follow-up bullet
+  (emit side): fully open-generic iterators
+  (`func Empty[T any]() IEnumerable[T] { for v in []T{} { yield v } }`)
+  bound correctly after #798 but the synthesized state-machine class
+  was not generic, so its hoisted-field signatures referenced the
+  outer method's MVar slots from inside a class context where no
+  MVars exist. The state-machine class is now reified over a
+  matching set of class-level type parameters mirroring the outer
+  method's (`<Empty>d__1`1<T>`, the same shape Roslyn emits), and
+  an emit-time outer-method-TP → class-TP remap on the
+  reflection emitter rewrites every field-signature and method-body
+  TP encoding inside SM-member emit boundaries to land on the
+  class's `Var(idx)` instead of the outer method's `MVar(idx)`.
+  The kickoff body constructs the SM through
+  `StructSymbol.Construct(smClass, [methodTPs])` so the `newobj`
+  token names `<Empty>d__1`1<MVar(0)>`. `IEnumerable` /
+  `IEnumerator` interface implementations on the SM are encoded as
+  TypeSpecs over the element type so `IEnumerable`1<!0>` flows
+  through the remap correctly. The structural-unification engine
+  used to build MethodSpec rows for generic-method calls now
+  unifies `sequence[T]` / `async sequence[T]` / `T?` return shapes
+  so calls like `Sequences.Empty[int32]()` (no parameters mention
+  T) infer correctly from the return type alone. End-to-end
+  verifier-clean emit for `Empty[T]`, `Of[T]`, `Range[T]`,
+  `Iterate[T]`, `Repeat[T]` across both `IEnumerable[T]` and
+  `sequence[T]` returns is now covered by
+  `test/Compiler.Tests/Emit/Issue810OpenGenericIteratorEmitTests.cs`.
+  The G#-source port of `Gsharp.Extensions.Sequences` itself
+  remains deferred: the public API surface still requires `params`
+  parameters on shared-class methods (variadic is currently
+  top-level-only per ADR-0101 / GS0146), `(K, V)` value-tuple
+  return shapes on extension methods (`Indexed` / `Pairwise`), and
+  `T?` overload disambiguation for the `*OrNil` reference-vs-value
+  splits — none of which were in scope for #810. The C# escape
+  hatch under `src/Sdk/Gsharp.Extensions/Sequences/` stays in
+  place for that follow-up; the emit fix unblocks anyone who wants
+  to author non-variadic, non-tuple G# iterators in their own
+  projects today.
 
 ## Consequences
 
