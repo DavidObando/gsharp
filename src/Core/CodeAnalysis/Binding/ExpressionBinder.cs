@@ -805,6 +805,24 @@ internal sealed partial class ExpressionBinder
             return ss.ImportedBaseType?.ClrType ?? typeof(object);
         }
 
+        // ADR-0087 §3 R5 / issue #765: a user-defined G# data struct (value
+        // type) appearing as an argument to an imported CLR generic method —
+        // typically `List[Box[int32]]::Add(object)` — needs an effective CLR
+        // type for overload resolution. The closed CLR shape was erased to
+        // `object` upstream, so `object` is the correct ride-through. The
+        // emitter materialises the right TypeSpec parent for the call.
+        if (typeSymbol is StructSymbol)
+        {
+            return typeof(object);
+        }
+
+        // ADR-0087 §3 R5: a user-defined G# interface or named delegate
+        // argument rides through the same `object` boundary as a struct.
+        if (typeSymbol is InterfaceSymbol || typeSymbol is DelegateTypeSymbol)
+        {
+            return typeof(object);
+        }
+
         // Issue #661: user-defined G# enum — backed by int32 at the CLR level.
         if (typeSymbol is EnumSymbol)
         {

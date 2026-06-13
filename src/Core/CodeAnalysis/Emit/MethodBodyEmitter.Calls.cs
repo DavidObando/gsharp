@@ -137,10 +137,26 @@ internal sealed partial class MethodBodyEmitter
         bool isGenericReceiver = receiverType != null
             && ReflectionMetadataEmitter.IsUserGenericTypeReference(receiverType);
 
+        // ADR-0087 R5 / issue #765: same TypeSpec-parenting requirement
+        // for a call dispatched through a user-declared generic interface
+        // receiver (e.g. `b: IBox[int32]; b.Get()`). The call's
+        // <c>Method</c> on a constructed interface is the substituted
+        // <c>FunctionSymbol</c>, which is NOT keyed in
+        // <c>cache.MethodHandles</c>; we therefore resolve back to the
+        // open method on the definition and produce a MemberRef parented
+        // at the constructed TypeSpec via <see cref="ResolveUserInterfaceInstanceMethodToken"/>.
+        var receiverIface = call.Receiver.Type as InterfaceSymbol;
+
         EntityHandle methodHandle;
         if (isGenericReceiver)
         {
             methodHandle = this.outer.ResolveUserInstanceMethodToken(receiverType, call.Method);
+        }
+        else if (receiverIface != null
+            && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(receiverIface))
+        {
+            var openMethod = ResolveOpenInterfaceMethod(receiverIface, call.Method);
+            methodHandle = this.outer.ResolveUserInterfaceInstanceMethodToken(receiverIface, openMethod);
         }
         else if (this.outer.cache.MethodHandles.TryGetValue(call.Method, out var defHandle))
         {
@@ -175,6 +191,69 @@ internal sealed partial class MethodBodyEmitter
         // ADR-0087 §3 R3+R4: after R2, a user-instance call returns the
         // method's reified signature (substituted at the TypeSpec / MethodSpec
         // level). No erasure-widening is required at the call boundary.
+    }
+
+    // ADR-0087 R5 / issue #765: bridges from a substituted FunctionSymbol on
+    // a constructed user interface (e.g. <c>IBox[int32].Get</c>) back to the
+    // open <c>FunctionSymbol</c> on the definition so the emitter can look
+    // up its <c>MethodHandle</c> and parent the resulting MemberRef at the
+    // constructed TypeSpec.
+    private static FunctionSymbol ResolveOpenInterfaceMethod(InterfaceSymbol receiverIface, FunctionSymbol substitutedMethod)
+    {
+        var def = receiverIface.Definition ?? receiverIface;
+        if (ReferenceEquals(def, receiverIface))
+        {
+            return substitutedMethod;
+        }
+
+        var instanceMethods = receiverIface.Methods;
+        for (var i = 0; i < instanceMethods.Length; i++)
+        {
+            if (ReferenceEquals(instanceMethods[i], substitutedMethod) && i < def.Methods.Length)
+            {
+                return def.Methods[i];
+            }
+        }
+
+        var staticMethods = receiverIface.StaticMethods;
+        for (var i = 0; i < staticMethods.Length; i++)
+        {
+            if (ReferenceEquals(staticMethods[i], substitutedMethod) && i < def.StaticMethods.Length)
+            {
+                return def.StaticMethods[i];
+            }
+        }
+
+        var privateMethods = receiverIface.PrivateMethods;
+        for (var i = 0; i < privateMethods.Length; i++)
+        {
+            if (ReferenceEquals(privateMethods[i], substitutedMethod) && i < def.PrivateMethods.Length)
+            {
+                return def.PrivateMethods[i];
+            }
+        }
+
+        var staticPrivateMethods = receiverIface.StaticPrivateMethods;
+        for (var i = 0; i < staticPrivateMethods.Length; i++)
+        {
+            if (ReferenceEquals(staticPrivateMethods[i], substitutedMethod) && i < def.StaticPrivateMethods.Length)
+            {
+                return def.StaticPrivateMethods[i];
+            }
+        }
+
+        // Fall back to name-and-arity matching (substitution path may have
+        // produced new param symbols whose identity differs from the open
+        // declarations).
+        foreach (var m in def.Methods)
+        {
+            if (m.Name == substitutedMethod.Name && m.Parameters.Length == substitutedMethod.Parameters.Length)
+            {
+                return m;
+            }
+        }
+
+        return substitutedMethod;
     }
 
     private void EmitClrConstructorCall(BoundClrConstructorCallExpression ctorCall)

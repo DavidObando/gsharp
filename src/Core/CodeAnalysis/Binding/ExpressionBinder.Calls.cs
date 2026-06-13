@@ -1257,7 +1257,7 @@ internal sealed partial class ExpressionBinder
                             var instRebound = RebindFormattableInterpolationArguments(instExpandedArgs, ce.Arguments, instParameters, instDownstreamMapping);
                             var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instDownstreamMapping, out var instHandlerPrelude, out var instUpdatedReceiver);
                             var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instDownstreamMapping);
-                            var instConvertedArgs = conversions.BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping);
+                            var instConvertedArgs = conversions.BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping, method: resolution.Best, receiverType: receiver?.Type);
                             var instArguments = OverloadResolver.BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
                             var instRefKinds = ComputeArgumentRefKinds(instParameters);
                             overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
