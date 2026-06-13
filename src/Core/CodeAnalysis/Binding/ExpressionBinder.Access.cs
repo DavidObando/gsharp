@@ -1115,7 +1115,17 @@ internal sealed partial class ExpressionBinder
                     && paramType is FunctionTypeSymbol openFunctionParameter
                     && LambdaBinder.TryGetFunctionLiteral(arguments[i], out var functionLiteralArgument))
                 {
-                    convertedArgs.Add(lambdas.CreateErasedFunctionLiteralAdapter(functionLiteralArgument, openFunctionParameter));
+                    // ADR-0087 §3 R6: substitute the open target before
+                    // routing through the adapter. When the substituted
+                    // target matches the literal's declared shape the
+                    // adapter returns the literal unchanged (see
+                    // IsIdentityAdapter), so the emitted MethodDef carries
+                    // the literal's concrete signature and the reified
+                    // Func/Action TypeSpec at the call site dispatches
+                    // through real Invoke without DynamicInvoke marshalling.
+                    var substitutedOpenTarget = (Binder.SubstituteType(openFunctionParameter, substitution) as FunctionTypeSymbol)
+                        ?? openFunctionParameter;
+                    convertedArgs.Add(lambdas.CreateErasedFunctionLiteralAdapter(functionLiteralArgument, substitutedOpenTarget));
                     continue;
                 }
 

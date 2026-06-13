@@ -427,12 +427,27 @@ internal sealed partial class MethodBodyEmitter
                 this.il.Token(fieldHandle);
             }
 
-            var delegateTypeC = overrideDelegateType ?? this.outer.ResolveDelegateClrType(literal.FunctionType);
-            var delegateCtorC = delegateTypeC.GetConstructors()[0];
             this.il.OpCode(ILOpCode.Ldftn);
             this.il.Token(invokeHandle);
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetCtorReference(delegateCtorC));
+
+            // ADR-0087 §3 R6: when the literal's effective delegate
+            // shape carries type-parameter slots (e.g. `func(T) U`), no
+            // host CLR type exists for `ResolveDelegateClrType` to
+            // reflect over. Use a MemberRef parented at the reified
+            // `Func<...>` / `Action<...>` TypeSpec instead — the .ctor
+            // signature is the canonical `(object, IntPtr)`.
+            if (overrideDelegateType == null && literal.FunctionType.ClrType == null)
+            {
+                this.il.Token(this.outer.GetFunctionDelegateCtorRef(literal.FunctionType));
+            }
+            else
+            {
+                var delegateTypeC = overrideDelegateType ?? this.outer.ResolveDelegateClrType(literal.FunctionType);
+                var delegateCtorC = delegateTypeC.GetConstructors()[0];
+                this.il.Token(this.outer.GetCtorReference(delegateCtorC));
+            }
+
             return;
         }
 
@@ -448,14 +463,23 @@ internal sealed partial class MethodBodyEmitter
                 $"Function literal '{literal.Function.Name}' has no emitted MethodDef.");
         }
 
-        var delegateType = overrideDelegateType ?? this.outer.ResolveDelegateClrType(literal.FunctionType);
-        var delegateCtor = delegateType.GetConstructors()[0];
-
         this.il.OpCode(ILOpCode.Ldnull);
         this.il.OpCode(ILOpCode.Ldftn);
         this.il.Token(methodHandle);
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(delegateCtor));
+
+        // ADR-0087 §3 R6: see capture-bearing branch above — reified
+        // ctor MemberRef when the function shape is type-parameter-bearing.
+        if (overrideDelegateType == null && literal.FunctionType.ClrType == null)
+        {
+            this.il.Token(this.outer.GetFunctionDelegateCtorRef(literal.FunctionType));
+        }
+        else
+        {
+            var delegateType = overrideDelegateType ?? this.outer.ResolveDelegateClrType(literal.FunctionType);
+            var delegateCtor = delegateType.GetConstructors()[0];
+            this.il.Token(this.outer.GetCtorReference(delegateCtor));
+        }
     }
 
     // Issue #324: emit a named-function method group as a delegate. The
@@ -480,8 +504,11 @@ internal sealed partial class MethodBodyEmitter
                 $"Method group '{methodGroup.Function.Name}' has no emitted MethodDef.");
         }
 
-        var delegateType = overrideDelegateType ?? this.outer.ResolveDelegateClrType(methodGroup.FunctionType);
-        var delegateCtor = delegateType.GetConstructors()[0];
+        Type delegateType = null;
+        if (overrideDelegateType != null || methodGroup.FunctionType.ClrType != null)
+        {
+            delegateType = overrideDelegateType ?? this.outer.ResolveDelegateClrType(methodGroup.FunctionType);
+        }
 
         if (methodGroup.Receiver == null)
         {
@@ -520,7 +547,18 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(delegateCtor));
+
+        // ADR-0087 §3 R6: reified MemberRef when the method-group's
+        // delegate shape carries type-parameter slots.
+        if (delegateType == null)
+        {
+            this.il.Token(this.outer.GetFunctionDelegateCtorRef(methodGroup.FunctionType));
+        }
+        else
+        {
+            var delegateCtor = delegateType.GetConstructors()[0];
+            this.il.Token(this.outer.GetCtorReference(delegateCtor));
+        }
     }
 
     // Issue #337: emit a resolved CLR member method group as a delegate over

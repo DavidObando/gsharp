@@ -557,6 +557,17 @@ internal sealed class LambdaBinder
         BoundFunctionLiteralExpression literal,
         FunctionTypeSymbol targetFunctionType)
     {
+        // ADR-0087 §3 R6: if the literal's declared signature already
+        // matches the (possibly substituted) target, the adapter would
+        // be an identity wrapper that erased type-parameter slots to
+        // System.Object without need. Skip it — the literal flows
+        // through with its concrete signature so the emitted lambda
+        // MethodDef matches the runtime delegate's Invoke shape.
+        if (IsIdentityAdapter(literal, targetFunctionType))
+        {
+            return literal;
+        }
+
         var adapterParameters = ImmutableArray.CreateBuilder<ParameterSymbol>(literal.Function.Parameters.Length);
         var replacementMap = new Dictionary<VariableSymbol, BoundExpression>();
         for (var i = 0; i < literal.Function.Parameters.Length; i++)
@@ -918,6 +929,40 @@ internal sealed class LambdaBinder
     private static TypeSymbol GetErasedDelegateSlotType(TypeSymbol type)
     {
         return TypeSymbol.ContainsTypeParameter(type) ? TypeSymbol.Object : type;
+    }
+
+    // ADR-0087 §3 R6: returns true when the literal's signature already
+    // matches the (possibly substituted) target — so wrapping it in the
+    // erased adapter would be pure waste. The adapter only widens
+    // type-parameter-containing slots to System.Object; once R6 retires
+    // that erasure, the only remaining role is shaping a mismatched
+    // literal to the target signature. When the shapes already line up
+    // the literal can flow through unchanged, which is the path needed
+    // for the reified Func/Action TypeSpec dispatch to bind correctly
+    // at runtime.
+    private static bool IsIdentityAdapter(BoundFunctionLiteralExpression literal, FunctionTypeSymbol target)
+    {
+        if (target == null)
+        {
+            return false;
+        }
+
+        if (literal.Function.Parameters.Length != target.ParameterTypes.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < literal.Function.Parameters.Length; i++)
+        {
+            if (!ReferenceEquals(literal.Function.Parameters[i].Type, target.ParameterTypes[i]))
+            {
+                return false;
+            }
+        }
+
+        var literalReturn = literal.Function.Type ?? TypeSymbol.Void;
+        var targetReturn = target.ReturnType ?? TypeSymbol.Void;
+        return ReferenceEquals(literalReturn, targetReturn);
     }
 
     private static ImmutableArray<VariableSymbol> CollectCapturedVariables(BoundStatement body, ImmutableArray<ParameterSymbol> parameters)

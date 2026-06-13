@@ -4662,6 +4662,16 @@ internal sealed class ReflectionMetadataEmitter
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
+        if (element is FunctionTypeSymbol fnElement && fnElement.ClrType == null)
+        {
+            // ADR-0087 §3 R6: an open-bearing function type
+            // (e.g. `(T) -> U`) tokenises as a TypeSpec for the
+            // reified `Func<...>` / `Action<...>` shape, with VAR/MVAR
+            // slots that the runtime substitutes against the
+            // surrounding generic instantiation.
+            return this.GetFunctionDelegateTypeSpec(fnElement);
+        }
+
         if (element.ClrType != null)
         {
             if (element.ClrType.IsConstructedGenericType)
@@ -6603,12 +6613,13 @@ internal sealed class ReflectionMetadataEmitter
         }
         else if (type is FunctionTypeSymbol openFn)
         {
-            // Phase 4 emit parity (F1, type-erased): a delegate type whose
-            // parameter or return types reference open type parameters (e.g.
-            // func(T) U) has no precomputed ClrType. Erase the type-parameter
-            // arguments to System.Object and encode the constructed
-            // System.Func / System.Action shape so signatures resolve.
-            this.EncodeClrType(encoder, this.ResolveDelegateClrType(openFn));
+            // ADR-0087 §3 R6: encode an open-bearing delegate type as a
+            // reified `GENERICINST<Func`N or Action`N><args>` so the
+            // signature carries `Var`/`MVar` slots that match the
+            // runtime delegate. Previously the encoder fell back to
+            // `Func<object, object>`, and the call site bridged the
+            // value-type boundary through `Delegate.DynamicInvoke`.
+            this.EncodeFunctionTypeSymbol(encoder, openFn);
         }
         else
         {
@@ -7030,20 +7041,188 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     // Resolve the CLR type used as a System.Func/System.Action type argument
-    // for one delegate parameter or return TypeSymbol. Under the type-erased
-    // generic model (Phase 4 emit parity, F1) an open type parameter has no
-    // ClrType; it erases to System.Object so the constructed open delegate
-    // (e.g. func(T) U -> System.Func<object, object>) resolves cleanly. Call
-    // sites already box / unbox.any value-type arguments and returns around
-    // the erased boundary.
+    // for one delegate parameter or return TypeSymbol. ADR-0087 §3 R6: under
+    // the reified model, a type-parameter slot must not appear here — the
+    // signature encoder takes the symbolic path
+    // (<see cref="EncodeFunctionTypeSymbol"/>) and the body emitter routes
+    // delegate ctor / Invoke through MemberRefs parented at the reified
+    // TypeSpec. Any caller that still passes a type-parameter-bearing type
+    // is a missed conversion site and worth surfacing.
     private Type ResolveDelegateArgClrType(TypeSymbol type)
     {
-        if (type is TypeParameterSymbol)
+        return this.MapToReferenceClrType(type.ClrType) ?? this.emitCtx.CoreObjectType;
+    }
+
+    // ADR-0087 §3 R6: cache for reified delegate (Func/Action) TypeSpecs
+    // keyed by a stable function-type symbol identity. A FunctionTypeSymbol
+    // is cached by its parameter/return symbol identities (see
+    // FunctionTypeSymbol.Get) so reference-equality is sufficient.
+    private readonly Dictionary<FunctionTypeSymbol, EntityHandle> functionDelegateTypeSpecCache =
+        new Dictionary<FunctionTypeSymbol, EntityHandle>(ReferenceEqualityComparer.Instance);
+
+    private readonly Dictionary<FunctionTypeSymbol, EntityHandle> functionDelegateCtorRefCache =
+        new Dictionary<FunctionTypeSymbol, EntityHandle>(ReferenceEqualityComparer.Instance);
+
+    private readonly Dictionary<FunctionTypeSymbol, EntityHandle> functionDelegateInvokeRefCache =
+        new Dictionary<FunctionTypeSymbol, EntityHandle>(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// ADR-0087 §3 R6: encodes a <see cref="FunctionTypeSymbol"/> whose
+    /// shape carries type-parameter slots (e.g. <c>func(T) U</c>) as a
+    /// reified <c>GENERICINST&lt;Func`N or Action`N&gt;&lt;args&gt;</c>
+    /// blob. Each argument is encoded recursively through
+    /// <see cref="EncodeTypeSymbol"/>, so type parameters resolve to the
+    /// proper <c>Var(idx)</c> / <c>MVar(idx)</c> slots.
+    /// </summary>
+    internal void EncodeFunctionTypeSymbol(SignatureTypeEncoder encoder, FunctionTypeSymbol fnType)
+    {
+        bool isVoid = fnType.ReturnType == null || fnType.ReturnType == TypeSymbol.Void;
+        int arity = fnType.ParameterTypes.Length;
+
+        if (isVoid && arity == 0)
         {
-            return this.emitCtx.CoreObjectType;
+            var actionType = this.emitCtx.References.GetCoreType("System.Action");
+            this.EncodeClrType(encoder, actionType);
+            return;
         }
 
-        return this.MapToReferenceClrType(type.ClrType) ?? this.emitCtx.CoreObjectType;
+        var typeName = isVoid
+            ? "System.Action`" + arity.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "System.Func`" + (arity + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var openDef = this.emitCtx.References.GetCoreType(typeName);
+        var openHandle = this.GetTypeReference(openDef);
+        int typeArgCount = arity + (isVoid ? 0 : 1);
+        var gi = encoder.GenericInstantiation(openHandle, typeArgCount, isValueType: openDef.IsValueType);
+        for (int i = 0; i < arity; i++)
+        {
+            this.EncodeTypeSymbol(gi.AddArgument(), fnType.ParameterTypes[i]);
+        }
+
+        if (!isVoid)
+        {
+            this.EncodeTypeSymbol(gi.AddArgument(), fnType.ReturnType);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R6: returns a <c>TypeSpec</c> EntityHandle for the
+    /// reified <c>Func&lt;...&gt;</c> / <c>Action&lt;...&gt;</c> shape
+    /// backing <paramref name="fnType"/>. Type-parameter arguments encode
+    /// as <c>Var(idx)</c> / <c>MVar(idx)</c>.
+    /// </summary>
+    internal EntityHandle GetFunctionDelegateTypeSpec(FunctionTypeSymbol fnType)
+    {
+        if (this.functionDelegateTypeSpecCache.TryGetValue(fnType, out var cached))
+        {
+            return cached;
+        }
+
+        var sigBlob = new BlobBuilder();
+        this.EncodeFunctionTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), fnType);
+        var spec = (EntityHandle)this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.functionDelegateTypeSpecCache[fnType] = spec;
+        return spec;
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R6: returns the MemberRef handle for the reified
+    /// delegate's <c>.ctor(object, IntPtr)</c>, parented at the
+    /// <c>TypeSpec</c> for <paramref name="fnType"/>. Used by
+    /// <c>EmitFunctionLiteral</c> / <c>EmitMethodGroup</c> when the
+    /// function type contains type-parameter slots.
+    /// </summary>
+    internal EntityHandle GetFunctionDelegateCtorRef(FunctionTypeSymbol fnType)
+    {
+        if (this.functionDelegateCtorRefCache.TryGetValue(fnType, out var cached))
+        {
+            return cached;
+        }
+
+        var parent = this.GetFunctionDelegateTypeSpec(fnType);
+
+        // Every Func/Action delegate exposes the canonical
+        // .ctor(object target, IntPtr methodPtr) signature; identical
+        // for every arity so no Var/MVar slots are needed.
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                2,
+                returnType: r => r.Void(),
+                parameters: ps =>
+                {
+                    ps.AddParameter().Type().Object();
+                    ps.AddParameter().Type().IntPtr();
+                });
+
+        var handle = (EntityHandle)this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.functionDelegateCtorRefCache[fnType] = handle;
+        return handle;
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R6: returns the MemberRef handle for the reified
+    /// delegate's <c>Invoke</c> method, parented at the <c>TypeSpec</c>
+    /// for <paramref name="fnType"/>. The signature uses <c>VAR(i)</c>
+    /// slots referencing the delegate type's own class-generic
+    /// parameters (e.g. <c>Func`2::Invoke</c> is encoded as
+    /// <c>!0 Invoke(!0)</c> wait — actually
+    /// <c>!1 Invoke(!0)</c>). When the runtime resolves this MemberRef
+    /// through the constructed parent <c>TypeSpec</c> (e.g.
+    /// <c>Func&lt;int32, int32&gt;</c>), the VAR slots get substituted
+    /// to the concrete arguments. No <see cref="System.Delegate.DynamicInvoke"/>
+    /// is required.
+    /// </summary>
+    internal EntityHandle GetFunctionDelegateInvokeRef(FunctionTypeSymbol fnType)
+    {
+        if (this.functionDelegateInvokeRefCache.TryGetValue(fnType, out var cached))
+        {
+            return cached;
+        }
+
+        var parent = this.GetFunctionDelegateTypeSpec(fnType);
+
+        bool isVoid = fnType.ReturnType == null || fnType.ReturnType == TypeSymbol.Void;
+        int arity = fnType.ParameterTypes.Length;
+
+        // The MemberRef signature for a method on a generic TypeSpec
+        // parent must reference the parent type's *class-generic*
+        // type parameters via VAR slots (`!0`..`!N-1`). The runtime
+        // substitutes them against the parent's instantiation when
+        // dispatching the call. For Func`N the slots are
+        // `(!0,...,!N-1) -> !N`; for Action`N they are
+        // `(!0,...,!N-1) -> void`.
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                arity,
+                returnType: r =>
+                {
+                    if (isVoid)
+                    {
+                        r.Void();
+                    }
+                    else
+                    {
+                        r.Type().GenericTypeParameter(arity);
+                    }
+                },
+                parameters: ps =>
+                {
+                    for (int i = 0; i < arity; i++)
+                    {
+                        ps.AddParameter().Type().GenericTypeParameter(i);
+                    }
+                });
+
+        var handle = (EntityHandle)this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString("Invoke"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.functionDelegateInvokeRefCache[fnType] = handle;
+        return handle;
     }
 
     /// <summary>
