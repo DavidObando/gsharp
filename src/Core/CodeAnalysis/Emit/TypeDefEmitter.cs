@@ -509,14 +509,21 @@ internal sealed class TypeDefEmitter
         }
 
         // Nested types have no namespace in ECMA-335 metadata.
+        // Issue #810: when the state-machine class is generic over the
+        // outer method's type parameters (mirroring how Roslyn emits
+        // `<Empty>d__0<T>`), mangle the name with the backtick-arity
+        // suffix per ECMA-335 II.10.3.1, then emit GenericParam rows
+        // so reflection sees the real type-parameter slots.
+        var nestedTypeDefName = MangleGenericName(structSym.Name, structSym.TypeParameters);
         var handle2 = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
             @namespace: default(StringHandle),
-            name: this.emitCtx.Metadata.GetOrAddString(structSym.Name),
+            name: this.emitCtx.Metadata.GetOrAddString(nestedTypeDefName),
             baseType: baseType,
             fieldList: firstField,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
         this.cache.StructTypeDefs[structSym] = handle2;
+        EmitGenericParamRows(this.emitCtx, handle2, structSym.TypeParameters);
         if (structSym.IsRefStruct)
         {
             // Issue #367: nested user-declared `ref struct` types are by-ref-like too.

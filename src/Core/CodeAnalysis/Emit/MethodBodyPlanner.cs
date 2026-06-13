@@ -66,6 +66,7 @@ internal sealed class MethodBodyPlanner
     private readonly Dictionary<FunctionSymbol, BoundBlockStatement> lambdaBodies;
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
     private readonly Func<Type, EntityHandle> getTypeHandleForMember;
+    private readonly Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol;
 
     private StateMachineEmitter stateMachines;
 
@@ -75,7 +76,8 @@ internal sealed class MethodBodyPlanner
         SlotPlanner slotPlanner,
         Dictionary<FunctionSymbol, BoundBlockStatement> lambdaBodies,
         Func<Type, TypeReferenceHandle> getTypeReference,
-        Func<Type, EntityHandle> getTypeHandleForMember)
+        Func<Type, EntityHandle> getTypeHandleForMember,
+        Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -83,6 +85,7 @@ internal sealed class MethodBodyPlanner
         this.lambdaBodies = lambdaBodies ?? throw new ArgumentNullException(nameof(lambdaBodies));
         this.getTypeReference = getTypeReference ?? throw new ArgumentNullException(nameof(getTypeReference));
         this.getTypeHandleForMember = getTypeHandleForMember ?? throw new ArgumentNullException(nameof(getTypeHandleForMember));
+        this.encodeTypeSymbol = encodeTypeSymbol ?? throw new ArgumentNullException(nameof(encodeTypeSymbol));
     }
 
     /// <summary>
@@ -766,12 +769,105 @@ internal sealed class MethodBodyPlanner
 
     public void AddIteratorInterfaceImplementations(StructSymbol smClass, StateMachineEmitter.IteratorStateMachineInfo info)
     {
-        var elementClr = info.Plan.ElementType.ClrType ?? typeof(object);
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.getTypeHandleForMember(typeof(System.Collections.Generic.IEnumerable<>).MakeGenericType(elementClr)));
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.getTypeHandleForMember(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(elementClr)));
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.getTypeReference(typeof(System.IDisposable)));
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.getTypeReference(typeof(System.Collections.IEnumerable)));
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.getTypeReference(typeof(System.Collections.IEnumerator)));
+        var elementType = info.Plan.ElementType;
+        var typeDef = this.cache.StructTypeDefs[smClass];
+
+        // Issue #810: when the iterator's element type contains an outer
+        // method type parameter (now remapped to a class-level Var on the
+        // SM), encode `IEnumerable<T>` / `IEnumerator<T>` as a TypeSpec
+        // whose argument flows through EncodeTypeSymbol (which honours the
+        // active iterator-state-machine remap pushed by the SM-class emit
+        // loop in RME — outer-method TPs translate to Var(idx)). For closed
+        // element types we keep the original CLR-erased path so existing
+        // closed-iterator behaviour is unchanged.
+        var elementContainsTp = ContainsTypeParameter(elementType);
+        EntityHandle enumerableHandle;
+        EntityHandle enumeratorHandle;
+        if (elementContainsTp)
+        {
+            enumerableHandle = this.BuildGenericInterfaceTypeSpec(typeof(System.Collections.Generic.IEnumerable<>), elementType);
+            enumeratorHandle = this.BuildGenericInterfaceTypeSpec(typeof(System.Collections.Generic.IEnumerator<>), elementType);
+        }
+        else
+        {
+            var elementClr = elementType.ClrType ?? typeof(object);
+            enumerableHandle = this.getTypeHandleForMember(typeof(System.Collections.Generic.IEnumerable<>).MakeGenericType(elementClr));
+            enumeratorHandle = this.getTypeHandleForMember(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(elementClr));
+        }
+
+        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef, enumerableHandle);
+        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef, enumeratorHandle);
+        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef, this.getTypeReference(typeof(System.IDisposable)));
+        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef, this.getTypeReference(typeof(System.Collections.IEnumerable)));
+        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef, this.getTypeReference(typeof(System.Collections.IEnumerator)));
+    }
+
+    /// <summary>
+    /// Issue #810: builds a <c>TypeSpec</c> handle encoding
+    /// <paramref name="openDef"/>&lt;<paramref name="elementType"/>&gt;
+    /// where the element type is encoded through
+    /// <see cref="ReflectionMetadataEmitter.EncodeTypeSymbol"/> so the
+    /// active iterator-state-machine remap (outer-method TP →
+    /// class-TP Var(idx)) is honoured. Used by
+    /// <see cref="AddIteratorInterfaceImplementations"/>.
+    /// </summary>
+    private EntityHandle BuildGenericInterfaceTypeSpec(Type openDef, TypeSymbol elementType)
+    {
+        var openHandle = this.getTypeReference(openDef);
+        var sigBlob = new BlobBuilder();
+        var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
+        var gi = encoder.GenericInstantiation(openHandle, genericArgumentCount: 1, isValueType: false);
+        this.encodeTypeSymbol(gi.AddArgument(), elementType);
+        return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
+    /// Issue #810: recursively returns true if <paramref name="t"/>
+    /// directly or transitively references a <see cref="TypeParameterSymbol"/>.
+    /// Used to decide between TypeSpec and CLR-erased interface
+    /// implementations for the iterator SM class.
+    /// </summary>
+    private static bool ContainsTypeParameter(TypeSymbol t)
+    {
+        switch (t)
+        {
+            case null:
+                return false;
+            case TypeParameterSymbol:
+                return true;
+            case ArrayTypeSymbol a:
+                return ContainsTypeParameter(a.ElementType);
+            case SliceTypeSymbol s:
+                return ContainsTypeParameter(s.ElementType);
+            case SequenceTypeSymbol seq:
+                return ContainsTypeParameter(seq.ElementType);
+            case AsyncSequenceTypeSymbol aseq:
+                return ContainsTypeParameter(aseq.ElementType);
+            case NullableTypeSymbol nu:
+                return ContainsTypeParameter(nu.UnderlyingType);
+            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in it.TypeArguments)
+                {
+                    if (ContainsTypeParameter(arg))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            case StructSymbol st when !st.TypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in st.TypeArguments)
+                {
+                    if (ContainsTypeParameter(arg))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            default:
+                return false;
+        }
     }
 
     public void AddAsyncIteratorInterfaceImplementations(StructSymbol smClass, AsyncIteratorPlan plan)

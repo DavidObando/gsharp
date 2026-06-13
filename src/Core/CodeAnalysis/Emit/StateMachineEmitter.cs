@@ -238,14 +238,65 @@ internal sealed class StateMachineEmitter
     public sealed class IteratorStateMachineInfo
     {
         public IteratorStateMachineInfo(IteratorStateMachinePlan plan, StructSymbol classSym)
+            : this(plan, classSym, ImmutableArray<TypeParameterSymbol>.Empty, ImmutableArray<TypeParameterSymbol>.Empty)
+        {
+        }
+
+        public IteratorStateMachineInfo(
+            IteratorStateMachinePlan plan,
+            StructSymbol classSym,
+            ImmutableArray<TypeParameterSymbol> outerMethodTypeParameters,
+            ImmutableArray<TypeParameterSymbol> classTypeParameters)
         {
             this.Plan = plan;
             this.ClassSym = classSym;
+            this.OuterMethodTypeParameters = outerMethodTypeParameters;
+            this.ClassTypeParameters = classTypeParameters;
         }
 
         public IteratorStateMachinePlan Plan { get; }
 
         public StructSymbol ClassSym { get; }
+
+        /// <summary>
+        /// Gets the OUTER method's type parameters (those declared on
+        /// <see cref="IteratorStateMachinePlan.Function"/>) that the
+        /// state-machine class is reified over (issue #810). Empty for
+        /// non-generic iterators.
+        /// </summary>
+        public ImmutableArray<TypeParameterSymbol> OuterMethodTypeParameters { get; }
+
+        /// <summary>
+        /// Gets the state-machine class's own type parameters (issue #810),
+        /// constructed as ordinal-aligned mirrors of
+        /// <see cref="OuterMethodTypeParameters"/> with
+        /// <see cref="TypeParameterSymbol.IsMethodTypeParameter"/> set to
+        /// <see langword="false"/>. Empty for non-generic iterators.
+        /// </summary>
+        public ImmutableArray<TypeParameterSymbol> ClassTypeParameters { get; }
+
+        /// <summary>
+        /// Issue #810: returns the emit-time remap from each outer-method
+        /// type parameter to its corresponding class-type-parameter ordinal,
+        /// or <see langword="null"/> when this iterator has no type
+        /// parameters. Used by
+        /// <see cref="ReflectionMetadataEmitter.activeIteratorStateMachineRemap"/>.
+        /// </summary>
+        public Dictionary<TypeParameterSymbol, int> BuildRemap()
+        {
+            if (this.OuterMethodTypeParameters.IsDefaultOrEmpty)
+            {
+                return null;
+            }
+
+            var map = new Dictionary<TypeParameterSymbol, int>(this.OuterMethodTypeParameters.Length);
+            for (var i = 0; i < this.OuterMethodTypeParameters.Length; i++)
+            {
+                map[this.OuterMethodTypeParameters[i]] = i;
+            }
+
+            return map;
+        }
     }
 
     /// <summary>
@@ -319,6 +370,48 @@ internal sealed class StateMachineEmitter
         foreach (var plan in this.IteratorPlans)
         {
             var packageName = hostPackage?.Name ?? plan.Function.Package?.Name ?? string.Empty;
+
+            // Issue #810: when the iterator is generic, the synthesized
+            // state-machine class must itself be generic over a matching
+            // set of class-level type parameters (mirroring Roslyn's
+            // `<Empty>d__0<T>`). Build class TPs (`IsMethodTypeParameter=false`,
+            // so EncodeTypeSymbol writes them as `Var(idx)`) before the
+            // class is materialized — every field/parameter/local that
+            // mentions the outer method's TP is then substituted to the
+            // class TP via the activeIteratorStateMachineRemap encode-time
+            // hook. The class TPs themselves are not used directly in any
+            // bound expression — the substitution lives at the encoder.
+            var outerMethodTPs = plan.Function.TypeParameters.IsDefaultOrEmpty
+                ? ImmutableArray<TypeParameterSymbol>.Empty
+                : plan.Function.TypeParameters;
+            ImmutableArray<TypeParameterSymbol> classTPs;
+            if (outerMethodTPs.IsDefaultOrEmpty)
+            {
+                classTPs = ImmutableArray<TypeParameterSymbol>.Empty;
+            }
+            else
+            {
+                var b = ImmutableArray.CreateBuilder<TypeParameterSymbol>(outerMethodTPs.Length);
+                foreach (var outerTP in outerMethodTPs)
+                {
+                    var classTP = new TypeParameterSymbol(
+                        outerTP.Name,
+                        outerTP.Ordinal,
+                        outerTP.Constraint,
+                        outerTP.Variance,
+                        outerTP.InterfaceConstraint)
+                    {
+                        HasReferenceTypeConstraint = outerTP.HasReferenceTypeConstraint,
+                        HasValueTypeConstraint = outerTP.HasValueTypeConstraint,
+                        HasDefaultConstructorConstraint = outerTP.HasDefaultConstructorConstraint,
+                        IsMethodTypeParameter = false,
+                    };
+                    b.Add(classTP);
+                }
+
+                classTPs = b.MoveToImmutable();
+            }
+
             var stateField = new FieldSymbol("<>1__state", TypeSymbol.Int32, Accessibility.Public);
             var currentField = new FieldSymbol("<>2__current", plan.ElementType, Accessibility.Public);
             var initialThreadField = new FieldSymbol("<>l__initialThreadId", TypeSymbol.Int32, Accessibility.Public);
@@ -372,10 +465,35 @@ internal sealed class StateMachineEmitter
                 isInline: false,
                 isClass: true);
 
+            // Issue #810: stamp the SM class with its class-level type
+            // parameters so `EmitNestedStructTypeDef` mangles the name
+            // (`<Empty>d__1` → `<Empty>d__1`1`) and emits `GenericParam`
+            // rows. Done after construction so the StructSymbol's
+            // internal generic flags are flipped without re-running the
+            // (cached) `Construct` path.
+            if (!classTPs.IsDefaultOrEmpty)
+            {
+                smClass.SetTypeParameters(classTPs);
+            }
+
             var moveNext = new FunctionSymbol("MoveNext", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Bool, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
             var getCurrent = new FunctionSymbol("get_Current", ImmutableArray<ParameterSymbol>.Empty, plan.ElementType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
             var getCurrentObject = new FunctionSymbol("get_Current", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.FromClrType(typeof(object)), null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
-            var getEnumeratorType = TypeSymbol.FromClrType(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(plan.ElementType.ClrType ?? typeof(object)));
+
+            // Issue #810: when the element type contains an outer-method
+            // type parameter, the `IEnumerator<T>` return for GetEnumerator
+            // must encode as `IEnumerator<Var(idx)>` (not `IEnumerator<object>`).
+            // Build a symbolic `ImportedTypeSymbol` so EncodeTypeSymbol's
+            // existing R2 path emits the proper GENERICINST blob; the
+            // emit-time remap then translates the outer-method TP to the
+            // class's TP. Closed element types continue through the CLR
+            // `MakeGenericType` path unchanged.
+            var getEnumeratorType = ContainsOuterMethodTypeParameter(plan.ElementType, outerMethodTPs)
+                ? (TypeSymbol)ImportedTypeSymbol.GetConstructed(
+                    typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(typeof(object)),
+                    typeof(System.Collections.Generic.IEnumerator<>),
+                    ImmutableArray.Create<TypeSymbol>(plan.ElementType))
+                : TypeSymbol.FromClrType(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(plan.ElementType.ClrType ?? typeof(object)));
             var getEnumerator = new FunctionSymbol("GetEnumerator", ImmutableArray<ParameterSymbol>.Empty, getEnumeratorType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
             var getEnumeratorObject = new FunctionSymbol("GetEnumerator", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.FromClrType(typeof(System.Collections.IEnumerator)), null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
             var dispose = new FunctionSymbol("Dispose", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
@@ -399,6 +517,24 @@ internal sealed class StateMachineEmitter
                 ImmutableArray.Create<BoundStatement>(
                 new BoundExpressionStatement(null, new BoundFieldAssignmentExpression(null, reset.ThisParameter, smClass, stateField, new BoundLiteralExpression(null, -1))),
                 new BoundReturnStatement(null, null))));
+
+            // Issue #810: the GetEnumerator and the outer-method kickoff
+            // both build a fresh state-machine literal. When the SM is
+            // generic, the literal target must be the CONSTRUCTED instance
+            // `<Empty>d__1<MVar(0)>` so the emitted `newobj`/`stfld` tokens
+            // land on a TypeSpec carrying the right type arguments. The
+            // GetEnumerator overloads run on `this` (an instance of the
+            // open SM definition, which encodes as a self-instantiation
+            // `<Empty>d__1<Var(0)>`); we pass the open `smClass` to the
+            // CreateIteratorStateMachineLiteral helper and let the encoder
+            // routing decide. The kickoff body lives inside the user's
+            // generic method whose type parameters are still active
+            // (`MVar(0)`), so we explicitly construct the SM type over the
+            // outer method's TPs.
+            var kickoffSmType = classTPs.IsDefaultOrEmpty
+                ? smClass
+                : StructSymbol.Construct(smClass, outerMethodTPs.CastArray<TypeSymbol>());
+
             this.lambdaBodies[getEnumerator] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
                 new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getEnumerator.ThisParameter), smClass, parameterFields[p]),
@@ -410,10 +546,62 @@ internal sealed class StateMachineEmitter
 
             this.IteratorKickoffBodies[plan.Function] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundVariableExpression(null, p),
+                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(kickoffSmType, stateField, parameterFields, plan.Function.Parameters, p => new BoundVariableExpression(null, p),
                     thisProxyField, plan.Function.ThisParameter != null ? new BoundVariableExpression(null, plan.Function.ThisParameter) : null)))));
-            this.IteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(plan, smClass);
+            this.IteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(plan, smClass, outerMethodTPs, classTPs);
             this.closures.SynthesizedClosureClasses.Add(smClass);
+        }
+    }
+
+    /// <summary>
+    /// Issue #810: returns <see langword="true"/> when <paramref name="type"/>
+    /// references any of the outer method's type parameters (directly or
+    /// nested inside an array/slice/sequence/imported-generic). Used to
+    /// decide whether the GetEnumerator return type needs a symbolic
+    /// (TypeSpec-encoded) `IEnumerator&lt;T&gt;` instead of the
+    /// CLR-erased `IEnumerator&lt;object&gt;` shape.
+    /// </summary>
+    private static bool ContainsOuterMethodTypeParameter(TypeSymbol type, ImmutableArray<TypeParameterSymbol> outerMethodTPs)
+    {
+        if (outerMethodTPs.IsDefaultOrEmpty || type == null)
+        {
+            return false;
+        }
+
+        switch (type)
+        {
+            case TypeParameterSymbol tp:
+                foreach (var outer in outerMethodTPs)
+                {
+                    if (ReferenceEquals(tp, outer))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            case ArrayTypeSymbol a:
+                return ContainsOuterMethodTypeParameter(a.ElementType, outerMethodTPs);
+            case SliceTypeSymbol s:
+                return ContainsOuterMethodTypeParameter(s.ElementType, outerMethodTPs);
+            case SequenceTypeSymbol seq:
+                return ContainsOuterMethodTypeParameter(seq.ElementType, outerMethodTPs);
+            case AsyncSequenceTypeSymbol aseq:
+                return ContainsOuterMethodTypeParameter(aseq.ElementType, outerMethodTPs);
+            case NullableTypeSymbol nu:
+                return ContainsOuterMethodTypeParameter(nu.UnderlyingType, outerMethodTPs);
+            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in it.TypeArguments)
+                {
+                    if (ContainsOuterMethodTypeParameter(arg, outerMethodTPs))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            default:
+                return false;
         }
     }
 
