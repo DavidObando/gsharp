@@ -4029,11 +4029,26 @@ internal sealed class ReflectionMetadataEmitter
         var sequenceNumber = 1;
         foreach (var p in function.Parameters)
         {
+            // ADR-0096 / issue #762: stamp HasFieldMarshal when the
+            // parameter carries a resolved `@MarshalAs(...)` override.
+            // The FieldMarshal table row is added immediately below
+            // and is keyed off the Parameter handle.
+            var paramAttrs = ParameterAttributes.None;
+            if (p.MarshalAsMetadata != null)
+            {
+                paramAttrs |= ParameterAttributes.HasFieldMarshal;
+            }
+
             var paramHandle = this.emitCtx.Metadata.AddParameter(
-                attributes: ParameterAttributes.None,
+                attributes: paramAttrs,
                 name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
                 sequenceNumber: sequenceNumber++);
             paramHandles.Add((p, paramHandle));
+
+            if (p.MarshalAsMetadata != null)
+            {
+                EmitFieldMarshalRow(paramHandle, p.MarshalAsMetadata);
+            }
         }
 
         var methodHandle = this.emitCtx.Metadata.AddMethodDefinition(
@@ -4070,6 +4085,25 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return methodHandle;
+    }
+
+    /// <summary>
+    /// ADR-0096 / issue #762: writes a CLR <c>FieldMarshal</c> table
+    /// row keyed off <paramref name="paramHandle"/> carrying the
+    /// per-parameter marshalling descriptor blob encoded per ECMA-335
+    /// II.23.4. The corresponding <see cref="ParameterAttributes.HasFieldMarshal"/>
+    /// bit must be set on the Param row by the caller (the runtime uses
+    /// the bit to decide whether to read this table).
+    /// </summary>
+    /// <param name="paramHandle">The owning Parameter row handle.</param>
+    /// <param name="metadata">The resolved per-parameter <c>@MarshalAs</c> metadata.</param>
+    private void EmitFieldMarshalRow(ParameterHandle paramHandle, MarshalAsMetadata metadata)
+    {
+        var blobBuilder = new BlobBuilder();
+        blobBuilder.WriteBytes(metadata.EncodeFieldMarshalBlob());
+        this.emitCtx.Metadata.AddMarshallingDescriptor(
+            paramHandle,
+            this.emitCtx.Metadata.GetOrAddBlob(blobBuilder));
     }
 
     private static MethodImportAttributes MapPInvokeImportAttributes(PInvokeMetadata pInvoke)
@@ -4205,11 +4239,27 @@ internal sealed class ReflectionMetadataEmitter
         var outerSeq = 1;
         foreach (var p in function.Parameters)
         {
+            // ADR-0096 / issue #762: stamp HasFieldMarshal on the outer
+            // Param row when the parameter carries an `@MarshalAs(...)`
+            // override. The outer stub uses the user-visible managed
+            // type (e.g. `int32`) so the override applies here; the
+            // inner blittable P/Invoke has no FieldMarshal row.
+            var outerParamAttrs = ParameterAttributes.None;
+            if (p.MarshalAsMetadata != null)
+            {
+                outerParamAttrs |= ParameterAttributes.HasFieldMarshal;
+            }
+
             var paramHandle = this.emitCtx.Metadata.AddParameter(
-                attributes: ParameterAttributes.None,
+                attributes: outerParamAttrs,
                 name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
                 sequenceNumber: outerSeq++);
             outerParamHandles.Add((p, paramHandle));
+
+            if (p.MarshalAsMetadata != null)
+            {
+                EmitFieldMarshalRow(paramHandle, p.MarshalAsMetadata);
+            }
         }
 
         // Build the IL body of the outer stub.
