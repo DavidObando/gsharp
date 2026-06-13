@@ -95,6 +95,15 @@ public static class AsyncIteratorRewriter
 
     private static bool IsAsyncIteratorFunction(FunctionSymbol function)
     {
+        // Issue #798: a generic `async sequence[T]` (AsyncSequenceTypeSymbol)
+        // with open T projects to a null ClrType. Recognize the symbolic
+        // form alongside the IAsyncEnumerable[T] / IAsyncEnumerator[T]
+        // shapes so the async iterator rewriter still rewrites it.
+        if (function.Type is AsyncSequenceTypeSymbol)
+        {
+            return true;
+        }
+
         var clr = function.Type?.ClrType;
         if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
         {
@@ -116,6 +125,14 @@ public static class AsyncIteratorRewriter
 
     private static TypeSymbol GetAsyncIteratorElementType(TypeSymbol type)
     {
+        // Issue #798: `async sequence[T]` (AsyncSequenceTypeSymbol) carries
+        // its element symbolically; honor it directly so an open T does not
+        // collapse via the ClrType branch.
+        if (type is AsyncSequenceTypeSymbol aseq)
+        {
+            return aseq.ElementType;
+        }
+
         var clr = type?.ClrType;
         if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
         {

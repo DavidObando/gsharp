@@ -2320,6 +2320,17 @@ public sealed class Binder
             return true;
         }
 
+        // Issue #798: `async sequence[T]` (AsyncSequenceTypeSymbol) is the
+        // ADR-0041 alias for `IAsyncEnumerable[T]`. For an in-scope generic
+        // T it cannot be keyed by the ClrType branch below because
+        // `AsyncSequenceTypeSymbol.MakeClrType` returns null when the
+        // element type carries no CLR projection. Recognize the symbolic
+        // form so `yield` is accepted inside `async func ... sequence[T]`.
+        if (type is AsyncSequenceTypeSymbol)
+        {
+            return true;
+        }
+
         var clr = type.ClrType;
         if (clr == null)
         {
@@ -2359,6 +2370,17 @@ public sealed class Binder
     /// </summary>
     private static bool IsAsyncIteratorReturnType(TypeSymbol type)
     {
+        // Issue #798: an open-T `async sequence[T]` carries a null ClrType
+        // because AsyncSequenceTypeSymbol erases its element type via the
+        // CLR projection. Honor the symbolic form so `await` + `yield`
+        // inside such a function are accepted without requiring the
+        // explicit `async` modifier (per the existing implicit-async
+        // contract for IAsyncEnumerable returns).
+        if (type is AsyncSequenceTypeSymbol)
+        {
+            return true;
+        }
+
         var clr = type?.ClrType;
         if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
         {
@@ -2382,6 +2404,14 @@ public sealed class Binder
     /// </summary>
     private static bool IsAsyncSequenceReturnType(TypeSymbol type)
     {
+        // Issue #798: see IsAsyncIteratorReturnType — open-T
+        // AsyncSequenceTypeSymbol has a null ClrType so honor it
+        // symbolically too.
+        if (type is AsyncSequenceTypeSymbol)
+        {
+            return true;
+        }
+
         var clr = type?.ClrType;
         if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
         {

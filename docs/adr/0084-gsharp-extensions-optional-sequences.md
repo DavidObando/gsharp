@@ -323,8 +323,9 @@ of that migration, not left behind as dead code.
   `sequence[T]` values and `nil`~~ (closed by issue #796), ~~no
   `[MethodImpl(...)]` annotation parsing inside `shared { }` blocks~~
   (closed by issue #797),
-  no `yield` inside a shared-static method that returns
-  `IEnumerable[T]`. Each is filed as a focused follow-up. The C#
+  ~~no `yield` inside a shared-static method that returns
+  `IEnumerable[T]`~~ (closed by issue #798 — binder + CFG side).
+  Each is filed as a focused follow-up. The C#
   escape hatch under `src/Sdk/Gsharp.Extensions/Optional/` and
   `src/Sdk/Gsharp.Extensions/Sequences/` remains in place; the
   Extensions test suite (107 tests) continues to run against it
@@ -378,6 +379,40 @@ of that migration, not left behind as dead code.
   expected `CustomAttribute` rows on the MethodDef / FieldDef /
   PropertyDef. Unlocks the `Sequences.Range` / `Optional.Map` port
   hot-path marking with `[MethodImpl(AggressiveInlining)]`.
+
+  Issue #798 closed the sixth follow-up bullet (binder side): a
+  `yield` statement inside a generic iterator — including a
+  shared-static method that returns `IEnumerable[T]` / `sequence[T]`
+  / `IAsyncEnumerable[T]` / `async sequence[T]` — surfaced as
+  `GS0136 Function 'yield' doesn't exist` (when reached through
+  the compile path) or `GS9998 Unexpected statement: YieldStatement`
+  (when reached through the gsc no-output / interpreter path via
+  `ControlFlowGraph.Create`). Root cause was two-fold and not
+  actually shared-static-specific: (a) `StatementBinder.GetIteratorElementType`
+  read only `function.Type.ClrType`, which is type-erased to
+  `IEnumerable<object>` for an `ImportedTypeSymbol` constructed
+  over an in-scope `T` (#313), so `yield v` (where `v: T`) failed
+  with `GS0155 Cannot convert type 'T' to 'object'`; (b)
+  `ControlFlowGraph.GraphBuilder.Build`'s second statement switch
+  did not list `BoundNodeKind.YieldStatement` in its fall-through
+  arm, causing the GS9998 crash. The fix honors
+  `ImportedTypeSymbol.TypeArguments[0]` for the IEnumerable /
+  IEnumerator / IAsyncEnumerable / IAsyncEnumerator open
+  definitions, mirrors the open-T handling for
+  `AsyncSequenceTypeSymbol` (whose `ClrType` is null for open T)
+  across `Binder.IsIteratorReturnType` /
+  `IsAsyncIteratorReturnType` / `IsAsyncSequenceReturnType`,
+  `StatementBinder.GetIteratorElementType`, and both the sync and
+  async iterator rewriters' `IsAsyncIteratorFunction` /
+  `GetAsyncIteratorElementType` predicates, and adds
+  `BoundNodeKind.YieldStatement` to the CFG fall-through.
+  Shared-static iterators that yield concrete (non-generic-method)
+  values now bind, lower, emit verifier-clean IL, and execute
+  through the interpreter. Generic-iterator IL emission (the SM
+  class being generic over the outer method's type parameters) is
+  a deeper, pre-existing emitter limitation tracked as a separate
+  follow-up; binder-level acceptance of the generic shapes is
+  proven by the issue-specific binder tests.
 
 ## Consequences
 
