@@ -79,6 +79,13 @@ internal sealed class WellKnownReferences
     private MemberReferenceHandle? isByRefLikeAttributeCtorRef;
     private MemberReferenceHandle? obsoleteAttributeStringBoolCtorRef;
 
+    // Issue #792 / ADR-0084: cached MemberRef for the parameterless
+    // System.Runtime.CompilerServices.ExtensionAttribute ctor. Used to mark
+    // every G#-authored extension method (and its host TypeDef) so C#/F#
+    // consumers see them as extension methods at the call site rather than
+    // as plain static helpers on `<Program>`.
+    private MemberReferenceHandle? extensionAttributeCtorRef;
+
     // Issue #410 / ADR-0029: cached member refs for data-struct synthesized members.
     private MemberReferenceHandle stringConcatRef;
     private MemberReferenceHandle stringEqualsRef;
@@ -333,6 +340,47 @@ internal sealed class WellKnownReferences
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
             this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
         return this.isByRefLikeAttributeCtorRef.Value;
+    }
+
+    /// <summary>
+    /// Issue #792 / ADR-0084. Returns the cached MemberRef for the
+    /// parameterless constructor of
+    /// <c>System.Runtime.CompilerServices.ExtensionAttribute</c>. The
+    /// attribute is stamped on every extension MethodDef and on the
+    /// extension method's host TypeDef so C#/F# call-site lookup treats the
+    /// methods as extension methods at the call site (per ECMA-334 §13.6.9).
+    /// </summary>
+    /// <returns>
+    /// The cached <see cref="MemberReferenceHandle"/>, or
+    /// <see langword="default"/> when the attribute type cannot be resolved
+    /// from the reference closure (very old TFMs).
+    /// </returns>
+    public MemberReferenceHandle GetExtensionAttributeCtorRef()
+    {
+        if (this.extensionAttributeCtorRef.HasValue)
+        {
+            return this.extensionAttributeCtorRef.Value;
+        }
+
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.ExtensionAttribute", out var resolved)
+            ? resolved
+            : typeof(System.Runtime.CompilerServices.ExtensionAttribute);
+        if (attrType == null)
+        {
+            return default;
+        }
+
+        var attrTypeRef = this.getTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        this.extensionAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.extensionAttributeCtorRef.Value;
     }
 
     public MemberReferenceHandle GetObsoleteAttributeStringBoolCtorRef()
