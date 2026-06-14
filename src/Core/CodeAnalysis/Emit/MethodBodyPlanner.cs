@@ -865,6 +865,26 @@ internal sealed class MethodBodyPlanner
                 }
 
                 return false;
+            case TupleTypeSymbol tup:
+                // Issue #813: a value-tuple element type mentioning an
+                // outer-method TP must also drive the symbolic
+                // `IEnumerable<…>` / `IEnumerator<…>` interface
+                // implementations on the iterator SM class so the
+                // TypeSpec carries `ValueTuple<…, !0>` instead of the
+                // type-erased `IEnumerable<object>`. Without this the
+                // SM's interface row references the wrong shape and a
+                // for-in over `Indexed[int32](source)` throws
+                // `EntryPointNotFoundException` from the runtime's
+                // `IEnumerable<(int32,T)>.GetEnumerator()` lookup.
+                foreach (var elem in tup.ElementTypes)
+                {
+                    if (ContainsTypeParameter(elem))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             default:
                 return false;
         }

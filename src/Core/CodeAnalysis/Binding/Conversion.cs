@@ -117,6 +117,20 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
+        // Issue #813: a G# `TupleTypeSymbol` and an imported CLR
+        // `System.ValueTuple<…>` instantiation denote the same type when
+        // their closed CLR backings agree. The former is produced by tuple
+        // literals (`yield (idx, v)`) and tuple type syntax; the latter
+        // appears when a fully-closed tuple element is recovered from a
+        // generic signature like `IEnumerable[(int32, string)]` whose
+        // element type round-trips through `TypeSymbol.FromClrType`. Treat
+        // them as identity so iterators returning tuple element types
+        // accept tuple literals.
+        if (IsTupleClrEquivalent(from, to))
+        {
+            return Conversion.Identity;
+        }
+
         // #313: two erased generics constructed over the same open definition
         // with structurally-equivalent symbolic arguments (e.g. the `List[T]`
         // parameter type and the `List[T]` declared return type) are distinct
@@ -660,6 +674,32 @@ public sealed class Conversion
         if (fromClr != null && toClr != null)
         {
             return ClrTypeUtilities.IsAssignableByName(toClr, fromClr);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #813: returns <see langword="true"/> when one side is a G#
+    /// <see cref="TupleTypeSymbol"/> and the other is the equivalent CLR
+    /// <c>System.ValueTuple&lt;…&gt;</c> instantiation (with identical
+    /// closed element types).
+    /// </summary>
+    private static bool IsTupleClrEquivalent(TypeSymbol a, TypeSymbol b)
+    {
+        if (a == null || b == null)
+        {
+            return false;
+        }
+
+        if (a is TupleTypeSymbol ta && b is not TupleTypeSymbol)
+        {
+            return ta.ClrType != null && b.ClrType != null && ta.ClrType == b.ClrType;
+        }
+
+        if (b is TupleTypeSymbol tb && a is not TupleTypeSymbol)
+        {
+            return tb.ClrType != null && a.ClrType != null && tb.ClrType == a.ClrType;
         }
 
         return false;

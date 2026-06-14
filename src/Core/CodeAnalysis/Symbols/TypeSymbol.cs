@@ -268,6 +268,22 @@ public class TypeSymbol : Symbol
                 }
 
                 return false;
+            case TupleTypeSymbol tup:
+                // Issue #813: value-tuple element types must propagate
+                // "contains type parameter" so callers like
+                // `ImportedTypeSymbol.HasTypeParameterArgument` route a
+                // wrapping `IEnumerable[(int32, T)]` through the
+                // type-spec encoder instead of falling back to the
+                // type-erased `IEnumerable<object>` shape.
+                foreach (var elem in tup.ElementTypes)
+                {
+                    if (ContainsTypeParameter(elem))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             default:
                 return false;
         }

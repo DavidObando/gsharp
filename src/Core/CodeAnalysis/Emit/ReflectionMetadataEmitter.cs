@@ -4822,6 +4822,22 @@ internal sealed class ReflectionMetadataEmitter
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
+        // Issue #813: a tuple whose element types include an open generic
+        // (TupleTypeSymbol.ClrType == null) needs a symbolic TypeSpec
+        // built via the shared helper; the encoder threads each element
+        // through EncodeTypeSymbol so the active iterator-state-machine
+        // remap (issue #810) translates outer-method TPs to the SM
+        // class's own type parameters. Without this branch, boxing a
+        // `(int32, T)` to `object` from inside a state-machine method
+        // body throws GS9998 from the EnumSymbol/throw tail below.
+        if (element is TupleTypeSymbol symbolicTuple
+            && symbolicTuple.ClrType == null
+            && symbolicTuple.Arity >= 2
+            && symbolicTuple.Arity <= 7)
+        {
+            return this.GetTupleTypeSpec(symbolicTuple);
+        }
+
         // ADR-0087 §3 R3: an ImportedTypeSymbol whose generic args mention a
         // type parameter (e.g. `Dictionary<string, T>` where T is MVAR(0))
         // must tokenise as a TypeSpec carrying VAR/MVAR, not the erased
@@ -5264,6 +5280,52 @@ internal sealed class ReflectionMetadataEmitter
             return TryUnify(fnu.UnderlyingType, anu.UnderlyingType, tp, out inferred);
         }
 
+        // Issue #813: unify value-tuple element types so the MethodSpec
+        // for an iterator-returning call like
+        // `Sequences.Indexed[int32](source)` resolves `T` from the
+        // formal return shape `sequence[(int32, T)]` against the
+        // substituted `sequence[(int32, int32)]`. Without this branch
+        // the recursive sequence unification above would only see the
+        // tuple wrapper and fail to descend into its element types.
+        // The actual side may arrive either as a TupleTypeSymbol (when
+        // the binder's SubstituteType produced one) or as an
+        // ImportedTypeSymbol whose ClrType is a closed `ValueTuple<…>`
+        // (when SubstituteType lifted it back through
+        // TypeSymbol.FromClrType on the closed CLR shape).
+        if (formal is TupleTypeSymbol ftup)
+        {
+            ImmutableArray<TypeSymbol> actualElements = default;
+            if (actual is TupleTypeSymbol atup
+                && ftup.ElementTypes.Length == atup.ElementTypes.Length)
+            {
+                actualElements = atup.ElementTypes;
+            }
+            else if (actual?.ClrType is { } actualClr
+                && actualClr.IsGenericType
+                && IsValueTupleOpenDefinition(actualClr.GetGenericTypeDefinition())
+                && actualClr.GenericTypeArguments.Length == ftup.ElementTypes.Length)
+            {
+                var b = ImmutableArray.CreateBuilder<TypeSymbol>(actualClr.GenericTypeArguments.Length);
+                foreach (var arg in actualClr.GenericTypeArguments)
+                {
+                    b.Add(TypeSymbol.FromClrType(arg));
+                }
+
+                actualElements = b.MoveToImmutable();
+            }
+
+            if (!actualElements.IsDefault)
+            {
+                for (int i = 0; i < ftup.ElementTypes.Length; i++)
+                {
+                    if (TryUnify(ftup.ElementTypes[i], actualElements[i], tp, out inferred))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
         var formalArgs = GetGenericTypeArguments(formal);
         var actualArgs = GetGenericTypeArguments(actual);
         if (!formalArgs.IsDefaultOrEmpty && !actualArgs.IsDefaultOrEmpty
@@ -5317,6 +5379,31 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return default;
+    }
+
+    /// <summary>
+    /// Issue #813: returns <see langword="true"/> when <paramref name="openDef"/>
+    /// is one of the BCL <c>System.ValueTuple&lt;…&gt;</c> open generic
+    /// definitions (arities 1–8). Used by the structural unification
+    /// engine so a formal <see cref="TupleTypeSymbol"/> can match against
+    /// an actual CLR <c>ValueTuple</c> instance recovered through
+    /// <see cref="TypeSymbol.FromClrType"/>.
+    /// </summary>
+    private static bool IsValueTupleOpenDefinition(Type openDef)
+    {
+        if (openDef == null)
+        {
+            return false;
+        }
+
+        return openDef == typeof(ValueTuple<>)
+            || openDef == typeof(ValueTuple<,>)
+            || openDef == typeof(ValueTuple<,,>)
+            || openDef == typeof(ValueTuple<,,,>)
+            || openDef == typeof(ValueTuple<,,,,>)
+            || openDef == typeof(ValueTuple<,,,,,>)
+            || openDef == typeof(ValueTuple<,,,,,,>)
+            || openDef == typeof(ValueTuple<,,,,,,,>);
     }
 
     private readonly Dictionary<StructSymbol, EntityHandle> userStructTypeSpecCache = new(ReferenceEqualityComparer.Instance);
@@ -7167,6 +7254,18 @@ internal sealed class ReflectionMetadataEmitter
         // argument passing) must treat it as such even though it has no
         // ClrType on the symbol.
         if (type is EnumSymbol)
+        {
+            return true;
+        }
+
+        // Issue #813: a tuple type is always a CLR value type
+        // (`System.ValueTuple<...>`). When one or more of its element types
+        // is an open generic parameter the symbol's ClrType is null and
+        // the ClrType-based branch below misses it, so boxing decisions
+        // (e.g. `(int32, T) → object`) on iterator yield paths would
+        // throw GS9998 from the emitter's NotSupportedException. Recognise
+        // the symbolic form directly.
+        if (type is TupleTypeSymbol)
         {
             return true;
         }

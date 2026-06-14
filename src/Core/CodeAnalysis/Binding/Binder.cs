@@ -2832,6 +2832,31 @@ public sealed class Binder
             return ReferenceEquals(inner, aseq.ElementType) ? type : AsyncSequenceTypeSymbol.Get(inner);
         }
 
+        if (type is TupleTypeSymbol tup)
+        {
+            // Issue #813: substitute through `(T1, T2, …)` so a call like
+            // `Indexed[int32](source)` lowers its return type from the
+            // open `sequence[(int32, T)]` to the closed
+            // `sequence[(int32, int32)]`. Without this branch the tuple's
+            // element types stay parametric and downstream member lookup
+            // (`.Item1` / `.Item2`) and conversion checks behave as if
+            // T were never substituted.
+            var builder = ImmutableArray.CreateBuilder<TypeSymbol>(tup.ElementTypes.Length);
+            var changed = false;
+            foreach (var elem in tup.ElementTypes)
+            {
+                var substituted = SubstituteType(elem, substitution);
+                if (!ReferenceEquals(substituted, elem))
+                {
+                    changed = true;
+                }
+
+                builder.Add(substituted);
+            }
+
+            return changed ? TupleTypeSymbol.Get(builder.MoveToImmutable()) : type;
+        }
+
         if (type is FunctionTypeSymbol fn)
         {
             var changed = false;
