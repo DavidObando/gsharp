@@ -1153,6 +1153,19 @@ internal sealed class OverloadResolver
                 // Issue #343: when an argument is named, locate its parameter
                 // by name (so type inference still works with named args) and
                 // unwrap the wrapper before binding.
+                //
+                // ADR-0101 follow-up / issue #819: when the primary constructor
+                // declares a trailing variadic parameter (`name ...T`), drive
+                // inference for that slot from EITHER the slice element type
+                // (one argument of type `[]T'` — pass-through) OR from each
+                // trailing argument's type (multiple positional args — pack).
+                // Mirrors `BindCallExpression` ADR-0101 inference. Named args
+                // are not legal at a variadic call site (the call layout has
+                // no slot name).
+                var defIsVariadic = defParams.Length > 0
+                    && defParams[defParams.Length - 1].IsVariadic;
+                var defFixedCount = defIsVariadic ? defParams.Length - 1 : defParams.Length;
+
                 for (var i = 0; i < syntax.Arguments.Count; i++)
                 {
                     var argSyntax = syntax.Arguments[i];
@@ -1181,6 +1194,13 @@ internal sealed class OverloadResolver
                         paramIdx = i;
                     }
 
+                    if (defIsVariadic && paramIdx >= defFixedCount)
+                    {
+                        // Variadic slot: handled in the dedicated block below
+                        // so we can choose between pass-through and pack.
+                        continue;
+                    }
+
                     if (paramIdx >= defParams.Length)
                     {
                         continue;
@@ -1188,6 +1208,32 @@ internal sealed class OverloadResolver
 
                     var preBound = bindExpression(argSyntax);
                     inferTypeArguments(defParams[paramIdx].Type, preBound.Type, substitution);
+                }
+
+                if (defIsVariadic)
+                {
+                    var variadicParamType = defParams[defParams.Length - 1].Type;
+                    var trailingCount = syntax.Arguments.Count - defFixedCount;
+                    if (trailingCount == 1)
+                    {
+                        var single = bindExpression(UnwrapNamedArgumentValue(syntax.Arguments[defFixedCount]));
+                        if (single.Type is SliceTypeSymbol)
+                        {
+                            inferTypeArguments(variadicParamType, single.Type, substitution);
+                        }
+                        else if (variadicParamType is SliceTypeSymbol variadicSlice)
+                        {
+                            inferTypeArguments(variadicSlice.ElementType, single.Type, substitution);
+                        }
+                    }
+                    else if (trailingCount > 1 && variadicParamType is SliceTypeSymbol variadicSlice2)
+                    {
+                        for (var j = defFixedCount; j < syntax.Arguments.Count; j++)
+                        {
+                            var preBound = bindExpression(UnwrapNamedArgumentValue(syntax.Arguments[j]));
+                            inferTypeArguments(variadicSlice2.ElementType, preBound.Type, substitution);
+                        }
+                    }
                 }
 
                 foreach (var tp in tps)
@@ -1233,6 +1279,141 @@ internal sealed class OverloadResolver
         {
             // Issue #343: bind the value behind any named-argument wrapper.
             boundArguments.Add(bindExpression(UnwrapNamedArgumentValue(argument)));
+        }
+
+        // ADR-0101 follow-up / issue #819: a primary constructor may declare a
+        // trailing variadic parameter (`name ...T`). When present, the
+        // matching auto-field has type `[]T`; at the call site we pack any
+        // trailing positional arguments into a fresh `[]T` (or forward a
+        // single `[]T` value unchanged). Named arguments are not legal at a
+        // variadic call site because the trailing slot consumes any number of
+        // positional arguments.
+        var primaryIsVariadic = parameters.Length > 0
+            && parameters[parameters.Length - 1].IsVariadic;
+        if (primaryIsVariadic)
+        {
+            if (!argumentNames.IsDefault)
+            {
+                Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, classType.Name, FirstNamedArgumentName(argumentNames));
+                return new BoundErrorExpression(syntax);
+            }
+
+            var fixedPrimaryCount = parameters.Length - 1;
+            var requestedArgCount = syntax.Arguments.Count;
+            if (requestedArgCount < fixedPrimaryCount)
+            {
+                Diagnostics.ReportTooFewArgumentsForVariadic(syntax.Identifier.Location, classType.Name, fixedPrimaryCount, requestedArgCount);
+                return new BoundErrorExpression(syntax);
+            }
+
+            var variadicParam = parameters[parameters.Length - 1];
+            var variadicSliceType = (SliceTypeSymbol)variadicParam.Type;
+            var elementType = variadicSliceType.ElementType;
+            var trailingCount = requestedArgCount - fixedPrimaryCount;
+            var passThrough = trailingCount == 1
+                && boundArguments[fixedPrimaryCount].Type == variadicSliceType;
+
+            var parameterSyntaxV = new ExpressionSyntax[requestedArgCount];
+            for (var i = 0; i < requestedArgCount; i++)
+            {
+                parameterSyntaxV[i] = syntax.Arguments[i];
+            }
+
+            // Convert/validate the fixed-portion arguments first.
+            var hasErrorsV = false;
+            for (var i = 0; i < fixedPrimaryCount; i++)
+            {
+                var argument = boundArguments[i];
+                var parameter = parameters[i];
+                if (parameterSyntaxV[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
+                    && isFormattableStringTargetType(parameter.Type))
+                {
+                    boundArguments[i] = bindInterpolatedStringAsFormattable(interpolatedCtorArg, parameter.Type);
+                    continue;
+                }
+
+                if (argument.Type != parameter.Type
+                    && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
+                {
+                    if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, parameter.Type, out var convertedArg))
+                    {
+                        boundArguments[i] = convertedArg;
+                        continue;
+                    }
+
+                    if (argument.Type != TypeSymbol.Error)
+                    {
+                        Diagnostics.ReportWrongArgumentType(parameterSyntaxV[i].Location, parameter.Name, parameter.Type, argument.Type);
+                    }
+
+                    hasErrorsV = true;
+                }
+            }
+
+            if (!passThrough)
+            {
+                for (var i = fixedPrimaryCount; i < requestedArgCount; i++)
+                {
+                    var argument = boundArguments[i];
+                    if (argument.Type != elementType
+                        && argument.Type != TypeSymbol.Error
+                        && !Conversion.Classify(argument.Type, elementType).IsImplicit)
+                    {
+                        Diagnostics.ReportWrongArgumentType(parameterSyntaxV[i].Location, variadicParam.Name, elementType, argument.Type);
+                        hasErrorsV = true;
+                    }
+                }
+            }
+
+            if (hasErrorsV)
+            {
+                return new BoundErrorExpression(syntax);
+            }
+
+            // Build the final argument list: fixed args + a single slice arg.
+            var rebuilt = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
+            for (var i = 0; i < fixedPrimaryCount; i++)
+            {
+                rebuilt.Add(boundArguments[i]);
+            }
+
+            if (passThrough)
+            {
+                rebuilt.Add(boundArguments[fixedPrimaryCount]);
+            }
+            else
+            {
+                var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailingCount);
+                for (var i = fixedPrimaryCount; i < requestedArgCount; i++)
+                {
+                    packed.Add(boundArguments[i]);
+                }
+
+                rebuilt.Add(new BoundArrayCreationExpression(syntax, variadicSliceType, packed.MoveToImmutable()));
+            }
+
+            var packedArgs = rebuilt.MoveToImmutable();
+
+            if (classType.IsInline)
+            {
+                return new BoundConstructorCallExpression(syntax, classType, packedArgs);
+            }
+
+            if (!classType.IsClass)
+            {
+                var fieldInitializersV = ImmutableArray.CreateBuilder<BoundFieldInitializer>(parameters.Length);
+                for (var i = 0; i < parameters.Length; i++)
+                {
+                    if (classType.TryGetField(parameters[i].Name, out var field))
+                    {
+                        fieldInitializersV.Add(new BoundFieldInitializer(field, packedArgs[i]));
+                    }
+                }
+
+                return new BoundStructLiteralExpression(syntax, classType, fieldInitializersV.ToImmutable());
+            }
+
+            return new BoundConstructorCallExpression(syntax, classType, packedArgs);
         }
 
         // ADR-0063 §5: primary constructors now honor optional parameters. When

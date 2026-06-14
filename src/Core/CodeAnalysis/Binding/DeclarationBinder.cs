@@ -390,6 +390,19 @@ internal sealed class DeclarationBinder
                     continue;
                 }
 
+                // ADR-0101 follow-up / issue #819: variadic primary-constructor
+                // parameters promote to a `[]T` auto-field of the same name.
+                // Inside the body the parameter is `[]T`; at call sites the
+                // trailing arguments are packed by
+                // `OverloadResolver.BindConstructorCallExpression`. The
+                // structural rules (at-most-one, last position) are validated
+                // by `ValidateVariadicParameterShape` after this loop.
+                var isVariadic = paramSyntax.IsVariadic;
+                if (isVariadic && paramType != TypeSymbol.Error)
+                {
+                    paramType = SliceTypeSymbol.Get(paramType);
+                }
+
                 if (!seenFieldNames.Add(paramName))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(paramSyntax.Identifier.Location, paramName);
@@ -425,11 +438,18 @@ internal sealed class DeclarationBinder
                     Diagnostics.ReportRefKindOnPrimaryCtorParameter(paramSyntax.RefKindModifier.Location, paramName);
                 }
 
-                var primaryCtorParam = new ParameterSymbol(paramName, paramType, declaringSyntax: paramSyntax.Identifier, isScoped: paramSyntax.IsScoped);
+                var primaryCtorParam = new ParameterSymbol(paramName, paramType, isVariadic, declaringSyntax: paramSyntax.Identifier, isScoped: paramSyntax.IsScoped);
                 conversions.BindAndAttachParameterDefaultValue(paramSyntax, primaryCtorParam);
                 ctorBuilder.Add(primaryCtorParam);
                 fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline));
             }
+
+            // ADR-0101 follow-up / issue #819: at most one variadic primary-ctor
+            // parameter (`GS0364`) and it must be the last (`GS0145`). Validation
+            // runs over the raw syntax so multi-variadic / non-last variadic
+            // signatures still get a diagnostic even when one of the parameters
+            // failed type binding above.
+            ValidateVariadicParameterShape(syntax.PrimaryConstructorParameters);
 
             primaryCtorParameters = ctorBuilder.ToImmutable();
         }
