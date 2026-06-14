@@ -92,6 +92,16 @@ internal sealed class WellKnownReferences
     // as plain static helpers on `<Program>`.
     private MemberReferenceHandle? extensionAttributeCtorRef;
 
+    // Issue #834: cached MemberRefs for the two
+    // System.Runtime.CompilerServices.NullableAttribute ctors and the
+    // single-byte System.Runtime.CompilerServices.NullableContextAttribute
+    // ctor. Stamped on per-parameter / per-return Param rows and on the
+    // MethodDef itself so C# nullable-flow analysis treats `T?` reference
+    // parameters as annotated instead of inferring the assembly default.
+    private MemberReferenceHandle? nullableAttributeByteCtorRef;
+    private MemberReferenceHandle? nullableAttributeByteArrayCtorRef;
+    private MemberReferenceHandle? nullableContextAttributeByteCtorRef;
+
     // Issue #410 / ADR-0029: cached member refs for data-struct synthesized members.
     private MemberReferenceHandle stringConcatRef;
     private MemberReferenceHandle stringEqualsRef;
@@ -419,6 +429,115 @@ internal sealed class WellKnownReferences
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
             this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
         return this.extensionAttributeCtorRef.Value;
+    }
+
+    /// <summary>
+    /// Issue #834: returns the cached MemberRef for
+    /// <c>NullableAttribute(byte)</c> — the compact, single-byte ctor the C#
+    /// compiler picks when all positions of a NullableAttribute share the
+    /// same flag value. Stamped on a Param row (or sequence-0 return Param
+    /// row) when the parameter / return contributes a single nullability byte
+    /// that differs from the surrounding context.
+    /// </summary>
+    /// <returns>
+    /// The cached <see cref="MemberReferenceHandle"/>, or
+    /// <see langword="default"/> when <c>System.Runtime.CompilerServices.NullableAttribute</c>
+    /// cannot be resolved from the reference closure (very old TFMs).
+    /// </returns>
+    public MemberReferenceHandle GetNullableAttributeByteCtorRef()
+    {
+        if (this.nullableAttributeByteCtorRef.HasValue)
+        {
+            return this.nullableAttributeByteCtorRef.Value;
+        }
+
+        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableAttribute", out var attrType))
+        {
+            return default;
+        }
+
+        var attrTypeRef = this.getTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), p => p.AddParameter().Type().Byte());
+
+        this.nullableAttributeByteCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.nullableAttributeByteCtorRef.Value;
+    }
+
+    /// <summary>
+    /// Issue #834: returns the cached MemberRef for
+    /// <c>NullableAttribute(byte[])</c> — the array-form ctor the C# compiler
+    /// picks when a NullableAttribute carries inner-position bytes for nested
+    /// generic-type arguments (e.g. <c>IEnumerable&lt;string?&gt;?</c>).
+    /// </summary>
+    /// <returns>
+    /// The cached <see cref="MemberReferenceHandle"/>, or
+    /// <see langword="default"/> when the attribute can't be resolved.
+    /// </returns>
+    public MemberReferenceHandle GetNullableAttributeByteArrayCtorRef()
+    {
+        if (this.nullableAttributeByteArrayCtorRef.HasValue)
+        {
+            return this.nullableAttributeByteArrayCtorRef.Value;
+        }
+
+        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableAttribute", out var attrType))
+        {
+            return default;
+        }
+
+        var attrTypeRef = this.getTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), p => p.AddParameter().Type().SZArray().Byte());
+
+        this.nullableAttributeByteArrayCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.nullableAttributeByteArrayCtorRef.Value;
+    }
+
+    /// <summary>
+    /// Issue #834: returns the cached MemberRef for
+    /// <c>NullableContextAttribute(byte)</c>. Stamped on a MethodDef row to
+    /// declare the method-level default nullability flag — the per-position
+    /// <c>NullableAttribute</c> rows only need to cover positions that
+    /// deviate from this default.
+    /// </summary>
+    /// <returns>
+    /// The cached <see cref="MemberReferenceHandle"/>, or
+    /// <see langword="default"/> when the attribute can't be resolved.
+    /// </returns>
+    public MemberReferenceHandle GetNullableContextAttributeByteCtorRef()
+    {
+        if (this.nullableContextAttributeByteCtorRef.HasValue)
+        {
+            return this.nullableContextAttributeByteCtorRef.Value;
+        }
+
+        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableContextAttribute", out var attrType))
+        {
+            return default;
+        }
+
+        var attrTypeRef = this.getTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), p => p.AddParameter().Type().Byte());
+
+        this.nullableContextAttributeByteCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.nullableContextAttributeByteCtorRef.Value;
     }
 
     public MemberReferenceHandle GetObsoleteAttributeStringBoolCtorRef()

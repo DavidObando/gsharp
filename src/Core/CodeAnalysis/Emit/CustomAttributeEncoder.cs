@@ -149,6 +149,88 @@ internal sealed class CustomAttributeEncoder
     }
 
     /// <summary>
+    /// Issue #834: emits
+    /// <c>System.Runtime.CompilerServices.NullableAttribute</c> on a Param row
+    /// using either the single-byte ctor (when <paramref name="flags"/> has
+    /// length 1) or the byte-array ctor (when there are nested generic
+    /// inner-position bytes). Silently no-ops when the attribute type can't
+    /// be resolved (very old TFMs) or when <paramref name="flags"/> is empty.
+    /// </summary>
+    /// <param name="paramHandle">The Param row to attach the attribute to.</param>
+    /// <param name="flags">The DFS pre-order nullability byte array.</param>
+    public void EmitNullableAttributeOnParameter(ParameterHandle paramHandle, ImmutableArray<byte> flags)
+    {
+        if (flags.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+
+        MemberReferenceHandle ctorRef;
+        if (flags.Length == 1)
+        {
+            ctorRef = this.wellKnown.GetNullableAttributeByteCtorRef();
+            if (ctorRef.IsNil)
+            {
+                return;
+            }
+
+            valueBlob.WriteByte(flags[0]);
+        }
+        else
+        {
+            ctorRef = this.wellKnown.GetNullableAttributeByteArrayCtorRef();
+            if (ctorRef.IsNil)
+            {
+                return;
+            }
+
+            valueBlob.WriteInt32(flags.Length);
+            foreach (var b in flags)
+            {
+                valueBlob.WriteByte(b);
+            }
+        }
+
+        valueBlob.WriteUInt16(0);
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: paramHandle,
+            constructor: ctorRef,
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
+
+    /// <summary>
+    /// Issue #834: emits
+    /// <c>System.Runtime.CompilerServices.NullableContextAttribute(<paramref name="flag"/>)</c>
+    /// on a MethodDef row to declare the method-level default nullability
+    /// context (per-position <c>NullableAttribute</c> rows only need to cover
+    /// positions that deviate from this default).
+    /// </summary>
+    /// <param name="methodHandle">The MethodDef row to attach the attribute to.</param>
+    /// <param name="flag">The nullability flag (0/1/2).</param>
+    public void EmitNullableContextAttributeOnMethod(MethodDefinitionHandle methodHandle, byte flag)
+    {
+        var ctorRef = this.wellKnown.GetNullableContextAttributeByteCtorRef();
+        if (ctorRef.IsNil)
+        {
+            return;
+        }
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteByte(flag);
+        valueBlob.WriteUInt16(0);
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: methodHandle,
+            constructor: ctorRef,
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
+
+    /// <summary>
     /// Phase 3 of #141 / ADR-0047 §3: emits a <c>CustomAttribute</c> row for
     /// every bound user annotation on <paramref name="symbol"/> whose target
     /// matches <paramref name="filter"/>. Resolves the attribute type to a

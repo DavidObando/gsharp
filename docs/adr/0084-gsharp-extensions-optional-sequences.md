@@ -589,10 +589,15 @@ of that migration, not left behind as dead code.
   were routed around in the G# source (use `List[T]` over
   `Queue[T]`, retain the `class`/`struct` constraint split that
   maps each helper to the right lowering, suppress the
-  consumer-side `CS8602` with a pragma) so the runtime behaviour
-  matches the C# baseline; ilverify is dirty on those remaining
-  methods only. The bootstrap is no longer hypothetical: it
-  builds the stdlib it ships.
+  consumer-side `CS8602` with a pragma — **the `CS8602` pragma is
+  now closed by #834**, which makes the reflection metadata
+  emitter stamp `[NullableAttribute]` /
+  `[NullableContextAttribute]` for `T?` reference parameters and
+  returns so C# consumers with `nullable enable` see the
+  annotation directly) so the runtime behaviour matches the C#
+  baseline; ilverify is dirty on those remaining methods only.
+  The bootstrap is no longer hypothetical: it builds the stdlib
+  it ships.
 
 ## Consequences
 
