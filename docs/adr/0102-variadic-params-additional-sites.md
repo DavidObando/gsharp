@@ -201,14 +201,17 @@ j("-")                       // empty pack
   in `OverloadResolver` was extended to perform pack / pass-through
   before dispatching to the lowered Invoke. The behavior matches the
   top-level / instance-method paths exactly.
-- Out-of-scope: the structural `(T1, T2, ...T3) -> R` function-type
-  clause (ADR-0075) — i.e. the *anonymous* delegate-shaped type
-  spelling without a named delegate — is **not** extended in this
-  ADR. `FunctionTypeSymbol` carries no per-parameter `IsVariadic`
-  flag, so the call-site packing has nowhere to consult. Authors who
-  want variadic semantics from a delegate-typed local should declare
-  a named `delegate` (case 6 above). The follow-up that lifts this
-  is the same `FunctionTypeSymbol` lift mentioned under case 5.
+- Out-of-scope (now delivered in #818): the structural
+  `(T1, T2, ...T3) -> R` function-type clause (ADR-0075) — i.e. the
+  *anonymous* delegate-shaped type spelling without a named delegate —
+  was not extended in the original ADR-0102 because
+  `FunctionTypeSymbol` carried no per-parameter `IsVariadic` flag.
+  Issue #818 lifts that carve-out: `FunctionTypeSymbol` now carries an
+  `IsVariadic` flag per parameter, the parser accepts
+  `(T1, ...T2) -> R` in every type-clause position, the binder
+  validates the structural rules (at-most-one, last position,
+  slice-wrapped element type), and the call-site pack /
+  pass-through machinery is shared with the named-delegate paths.
 
 ## Diagnostics
 

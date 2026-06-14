@@ -604,11 +604,22 @@ internal sealed class MemberLookup
 
         var parameters = invoke.GetParameters();
         var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.Length);
+        var variadicBuilder = ImmutableArray.CreateBuilder<bool>(parameters.Length);
+        var anyVariadic = false;
         foreach (var parameter in parameters)
         {
             parameterTypes.Add(parameter.ParameterType.ContainsGenericParameters
                 ? TypeSymbol.Object
                 : TypeSymbol.FromClrType(parameter.ParameterType));
+
+            // ADR-0102 follow-up / issue #818: a delegate whose CLR Invoke
+            // parameter carries [ParamArrayAttribute] is variadic from the
+            // G# perspective too — the call-site pack / pass-through rules
+            // mirror what direct method calls already do for params methods.
+            var paramArray = parameter.GetCustomAttributesData()
+                .Any(a => string.Equals(a.AttributeType.FullName, "System.ParamArrayAttribute", StringComparison.Ordinal));
+            variadicBuilder.Add(paramArray);
+            anyVariadic |= paramArray;
         }
 
         var returnType = invoke.ReturnType == typeof(void)
@@ -616,7 +627,8 @@ internal sealed class MemberLookup
             : invoke.ReturnType.ContainsGenericParameters
                 ? TypeSymbol.Object
                 : TypeSymbol.FromClrType(invoke.ReturnType);
-        functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), returnType);
+        var variadicFlags = anyVariadic ? variadicBuilder.ToImmutable() : default;
+        functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), variadicFlags, returnType);
         return true;
     }
 

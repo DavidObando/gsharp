@@ -1646,16 +1646,52 @@ public sealed class Binder
             // Phase 4.7: function-type clause `func(T1, T2, ...) R?`.
             // ADR-0043: `async func(P) R` aliases to `func(P) Task[R]` (with
             // carve-outs for void → Task and IAsyncEnumerable[T] → unchanged).
+            // ADR-0102 follow-up / issue #818: the parameter list may
+            // declare a trailing variadic slot `...T`. The structural rules
+            // (at most one, last position, slice-typed) are enforced here
+            // and the per-slot variadic flag is threaded into the cached
+            // `FunctionTypeSymbol` so call-site pack / pass-through can
+            // consult it.
             var paramTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.FunctionParameterTypes.Count);
+            var variadicFlagsBuilder = ImmutableArray.CreateBuilder<bool>(syntax.FunctionParameterTypes.Count);
+            var anyVariadic = false;
+            var firstVariadicSeen = false;
             for (var i = 0; i < syntax.FunctionParameterTypes.Count; i++)
             {
-                var pt = BindTypeClause(syntax.FunctionParameterTypes[i]);
+                var paramSyntax = syntax.FunctionParameterTypes[i];
+                var pt = BindTypeClause(paramSyntax);
                 if (pt == null)
                 {
                     return null;
                 }
 
+                var isVariadicSlot = syntax.IsParameterVariadic(i);
+                if (isVariadicSlot)
+                {
+                    anyVariadic = true;
+                    if (firstVariadicSeen)
+                    {
+                        Diagnostics.ReportMultipleVariadicParameters(paramSyntax.Location, $"<arg{i}>");
+                    }
+
+                    firstVariadicSeen = true;
+                    if (i < syntax.FunctionParameterTypes.Count - 1)
+                    {
+                        Diagnostics.ReportVariadicParameterMustBeLast(paramSyntax.Location, $"<arg{i}>");
+                    }
+
+                    // ADR-0102 follow-up / issue #818: the user writes
+                    // `...T` and the stored parameter type is the slice
+                    // `[]T`, matching the named-delegate convention so
+                    // call-site pack / pass-through can share machinery.
+                    if (pt != TypeSymbol.Error)
+                    {
+                        pt = SliceTypeSymbol.Get(pt);
+                    }
+                }
+
                 paramTypes.Add(pt);
+                variadicFlagsBuilder.Add(isVariadicSlot);
             }
 
             var ret = syntax.ReturnTypeClause != null ? BindTypeClause(syntax.ReturnTypeClause) : TypeSymbol.Void;
@@ -1690,7 +1726,8 @@ public sealed class Binder
                 }
             }
 
-            return FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), ret ?? TypeSymbol.Void);
+            var variadicFlags = anyVariadic ? variadicFlagsBuilder.MoveToImmutable() : default;
+            return FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), variadicFlags, ret ?? TypeSymbol.Void);
         }
 
         if (syntax.IsTuple)
@@ -2870,7 +2907,13 @@ public sealed class Binder
 
             var substitutedReturn = SubstituteType(fn.ReturnType, substitution);
             changed |= !ReferenceEquals(substitutedReturn, fn.ReturnType);
-            return changed ? FunctionTypeSymbol.Get(builder.MoveToImmutable(), substitutedReturn) : type;
+
+            // ADR-0102 follow-up / issue #818: preserve the per-parameter
+            // variadic flags through substitution so the substituted function
+            // type retains its variadic call-site semantics.
+            return changed
+                ? FunctionTypeSymbol.Get(builder.MoveToImmutable(), fn.IsVariadic, substitutedReturn)
+                : type;
         }
 
         if (type is ImportedTypeSymbol it && it.HasTypeParameterArgument)

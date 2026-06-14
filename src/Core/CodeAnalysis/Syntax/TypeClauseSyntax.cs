@@ -263,12 +263,31 @@ public sealed class TypeClauseSyntax : SyntaxNode
         TypeClauseSyntax returnTypeClause,
         SyntaxToken questionToken,
         bool isFunction)
+        : this(syntaxTree, asyncModifier, funcKeyword, openParenToken, functionParameterTypes, functionParameterEllipsisTokens: default, closeParenToken, returnTypeClause, questionToken, isFunction)
+    {
+    }
+#pragma warning restore SA1642
+
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for an (optionally <c>async</c>-modified) function type clause (ADR-0043) with optional per-parameter variadic markers (ADR-0102 follow-up / issue #818).</summary>
+#pragma warning disable SA1642
+    private TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken asyncModifier,
+        SyntaxToken funcKeyword,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        ImmutableArray<SyntaxToken> functionParameterEllipsisTokens,
+        SyntaxToken closeParenToken,
+        TypeClauseSyntax returnTypeClause,
+        SyntaxToken questionToken,
+        bool isFunction)
         : base(syntaxTree)
     {
         AsyncModifier = asyncModifier;
         FuncKeyword = funcKeyword;
         OpenParenToken = openParenToken;
         FunctionParameterTypes = functionParameterTypes;
+        FunctionParameterEllipsisTokens = functionParameterEllipsisTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : functionParameterEllipsisTokens;
         CloseParenToken = closeParenToken;
         ReturnTypeClause = returnTypeClause;
         QuestionToken = questionToken;
@@ -287,11 +306,30 @@ public sealed class TypeClauseSyntax : SyntaxNode
         TypeClauseSyntax returnTypeClause,
         SyntaxToken questionToken,
         bool isArrowFunction)
+        : this(syntaxTree, asyncModifier, openParenToken, functionParameterTypes, functionParameterEllipsisTokens: default, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction)
+    {
+    }
+#pragma warning restore SA1642
+
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for the arrow-form function type clause <c>(T1, T2, ...) -&gt; R?</c> with optional per-parameter variadic markers <c>(T1, ...T2) -&gt; R</c> (ADR-0102 follow-up / issue #818).</summary>
+#pragma warning disable SA1642
+    private TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken asyncModifier,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        ImmutableArray<SyntaxToken> functionParameterEllipsisTokens,
+        SyntaxToken closeParenToken,
+        SyntaxToken arrowToken,
+        TypeClauseSyntax returnTypeClause,
+        SyntaxToken questionToken,
+        bool isArrowFunction)
         : base(syntaxTree)
     {
         AsyncModifier = asyncModifier;
         OpenParenToken = openParenToken;
         FunctionParameterTypes = functionParameterTypes;
+        FunctionParameterEllipsisTokens = functionParameterEllipsisTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : functionParameterEllipsisTokens;
         CloseParenToken = closeParenToken;
         ArrowToken = arrowToken;
         ReturnTypeClause = returnTypeClause;
@@ -414,6 +452,17 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets the function parameter-type clauses, or the default value.</summary>
     public SeparatedSyntaxList<TypeClauseSyntax> FunctionParameterTypes { get; }
 
+    /// <summary>
+    /// Gets the per-parameter <c>...</c> tokens for a variadic anonymous
+    /// function-type clause (ADR-0102 follow-up / issue #818). The array is
+    /// parallel to <see cref="FunctionParameterTypes"/> — entry <c>i</c> is
+    /// the leading <c>...</c> token of the i-th parameter slot, or
+    /// <see langword="null"/> when that slot is not variadic. The array is
+    /// always non-default; it is <see cref="ImmutableArray{T}.Empty"/> when
+    /// the clause is not a function-type clause or carries no variadic.
+    /// </summary>
+    public ImmutableArray<SyntaxToken> FunctionParameterEllipsisTokens { get; } = ImmutableArray<SyntaxToken>.Empty;
+
     /// <summary>Gets the function return-type clause, or <c>null</c> when the type is void / not a function type.</summary>
     public TypeClauseSyntax ReturnTypeClause { get; }
 
@@ -513,6 +562,17 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this clause denotes an async function type <c>async func(...) R?</c> (ADR-0043) or the canonical arrow form <c>async (...) -&gt; R?</c> (ADR-0075).</summary>
     public bool IsAsyncFunction => IsFunction && AsyncModifier != null;
 
+    /// <summary>Returns a value indicating whether the parameter at <paramref name="index"/> carries a leading <c>...</c> marker (ADR-0102 follow-up / issue #818).</summary>
+    /// <param name="index">The parameter slot index.</param>
+    /// <returns><see langword="true"/> when the parameter is variadic.</returns>
+    public bool IsParameterVariadic(int index)
+    {
+        return !FunctionParameterEllipsisTokens.IsDefaultOrEmpty
+            && index >= 0
+            && index < FunctionParameterEllipsisTokens.Length
+            && FunctionParameterEllipsisTokens[index] != null;
+    }
+
     /// <summary>Creates a pointer type clause <c>*T</c> (ADR-0039).</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="starToken">The <c>*</c> prefix token.</param>
@@ -588,7 +648,55 @@ public sealed class TypeClauseSyntax : SyntaxNode
         TypeClauseSyntax returnTypeClause,
         SyntaxToken questionToken)
     {
-        return new TypeClauseSyntax(syntaxTree, asyncModifier, funcKeyword, openParenToken, functionParameterTypes, closeParenToken, returnTypeClause, questionToken, isFunction: true);
+        return new TypeClauseSyntax(syntaxTree, asyncModifier, funcKeyword, openParenToken, functionParameterTypes, functionParameterEllipsisTokens: default, closeParenToken, returnTypeClause, questionToken, isFunction: true);
+    }
+
+    /// <summary>Creates an async function type clause <c>async func(P, ...T) R?</c> with per-parameter variadic markers (ADR-0102 follow-up / issue #818).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="asyncModifier">The leading <c>async</c> modifier token.</param>
+    /// <param name="funcKeyword">The <c>func</c> keyword.</param>
+    /// <param name="openParenToken">The opening <c>(</c> token.</param>
+    /// <param name="functionParameterTypes">The comma-separated parameter-type clauses.</param>
+    /// <param name="functionParameterEllipsisTokens">The per-slot <c>...</c> tokens (parallel to <paramref name="functionParameterTypes"/>); entries may be <see langword="null"/> for non-variadic slots.</param>
+    /// <param name="closeParenToken">The closing <c>)</c> token.</param>
+    /// <param name="returnTypeClause">The optional return-type clause; <c>null</c> for void.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    /// <returns>An async function type clause.</returns>
+    public static TypeClauseSyntax CreateAsyncFunction(
+        SyntaxTree syntaxTree,
+        SyntaxToken asyncModifier,
+        SyntaxToken funcKeyword,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        ImmutableArray<SyntaxToken> functionParameterEllipsisTokens,
+        SyntaxToken closeParenToken,
+        TypeClauseSyntax returnTypeClause,
+        SyntaxToken questionToken)
+    {
+        return new TypeClauseSyntax(syntaxTree, asyncModifier, funcKeyword, openParenToken, functionParameterTypes, functionParameterEllipsisTokens, closeParenToken, returnTypeClause, questionToken, isFunction: true);
+    }
+
+    /// <summary>Creates a legacy <c>func(P, ...T) R?</c> function type clause with per-parameter variadic markers (ADR-0102 follow-up / issue #818).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="funcKeyword">The <c>func</c> keyword.</param>
+    /// <param name="openParenToken">The opening <c>(</c> token.</param>
+    /// <param name="functionParameterTypes">The comma-separated parameter-type clauses.</param>
+    /// <param name="functionParameterEllipsisTokens">The per-slot <c>...</c> tokens.</param>
+    /// <param name="closeParenToken">The closing <c>)</c> token.</param>
+    /// <param name="returnTypeClause">The optional return-type clause; <c>null</c> for void.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    /// <returns>A legacy function type clause.</returns>
+    public static TypeClauseSyntax CreateLegacyFunction(
+        SyntaxTree syntaxTree,
+        SyntaxToken funcKeyword,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        ImmutableArray<SyntaxToken> functionParameterEllipsisTokens,
+        SyntaxToken closeParenToken,
+        TypeClauseSyntax returnTypeClause,
+        SyntaxToken questionToken)
+    {
+        return new TypeClauseSyntax(syntaxTree, asyncModifier: null, funcKeyword, openParenToken, functionParameterTypes, functionParameterEllipsisTokens, closeParenToken, returnTypeClause, questionToken, isFunction: true);
     }
 
     /// <summary>Creates the canonical arrow-form function type clause <c>(T1, T2, ...) -&gt; R?</c> (ADR-0075).</summary>
@@ -609,7 +717,30 @@ public sealed class TypeClauseSyntax : SyntaxNode
         TypeClauseSyntax returnTypeClause,
         SyntaxToken questionToken)
     {
-        return new TypeClauseSyntax(syntaxTree, asyncModifier: null, openParenToken, functionParameterTypes, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction: true);
+        return new TypeClauseSyntax(syntaxTree, asyncModifier: null, openParenToken, functionParameterTypes, functionParameterEllipsisTokens: default, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction: true);
+    }
+
+    /// <summary>Creates the canonical arrow-form function type clause <c>(T1, T2, ...Tk) -&gt; R?</c> with per-parameter variadic markers (ADR-0102 follow-up / issue #818).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="openParenToken">The opening <c>(</c> token.</param>
+    /// <param name="functionParameterTypes">The comma-separated parameter-type clauses.</param>
+    /// <param name="functionParameterEllipsisTokens">Per-slot <c>...</c> tokens (parallel to <paramref name="functionParameterTypes"/>); entries may be <see langword="null"/>.</param>
+    /// <param name="closeParenToken">The closing <c>)</c> token.</param>
+    /// <param name="arrowToken">The <c>-&gt;</c> token.</param>
+    /// <param name="returnTypeClause">The return-type clause.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    /// <returns>An arrow-form function type clause.</returns>
+    public static TypeClauseSyntax CreateArrowFunction(
+        SyntaxTree syntaxTree,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        ImmutableArray<SyntaxToken> functionParameterEllipsisTokens,
+        SyntaxToken closeParenToken,
+        SyntaxToken arrowToken,
+        TypeClauseSyntax returnTypeClause,
+        SyntaxToken questionToken)
+    {
+        return new TypeClauseSyntax(syntaxTree, asyncModifier: null, openParenToken, functionParameterTypes, functionParameterEllipsisTokens, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction: true);
     }
 
     /// <summary>Creates the canonical async arrow-form function type clause <c>async (T1, T2, ...) -&gt; R?</c> (ADR-0075).</summary>
@@ -632,7 +763,32 @@ public sealed class TypeClauseSyntax : SyntaxNode
         TypeClauseSyntax returnTypeClause,
         SyntaxToken questionToken)
     {
-        return new TypeClauseSyntax(syntaxTree, asyncModifier, openParenToken, functionParameterTypes, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction: true);
+        return new TypeClauseSyntax(syntaxTree, asyncModifier, openParenToken, functionParameterTypes, functionParameterEllipsisTokens: default, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction: true);
+    }
+
+    /// <summary>Creates the canonical async arrow-form function type clause <c>async (T1, T2, ...Tk) -&gt; R?</c> with per-parameter variadic markers (ADR-0102 follow-up / issue #818).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="asyncModifier">The leading <c>async</c> modifier token.</param>
+    /// <param name="openParenToken">The opening <c>(</c> token.</param>
+    /// <param name="functionParameterTypes">The comma-separated parameter-type clauses.</param>
+    /// <param name="functionParameterEllipsisTokens">Per-slot <c>...</c> tokens.</param>
+    /// <param name="closeParenToken">The closing <c>)</c> token.</param>
+    /// <param name="arrowToken">The <c>-&gt;</c> token.</param>
+    /// <param name="returnTypeClause">The return-type clause.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    /// <returns>An async arrow-form function type clause.</returns>
+    public static TypeClauseSyntax CreateAsyncArrowFunction(
+        SyntaxTree syntaxTree,
+        SyntaxToken asyncModifier,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        ImmutableArray<SyntaxToken> functionParameterEllipsisTokens,
+        SyntaxToken closeParenToken,
+        SyntaxToken arrowToken,
+        TypeClauseSyntax returnTypeClause,
+        SyntaxToken questionToken)
+    {
+        return new TypeClauseSyntax(syntaxTree, asyncModifier, openParenToken, functionParameterTypes, functionParameterEllipsisTokens, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction: true);
     }
 
     /// <summary>Creates the raw function-pointer type clause <c>unmanaged[CC] (T1, T2, ...) -&gt; R</c> (ADR-0095 / issue #761).</summary>

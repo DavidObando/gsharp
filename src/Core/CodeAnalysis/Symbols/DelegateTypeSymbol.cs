@@ -84,12 +84,21 @@ public sealed class DelegateTypeSymbol : TypeSymbol
             if (equivalentFunctionType == null)
             {
                 var paramTypes = ImmutableArray.CreateBuilder<TypeSymbol>(Parameters.Length);
+                var variadicBuilder = ImmutableArray.CreateBuilder<bool>(Parameters.Length);
+                var anyVariadic = false;
                 foreach (var p in Parameters)
                 {
                     paramTypes.Add(p.Type);
+                    variadicBuilder.Add(p.IsVariadic);
+                    anyVariadic |= p.IsVariadic;
                 }
 
-                equivalentFunctionType = FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), ReturnType);
+                // ADR-0102 follow-up / issue #818: a named delegate with a
+                // trailing variadic parameter materialises a variadic
+                // FunctionTypeSymbol so callers that take a `(T, ...U) -> R`
+                // typed value and a named delegate value share identity.
+                var variadicFlags = anyVariadic ? variadicBuilder.MoveToImmutable() : default;
+                equivalentFunctionType = FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), variadicFlags, ReturnType);
             }
 
             return equivalentFunctionType;

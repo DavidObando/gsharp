@@ -269,7 +269,7 @@ internal sealed class LambdaBinder
             observableReturnType = WrapAsTask(returnType);
         }
 
-        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), observableReturnType);
+        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), BuildVariadicFlagsIfAny(parameterSymbols), observableReturnType);
         var synthetic = new FunctionSymbol(
             $"<lambda{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
             parameterSymbols.ToImmutable(),
@@ -538,7 +538,7 @@ internal sealed class LambdaBinder
         }
 
         var bodyBlock = new BoundBlockStatement(syntax.Body, bodyStatements.ToImmutable());
-        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), observableReturnType);
+        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), BuildVariadicFlagsIfAny(parameterSymbols), observableReturnType);
         var captured = CollectCapturedVariables(bodyBlock, synthetic.Parameters);
 
         // Issue #367 / ADR-0058: by-ref-like or managed-pointer locals cannot
@@ -617,8 +617,13 @@ internal sealed class LambdaBinder
         var adapterReturnType = targetFunctionType.ReturnType == TypeSymbol.Void
             ? TypeSymbol.Void
             : GetErasedDelegateSlotType(targetFunctionType.ReturnType);
+
+        // ADR-0102 follow-up / issue #818: preserve the target's variadic
+        // flag shape through the erased adapter so call-site dispatch keeps
+        // its pack / pass-through semantics.
         var adapterFunctionType = FunctionTypeSymbol.Get(
             adapterParameters.Select(p => p.Type).ToImmutableArray(),
+            targetFunctionType.IsVariadic,
             adapterReturnType);
         var adapterFunction = new FunctionSymbol(
             $"<lambda_erased{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
@@ -752,6 +757,42 @@ internal sealed class LambdaBinder
             ? trailing
             : conversions.BindConversion(syntax.Body.Location, trailing, returnType);
         bodyStatements.Add(new BoundReturnStatement(syntax.Body, trailingConverted));
+    }
+
+    /// <summary>
+    /// ADR-0102 follow-up / issue #818: collects per-parameter variadic
+    /// flags from a lambda's bound parameter list into the array shape
+    /// <see cref="FunctionTypeSymbol.Get(ImmutableArray{TypeSymbol}, ImmutableArray{bool}, TypeSymbol)"/>
+    /// consumes. Returns <c>default</c> when no parameter is variadic so
+    /// the cache lookup stays on the non-variadic key path for the common
+    /// case.
+    /// </summary>
+    /// <param name="parameters">The bound parameter symbol builder.</param>
+    /// <returns>The per-parameter variadic flag array, or <c>default</c>.</returns>
+    private static ImmutableArray<bool> BuildVariadicFlagsIfAny(ImmutableArray<ParameterSymbol>.Builder parameters)
+    {
+        var anyVariadic = false;
+        for (var i = 0; i < parameters.Count; i++)
+        {
+            if (parameters[i].IsVariadic)
+            {
+                anyVariadic = true;
+                break;
+            }
+        }
+
+        if (!anyVariadic)
+        {
+            return default;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<bool>(parameters.Count);
+        for (var i = 0; i < parameters.Count; i++)
+        {
+            builder.Add(parameters[i].IsVariadic);
+        }
+
+        return builder.MoveToImmutable();
     }
 
     /// <summary>
