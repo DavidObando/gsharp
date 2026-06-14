@@ -270,6 +270,344 @@ public class VariadicEmitTests
         }
     }
 
+    // ADR-0102 / issue #812 — variadic parameters on additional declaration
+    // sites: class instance methods, class static (shared) methods,
+    // interface DIM default bodies, constructors, lambdas, and named
+    // delegates. Each site must emit a MethodDef whose trailing parameter
+    // carries [ParamArrayAttribute] for C# interop.
+
+    [Fact]
+    public void Variadic_OnClassInstanceMethod_EndToEnd()
+    {
+        var source = """
+            package P
+            import System
+
+            class Joiner {
+              func Sum(nums ...int32) int32 {
+                var total = 0
+                for v in nums {
+                  total = total + v
+                }
+                return total
+              }
+            }
+
+            var j = Joiner()
+            Console.WriteLine(j.Sum(1, 2, 3, 4, 5))
+            Console.WriteLine(j.Sum([]int32{10, 20, 30}))
+            Console.WriteLine(j.Sum())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("15\n60\n0\n", output);
+    }
+
+    [Fact]
+    public void Variadic_OnSharedStaticMethod_EndToEnd()
+    {
+        var source = """
+            package P
+            import System
+
+            class Sequences {
+              shared {
+                func Of[T](values ...T) []T { return values }
+              }
+            }
+
+            let xs = Sequences.Of(1, 2, 3, 4)
+            Console.WriteLine(xs.Length)
+
+            let arr = []int32{10, 20, 30}
+            let ys = Sequences.Of(arr)
+            Console.WriteLine(ys.Length)
+            Console.WriteLine(ys[1])
+
+            let zs = Sequences.Of[int32]()
+            Console.WriteLine(zs.Length)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("4\n3\n20\n0\n", output);
+    }
+
+    [Fact]
+    public void Variadic_OnInterfaceDefaultBody_EndToEnd()
+    {
+        var source = """
+            package P
+            import System
+
+            interface IAdder {
+              func Add(nums ...int32) int32 {
+                var total = 0
+                for v in nums {
+                  total = total + v
+                }
+                return total
+              }
+            }
+
+            class Adder : IAdder {}
+
+            var a = Adder()
+            Console.WriteLine(a.Add(1, 2, 3, 4))
+            Console.WriteLine(a.Add([]int32{5, 5}))
+            Console.WriteLine(a.Add())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("10\n10\n0\n", output);
+    }
+
+    [Fact]
+    public void Variadic_OnConstructor_EndToEnd()
+    {
+        var source = """
+            package P
+            import System
+
+            class Tags {
+              var Values []string
+              init(vs ...string) {
+                Values = vs
+              }
+            }
+
+            var t1 = Tags("a", "b", "c")
+            Console.WriteLine(t1.Values.Length)
+
+            var t2 = Tags([]string{"x", "y"})
+            Console.WriteLine(t2.Values.Length)
+
+            var t3 = Tags()
+            Console.WriteLine(t3.Values.Length)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("3\n2\n0\n", output);
+    }
+
+    [Fact]
+    public void Variadic_OnLambda_EndToEnd()
+    {
+        // The lambda's FunctionTypeSymbol does not propagate IsVariadic to
+        // call sites (ADR-0102 §5), so the caller passes an explicit []T.
+        // The body still binds the parameter as `[]T` — exercised via
+        // `xs.Length`. Both function-literal and arrow forms.
+        var source = """
+            package P
+            import System
+
+            let f = func(xs ...int32) int32 { return xs.Length }
+            Console.WriteLine(f([]int32{1, 2, 3}))
+
+            let g = (xs ...int32) -> xs.Length
+            Console.WriteLine(g([]int32{10, 20, 30, 40}))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("3\n4\n", output);
+    }
+
+    [Fact]
+    public void Variadic_OnNamedDelegate_DirectAndInvoke_EndToEnd()
+    {
+        // `for v in xs` inside a function-literal body trips a known emit
+        // issue (variable slot capture for the range variable); use the
+        // C-style for loop instead.
+        var source = """
+            package P
+            import System
+
+            type Adder = delegate func(nums ...int32) int32
+
+            var d Adder = func(nums ...int32) int32 {
+              var total = 0
+              for var i = 0; i < nums.Length; i++ {
+                total = total + nums[i]
+              }
+              return total
+            }
+
+            Console.WriteLine(d(1, 2, 3, 4))
+            Console.WriteLine(d.Invoke(5, 5))
+            Console.WriteLine(d([]int32{100, 200}))
+            Console.WriteLine(d())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("10\n10\n300\n0\n", output);
+    }
+
+    // Cross-language: assert every new site emits [ParamArrayAttribute] on
+    // the trailing variadic parameter so C# / F# consumers see `params`.
+    // Split into two compilations because combining a DIM default-body
+    // interface and a named delegate in the same compilation trips a
+    // pre-existing emit bug (delegate .ctor MethodDef row mismatch) that
+    // is out of scope for issue #812.
+
+    [Fact]
+    public void Variadic_AdditionalSites_Emit_ParamArrayAttribute_ForCSharpInterop()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_variadic_sites_csinterop_").FullName;
+        try
+        {
+            var gsSrc = Path.Combine(tempDir, "sites.gs");
+            var gsDll = Path.Combine(tempDir, "GsVariadicSitesLib.dll");
+            File.WriteAllText(gsSrc, """
+                package GsVariadicSitesLib
+
+                public class Joiner {
+                  public func Sum(nums ...int32) int32 {
+                    var total = 0
+                    for var i = 0; i < nums.Length; i++ { total = total + nums[i] }
+                    return total
+                  }
+                }
+
+                public class Sequences {
+                  shared {
+                    public func Of[T](values ...T) []T { return values }
+                  }
+                }
+
+                public interface IAdder {
+                  func Add(nums ...int32) int32 {
+                    var total = 0
+                    for var i = 0; i < nums.Length; i++ { total = total + nums[i] }
+                    return total
+                  }
+                }
+
+                public class Tags {
+                  public var Values []string
+                  init(vs ...string) {
+                    Values = vs
+                  }
+                }
+                """);
+
+            CompileLibrary(gsSrc, gsDll);
+            IlVerifier.Verify(gsDll);
+
+            var asm = System.Reflection.Assembly.LoadFrom(gsDll);
+            var flags = System.Reflection.BindingFlags.Public
+                | System.Reflection.BindingFlags.NonPublic
+                | System.Reflection.BindingFlags.Static
+                | System.Reflection.BindingFlags.Instance;
+
+            // (1) Class instance method.
+            var joinerType = asm.GetTypes().Single(t => t.Name == "Joiner");
+            var sumMethod = joinerType.GetMethod("Sum", flags);
+            Assert.NotNull(sumMethod);
+            var sumParams = sumMethod!.GetParameters();
+            Assert.Single(sumParams);
+            Assert.True(HasParamArray(sumParams[0]), "Class instance method's variadic param must carry [ParamArrayAttribute].");
+
+            // (2) Class static (shared) method.
+            var sequencesType = asm.GetTypes().Single(t => t.Name == "Sequences");
+            var ofMethod = sequencesType.GetMethods(flags).Single(m => m.Name == "Of");
+            var ofParams = ofMethod.GetParameters();
+            Assert.Single(ofParams);
+            Assert.True(HasParamArray(ofParams[0]), "Class static (shared) method's variadic param must carry [ParamArrayAttribute].");
+
+            // (3) Interface DIM default body.
+            var iadderType = asm.GetTypes().Single(t => t.Name == "IAdder");
+            var addMethod = iadderType.GetMethod("Add", flags);
+            Assert.NotNull(addMethod);
+            var addParams = addMethod!.GetParameters();
+            Assert.Single(addParams);
+            Assert.True(HasParamArray(addParams[0]), "Interface DIM default body's variadic param must carry [ParamArrayAttribute].");
+
+            // (4) Constructor.
+            var tagsType = asm.GetTypes().Single(t => t.Name == "Tags");
+            var tagsCtor = tagsType.GetConstructors(flags).Single(c => c.GetParameters().Length == 1);
+            var tagsCtorParams = tagsCtor.GetParameters();
+            Assert.True(HasParamArray(tagsCtorParams[0]), "Constructor's variadic param must carry [ParamArrayAttribute].");
+
+            // Sanity: invoke the class instance method via reflection using
+            // the C#-style expanded array (what `params` lowers to).
+            var instance = Activator.CreateInstance(joinerType);
+            var sumResult = sumMethod.Invoke(instance, new object[] { new int[] { 1, 2, 3, 4, 5 } });
+            Assert.Equal(15, sumResult);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Variadic_OnNamedDelegate_Emits_ParamArrayAttribute_OnInvoke()
+    {
+        // Standalone compilation — combining a DIM default-body interface
+        // with a named delegate in the same compilation trips a pre-
+        // existing emit bug (delegate .ctor MethodDef row mismatch). The
+        // sites are exercised independently above.
+        var tempDir = Directory.CreateTempSubdirectory("gs_variadic_delegate_csinterop_").FullName;
+        try
+        {
+            var gsSrc = Path.Combine(tempDir, "delegate.gs");
+            var gsDll = Path.Combine(tempDir, "GsVariadicDelegateLib.dll");
+            File.WriteAllText(gsSrc, """
+                package GsVariadicDelegateLib
+
+                public type StringJoiner = delegate func(sep string, parts ...string) string
+                """);
+
+            CompileLibrary(gsSrc, gsDll);
+            IlVerifier.Verify(gsDll);
+
+            var asm = System.Reflection.Assembly.LoadFrom(gsDll);
+            var stringJoinerType = asm.GetTypes().Single(t => t.Name == "StringJoiner");
+            var invokeMethod = stringJoinerType.GetMethod("Invoke");
+            Assert.NotNull(invokeMethod);
+            var invokeParams = invokeMethod!.GetParameters();
+            Assert.Equal(2, invokeParams.Length);
+            Assert.False(HasParamArray(invokeParams[0]), "Named delegate's fixed leading param must NOT carry [ParamArrayAttribute].");
+            Assert.True(HasParamArray(invokeParams[1]), "Named delegate's trailing variadic param must carry [ParamArrayAttribute].");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    private static void CompileLibrary(string gsSrc, string gsDll)
+    {
+        using var compileOut = new StringWriter();
+        using var compileErr = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(compileOut);
+        Console.SetError(compileErr);
+        int compileExit;
+        try
+        {
+            compileExit = Program.Main(new[]
+            {
+                "/out:" + gsDll,
+                "/target:library",
+                "/targetframework:net10.0",
+                gsSrc,
+            });
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+        }
+
+        Assert.True(
+            compileExit == 0,
+            $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+    }
+
+    private static bool HasParamArray(System.Reflection.ParameterInfo p) =>
+        p.GetCustomAttributesData().Any(a => a.AttributeType.FullName == "System.ParamArrayAttribute");
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_variadic_emit_").FullName;

@@ -94,6 +94,7 @@ internal sealed class TypeDefEmitter
     private readonly Func<ParameterHandle> nextParameterHandle;
     private readonly Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes;
     private readonly Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter;
+    private readonly Action<ParameterHandle> emitParamArrayAttributeOnParameter;
     private readonly Func<ConstructorInfo, MemberReferenceHandle> getCtorReference;
     private readonly Func<StructSymbol, int> emitStaticConstructorBodyBytes;
     private readonly Func<StructSymbol, EntityHandle, int> emitClassDefaultConstructorBodyBytes;
@@ -112,6 +113,7 @@ internal sealed class TypeDefEmitter
         Func<ParameterHandle> nextParameterHandle,
         Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes,
         Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter,
+        Action<ParameterHandle> emitParamArrayAttributeOnParameter,
         Func<ConstructorInfo, MemberReferenceHandle> getCtorReference,
         Func<StructSymbol, int> emitStaticConstructorBodyBytes,
         Func<StructSymbol, EntityHandle, int> emitClassDefaultConstructorBodyBytes,
@@ -129,6 +131,7 @@ internal sealed class TypeDefEmitter
         this.nextParameterHandle = nextParameterHandle ?? throw new ArgumentNullException(nameof(nextParameterHandle));
         this.emitUserAttributes = emitUserAttributes ?? throw new ArgumentNullException(nameof(emitUserAttributes));
         this.emitIsReadOnlyAttributeOnParameter = emitIsReadOnlyAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitIsReadOnlyAttributeOnParameter));
+        this.emitParamArrayAttributeOnParameter = emitParamArrayAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitParamArrayAttributeOnParameter));
         this.getCtorReference = getCtorReference ?? throw new ArgumentNullException(nameof(getCtorReference));
         this.emitStaticConstructorBodyBytes = emitStaticConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitStaticConstructorBodyBytes));
         this.emitClassDefaultConstructorBodyBytes = emitClassDefaultConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitClassDefaultConstructorBodyBytes));
@@ -784,6 +787,14 @@ internal sealed class TypeDefEmitter
             {
                 this.emitIsReadOnlyAttributeOnParameter(paramHandle);
             }
+
+            // ADR-0101 follow-up / issue #812: stamp [ParamArrayAttribute]
+            // on the trailing variadic Invoke parameter so C# / F# / VB
+            // consumers see the delegate as a normal `params T[]` delegate.
+            if (p.IsVariadic)
+            {
+                this.emitParamArrayAttributeOnParameter(paramHandle);
+            }
         }
 
         var invokeAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
@@ -1165,6 +1176,15 @@ internal sealed class TypeDefEmitter
             if (p.RefKind == RefKind.In)
             {
                 this.emitIsReadOnlyAttributeOnParameter(paramHandle);
+            }
+
+            // ADR-0102 / issue #812: emit [ParamArrayAttribute] on the
+            // trailing variadic parameter of an explicit init(...)
+            // constructor so C#/F# consumers see `params`. Mirrors the
+            // method path in ReflectionMetadataEmitter.AddMethodDefinition.
+            if (p.IsVariadic)
+            {
+                this.emitParamArrayAttributeOnParameter(paramHandle);
             }
         }
 

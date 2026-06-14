@@ -1788,16 +1788,59 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindNamedDelegateInvokeCall(BoundExpression receiver, DelegateTypeSymbol delegateSym, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
     {
-        if (arguments.Length != delegateSym.Parameters.Length)
+        // ADR-0101 follow-up / issue #812: a named delegate may declare a
+        // trailing variadic parameter. Apply the same arity + pack /
+        // pass-through rule that we use for the direct-call (`del(args)`)
+        // path so the explicit `.Invoke(args)` spelling behaves identically.
+        var isVariadic = delegateSym.Parameters.Length > 0
+            && delegateSym.Parameters[delegateSym.Parameters.Length - 1].IsVariadic;
+        var fixedParamCount = isVariadic ? delegateSym.Parameters.Length - 1 : delegateSym.Parameters.Length;
+
+        if (isVariadic)
+        {
+            if (arguments.Length < fixedParamCount)
+            {
+                Diagnostics.ReportTooFewArgumentsForVariadic(ce.Location, delegateSym.Name, fixedParamCount, arguments.Length);
+                return new BoundErrorExpression(null);
+            }
+        }
+        else if (arguments.Length != delegateSym.Parameters.Length)
         {
             Diagnostics.ReportWrongArgumentCount(ce.Location, delegateSym.Name, delegateSym.Parameters.Length, arguments.Length);
             return new BoundErrorExpression(null);
         }
 
-        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
-        for (var i = 0; i < arguments.Length; i++)
+        var permutedArgs = arguments;
+        if (isVariadic)
         {
-            convertedArgs.Add(conversions.BindConversion(ce.Arguments[i].Location, arguments[i], delegateSym.Parameters[i].Type));
+            var variadicParam = delegateSym.Parameters[delegateSym.Parameters.Length - 1];
+            var sliceType = (SliceTypeSymbol)variadicParam.Type;
+            var trailingCount = arguments.Length - fixedParamCount;
+            var passThrough = trailingCount == 1 && arguments[fixedParamCount].Type == sliceType;
+            if (!passThrough)
+            {
+                var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailingCount);
+                for (var i = fixedParamCount; i < arguments.Length; i++)
+                {
+                    packed.Add(arguments[i]);
+                }
+
+                var rebuilt = ImmutableArray.CreateBuilder<BoundExpression>(fixedParamCount + 1);
+                for (var i = 0; i < fixedParamCount; i++)
+                {
+                    rebuilt.Add(arguments[i]);
+                }
+
+                rebuilt.Add(new BoundArrayCreationExpression(ce, sliceType, packed.MoveToImmutable()));
+                permutedArgs = rebuilt.ToImmutable();
+            }
+        }
+
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(permutedArgs.Length);
+        for (var i = 0; i < permutedArgs.Length; i++)
+        {
+            var argLoc = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
+            convertedArgs.Add(conversions.BindConversion(argLoc, permutedArgs[i], delegateSym.Parameters[i].Type));
         }
 
         return new BoundIndirectCallExpression(null, receiver, delegateSym.EquivalentFunctionType, convertedArgs.MoveToImmutable());

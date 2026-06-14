@@ -229,6 +229,11 @@ public class Program
         var message = $"{typeName}: {ex.Message}";
 
         Console.Out.WriteLine($"{file}(1,1,1,1): error GS9998: {message}");
+        if (System.Environment.GetEnvironmentVariable("GS_DEBUG_STACK") != null)
+        {
+            Console.Out.WriteLine(ex.ToString());
+        }
+
         return Error;
     }
 
