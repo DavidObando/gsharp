@@ -582,13 +582,17 @@ of that migration, not left behind as dead code.
   reference-class TPs in `Optional.Map` / `FlatMap` (`ldnull` vs
   `T` ilverify mismatch), open-T `Queue<T>.Dequeue()` discard
   spuriously inserting `unbox.any !T`, and
-  `Enumerable.Empty[T]()` returning `Object[]` for open T — were
-  routed around in the G# source (use `List[T]` over `Queue[T]`,
-  retain the `class`/`struct` constraint split that maps each helper
-  to the right lowering, suppress the consumer-side `CS8602` with a
-  pragma) so the runtime behaviour matches the C# baseline; ilverify
-  is dirty on those eight methods only. The bootstrap is no longer
-  hypothetical: it builds the stdlib it ships.
+  `Enumerable.Empty[T]()` returning `Object[]` for open T (now
+  **closed by #833** — open-T generic-method calls preserve the
+  symbolic return type; `Empty[T]` in `Sequences.gs` has been
+  restored to the inlined `return Enumerable.Empty[T]()` shape) —
+  were routed around in the G# source (use `List[T]` over
+  `Queue[T]`, retain the `class`/`struct` constraint split that
+  maps each helper to the right lowering, suppress the
+  consumer-side `CS8602` with a pragma) so the runtime behaviour
+  matches the C# baseline; ilverify is dirty on those remaining
+  methods only. The bootstrap is no longer hypothetical: it
+  builds the stdlib it ships.
 
 ## Consequences
 

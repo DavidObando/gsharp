@@ -1326,7 +1326,11 @@ internal sealed partial class ExpressionBinder
                     switch (resolution.Outcome)
                     {
                         case OverloadResolution.ResolutionOutcome.Resolved:
+                            var instSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(receiver?.Type, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+                            var instSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(resolution.Best, typeArgSymbols, instSymbolicArgs);
+                            var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : typeArgSymbols;
                             var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
+                                ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(resolution.Best, instSymbolicTypeArgs, receiver?.Type)
                                 ?? ResolveInstanceReturnTypeFromReceiver(receiver?.Type, resolution.Best)
                                 ?? MapClrMemberType(resolution.Best.ReturnType);
                             var instParameters = resolution.Best.GetParameters();
@@ -1342,7 +1346,7 @@ internal sealed partial class ExpressionBinder
                             var instArguments = OverloadResolver.BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
                             var instRefKinds = ComputeArgumentRefKinds(instParameters);
                             overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
-                            BoundExpression instCall = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, instUpdatedReceiver ?? receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols));
+                            BoundExpression instCall = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, instUpdatedReceiver ?? receiver, resolution.Best, returnType, instArguments, instRefKinds, instTypeArgSymbolsForCall));
                             return WrapWithHandlerPrelude(instCall, instHandlerPrelude, ce);
                         case OverloadResolution.ResolutionOutcome.Ambiguous:
                             Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
@@ -1782,7 +1786,11 @@ internal sealed partial class ExpressionBinder
         switch (resolution.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
+                var inheritedSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(receiver?.Type, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+                var inheritedSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(resolution.Best, typeArgSymbols, inheritedSymbolicArgs);
+                var inheritedTypeArgSymbolsForCall = !inheritedSymbolicTypeArgs.IsDefault ? inheritedSymbolicTypeArgs : typeArgSymbols;
                 var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
+                    ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(resolution.Best, inheritedSymbolicTypeArgs, receiver?.Type)
                     ?? ResolveInstanceReturnTypeFromReceiver(receiver?.Type, resolution.Best)
                     ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
                 var inheritedParameters = resolution.Best.GetParameters();
@@ -1797,7 +1805,7 @@ internal sealed partial class ExpressionBinder
                 var inheritedArguments = OverloadResolver.BuildOrderedCallArguments(inheritedConvertedArgs, inheritedDownstreamMapping, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
                 overloads.ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
-                BoundExpression inheritedCall = new BoundImportedInstanceCallExpression(null, inheritedUpdatedReceiver ?? receiver, resolution.Best, returnType, inheritedArguments, refKinds, typeArgSymbols);
+                BoundExpression inheritedCall = new BoundImportedInstanceCallExpression(null, inheritedUpdatedReceiver ?? receiver, resolution.Best, returnType, inheritedArguments, refKinds, inheritedTypeArgSymbolsForCall);
                 result = WrapWithHandlerPrelude(inheritedCall, inheritedHandlerPrelude, ce);
                 return true;
             case OverloadResolution.ResolutionOutcome.Ambiguous:
@@ -1912,7 +1920,15 @@ internal sealed partial class ExpressionBinder
         var receiverClrType = receiver?.Type?.ClrType;
         if (receiverClrType == null)
         {
-            return false;
+            // Issue #833: a slice/sequence of an open method type parameter
+            // (e.g. `[]T{}.ToArray()` inside `func F[T]()`) has no CLR
+            // backing on the receiver. Project it to an erased shape so
+            // overload resolution can run; symbolic recovery happens via
+            // BuildSymbolicMethodTypeArgs + ResolveCallReturnTypeFromSymbolicTypeArgs.
+            if (receiver?.Type == null || !MemberLookup.TryProjectErasedClrType(receiver.Type, out receiverClrType))
+            {
+                return false;
+            }
         }
 
         // Build the argument-type vector as the extension method sees it: the
@@ -1930,7 +1946,12 @@ internal sealed partial class ExpressionBinder
             var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
             if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
-                return false;
+                // Issue #833: argument may carry an open TP (e.g. `T`,
+                // `[]T`). Project to an erased shape so resolution can run.
+                if (!MemberLookup.TryProjectErasedClrType(arguments[i].Type, out t))
+                {
+                    return false;
+                }
             }
 
             if (arguments[i].Type is StructSymbol { IsClass: true })
@@ -2008,7 +2029,18 @@ internal sealed partial class ExpressionBinder
         }
 
         var importedClass = new ImportedClassSymbol(declaringType, ce);
-        var returnOverride = ResolveImportedGenericReturnType(best, typeArgSymbols);
+
+        // Issue #833: for an extension call the symbolic-argument vector
+        // includes the receiver as slot 0 to mirror the static-dispatch
+        // shape (`Class.Method(this receiver, args…)`). The inferred
+        // method-type-args may then surface a symbolic return like
+        // `[]T` from `[]T{}.ToArray()` instead of the erased
+        // `object[]`.
+        var extensionSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(receiver?.Type, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+        var extensionSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(best, typeArgSymbols, extensionSymbolicArgs);
+        var extensionTypeArgSymbolsForCall = !extensionSymbolicTypeArgs.IsDefault ? extensionSymbolicTypeArgs : typeArgSymbols;
+        var returnOverride = ResolveImportedGenericReturnType(best, typeArgSymbols)
+            ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(best, extensionSymbolicTypeArgs, receiver?.Type);
         var function = new ImportedFunctionSymbol(methodName, importedClass, best, ce, returnOverride);
 
         var allArguments = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length + 1);
@@ -2058,7 +2090,7 @@ internal sealed partial class ExpressionBinder
 
         var refKinds = ComputeArgumentRefKinds(parameters);
         overloads.ValidateRefArguments(bound, refKinds, methodName, ce.Location);
-        result = new BoundImportedCallExpression(null, function, bound, refKinds, typeArgSymbols);
+        result = new BoundImportedCallExpression(null, function, bound, refKinds, extensionTypeArgSymbolsForCall);
         return true;
     }
 

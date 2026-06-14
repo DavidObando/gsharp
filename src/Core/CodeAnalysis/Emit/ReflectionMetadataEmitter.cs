@@ -7712,6 +7712,16 @@ internal sealed class ReflectionMetadataEmitter
             return true;
         }
 
+        // Issue #833: an in-scope generic type parameter (MVar/Var) carried
+        // through as a call-site type argument must drive the symbolic
+        // encoding path so the resulting MethodSpec references `MVar(idx)`
+        // / `Var(idx)` instead of the type-erased `System.Object`
+        // placeholder.
+        if (arg is TypeParameterSymbol)
+        {
+            return true;
+        }
+
         if (arg is ImportedTypeSymbol nested
             && nested.OpenDefinition != null
             && !nested.TypeArguments.IsDefaultOrEmpty
