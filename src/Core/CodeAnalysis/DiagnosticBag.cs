@@ -3722,6 +3722,27 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Error);
     }
 
+    /// <summary>
+    /// Reports GS0367 — issue #836: a <c>yield</c> statement appears
+    /// lexically inside a <c>try</c> block that also has one or more
+    /// <c>catch</c> clauses. The C# spec (§15.14) and ECMA-335 forbid
+    /// this combination because the iterator state machine cannot
+    /// safely resume into a protected region from a synthesized
+    /// dispatch. Wrap the <c>yield</c> in a separate <c>try</c>/
+    /// <c>finally</c> instead, or move the exception-handling block to
+    /// the consumer (<c>for v in iter()</c>) side.
+    /// </summary>
+    /// <param name="location">The source location of the offending
+    /// <c>yield</c> keyword.</param>
+    public void ReportYieldInsideTryWithCatch(TextLocation location)
+    {
+        Report(
+            location,
+            "GS0367",
+            "'yield' cannot appear inside a 'try' block that has a 'catch' clause; only 'try'/'finally' is supported around 'yield' (issue #836).",
+            DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

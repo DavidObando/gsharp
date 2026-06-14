@@ -195,13 +195,21 @@ func (source IEnumerable[T]) ToMap[T, TKey, TValue](keyFn (T) -> TKey, valueFn (
 // ====================================================================
 
 func WindowedIterator[T](source IEnumerable[T], size int32) IEnumerable[IList[T]] {
-    var buffer = Queue[T](size)
-    for item in source {
-        buffer.Enqueue(item)
-        if buffer.Count == size {
-            yield List[T](buffer)
-            buffer.Dequeue()
+    // Issue #836: with try/finally + yield supported, eagerly grab the
+    // source enumerator and guarantee its disposal even when the
+    // consumer breaks early. Matches the C# baseline shape.
+    let enumerator = source.GetEnumerator()
+    try {
+        var buffer = Queue[T](size)
+        while enumerator.MoveNext() {
+            buffer.Enqueue(enumerator.Current)
+            if buffer.Count == size {
+                yield List[T](buffer)
+                buffer.Dequeue()
+            }
         }
+    } finally {
+        enumerator.Dispose()
     }
 }
 
@@ -222,10 +230,17 @@ func ChunkedIterator[T](source IEnumerable[T], size int32) IEnumerable[IList[T]]
 }
 
 func IndexedIterator[T](source IEnumerable[T]) IEnumerable[(int32, T)] {
-    var i = 0
-    for item in source {
-        yield (i, item)
-        i++
+    // Issue #836: explicit enumerator + try/finally guarantees
+    // disposal on early termination, matching the C# baseline.
+    let enumerator = source.GetEnumerator()
+    try {
+        var i = 0
+        while enumerator.MoveNext() {
+            yield (i, enumerator.Current)
+            i++
+        }
+    } finally {
+        enumerator.Dispose()
     }
 }
 
@@ -243,10 +258,11 @@ func PairwiseIterator[T](source IEnumerable[T]) IEnumerable[(T, T)] {
 }
 
 func InterleaveIterator[T](source IEnumerable[T], other IEnumerable[T]) IEnumerable[T] {
-    // Iterator blocks can't host a `try-finally` wrap around `yield`,
-    // so we use `using let` to bind each enumerator — the iterator
-    // lowering disposes them in the resulting state machine's
-    // FaultBlock.
+    // The `using let` form binds each enumerator's lifetime to the
+    // iterator block — the iterator lowering disposes them when the
+    // state machine's Dispose path runs. Issue #836 also unlocked an
+    // explicit `try { … } finally { … }` shape for this scenario, but
+    // `using let` keeps the intent declarative.
     using let left = source.GetEnumerator()
     using let right = other.GetEnumerator()
 
