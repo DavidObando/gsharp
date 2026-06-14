@@ -190,7 +190,7 @@
       "patterns": [
         {
           "name": "keyword.control.gsharp",
-          "match": "\\b(if|else|for|while|do|guard|switch|case|default|break|continue|return|goto|fallthrough|range|select|in|from|where|when|yield)\\b"
+          "match": "\\b(if|else|for|while|do|guard|switch|case|default|break|continue|return|goto|fallthrough|range|select)\\b"
         },
         {
           "name": "keyword.control.flow.gsharp",
@@ -202,15 +202,15 @@
         },
         {
           "name": "keyword.declaration.gsharp",
-          "match": "\\b(func|class|struct|enum|interface|type|operator|sequence|delegate|event|prop|init)\\b"
+          "match": "\\b(func|class|struct|enum|interface|type|operator|sequence)\\b"
         },
         {
-          "name": "storage.modifier.gsharp",
-          "match": "\\b(public|private|internal|protected|open|sealed|override|abstract|virtual|static|const|shared|partial|readonly|data|inline|extern|scoped)\\b"
+          "name": "keyword.modifier.gsharp",
+          "match": "\\b(public|private|internal|open|sealed|override|const)\\b"
         },
         {
-          "name": "storage.modifier.refkind.gsharp",
-          "match": "\\b(ref|out)\\b"
+          "name": "keyword.modifier.contextual.gsharp",
+          "match": "\\b(data|delegate|event|in|init|inline|make|nameof|out|prop|raise|record|ref|remove|scoped|shared|static|typeof|when|where|with|yield)\\b"
         },
         {
           "name": "keyword.other.accessor.gsharp",
@@ -218,7 +218,7 @@
         },
         {
           "name": "keyword.other.gsharp",
-          "match": "\\b(import|package|using|var|let|is|as|scope|chan|map|with|make|nameof|typeof)\\b"
+          "match": "\\b(import|package|using|var|let|is|as|scope|chan|map)\\b"
         }
       ]
     },
