@@ -452,6 +452,61 @@ Cause/fix examples:
 - **GS0296** — `let s = "hi"; if let v = s { ... }`. Fix: either use a plain `let v = s` (no narrowing) or pass a nullable value. The binding only makes sense when the RHS has type `T?`.
 - **GS0297** — `guard let v = s else { var x = 1 }`. Fix: make the else block exit the enclosing scope — `return`, `throw`, `break`, or `continue`. The binding is only in scope after the guard precisely because the else cannot fall through.
 
+## Top-level-statement diagnostics (GS0285–GS0287)
+
+ADR-0066 (top-level statements). The three diagnostics below cover
+the project-shape / placement / return-shape rules that the synthesized
+entry point depends on.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0285 | Error | Top-level statements are not allowed in a library project. Set `<OutputType>Exe</OutputType>` on the project, or move the statements into an explicit `func Main()`. |
+| GS0286 | Warning | Top-level statements should form a single contiguous block within a file — interleaving them with type or function declarations is hard to read. |
+| GS0287 | Error | Top-level statements mix bare `return;` and `return <expr>;`. Choose one return shape so the synthesized entry point has a single return type. |
+
+## Field declaration `var` / `let` requirement (GS0288)
+
+ADR-0067. Field declarations inside a `struct`, `class`, or `shared`
+block must carry a leading `var` (mutable) or `let` (read-only)
+keyword. The keyword distinguishes mutable from read-only storage and
+keeps type bodies visually consistent with property, event, and method
+members.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0288 | Error | Field declarations require a `var` (mutable) or `let` (read-only) keyword. |
+
+Cause/fix — `struct Point { x int32; y int32 }` → `struct Point { var x int32; var y int32 }` (or `let` for read-only). The parser recovers by treating the field as `var`, but the error still fires.
+
+## `deinit` (finalizer) diagnostics (GS0289–GS0292)
+
+ADR-0068 / issue #698 — `deinit { … }` declares a CLR finalizer on a
+class. The diagnostics below cover the placement and shape rules.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0289 | Error | `deinit` is only valid on a class type — `<type>` is a `<kind>`. |
+| GS0290 | Error | Class `<name>` declares more than one `deinit`; only the first declaration emits a finalizer. |
+| GS0291 | Error | `deinit` may not declare parameters — the CLR invokes the destructor with no arguments. |
+| GS0292 | Error | `deinit` may not declare a return type — the CLR finalizer always returns void. |
+
+## Labeled `break` / `continue` diagnostics (GS0293–GS0295)
+
+ADR-0070 / issue #707 — labeled loops and `break label` / `continue
+label` targeting an enclosing loop by name.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0293 | Error | No enclosing loop is labeled `<label>` (in `break <label>` / `continue <label>`). |
+| GS0294 | Error | Label `<label>` can only be applied to a loop statement (`for` / `while` / `do-while`). |
+| GS0295 | Warning | Label `<label>` shadows an enclosing loop label of the same name; the inner label wins for nested `break` / `continue`. |
+
+Cause/fix:
+
+- **GS0293** — typo or stale name; spell the label exactly as it appears on the enclosing loop.
+- **GS0294** — label-prefixes only attach to the three loop forms; remove the prefix on `if`/`switch`/etc.
+- **GS0295** — rename the inner label so the two are distinguishable, or accept the inner-wins semantics.
+
 ## If-expression diagnostics (GS0276–GS0277)
 
 ADR-0064 generalises `if` so that it can sit in value position (`let x = if cond { a } else { b }`). The diagnostics below guard the two binder rejection paths that are unique to the expression form; the branch-type-mismatch case reuses GS0263 (shared with the ADR-0062 ternary).
@@ -1400,26 +1455,35 @@ Cross-references:
 - ADR-0087 — reified generics (`initobj T` for unconstrained `T`).
 - Issues #795 (this feature), #792 (dogfooded `Optional`/`Sequences` port), #706 (parent tracker).
 
-## Variadic-parameter diagnostics (GS0363, GS0364)
+## Variadic-parameter diagnostics (GS0363, GS0364, GS0365)
 
-ADR-0101 / issue #799. The canonical G# spelling for a variadic
-parameter is `name ...T` (Go-style: the ellipsis sits between the
-parameter identifier and the element type); inside the body the
-parameter has type `[]T`. A signature may declare **at most one**
-variadic parameter and it must be the **last** parameter
-(see `GS0145` above). Variadic declarations are accepted only on
-top-level `func` declarations in this ADR; other declaration sites
-report `GS0146` (see above).
+ADR-0101 (`...T` parameters) and ADR-0102 (variadic slot in anonymous
+function-type clauses) / issues #799, #818. The canonical G# spelling
+for a variadic parameter is `name ...T` (Go-style: the ellipsis sits
+between the parameter identifier and the element type); inside the
+body the parameter has type `[]T`. A signature may declare **at most
+one** variadic parameter and it must be the **last** parameter
+(see `GS0145` above). Variadic declarations are accepted on top-level
+`func` declarations and on anonymous function-type clauses of the
+shape `(T1, ...T2) -> R`; other declaration sites report `GS0146`
+(see above).
 
 | Code | Severity | Message |
 |----|----------|-------------|
 | GS0363 | Error | The C# `params` keyword is not supported in G#. Use the canonical variadic spelling `name ...T` (Go-style); inside the function body the parameter has type `[]T`. |
 | GS0364 | Error | A function signature may declare at most one variadic parameter. |
+| GS0365 | Error | A variadic parameter slot in an anonymous function-type clause must use the slice form `[]T`; got `<typeName>`. |
 
 Cause/fix:
 
 - **GS0363 — `params` keyword.** Replace `params values []T` with `values ...T`. The lowering and call-site behaviour are identical; this is purely a spelling decision (ADR-0101 §"Structural rules" explains why the alias was rejected).
 - **GS0364 — multiple variadic parameters.** Pick the one parameter that should accept the parameter pack and drop the `...` from the others. The remaining variadic must be the last parameter (`GS0145`).
+- **GS0365 — variadic slot in `(...)-> R` is not a slice.** In an
+  anonymous function-type clause the `...` marker turns the parameter
+  slot into a pack/passthrough call site, so the slot's element type
+  must be a slice. Spell it `(...[]T) -> R`, not `(...T) -> R`. The
+  body-side spelling on a real declaration (`func f(values ...T)`) is
+  unchanged.
 
 Caller-side semantics — the binder packs trailing positional arguments
 into a fresh `[]T` array; if the caller supplies exactly one trailing
@@ -1431,9 +1495,10 @@ VB consumers see it as `params T[]`.
 Cross-references:
 
 - ADR-0101 — variadic (`...T`) parameter declarations.
+- ADR-0102 — variadic slot in anonymous function-type clauses.
 - ADR-0084 — slice type `[]T` (the body-visible type of a variadic parameter).
 - ADR-0063 — overload resolution & generic inference.
-- Issues #799 (this feature), #792 (dogfooded `Optional`/`Sequences` port), #706 (parent tracker).
+- Issues #799, #818 (these features), #792 (dogfooded `Optional`/`Sequences` port), #706 (parent tracker).
 
 
 ## Map type-clause spelling removal (GS0366)

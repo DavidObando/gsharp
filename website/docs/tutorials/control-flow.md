@@ -22,11 +22,9 @@ header when you need init and post clauses:
 
 ```gsharp title="Loop.gs"
 // file: Loop.gs
-// Demonstrates statements added across Phases 1 and 2: implicit
-// `import System` (Phase 1.5), string interpolation (Phase 1.1),
-// the C-style `for init; cond; post { … }` clause form (Phase 2.4),
-// and the `i--` decrement statement (Phase 2.2). This is the v0.1
-// design — see `design/Gsharp-design-v0.1.md` and ADR-0010.
+// Demonstrates implicit `import System`, string interpolation,
+// the C-style `for init; cond; post { … }` clause form, and
+// the `i--` decrement statement.
 
 package GSharp.Example.Loop
 

@@ -5,11 +5,91 @@ draft: false
 
 # Release notes
 
-G# is pre-1.0. The repository's version base is currently `0.1`, and product versions are derived by Nerdbank.GitVersioning from that base and the Git commit. Until the project reaches a stable compatibility promise, release notes should be read as implementation status notes rather than a long-term compatibility contract.
+G# is pre-1.0. The repository's version base is currently `0.2`, and product versions are derived by Nerdbank.GitVersioning from that base and the Git commit. Until the project reaches a stable compatibility promise, release notes should be read as implementation status notes rather than a long-term compatibility contract.
 
-## Unreleased
+## 0.2
 
-The G# compiler, language server, and VS Code extension absorbed a large stack of additions this cycle. The summary below groups them by area; each item links to the design decision (ADR) or implementation reference.
+The second pre-1.0 line ("Oats" sweep, parent epic #706). v0.2 is a
+syntax-and-ergonomics release: the parser, binder, and emitter all
+absorbed substantial additions, several legacy Go-flavored spellings
+were retired in favour of canonical G# forms, and the native-interop
+and default-interface-method surfaces shipped end-to-end. This release
+also formally introduces docs versioning — the `0.1` snapshot is
+removed and a fresh `0.2` snapshot is cut from the live docs.
+
+### Highlights
+
+- **New language surface.** `while` / `do…while` + labeled
+  `break`/`continue` ([ADR-0070](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0070-while-do-loops-and-labeled-break-continue.md)),
+  `if let` / `guard let` smart-cast bindings ([ADR-0071](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0071-if-let-guard-let-bindings.md)),
+  null-coalescing compound assignment `??=` ([ADR-0072](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0072-null-coalescing-compound-assignment.md)),
+  null-conditional indexing `a?[i]` ([ADR-0073](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0073-null-conditional-indexing.md)),
+  arrow lambdas `x => body` ([ADR-0074](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0074-arrow-lambda-expressions.md)),
+  the canonical `(T1, T2) -> R` function-type clause ([ADR-0075](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0075-function-type-clause-arrow-syntax.md)),
+  lambda binding-type inference ([ADR-0076](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0076-lambda-binding-type-inference.md)),
+  Kotlin/Swift-style type-declaration grammar ([ADR-0078](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0078-kotlin-swift-style-type-declarations.md)),
+  if-as-expression finished ([ADR-0064](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0064-if-expression.md), issue #711),
+  smart-cast extensions (ADR-0069 addendum), discriminated-union
+  enum payloads (issue #725), `default(T)` and target-typed bare
+  `default` ([ADR-0100](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0100-default-expression.md)),
+  variadic `...T` parameters ([ADR-0101](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0101-variadic-parameters.md)) including
+  the variadic slot inside anonymous function-type clauses
+  ([ADR-0102](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0102-variadic-anonymous-function-type-clause.md))
+  and at every declaration site ([ADR-0103](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0103-variadic-all-declaration-sites.md)),
+  `class` / `struct` / `new()` constraint flag spellings
+  ([ADR-0097](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0097-class-struct-new-constraints.md)),
+  default-interface methods ([ADR-0085](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0085-default-interface-methods.md),
+  [ADR-0089](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0089-default-interface-methods-static-virtual.md),
+  [ADR-0090](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0090-default-interface-methods-private-helpers.md),
+  [ADR-0091](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0091-default-interface-methods-explicit-base.md)),
+  reified generics ([ADR-0087](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0087-reified-generics.md) R1–R7),
+  `Gsharp.Extensions.Optional` and `Gsharp.Extensions.Sequences`
+  ([ADR-0084](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0084-extensions-optional-sequences.md)),
+  friendly numeric type aliases ([ADR-0098](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0098-friendly-numeric-type-aliases.md)),
+  and the canonical map type clause `map[K,V]`
+  ([ADR-0104](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0104-map-type-clause-canonical-spelling.md)).
+- **Removals (breaking).** Five legacy spellings were retired this
+  cycle. The lexer / parser still recognise each shape long enough to
+  emit a focused span-accurate diagnostic with the canonical
+  replacement, so IDE quick-fixes can patch in one edit:
+  - `type` keyword for type declarations (`type Foo struct { … }` →
+    `struct Foo { … }`) — [ADR-0078](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0078-kotlin-swift-style-type-declarations.md).
+  - `record` keyword (use `data class` or `data struct`) — ADR-0078.
+  - `:=` short variable declaration (use `let` / `var`) —
+    [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md), `GS0305`.
+  - `name = value` named-argument separator (use `name: value`)
+    deprecated this release —
+    [ADR-0080](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0080-deprecate-equals-named-arguments.md), `GS0315`.
+  - `func(T) R` legacy function-type clause (use `(T) -> R`)
+    deprecated this release —
+    [ADR-0075](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0075-function-type-clause-arrow-syntax.md), `GS0303`.
+  - Go-flavored `map[K]V` type clause (use `map[K,V]`) — ADR-0104, `GS0366`.
+- **Native interop end-to-end.** P/Invoke via `@DllImport`
+  ([ADR-0086](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0086-pinvoke-dllimport.md)),
+  source-generator-shaped `@LibraryImport`
+  ([ADR-0092](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0092-pinvoke-libraryimport.md)),
+  struct/class marshalling
+  ([ADR-0093](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0093-pinvoke-struct-marshalling.md)),
+  `ref` / `out` / `in` parameter marshalling
+  ([ADR-0094](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0094-pinvoke-ref-out-in.md)),
+  function-pointer marshalling
+  ([ADR-0095](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0095-pinvoke-function-pointers.md)),
+  and `@MarshalAs` parameter overrides
+  ([ADR-0096](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0096-pinvoke-marshalas-parameter-overrides.md)).
+- **Go-flavored concurrency moved behind an opt-in import.** `go`,
+  `chan`, `select`, channel send/receive, `make(chan T)` and the
+  built-ins `len`, `cap`, `append`, `make`, `delete` now require
+  `import Gsharp.Extensions.Go` ([ADR-0082](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0082-go-concurrency-extensions.md),
+  [ADR-0083](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0083-go-builtins-extensions.md)).
+  Diagnostics `GS0316` / `GS0317` point at the missing import.
+- **Tooling polish.** LSP completion polish for async-shaped types
+  (`async (T) -> R`, `async sequence[T]`) (#713); nil-related quick
+  fixes from `textDocument/codeAction` ([ADR-0099](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0099-lsp-nil-quick-fixes.md));
+  `null` → `nil` "did you mean" diagnostic
+  ([ADR-0081](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0081-null-to-nil-did-you-mean.md), `GS0273`).
+- **Diagnostics catalogue extended.** v0.2 introduces GS0273,
+  GS0288–GS0366. The [Diagnostics reference](./ref/diagnostics.md)
+  has the per-ID cause/fix detail.
 
 ### Added
 
@@ -35,6 +115,7 @@ The G# compiler, language server, and VS Code extension absorbed a large stack o
 - The website spec, feature matrix, FAQ, bridges page, guide pages, and design-decisions index were refreshed to match the compiler ground truth — most visibly, "Parameters do not have default-value syntax" and "Named arguments — Partial" are no longer correct and were rewritten.
 - The repo `docs/lexical.md` block-comment paragraph (which incorrectly claimed block comments were not implemented) is corrected, and a documentation-comments subsection was added.
 - The VS Code TextMate grammar adds the missing contextual keywords (`data`, `inline`, `record`, `delegate`, `event`, `prop`, `init`, `shared`, `scoped`, accessor names `get`/`set`/`add`/`remove`/`raise`, ref-kinds `ref`/`out`), operators (`:=`, `?.`, `??`, `?`/`:`, `!!`, `...`, `=>`), an `@Annotation` scope, and a `///` documentation-comment scope with `@tag` highlighting. The VS Code snippet set was rewritten to match current grammar.
+- The Docusaurus site cuts a new `0.2` snapshot from the live docs and retires the `0.1` snapshot. The version dropdown lists `0.2` and `Next`; the `0.1` URL space is no longer served.
 
 ### Fixed
 
