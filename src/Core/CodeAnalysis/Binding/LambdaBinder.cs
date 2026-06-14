@@ -216,9 +216,16 @@ internal sealed class LambdaBinder
         {
             var pname = p.Identifier.Text;
             var ptype = bindTypeClause(p.Type) ?? TypeSymbol.Error;
-            if (p.IsVariadic)
+
+            // ADR-0101 follow-up / issue #812: variadic parameters are now
+            // accepted on function-literal lambdas. The body sees the
+            // parameter as a `[]T` slice; when the lambda is invoked through
+            // a typed delegate (the common case), pack/pass-through happens
+            // on the indirect-call path inside OverloadResolver.
+            var isVariadic = p.IsVariadic;
+            if (isVariadic && ptype != null && ptype != TypeSymbol.Error)
             {
-                Diagnostics.ReportVariadicParameterNotSupportedHere(p.Location, pname);
+                ptype = SliceTypeSymbol.Get(ptype);
             }
 
             if (!seen.Add(pname))
@@ -226,7 +233,7 @@ internal sealed class LambdaBinder
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
             }
 
-            var lambdaParam = new ParameterSymbol(pname, ptype, declaringSyntax: p.Identifier, isScoped: p.IsScoped);
+            var lambdaParam = new ParameterSymbol(pname, ptype, isVariadic, declaringSyntax: p.Identifier, isScoped: p.IsScoped);
 
             // ADR-0063 §5: function-literal (lambda) parameters can declare a
             // default value; lambdas can be invoked through their delegate type
@@ -235,6 +242,9 @@ internal sealed class LambdaBinder
             parameterSymbols.Add(lambdaParam);
             parameterTypes.Add(ptype);
         }
+
+        // ADR-0101 follow-up / issue #812: enforce variadic structural rules.
+        ValidateVariadicParameterShape(syntax.Parameters);
 
         var returnType = syntax.ReturnTypeClause != null ? bindReturnTypeClause(syntax.ReturnTypeClause, syntax.IsAsync) : TypeSymbol.Void;
         returnType ??= TypeSymbol.Void;
@@ -400,9 +410,22 @@ internal sealed class LambdaBinder
                 ptype = TypeSymbol.Error;
             }
 
-            if (p.IsVariadic)
+            // ADR-0101 follow-up / issue #812: variadic parameters are now
+            // accepted on arrow lambdas. The body sees the parameter as a
+            // `[]T` slice; when the lambda is invoked through its inferred
+            // delegate type, the indirect-call path packs / passes through
+            // trailing arguments.
+            //
+            // Target-typed inference: when the slot type already comes from
+            // a `(T1, ..., Tn) -> R` target whose Nth slot is itself a
+            // slice, treat the `...T` form as element-type `T` and wrap to
+            // `[]T` here. If the inferred slot is already a slice and the
+            // user wrote `xs ...T`, the wrap below is a no-op only when the
+            // user spelled `xs ...[]T`; the binder doesn't second-guess.
+            var isVariadic = p.IsVariadic;
+            if (isVariadic && ptype != null && ptype != TypeSymbol.Error && p.Type != null)
             {
-                Diagnostics.ReportVariadicParameterNotSupportedHere(p.Location, pname);
+                ptype = SliceTypeSymbol.Get(ptype);
             }
 
             if (!seen.Add(pname))
@@ -410,7 +433,7 @@ internal sealed class LambdaBinder
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
             }
 
-            var lambdaParam = new ParameterSymbol(pname, ptype, declaringSyntax: p.Identifier, isScoped: p.IsScoped);
+            var lambdaParam = new ParameterSymbol(pname, ptype, isVariadic, declaringSyntax: p.Identifier, isScoped: p.IsScoped);
 
             // ADR-0063 §5: arrow-lambda parameters can also declare a default
             // value; the conversion classifier validates the constant-folded
@@ -420,6 +443,9 @@ internal sealed class LambdaBinder
             parameterSymbols.Add(lambdaParam);
             parameterTypes.Add(ptype);
         }
+
+        // ADR-0101 follow-up / issue #812: enforce variadic structural rules.
+        ValidateVariadicParameterShape(syntax.Parameters);
 
         // Construct a placeholder synthetic FunctionSymbol whose return type
         // is being inferred. The placeholder type itself is set to
@@ -726,6 +752,36 @@ internal sealed class LambdaBinder
             ? trailing
             : conversions.BindConversion(syntax.Body.Location, trailing, returnType);
         bodyStatements.Add(new BoundReturnStatement(syntax.Body, trailingConverted));
+    }
+
+    /// <summary>
+    /// ADR-0101 / issue #812 — variadic structural validation for lambda
+    /// parameter lists. Mirrors
+    /// <c>DeclarationBinder.ValidateVariadicParameterShape</c>: emits GS0145
+    /// for a non-trailing variadic, GS0364 for two-or-more variadic
+    /// parameters in the same lambda.
+    /// </summary>
+    private void ValidateVariadicParameterShape(SeparatedSyntaxList<ParameterSyntax> parameters)
+    {
+        var firstVariadicSeen = false;
+        for (var i = 0; i < parameters.Count; i++)
+        {
+            if (!parameters[i].IsVariadic)
+            {
+                continue;
+            }
+
+            if (firstVariadicSeen)
+            {
+                Diagnostics.ReportMultipleVariadicParameters(parameters[i].Location, parameters[i].Identifier.Text);
+            }
+
+            firstVariadicSeen = true;
+            if (i < parameters.Count - 1)
+            {
+                Diagnostics.ReportVariadicParameterMustBeLast(parameters[i].Location, parameters[i].Identifier.Text);
+            }
+        }
     }
 
     // ADR-0076 / issue #716: compute the inferred return type from the bound

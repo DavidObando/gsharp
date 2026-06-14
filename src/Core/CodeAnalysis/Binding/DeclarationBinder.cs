@@ -200,11 +200,23 @@ internal sealed class DeclarationBinder
                 continue;
             }
 
+            // ADR-0101 follow-up / issue #812: variadic parameters are now
+            // accepted on delegate declarations. The Invoke signature carries
+            // a `[]T` slice, and the emitter stamps [ParamArrayAttribute] on
+            // the trailing parameter so C# / F# / VB consumers see the
+            // delegate as a normal `params T[]` delegate.
+            var isVariadic = parameterSyntax.IsVariadic;
+            if (isVariadic && parameterType != TypeSymbol.Error)
+            {
+                parameterType = SliceTypeSymbol.Get(parameterType);
+            }
+
             var delegateParam = new ParameterSymbol(
                 parameterName,
                 parameterType,
+                isVariadic,
                 declaringSyntax: parameterSyntax.Identifier,
-                refKind: conversions.BindAndValidateParameterRefKind(parameterSyntax, parameterName, parameterType, isVariadic: false, asyncOrIteratorKind: null));
+                refKind: conversions.BindAndValidateParameterRefKind(parameterSyntax, parameterName, parameterType, isVariadic, asyncOrIteratorKind: null));
 
             // ADR-0063 §5: delegate declarations can declare default-valued
             // parameters; the value is recorded on the parameter symbol for
@@ -213,16 +225,9 @@ internal sealed class DeclarationBinder
             parameters.Add(delegateParam);
         }
 
-        // Variadic / `scoped` parameters are deliberately not supported in v1
-        // (the CLR delegate's Invoke signature has no analogue). Flag the
-        // first occurrence with the existing variadic-must-be-last check.
-        for (var i = 0; i < syntax.Parameters.Count; i++)
-        {
-            if (syntax.Parameters[i].IsVariadic)
-            {
-                Diagnostics.ReportVariadicParameterMustBeLast(syntax.Parameters[i].Location, syntax.Parameters[i].Identifier.Text);
-            }
-        }
+        // ADR-0101 follow-up / issue #812: `...T` must be the last parameter
+        // and at most one variadic parameter per delegate signature.
+        ValidateVariadicParameterShape(syntax.Parameters);
 
         var returnType = syntax.ReturnType != null ? bindTypeClause(syntax.ReturnType) : TypeSymbol.Void;
         if (returnType == null)
@@ -806,20 +811,29 @@ internal sealed class DeclarationBinder
                 {
                     var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
                     var seenParameterNames = new HashSet<string>();
-                    foreach (var parameterSyntax in methodSyntax.Parameters)
+                    for (var pIndex = 0; pIndex < methodSyntax.Parameters.Count; pIndex++)
                     {
+                        var parameterSyntax = methodSyntax.Parameters[pIndex];
                         var parameterName = parameterSyntax.Identifier.Text;
                         var parameterType = bindTypeClause(parameterSyntax.Type);
-                        if (parameterSyntax.IsVariadic)
+
+                        // ADR-0101 follow-up / issue #812: variadic parameters
+                        // are now accepted on class instance methods. The body
+                        // sees the parameter as a `[]T` slice; the call site
+                        // packs trailing arguments into a fresh slice (or
+                        // passes through a single `[]T` argument unchanged) —
+                        // see OverloadResolver.BindUserInstanceCall.
+                        var isVariadic = parameterSyntax.IsVariadic;
+                        if (isVariadic && parameterType != null && parameterType != TypeSymbol.Error)
                         {
-                            Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
+                            parameterType = SliceTypeSymbol.Get(parameterType);
                         }
 
                         var parameterRefKind = conversions.BindAndValidateParameterRefKind(
                             parameterSyntax,
                             parameterName,
                             parameterType,
-                            isVariadic: false,
+                            isVariadic,
                             asyncOrIteratorKind: methodSyntax.IsAsync ? "async" : null);
 
                         if (!seenParameterNames.Add(parameterName))
@@ -828,11 +842,13 @@ internal sealed class DeclarationBinder
                         }
                         else
                         {
-                            var classMethodParam = new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
+                            var classMethodParam = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
                             conversions.BindAndAttachParameterDefaultValue(parameterSyntax, classMethodParam);
                             parameters.Add(classMethodParam);
                         }
                     }
+
+                    ValidateVariadicParameterShape(methodSyntax.Parameters);
 
                     var returnType = bindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
                     var methodAccessibility = resolveAccessibility(methodSyntax.AccessibilityModifier);
@@ -1421,16 +1437,23 @@ internal sealed class DeclarationBinder
                     {
                         var parameterName = parameterSyntax.Identifier.Text;
                         var parameterType = bindTypeClause(parameterSyntax.Type);
-                        if (parameterSyntax.IsVariadic)
+
+                        // ADR-0101 follow-up / issue #812: variadic parameters
+                        // are now accepted on shared/static class methods. The
+                        // body sees the parameter as `[]T`; the static-call
+                        // path goes through the same overload resolver that
+                        // handles top-level variadic functions.
+                        var isVariadic = parameterSyntax.IsVariadic;
+                        if (isVariadic && parameterType != null && parameterType != TypeSymbol.Error)
                         {
-                            Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
+                            parameterType = SliceTypeSymbol.Get(parameterType);
                         }
 
                         var parameterRefKind = conversions.BindAndValidateParameterRefKind(
                             parameterSyntax,
                             parameterName,
                             parameterType,
-                            isVariadic: false,
+                            isVariadic,
                             asyncOrIteratorKind: methodSyntax.IsAsync ? "async" : null);
 
                         if (!seenParameterNames.Add(parameterName))
@@ -1439,11 +1462,13 @@ internal sealed class DeclarationBinder
                         }
                         else
                         {
-                            var staticMethodParam = new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
+                            var staticMethodParam = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
                             conversions.BindAndAttachParameterDefaultValue(parameterSyntax, staticMethodParam);
                             parameters.Add(staticMethodParam);
                         }
                     }
+
+                    ValidateVariadicParameterShape(methodSyntax.Parameters);
 
                     var returnType = bindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
                     var methodAccessibility = resolveAccessibility(methodSyntax.AccessibilityModifier);
@@ -2473,16 +2498,24 @@ internal sealed class DeclarationBinder
             {
                 var parameterName = parameterSyntax.Identifier.Text;
                 var parameterType = bindTypeClause(parameterSyntax.Type);
-                if (parameterSyntax.IsVariadic)
+
+                // ADR-0101 follow-up / issue #812: variadic parameters are now
+                // accepted on interface methods. For abstract members the
+                // variadic flag travels through the dispatch table; for ADR-0085
+                // default-bodied members the body sees the parameter as `[]T`,
+                // and the emitter stamps [ParamArrayAttribute] on the MethodDef
+                // (interface method emit shares the same path as class methods).
+                var isVariadic = parameterSyntax.IsVariadic;
+                if (isVariadic && parameterType != null && parameterType != TypeSymbol.Error)
                 {
-                    Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
+                    parameterType = SliceTypeSymbol.Get(parameterType);
                 }
 
                 var parameterRefKind = conversions.BindAndValidateParameterRefKind(
                     parameterSyntax,
                     parameterName,
                     parameterType,
-                    isVariadic: false,
+                    isVariadic,
                     asyncOrIteratorKind: methodSyntax.IsAsync ? "async" : null);
 
                 if (!seenParameterNames.Add(parameterName))
@@ -2491,11 +2524,13 @@ internal sealed class DeclarationBinder
                 }
                 else
                 {
-                    var ifaceMethodParam = new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
+                    var ifaceMethodParam = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
                     conversions.BindAndAttachParameterDefaultValue(parameterSyntax, ifaceMethodParam);
                     parameters.Add(ifaceMethodParam);
                 }
             }
+
+            ValidateVariadicParameterShape(methodSyntax.Parameters);
 
             var returnType = bindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
             var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
@@ -2895,25 +2930,7 @@ internal sealed class DeclarationBinder
             // ADR-0101 / issue #799: also flag the (rare) case where more than one
             // parameter is variadic — the second and later occurrences get GS0364
             // in addition to the "must-be-last" diagnostic on the earlier one(s).
-            var firstVariadicSeen = false;
-            for (var i = 0; i < syntax.Parameters.Count; i++)
-            {
-                if (!syntax.Parameters[i].IsVariadic)
-                {
-                    continue;
-                }
-
-                if (firstVariadicSeen)
-                {
-                    Diagnostics.ReportMultipleVariadicParameters(syntax.Parameters[i].Location, syntax.Parameters[i].Identifier.Text);
-                }
-
-                firstVariadicSeen = true;
-                if (i < syntax.Parameters.Count - 1)
-                {
-                    Diagnostics.ReportVariadicParameterMustBeLast(syntax.Parameters[i].Location, syntax.Parameters[i].Identifier.Text);
-                }
-            }
+            ValidateVariadicParameterShape(syntax.Parameters);
 
             // ADR-0041: bind the return type with async-aware alias resolution.
             var type = bindReturnTypeClause(syntax.Type, syntax.IsAsync) ?? TypeSymbol.Void;
@@ -3467,6 +3484,42 @@ internal sealed class DeclarationBinder
     /// for invalid combinations. Returns <see cref="RefKind.Ref"/> when the function should be
     /// modeled as ref-returning, <see cref="RefKind.None"/> otherwise.
     /// </summary>
+    /// <summary>
+    /// ADR-0101 / issue #799 + #812 — shared validation for variadic
+    /// (<c>...T</c>) parameters on any declaration kind (top-level
+    /// function, class instance method, class static method, interface
+    /// method, constructor, delegate, lambda). Reports
+    /// <c>GS0145</c> ("variadic parameter must be the last parameter")
+    /// for every variadic parameter that is not the last syntactic
+    /// parameter, and <c>GS0364</c> ("a signature may declare at most
+    /// one variadic parameter") for any second-or-later occurrence.
+    /// The caller is responsible for wrapping the parameter's element
+    /// type in a <see cref="SliceTypeSymbol"/> and setting
+    /// <see cref="ParameterSymbol.IsVariadic"/>.
+    /// </summary>
+    private void ValidateVariadicParameterShape(SeparatedSyntaxList<ParameterSyntax> parameters)
+    {
+        var firstVariadicSeen = false;
+        for (var i = 0; i < parameters.Count; i++)
+        {
+            if (!parameters[i].IsVariadic)
+            {
+                continue;
+            }
+
+            if (firstVariadicSeen)
+            {
+                Diagnostics.ReportMultipleVariadicParameters(parameters[i].Location, parameters[i].Identifier.Text);
+            }
+
+            firstVariadicSeen = true;
+            if (i < parameters.Count - 1)
+            {
+                Diagnostics.ReportVariadicParameterMustBeLast(parameters[i].Location, parameters[i].Identifier.Text);
+            }
+        }
+    }
+
     private RefKind ValidateReturnRefKind(FunctionDeclarationSyntax syntax, TypeSymbol returnType)
     {
         if (!syntax.IsRefReturn)
@@ -3997,16 +4050,23 @@ internal sealed class DeclarationBinder
         {
             var parameterName = parameterSyntax.Identifier.Text;
             var parameterType = bindTypeClause(parameterSyntax.Type);
-            if (parameterSyntax.IsVariadic)
+
+            // ADR-0101 follow-up / issue #812: variadic parameters are now
+            // accepted on explicit `init(...)` constructors. The body sees
+            // the parameter as `[]T`; constructor calls (and
+            // `: this(...)` / `: base(...)` chaining) go through the
+            // constructor overload paths that pack trailing arguments.
+            var isVariadic = parameterSyntax.IsVariadic;
+            if (isVariadic && parameterType != null && parameterType != TypeSymbol.Error)
             {
-                Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
+                parameterType = SliceTypeSymbol.Get(parameterType);
             }
 
             var parameterRefKind = conversions.BindAndValidateParameterRefKind(
                 parameterSyntax,
                 parameterName,
                 parameterType,
-                isVariadic: false,
+                isVariadic,
                 asyncOrIteratorKind: null);
 
             if (!seenParameterNames.Add(parameterName))
@@ -4015,11 +4075,13 @@ internal sealed class DeclarationBinder
             }
             else
             {
-                var ctorParam = new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
+                var ctorParam = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
                 conversions.BindAndAttachParameterDefaultValue(parameterSyntax, ctorParam);
                 parameters.Add(ctorParam);
             }
         }
+
+        ValidateVariadicParameterShape(ctorSyntax.Parameters);
 
         var ctorAccessibility = resolveAccessibility(ctorSyntax.AccessibilityModifier);
         var ctorFunction = new FunctionSymbol(

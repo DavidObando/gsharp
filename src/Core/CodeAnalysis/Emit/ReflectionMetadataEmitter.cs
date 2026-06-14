@@ -597,6 +597,7 @@ internal sealed class ReflectionMetadataEmitter
             this.customAttrEncoder.NextParameterHandle,
             this.customAttrEncoder.EmitUserAttributes,
             this.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter,
+            this.customAttrEncoder.EmitParamArrayAttributeOnParameter,
             this.GetCtorReference,
             this.EmitStaticConstructorBodyBytes,
             this.EmitClassDefaultConstructorBodyBytes,

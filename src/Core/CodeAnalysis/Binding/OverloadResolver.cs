@@ -1507,11 +1507,33 @@ internal sealed class OverloadResolver
 
         var parameters = selectedCtor.Parameters;
 
+        // ADR-0101 follow-up / issue #812: a constructor's last parameter
+        // may be variadic. The arity check accepts any count >= the fixed
+        // (non-variadic) parameter count; pack / pass-through happens just
+        // below before the per-position conversion loop.
+        var ctorIsVariadic = parameters.Length > 0
+            && parameters[parameters.Length - 1].IsVariadic;
+        var fixedCtorParamCount = ctorIsVariadic ? parameters.Length - 1 : parameters.Length;
+
+        if (ctorIsVariadic && !argumentNames.IsDefault)
+        {
+            Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, classType.Name, FirstNamedArgumentName(argumentNames));
+            return new BoundErrorExpression(syntax);
+        }
+
         // ADR-0063: synthesize defaults for any unsupplied trailing/middle
         // optional parameters. Both arity-with-named-omission and
         // trailing-omission go through this path.
         var requestedArgCount = syntax.Arguments.Count;
-        if (requestedArgCount < parameters.Length)
+        if (ctorIsVariadic)
+        {
+            if (requestedArgCount < fixedCtorParamCount)
+            {
+                Diagnostics.ReportTooFewArgumentsForVariadic(syntax.Identifier.Location, classType.Name, fixedCtorParamCount, requestedArgCount);
+                return new BoundErrorExpression(syntax);
+            }
+        }
+        else if (requestedArgCount < parameters.Length)
         {
             var minRequired = parameters.Length;
             for (var i = parameters.Length - 1; i >= 0; i--)
@@ -1543,7 +1565,72 @@ internal sealed class OverloadResolver
         // unsupplied optional parameters.
         ExpressionSyntax[] parameterSyntax;
         var boundArguments = boundArgumentsBuilder;
-        if (!argumentNames.IsDefault || requestedArgCount < parameters.Length)
+        if (ctorIsVariadic)
+        {
+            parameterSyntax = new ExpressionSyntax[syntax.Arguments.Count];
+            for (var i = 0; i < syntax.Arguments.Count; i++)
+            {
+                parameterSyntax[i] = syntax.Arguments[i];
+            }
+
+            // Pack or pass-through the trailing arguments into a single
+            // slice-typed argument so the per-position conversion loop
+            // below sees exactly `parameters.Length` arguments.
+            var variadicParam = parameters[parameters.Length - 1];
+            var sliceType = (SliceTypeSymbol)variadicParam.Type;
+            var elementType = sliceType.ElementType;
+            var trailingCount = requestedArgCount - fixedCtorParamCount;
+            var passThrough = trailingCount == 1
+                && boundArguments[fixedCtorParamCount].Type == sliceType;
+
+            if (!passThrough)
+            {
+                var hasVariadicErrors = false;
+                for (var i = fixedCtorParamCount; i < requestedArgCount; i++)
+                {
+                    var argument = boundArguments[i];
+                    if (argument.Type != elementType
+                        && argument.Type != TypeSymbol.Error
+                        && !Conversion.Classify(argument.Type, elementType).IsImplicit)
+                    {
+                        Diagnostics.ReportWrongArgumentType(parameterSyntax[i].Location, variadicParam.Name, elementType, argument.Type);
+                        hasVariadicErrors = true;
+                    }
+                }
+
+                if (hasVariadicErrors)
+                {
+                    return new BoundErrorExpression(syntax);
+                }
+
+                var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailingCount);
+                for (var i = fixedCtorParamCount; i < requestedArgCount; i++)
+                {
+                    packed.Add(boundArguments[i]);
+                }
+
+                var rebuilt = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
+                for (var i = 0; i < fixedCtorParamCount; i++)
+                {
+                    rebuilt.Add(boundArguments[i]);
+                }
+
+                rebuilt.Add(new BoundArrayCreationExpression(syntax, sliceType, packed.MoveToImmutable()));
+                boundArguments = rebuilt;
+
+                var newSyntax = new ExpressionSyntax[parameters.Length];
+                for (var i = 0; i < fixedCtorParamCount; i++)
+                {
+                    newSyntax[i] = parameterSyntax[i];
+                }
+
+                newSyntax[fixedCtorParamCount] = parameterSyntax.Length > fixedCtorParamCount
+                    ? parameterSyntax[fixedCtorParamCount]
+                    : (syntax.Arguments.Count > 0 ? syntax.Arguments[syntax.Arguments.Count - 1] : null);
+                parameterSyntax = newSyntax;
+            }
+        }
+        else if (!argumentNames.IsDefault || requestedArgCount < parameters.Length)
         {
             if (!TryReorderUserCallArgumentsWithDefaults(
                     syntax.Arguments,
@@ -1582,6 +1669,7 @@ internal sealed class OverloadResolver
             // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument
             // targeting an IFormattable/FormattableString parameter.
             if (i < parameterSyntax.Length
+                && parameterSyntax[i] != null
                 && parameterSyntax[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
                 && isFormattableStringTargetType(parameter.Type))
             {
@@ -1613,7 +1701,9 @@ internal sealed class OverloadResolver
                 }
             }
 
-            var argLocation = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
+            var argLocation = i < parameterSyntax.Length && parameterSyntax[i] != null
+                ? parameterSyntax[i].Location
+                : syntax.Identifier.Location;
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
@@ -2250,16 +2340,62 @@ internal sealed class OverloadResolver
                 return new BoundErrorExpression(null);
             }
 
-            if (syntax.Arguments.Count != namedDelegateSym.Parameters.Length)
+            // ADR-0101 follow-up / issue #812: a named delegate can declare a
+            // trailing variadic parameter. Pack / pass-through happens at the
+            // direct-call site so the lowered Invoke receives one slice
+            // argument, matching the delegate's Invoke signature.
+            var ndIsVariadic = namedDelegateSym.Parameters.Length > 0
+                && namedDelegateSym.Parameters[namedDelegateSym.Parameters.Length - 1].IsVariadic;
+            var ndFixedCount = ndIsVariadic
+                ? namedDelegateSym.Parameters.Length - 1
+                : namedDelegateSym.Parameters.Length;
+
+            if (ndIsVariadic)
+            {
+                if (syntax.Arguments.Count < ndFixedCount)
+                {
+                    Diagnostics.ReportTooFewArgumentsForVariadic(syntax.Identifier.Location, namedDelegateVar.Name, ndFixedCount, syntax.Arguments.Count);
+                    return new BoundErrorExpression(null);
+                }
+            }
+            else if (syntax.Arguments.Count != namedDelegateSym.Parameters.Length)
             {
                 Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, namedDelegateVar.Name, namedDelegateSym.Parameters.Length, syntax.Arguments.Count);
                 return new BoundErrorExpression(null);
             }
 
-            var convertedNamedArgs = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
-            for (var i = 0; i < syntax.Arguments.Count; i++)
+            ImmutableArray<BoundExpression> ndPermutedArgs = boundArguments.ToImmutable();
+            if (ndIsVariadic)
             {
-                convertedNamedArgs.Add(conversions.BindConversion(syntax.Arguments[i].Location, boundArguments[i], namedDelegateSym.Parameters[i].Type));
+                var ndVariadicParam = namedDelegateSym.Parameters[namedDelegateSym.Parameters.Length - 1];
+                var ndSliceType = (SliceTypeSymbol)ndVariadicParam.Type;
+                var ndElementType = ndSliceType.ElementType;
+                var ndTrailing = syntax.Arguments.Count - ndFixedCount;
+                var ndPassThrough = ndTrailing == 1 && boundArguments[ndFixedCount].Type == ndSliceType;
+                if (!ndPassThrough)
+                {
+                    var ndPacked = ImmutableArray.CreateBuilder<BoundExpression>(ndTrailing);
+                    for (var i = ndFixedCount; i < syntax.Arguments.Count; i++)
+                    {
+                        ndPacked.Add(boundArguments[i]);
+                    }
+
+                    var ndNew = ImmutableArray.CreateBuilder<BoundExpression>(ndFixedCount + 1);
+                    for (var i = 0; i < ndFixedCount; i++)
+                    {
+                        ndNew.Add(boundArguments[i]);
+                    }
+
+                    ndNew.Add(new BoundArrayCreationExpression(syntax, ndSliceType, ndPacked.MoveToImmutable()));
+                    ndPermutedArgs = ndNew.ToImmutable();
+                }
+            }
+
+            var convertedNamedArgs = ImmutableArray.CreateBuilder<BoundExpression>(ndPermutedArgs.Length);
+            for (var i = 0; i < ndPermutedArgs.Length; i++)
+            {
+                var argLoc = i < syntax.Arguments.Count ? syntax.Arguments[i].Location : syntax.Identifier.Location;
+                convertedNamedArgs.Add(conversions.BindConversion(argLoc, ndPermutedArgs[i], namedDelegateSym.Parameters[i].Type));
             }
 
             return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, namedDelegateVar), namedDelegateSym.EquivalentFunctionType, convertedNamedArgs.MoveToImmutable());
@@ -2965,7 +3101,32 @@ internal sealed class OverloadResolver
     {
         var parameterOffset = method.ExplicitReceiverParameter == null ? 0 : 1;
         var callableParameterCount = method.Parameters.Length - parameterOffset;
-        if (arguments.Length != callableParameterCount)
+
+        // ADR-0101 follow-up / issue #812: class / interface instance methods
+        // may declare a trailing variadic parameter. The arity check accepts
+        // any count >= fixed parameters (the fixed prefix is everything
+        // except the trailing variadic). Pack / pass-through happens below
+        // before the per-position conversion loop.
+        var isVariadic = method.Parameters.Length > 0
+            && method.Parameters[method.Parameters.Length - 1].IsVariadic;
+        var fixedCallableParamCount = isVariadic ? callableParameterCount - 1 : callableParameterCount;
+
+        // Issue #343: variadic functions and named arguments do not compose.
+        if (isVariadic && !argumentNames.IsDefault)
+        {
+            Diagnostics.ReportNamedArgumentParameterNotFound(ce.Identifier.Location, method.Name, FirstNamedArgumentName(argumentNames));
+            return new BoundErrorExpression(null);
+        }
+
+        if (isVariadic)
+        {
+            if (arguments.Length < fixedCallableParamCount)
+            {
+                Diagnostics.ReportTooFewArgumentsForVariadic(ce.Identifier.Location, method.Name, fixedCallableParamCount, arguments.Length);
+                return new BoundErrorExpression(null);
+            }
+        }
+        else if (arguments.Length != callableParameterCount)
         {
             Diagnostics.ReportWrongArgumentCount(ce.Location, method.Name, callableParameterCount, arguments.Length);
             return new BoundErrorExpression(null);
@@ -3044,7 +3205,34 @@ internal sealed class OverloadResolver
             {
                 for (var i = 0; i < permutedArguments.Length; i++)
                 {
-                    inferTypeArguments(method.Parameters[i + parameterOffset].Type, permutedArguments[i].Type, substitution);
+                    // ADR-0101 follow-up / issue #812: when the call lands
+                    // on the trailing variadic parameter (whose type is
+                    // `[]T`), each trailing argument contributes to `T`'s
+                    // inference. A single trailing `[]U` argument infers
+                    // `T = U` from the slice element so the pass-through
+                    // path works.
+                    var paramType = method.Parameters[i + parameterOffset].Type;
+                    if (isVariadic
+                        && i + parameterOffset == method.Parameters.Length - 1
+                        && paramType is SliceTypeSymbol variadicSlice)
+                    {
+                        var argType = permutedArguments[i].Type;
+                        if (permutedArguments.Length - i == 1 && argType is SliceTypeSymbol passThroughSlice)
+                        {
+                            inferTypeArguments(variadicSlice.ElementType, passThroughSlice.ElementType, substitution);
+                        }
+                        else
+                        {
+                            for (var j = i; j < permutedArguments.Length; j++)
+                            {
+                                inferTypeArguments(variadicSlice.ElementType, permutedArguments[j].Type, substitution);
+                            }
+                        }
+
+                        break;
+                    }
+
+                    inferTypeArguments(paramType, permutedArguments[i].Type, substitution);
                 }
 
                 foreach (var tp in method.TypeParameters)
@@ -3070,6 +3258,85 @@ internal sealed class OverloadResolver
                     Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, describeConstraint(tp));
                     return new BoundErrorExpression(null);
                 }
+            }
+        }
+
+        // ADR-0101 follow-up / issue #812: pack or pass-through trailing
+        // variadic arguments before per-position conversion. Mirrors the
+        // top-level call path: a single trailing argument whose substituted
+        // type matches the variadic slice type forwards unchanged; otherwise
+        // the trailing args are typed against the element type and packed
+        // into a fresh `BoundArrayCreationExpression`.
+        if (isVariadic)
+        {
+            var variadicParam = method.Parameters[method.Parameters.Length - 1];
+            var paramSliceType = (SliceTypeSymbol)variadicParam.Type;
+            var sliceType = substitution != null
+                ? (SliceTypeSymbol)substituteType(paramSliceType, substitution)
+                : paramSliceType;
+            var elementType = sliceType.ElementType;
+            var trailingCount = permutedArguments.Length - fixedCallableParamCount;
+
+            var passThrough = trailingCount == 1
+                && permutedArguments[fixedCallableParamCount].Type == sliceType;
+
+            if (!passThrough)
+            {
+                var hasVariadicErrors = false;
+                for (var i = fixedCallableParamCount; i < permutedArguments.Length; i++)
+                {
+                    var argument = permutedArguments[i];
+                    if (elementType is TypeParameterSymbol)
+                    {
+                        // Open element type: leave argument untouched, the
+                        // emitter boxes as needed (type-erased model).
+                        continue;
+                    }
+
+                    if (argument.Type != elementType
+                        && argument.Type != TypeSymbol.Error
+                        && !Conversion.Classify(argument.Type, elementType).IsImplicit)
+                    {
+                        Diagnostics.ReportWrongArgumentType(permutedSyntax[i].Location, variadicParam.Name, elementType, argument.Type);
+                        hasVariadicErrors = true;
+                    }
+                }
+
+                if (hasVariadicErrors)
+                {
+                    return new BoundErrorExpression(null);
+                }
+
+                var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailingCount);
+                for (var i = fixedCallableParamCount; i < permutedArguments.Length; i++)
+                {
+                    packed.Add(permutedArguments[i]);
+                }
+
+                var newArgs = ImmutableArray.CreateBuilder<BoundExpression>(fixedCallableParamCount + 1);
+                for (var i = 0; i < fixedCallableParamCount; i++)
+                {
+                    newArgs.Add(permutedArguments[i]);
+                }
+
+                newArgs.Add(new BoundArrayCreationExpression(ce, sliceType, packed.MoveToImmutable()));
+                permutedArguments = newArgs.ToImmutable();
+
+                var newSyntax = new ExpressionSyntax[fixedCallableParamCount + 1];
+                for (var i = 0; i < fixedCallableParamCount; i++)
+                {
+                    newSyntax[i] = permutedSyntax[i];
+                }
+
+                // The packed-slice slot has no corresponding source argument
+                // (or, when the user supplied one or more trailing args, we
+                // collapse them down to a single synthetic slot). Use the
+                // first trailing arg's syntax when present, otherwise leave
+                // null and the conversion loop will fall back to `ce.Location`.
+                newSyntax[fixedCallableParamCount] = permutedSyntax.Length > fixedCallableParamCount
+                    ? permutedSyntax[fixedCallableParamCount]
+                    : null;
+                permutedSyntax = newSyntax;
             }
         }
 
@@ -3111,18 +3378,21 @@ internal sealed class OverloadResolver
                 }
             }
 
+            var argSyntaxForLocation = i < permutedSyntax.Length ? permutedSyntax[i] : null;
+
             // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument to
             // FormattableStringFactory.Create when the parameter is
             // IFormattable/FormattableString.
-            var argSyntaxForInterp = UnwrapNamedArgumentValue(permutedSyntax[i]);
+            var argSyntaxForInterp = argSyntaxForLocation != null ? UnwrapNamedArgumentValue(argSyntaxForLocation) : null;
             if (argSyntaxForInterp is InterpolatedStringExpressionSyntax interpolatedArg
-                && isFormattableStringTargetType(expectedType))
+        && isFormattableStringTargetType(expectedType))
             {
-                convertedArgs.Add(bindInterpolatedStringAsFormattable(interpolatedArg, expectedType));
-                continue;
+        convertedArgs.Add(bindInterpolatedStringAsFormattable(interpolatedArg, expectedType));
+        continue;
             }
 
-            convertedArgs.Add(conversions.BindCallArgumentWithRefKind(permutedSyntax[i].Location, permutedArguments[i], expectedType, method.Parameters[i + parameterOffset]));
+            var argLoc = argSyntaxForLocation?.Location ?? ce.Location;
+            convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, method.Parameters[i + parameterOffset]));
         }
 
         if (substitution != null)

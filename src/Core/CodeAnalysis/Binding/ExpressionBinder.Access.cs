@@ -1037,7 +1037,23 @@ internal sealed partial class ExpressionBinder
 
         if (structSym.TryGetStaticMethod(methodName, out var method))
         {
-            if (arguments.Length != method.Parameters.Length)
+            // ADR-0101 follow-up / issue #812: a user-declared static method
+            // may declare a trailing variadic parameter. Allow flexible
+            // arity, infer the element type from trailing args (if generic),
+            // and pack / pass-through trailing args into a single slice
+            // argument before the per-position conversion loop.
+            var isVariadic = method.Parameters.Length > 0 && method.Parameters[method.Parameters.Length - 1].IsVariadic;
+            var fixedParamCount = isVariadic ? method.Parameters.Length - 1 : method.Parameters.Length;
+
+            if (isVariadic)
+            {
+                if (arguments.Length < fixedParamCount)
+                {
+                    Diagnostics.ReportTooFewArgumentsForVariadic(ce.Location, method.Name, fixedParamCount, arguments.Length);
+                    return new BoundErrorExpression(null);
+                }
+            }
+            else if (arguments.Length != method.Parameters.Length)
             {
                 Diagnostics.ReportWrongArgumentCount(ce.Location, method.Name, method.Parameters.Length, arguments.Length);
                 return new BoundErrorExpression(null);
@@ -1072,9 +1088,33 @@ internal sealed partial class ExpressionBinder
                 }
                 else
                 {
-                    for (var i = 0; i < arguments.Length; i++)
+                    // ADR-0101 follow-up / issue #812: when the static method is
+                    // variadic, fixed parameters infer pairwise as before;
+                    // for the variadic slot, infer the element type from each
+                    // trailing argument. A single trailing `[]U` arg with
+                    // pass-through inference still infers `T=U`.
+                    var inferenceLimit = isVariadic ? fixedParamCount : arguments.Length;
+                    for (var i = 0; i < inferenceLimit; i++)
                     {
                         Binder.InferTypeArguments(method.Parameters[i].Type, arguments[i].Type, substitution);
+                    }
+
+                    if (isVariadic)
+                    {
+                        var variadicParam = method.Parameters[method.Parameters.Length - 1];
+                        var variadicElementType = ((SliceTypeSymbol)variadicParam.Type).ElementType;
+                        var trailingCount = arguments.Length - fixedParamCount;
+                        if (trailingCount == 1 && arguments[fixedParamCount].Type is SliceTypeSymbol singleSlice)
+                        {
+                            Binder.InferTypeArguments(variadicElementType, singleSlice.ElementType, substitution);
+                        }
+                        else
+                        {
+                            for (var i = fixedParamCount; i < arguments.Length; i++)
+                            {
+                                Binder.InferTypeArguments(variadicElementType, arguments[i].Type, substitution);
+                            }
+                        }
                     }
 
                     foreach (var tp in method.TypeParameters)
@@ -1101,19 +1141,61 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
-            for (var i = 0; i < arguments.Length; i++)
+            // ADR-0101 follow-up / issue #812: pack / pass-through for the
+            // variadic slot. A single trailing arg whose type already equals
+            // the substituted slice type passes through; otherwise wrap the
+            // trailing args in a fresh `[]T` slice. Empty trailing => empty
+            // slice.
+            ImmutableArray<BoundExpression> permutedArgs;
+            if (isVariadic)
+            {
+                var variadicParam = method.Parameters[method.Parameters.Length - 1];
+                var sliceType = (SliceTypeSymbol)variadicParam.Type;
+                var substitutedSlice = substitution != null
+                    ? (SliceTypeSymbol)Binder.SubstituteType(sliceType, substitution)
+                    : sliceType;
+                var trailingCount = arguments.Length - fixedParamCount;
+                var passThrough = trailingCount == 1 && arguments[fixedParamCount].Type == substitutedSlice;
+                if (passThrough)
+                {
+                    permutedArgs = arguments;
+                }
+                else
+                {
+                    var packedTrailing = ImmutableArray.CreateBuilder<BoundExpression>(trailingCount);
+                    for (var i = fixedParamCount; i < arguments.Length; i++)
+                    {
+                        packedTrailing.Add(arguments[i]);
+                    }
+
+                    var newArgs = ImmutableArray.CreateBuilder<BoundExpression>(fixedParamCount + 1);
+                    for (var i = 0; i < fixedParamCount; i++)
+                    {
+                        newArgs.Add(arguments[i]);
+                    }
+
+                    newArgs.Add(new BoundArrayCreationExpression(ce, substitutedSlice, packedTrailing.MoveToImmutable()));
+                    permutedArgs = newArgs.ToImmutable();
+                }
+            }
+            else
+            {
+                permutedArgs = arguments;
+            }
+
+            var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(permutedArgs.Length);
+            for (var i = 0; i < permutedArgs.Length; i++)
             {
                 var paramType = method.Parameters[i].Type;
                 if (paramType is TypeParameterSymbol)
                 {
-                    convertedArgs.Add(arguments[i]);
+                    convertedArgs.Add(permutedArgs[i]);
                     continue;
                 }
 
                 if (substitution != null
                     && paramType is FunctionTypeSymbol openFunctionParameter
-                    && LambdaBinder.TryGetFunctionLiteral(arguments[i], out var functionLiteralArgument))
+                    && LambdaBinder.TryGetFunctionLiteral(permutedArgs[i], out var functionLiteralArgument))
                 {
                     // ADR-0087 §3 R6: substitute the open target before
                     // routing through the adapter. When the substituted
@@ -1130,7 +1212,8 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var expectedType = substitution != null ? Binder.SubstituteType(paramType, substitution) : paramType;
-                convertedArgs.Add(conversions.BindCallArgumentWithRefKind(ce.Arguments[i].Location, arguments[i], expectedType, method.Parameters[i]));
+                var argLoc = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
+                convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArgs[i], expectedType, method.Parameters[i]));
             }
 
             if (substitution != null)
