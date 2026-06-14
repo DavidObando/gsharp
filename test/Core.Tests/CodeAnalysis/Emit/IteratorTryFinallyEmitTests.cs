@@ -55,8 +55,13 @@ for v in gen() {
     }
 
     [Fact]
-    public void Iterator_YieldInsideTryCatchFinally_RunsFinally()
+    public void Iterator_YieldInsideTryWithCatch_IsRejected_Issue836()
     {
+        // Issue #836: per C# §15.14 / ECMA-335, `yield` lexically inside
+        // a `try` block that has any `catch` clause is rejected. The
+        // iterator state machine cannot resume into a protected region
+        // that also acts as a CLR exception-handler frame. Pure
+        // try/finally remains supported.
         var source = @"
 package IterTest
 import System
@@ -77,11 +82,12 @@ for v in gen() {
     Console.WriteLine(v)
 }
 ";
-        var output = CompileLoadInvokeCaptureStdout(source, nameof(Iterator_YieldInsideTryCatchFinally_RunsFinally));
-        Assert.Contains("10", output);
-        Assert.Contains("20", output);
-        Assert.Contains("done", output);
-        Assert.DoesNotContain("caught", output);
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        using var peStream = new MemoryStream();
+        var result = compilation.Emit(peStream);
+        Assert.False(result.Success, "compilation must fail when yield appears inside try with catch.");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0367");
     }
 
     [Fact]

@@ -2195,7 +2195,62 @@ internal sealed class StatementBinder
             return BindErrorStatement();
         }
 
+        // Issue #836: a `yield` lexically inside a `try` block that also
+        // has any `catch` clause is rejected (C# §15.14 / ECMA-335). The
+        // iterator state machine cannot safely resume into a protected
+        // region from a synthesized dispatch when that region also acts
+        // as a CLR exception handler frame. Pure `try`/`finally` around
+        // `yield` is supported and lowered by IteratorMoveNextBodyBuilder.
+        if (catches.Count > 0
+            && function != null
+            && isIteratorReturnType(function.Type)
+            && YieldFinder.ContainsYieldInOwnTryBlock(tryBlock))
+        {
+            foreach (var yieldLocation in YieldFinder.GetYieldLocationsInOwnTryBlock(tryBlock))
+            {
+                Diagnostics.ReportYieldInsideTryWithCatch(yieldLocation);
+            }
+        }
+
         return new BoundTryStatement(syntax, tryBlock, catches.ToImmutable(), finallyBlock);
+    }
+
+    /// <summary>
+    /// Walker that locates <c>yield</c> statements lexically inside a
+    /// bound block, but does not descend into nested function bodies
+    /// (lambdas / local functions). Issue #836.
+    /// </summary>
+    private sealed class YieldFinder : BoundTreeWalker
+    {
+        private readonly List<TextLocation> locations = new List<TextLocation>();
+
+        public static bool ContainsYieldInOwnTryBlock(BoundStatement tryBlock)
+        {
+            var walker = new YieldFinder();
+            walker.VisitStatement(tryBlock);
+            return walker.locations.Count > 0;
+        }
+
+        public static IReadOnlyList<TextLocation> GetYieldLocationsInOwnTryBlock(BoundStatement tryBlock)
+        {
+            var walker = new YieldFinder();
+            walker.VisitStatement(tryBlock);
+            return walker.locations;
+        }
+
+        protected override void VisitYieldStatement(BoundYieldStatement node)
+        {
+            // Prefer the `yield` keyword's location; fall back to the
+            // full statement syntax location if available.
+            if (node.Syntax is YieldStatementSyntax yieldSyntax)
+            {
+                this.locations.Add(yieldSyntax.YieldKeyword.Location);
+            }
+            else if (node.Syntax != null)
+            {
+                this.locations.Add(node.Syntax.Location);
+            }
+        }
     }
 
     private BoundStatement BindThrowStatement(ThrowStatementSyntax syntax)
