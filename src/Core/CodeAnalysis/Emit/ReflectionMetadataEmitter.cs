@@ -6652,6 +6652,55 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #832 (mirrors the property variant above for instance method calls):
+    /// when an instance method call's receiver is a symbolic open-generic
+    /// container (e.g. <c>Queue[T]</c> with an in-scope <c>T</c>), the call's
+    /// MemberRef parent is encoded as the symbolic generic instantiation, so
+    /// the runtime stack value after <c>callvirt</c> is the substituted
+    /// symbolic return type (<c>!T</c>) — NOT the closed CLR <c>object</c>
+    /// that <see cref="MethodInfo.ReturnType"/> reports for the type-erased
+    /// closed method. Returning that substituted return to the body emitter
+    /// lets the erasure-widening short-circuit, avoiding a verifier-breaking
+    /// (and runtime-crashing) <c>unbox.any T</c> when the result is discarded
+    /// or otherwise consumed at the open-T slot.
+    /// </summary>
+    /// <param name="receiverType">The receiver's type as seen by the body emitter.</param>
+    /// <param name="method">The closed-CLR method selected by the lowerer.</param>
+    /// <param name="substitutedReturn">The substituted symbolic return type, on success.</param>
+    /// <returns><see langword="true"/> when the receiver is a symbolic
+    /// open-generic container and the substituted return resolves to a
+    /// non-error symbolic type.</returns>
+    internal bool TryGetSymbolicSubstitutedInstanceMethodReturn(
+        TypeSymbol receiverType,
+        MethodInfo method,
+        out TypeSymbol substitutedReturn)
+    {
+        substitutedReturn = null;
+        if (method == null
+            || !TryNormalizeToSymbolicContainer(receiverType, out var openDef, out var typeArguments)
+            || typeArguments.IsDefaultOrEmpty
+            || !(typeArguments.Any(TypeSymbol.ContainsTypeParameter) || typeArguments.Any(ArgIsSymbolicUserDefined)))
+        {
+            return false;
+        }
+
+        var openMethod = ResolveMethodOnOpenDefinition(openDef, method);
+        if (openMethod == null)
+        {
+            return false;
+        }
+
+        var openReturn = openMethod.ReturnType;
+        if (openReturn == null || openReturn == typeof(void))
+        {
+            return false;
+        }
+
+        substitutedReturn = MemberLookup.MapOpenClrTypeToSymbolic(openReturn, openDef, typeArguments);
+        return substitutedReturn != null && substitutedReturn != TypeSymbol.Error;
+    }
+
+    /// <summary>
     /// Phase 4 emit parity: get a MemberRef for a CLR instance constructor.
     /// Handles both non-generic types (<c>StringBuilder()</c>) and constructed
     /// generic types (<c>List&lt;int&gt;()</c>, <c>Dictionary&lt;string, int&gt;()</c>).

@@ -224,6 +224,24 @@ internal sealed partial class MethodBodyEmitter
 
                     this.il.OpCode(useCall ? ILOpCode.Call : ILOpCode.Callvirt);
                     this.il.Token(instCallHandle);
+
+                    // Issue #832: when the receiver is a symbolic open-generic
+                    // container (e.g. `Queue[T]` with an in-scope `T`), the
+                    // MemberRef is parented at the symbolic instantiation and
+                    // the runtime stack value after `callvirt` is the
+                    // substituted symbolic return (`!T`) — NOT the closed CLR
+                    // `object` that `instCall.Method.ReturnType` reports for
+                    // the type-erased close. Skip the erasure-widening so we
+                    // don't emit a spurious `unbox.any T` against a stack slot
+                    // that already holds `T`. The spurious unbox passed
+                    // ilverify at the source method but produced a runtime
+                    // NullReferenceException once a state-machine rewrite
+                    // (e.g. iterator MoveNext) re-inspected the IL.
+                    if (this.outer.TryGetSymbolicSubstitutedInstanceMethodReturn(receiverType, instCall.Method, out _))
+                    {
+                        break;
+                    }
+
                     this.EmitErasedObjectReturnWidening(
                         TypeSymbol.FromClrType(instCall.Method.ReturnType),
                         instCall.Type);
