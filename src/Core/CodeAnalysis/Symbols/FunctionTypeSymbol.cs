@@ -21,15 +21,29 @@ public sealed class FunctionTypeSymbol : TypeSymbol
 
     private static long typeParameterIdSeed;
 
-    private FunctionTypeSymbol(string name, ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
+    private FunctionTypeSymbol(string name, ImmutableArray<TypeSymbol> parameterTypes, ImmutableArray<bool> isVariadic, TypeSymbol returnType)
         : base(name, BuildClrType(parameterTypes, returnType))
     {
         ParameterTypes = parameterTypes;
+        IsVariadic = isVariadic;
         ReturnType = returnType;
     }
 
     /// <summary>Gets the function's parameter types.</summary>
     public ImmutableArray<TypeSymbol> ParameterTypes { get; }
+
+    /// <summary>
+    /// Gets the per-parameter variadic flags (ADR-0102 follow-up / issue #818).
+    /// Always parallel to <see cref="ParameterTypes"/> — entry <c>i</c> is
+    /// <see langword="true"/> iff the corresponding parameter is the
+    /// trailing variadic <c>...T</c> slot. All-<see langword="false"/> for
+    /// a regular function type. The variadic slot's
+    /// <see cref="ParameterTypes"/> entry is the already-wrapped slice
+    /// (<c>[]T</c>) so existing callers that just look at the parameter
+    /// type continue to work; the flag is consulted at call sites to
+    /// drive pack / pass-through.
+    /// </summary>
+    public ImmutableArray<bool> IsVariadic { get; }
 
     /// <summary>Gets the function's return type. <c>void</c> when the function returns nothing.</summary>
     public TypeSymbol ReturnType { get; }
@@ -37,16 +51,40 @@ public sealed class FunctionTypeSymbol : TypeSymbol
     /// <summary>Gets the number of parameters.</summary>
     public int Arity => ParameterTypes.Length;
 
-    /// <summary>Returns the cached <see cref="FunctionTypeSymbol"/> for the given signature.</summary>
+    /// <summary>Gets a value indicating whether this function type declares a trailing variadic parameter.</summary>
+    public bool HasVariadic => !IsVariadic.IsDefaultOrEmpty && IsVariadic[IsVariadic.Length - 1];
+
+    /// <summary>Returns the cached <see cref="FunctionTypeSymbol"/> for the given signature with no variadic parameters.</summary>
     /// <param name="parameterTypes">The parameter types.</param>
     /// <param name="returnType">The return type (use <see cref="TypeSymbol.Void"/> for no return).</param>
     /// <returns>A cached <see cref="FunctionTypeSymbol"/>.</returns>
     public static FunctionTypeSymbol Get(ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
     {
+        return Get(parameterTypes, isVariadic: default, returnType);
+    }
+
+    /// <summary>Returns the cached <see cref="FunctionTypeSymbol"/> for the given signature, with optional per-parameter variadic flags (ADR-0102 follow-up / issue #818).</summary>
+    /// <param name="parameterTypes">The parameter types.</param>
+    /// <param name="isVariadic">Per-parameter variadic flags; pass <c>default</c> or empty for a non-variadic signature. When non-default the array length must match <paramref name="parameterTypes"/>.</param>
+    /// <param name="returnType">The return type (use <see cref="TypeSymbol.Void"/> for no return).</param>
+    /// <returns>A cached <see cref="FunctionTypeSymbol"/>. Two calls with the same parameter shape, return type, and variadic flag tuple return the same instance.</returns>
+    public static FunctionTypeSymbol Get(ImmutableArray<TypeSymbol> parameterTypes, ImmutableArray<bool> isVariadic, TypeSymbol returnType)
+    {
         // ADR-0075 / issue #715: the canonical display form of a function type
         // is the arrow shape `(T1, T2, ...) -> R` (Kotlin/Swift style), to
         // match the canonical source spelling. A void-returning function is
         // displayed as `(T1, ...) -> void`.
+        // ADR-0102 follow-up / issue #818: a trailing variadic parameter is
+        // rendered with the `...` prefix and the element type rather than
+        // the wrapped slice (e.g. `(int32, ...string) -> int32`).
+        if (!isVariadic.IsDefaultOrEmpty && isVariadic.Length != parameterTypes.Length)
+        {
+            throw new System.ArgumentException(
+                "isVariadic length must equal parameterTypes length.",
+                nameof(isVariadic));
+        }
+
+        var hasVariadicFlags = !isVariadic.IsDefaultOrEmpty;
         var sb = new System.Text.StringBuilder();
         sb.Append('(');
         for (var i = 0; i < parameterTypes.Length; i++)
@@ -56,7 +94,22 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 sb.Append(", ");
             }
 
-            sb.Append(parameterTypes[i].Name);
+            if (hasVariadicFlags && isVariadic[i])
+            {
+                sb.Append("...");
+                if (parameterTypes[i] is SliceTypeSymbol slice)
+                {
+                    sb.Append(slice.ElementType?.Name ?? parameterTypes[i].Name);
+                }
+                else
+                {
+                    sb.Append(parameterTypes[i].Name);
+                }
+            }
+            else
+            {
+                sb.Append(parameterTypes[i].Name);
+            }
         }
 
         sb.Append(") -> ");
@@ -88,6 +141,11 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 keyBuilder.Append(',');
             }
 
+            if (hasVariadicFlags && isVariadic[i])
+            {
+                keyBuilder.Append("...");
+            }
+
             AppendIdentityKey(keyBuilder, parameterTypes[i]);
         }
 
@@ -95,7 +153,8 @@ public sealed class FunctionTypeSymbol : TypeSymbol
         AppendIdentityKey(keyBuilder, returnType ?? TypeSymbol.Void);
 
         var cacheKey = keyBuilder.ToString();
-        return Cache.GetOrAdd(cacheKey, _ => new FunctionTypeSymbol(name, parameterTypes, returnType ?? TypeSymbol.Void));
+        var normalizedFlags = hasVariadicFlags ? isVariadic : ImmutableArray<bool>.Empty;
+        return Cache.GetOrAdd(cacheKey, _ => new FunctionTypeSymbol(name, parameterTypes, normalizedFlags, returnType ?? TypeSymbol.Void));
     }
 
     private static void AppendIdentityKey(System.Text.StringBuilder builder, TypeSymbol type)

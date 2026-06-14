@@ -2312,16 +2312,57 @@ internal sealed class OverloadResolver
                 return new BoundErrorExpression(null);
             }
 
-            if (syntax.Arguments.Count != fnType.Arity)
+            // ADR-0102 follow-up / issue #818: a function-typed variable
+            // whose declared type spells a trailing variadic parameter
+            // (`(T1, ..., ...Tn) -> R`) packs / passes through the trailing
+            // arguments at the call site, mirroring the named-delegate path.
+            var fnIsVariadic = fnType.HasVariadic;
+            var fnFixedCount = fnIsVariadic ? fnType.Arity - 1 : fnType.Arity;
+
+            if (fnIsVariadic)
+            {
+                if (syntax.Arguments.Count < fnFixedCount)
+                {
+                    Diagnostics.ReportTooFewArgumentsForVariadic(syntax.Identifier.Location, variable.Name, fnFixedCount, syntax.Arguments.Count);
+                    return new BoundErrorExpression(null);
+                }
+            }
+            else if (syntax.Arguments.Count != fnType.Arity)
             {
                 Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, variable.Name, fnType.Arity, syntax.Arguments.Count);
                 return new BoundErrorExpression(null);
             }
 
-            var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
-            for (var i = 0; i < syntax.Arguments.Count; i++)
+            ImmutableArray<BoundExpression> fnPermutedArgs = boundArguments.ToImmutable();
+            if (fnIsVariadic)
             {
-                convertedArgs.Add(conversions.BindConversion(syntax.Arguments[i].Location, boundArguments[i], fnType.ParameterTypes[i]));
+                var fnSliceType = (SliceTypeSymbol)fnType.ParameterTypes[fnType.Arity - 1];
+                var fnTrailing = syntax.Arguments.Count - fnFixedCount;
+                var fnPassThrough = fnTrailing == 1 && boundArguments[fnFixedCount].Type == fnSliceType;
+                if (!fnPassThrough)
+                {
+                    var fnPacked = ImmutableArray.CreateBuilder<BoundExpression>(fnTrailing);
+                    for (var i = fnFixedCount; i < syntax.Arguments.Count; i++)
+                    {
+                        fnPacked.Add(boundArguments[i]);
+                    }
+
+                    var fnNew = ImmutableArray.CreateBuilder<BoundExpression>(fnFixedCount + 1);
+                    for (var i = 0; i < fnFixedCount; i++)
+                    {
+                        fnNew.Add(boundArguments[i]);
+                    }
+
+                    fnNew.Add(new BoundArrayCreationExpression(syntax, fnSliceType, fnPacked.MoveToImmutable()));
+                    fnPermutedArgs = fnNew.ToImmutable();
+                }
+            }
+
+            var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(fnPermutedArgs.Length);
+            for (var i = 0; i < fnPermutedArgs.Length; i++)
+            {
+                var argLoc = i < syntax.Arguments.Count ? syntax.Arguments[i].Location : syntax.Identifier.Location;
+                convertedArgs.Add(conversions.BindConversion(argLoc, fnPermutedArgs[i], fnType.ParameterTypes[i]));
             }
 
             return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, variable), fnType, convertedArgs.MoveToImmutable());

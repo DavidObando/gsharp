@@ -184,6 +184,35 @@ public sealed class Conversion
             return Conversion.None;
         }
 
+        // ADR-0102 follow-up / issue #818: two anonymous function types that
+        // share parameter types and return type but differ only in the
+        // per-parameter variadic flag tuple convert implicitly. The variadic
+        // flag is a call-site directive (pack / pass-through) — it does not
+        // change the parameter storage shape or the underlying CLR delegate
+        // erasure, so a `(int32, ...string) -> int32` value can flow into a
+        // `(int32, []string) -> int32` slot and vice versa. Identity (i.e.
+        // exact same FunctionTypeSymbol cache instance) was already handled
+        // by the early reference-equality short circuit at the top.
+        if (from is FunctionTypeSymbol fnFrom && to is FunctionTypeSymbol fnTo
+            && fnFrom.Arity == fnTo.Arity
+            && fnFrom.ReturnType == fnTo.ReturnType)
+        {
+            var sameShape = true;
+            for (var i = 0; i < fnFrom.Arity; i++)
+            {
+                if (fnFrom.ParameterTypes[i] != fnTo.ParameterTypes[i])
+                {
+                    sameShape = false;
+                    break;
+                }
+            }
+
+            if (sameShape)
+            {
+                return Conversion.Implicit;
+            }
+        }
+
         // Issue #295: a GSharp function value (a `func` literal or any
         // function-typed value) implicitly converts to ANY compatible CLR
         // delegate type — one deriving from System.MulticastDelegate whose

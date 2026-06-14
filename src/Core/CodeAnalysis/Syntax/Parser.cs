@@ -3281,11 +3281,21 @@ public class Parser
         Diagnostics.ReportFunctionTypeClauseFuncKeywordDeprecated(funcKeyword.Location);
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var ellipsisTokens = ImmutableArray.CreateBuilder<SyntaxToken>();
 
         while (Current.Kind != SyntaxKind.CloseParenthesisToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
+            // ADR-0102 follow-up / issue #818: per-parameter `...` marker
+            // for a variadic parameter in an anonymous function-type clause.
+            SyntaxToken ellipsis = null;
+            if (Current.Kind == SyntaxKind.EllipsisToken)
+            {
+                ellipsis = MatchToken(SyntaxKind.EllipsisToken);
+            }
+
             nodesAndSeparators.Add(ParseTypeClause());
+            ellipsisTokens.Add(ellipsis);
             if (Current.Kind == SyntaxKind.CommaToken)
             {
                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
@@ -3305,6 +3315,7 @@ public class Parser
             funcKeyword,
             openParen,
             new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
+            ellipsisTokens.ToImmutable(),
             closeParen,
             returnTypeClause,
             question);
@@ -3322,11 +3333,20 @@ public class Parser
         Diagnostics.ReportFunctionTypeClauseFuncKeywordDeprecated(funcKeyword.Location);
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var ellipsisTokens = ImmutableArray.CreateBuilder<SyntaxToken>();
 
         while (Current.Kind != SyntaxKind.CloseParenthesisToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
+            // ADR-0102 follow-up / issue #818: per-parameter `...` marker.
+            SyntaxToken ellipsis = null;
+            if (Current.Kind == SyntaxKind.EllipsisToken)
+            {
+                ellipsis = MatchToken(SyntaxKind.EllipsisToken);
+            }
+
             nodesAndSeparators.Add(ParseTypeClause());
+            ellipsisTokens.Add(ellipsis);
             if (Current.Kind == SyntaxKind.CommaToken)
             {
                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
@@ -3340,11 +3360,12 @@ public class Parser
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         var returnTypeClause = ParseOptionalTypeClause();
         var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
-        return new TypeClauseSyntax(
+        return TypeClauseSyntax.CreateLegacyFunction(
             syntaxTree,
             funcKeyword,
             openParen,
             new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
+            ellipsisTokens.ToImmutable(),
             closeParen,
             returnTypeClause,
             question);
@@ -3357,13 +3378,25 @@ public class Parser
         // parenthesised (empty is OK); the arrow is mandatory; the return
         // type clause is required (use `void` or the legacy `func(...)`
         // shape for void-returning function types).
+        // ADR-0102 follow-up / issue #818: any single parameter slot may
+        // be prefixed with `...` to mark it as variadic. Structural rules
+        // (at most one, must be last, must be `[]T`) are enforced by the
+        // binder so this site only records the per-slot marker tokens.
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var ellipsisTokens = ImmutableArray.CreateBuilder<SyntaxToken>();
 
         while (Current.Kind != SyntaxKind.CloseParenthesisToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
+            SyntaxToken ellipsis = null;
+            if (Current.Kind == SyntaxKind.EllipsisToken)
+            {
+                ellipsis = MatchToken(SyntaxKind.EllipsisToken);
+            }
+
             nodesAndSeparators.Add(ParseTypeClause());
+            ellipsisTokens.Add(ellipsis);
             if (Current.Kind == SyntaxKind.CommaToken)
             {
                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
@@ -3385,6 +3418,7 @@ public class Parser
                 asyncModifier,
                 openParen,
                 new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
+                ellipsisTokens.ToImmutable(),
                 closeParen,
                 arrow,
                 returnTypeClause,
@@ -3395,6 +3429,7 @@ public class Parser
             syntaxTree,
             openParen,
             new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
+            ellipsisTokens.ToImmutable(),
             closeParen,
             arrow,
             returnTypeClause,

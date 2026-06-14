@@ -3429,6 +3429,25 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports GS0365 — ADR-0102 follow-up / issue #818: a variadic
+    /// parameter slot in an anonymous function-type clause
+    /// (<c>(T1, ...T2) -&gt; R</c>) must spell its element type with the
+    /// slice form <c>[]T</c>. The <c>...</c> marker turns the slot into a
+    /// pack/passthrough call site, so the storage type must be a slice the
+    /// trailing positional arguments can pack into.
+    /// </summary>
+    /// <param name="location">The location of the offending parameter type clause.</param>
+    /// <param name="typeName">The non-slice type name that was supplied.</param>
+    public void ReportVariadicParameterMustBeSlice(TextLocation location, string typeName)
+    {
+        Report(
+            location,
+            "GS0365",
+            $"A variadic parameter slot in an anonymous function-type clause must use the slice form '[]T'; got '{typeName}'.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Reports GS0330 — ADR-0089 / issue #755: <c>static let</c> inside an
     /// interface declaration is reserved for a future release. The minimal
     /// static-virtual interface members feature only accepts

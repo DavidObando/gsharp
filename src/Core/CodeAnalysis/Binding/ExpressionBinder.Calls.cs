@@ -1554,17 +1554,57 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        if (arguments.Length != functionType.ParameterTypes.Length)
+        // ADR-0102 follow-up / issue #818: when the field's declared
+        // function type spells a trailing variadic parameter, pack /
+        // pass-through trailing args at the call site.
+        var fldIsVariadic = functionType.HasVariadic;
+        var fldFixedCount = fldIsVariadic ? functionType.ParameterTypes.Length - 1 : functionType.ParameterTypes.Length;
+        if (fldIsVariadic)
+        {
+            if (arguments.Length < fldFixedCount)
+            {
+                Diagnostics.ReportTooFewArgumentsForVariadic(ce.Location, methodName, fldFixedCount, arguments.Length);
+                result = new BoundErrorExpression(null);
+                return true;
+            }
+        }
+        else if (arguments.Length != functionType.ParameterTypes.Length)
         {
             Diagnostics.ReportWrongArgumentCount(ce.Location, methodName, functionType.ParameterTypes.Length, arguments.Length);
             result = new BoundErrorExpression(null);
             return true;
         }
 
-        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
-        for (var i = 0; i < arguments.Length; i++)
+        ImmutableArray<BoundExpression> permutedArgs = arguments;
+        if (fldIsVariadic)
         {
-            convertedArgs.Add(conversions.BindConversion(ce.Arguments[i].Location, arguments[i], functionType.ParameterTypes[i]));
+            var sliceType = (SliceTypeSymbol)functionType.ParameterTypes[functionType.ParameterTypes.Length - 1];
+            var trailing = arguments.Length - fldFixedCount;
+            var passThrough = trailing == 1 && arguments[fldFixedCount].Type == sliceType;
+            if (!passThrough)
+            {
+                var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailing);
+                for (var i = fldFixedCount; i < arguments.Length; i++)
+                {
+                    packed.Add(arguments[i]);
+                }
+
+                var rebuilt = ImmutableArray.CreateBuilder<BoundExpression>(fldFixedCount + 1);
+                for (var i = 0; i < fldFixedCount; i++)
+                {
+                    rebuilt.Add(arguments[i]);
+                }
+
+                rebuilt.Add(new BoundArrayCreationExpression(ce, sliceType, packed.MoveToImmutable()));
+                permutedArgs = rebuilt.ToImmutable();
+            }
+        }
+
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(permutedArgs.Length);
+        for (var i = 0; i < permutedArgs.Length; i++)
+        {
+            var argLoc = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
+            convertedArgs.Add(conversions.BindConversion(argLoc, permutedArgs[i], functionType.ParameterTypes[i]));
         }
 
         var fieldLoad = new BoundFieldAccessExpression(null, receiver, declaringType, matchedField);
