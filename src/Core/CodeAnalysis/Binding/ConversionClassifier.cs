@@ -366,9 +366,19 @@ internal sealed class ConversionClassifier
         // shares the CLR representation of `T` and is fine emitting `ldnull`,
         // so it continues through the normal BoundConversionExpression path
         // below.
+        //
+        // Issue #814 / ADR-0084 §L5: the same lowering also applies when the
+        // underlying type is an open type parameter — for `[T struct]` the
+        // representation is `Nullable<!!T>` (which requires `initobj`), and
+        // for `[T class]` an open `T` slot is verifier-strict (the C#
+        // compiler also emits `ldloca; initobj !!T` instead of `ldnull`
+        // even with a `class` constraint, since `ldnull → !!T` is rejected
+        // by ECMA-335 stack typing). Routing both constraint kinds through
+        // BoundDefaultExpression produces uniformly verifiable IL.
         if (expression.Type == TypeSymbol.Null
             && type is NullableTypeSymbol nilTargetNullable
-            && nilTargetNullable.UnderlyingType?.ClrType is { IsValueType: true })
+            && (nilTargetNullable.UnderlyingType?.ClrType is { IsValueType: true }
+                || nilTargetNullable.UnderlyingType is TypeParameterSymbol))
         {
             return new BoundDefaultExpression(null, type);
         }

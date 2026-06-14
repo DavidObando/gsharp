@@ -137,6 +137,17 @@ internal sealed class MetadataTokenCache
         = new Dictionary<CtorRefSymbolKey, MemberReferenceHandle>();
 
     /// <summary>
+    /// Gets the cache mapping an open type parameter <c>T</c> (constrained to
+    /// <c>struct</c>) to the <see cref="MemberReferenceHandle"/> for
+    /// <c>System.Nullable`1&lt;!!T&gt;::.ctor(!0)</c> (issue #814 / ADR-0084 §L5).
+    /// The parent TypeSpec uses the same VAR/MVAR slot as the wrapping
+    /// method's signature, so a single MemberRef per <c>T</c> serves every
+    /// instantiation of the enclosing generic method or type.
+    /// </summary>
+    public Dictionary<TypeParameterSymbol, MemberReferenceHandle> NullableOpenCtorMemberRefs { get; }
+        = new Dictionary<TypeParameterSymbol, MemberReferenceHandle>();
+
+    /// <summary>
     /// Gets the cache mapping a <see cref="FieldInfo"/> to its
     /// <see cref="MemberReferenceHandle"/>.
     /// </summary>

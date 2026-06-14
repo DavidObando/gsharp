@@ -4781,6 +4781,26 @@ internal sealed class ReflectionMetadataEmitter
             return this.GetTypeHandleForMember(nullableClr);
         }
 
+        // Issue #814 / ADR-0084 §L5: `T?` over an open type parameter.
+        // For `[T struct]` the storage shape is `Nullable<!!T>`, encoded
+        // as a TypeSpec naming the generic instantiation; this is the
+        // token consumed by `initobj` when zero-initialising the slot.
+        // For `[T class]` the storage shape is the bare `!!T` (a reference
+        // slot that holds `null`), so we forward to the existing
+        // TypeParameterSymbol branch by recursing on the underlying.
+        if (element is NullableTypeSymbol nullableTpElement
+            && nullableTpElement.UnderlyingType is TypeParameterSymbol nullableTpInner)
+        {
+            if (nullableTpInner.HasValueTypeConstraint)
+            {
+                var sigBlob = new BlobBuilder();
+                this.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), nullableTpElement);
+                return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+            }
+
+            return this.GetElementTypeToken(nullableTpInner);
+        }
+
         if (element == TypeSymbol.Int32)
         {
             return this.GetTypeReference(this.emitCtx.CoreInt32Type);
@@ -5270,9 +5290,108 @@ internal sealed class ReflectionMetadataEmitter
             return TryUnify(fseq.ElementType, aseq.ElementType, tp, out inferred);
         }
 
+        // Issue #814 / ADR-0084 §L5: an extension method's open
+        // `sequence[T]` receiver may have a call-site actual that is a
+        // slice (`[]T`), a fixed-length array (`[N]T`), or any CLR
+        // generic type implementing `IEnumerable<T>`. The binder
+        // inserts a `BoundConversionExpression` widening to
+        // `sequence[T]`, but `StripConversion` peels it off so emit
+        // sees the pre-widening type. Without these branches the
+        // method-spec inference falls through and throws
+        // "Cannot infer type argument for 'T'" for the
+        // `arr.FirstOrNil()` / `arr.LastOrNil()` / `arr.SingleOrNil()`
+        // class/struct overload pair.
+        if (formal is SequenceTypeSymbol fseqAny)
+        {
+            if (actual is SliceTypeSymbol aSliceEnum)
+            {
+                return TryUnify(fseqAny.ElementType, aSliceEnum.ElementType, tp, out inferred);
+            }
+
+            if (actual is ArrayTypeSymbol aArrEnum)
+            {
+                return TryUnify(fseqAny.ElementType, aArrEnum.ElementType, tp, out inferred);
+            }
+
+            if (actual?.ClrType is { } actualClrSeq)
+            {
+                var openIEnumerable = typeof(System.Collections.Generic.IEnumerable<>);
+                System.Type matched = null;
+                if (actualClrSeq.IsArray)
+                {
+                    var elt = actualClrSeq.GetElementType();
+                    if (elt != null)
+                    {
+                        matched = openIEnumerable.MakeGenericType(elt);
+                    }
+                }
+                else if (actualClrSeq.IsGenericType
+                    && actualClrSeq.GetGenericTypeDefinition() == openIEnumerable)
+                {
+                    matched = actualClrSeq;
+                }
+                else
+                {
+                    foreach (var iface in actualClrSeq.GetInterfaces())
+                    {
+                        if (iface.IsGenericType
+                            && iface.GetGenericTypeDefinition() == openIEnumerable)
+                        {
+                            matched = iface;
+                            break;
+                        }
+                    }
+                }
+
+                if (matched != null)
+                {
+                    var elementSym = TypeSymbol.FromClrType(matched.GetGenericArguments()[0]);
+                    if (TryUnify(fseqAny.ElementType, elementSym, tp, out inferred))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
         if (formal is AsyncSequenceTypeSymbol faseq && actual is AsyncSequenceTypeSymbol aaseq)
         {
             return TryUnify(faseq.ElementType, aaseq.ElementType, tp, out inferred);
+        }
+
+        // Issue #814: mirror of the synchronous sequence-vs-enumerable
+        // unification above for `async sequence[T]` receivers against
+        // any CLR generic implementing `IAsyncEnumerable<T>`.
+        if (formal is AsyncSequenceTypeSymbol faseqAny && actual?.ClrType is { } actualClrAseq)
+        {
+            var openIAsync = typeof(System.Collections.Generic.IAsyncEnumerable<>);
+            System.Type matched = null;
+            if (actualClrAseq.IsGenericType
+                && actualClrAseq.GetGenericTypeDefinition() == openIAsync)
+            {
+                matched = actualClrAseq;
+            }
+            else
+            {
+                foreach (var iface in actualClrAseq.GetInterfaces())
+                {
+                    if (iface.IsGenericType
+                        && iface.GetGenericTypeDefinition() == openIAsync)
+                    {
+                        matched = iface;
+                        break;
+                    }
+                }
+            }
+
+            if (matched != null)
+            {
+                var elementSym = TypeSymbol.FromClrType(matched.GetGenericArguments()[0]);
+                if (TryUnify(faseqAny.ElementType, elementSym, tp, out inferred))
+                {
+                    return true;
+                }
+            }
         }
 
         if (formal is NullableTypeSymbol fnu && actual is NullableTypeSymbol anu)
@@ -6535,6 +6654,57 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #814 / ADR-0084 §L5: builds a <c>MemberRef</c> parented at the
+    /// <c>TypeSpec</c> for <c>System.Nullable`1&lt;!!T&gt;</c> with signature
+    /// <c>instance void .ctor(!0)</c>. The CLR substitutes <c>!0</c> against
+    /// the parent's first generic argument at call time, so a single
+    /// MemberRef serves every instantiation. Used by the
+    /// <c>T → Nullable&lt;T&gt;</c> value-type lift when <c>T</c> is an open
+    /// type parameter constrained to <c>struct</c> — the closed
+    /// <see cref="ConstructorInfo"/> we normally route through
+    /// <see cref="GetCtorReference(ConstructorInfo)"/> is unavailable because
+    /// <see cref="TypeParameterSymbol"/> has no <see cref="Type"/>.
+    /// </summary>
+    /// <param name="nullableOfTp">A <see cref="NullableTypeSymbol"/> whose underlying type is an open <see cref="TypeParameterSymbol"/>.</param>
+    /// <returns>The MemberRef handle for <c>Nullable&lt;!!T&gt;::.ctor(!0)</c>.</returns>
+    internal MemberReferenceHandle GetNullableCtorMemberRefForOpenTypeParameter(NullableTypeSymbol nullableOfTp)
+    {
+        if (nullableOfTp?.UnderlyingType is not TypeParameterSymbol tp)
+        {
+            throw new InvalidOperationException(
+                "GetNullableCtorMemberRefForOpenTypeParameter requires Nullable<TypeParameter>.");
+        }
+
+        if (this.cache.NullableOpenCtorMemberRefs.TryGetValue(tp, out var cached))
+        {
+            return cached;
+        }
+
+        var parentBlob = new BlobBuilder();
+        this.EncodeTypeSymbol(new BlobEncoder(parentBlob).TypeSpecificationSignature(), nullableOfTp);
+        var parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob));
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                parameterCount: 1,
+                returnType: r => r.Void(),
+                parameters: ps =>
+                {
+                    // `!0`: the parent TypeSpec's first generic parameter
+                    // (i.e. the inner type that Nullable<> is closed over).
+                    ps.AddParameter().Type().GenericTypeParameter(0);
+                });
+
+        var handle = this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.cache.NullableOpenCtorMemberRefs[tp] = handle;
+        return handle;
+    }
+
+    /// <summary>
     /// Phase 4 emit parity: get a MemberRef for a CLR field on a possibly
     /// generic declaring type (e.g. <c>KeyValuePair&lt;K, V&gt;.Key</c>).
     /// </summary>
@@ -6838,6 +7008,28 @@ internal sealed class ReflectionMetadataEmitter
                 }
 
                 this.EncodeClrType(encoder, nullableClr);
+                return;
+            }
+
+            // Issue #814 / ADR-0084 §L5: `T?` over an open type parameter
+            // constrained to `struct` must encode as `GENERICINST System.Nullable`1<MVAR/VAR>`,
+            // not as the bare `T` slot. Without this branch the struct-constrained
+            // overload of `FirstOrNil`/`LastOrNil`/`SingleOrNil` emits a return
+            // signature of `!!T` that, after instantiation with a value type,
+            // becomes plain `int32` (etc.) — but the body assigns/returns a
+            // `Nullable<T>` value, so the verifier rejects the mismatch and the
+            // runtime mis-shapes the slot.  When the constraint is `class` the
+            // CLR representation of `T?` coincides with `T` (a reference slot
+            // that can hold `null`), so we keep the existing fall-through
+            // to encode the bare type parameter.
+            if (inner is TypeParameterSymbol nullableTp && nullableTp.HasValueTypeConstraint)
+            {
+                var nullableOpen = typeof(System.Nullable<>);
+                var giNullable = encoder.GenericInstantiation(
+                    this.GetTypeReference(nullableOpen),
+                    genericArgumentCount: 1,
+                    isValueType: true);
+                this.EncodeTypeSymbol(giNullable.AddArgument(), nullableTp);
                 return;
             }
 

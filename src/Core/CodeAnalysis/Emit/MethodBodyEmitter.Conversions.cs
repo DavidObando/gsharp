@@ -110,6 +110,19 @@ internal sealed partial class MethodBodyEmitter
             && ReflectionMetadataEmitter.IsValueTypeNullable(toValueNullableLift)
             && from == toValueNullableLift.UnderlyingType)
         {
+            // Issue #814 / ADR-0084 §L5: open `T → Nullable<T>` where T is an
+            // open type parameter constrained to `struct`. The closed ctor
+            // is unavailable (T has no CLR type), so we emit a MemberRef
+            // parented at the TypeSpec `Nullable<!!T>` with signature
+            // `instance void .ctor(!0)`. The CLR resolves `!0` against the
+            // parent's first generic argument at call time.
+            if (toValueNullableLift.UnderlyingType is TypeParameterSymbol)
+            {
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(this.outer.GetNullableCtorMemberRefForOpenTypeParameter(toValueNullableLift));
+                return;
+            }
+
             var innerClr = toValueNullableLift.UnderlyingType.ClrType
                 ?? throw new InvalidOperationException(
                     $"Nullable<{toValueNullableLift.UnderlyingType.Name}> lift has no CLR underlying type.");
@@ -644,8 +657,14 @@ internal sealed partial class MethodBodyEmitter
         // route through the slot-based `ldloca; initobj; ldloc` shape — it
         // zero-inits the storage uniformly (null for ref types, zeroed
         // bytes for value types) and IL-verifies for any instantiation.
+        // Issue #814 / ADR-0084 §L5: `T?` over an open type parameter
+        // (either `[T struct]` or `[T class]`) needs the same treatment —
+        // ldnull → !!T is unverifiable even with a `class` constraint, and
+        // for `[T struct]` the storage is `Nullable<!!T>` which requires
+        // `initobj` to materialise the missing-value sentinel.
         var typeParamLike = type is TypeParameterSymbol
-            || (type is ImportedTypeSymbol erasedGen && erasedGen.HasTypeParameterArgument);
+            || (type is ImportedTypeSymbol erasedGen && erasedGen.HasTypeParameterArgument)
+            || (type is NullableTypeSymbol nullableTp && nullableTp.UnderlyingType is TypeParameterSymbol);
 
         // Reference types: ldnull
         if (!typeParamLike && !ReflectionMetadataEmitter.IsValueTypeSymbol(type))

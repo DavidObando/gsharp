@@ -119,7 +119,24 @@ public static class NullableLifting
     /// <returns><see langword="true"/> when the underlying type is a CLR value type.</returns>
     internal static bool IsValueTypeNullable(NullableTypeSymbol nullable)
     {
-        return nullable?.UnderlyingType?.ClrType is { IsValueType: true };
+        if (nullable?.UnderlyingType?.ClrType is { IsValueType: true })
+        {
+            return true;
+        }
+
+        // Issue #814 / ADR-0084 §L5: `T?` over an open type parameter
+        // constrained to `struct` is a value-type `Nullable<T>` at the IL
+        // level (encoded as `GENERICINST System.Nullable`1<MVAR>`). All
+        // emit-side decisions that distinguish value-type Nullable from
+        // reference-type Nullable (slot-based default-init, newobj lift,
+        // HasValue branching in `?:`) must treat the open struct case
+        // the same as a closed value type.
+        if (nullable?.UnderlyingType is TypeParameterSymbol tp && tp.HasValueTypeConstraint)
+        {
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>

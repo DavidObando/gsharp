@@ -435,7 +435,17 @@ internal sealed class MethodBodyPlanner
         {
             var needsSlot = ReflectionMetadataEmitter.IsValueTypeSymbol(def.Type)
                 || def.Type is TypeParameterSymbol
-                || (def.Type is ImportedTypeSymbol erasedGen && erasedGen.HasTypeParameterArgument);
+                || (def.Type is ImportedTypeSymbol erasedGen && erasedGen.HasTypeParameterArgument)
+
+                // Issue #814 / ADR-0084 §L5: `default(T?)` over an open type
+                // parameter — either `[T struct]` (encoded as Nullable<!!T>)
+                // or `[T class]` (encoded as bare !!T) — needs the same
+                // ldloca/initobj/ldloc slot path as a closed value-type
+                // default. The type-parameter case is required because
+                // ldnull → !!T is rejected by the IL verifier even with
+                // a `class` constraint.
+                || (def.Type is NullableTypeSymbol nullableDef
+                    && nullableDef.UnderlyingType is TypeParameterSymbol);
             if (!needsSlot)
             {
                 continue;
