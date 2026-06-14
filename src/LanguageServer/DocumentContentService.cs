@@ -37,7 +37,7 @@ public class DocumentContentService
     /// <param name="content">Document content.</param>
     /// <returns>Whether or not the operation succeeded.</returns>
     /// <seealso cref="DocumentContent"/>
-    public bool TryGet(string key, out DocumentContent content)
+    public virtual bool TryGet(string key, out DocumentContent content)
     {
         return this.documentContents.TryGetValue(key, out content);
     }

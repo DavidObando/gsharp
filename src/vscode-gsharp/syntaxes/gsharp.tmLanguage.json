@@ -8,6 +8,7 @@
     { "include": "#characters" },
     { "include": "#numbers" },
     { "include": "#annotations" },
+    { "include": "#declarations" },
     { "include": "#keywords" },
     { "include": "#types" },
     { "include": "#constants" },
@@ -157,6 +158,34 @@
         }
       ]
     },
+    "declarations": {
+      "patterns": [
+        {
+          "comment": "Aggregate declarations per ADR-0078: `class|struct|enum|interface Name`",
+          "match": "\\b(class|struct|enum|interface)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.gsharp" },
+            "2": { "name": "entity.name.type.gsharp" }
+          }
+        },
+        {
+          "comment": "Delegate type alias per ADR-0078: `type Name = delegate ...`",
+          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.gsharp" },
+            "2": { "name": "entity.name.type.gsharp" }
+          }
+        },
+        {
+          "comment": "Function/sequence declaration: `func Name(...)` or `sequence Name(...)`",
+          "match": "\\b(func|sequence)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.gsharp" },
+            "2": { "name": "entity.name.function.gsharp" }
+          }
+        }
+      ]
+    },
     "keywords": {
       "patterns": [
         {
@@ -173,7 +202,7 @@
         },
         {
           "name": "keyword.declaration.gsharp",
-          "match": "\\b(func|class|struct|enum|interface|type|operator|sequence|record|delegate|event|prop|init)\\b"
+          "match": "\\b(func|class|struct|enum|interface|type|operator|sequence|delegate|event|prop|init)\\b"
         },
         {
           "name": "storage.modifier.gsharp",
@@ -197,7 +226,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.gsharp",
-          "match": "\\b(bool|uint8|int8|int16|uint16|int32|uint32|int64|uint64|nint|nuint|float32|float64|decimal|char|string|object|void|byte|sbyte|ushort|short|uint|long|ulong|float|double)\\b"
+          "match": "\\b(bool|uint8|int8|int16|uint16|int32|uint32|int64|uint64|nint|nuint|float32|float64|decimal|char|string|object|void|byte|sbyte|short|ushort|int|uint|long|ulong|float|double)\\b"
         }
       ]
     },
@@ -228,16 +257,12 @@
           "match": "\\.\\.\\."
         },
         {
-          "name": "keyword.operator.short-declaration.gsharp",
-          "match": ":="
-        },
-        {
           "name": "keyword.operator.null-coalescing.gsharp",
           "match": "\\?\\?=|\\?\\?"
         },
         {
           "name": "keyword.operator.null-conditional.gsharp",
-          "match": "\\?\\."
+          "match": "\\?\\.|\\?\\["
         },
         {
           "name": "keyword.operator.null-forgiving.gsharp",

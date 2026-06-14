@@ -206,7 +206,25 @@ public sealed class LspServer
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: false, project, filePath, this.workspaceState);
+
+        DiagnosticComputationResult result;
+        try
+        {
+            result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: false, project, filePath, this.workspaceState);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Issue #816: a binder/parser crash on partially valid input used to surface as a
+            // per-file "Object reference not set to an instance of an object" popup, blocking
+            // every other LSP feature for the file. Degrade to "no diagnostics" instead.
+            LogHandlerException(nameof(DocumentDiagnosticAsync), ex);
+            return new FullDocumentDiagnosticReport { Items = Array.Empty<Diagnostic>() };
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
 
         var resultId = ComputeResultId(result.Diagnostics);
@@ -414,16 +432,48 @@ public sealed class LspServer
     public Task<LinkedEditingRanges> LinkedEditingRangeAsync(LinkedEditingRangeParams request)
         => this.GuardAsync(() => this.ComputeLinkedEditingRanges(request));
 
-    private async Task<T> GuardAsync<T>(Func<T> body)
+    private async Task<T> GuardAsync<T>(Func<T> body, [System.Runtime.CompilerServices.CallerMemberName] string caller = null)
     {
         await this.gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            return body();
+            try
+            {
+                return body();
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Issue #816: handler crashes (e.g., NRE deep in symbol resolution when
+                // editing a file whose syntax outpaces the bundled LS) used to surface as
+                // a per-request "Object reference not set to an instance of an object"
+                // popup for every diagnostic / inlayHint / codeLens / semanticTokens pull
+                // until the user restarted the editor. Swallow the exception, log it to
+                // stderr for diagnosis, and return a safe default (null for reference
+                // types — LSP clients treat that as "no result" rather than an error).
+                LogHandlerException(caller, ex);
+                return default;
+            }
         }
         finally
         {
             this.gate.Release();
+        }
+    }
+
+    private static void LogHandlerException(string handler, Exception ex)
+    {
+        try
+        {
+            Console.Error.WriteLine($"[gsharp-lsp] {handler ?? "handler"} failed: {ex.GetType().FullName}: {ex.Message}");
+            Console.Error.WriteLine(ex.StackTrace);
+        }
+        catch
+        {
+            // Logging is best-effort; never let a stderr write tear down the server.
         }
     }
 
