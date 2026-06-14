@@ -6,7 +6,7 @@ draft: false
 
 # Tutorial: Data and types
 
-In this tutorial, you will work through G#'s everyday data shapes: zero values, structs and classes, data structs, records, inline value wrappers, arrays, slices, maps, and nullable references.
+In this tutorial, you will work through G#'s everyday data shapes: zero values, structs and classes, data structs, inline value wrappers, arrays, slices, maps, and nullable references.
 
 ## Prerequisites
 
@@ -55,15 +55,8 @@ Plain structs are value-like aggregates. Classes are reference-like aggregates w
 
 ```gsharp title="AddressBook.gs"
 // file: AddressBook.gs
-// Phase 3 exit sample. Combines class declarations with primary constructors
-// and instance methods (3.B.3 / ADR-0017), nullable types (3.C.1 / ADR-0020),
-// the nil literal (3.C.2), the Elvis (?:) and null-assertion (!!) operators
-// (3.C.3), the null-conditional access operator (3.C.3b), and string
-// interpolation (1.1 / ADR-0011). The lookup helper returns a nullable
-// `Contact?` so callers can choose between Elvis-default and the
-// "I-know-this-is-present" assertion. Runs through the conformance harness
-// on the emit backend; the interpreter exercises the same constructs in
-// Phase 3.C unit tests.
+// Combines class declarations, primary constructors, nullable types,
+// null-conditional access, null assertions, and string interpolation.
 
 package GSharp.Example.AddressBook
 
@@ -114,7 +107,7 @@ no match
 Alice <alice@example.com>
 ```
 
-`Contact?` means the function can return `nil`. Use `?.` to call only when non-nil, `?[i]` to index only when non-nil (lifts to nullable; ADR-0073), `?:` to provide a fallback, and `!!` when you want a runtime assertion that the value is present.
+`Contact?` means the function can return `nil`. Use `?.` to call only when non-nil, `?[i]` to index only when non-nil, `?:` to provide a fallback, and `!!` when you want a runtime assertion that the value is present.
 
 ## 3. Use data structs for structural values
 
@@ -122,7 +115,7 @@ A `data struct` is a value aggregate with structural equality and copy/update er
 
 ```gsharp title="DataStructErgonomics.gs"
 // file: DataStructErgonomics.gs
-// Phase 7.3 / ADR-0032: data-struct copy, with-expression, and deconstruction ergonomics.
+// Demonstrates data-struct copy, with-expression, and deconstruction ergonomics.
 
 package GSharp.Example.DataStructErgonomics
 
@@ -162,61 +155,14 @@ True
 
 The `.copy(...)` call and `with` expression produce modified values without mutating the original. Tuple and named deconstruction read fields from a data struct.
 
-## 4. Use records as a familiar alias
-
-`record` is a contextual alias for `data struct`, not a separate runtime kind:
-
-```gsharp title="Records.gs"
-// file: Records.gs
-// Phase 6.7 / ADR-0025: 'record' is a context-sensitive alias for
-// 'data struct'. This sample intentionally mirrors DataStruct.gs with the
-// same observable structural-equality behavior.
-
-package GSharp.Example.Records
-
-import System
-
-data struct Point {
-    X int32
-    Y int32
-}
-
-var p = Point{X: 3, Y: 4}
-var q = Point{X: 3, Y: 4}
-var r = Point{X: 3, Y: 5}
-
-Console.WriteLine(p == q)
-Console.WriteLine(p != r)
-Console.WriteLine(q == r)
-
-var s = p
-s.X = 99
-Console.WriteLine(p == s)
-```
-
-Expected output:
-
-```text
-True
-True
-False
-False
-```
-
-Choose the spelling that best communicates with your team. The compiler binds both forms to the same data-struct semantics.
-
-## 5. Use a minimal data struct
+## 4. Use a minimal data struct
 
 The smaller `DataStruct` sample shows synthesized string and equality behavior:
 
 ```gsharp title="DataStruct.gs"
 // file: DataStruct.gs
-// Phase 3.B.2 / ADR-0029: 'data struct' declarations introduce a value-typed
-// aggregate whose instances compare with structural equality. The 'data'
-// keyword is context-sensitive (only special before 'struct') and the
-// compiled CLR type is a plain ValueType whose inherited reflection-based
-// Equals/GetHashCode delivers the same semantics as the interpreter's
-// field-by-field comparison.
+// Demonstrates a value-typed aggregate whose instances compare with
+// structural equality.
 
 package GSharp.Example.DataStruct
 
@@ -249,13 +195,13 @@ False
 False
 ```
 
-## 6. Wrap values with inline structs
+## 5. Wrap values with inline structs
 
 An `inline struct` is a readonly single-field value wrapper, useful for nominal IDs without class allocation:
 
 ```gsharp title="InlineStruct.gs"
 // file: InlineStruct.gs
-// Phase 7.4 / ADR-0033: 'inline struct' declarations introduce readonly single-field value wrappers for zero-allocation newtypes.
+// Demonstrates readonly single-field value wrappers for zero-allocation newtypes.
 
 package GSharp.Example.InlineStruct
 
@@ -295,59 +241,52 @@ o-1
 
 `UserId` and `OrderId` both wrap strings, but they are different G# types.
 
-## 7. Choose arrays, slices, and maps
+## 6. Choose arrays, slices, and maps
 
-Fixed arrays use `[N]T`. Slices use `[]T`, support `len`, `cap`, and `append`, and are backed by CLR arrays. The `len`, `cap`, `append`, and `delete` built-ins are Go-style and require `import Gsharp.Extensions.Go` per ADR-0083 (issue #723); the binder emits diagnostic `GS0317` when the import is missing and names the .NET-idiomatic alternative (`.Length`, `.Count`, `.Remove(k)`, `List[T].Add`) so the migration is mechanical when a file does not want the Go surface:
+Fixed arrays use `[N]T`. Slices use `[]T`, expose `.Length`, and are backed by CLR arrays. Use CLR collections such as `List[T]` when you need growable storage:
 
 ```gsharp title="Slices.gs"
 // file: Slices.gs
-// Demonstrates Phase 3.A.2 emit coverage: variable-length slice types,
-// composite literals, indexing, and the len / cap / append intrinsics.
+// Demonstrates variable-length slice types, composite literals, indexing, and
+// growable CLR lists.
 
 package GSharp.Example.Slices
 
 import System
-import Gsharp.Extensions.Go
+import System.Collections.Generic
 
 var nums = []int32{10, 20, 30}
-Console.WriteLine(len(nums))
-Console.WriteLine(cap(nums))
+Console.WriteLine(nums.Length)
 Console.WriteLine(nums[0])
 Console.WriteLine(nums[1])
 Console.WriteLine(nums[2])
 
-nums = append(nums, 40)
-Console.WriteLine(len(nums))
-Console.WriteLine(nums[3])
-
 var sum = 0
-for i in 0 ... len(nums) {
+for i in 0 ... nums.Length {
     sum = sum + nums[i]
 }
 
 Console.WriteLine(sum)
 
-var words = []string{"alpha"}
-words = append(words, "beta")
-words = append(words, "gamma")
-Console.WriteLine(len(words))
+var words = List[string]()
+words.Add("alpha")
+words.Add("beta")
+words.Add("gamma")
+Console.WriteLine(words.Count)
 Console.WriteLine(words[0])
 Console.WriteLine(words[2])
 
-Console.WriteLine(len("hello"))
+Console.WriteLine("hello".Length)
 ```
 
 Expected output:
 
 ```text
 3
-3
 10
 20
 30
-4
-40
-100
+60
 3
 alpha
 gamma
@@ -358,8 +297,7 @@ Fixed arrays are useful when the length is part of the type:
 
 ```gsharp title="Arrays.gs"
 // file: Arrays.gs
-// Demonstrates Phase 3.A.1 / 3.A.3 emit coverage: fixed-length array types,
-// composite literals, index read, and indexed assignment.
+// Demonstrates fixed-length array types, composite literals, index read, and indexed assignment.
 
 package GSharp.Example.Arrays
 
@@ -403,6 +341,6 @@ For maps, use `map[K,V]` for the G# map type or import `System.Collections.Gener
 
 - `var x T` starts at the type's zero value.
 - Classes are reference-like; structs are value-like.
-- `data struct` and `record` are structural value aggregates.
+- `data struct` creates structural value aggregates.
 - `inline struct` creates a nominal single-field wrapper.
 - Arrays, slices, maps, nullable values, and CLR collections compose with ordinary G# control flow.

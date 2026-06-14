@@ -6,15 +6,15 @@ draft: false
 
 # Expressions and statements
 
-G# expression syntax is compact and Go-like, with CLR-oriented additions for nullability, async, exceptions, and interop. The exact precedence table is in the [language specification](/docs/ref/spec#precedence).
+G# expression syntax is compact, with CLR-oriented additions for nullability, async, exceptions, and interop. The exact precedence table is in the [language specification](/docs/ref/spec#precedence).
 
 ## Operators
 
-Unary operators include numeric identity and negation, logical not, bitwise complement, address-of, dereference, channel receive, and `await`. Binary operators are left-associative. Multiplicative, shift, bitwise, additive, comparison, logical-and, logical-or, and null-coalescing levels are implemented. The type-test operator `expr is T` returns `bool` and the safe-cast operator `expr as T` returns `T` (or `T?` for value types) or `nil` on failure; both sit at the comparison precedence level. The conditional (ternary) expression `cond ? whenTrue : whenFalse` is a normal expression (ADR-0062); both arms must share a common type, otherwise `GS0263` fires. User operator overloads are supported through receiver `operator` declarations; see [ADR-0026](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0026-operator-by-name-deferral.md) and [ADR-0035](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0035-user-operator-overloads.md).
+Unary operators include numeric identity and negation, logical not, bitwise complement, address-of, dereference, channel receive, and `await`. Binary operators are left-associative. Multiplicative, shift, bitwise, additive, comparison, logical-and, logical-or, and null-coalescing levels are implemented. The type-test operator `expr is T` returns `bool` and the safe-cast operator `expr as T` returns `T` (or `T?` for value types) or `nil` on failure; both sit at the comparison precedence level. The conditional (ternary) expression `cond ? whenTrue : whenFalse` is a normal expression; both arms must share a common type, otherwise `GS0263` fires. User operator overloads are supported through receiver `operator` declarations.
 
 ## Calls, access, and literals
 
-Calls use parentheses. Generic calls use bracketed type arguments. Member access uses `.`, null-conditional access uses `?.`, indexing uses brackets, and null-conditional indexing uses `?[` (ADR-0073). These postfix operators chain after any primary expression, including a parenthesized one — `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The one exception is a bare numeric literal: write `(42).ToString()` rather than `42.ToString()`, which is ambiguous with float-literal lexing (see [ADR-0054](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0054-postfix-member-access-on-primary-expressions.md)). Struct literals use field labels; data structs can be copied with `with` updates.
+Calls use parentheses. Generic calls use bracketed type arguments. Member access uses `.`, null-conditional access uses `?.`, indexing uses brackets, and null-conditional indexing uses `?[`. These postfix operators chain after any primary expression, including a parenthesized one — `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The one exception is a bare numeric literal: write `(42).ToString()` rather than `42.ToString`, which is ambiguous with float-literal lexing. Struct literals use field labels; data structs can be copied with `with` updates.
 
 `a?[i]` evaluates the receiver `a` exactly once; when it is `nil` the whole expression yields `nil` and the index is not evaluated, otherwise the result is the indexed value lifted to the nullable form of the indexer's return type. Chained forms (`h?.Data?[i]?.Length`) short-circuit on the first nil receiver. Null-conditional forms (`?.`, `?[]`) are not allowed on the left-hand side of an assignment (diagnostic GS0301).
 
@@ -28,7 +28,7 @@ let first = matrix?[0]?[0] ?: -1
 let kind = (p.X + p.Y).GetType()
 ```
 
-Function literals are written with `func` or `async func`. A trailing lambda may follow a call as the final argument. There is no arrow-lambda expression today; `->` is used for switch expression arms. See [ADR-0050](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0050-trailing-arrow-lambda.md) for the design discussion behind trailing lambda syntax and the current parser behavior.
+Lambda literals use the arrow form `(params) -> expr` or `(params) -> { ... }`; async lambdas use `async (params) -> ...`. A trailing lambda may follow a call as the final argument.
 
 ## Interpolation
 
@@ -43,7 +43,7 @@ Console.WriteLine("padded=[${label,5}]")
 
 ## Declarations, assignment, and deconstruction
 
-Use declaration statements for new bindings and assignment for existing variables. Multi-target assignment is implemented for identifier lists. Tuple and named deconstruction use `let` forms. The null-coalescing compound assignment `a ??= b` writes `b` into `a` only when `a` currently reads as `nil` — the right-hand side is short-circuited otherwise (ADR-0072).
+Use declaration statements for new bindings and assignment for existing variables. Multi-target assignment is implemented for identifier lists. Tuple and named deconstruction use `let` forms. The null-coalescing compound assignment `a ??= b` writes `b` into `a` only when `a` currently reads as `nil` — the right-hand side is short-circuited otherwise.
 
 ```gsharp
 let (x, y) = pair
@@ -57,7 +57,7 @@ greeting ??= "ignored" // no-op — RHS not evaluated
 
 ## If and switch
 
-`if` can include a simple statement before the condition. Switch statements use block-bodied cases and do not fall through. `fallthrough` is reserved and diagnosed if used. Switch expressions use `->` arms and require semantic coverage or a default arm. Rationale: [ADR-0009](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0009-switch-semantics.md) and [ADR-0013](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0013-no-fallthrough.md).
+`if` can include a simple statement before the condition. Switch statements use block-bodied cases and do not fall through. `fallthrough` is reserved and diagnosed if used. Switch expressions use `->` arms and require semantic coverage or a default arm.
 
 ```gsharp
 let label = switch n {
@@ -67,7 +67,7 @@ default: "many"
 }
 ```
 
-`if` itself is also a value-producing expression (ADR-0064). In expression position the form requires an exhaustive `else` chain and uses brace blocks whose last expression is the branch value — there is no `yield`. The result type is the common type of every branch tail, computed by the same rule as the `?:` ternary. Multi-statement blocks run their prefix statements for side effects and then yield the trailing expression.
+`if` itself is also a value-producing expression. In expression position the form requires an exhaustive `else` chain and uses brace blocks whose last expression is the branch value — there is no `yield`. The result type is the common type of every branch tail, computed by the same rule as the `?:` ternary. Multi-statement blocks run their prefix statements for side effects and then yield the trailing expression.
 
 ```gsharp
 let label = if n > 0 { "positive" }
@@ -86,7 +86,7 @@ Missing the terminal `else` in value position reports `GS0276`. A block with no 
 
 ## Loops
 
-G# has infinite `for`, condition `for`, three-part `for`, `for in`, and ellipsis range loops. It does not implement a `while` keyword; use `for condition { ... }` for while-style control flow. `for in` is the canonical collection iteration spelling from [ADR-0031](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0031-canonical-for-in.md). The legacy `for v := range coll` and `for i := lo ... hi` spellings were removed in [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md); use the `in` form.
+G# has infinite `for`, condition `for`, three-part `for`, `for in`, ellipsis range loops, `while`, and `do`-`while`. Use `for in` for collection iteration.
 
 ```gsharp
 for item in items {

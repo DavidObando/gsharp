@@ -6,7 +6,7 @@ draft: false
 
 # G# for Go developers
 
-G# is a Go-inspired language for .NET. You will recognize packages, `func`, `defer`, `go`, channels, `select`, `for`, and slices, but the type system and runtime are intentionally CLR-shaped.
+G# brings Go-style ergonomics — packages, `func`, `defer`, `for`, slices — to the .NET runtime alongside Kotlin- and Swift-style modern affordances. You will recognize packages, `func`, `defer`, `go`, channels, `select`, `for`, and slices, while the type system and runtime are intentionally CLR-shaped.
 
 ## Quick comparison
 
@@ -16,12 +16,12 @@ G# is a Go-inspired language for .NET. You will recognize packages, `func`, `def
 | `import "fmt"` | `import System` | Imports bind CLR namespaces, G# packages, and aliases. |
 | `func main()` | top-level statements or `func Main()` | SDK projects synthesize an entry point from top-level statements. |
 | `fmt.Println(x)` | `Console.WriteLine(x)` | Use .NET library types directly. |
-| `var x int` | `var x int` (alias for `int32`) or `var x int32` | G# accepts both the friendly `int` alias and the canonical `int32`. The alias resolves to the canonical type at the binder, so diagnostics and IL print the width-bearing name. See ADR-0098. |
-| `:=` | `let x = …` or `var x = …` | G# removed the Go-style `:=` short declaration ([ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md)); every binding site requires `let` (immutable) or `var` (mutable). For ranges, write `for i in lo ... hi` and `for v in xs`. |
-| `[]T` | `[]T` | Slices are backed by CLR arrays and support `len`, `cap`, and `append`. |
+| `var x int` | `var x int` (alias for `int32`) or `var x int32` | G# accepts both the friendly `int` alias and the canonical `int32`. The alias resolves to the canonical type at the binder, so diagnostics and IL print the width-bearing name.  |
+| `:=` | `let x = …` or `var x = …` | G# removed the Go-style `:=` short declaration; every binding site requires `let` (immutable) or `var` (mutable). For ranges, write `for i in lo ... hi` and `for v in xs`. |
+| `[]T` | `[]T` | Slices are backed by CLR arrays and expose `.Length`; use `List[T]` for growable storage. |
 | `[3]T` | `[3]T` | Fixed arrays carry the length in the type. |
 | `map[K,V]` | `map[K,V]` or `Dictionary[K, V]` | CLR generic syntax uses brackets. |
-| `struct` | `struct`, `data struct`, `record`, or `class` | G# also has CLR classes and structural data structs. |
+| `struct` | `struct`, `data struct`, `data class`, or `class` | G# also has CLR classes and structural data aggregates. |
 | exported by `Name` | `public Name` | Visibility is explicit: `public`, `private`, or `internal`. |
 | goroutine `go f()` | `go f()` | Scoped `go` joins through `scope`. |
 | channel `chan T` | `chan T` | Lowered to `System.Threading.Channels`. |
@@ -65,7 +65,7 @@ This matches CLR metadata and lets `PascalCase` or `camelCase` be stylistic choi
 
 ## Control flow is familiar, but switches do not fall through
 
-G# keeps Go-shaped `if`, `for`, `for in`, `switch`, and `select`. Switch cases do not fall through. The `fallthrough` keyword is reserved only so the compiler can issue a clear diagnostic.
+G# keeps compact `if`, `for`, `for in`, `switch`, and `select` forms. Switch cases do not fall through. The `fallthrough` keyword is reserved only so the compiler can issue a clear diagnostic.
 
 ## Generics and CLR interop use bracket syntax
 

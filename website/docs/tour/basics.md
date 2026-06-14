@@ -123,7 +123,7 @@ Console.WriteLine(sum(arr))
 60
 ```
 
-The emitted method carries `[System.ParamArrayAttribute]` so it is consumable from C# / F# / VB as if it had been declared with `params T[]`. The variadic spelling is accepted on top-level `func`, class methods, interface methods (including default-body methods), constructors, lambdas, and named delegate declarations. See [ADR-0101](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0101-variadic-params.md) and [ADR-0102](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0102-variadic-params-additional-sites.md).
+The emitted method carries `[System.ParamArrayAttribute]` so it is consumable from C# / F# / VB as if it had been declared with `params T[]`. The variadic spelling is accepted on top-level `func`, class methods, interface methods (including default-body methods), constructors, lambdas, and named delegate declarations.
 
 ## Basic types
 

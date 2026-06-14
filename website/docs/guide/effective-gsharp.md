@@ -32,7 +32,7 @@ Prefer width-bearing primitive names such as `int32`, `uint64`, and `float64` in
 
 ## Naming numeric types
 
-G# accepts ten friendly aliases on top of the canonical width-bearing names (ADR-0098 / issue #729): `int` → `int32`, `uint` → `uint32`, `long` → `int64`, `ulong` → `uint64`, `short` → `int16`, `ushort` → `uint16`, `byte` → `uint8`, `sbyte` → `int8`, `float` → `float32`, and `double` → `float64`. The alias resolves to the canonical `TypeSymbol` at the binder, so diagnostics, `typeof`, `nameof`, hover, and emitted IL always print the canonical name regardless of which spelling you wrote.
+G# accepts ten friendly aliases on top of the canonical width-bearing names: `int` → `int32`, `uint` → `uint32`, `long` → `int64`, `ulong` → `uint64`, `short` → `int16`, `ushort` → `uint16`, `byte` → `uint8`, `sbyte` → `int8`, `float` → `float32`, and `double` → `float64`. The alias resolves to the canonical `TypeSymbol` at the binder, so diagnostics, `typeof`, `nameof`, hover, and emitted IL always print the canonical name regardless of which spelling you wrote.
 
 Prefer the canonical width-bearing spellings in documentation, public library APIs, and conformance samples — the explicit width keeps cross-library readability stable as a project grows. The friendly aliases are appropriate inside function bodies, lambdas, and local examples where brevity helps reading.
 
@@ -51,11 +51,11 @@ The formatter does not rewrite either spelling — author intent wins. Aliases a
 
 ## Choose `let`, `var`, and `const` deliberately
 
-Use `let` when a binding should not be reassigned, `var` when mutation is part of the algorithm, and `const` for compile-time constants. The short `name := expr` form was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md); spell `let name = expr` for a one-line immutable introduction and `var name = expr` when the value is rebound. Use explicit types at API boundaries and for zero-value `var` declarations.
+Use `let` when a binding should not be reassigned, `var` when mutation is part of the algorithm, and `const` for compile-time constants. Spell `let name = expr` for a one-line immutable introduction and `var name = expr` when the value is rebound. Use explicit types at API boundaries and for zero-value `var` declarations.
 
 ## Prefer simple data declarations
 
-Start with `struct` for value-like aggregates and `class` for identity, mutation, or inheritance. Use `data struct` when structural equality and copy/update behavior are part of the model (value-typed); use `data class` when reference identity matters. The `record` keyword was removed by [ADR-0078](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0078-kotlin-style-type-declaration-grammar.md). Use `inline struct` for a single-field value wrapper when you want a domain-specific class without identity. Reach for `sealed class` (or a payload-bearing `enum` — a discriminated union) when you need a closed hierarchy with exhaustiveness checking.
+Start with `struct` for value-like aggregates and `class` for identity, mutation, or inheritance. Use `data struct` when structural equality and copy/update behavior are part of the model (value-typed); use `data class` when reference identity matters. Use `inline struct` for a single-field value wrapper when you want a domain-specific class without identity. Reach for `sealed class` (or a payload-bearing `enum` — a discriminated union) when you need a closed hierarchy with exhaustiveness checking.
 
 ```gsharp
 data struct Point {
@@ -67,11 +67,9 @@ let origin = Point{X: 0, Y: 0}
 let moved = origin with { X = 10 }
 ```
 
-Relevant rationale: [ADR-0029](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0029-data-struct-synthesized-members.md), [ADR-0032](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0032-data-struct-ergonomics.md), and [ADR-0033](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0033-inline-value-classes.md).
-
 ## Methods, receiver functions, and extension functions
 
-Use class methods when behavior depends on class identity, virtual dispatch, or private representation. Use receiver-style functions for value-oriented behavior on types this package does **not** own (BCL primitives, imported CLR types, types from referenced packages). [ADR-0024](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0024-methods-vs-extensions-canonical-style.md) makes the in-body form canonical for owned-type instance methods; [ADR-0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md) backs that with the soft `GS0314` warning when a receiver clause targets an owned class or struct.
+Use class methods when behavior depends on class identity, virtual dispatch, or private representation. Use receiver-style functions for value-oriented behavior on types this package does **not** own (BCL primitives, imported CLR types, types from referenced packages). The in-body form is canonical for owned-type instance methods; a receiver clause that targets an owned class or struct emits the soft `GS0314` warning.
 
 ```gsharp
 class Point(X int32, Y int32) {
@@ -102,26 +100,22 @@ try {
 }
 ```
 
-Rationale: [ADR-0001](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0001-null-model.md) and [ADR-0005](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0005-error-handling.md).
-
 ## Cleanup: `defer` and `using`
 
 Use `using` for disposable resources because the compiler can require a disposable value and place the lifetime directly in the code. Use `defer` for small cleanup calls that should run when the current scope exits. Keep deferred calls simple; the binder requires the deferred operand to be a call.
 
-Rationale: [ADR-0030](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0030-defer-and-using-block-scope.md).
-
 ## Concurrency patterns
 
-Use channels for ownership transfer and synchronization. Use buffered channels when the capacity is part of the protocol. Use `select` to wait on multiple channel operations. Wrap related `go` calls in `scope` so failures propagate and child tasks are joined before the block exits.
+For I/O-shaped asynchrony, prefer `async func` and `await`. Use `scope` so child work is joined before the block exits and failures propagate. Use `async sequence[T]` and `await for` when a stream is naturally asynchronous. See [Concurrency and async](./concurrency) for the full surface.
 
 ```gsharp
 scope {
-    go worker(ch)
-    ch <- 42
+    runStage("a").Wait()
+    runStage("b").Wait()
 }
 ```
 
-For I/O-shaped asynchrony, prefer `async func` and `await` over manually coordinating tasks. Use `async sequence[T]` and `await for` when a stream is naturally asynchronous. See [Concurrency and async](/docs/guide/concurrency-async) for details and [ADR-0002](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0002-concurrency-model.md), [ADR-0022](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0022-go-chan-select-lowering.md), and [ADR-0023](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0023-async-state-machine.md).
+For Go-shaped concurrency primitives — `go`, channels, `select` — see [Extensions: Go-flavored concurrency](../extensions/go-concurrency), which opt in with `import Gsharp.Extensions.Go`.
 
 ## Use CLR interop instead of wrappers when possible
 

@@ -13,13 +13,15 @@ type FeatureItem = {
 
 const FeatureList: FeatureItem[] = [
   {
-    title: 'Go-inspired syntax',
+    title: 'Modern, familiar syntax',
     icon: '⚡',
     description: (
       <>
-        Packages and imports, <code>func</code> declarations, slices and maps,
-        <code> defer</code>, and <code>for … in</code> ranges. Familiar if you
-        know Go, with a few pragmatic differences.
+        Packages and imports, <code>func</code> declarations, sealed
+        classes and discriminated <code>enum</code>s, arrow lambdas,
+        <code> if&nbsp;let</code> nullable handling, and pattern-based
+        <code> switch</code>. Recognisable from Go, Kotlin, Swift, and
+        TypeScript.
       </>
     ),
     to: '/docs/tour',
@@ -41,12 +43,13 @@ const FeatureList: FeatureItem[] = [
     icon: '🧵',
     description: (
       <>
-        Launch work with <code>go</code>, communicate over typed{' '}
-        <code>chan</code> channels, coordinate with <code>select</code>, and
-        write <code>async</code>/<code>await</code> code over sequences.
+        Structured concurrency with <code>scope</code>,{' '}
+        <code>async</code>/<code>await</code> over <code>Task[T]</code>,
+        and <code>async&nbsp;sequence[T]</code> async streams.
+        Channels and goroutines ship as an opt-in extension.
       </>
     ),
-    to: '/docs/guide/concurrency-async',
+    to: '/docs/tour/concurrency',
   },
   {
     title: 'Precise numeric types',

@@ -6,7 +6,7 @@ draft: false
 
 # Tutorial: Control flow
 
-In this tutorial, you will write G# branches, loops, switches, and patterns. G# keeps Go-like `if` and `for` syntax, adds expression switches, and deliberately does not support fallthrough.
+In this tutorial, you will write G# branches, loops, switches, and patterns. G# keeps compact `if` and `for` syntax, adds expression switches, and deliberately does not support fallthrough.
 
 ## Prerequisites
 
@@ -15,10 +15,7 @@ In this tutorial, you will write G# branches, loops, switches, and patterns. G# 
 
 ## 1. Count with `for`
 
-G# also supports a `while` keyword and a `do`-`while` form (ADR-0070); the
-`for` family remains the most common choice for indexed loops. Use
-`for condition` (or `while condition`) for while-shaped loops, or a C-style
-header when you need init and post clauses:
+G# supports `for`, `while`, and `do`-`while`. The `for` family remains the most common choice for indexed loops; use a C-style header when you need init and post clauses:
 
 ```gsharp title="Loop.gs"
 // file: Loop.gs
@@ -117,7 +114,7 @@ two
 6
 ```
 
-The legacy `for v := range collection` Go-style spelling was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md); use `for v in collection` everywhere.
+
 
 ## 3. Use `if` for local decisions
 
@@ -125,28 +122,8 @@ The `CountWords` sample combines `if`, dictionary lookup, and loops to count wor
 
 ```gsharp title="CountWords.gs"
 // file: CountWords.gs
-//
-// Phase 4 exit sample. Exercises the CLR-interop features that landed
-// across PRs #62–#65 in one cohesive program:
-//
-//   - `Dictionary[K, V]` instantiation via the generic BCL type-position
-//     resolver (Phase 4.4 / ADR-0020) and the CLR constructor-call
-//     binder (Phase 4 exit, part 1).
-//   - Indexer read/write on a CLR map (`counts[w]`) and instance method
-//     calls (`counts.ContainsKey(w)`) via the CLR member-access binder
-//     (Phase 4 exit, part 2).
-//   - Range iteration over both an array (`for w in words`) and a
-//     CLR `IDictionary[K, V]` (`for k, v in counts`) via the
-//     for-range lowerer (Phase 4 exit, part 3).
-//   - Cross-feature use of string interpolation (Phase 1.1) and the
-//     fixed-size array literal syntax (Phase 3.A.2).
-//
-// Runs on both backends. Originally landed under `samples/aspirational/`
-// (PR #66) because the emit pipeline could not yet encode CLR
-// constructors / member access / for-range. The emit-parity work in PRs
-// #67+ closes that gap, so this sample is now part of the top-level
-// emit conformance harness (SampleConformanceTests) in addition to its
-// interpreter-side sibling CountWordsSampleTests.
+// Exercises dictionary construction, indexer read/write, collection iteration,
+// and string interpolation in one program.
 
 package GSharp.Example.CountWords
 
@@ -186,7 +163,7 @@ lazy: 1
 dog: 1
 ```
 
-## 4. Use `if` as a value (ADR-0064)
+## 4. Use `if` as a value
 
 When a branch picks a value rather than a side-effecting action, `if` can also sit in expression position. The form supports `else if` chains and multi-statement blocks whose trailing expression is the branch value:
 
@@ -408,6 +385,6 @@ positive / bookended
 ## What you learned
 
 - Use `for` for infinite, condition, counted, and collection loops.
-- Prefer `for x in xs` over legacy range spelling.
+- Use `for x in xs` for collection iteration.
 - Switch cases do not fall through, and `fallthrough` is reserved only for a clear diagnostic.
 - Patterns work in both switch statements and switch expressions.

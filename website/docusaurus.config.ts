@@ -6,7 +6,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
   title: 'G#',
-  tagline: 'A Go-inspired language for the .NET runtime',
+  tagline: 'A modern .NET language with Go, Kotlin, and Swift ergonomics',
   favicon: 'img/favicon.ico',
 
   future: {

@@ -9,13 +9,13 @@ This page answers common questions about G# as it exists today. For formal detai
 
 ## What is G#?
 
-G# is a Go-inspired programming language for .NET. It keeps a compact surface with packages, imports, `func`, structs, slices, maps, channels, `go`, `select`, and `range`-style iteration, while targeting managed assemblies and interoperating with CLR libraries. The project goal is a modern, simple, accessible language that lets developers use the .NET ecosystem without writing C#.
+G# is a modern .NET language that brings concise package, function, concurrency, and data-shape ergonomics to the CLR. It keeps a compact surface with packages, imports, `func`, structs, slices, maps, channels, `go`, `select`, and `for in` iteration, while targeting managed assemblies and interoperating with CLR libraries. The project goal is a modern, simple, accessible language that lets developers use the .NET ecosystem without writing C#.
 
 ## How does G# relate to Go?
 
-G# borrows many ideas from Go: package-oriented source files, `func`, slices, maps, channels, `go`, `select`, `defer`, and a bias toward simple syntax. It is not Go, and it does not try to replace Go; Go skills should transfer, but G# chooses CLR interop, .NET exceptions, nullable types, `async`/`await`, and explicit `let`/`var` (no `:=`; see [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md)) where the .NET platform requires them.
+G# borrows many ideas from Go: package-oriented source files, `func`, slices, maps, channels, `go`, `select`, `defer`, and a bias toward simple syntax. It is not Go, and it does not try to replace Go; Go skills should transfer, but G# also chooses CLR interop, .NET exceptions, nullable types, `async`/`await`, and explicit `let`/`var` where the .NET platform benefits from them.
 
-## How does G# relate to C# and .NET?
+## How does G# relate to C#.NET?
 
 G# targets the same runtime and libraries as C# rather than defining a separate platform. It emits managed assemblies, can call CLR constructors, methods, properties, fields, events, operators, conversions, delegates, and generic types, and uses normal .NET project builds through the G# MSBuild SDK. See the [CLR interop reference](/docs/ref/clr-interop).
 
@@ -33,37 +33,35 @@ The public specification page is [Language specification](/docs/ref/spec). It is
 
 ## Why use `int32` and `uint64` instead of `int` and `long`?
 
-G# uses width-bearing fixed-size integer names such as `int8`, `uint16`, `int32`, and `uint64` so the type's size is visible in source and consistent with names like `float32` and `float64`. ADR-0049 replaced the earlier C#-style integer names while the language was still pre-stable; `nint` and `nuint` remain the native-width integer spellings. ADR-0098 / issue #729 layers ten friendly aliases (`int`, `uint`, `long`, `ulong`, `short`, `ushort`, `byte`, `sbyte`, `float`, `double`) on top of the canonical names: they resolve at the binder, are interchangeable with the width-bearing spellings everywhere, and diagnostics, `typeof`, hover, and IL always print the canonical name. The canonical width-bearing spellings remain preferred in documentation and public library APIs. See [ADR-0044](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0044-numeric-primitive-coverage.md), [ADR-0049](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0049-width-bearing-integer-names.md), and [ADR-0098](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0098-friendly-numeric-type-aliases.md).
-
+G# uses width-bearing fixed-size integer names such as `int8`, `uint16`, `int32`, and `uint64` so the type's size is visible in source and consistent with names like `float32` and `float64`.  replaced the earlier C#-style integer names while the language was still pre-stable; `nint` and `nuint` remain the native-width integer spellings.  /  layers ten friendly aliases (`int`, `uint`, `long`, `ulong`, `short`, `ushort`, `byte`, `sbyte`, `float`, `double`) on top of the canonical names: they resolve at the binder, are interchangeable with the width-bearing spellings everywhere, and diagnostics, `typeof`, hover, and IL always print the canonical name. The canonical width-bearing spellings remain preferred in documentation and public library APIs. 
 ## Does G# have `null`?
 
-G# uses `nil`, not `null`, and nullability is part of the type. A non-nullable `T` cannot receive `nil`; a nullable `T?` can. The language includes safe access `?.`, null coalescing `?:`, and null assertion `!!`. This is the Kotlin-style model chosen in [ADR-0001](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0001-null-model.md).
+G# uses `nil`, not `null`, and nullability is part of the type. A non-nullable `T` cannot receive `nil`; a nullable `T?` can. The language includes safe access `?.`, null coalescing `?:`, and null assertion `!!`. This is the language nullability model.
 
 ## How is concurrency modeled?
 
-G# combines a Go-shaped surface with .NET primitives. `go f()` starts a concurrent call, `chan T` is backed by `System.Threading.Channels`, sends and receives use `<-`, and `select` chooses among channel operations. `scope` provides structured concurrency so child tasks are joined and failures propagate at the end of the scope. See [Concurrency and async](/docs/guide/concurrency-async), [ADR-0002](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0002-concurrency-model.md), and [ADR-0022](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0022-go-chan-select-lowering.md).
+G# combines a structured concurrency surface with .NET primitives. `go f` starts a concurrent call, `chan T` is backed by `System.Threading.Channels`, sends and receives use `<-`, and `select` chooses among channel operations. `scope` provides structured concurrency so child tasks are joined and failures propagate at the end of the scope. See [Concurrency and async](/docs/guide/concurrency-async).
 
 ## How does `async` work?
 
-`async func` and `await` exist for direct .NET interop with `Task`, `Task[T]`, and compatible awaitable shapes. In emitted code, G# lowers async functions and lambdas to .NET state machines; in the interpreter, awaits block on the awaiter for simple test and REPL behavior. See [ADR-0023](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0023-async-state-machine.md).
-
+`async func` and `await` exist for direct .NET interop with `Task`, `Task[T]`, and compatible awaitable shapes. In emitted code, G# lowers async functions and lambdas to .NET state machines; in the interpreter, awaits block on the awaiter for simple test and REPL behavior. 
 ## How do optional parameters, named arguments, and overloading work in G# functions?
 
 User-defined G# functions support all three:
 
-- **Optional parameters**: declare a default value with `=` after the type — `func greet(name string = "world")` (ADR-0063). Defaults must be compile-time constants and trailing optional parameters cannot precede required ones. Misuse reports `GS0265`.
-- **Named arguments**: any call site can name an argument — `greet(name: "Ada")` — for free functions, user methods, user constructors, extension functions, and inherited CLR methods. The call-site form is `name: value`; the older `name = value` shape (still accepted for `.copy(...)` and attribute argument lists today) is deprecated in this release and emits the `GS0315` warning ([ADR-0080](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0080-deprecate-equals-named-arguments.md), issue #720) before removal in a later release. Indirect calls through a function-typed variable and variadic call sites do not accept names because the target does not preserve parameter names. Diagnostics `GS0244`–`GS0247`; `GS0315` covers the deprecated `=` separator.
-- **Overloading**: two declarations of the same function name are allowed as long as they differ by parameter types, arity, or ref-kinds (ADR-0063). Duplicate signatures report `GS0264`; ambiguous calls report `GS0266`; no-applicable-overload reports `GS0267`.
+- **Optional parameters**: declare a default value with `=` after the type — `func greet(name string = "world")`. Defaults must be compile-time constants and trailing optional parameters cannot precede required ones. Misuse reports `GS0265`.
+- **Named arguments**: any call site can name an argument — `greet(name: "Ada")` — for free functions, user methods, user constructors, extension functions, and inherited CLR methods. The call-site form is `name: value`; `GS0315` identifies the older separator form. Indirect calls through a function-typed variable and variadic call sites do not accept names because the target does not preserve parameter names. Diagnostics `GS0244`–`GS0247`.
+- **Overloading**: two declarations of the same function name are allowed as long as they differ by parameter types, arity, or ref-kinds. Duplicate signatures report `GS0264`; ambiguous calls report `GS0266`; no-applicable-overload reports `GS0267`.
 
 This is a recent change — earlier docs described G# as having no parameter defaults and only "partial" named-argument support. That is no longer accurate.
 
 ## How do generics work?
 
-G# supports generic functions and types with Go-style square brackets, such as `func Id[T any](x T) T` and `Box[int32]`. The implementation emits **reified CLR generic metadata** end-to-end: user-declared generic types/methods carry `GenericParam` rows, signatures over `T` encode `Var`/`MVar`, closed CLR generics over an in-scope type parameter (`List[T]`) emit honest `GenericInstantiation` blobs, and open-bearing delegates (`func(T) U`) dispatch through reified `Func`N::Invoke` MemberRefs. Type-argument inference is implemented for supported cases. Variance markers `in` and `out` are available where the CLR supports them, especially interfaces. The R1–R7 staging that delivered this state is recorded in [ADR-0087](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0087-reified-generics-emit-audit.md); see also [ADR-0004](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0004-generics-scope.md), [ADR-0020](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0020-generic-brackets.md), and [ADR-0021](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0021-generic-variance.md).
+G# supports generic functions and types with bracketed CLR generic syntax, such as `func Id[T any](x T) T` and `Box[int32]`. The implementation emits **reified CLR generic metadata** end-to-end: user-declared generic types/methods carry `GenericParam` rows, signatures over `T` encode `Var`/`MVar`, closed CLR generics over an in-scope type parameter (`List[T]`) emit honest `GenericInstantiation` blobs, and open-bearing delegates (`func(T) U`) dispatch through reified `Func`N::Invoke` MemberRefs. Type-argument inference is implemented for supported cases. Variance markers `in` and `out` are available where the CLR supports them, especially interfaces. 
 
-## What is the difference between structs, classes, data structs, inline value classes, and records?
+## What is the difference between structs, classes, data structs, data classes, and inline value classes?
 
-A `struct` is value-like, while a `class` is reference-like and can participate in class inheritance when marked `open`. A `data struct` is a value aggregate with synthesized structural equality and copy/update ergonomics. An `inline struct` is a one-field readonly value wrapper for newtype-style modeling. `record` is a parse-time alias for `data struct`, not a separate runtime kind. See [ADR-0029](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0029-data-struct-synthesized-members.md), [ADR-0032](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0032-data-struct-ergonomics.md), [ADR-0033](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0033-inline-value-classes.md), and [ADR-0025](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0025-record-keyword-alias.md).
+A `struct` is value-like, while a `class` is reference-like and can participate in class inheritance when marked `open`. A `data struct` is a value aggregate with synthesized structural equality and copy/update ergonomics; `data class` provides the reference-typed counterpart. An `inline struct` is a one-field readonly value wrapper for newtype-style modeling. 
 
 ## How do I call .NET libraries?
 
