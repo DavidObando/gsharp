@@ -52,7 +52,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Gsharp.Templates", "src\Sdk
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sdk.Tests", "test\Sdk.Tests\Sdk.Tests.csproj", "{05DB2CB2-6073-434C-BCB3-A2ADECD6B40C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Gsharp.Extensions", "src\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj", "{1C01AECD-4E67-4227-87F2-DA6606B43C85}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Gsharp.Extensions", "src\Sdk\Gsharp.Extensions\Gsharp.Extensions.proj", "{1C01AECD-4E67-4227-87F2-DA6606B43C85}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Extensions.Tests", "test\Extensions.Tests\Extensions.Tests.csproj", "{63CB3C22-4C13-48C0-B5A0-E1191DCEF878}"
 EndProject

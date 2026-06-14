@@ -50,8 +50,10 @@
 
     <!-- Force the XML doc file under the canonical assembly name (the
          shared build/gsharp.build.props default uses
-         GSharp.$(MSBuildProjectName)). -->
-    <DocumentationFile>$(OutputPath)/$(AssemblyName).xml</DocumentationFile>
+         GSharp.$(MSBuildProjectName)). Written to IntermediateOutputPath
+         so the standard CopyFilesToOutputDirectory step copies it to
+         OutDir alongside the assembly (same convention csc uses). -->
+    <DocumentationFile>$(IntermediateOutputPath)$(AssemblyName).xml</DocumentationFile>
 
     <!-- The bootstrap targets resolve gsc + BuildTask from the in-tree
          out/bin/$(Configuration)/{Compiler,Gsharp.NET.Sdk}/ directories.
@@ -88,7 +90,7 @@
 
   <!-- ProjectReference the in-tree Compiler + Gsharp.NET.Sdk projects so
        MSBuild walks the topology Compiler.csproj → Gsharp.NET.Sdk.csproj
-       → Gsharp.Extensions.csproj when `dotnet build GSharp.sln` is run.
+       → Gsharp.Extensions.proj when `dotnet build GSharp.sln` is run.
        The bootstrap targets resolve gsc.dll + BuildTask.dll from the
        in-tree out/bin/$(Configuration)/{Compiler,Gsharp.NET.Sdk}/
        directories at CoreCompile time; both inputs must exist before
@@ -152,6 +154,11 @@
          resolve our ProjectReference. -->
     <TargetFileName>$(TargetName)$(TargetExt)</TargetFileName>
     <TargetPath>$(OutputPath)$(TargetFileName)</TargetPath>
+
+    <!-- Issue #845: reassert DocumentationFile after all imports have
+         resolved so it uses the correct AssemblyName (Gsharp.Extensions,
+         not GSharp.Gsharp.Extensions from gsharp.build.props). -->
+    <DocumentationFile>$(IntermediateOutputPath)$(AssemblyName).xml</DocumentationFile>
   </PropertyGroup>
 
 </Project>

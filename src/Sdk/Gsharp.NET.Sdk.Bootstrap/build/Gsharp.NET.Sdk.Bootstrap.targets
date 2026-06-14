@@ -94,6 +94,21 @@
     </ItemGroup>
   </Target>
 
+  <!-- Populate @(DocFileItem) and @(FinalDocFile) so the standard
+       CopyFilesToOutputDirectory target copies the XML doc file to
+       $(OutDir). Normally the C# CoreCompile target populates DocFileItem
+       and FinalDocFile is evaluated at import time from it, but since we
+       override CoreCompile entirely and this targets file is imported after
+       Microsoft.Common.CurrentVersion.targets, we must set both. -->
+  <Target Name="_PopulateGsharpDocFileItems"
+          AfterTargets="CoreCompile"
+          Condition=" '$(DocumentationFile)' != '' ">
+    <ItemGroup>
+      <DocFileItem Include="$(DocumentationFile)" />
+      <FinalDocFile Include="$(OutDir)$([System.IO.Path]::GetFileName('$(DocumentationFile)'))" />
+    </ItemGroup>
+  </Target>
+
   <!-- Required by Common.targets; defer to C# semantics. -->
   <Target Name="CreateManifestResourceNames" />
 

@@ -45,7 +45,7 @@ the seed for a longer-running stdlib track, not a hard freeze.
   `Gsharp.NET.Sdk` via the `_ExplicitReference` machinery already
   introduced in ADR-0082. No additional NuGet reference is required.
 - **Authored under `src/Sdk/Gsharp.Extensions/`** as a single
-  `Gsharp.Extensions.csproj`. The dogfooding goal (see "Known
+  `Gsharp.Extensions.proj`. The dogfooding goal (see "Known
   limitations" below) is to author every helper in G# itself; until
   the language gaps documented here are closed, the helpers in this
   ADR are authored in C# inside the same project as a documented
@@ -537,7 +537,7 @@ of that migration, not left behind as dead code.
   ships in idiomatic G#. `Optional.gs`, `Sequences.gs`, and
   `SequenceExtensions.gs` replace the C# escape hatches under
   `src/Sdk/Gsharp.Extensions/Optional/` and
-  `src/Sdk/Gsharp.Extensions/Sequences/`; `Gsharp.Extensions.csproj`
+  `src/Sdk/Gsharp.Extensions/Sequences/`; `Gsharp.Extensions.proj`
   now consumes the `Gsharp.NET.Sdk.Bootstrap` build-time SDK landed
   by #792, so the same `gsc.dll` + `BuildTask` invocation that any
   user `.gsproj` exercises now compiles the stdlib itself. The

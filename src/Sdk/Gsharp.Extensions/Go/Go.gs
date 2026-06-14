@@ -19,5 +19,17 @@
 
 package Gsharp.Extensions.Go
 
+/// Marker type for the `Gsharp.Extensions.Go` namespace.
+///
+/// The Go-flavored concurrency surface (the `go` statement, `chan T`
+/// type, `<-` send and receive operators, `select` statement,
+/// `close(ch)` built-in, and `make(chan T)` constructor) is
+/// compiler-built-in: the binder gates each form on a per-file
+/// `import Gsharp.Extensions.Go` (ADR-0082 / issue #722). This class
+/// has no instance API and is never intended to be instantiated; it
+/// exists so the namespace round-trips through `System.Type`-based
+/// reference resolution and so the assembly carries at least one
+/// public type for normal publish/reference flows. Channel-related
+/// helpers are layered in by follow-up issues (#723, #724).
 class GoExtensions {
 }
