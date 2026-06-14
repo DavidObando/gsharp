@@ -5445,6 +5445,59 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        // Issue #821: when the formal is a constructed CLR generic
+        // interface that the actual's backing array satisfies — e.g.
+        // `IEnumerable[T]` / `IList[T]` / `ICollection[T]` /
+        // `IReadOnlyList[T]` (any interface implemented by `T[]`) — and
+        // the actual is a `[]T` slice or `[N]T` fixed-length array,
+        // bridge their generic arguments by locating the matching
+        // interface instantiation on the actual's backing CLR `T[]` and
+        // recursing into the element-type slot. Mirrors the binder's
+        // slice-to-interface classifier (#570) and the
+        // `sequence[T]`-vs-slice/array arm above (#774/#814) at the
+        // static-method / free-function argument-slot inference path so
+        // generic-method-spec construction can recover `T` from a
+        // slice argument when the type parameter only appears in an
+        // interface-typed formal parameter (no `T` in the return).
+        if (formal is ImportedTypeSymbol formalImported
+            && formalImported.ClrType is { IsInterface: true, IsGenericType: true } formalIface
+            && !formalImported.TypeArguments.IsDefaultOrEmpty
+            && (actual is SliceTypeSymbol || actual is ArrayTypeSymbol)
+            && actual?.ClrType is { IsArray: true } actualClrArray)
+        {
+            Type matched = null;
+            foreach (var iface in actualClrArray.GetInterfaces())
+            {
+                if (iface.IsGenericType
+                    && ClrTypeUtilities.AreSame(
+                        iface.GetGenericTypeDefinition(),
+                        formalIface.GetGenericTypeDefinition()))
+                {
+                    matched = iface;
+                    break;
+                }
+            }
+
+            if (matched != null)
+            {
+                var matchedArgs = matched.GetGenericArguments();
+                if (formalImported.TypeArguments.Length == matchedArgs.Length)
+                {
+                    for (int i = 0; i < formalImported.TypeArguments.Length; i++)
+                    {
+                        if (TryUnify(
+                                formalImported.TypeArguments[i],
+                                TypeSymbol.FromClrType(matchedArgs[i]),
+                                tp,
+                                out inferred))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
         var formalArgs = GetGenericTypeArguments(formal);
         var actualArgs = GetGenericTypeArguments(actual);
         if (!formalArgs.IsDefaultOrEmpty && !actualArgs.IsDefaultOrEmpty
@@ -6274,7 +6327,7 @@ internal sealed class ReflectionMetadataEmitter
         // null ClrType (issue #774), or an AsyncSequenceTypeSymbol with
         // null ClrType.
         var symbolicView = ImportedTypeSymbol.GetConstructed(
-            openDefinition.MakeGenericType(GetErasedObjectArgs(openDefinition)),
+            openDefinition.MakeGenericType(this.GetErasedObjectArgs(openDefinition)),
             openDefinition,
             typeArguments);
 
@@ -6380,16 +6433,37 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private static Type[] GetErasedObjectArgs(Type openDefinition)
+    // Issue #821: choose the right erased `object` for an open generic
+    // definition's MakeGenericType call. The open def may live in a
+    // MetadataLoadContext (reference-pack assemblies); passing a live
+    // `typeof(object)` to its MakeGenericType raises ArgumentException with
+    // "type was not loaded by the MetadataLoadContext that loaded the
+    // generic type or method." Use `emitCtx.CoreObjectType`, which is the
+    // System.Object resolved through the active reference context, when the
+    // open def lives outside the host runtime.
+    private Type[] GetErasedObjectArgs(Type openDefinition)
     {
         var parameters = openDefinition.GetGenericArguments();
         var result = new Type[parameters.Length];
+        var coreObject = ChooseErasedObjectType(openDefinition);
         for (var i = 0; i < parameters.Length; i++)
         {
-            result[i] = typeof(object);
+            result[i] = coreObject;
         }
 
         return result;
+    }
+
+    private Type ChooseErasedObjectType(Type openDefinition)
+    {
+        // Same context as the open def → cheap path.
+        var hostObject = typeof(object);
+        if (openDefinition?.Assembly == hostObject.Assembly)
+        {
+            return hostObject;
+        }
+
+        return this.emitCtx.CoreObjectType ?? hostObject;
     }
 
     private static MethodInfo ResolveMethodOnOpenDefinition(Type openDefinition, MethodInfo method)

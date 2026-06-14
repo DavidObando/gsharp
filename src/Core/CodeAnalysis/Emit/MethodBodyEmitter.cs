@@ -532,6 +532,58 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
+        // Issue #821: cross-context slice-to-constructed-interface widening
+        // where the target is an <see cref="ImportedTypeSymbol"/> whose
+        // <c>ClrType</c> is the type-erased open-definition form (because
+        // <c>MakeGenericType</c> at substitution time could not produce a
+        // closed CLR type — the open def lives in a MetadataLoadContext while
+        // the arguments live in the host runtime). Match the slice's backing
+        // <c>T[]</c> interfaces against the open definition's full name and
+        // the symbolic <c>TypeArguments</c> by leaf-FullName so the CLR
+        // no-op upcast classifies correctly. Mirrors the binder fallback in
+        // <see cref="Conversion.SliceImplementsInterface"/>.
+        if (a is SliceTypeSymbol aSlice
+            && aSlice.ClrType != null
+            && b is ImportedTypeSymbol bImported
+            && bImported.OpenDefinition is { } bOpenDef
+            && !bImported.TypeArguments.IsDefaultOrEmpty)
+        {
+            foreach (var iface in aSlice.ClrType.GetInterfaces())
+            {
+                if (!iface.IsGenericType
+                    || !string.Equals(
+                        iface.GetGenericTypeDefinition().FullName,
+                        bOpenDef.FullName,
+                        StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var ifaceArgs = iface.GetGenericArguments();
+                if (ifaceArgs.Length != bImported.TypeArguments.Length)
+                {
+                    continue;
+                }
+
+                var allMatch = true;
+                for (var i = 0; i < ifaceArgs.Length; i++)
+                {
+                    var symbolic = bImported.TypeArguments[i];
+                    if (symbolic?.ClrType is null
+                        || !string.Equals(ifaceArgs[i].FullName, symbolic.ClrType.FullName, StringComparison.Ordinal))
+                    {
+                        allMatch = false;
+                        break;
+                    }
+                }
+
+                if (allMatch)
+                {
+                    return true;
+                }
+            }
+        }
+
         return false;
     }
 

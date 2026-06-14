@@ -462,7 +462,7 @@ public sealed class Conversion
         if (from is SliceTypeSymbol sliceForIface && to?.ClrType != null && to.ClrType.IsInterface)
         {
             if (sliceForIface.ClrType != null
-                && ClrTypeUtilities.ImplementsInterfaceByName(sliceForIface.ClrType, to.ClrType))
+                && SliceImplementsInterface(sliceForIface, to))
             {
                 return Conversion.Implicit;
             }
@@ -729,6 +729,88 @@ public sealed class Conversion
         if (b is TupleTypeSymbol tb && a is not TupleTypeSymbol)
         {
             return tb.ClrType != null && a.ClrType != null && tb.ClrType == a.ClrType;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #821: cross-context-safe slice-to-interface check. When the
+    /// target is a constructed <see cref="ImportedTypeSymbol"/> whose
+    /// <c>ClrType</c> is the type-erased open-definition form (because
+    /// <see cref="Type.MakeGenericType(Type[])"/> could not be closed at
+    /// substitution time — typically because the open definition lives in a
+    /// <see cref="System.Reflection.MetadataLoadContext"/> while the
+    /// substituted argument types live in the live runtime) the symbolic
+    /// <see cref="ImportedTypeSymbol.TypeArguments"/> carry the real
+    /// substituted G# types. Match against those, not the erased CLR
+    /// arguments, so the slice still classifies as implicitly convertible to
+    /// the constructed interface.
+    /// </summary>
+    /// <param name="slice">The source slice type.</param>
+    /// <param name="targetInterface">The constructed interface target.</param>
+    /// <returns><see langword="true"/> when the slice's backing array
+    /// implements the target interface.</returns>
+    private static bool SliceImplementsInterface(SliceTypeSymbol slice, TypeSymbol targetInterface)
+    {
+        // Cheap path: the target's CLR generic arguments are already the
+        // properly substituted closed form. Defer to the existing
+        // by-name interface walk.
+        if (ClrTypeUtilities.ImplementsInterfaceByName(slice.ClrType, targetInterface.ClrType))
+        {
+            return true;
+        }
+
+        if (targetInterface is not ImportedTypeSymbol imported
+            || imported.OpenDefinition is null
+            || imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        // Cross-context fallback: walk the slice's backing CLR array
+        // interfaces and match each generic argument against the symbolic
+        // TypeArguments by ClrType FullName, which is assembly-qualifier
+        // free for leaf types (System.Int32, System.String, …) and so
+        // compares correctly across reflection contexts.
+        var openDef = imported.OpenDefinition;
+        foreach (var iface in slice.ClrType.GetInterfaces())
+        {
+            if (!iface.IsGenericType)
+            {
+                continue;
+            }
+
+            if (!string.Equals(
+                    iface.GetGenericTypeDefinition().FullName,
+                    openDef.FullName,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var ifaceArgs = iface.GetGenericArguments();
+            if (ifaceArgs.Length != imported.TypeArguments.Length)
+            {
+                continue;
+            }
+
+            var allMatch = true;
+            for (var i = 0; i < ifaceArgs.Length; i++)
+            {
+                var symbolic = imported.TypeArguments[i];
+                if (symbolic?.ClrType is null
+                    || !string.Equals(ifaceArgs[i].FullName, symbolic.ClrType.FullName, StringComparison.Ordinal))
+                {
+                    allMatch = false;
+                    break;
+                }
+            }
+
+            if (allMatch)
+            {
+                return true;
+            }
         }
 
         return false;
