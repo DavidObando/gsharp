@@ -21,7 +21,7 @@ A short tour of v0.2 idioms — the same ones the documentation site uses.
 
 ### Data classes with `with`-copy and deconstruction
 
-```swift
+```gsharp
 package GSharp.Tour.DataClass
 
 import System
@@ -42,7 +42,7 @@ equality, `with`-copy, and deconstruction.
 
 ### `if let` for nullable handling
 
-```swift
+```gsharp
 package GSharp.Tour.IfLet
 
 import System
@@ -65,7 +65,7 @@ the remainder of the enclosing block when the value is non-nil, and the
 
 ### Sequences from `Gsharp.Extensions.Sequences`
 
-```swift
+```gsharp
 package GSharp.Tour.Sequences
 
 import System
@@ -87,7 +87,7 @@ for trio in Sequences.Range(1, 6).Windowed(3) {
 
 ### Optional helpers — `Map`, `OrElse`, `Filter`
 
-```swift
+```gsharp
 package GSharp.Tour.Optional
 
 import System
@@ -107,7 +107,7 @@ Console.WriteLine(short ?: "<filtered out>")     // <filtered out>
 
 ### `scope` + `async` / `await`
 
-```swift
+```gsharp
 package GSharp.Tour.AsyncScope
 
 import System
@@ -186,7 +186,7 @@ is callable from G# with the syntax you already know. CLR generics use
 G#'s bracket spelling, and method calls, properties, indexers, and
 `for in` over `IEnumerable[T]` all just work:
 
-```swift
+```gsharp
 package GSharp.Tour.Interop
 
 import System
@@ -211,7 +211,7 @@ G# also speaks the unmanaged boundary directly. A `func` declaration
 whose body is `;` and that carries `@DllImport` or `@LibraryImport`
 binds as a P/Invoke stub — no `extern` keyword needed:
 
-```swift
+```gsharp
 package GSharp.Tour.PInvoke
 
 import System

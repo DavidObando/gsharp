@@ -55,6 +55,9 @@
         "extensions": [
           ".gsproj"
         ]
+      },
+      {
+        "id": "gsharp-markdown-injection"
       }
     ],
     "grammars": [
@@ -62,6 +65,17 @@
         "language": "gsharp",
         "scopeName": "source.gsharp",
         "path": "./syntaxes/gsharp.tmLanguage.json"
+      },
+      {
+        "language": "gsharp-markdown-injection",
+        "scopeName": "markdown.gsharp.codeblock",
+        "path": "./syntaxes/gsharp-markdown-injection.json",
+        "injectTo": [
+          "text.html.markdown"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.gsharp": "gsharp"
+        }
       }
     ],
     "snippets": [
