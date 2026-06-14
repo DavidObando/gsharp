@@ -150,29 +150,32 @@ public sealed class TypeClauseSyntax : SyntaxNode
         QuestionToken = questionToken;
     }
 
-    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a map type <c>map[K]V?</c> (Phase 3.A.4).</summary>
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a map type <c>map[K,V]?</c> (ADR-0104, supersedes the Phase 3.A.4 Go-flavored <c>map[K]V</c> shape).</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="mapKeyword">The <c>map</c> keyword.</param>
-    /// <param name="mapOpenBracketToken">The <c>[</c> introducing the key type.</param>
+    /// <param name="mapOpenBracketToken">The <c>[</c> introducing the key/value type pair.</param>
     /// <param name="mapKeyType">The key type clause.</param>
-    /// <param name="mapCloseBracketToken">The <c>]</c> closing the key type.</param>
+    /// <param name="mapCommaToken">The <c>,</c> separating the key type from the value type. May be <see langword="null"/> when the parser recovered from a legacy <c>map[K]V</c> shape (see GS0366).</param>
     /// <param name="mapValueType">The value type clause.</param>
+    /// <param name="mapCloseBracketToken">The <c>]</c> closing the map type-argument list.</param>
     /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
     public TypeClauseSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken mapKeyword,
         SyntaxToken mapOpenBracketToken,
         TypeClauseSyntax mapKeyType,
-        SyntaxToken mapCloseBracketToken,
+        SyntaxToken mapCommaToken,
         TypeClauseSyntax mapValueType,
+        SyntaxToken mapCloseBracketToken,
         SyntaxToken questionToken)
         : base(syntaxTree)
     {
         MapKeyword = mapKeyword;
         MapOpenBracketToken = mapOpenBracketToken;
         MapKeyType = mapKeyType;
-        MapCloseBracketToken = mapCloseBracketToken;
+        MapCommaToken = mapCommaToken;
         MapValueType = mapValueType;
+        MapCloseBracketToken = mapCloseBracketToken;
         QuestionToken = questionToken;
     }
 
@@ -505,19 +508,22 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets the <c>map</c> keyword for map types, or <c>null</c>.</summary>
     public SyntaxToken MapKeyword { get; }
 
-    /// <summary>Gets the <c>[</c> opening the map key type, or <c>null</c>.</summary>
+    /// <summary>Gets the <c>[</c> opening the map key/value type-argument list (ADR-0104), or <c>null</c>.</summary>
     public SyntaxToken MapOpenBracketToken { get; }
 
     /// <summary>Gets the map key type clause, or <c>null</c>.</summary>
     public TypeClauseSyntax MapKeyType { get; }
 
-    /// <summary>Gets the <c>]</c> closing the map key type, or <c>null</c>.</summary>
+    /// <summary>Gets the <c>,</c> separating the map key type from the map value type (ADR-0104), or <c>null</c> when absent (e.g. parser recovered from a legacy <c>map[K]V</c> shape under GS0366).</summary>
+    public SyntaxToken MapCommaToken { get; }
+
+    /// <summary>Gets the <c>]</c> closing the map key/value type-argument list (ADR-0104), or <c>null</c>.</summary>
     public SyntaxToken MapCloseBracketToken { get; }
 
     /// <summary>Gets the map value type clause, or <c>null</c>.</summary>
     public TypeClauseSyntax MapValueType { get; }
 
-    /// <summary>Gets a value indicating whether this clause denotes a map type <c>map[K]V</c> (Phase 3.A.4).</summary>
+    /// <summary>Gets a value indicating whether this clause denotes a map type <c>map[K,V]</c> (ADR-0104).</summary>
     public bool IsMap => MapKeyword != null;
 
     /// <summary>Gets the <c>chan</c> keyword for channel types, or <c>null</c>.</summary>

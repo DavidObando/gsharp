@@ -10,7 +10,7 @@ using GSharp.Core.CodeAnalysis.Syntax;
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
-/// Bound map literal expression — <c>map[K]V{k1: v1, k2: v2, …}</c>
+/// Bound map literal expression — <c>map[K,V]{k1: v1, k2: v2, …}</c>
 /// (Phase 3.A.4).
 /// </summary>
 public sealed class BoundMapLiteralExpression : BoundExpression

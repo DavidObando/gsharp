@@ -20,7 +20,7 @@ func sumOf(values []int32) int32 {
     return total
 }
 
-func tryLookup(dict map[string]string, key string) string? {
+func tryLookup(dict map[string,string], key string) string? {
     if dict.ContainsKey(key) {
         return dict[key]
     }

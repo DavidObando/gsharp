@@ -32,7 +32,7 @@ The remaining built-ins are Go-style, not Go-only:
 - `append(s, e)` grows-and-copies a slice.
 - `delete(m, k)` removes a key from a map.
 - `make(T)` / `make(T, n)` / `make(T, n, m)` is the constructor
-  for `chan T`, `map[K]V`, and `[]T` (only the `chan T` shape is
+  for `chan T`, `map[K,V]`, and `[]T` (only the `chan T` shape is
   currently implemented in the parser — see "Scope" below).
 - `close(ch)` marks a channel-writer complete. ADR-0082 already
   gates `close`.
@@ -95,7 +95,7 @@ built-ins in the same cluster. See "Deconfliction with `close`"
 below.
 
 The other shapes of `make` (`make([]T, n)` for slices and
-`make(map[K]V)` for maps) are not currently supported by the
+`make(map[K,V])` for maps) are not currently supported by the
 parser (see ADR-0020 §"Open questions"). When they are added,
 they will reuse the gate site established here — the binder
 helper `ReportIfGoBuiltinImportMissing` already exists and the

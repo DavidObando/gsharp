@@ -6,7 +6,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
 /// Represents a single <c>key: value</c> entry inside a map literal
-/// <c>map[K]V{ … }</c> (Phase 3.A.4).
+/// <c>map[K,V]{ … }</c> (ADR-0104).
 /// </summary>
 public sealed class MapEntrySyntax : SyntaxNode
 {

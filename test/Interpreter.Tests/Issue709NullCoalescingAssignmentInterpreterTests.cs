@@ -94,7 +94,7 @@ public class Issue709NullCoalescingAssignmentInterpreterTests
     {
         var source = """
             func main() {
-                var m = map[string]string?{}
+                var m = map[string,string?]{}
                 m["k"] = nil
                 m["k"] ??= "v"
                 Console.WriteLine(m["k"])

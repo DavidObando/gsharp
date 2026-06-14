@@ -854,7 +854,7 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindMapCreationExpression(MapCreationExpressionSyntax syntax)
     {
-        // Phase 3.A.4: bind `map[K]V{k1: v1, k2: v2, …}`.
+        // ADR-0104: bind `map[K,V]{k1: v1, k2: v2, …}`.
         var mapType = bindTypeClause(syntax.TypeClause);
         if (mapType == null)
         {

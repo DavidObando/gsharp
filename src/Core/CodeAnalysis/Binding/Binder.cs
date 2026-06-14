@@ -1756,7 +1756,7 @@ public sealed class Binder
 
         if (syntax.IsMap)
         {
-            // Phase 3.A.4: map type clause `map[K]V`.
+            // ADR-0104: map type clause `map[K,V]`.
             var keyType = BindTypeClause(syntax.MapKeyType);
             var valueType = BindTypeClause(syntax.MapValueType);
             if (keyType == null || valueType == null)

@@ -159,7 +159,7 @@ func nextKey() string {
     keyCalls = keyCalls + 1
     return ""k""
 }
-var m = map[string]int32{}
+var m = map[string,int32]{}
 m[nextKey()] = 7
 Console.WriteLine(keyCalls)
 Console.WriteLine(m[""k""])

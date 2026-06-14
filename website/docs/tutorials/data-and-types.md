@@ -397,7 +397,7 @@ beta
 139
 ```
 
-For maps, use `map[K]V` for the G# map type or import `System.Collections.Generic` and use CLR `Dictionary[K, V]`, as shown in [Projects and packages](./project-and-packages).
+For maps, use `map[K,V]` for the G# map type or import `System.Collections.Generic` and use CLR `Dictionary[K, V]`, as shown in [Projects and packages](./project-and-packages).
 
 ## What you learned
 

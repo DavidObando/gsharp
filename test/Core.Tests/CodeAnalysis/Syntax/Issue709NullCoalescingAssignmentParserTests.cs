@@ -78,7 +78,7 @@ public class Issue709NullCoalescingAssignmentParserTests
             package P
             import System
             func main() {
-                var m = map[string]string?{}
+                var m = map[string,string?]{}
                 m["k"] ??= "v"
             }
             main()

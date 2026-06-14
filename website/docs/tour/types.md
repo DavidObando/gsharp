@@ -143,14 +143,14 @@ Console.WriteLine(nums[3])
 40
 ```
 
-Maps use `map[K]V` for G# map literals, and CLR collections such as `Dictionary[string, int32]` are available through imports.
+Maps use `map[K,V]` for G# map literals, and CLR collections such as `Dictionary[string, int32]` are available through imports.
 
 ```gsharp
 package Tour.Types
 
 import System
 
-var counts = map[string]int32{"gsharp": 1}
+var counts = map[string,int32]{"gsharp": 1}
 counts["gsharp"] = counts["gsharp"] + 1
 Console.WriteLine(counts["gsharp"])
 ```

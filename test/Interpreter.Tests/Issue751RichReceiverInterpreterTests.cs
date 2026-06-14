@@ -11,7 +11,7 @@ namespace GSharp.Interpreter.Tests;
 /// <summary>
 /// Tree-walking interpreter parity for issue #751 / ADR-0084 §L2: the
 /// receiver clause now accepts rich type spellings (nullable, tuple,
-/// nullable array, map[K]V). Each test exercises the same shape covered
+/// nullable array, map[K,V]). Each test exercises the same shape covered
 /// by the emit and binder suites but through the REPL evaluator, which
 /// shares the binder with the compiler.
 /// </summary>
@@ -76,11 +76,11 @@ public class Issue751RichReceiverInterpreterTests
     public void Map_Receiver_Dispatches()
     {
         var source = """
-            func (self map[string]int32) CountKeys() int32 {
+            func (self map[string,int32]) CountKeys() int32 {
                 return self.Count
             }
 
-            var m = map[string]int32{"a": 1, "b": 2, "c": 3}
+            var m = map[string,int32]{"a": 1, "b": 2, "c": 3}
             Console.WriteLine(m.CountKeys())
             """;
 

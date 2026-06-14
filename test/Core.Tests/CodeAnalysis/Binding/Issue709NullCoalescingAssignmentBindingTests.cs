@@ -142,7 +142,7 @@ public class Issue709NullCoalescingAssignmentBindingTests
         var diagnostics = Bind("""
             package P
             func F() {
-                var m = map[string]string?{}
+                var m = map[string,string?]{}
                 m["k"] = nil
                 m["k"] ??= "v"
             }

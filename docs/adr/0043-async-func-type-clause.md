@@ -69,7 +69,7 @@ The `async` type-clause prefix now has exactly two legal successors:
 - `async sequence[T]` (ADR-0042) → `IAsyncEnumerable[T]`
 - `async func(...) R`  (this ADR) → `func(...) Task[R]` (with carve-outs above)
 
-Any other follower (`async int`, `async map[K]V`, `async chan T`, `async []T`, `async *T`, etc.) is rejected by the parser with diagnostic **GS0135** ("the `async` modifier in a type clause is only valid before `sequence[T]` or `func(...)`").
+Any other follower (`async int`, `async map[K,V]`, `async chan T`, `async []T`, `async *T`, etc.) is rejected by the parser with diagnostic **GS0135** ("the `async` modifier in a type clause is only valid before `sequence[T]` or `func(...)`").
 
 ## Consequences
 
@@ -98,7 +98,7 @@ The status quo. Rejected because the asymmetry is visible at every function-type
 
 Rejected. Silent double-wrap (`Task[Task[X]]`) is almost never what the user means and creates a subtle trap. Silently no-opping (treating `Task[X]` as already-wrapped) hides intent and makes the modifier meaningless. The diagnostic forces the user to pick a single spelling.
 
-### C. Generalise the modifier to all type-clause prefixes (`async map[K]V`, `async chan T`, etc.)
+### C. Generalise the modifier to all type-clause prefixes (`async map[K,V]`, `async chan T`, etc.)
 
 Rejected as overreach, for the same reasons as ADR-0042 §Alternatives D. None of the other shapes have an established BCL-side Task or AsyncEnumerable counterpart, and the modifier would lose its meaning.
 
