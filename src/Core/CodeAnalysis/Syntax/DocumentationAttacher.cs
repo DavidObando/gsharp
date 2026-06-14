@@ -217,6 +217,32 @@ internal static class DocumentationAttacher
                 result.Add(ctor);
             }
         }
+
+        // ADR-0053: members declared inside a `shared { … }` block are still
+        // documentable. The block itself is not a documentable declaration,
+        // but each contained field/property/event/method is.
+        if (structDecl.SharedBlock != null)
+        {
+            foreach (var field in structDecl.SharedBlock.Fields)
+            {
+                result.Add(field);
+            }
+
+            foreach (var prop in structDecl.SharedBlock.Properties)
+            {
+                result.Add(prop);
+            }
+
+            foreach (var evt in structDecl.SharedBlock.Events)
+            {
+                result.Add(evt);
+            }
+
+            foreach (var method in structDecl.SharedBlock.Methods)
+            {
+                result.Add(method);
+            }
+        }
     }
 
     private static void CollectFromEnumBody(EnumDeclarationSyntax enumDecl, List<SyntaxNode> result)

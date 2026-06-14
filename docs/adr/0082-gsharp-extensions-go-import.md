@@ -85,7 +85,7 @@ implementation detail that mirrors the existing implicit
 `mscorlib` reference (see `Gsharp.NET.Core.Sdk.targets`).
 
 In the in-repo build, the project lives at
-`src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj` (next to
+`src/Sdk/Gsharp.Extensions/Gsharp.Extensions.proj` (next to
 `Gsharp.NET.Sdk` and `Gsharp.Templates`) and is added to
 `GSharp.sln` so it builds with the rest of the repo. The
 project targets `net10.0` to match the bundled compiler.

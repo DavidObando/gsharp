@@ -243,7 +243,7 @@ to G# once the language gaps closed:
 What remains is **not** a language gap: it is an SDK bootstrap cycle.
 `Gsharp.Extensions.dll` is auto-referenced by every `.gsproj` build via
 `Gsharp.NET.Sdk`, but the SDK itself takes a `ProjectReference` on
-`Gsharp.Extensions.csproj` at pack time (see
+`Gsharp.Extensions.proj` at pack time (see
 `src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj` and the
 `PackGsharpExtensions` target). Re-authoring `Gsharp.Extensions` as a
 `.gsproj` would require the SDK to already exist in order to compile
