@@ -195,13 +195,12 @@ func (source IEnumerable[T]) ToMap[T, TKey, TValue](keyFn (T) -> TKey, valueFn (
 // ====================================================================
 
 func WindowedIterator[T](source IEnumerable[T], size int32) IEnumerable[IList[T]] {
-    var buffer = List[T](size)
+    var buffer = Queue[T](size)
     for item in source {
-        buffer.Add(item)
+        buffer.Enqueue(item)
         if buffer.Count == size {
-            let snap = List[T](buffer)
-            yield snap
-            buffer.RemoveAt(0)
+            yield List[T](buffer)
+            buffer.Dequeue()
         }
     }
 }
