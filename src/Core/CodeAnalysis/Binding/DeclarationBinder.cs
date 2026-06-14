@@ -815,7 +815,7 @@ internal sealed class DeclarationBinder
                     {
                         var parameterSyntax = methodSyntax.Parameters[pIndex];
                         var parameterName = parameterSyntax.Identifier.Text;
-                        var parameterType = bindTypeClause(parameterSyntax.Type);
+                        var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
 
                         // ADR-0101 follow-up / issue #812: variadic parameters
                         // are now accepted on class instance methods. The body
@@ -824,7 +824,7 @@ internal sealed class DeclarationBinder
                         // passes through a single `[]T` argument unchanged) —
                         // see OverloadResolver.BindUserInstanceCall.
                         var isVariadic = parameterSyntax.IsVariadic;
-                        if (isVariadic && parameterType != null && parameterType != TypeSymbol.Error)
+                        if (isVariadic && parameterType != TypeSymbol.Error)
                         {
                             parameterType = SliceTypeSymbol.Get(parameterType);
                         }
@@ -1436,7 +1436,7 @@ internal sealed class DeclarationBinder
                     foreach (var parameterSyntax in methodSyntax.Parameters)
                     {
                         var parameterName = parameterSyntax.Identifier.Text;
-                        var parameterType = bindTypeClause(parameterSyntax.Type);
+                        var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
 
                         // ADR-0101 follow-up / issue #812: variadic parameters
                         // are now accepted on shared/static class methods. The
@@ -1444,7 +1444,7 @@ internal sealed class DeclarationBinder
                         // path goes through the same overload resolver that
                         // handles top-level variadic functions.
                         var isVariadic = parameterSyntax.IsVariadic;
-                        if (isVariadic && parameterType != null && parameterType != TypeSymbol.Error)
+                        if (isVariadic && parameterType != TypeSymbol.Error)
                         {
                             parameterType = SliceTypeSymbol.Get(parameterType);
                         }
@@ -2497,7 +2497,7 @@ internal sealed class DeclarationBinder
             foreach (var parameterSyntax in methodSyntax.Parameters)
             {
                 var parameterName = parameterSyntax.Identifier.Text;
-                var parameterType = bindTypeClause(parameterSyntax.Type);
+                var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
 
                 // ADR-0101 follow-up / issue #812: variadic parameters are now
                 // accepted on interface methods. For abstract members the
@@ -2506,7 +2506,7 @@ internal sealed class DeclarationBinder
                 // and the emitter stamps [ParamArrayAttribute] on the MethodDef
                 // (interface method emit shares the same path as class methods).
                 var isVariadic = parameterSyntax.IsVariadic;
-                if (isVariadic && parameterType != null && parameterType != TypeSymbol.Error)
+                if (isVariadic && parameterType != TypeSymbol.Error)
                 {
                     parameterType = SliceTypeSymbol.Get(parameterType);
                 }
@@ -2896,7 +2896,7 @@ internal sealed class DeclarationBinder
             {
                 var parameterSyntax = syntax.Parameters[pIndex];
                 var parameterName = parameterSyntax.Identifier.Text;
-                var parameterType = bindTypeClause(parameterSyntax.Type);
+                var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
                 if (!seenParameterNames.Add(parameterName))
                 {
                     Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
@@ -2907,7 +2907,7 @@ internal sealed class DeclarationBinder
                     // and must be the last parameter. Auto-packing of trailing
                     // arguments happens at the call site.
                     var isVariadic = parameterSyntax.IsVariadic;
-                    if (isVariadic && parameterType != null && parameterType != TypeSymbol.Error)
+                    if (isVariadic && parameterType != TypeSymbol.Error)
                     {
                         parameterType = SliceTypeSymbol.Get(parameterType);
                     }
@@ -4049,7 +4049,7 @@ internal sealed class DeclarationBinder
         foreach (var parameterSyntax in ctorSyntax.Parameters)
         {
             var parameterName = parameterSyntax.Identifier.Text;
-            var parameterType = bindTypeClause(parameterSyntax.Type);
+            var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
 
             // ADR-0101 follow-up / issue #812: variadic parameters are now
             // accepted on explicit `init(...)` constructors. The body sees
@@ -4057,7 +4057,7 @@ internal sealed class DeclarationBinder
             // `: this(...)` / `: base(...)` chaining) go through the
             // constructor overload paths that pack trailing arguments.
             var isVariadic = parameterSyntax.IsVariadic;
-            if (isVariadic && parameterType != null && parameterType != TypeSymbol.Error)
+            if (isVariadic && parameterType != TypeSymbol.Error)
             {
                 parameterType = SliceTypeSymbol.Get(parameterType);
             }
