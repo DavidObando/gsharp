@@ -1,0 +1,14 @@
+Indexed[int32]:
+0:10
+1:20
+2:30
+Indexed[string]:
+0:a
+1:b
+2:c
+Pairwise[int32]:
+10->20
+20->30
+Pairwise[string]:
+a->b
+b->c

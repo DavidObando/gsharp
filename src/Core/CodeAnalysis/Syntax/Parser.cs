@@ -3731,10 +3731,17 @@ public class Parser
                     Peek(1).Kind != SyntaxKind.MinusMinusToken &&
                     Peek(1).Kind != SyntaxKind.CommaToken &&
                     Peek(1).Kind != SyntaxKind.DotToken &&
-                    Peek(1).Kind != SyntaxKind.OpenParenthesisToken &&
                     Peek(1).Kind != SyntaxKind.EqualsToken &&
-                    Peek(1).Kind != SyntaxKind.OpenSquareBracketToken)
+                    Peek(1).Kind != SyntaxKind.OpenSquareBracketToken &&
+                    (Peek(1).Kind != SyntaxKind.OpenParenthesisToken || LooksLikeYieldTupleLiteral(1)))
                 {
+                    // Issue #813: `yield (a, b)` is a yield-statement that
+                    // yields a value-tuple literal — required for iterators
+                    // whose element type is `(T1, T2, …)` (e.g. the
+                    // dogfooded `Indexed` / `Pairwise` ports). Without the
+                    // tuple-literal lookahead, `yield (` was uniformly
+                    // forwarded to expression-statement parsing where it
+                    // became the call `yield(args)` and reported GS0130.
                     return ParseYieldStatement();
                 }
 
@@ -4686,6 +4693,68 @@ public class Parser
         var yieldToken = MatchToken(SyntaxKind.IdentifierToken);
         var expression = ParseExpression();
         return new YieldStatementSyntax(syntaxTree, yieldToken, expression);
+    }
+
+    /// <summary>
+    /// Issue #813: lookahead helper for the contextual <c>yield</c> at statement
+    /// start. Returns <see langword="true"/> when the token at <paramref name="parenOffset"/>
+    /// is a <c>(</c> that opens a value-tuple literal (i.e. its matching
+    /// <c>)</c> follows a top-level <c>,</c>). A tuple-literal yield like
+    /// <c>yield (a, b)</c> must be parsed as a yield-statement; without this
+    /// disambiguation the existing rule rejected every <c>yield (</c> form
+    /// because it treats parens as the start of a function-call expression.
+    /// </summary>
+    private bool LooksLikeYieldTupleLiteral(int parenOffset)
+    {
+        if (Peek(parenOffset).Kind != SyntaxKind.OpenParenthesisToken)
+        {
+            return false;
+        }
+
+        var depth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var i = parenOffset; i < tokens.Length; i++)
+        {
+            var t = Peek(i);
+            switch (t.Kind)
+            {
+                case SyntaxKind.OpenParenthesisToken:
+                    depth++;
+                    break;
+                case SyntaxKind.CloseParenthesisToken:
+                    depth--;
+                    if (depth == 0)
+                    {
+                        return false;
+                    }
+
+                    break;
+                case SyntaxKind.OpenSquareBracketToken:
+                    bracketDepth++;
+                    break;
+                case SyntaxKind.CloseSquareBracketToken:
+                    bracketDepth--;
+                    break;
+                case SyntaxKind.OpenBraceToken:
+                    braceDepth++;
+                    break;
+                case SyntaxKind.CloseBraceToken:
+                    braceDepth--;
+                    break;
+                case SyntaxKind.CommaToken:
+                    if (depth == 1 && bracketDepth == 0 && braceDepth == 0)
+                    {
+                        return true;
+                    }
+
+                    break;
+                case SyntaxKind.EndOfFileToken:
+                    return false;
+            }
+        }
+
+        return false;
     }
 
     private StatementSyntax ParseSwitchStatement()

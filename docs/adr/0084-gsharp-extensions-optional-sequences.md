@@ -449,6 +449,48 @@ of that migration, not left behind as dead code.
   to author non-variadic, non-tuple G# iterators in their own
   projects today.
 
+  Issue #813 closes the value-tuple return-shape gap left by #810.
+  Iterators whose element type is a tuple — `func Indexed[T]()
+  sequence[(int32, T)] { yield (idx, v) }` and
+  `func Pairwise[T]() sequence[(T, T)]` — now bind, emit
+  verifier-clean IL, and execute. The root cause was that
+  `TupleTypeSymbol` (the symbol backing
+  `System.ValueTuple<…>` for G# tuple literals) was absent from
+  every "contains a type parameter?" predicate the iterator emit
+  path consults: `TypeSymbol.ContainsTypeParameter` (the master
+  helper used by `ImportedTypeSymbol.HasTypeParameterArgument` to
+  decide whether a generic instantiation needs reified-generic
+  routing), the state-machine rewriter's
+  `ContainsOuterMethodTypeParameter`, and the method-body planner's
+  interface-implementation row predicate. Without these cases an
+  `IEnumerable[(int32, T)]` return type was type-erased to
+  `IEnumerable<object>` at emit time even though the binder had
+  computed the correct element-type signature. The fix also
+  threads `TupleTypeSymbol` through `Binder.SubstituteType` (so
+  closing `T = int32` replaces the inner element-type slot), the
+  `IsValueTypeSymbol` / `GetElementTypeToken` emit helpers (the
+  latter delegating to the pre-existing `GetTupleTypeSpec`), the
+  structural unifier for method-spec rows (so an actual
+  `System.ValueTuple<int, int>` argument matches a formal
+  `(int32, T)` parameter), the parser's `yield (...)` lookahead
+  (a `yield (a, b)` tuple literal previously failed
+  `LooksLikeYieldExpression` and fell back to call-expression
+  parsing), and the conversion classifier (a fully closed
+  `IEnumerable[(int32, string)]` return type resolves to the
+  imported CLR `ValueTuple<,>` instantiation, so the assignability
+  check between a tuple literal's `TupleTypeSymbol` and the
+  recovered imported type now succeeds as identity when the
+  closed CLR backings agree). Coverage:
+  `test/Core.Tests/CodeAnalysis/Binding/Issue813TupleSequenceReturnBindingTests.cs`
+  for the binder (six tests across 2/3-arity, nested tuple, and
+  `sequence` / `IEnumerable` return shapes),
+  `test/Compiler.Tests/Emit/Issue813TupleSequenceReturnEmitTests.cs`
+  for the IL-verified end-to-end path (eight tests closing
+  `T = int32` and `T = string` on both `sequence` and `IEnumerable`
+  return shapes), and
+  `test/Interpreter.Tests/Issue813TupleSequenceReturnInterpreterTests.cs`
+  for tree-walking parity at the closed instantiation.
+
 ## Consequences
 
 - **Positive — uniform G# feel.** Samples that previously had to

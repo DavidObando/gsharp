@@ -600,6 +600,23 @@ internal sealed class StateMachineEmitter
                 }
 
                 return false;
+            case TupleTypeSymbol tup:
+                // Issue #813: a tuple element type that mentions an
+                // outer-method TP (e.g. `(int32, T)` from
+                // `sequence[(int32, T)]`) must drive the same
+                // symbolic-IEnumerator routing as the open-generic
+                // sequence cases above, so the SM's GetEnumerator return
+                // encodes as `IEnumerator<ValueTuple<int32,!0>>` rather
+                // than the type-erased `IEnumerator<object>`.
+                foreach (var elem in tup.ElementTypes)
+                {
+                    if (ContainsOuterMethodTypeParameter(elem, outerMethodTPs))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             default:
                 return false;
         }
