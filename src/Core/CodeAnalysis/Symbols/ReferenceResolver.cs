@@ -206,7 +206,7 @@ public sealed class ReferenceResolver : IDisposable
         {
             try
             {
-                var asm = mlc.LoadFromAssemblyPath(path);
+                var asm = resolver.LoadFromPath(mlc, path);
                 if (asm != null && seen.Add(asm.GetName().FullName))
                 {
                     builder.Add(asm);
@@ -247,7 +247,7 @@ public sealed class ReferenceResolver : IDisposable
 
                 try
                 {
-                    var asm = mlc.LoadFromAssemblyPath(host);
+                    var asm = resolver.LoadFromPath(mlc, host);
                     if (asm != null && seen.Add(asm.GetName().FullName))
                     {
                         builder.Add(asm);
@@ -737,13 +737,33 @@ public sealed class ReferenceResolver : IDisposable
     /// </summary>
     private sealed class FallbackMetadataAssemblyResolver : MetadataAssemblyResolver
     {
-        private readonly PathAssemblyResolver inner;
+        private readonly Dictionary<string, byte[]> assemblyBytes = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> unresolved = new(StringComparer.OrdinalIgnoreCase);
         private readonly object gate = new();
 
         public FallbackMetadataAssemblyResolver(IEnumerable<string> paths)
         {
-            inner = new PathAssemblyResolver(paths);
+            // Read each assembly into memory so no file handles are held open.
+            // This prevents MSBuild CopyRefAssembly from being blocked (#853).
+            foreach (var path in paths)
+            {
+                var fileName = Path.GetFileNameWithoutExtension(path);
+                if (!assemblyBytes.ContainsKey(fileName))
+                {
+                    try
+                    {
+                        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                        var bytes = new byte[fs.Length];
+                        fs.ReadExactly(bytes);
+                        assemblyBytes[fileName] = bytes;
+                    }
+                    catch (Exception ex) when (
+                        ex is IOException or UnauthorizedAccessException or BadImageFormatException)
+                    {
+                        // Skip files that can't be read.
+                    }
+                }
+            }
         }
 
         public IEnumerable<string> UnresolvedSimpleNames
@@ -757,30 +777,48 @@ public sealed class ReferenceResolver : IDisposable
             }
         }
 
-        public override Assembly Resolve(MetadataLoadContext context, AssemblyName assemblyName)
+        /// <summary>
+        /// Loads an assembly by path into the given <see cref="MetadataLoadContext"/>
+        /// using in-memory bytes (no file handle held open).
+        /// </summary>
+        public Assembly LoadFromPath(MetadataLoadContext context, string path)
         {
-            try
+            var fileName = Path.GetFileNameWithoutExtension(path);
+            if (assemblyBytes.TryGetValue(fileName, out var bytes))
             {
-                var resolved = inner.Resolve(context, assemblyName);
-                if (resolved != null)
-                {
-                    return resolved;
-                }
-            }
-            catch (Exception ex) when (
-                ex is FileNotFoundException
-                    or FileLoadException
-                    or BadImageFormatException)
-            {
-                // Fall through to record-and-degrade below.
+                return context.LoadFromByteArray(bytes);
             }
 
-            var name = assemblyName?.Name;
-            if (!string.IsNullOrEmpty(name))
+            // Fallback: read from disk with sharing flags.
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var buffer = new byte[fs.Length];
+            fs.ReadExactly(buffer);
+            return context.LoadFromByteArray(buffer);
+        }
+
+        public override Assembly Resolve(MetadataLoadContext context, AssemblyName assemblyName)
+        {
+            var simpleName = assemblyName?.Name;
+            if (!string.IsNullOrEmpty(simpleName) && assemblyBytes.TryGetValue(simpleName, out var bytes))
+            {
+                try
+                {
+                    return context.LoadFromByteArray(bytes);
+                }
+                catch (Exception ex) when (
+                    ex is FileNotFoundException
+                        or FileLoadException
+                        or BadImageFormatException)
+                {
+                    // Fall through to record-and-degrade below.
+                }
+            }
+
+            if (!string.IsNullOrEmpty(simpleName))
             {
                 lock (gate)
                 {
-                    unresolved.Add(name);
+                    unresolved.Add(simpleName);
                 }
             }
 

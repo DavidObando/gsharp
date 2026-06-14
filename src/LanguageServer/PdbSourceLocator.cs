@@ -171,7 +171,7 @@ public static class PdbSourceLocator
 
         try
         {
-            using var stream = new FileStream(assemblyFilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var stream = new FileStream(assemblyFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var peReader = new PEReader(stream);
             if (!peReader.HasMetadata)
             {
@@ -300,7 +300,7 @@ public static class PdbSourceLocator
             }
 
             // Probe the PE for an embedded PDB.
-            using var stream = new FileStream(assemblyFilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var stream = new FileStream(assemblyFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var peReader = new PEReader(stream);
             if (!peReader.HasMetadata)
             {
