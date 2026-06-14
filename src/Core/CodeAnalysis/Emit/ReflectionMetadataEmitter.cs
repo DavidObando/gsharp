@@ -4024,11 +4024,53 @@ internal sealed class ReflectionMetadataEmitter
         // emit a Parameter row with sequence number 0 (ECMA-335 II.22.33) in
         // front of the source-parameter rows so we can attach return-target
         // CustomAttribute rows to it.
+        //
+        // Issue #834: per-parameter / return [NullableAttribute] also needs to
+        // attach to its corresponding Param row. Compute the nullable byte
+        // arrays up front so we know whether to synthesise a sequence-0 return
+        // Param row before emitting the source-parameter rows (the order
+        // matters: ECMA-335 II.22.33 mandates that Param rows for a method
+        // appear in ascending sequence number, anchored by
+        // MethodDef.parameterList).
         var firstParamHandle = this.customAttrEncoder.NextParameterHandle();
         var hasReturnAttributes = !function.Attributes.IsDefaultOrEmpty
             && function.Attributes.Any(a => a.Target == AttributeTargetKind.Return);
+
+        // Compute nullable flags for return + each non-`this` parameter. Async
+        // kickoff methods get an empty return-slot here because the actual
+        // emitted return type is `Task` / `Task<T>`, not `function.Type`; its
+        // reference-non-nullable shape (byte 1) matches the assembly-level
+        // NullableContextAttribute(1) default, so omitting the per-return
+        // attribute is equivalent to emitting `[NullableAttribute(1)]`.
+        var returnFlags = asyncPlan != null
+            ? ImmutableArray<byte>.Empty
+            : NullableFlagsBuilder.Build(function.Type);
+        var paramFlagsList = new List<ImmutableArray<byte>>();
+        foreach (var p in function.Parameters)
+        {
+            if (ReferenceEquals(p, function.ThisParameter))
+            {
+                continue;
+            }
+
+            paramFlagsList.Add(NullableFlagsBuilder.Build(p.Type));
+        }
+
+        // Pick a method-level NullableContextAttribute. Roslyn picks the
+        // single byte value that appears most often across return + parameter
+        // positions (ties go to NotAnnotated = 1, which is also the assembly
+        // default), emits NullableContextAttribute(common) on the method when
+        // `common` differs from the assembly default, and skips per-position
+        // NullableAttribute rows that match `common` exactly. The result is
+        // the most compact metadata shape C# emits for the same source.
+        var (effectiveDefault, contextByteToEmit) = ChooseMethodNullableContext(returnFlags, paramFlagsList);
+
+        var returnNeedsNullableAttribute =
+            !returnFlags.IsDefaultOrEmpty
+            && !(returnFlags.Length == 1 && returnFlags[0] == effectiveDefault);
+
         ParameterHandle? returnParamHandle = null;
-        if (hasReturnAttributes)
+        if (hasReturnAttributes || returnNeedsNullableAttribute)
         {
             returnParamHandle = this.emitCtx.Metadata.AddParameter(
                 attributes: ParameterAttributes.None,
@@ -4036,8 +4078,9 @@ internal sealed class ReflectionMetadataEmitter
                 sequenceNumber: 0);
         }
 
-        var paramHandles = new List<(ParameterSymbol Symbol, ParameterHandle Handle)>();
+        var paramHandles = new List<(ParameterSymbol Symbol, ParameterHandle Handle, ImmutableArray<byte> NullableFlags)>();
         var sequenceNumber = 1;
+        var flagsIndex = 0;
         foreach (var p in function.Parameters)
         {
             if (ReferenceEquals(p, function.ThisParameter))
@@ -4092,7 +4135,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.emitCtx.Metadata.AddConstant(paramHandle, p.ExplicitDefaultValue);
             }
 
-            paramHandles.Add((p, paramHandle));
+            paramHandles.Add((p, paramHandle, paramFlagsList[flagsIndex++]));
         }
 
         // ADR-0084 §L5 / issue #806: honour `@MethodImpl(MethodImplOptions.…)`
@@ -4145,9 +4188,42 @@ internal sealed class ReflectionMetadataEmitter
             this.customAttrEncoder.EmitUserAttributes(retHandle, function, AttributeTargetKind.Return);
         }
 
-        foreach (var (paramSym, paramHandle) in paramHandles)
+        foreach (var (paramSym, paramHandle, _) in paramHandles)
         {
             this.customAttrEncoder.EmitUserAttributes(paramHandle, paramSym, AttributeTargetKind.Param);
+        }
+
+        // Issue #834: emit [NullableContextAttribute] on the MethodDef when
+        // the chosen method-level default differs from the assembly default
+        // (1 = NotAnnotated). Then stamp [NullableAttribute] on every Param
+        // row whose nullability bytes deviate from that effective default.
+        // C# consumers then see `T?` reference parameters / returns as
+        // annotated (CS8602 silenced) and non-nullable positions stay
+        // implicit. The byte-array form is used only for nested generic
+        // inner-position bytes (e.g. `IEnumerable<string?>?`).
+        if (contextByteToEmit is byte ctxByte)
+        {
+            this.customAttrEncoder.EmitNullableContextAttributeOnMethod(handle, ctxByte);
+        }
+
+        if (returnParamHandle is { } returnHandleForNullable && returnNeedsNullableAttribute)
+        {
+            this.customAttrEncoder.EmitNullableAttributeOnParameter(returnHandleForNullable, returnFlags);
+        }
+
+        foreach (var (_, paramHandle, paramFlags) in paramHandles)
+        {
+            if (paramFlags.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            if (paramFlags.Length == 1 && paramFlags[0] == effectiveDefault)
+            {
+                continue;
+            }
+
+            this.customAttrEncoder.EmitNullableAttributeOnParameter(paramHandle, paramFlags);
         }
 
         // Issue #792 / ADR-0084. Stamp [ExtensionAttribute] on every G#-
@@ -4161,6 +4237,89 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return handle;
+    }
+
+    /// <summary>
+    /// Issue #834: chooses the method-level <c>NullableContextAttribute</c>
+    /// byte for an emitted method. Mirrors Roslyn's compaction: pick the
+    /// most frequent byte across return + per-parameter flag bytes; emit a
+    /// <c>NullableContextAttribute(common)</c> on the MethodDef only when
+    /// <c>common</c> differs from the assembly default (1 = NotAnnotated).
+    /// Per-position <c>NullableAttribute</c> rows are then required only for
+    /// positions whose single byte deviates from <c>effectiveDefault</c>.
+    /// </summary>
+    /// <param name="returnFlags">The return slot's nullable byte array (DFS pre-order).</param>
+    /// <param name="paramFlags">Each non-`this` parameter's nullable byte array.</param>
+    /// <returns>
+    /// A tuple of the effective method-level default byte (used by per-position
+    /// emission to decide which rows to skip) and the optional context byte to
+    /// stamp on the MethodDef. The context byte is <see langword="null"/>
+    /// when the assembly default (1) wins and there's nothing to emit on the
+    /// method itself.
+    /// </returns>
+    private static (byte EffectiveDefault, byte? ContextByteToEmit) ChooseMethodNullableContext(
+        ImmutableArray<byte> returnFlags,
+        List<ImmutableArray<byte>> paramFlags)
+    {
+        const byte AssemblyDefault = NullableFlagsBuilder.NotAnnotated;
+
+        int countOblivious = 0;
+        int countNotAnnotated = 0;
+        int countAnnotated = 0;
+
+        void Tally(ImmutableArray<byte> flags)
+        {
+            if (flags.IsDefaultOrEmpty)
+            {
+                return;
+            }
+
+            foreach (var b in flags)
+            {
+                switch (b)
+                {
+                    case 0: countOblivious++; break;
+                    case 1: countNotAnnotated++; break;
+                    case 2: countAnnotated++; break;
+                }
+            }
+        }
+
+        Tally(returnFlags);
+        foreach (var pf in paramFlags)
+        {
+            Tally(pf);
+        }
+
+        if (countOblivious + countNotAnnotated + countAnnotated == 0)
+        {
+            // No reference-typed positions at all — assembly default wins,
+            // nothing to emit. Per-position emission also has nothing to do.
+            return (AssemblyDefault, null);
+        }
+
+        // Pick the most frequent byte. Tie-breakers favour the assembly
+        // default (NotAnnotated = 1) so we emit the smallest amount of
+        // metadata when a method is half non-null / half annotated.
+        byte common = AssemblyDefault;
+        int best = countNotAnnotated;
+        if (countAnnotated > best)
+        {
+            common = NullableFlagsBuilder.Annotated;
+            best = countAnnotated;
+        }
+
+        if (countOblivious > best)
+        {
+            common = 0;
+        }
+
+        if (common == AssemblyDefault)
+        {
+            return (AssemblyDefault, null);
+        }
+
+        return (common, common);
     }
 
     /// <summary>
