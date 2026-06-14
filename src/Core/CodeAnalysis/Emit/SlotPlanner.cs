@@ -991,13 +991,27 @@ internal sealed class SlotPlanner
         }
     }
 
-    // Issue #504: walks the bound tree collecting every `BoundUnaryExpression`
-    // whose operator is `NullAssertion` (`!!`) and whose operand is a
-    // value-type `Nullable<T>`. Each such site needs a `Nullable<T>`-typed
-    // temp slot so the emitter can spill the operand and call
-    // `Nullable<T>::get_Value` (which yields the underlying `T` or throws
-    // `InvalidOperationException`). The reference-type `!!` path uses the
-    // existing `dup; brtrue; throw NRE` pattern and needs no slot.
+    // Issue #504 + Issue #831: walks the bound tree collecting every
+    // `BoundUnaryExpression` whose operator is `NullAssertion` (`!!`)
+    // and whose operand requires an emit-time spill slot. Two shapes
+    // qualify:
+    //
+    //   * Value-type `Nullable<T>` operand — the emitter spills the
+    //     struct to a slot and calls `Nullable<T>::get_Value` (which
+    //     yields the underlying `T` or throws `InvalidOperationException`).
+    //
+    //   * Open-type-parameter operand whose binder-typed shape is `T?`
+    //     or bare `T` (after a smart-cast that narrowed `T?` to `T`),
+    //     where T is NOT struct-constrained. The bare `!!T` stack value
+    //     cannot be probed via `dup; brtrue` either — the verifier
+    //     rejects branching on an opaque type-parameter slot. The
+    //     emitter instead stores the operand to a `T`-typed slot,
+    //     probes its non-nullness via `box !!T; brtrue nonNull`, throws
+    //     on null, and reloads the slot on the non-null path.
+    //
+    // Reference-type `!!` over a concrete reference (string?, Func<T>?,
+    // sequence[T], ...) uses the existing `dup; brtrue; throw NRE`
+    // pattern and needs no slot.
     private sealed class NullableValueTypeUnwrapCollector : BoundTreeWalker
     {
         private readonly List<BoundUnaryExpression> sink;
@@ -1009,11 +1023,29 @@ internal sealed class SlotPlanner
 
         protected override void VisitUnaryExpression(BoundUnaryExpression node)
         {
-            if (node.Op.Kind == BoundUnaryOperatorKind.NullAssertion
-                && node.Operand.Type is NullableTypeSymbol n
-                && n.UnderlyingType?.ClrType is { IsValueType: true })
+            if (node.Op.Kind == BoundUnaryOperatorKind.NullAssertion)
             {
-                this.sink.Add(node);
+                bool needsSlot = false;
+
+                if (node.Operand.Type is NullableTypeSymbol n)
+                {
+                    needsSlot = n.UnderlyingType?.ClrType is { IsValueType: true }
+                        || (n.UnderlyingType is TypeParameterSymbol tp && !tp.HasValueTypeConstraint);
+                }
+                else if (node.Operand.Type is TypeParameterSymbol bare && !bare.HasValueTypeConstraint)
+                {
+                    // Issue #831: smart-cast may narrow `self T?` to bare
+                    // `T` after a preceding `if self == nil { return }`
+                    // guard, but the runtime value still needs the
+                    // verifiable `box; brtrue` shape rather than the
+                    // direct `dup; brtrue` over an opaque `!!T` slot.
+                    needsSlot = true;
+                }
+
+                if (needsSlot)
+                {
+                    this.sink.Add(node);
+                }
             }
 
             base.VisitUnaryExpression(node);
@@ -1021,14 +1053,25 @@ internal sealed class SlotPlanner
     }
 
     // Issue #519: walks the bound tree collecting every `BoundBinaryExpression`
-    // whose operator is `NullCoalesce` (`?:`) and whose LHS is a value-type
-    // `Nullable<T>`. Each such site needs a `Nullable<T>`-typed temp slot so
-    // the emitter can spill the LHS once, call `Nullable<T>::get_HasValue`
-    // off the slot's address, and either reload the slot (when the result
-    // type is `Nullable<T>`) or call `Nullable<T>::get_Value` off the slot's
-    // address (when the result type is the underlying `T`). The reference-
-    // type `?:` path uses the existing `dup; brtrue; pop; rhs` pattern and
-    // needs no slot.
+    // whose operator is `NullCoalesce` (`?:`) and whose LHS needs an emit-time
+    // spill slot. Two shapes qualify:
+    //
+    //   * Value-type `Nullable<T>` LHS — the emitter spills the LHS once and
+    //     calls `Nullable<T>::get_HasValue` / `get_Value` off the slot's
+    //     address (since `dup; brtrue` is invalid IL for struct stack values).
+    //
+    //   * Issue #831: open-type-parameter `T?` LHS where T is NOT
+    //     struct-constrained (class-constrained or unconstrained). The bare
+    //     `!!T` stack value cannot be probed with `dup; brtrue` either —
+    //     the verifier rejects branching on an opaque type-parameter slot
+    //     because it cannot prove T is a reference type at the signature
+    //     layer. The slot is typed as `T?` (which encodes as bare `!!T` per
+    //     `ReflectionMetadataEmitter.GetElementTypeToken`), and the emitter
+    //     probes its non-nullness via `box !!T; brfalse fallback`.
+    //
+    // Reference-type `?:` over a concrete reference type (string?, Func<T>?,
+    // sequence[T], etc.) uses the existing `dup; brtrue; pop; rhs` pattern
+    // and needs no slot.
     private sealed class NullableValueTypeCoalesceCollector : BoundTreeWalker
     {
         private readonly List<BoundBinaryExpression> sink;
@@ -1041,10 +1084,15 @@ internal sealed class SlotPlanner
         protected override void VisitBinaryExpression(BoundBinaryExpression node)
         {
             if (node.Op.Kind == BoundBinaryOperatorKind.NullCoalesce
-                && node.Left.Type is NullableTypeSymbol n
-                && n.UnderlyingType?.ClrType is { IsValueType: true })
+                && node.Left.Type is NullableTypeSymbol n)
             {
-                this.sink.Add(node);
+                bool needsSlot = n.UnderlyingType?.ClrType is { IsValueType: true }
+                    || (n.UnderlyingType is TypeParameterSymbol tp && !tp.HasValueTypeConstraint);
+
+                if (needsSlot)
+                {
+                    this.sink.Add(node);
+                }
             }
 
             base.VisitBinaryExpression(node);
