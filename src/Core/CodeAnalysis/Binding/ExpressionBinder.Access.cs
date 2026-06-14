@@ -1470,7 +1470,7 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportUnableToFindMember(ne.Location, nullableMemberName);
                     return new BoundErrorExpression(null);
                 }
-                else if (receiver != null && receiver.Type is not NullableTypeSymbol && receiver.Type.ClrType != null)
+                else if (receiver != null && receiver.Type != null && receiver.Type is not NullableTypeSymbol && receiver.Type.ClrType != null)
                 {
                     // Phase 4 exit: read a public instance property or field on
                     // a CLR receiver (e.g. `lst.Count`, `sb.Length`,
