@@ -1470,6 +1470,49 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportUnableToFindMember(ne.Location, nullableMemberName);
                     return new BoundErrorExpression(null);
                 }
+                else if (receiver != null && receiver.Type is NullableTypeSymbol openNullableSym
+                    && openNullableSym.UnderlyingType is TypeParameterSymbol openTp
+                    && openTp.HasValueTypeConstraint)
+                {
+                    // Issue #806: a `T?` receiver where T is an open value-type
+                    // type parameter still lowers to `Nullable<T>` at IL emit
+                    // time, but the closed `Nullable<T>` CLR instance is not
+                    // available here. Resolve the member name against the open
+                    // `typeof(Nullable<>)` definition so `.HasValue`, `.Value`
+                    // and `.GetValueOrDefault()` bind successfully and lower
+                    // to a normal property/method access on the symbolic
+                    // constructed receiver.
+                    var openNullableMemberName = ne.IdentifierToken.Text;
+                    var openNullableDef = typeof(System.Nullable<>);
+                    var openProp = ClrTypeUtilities.SafeGetProperty(openNullableDef, openNullableMemberName, BindingFlags.Public | BindingFlags.Instance);
+                    if (openProp != null && openProp.GetIndexParameters().Length == 0 && openProp.CanRead)
+                    {
+                        // HasValue → bool (concrete); Value → the open T (the
+                        // property's PropertyType IS the open type parameter
+                        // itself in the reflection model). Substitute back to
+                        // the binder's symbolic T so downstream type checks
+                        // see the right symbol.
+                        TypeSymbol openPropType;
+                        if (openProp.PropertyType.IsGenericParameter)
+                        {
+                            openPropType = openTp;
+                        }
+                        else
+                        {
+                            openPropType = ClrNullability.GetPropertyTypeSymbol(openProp);
+                        }
+
+                        return new BoundClrPropertyAccessExpression(null, receiver, openProp, openPropType);
+                    }
+
+                    if (TryBindClrMethodGroup(receiver, openNullableDef, wantStatic: false, openNullableMemberName, out var openNullableGroup))
+                    {
+                        return openNullableGroup;
+                    }
+
+                    Diagnostics.ReportUnableToFindMember(ne.Location, openNullableMemberName);
+                    return new BoundErrorExpression(null);
+                }
                 else if (receiver != null && receiver.Type != null && receiver.Type is not NullableTypeSymbol && receiver.Type.ClrType != null)
                 {
                     // Phase 4 exit: read a public instance property or field on

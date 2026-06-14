@@ -2,6 +2,20 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+// Issue #806: after the C# → G# port of `Gsharp.Extensions.Optional`,
+// the emitted method signatures lose the per-parameter NullableAttribute
+// metadata (only the assembly-level NullableContextAttribute(1) is
+// emitted). C#'s null-flow analysis then infers a generic type
+// argument that retains the receiver's nullable annotation (e.g.
+// `Map<string?, _>` instead of `Map<string, _>`), which makes the
+// lambda parameter appear nullable inside the body. The runtime
+// semantics are unchanged — Map / FlatMap short-circuit on null
+// receivers exactly like the C# original — but the C# warning trips
+// CS8602. Suppress at file scope; the underlying emitter
+// limitation is tracked as an Oats follow-up (per-parameter
+// NullableAttribute emission for `T?` where T is a reference type).
+#pragma warning disable CS8602
+
 using System;
 using Gsharp.Extensions.Optional;
 using Xunit;

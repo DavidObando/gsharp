@@ -107,10 +107,11 @@ public class Issue750ConstraintOverloadInterpreterTests
         // runtimes, but on .NET 10's lazy test host we additionally
         // Assembly.LoadFrom() the on-disk Gsharp.Extensions.dll so the
         // assembly is unambiguously present in the host AppDomain when
-        // the binder collects candidates.
-        _ = typeof(Gsharp.Extensions.Optional.OptionalExtensions);
-        _ = typeof(Gsharp.Extensions.Sequences.SequenceExtensions);
-        _ = typeof(Gsharp.Extensions.Sequences.SequenceValueExtensions);
+        // the binder collects candidates. After issue #806 the
+        // OptionalExtensions / SequenceExtensions / SequenceValueExtensions
+        // C# host classes were replaced by G#-authored top-level extension
+        // funcs that emit into compiler-generated `<Program>` host
+        // typedefs; only `Sequences` survives as a real named class.
         _ = typeof(Gsharp.Extensions.Sequences.Sequences);
 
         var extPath = LocateGsharpExtensionsAssembly();

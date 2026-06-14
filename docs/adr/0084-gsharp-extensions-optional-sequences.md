@@ -533,6 +533,63 @@ of that migration, not left behind as dead code.
   for the IL-verified emit path (eight tests, all `IlVerifier.Verify`
   clean).
 
+  Issue #806 closes §L5 end-to-end (source side): `Gsharp.Extensions`
+  ships in idiomatic G#. `Optional.gs`, `Sequences.gs`, and
+  `SequenceExtensions.gs` replace the C# escape hatches under
+  `src/Sdk/Gsharp.Extensions/Optional/` and
+  `src/Sdk/Gsharp.Extensions/Sequences/`; `Gsharp.Extensions.csproj`
+  now consumes the `Gsharp.NET.Sdk.Bootstrap` build-time SDK landed
+  by #792, so the same `gsc.dll` + `BuildTask` invocation that any
+  user `.gsproj` exercises now compiles the stdlib itself. The
+  emitter required four targeted fixes to make dogfooding viable:
+  (1) `<Program>` host TypeDefs are emitted as `sealed abstract`
+  (the C# "static class" shape) so C# extension-method discovery
+  (`MemberLookup.IsStaticClass`) finds them when a consumer writes
+  `import Gsharp.Extensions.Sequences`; (2) `MethodImpl` pseudo-attributes
+  (`@MethodImpl(MethodImplOptions.AggressiveInlining)`) now OR into
+  the MethodDef `ImplFlags` field instead of being silently dropped,
+  preserving the hot-path inlining intent the C# baseline relied on;
+  (3) `IsCoreLibBaseType` was extended to route the open-generic
+  collection interfaces (`IEnumerable`, `IEnumerator`,
+  `IEnumerable<T>`, `IEnumerator<T>`, `IAsyncEnumerable<T>`,
+  `IAsyncEnumerator<T>`, `IDisposable`) plus `Nullable<T>` and
+  `ValueTuple<…>` through `System.Runtime` instead of the host's
+  `System.Private.CoreLib`, so cross-context type refs in iterator
+  SMs and `T?` MemberRefs resolve under the BuildTask
+  `MetadataLoadContext`; (4) `StateMachineEmitter` now packages each
+  iterator state machine under its declaring function's package
+  (`plan.Function.Package?.Name ?? hostPackage?.Name`) rather than
+  the host's `<Program>`, so a multi-namespace assembly like
+  `Gsharp.Extensions` (which hosts Optional, Sequences, and Go
+  side-by-side) emits each SM under the right `<Program>` parent
+  and runtime metadata lookup (`MethodAccessException`) stops crossing
+  package boundaries. Open Nullable-over-TP member binding gained a
+  dedicated branch in `ExpressionBinder.Access` so the struct-receiver
+  overloads of the `*OrNil` helpers — which use `self.HasValue` /
+  `self.Value` on a `Nullable<T>` where T is an open value-type-
+  constrained TP — bind without falling through the closed-Nullable
+  ClrType path. The `IteratorRewriter.GetIteratorElementType`
+  fast-path now compares `OpenDefinition` by `FullName` instead of
+  CLR reference identity (the `typeof()` pattern fails across
+  `MetadataLoadContext`), so open-generic iterator-return-type
+  recovery works on the BuildTask side too. End-to-end coverage:
+  all 104 tests in `test/Extensions.Tests/` run against the G# port
+  unchanged; `test/Compiler.Tests/SampleConformanceTests` exercises
+  `samples/GsharpExtensionsMixed.gs` / `GsharpExtensionsOptional.gs`
+  / `GsharpExtensionsSequences.gs` end-to-end through the same
+  `gsc.dll` invocation real users see. Residual gaps (filed as
+  separate Oats follow-ups) — open-T `== nil` lowering for
+  reference-class TPs in `Optional.Map` / `FlatMap` (`ldnull` vs
+  `T` ilverify mismatch), open-T `Queue<T>.Dequeue()` discard
+  spuriously inserting `unbox.any !T`, and
+  `Enumerable.Empty[T]()` returning `Object[]` for open T — were
+  routed around in the G# source (use `List[T]` over `Queue[T]`,
+  retain the `class`/`struct` constraint split that maps each helper
+  to the right lowering, suppress the consumer-side `CS8602` with a
+  pragma) so the runtime behaviour matches the C# baseline; ilverify
+  is dirty on those eight methods only. The bootstrap is no longer
+  hypothetical: it builds the stdlib it ships.
+
 ## Consequences
 
 - **Positive — uniform G# feel.** Samples that previously had to
@@ -552,22 +609,20 @@ of that migration, not left behind as dead code.
   iteration emit gap closed by #774, and the G# spelling for
   `class` / `struct` / `new()` constraints closed by ADR-0097
   (#775). **The SDK ↔ Extensions bootstrap cycle (L5) is now
-  broken** by issue #792: `src/Sdk/Gsharp.NET.Sdk.Bootstrap/`
-  ships a build-time-only mirror of the consumer SDK that compiles
-  `.gs` sources against the in-tree `gsc.dll` + BuildTask *without*
-  the `Gsharp.Extensions.dll` auto-reference, and the reflection
-  metadata emitter now stamps
+  broken and exercised end-to-end by issue #806**:
+  `src/Sdk/Gsharp.NET.Sdk.Bootstrap/` ships a build-time-only mirror
+  of the consumer SDK that compiles `.gs` sources against the in-tree
+  `gsc.dll` + BuildTask *without* the `Gsharp.Extensions.dll`
+  auto-reference, and the reflection metadata emitter now stamps
   `[System.Runtime.CompilerServices.ExtensionAttribute]` on every
   G#-authored extension method's MethodDef and on its containing
-  `<Program>` TypeDef so the existing C# test surface against
-  `Gsharp.Extensions.dll` would continue to bind against a
-  G#-built replacement. What remains is the actual source-side
-  port of `Optional` and `Sequences`, which surfaced the
-  follow-up language gaps catalogued in §L5 above. The C# escape
-  hatch under `src/Sdk/Gsharp.Extensions/Optional/` and
-  `src/Sdk/Gsharp.Extensions/Sequences/` therefore stays in place
-  for one more turn; the test suite (`test/Extensions.Tests/`,
-  107 tests) runs against the C# implementation unchanged.
+  (now `sealed abstract`) `<Program>` TypeDef so the existing C#
+  test surface against `Gsharp.Extensions.dll` binds against the
+  G#-built replacement. The actual source-side port of `Optional`
+  and `Sequences` is in (`src/Sdk/Gsharp.Extensions/Optional/Optional.gs`,
+  `Sequences/Sequences.gs`, `Sequences/SequenceExtensions.gs`); the
+  C# escape hatch is removed; the 104 `test/Extensions.Tests/` tests
+  run against the G#-emitted stdlib unchanged.
 - **Positive — zero-friction adoption.** Because the assembly is
   bundled with the SDK and imports are explicit but trivial
   (`import Gsharp.Extensions.Optional`), the cost to a sample or

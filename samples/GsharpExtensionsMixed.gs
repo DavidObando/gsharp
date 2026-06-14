@@ -12,7 +12,7 @@ import System.Collections.Generic
 import Gsharp.Extensions.Optional
 import Gsharp.Extensions.Sequences
 
-func sumOf(values []int32) int32 {
+func sumOf(values IEnumerable[int32]) int32 {
     var total int32 = 0
     for v in values {
         total = total + v
@@ -32,11 +32,11 @@ func tryLookup(dict map[string,string], key string) string? {
 
 let geom = Sequences.Iterate(1, func(n int32) int32 { return n * 2 })
 
-let firstHeavyTrio = geom.Take(8).Windowed(3).Where(func(w []int32) bool {
+let firstHeavyTrio = geom.Take(8).Windowed(3).Where(func(w IList[int32]) bool {
     return sumOf(w) > 50
 }).FirstOrNil()
 
-let heavySumText = firstHeavyTrio.Map(func(w []int32) string { return sumOf(w).ToString() })
+let heavySumText = firstHeavyTrio.Map(func(w IList[int32]) string { return sumOf(w).ToString() })
 Console.WriteLine("first heavy trio sum: " + heavySumText.OrElse("<absent>"))
 
 // Build a {first-letter -> word} map from a sequence and look up keys via

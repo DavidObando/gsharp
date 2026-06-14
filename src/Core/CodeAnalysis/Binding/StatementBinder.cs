@@ -2593,8 +2593,8 @@ internal sealed class StatementBinder
             && !importedSym.TypeArguments.IsDefaultOrEmpty)
         {
             var def = importedSym.OpenDefinition;
-            if (def == typeof(System.Collections.Generic.IEnumerable<>) ||
-                def == typeof(System.Collections.Generic.IEnumerator<>) ||
+            if (def.FullName == "System.Collections.Generic.IEnumerable`1" ||
+                def.FullName == "System.Collections.Generic.IEnumerator`1" ||
                 def.FullName == "System.Collections.Generic.IAsyncEnumerable`1" ||
                 def.FullName == "System.Collections.Generic.IAsyncEnumerator`1")
             {
@@ -2611,8 +2611,8 @@ internal sealed class StatementBinder
         if (clr.IsGenericType && !clr.IsGenericTypeDefinition)
         {
             var def = clr.GetGenericTypeDefinition();
-            if (def == typeof(System.Collections.Generic.IEnumerable<>) ||
-                def == typeof(System.Collections.Generic.IEnumerator<>))
+            if (def.FullName == "System.Collections.Generic.IEnumerable`1" ||
+                def.FullName == "System.Collections.Generic.IEnumerator`1")
             {
                 return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
             }

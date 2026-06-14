@@ -50,16 +50,18 @@
     <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\gsharp-icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
   </ItemGroup>
 
-  <!-- Ensure Gsharp.Extensions is built (and its publish closure is staged) before
-       PackGsharpExtensions inspects the outputs. The project itself is referenced
-       only at pack time so consumers of this SDK csproj's compile graph are not
-       polluted with the runtime assembly. -->
-  <ItemGroup>
-    <ProjectReference Include="..\Gsharp.Extensions\Gsharp.Extensions.csproj"
-                      Private="false"
-                      ReferenceOutputAssembly="false"
-                      SkipGetTargetFrameworkProperties="true" />
-  </ItemGroup>
+  <!-- ADR-0084 §L5 / issue #806. The previous topology had this SDK
+       csproj reference Gsharp.Extensions.csproj (Private="false"
+       ReferenceOutputAssembly="false") to ensure Extensions was built
+       before PackGsharpExtensions ran. That arrow has been REMOVED:
+       Gsharp.Extensions now references this project (so it builds
+       AFTER the BuildTask DLL exists), which would form a cycle if the
+       reverse arrow were kept. PackGsharpExtensions below still works
+       because the <MSBuild Projects="..." Targets="Build" /> invocation
+       resolves the Extensions output at pack time — Extensions has
+       either already been built by the sln-level topology (the common
+       case) or gets built inline at pack time (the standalone-pack
+       case). -->
 
   <!-- Pack the BuildTask DLL (this assembly's build output) under tools/task/. -->
   <Target Name="PackGsharpBuildTask" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
@@ -112,13 +114,25 @@
        tools/task/ (BuildTask) and tools/compiler/ (gsc). -->
   <Target Name="PackGsharpExtensions" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
     <PropertyGroup>
+      <_GsharpCompilerProject>$(MSBuildThisFileDirectory)..\..\Compiler\Compiler.csproj</_GsharpCompilerProject>
       <_GsharpExtensionsProject>$(MSBuildThisFileDirectory)..\Gsharp.Extensions\Gsharp.Extensions.csproj</_GsharpExtensionsProject>
       <_GsharpExtensionsOutDir>$(IntermediateOutputPath)gsharp-extensions\</_GsharpExtensionsOutDir>
     </PropertyGroup>
+    <!-- Gsharp.Extensions is built with the bootstrap SDK, which requires
+         gsc.dll at out/bin/$(Configuration)/Compiler/gsc.dll. When this
+         SDK is packed directly (e.g. e2e tests running
+         `dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj`),
+         MSBuild's own ProjectReference walker doesn't traverse the
+         Compiler arrow from inside Extensions.csproj because the nested
+         MSBuild call below disables project-references. Build Compiler
+         explicitly here so its output exists before the bootstrap fires. -->
+    <MSBuild Projects="$(_GsharpCompilerProject)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration)" />
     <RemoveDir Directories="$(_GsharpExtensionsOutDir)" Condition="Exists('$(_GsharpExtensionsOutDir)')" />
     <MSBuild Projects="$(_GsharpExtensionsProject)"
              Targets="Build"
-             Properties="Configuration=$(Configuration);OutputPath=$(_GsharpExtensionsOutDir)" />
+             Properties="Configuration=$(Configuration);OutputPath=$(_GsharpExtensionsOutDir);BuildProjectReferences=false" />
     <ItemGroup>
       <_GsharpExtensionsPayload Include="$(_GsharpExtensionsOutDir)Gsharp.Extensions.dll" />
       <_GsharpExtensionsPayload Include="$(_GsharpExtensionsOutDir)Gsharp.Extensions.xml" Condition="Exists('$(_GsharpExtensionsOutDir)Gsharp.Extensions.xml')" />
