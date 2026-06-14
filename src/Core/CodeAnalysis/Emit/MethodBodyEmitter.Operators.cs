@@ -70,6 +70,49 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
+            // Issue #831: `!!` on an open-type-parameter operand whose
+            // type is bare `T` or `T?` and where T is NOT
+            // struct-constrained. The bottom `dup; brtrue` path below
+            // is invalid IL — the verifier rejects `dup` / `brtrue`
+            // on an opaque `!!T` stack value because it cannot prove T
+            // is a reference type at the signature layer. Mirror the
+            // value-type spill: store the operand to a `T`-typed slot,
+            // probe its non-nullness via `box !!T; brtrue nonNull`,
+            // throw on the null path, and reload the slot on the
+            // non-null path. The JIT elides the box when T resolves to
+            // a reference type at runtime (ECMA-335 III.4.1). This
+            // catches both the un-narrowed `self!!` over `self T?` and
+            // the smart-cast `self!!` whose binder-typed operand has
+            // already collapsed to bare `T` after a null-check guard.
+            if (TryGetOpenTypeParameter(u.Operand.Type, out var tpOperand))
+            {
+                if (!this.receiverSpillSlots.TryGetValue(u, out var tpUnwrapSlot))
+                {
+                    throw new InvalidOperationException(
+                        "No scratch slot pre-allocated for class-constrained `T?` / open `T` '!!' operand — "
+                        + "check NullableValueTypeUnwrapCollector and the prepass in CollectLocalsAndLabels.");
+                }
+
+                var tpToken = this.outer.GetElementTypeToken(tpOperand);
+                var tpNonNull = this.il.DefineLabel();
+
+                this.EmitExpression(u.Operand);
+                this.il.StoreLocal(tpUnwrapSlot);
+                this.il.LoadLocal(tpUnwrapSlot);
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(tpToken);
+                this.il.Branch(ILOpCode.Brtrue, tpNonNull);
+
+                var tpNreCtor = this.outer.wellKnown.GetNullReferenceExceptionCtorRef();
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(tpNreCtor);
+                this.il.OpCode(ILOpCode.Throw);
+
+                this.il.MarkLabel(tpNonNull);
+                this.il.LoadLocal(tpUnwrapSlot);
+                return;
+            }
+
             this.EmitExpression(u.Operand);
             this.il.OpCode(ILOpCode.Dup);
             var nonNull = this.il.DefineLabel();
@@ -182,6 +225,52 @@ internal sealed partial class MethodBodyEmitter
 
                 // Null branch: evaluate RHS, which the binder typed to
                 // match the operator's result (either `T` or `Nullable<T>`).
+                this.il.MarkLabel(fallback);
+                this.EmitExpression(b.Right);
+                this.il.MarkLabel(end);
+                return;
+            }
+
+            // Issue #831: NullCoalesce over a class-constrained (or
+            // unconstrained) `T?` whose underlying is an open type
+            // parameter. The underlying T has no static ClrType, so
+            // neither the value-type Nullable<T> spill branch above nor
+            // the bottom `dup; brtrue` shape is verifiable IL: the
+            // verifier rejects `dup` / `brtrue` on an opaque `!!T`
+            // stack value because it cannot prove T is a reference type
+            // at the signature layer (ECMA-335 III.1.8). Mirror the
+            // value-type spill: store the LHS to a `T`-typed slot, probe
+            // its non-nullness via `box !!T; brtrue/brfalse` (which the
+            // verifier accepts because `box` always produces an object
+            // reference), and either reload the slot or evaluate RHS.
+            // The JIT elides the box at runtime when T resolves to a
+            // reference type (ECMA-335 III.4.1), so the optimized native
+            // code is no worse than the original `dup; brtrue` shape.
+            if (b.Left.Type is NullableTypeSymbol tpNullable
+                && tpNullable.UnderlyingType is TypeParameterSymbol tpUnderlying
+                && !tpUnderlying.HasValueTypeConstraint)
+            {
+                if (!this.nullableCoalesceSpillSlots.TryGetValue(b, out var tpSlot))
+                {
+                    throw new InvalidOperationException(
+                        "No scratch slot pre-allocated for class-constrained `T?` '?:' LHS — "
+                        + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
+                }
+
+                var tpToken = this.outer.GetElementTypeToken(tpUnderlying);
+                var fallback = this.il.DefineLabel();
+                var end = this.il.DefineLabel();
+
+                this.EmitExpression(b.Left);
+                this.il.StoreLocal(tpSlot);
+                this.il.LoadLocal(tpSlot);
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(tpToken);
+                this.il.Branch(ILOpCode.Brfalse, fallback);
+
+                this.il.LoadLocal(tpSlot);
+                this.il.Branch(ILOpCode.Br, end);
+
                 this.il.MarkLabel(fallback);
                 this.EmitExpression(b.Right);
                 this.il.MarkLabel(end);
@@ -341,6 +430,45 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #831: `T? == nil` / `T? != nil` where the underlying T
+        // is an open type parameter (class-constrained, struct-constrained
+        // or unconstrained). The concrete value-type Nullable<T> arm above
+        // (via liftedBinarySlots + EmitLiftedNullableBinary) only catches
+        // operands with a static `ClrType`, which open type parameters do
+        // NOT have — so without this guard the bottom of EmitBinary would
+        // emit `<T-value>; ldnull; ceq`. ilverify rejects that with
+        // `[StackUnexpected]: found Nullobjref ... expected value 'T'`
+        // (class/unconstrained) or `expected value 'Nullable`1<T>'`
+        // (struct-constrained), because `ceq` cannot match an opaque
+        // stack slot against a managed-null reference at the verifier
+        // layer. Box the operand first so the comparison runs against an
+        // `O` reference. The CLR's `box` opcode has the property that
+        // `box Nullable<T>` yields the managed-null reference when
+        // HasValue is false (ECMA-335 III.4.1) — so the same shape
+        // works uniformly for class-T (boxing a reference is a no-op the
+        // JIT elides) and struct-T (boxing a Nullable encodes HasValue
+        // into the reference). We use the LHS expression's full type
+        // token (the NullableTypeSymbol) so the `box` operand resolves to
+        // `!!T` for class/unconstrained-T (where T? stores as a bare
+        // reference slot) and to `Nullable<!!T>` for struct-T (where T?
+        // stores as a value-typed nullable).
+        if ((b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+            && TryMatchTypeParameterNilCompare(b, out var tpNilOperand))
+        {
+            this.EmitExpression(tpNilOperand);
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(tpNilOperand.Type));
+            this.il.OpCode(ILOpCode.Ldnull);
+            this.il.OpCode(ILOpCode.Ceq);
+            if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+            {
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+            }
+
+            return;
+        }
+
         // Short-circuit evaluation for logical `&&` and `||`: the right
         // operand must not be evaluated when the left operand already
         // determines the result. Emit a dup + conditional branch so the
@@ -440,6 +568,88 @@ internal sealed partial class MethodBodyEmitter
         }
 
         EmitNarrowingTruncationIfNeeded(b.Op.Kind, b.Type);
+    }
+
+    /// <summary>
+    /// Issue #831: matches `T? == nil` / `T? != nil` (and the symmetric
+    /// `nil == T?` / `nil != T?`) where the underlying T is an open
+    /// type parameter (class-constrained, struct-constrained, or
+    /// unconstrained). The concrete value-type Nullable&lt;T&gt; arm
+    /// (driven by <see cref="liftedBinarySlots"/>) only catches
+    /// operands with a static <c>ClrType</c>; open type parameters
+    /// have none, so this match fills the gap. The caller boxes the
+    /// matched operand using its full nullable type token, which
+    /// resolves to a bare reference slot for class/unconstrained T and
+    /// to <c>Nullable&lt;!!T&gt;</c> for struct T.
+    /// </summary>
+    private static bool TryMatchTypeParameterNilCompare(
+        BoundBinaryExpression node,
+        out BoundExpression operand)
+    {
+        if (node.Right.Type == TypeSymbol.Null
+            && IsOpenTypeParameterNullable(node.Left.Type))
+        {
+            operand = node.Left;
+            return true;
+        }
+
+        if (node.Left.Type == TypeSymbol.Null
+            && IsOpenTypeParameterNullable(node.Right.Type))
+        {
+            operand = node.Right;
+            return true;
+        }
+
+        operand = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #831: returns true when <paramref name="t"/> is a
+    /// <see cref="NullableTypeSymbol"/> wrapping an open type parameter
+    /// (regardless of constraint). The CLR storage of <c>T?</c> is
+    /// either a bare <c>!!T</c> reference slot (class/unconstrained T)
+    /// or a <c>Nullable&lt;!!T&gt;</c> value-typed slot (struct T) —
+    /// see <see cref="ReflectionMetadataEmitter.GetElementTypeToken"/>.
+    /// Both shapes need the same `box; ldnull; ceq` lowering for
+    /// nil-comparison to be verifier-clean: boxing a reference is a
+    /// JIT-elided no-op, while boxing <c>Nullable&lt;T&gt;</c> per
+    /// ECMA-335 III.4.1 yields a managed-null reference when
+    /// HasValue is false.
+    /// </summary>
+    private static bool IsOpenTypeParameterNullable(TypeSymbol t)
+    {
+        return t is NullableTypeSymbol nullable
+            && nullable.UnderlyingType is TypeParameterSymbol;
+    }
+
+    /// <summary>
+    /// Issue #831: returns true when <paramref name="t"/> resolves to an
+    /// open type parameter that is NOT struct-constrained, either
+    /// directly (e.g. after a smart-cast narrowing) or via a
+    /// <see cref="NullableTypeSymbol"/> wrapper. Used by the `!!`
+    /// (NullAssertion) emit path to recognise both `self T?` and the
+    /// narrowed bare-`T` operand shape produced after a preceding
+    /// nil-check guard.
+    /// </summary>
+    private static bool TryGetOpenTypeParameter(TypeSymbol t, out TypeParameterSymbol typeParameter)
+    {
+        if (t is TypeParameterSymbol bare && !bare.HasValueTypeConstraint)
+        {
+            typeParameter = bare;
+            return true;
+        }
+
+        if (t is NullableTypeSymbol nullable
+            && nullable.UnderlyingType is TypeParameterSymbol wrapped
+            && !wrapped.HasValueTypeConstraint)
+        {
+            typeParameter = wrapped;
+            return true;
+        }
+
+        typeParameter = null;
+        return false;
     }
 
     private void EmitNarrowingTruncationIfNeeded(BoundBinaryOperatorKind kind, TypeSymbol resultType)
