@@ -322,7 +322,17 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
                 this.Log.LogError(null, code, null, file, startLine, startColumn, endLine, endColumn, message);
                 break;
             case "warning":
-                this.Log.LogWarning(null, code, null, file, startLine, startColumn, endLine, endColumn, message);
+                // GS9100 is advisory (missing transitive references) — only surface
+                // at detailed/diagnostic verbosity to keep normal builds quiet.
+                if (string.Equals(code, "GS9100", StringComparison.OrdinalIgnoreCase))
+                {
+                    this.Log.LogMessage(MessageImportance.Low, line);
+                }
+                else
+                {
+                    this.Log.LogWarning(null, code, null, file, startLine, startColumn, endLine, endColumn, message);
+                }
+
                 break;
             default:
                 this.Log.LogMessage(MessageImportance.Normal, line);
