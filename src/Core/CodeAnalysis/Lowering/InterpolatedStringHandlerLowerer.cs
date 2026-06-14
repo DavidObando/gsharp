@@ -467,7 +467,7 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
         LocalVariableSymbol continueLocal,
         ImmutableArray<BoundStatement> holeLeading = default)
     {
-        var returnsBool = appendCall.Type?.ClrType == typeof(bool);
+        var returnsBool = appendCall.Type?.ClrType.IsSameAs(typeof(bool)) == true;
         var leading = holeLeading.IsDefault ? ImmutableArray<BoundStatement>.Empty : holeLeading;
 
         if (continueLocal == null)
@@ -550,13 +550,13 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
             var idx = 1;
             if (wantAlign)
             {
-                ok = ps[idx].ParameterType == typeof(int);
+                ok = ps[idx].ParameterType.IsSameAs(typeof(int));
                 idx++;
             }
 
             if (ok && wantFormat)
             {
-                ok = ps[idx].ParameterType == typeof(string);
+                ok = ps[idx].ParameterType.IsSameAs(typeof(string));
             }
 
             if (ok)
@@ -682,14 +682,14 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
 
     private static bool AppendsReturnBool(System.Type handlerType, MethodInfo appendLiteral)
     {
-        if (appendLiteral.ReturnType == typeof(bool))
+        if (appendLiteral.ReturnType.IsSameAs(typeof(bool)))
         {
             return true;
         }
 
         foreach (var method in handlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
         {
-            if (method.Name == "AppendFormatted" && method.ReturnType == typeof(bool))
+            if (method.Name == "AppendFormatted" && method.ReturnType.IsSameAs(typeof(bool)))
             {
                 return true;
             }

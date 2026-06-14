@@ -756,7 +756,7 @@ public static class SemanticLookup
     private static bool IsDefaultImmutableArray(object value)
     {
         var type = value.GetType();
-        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(System.Collections.Immutable.ImmutableArray<>))
+        if (type.IsGenericType && type.GetGenericTypeDefinition().IsSameAs(typeof(System.Collections.Immutable.ImmutableArray<>)))
         {
             var isDefault = type.GetProperty("IsDefault");
             return isDefault != null && (bool)isDefault.GetValue(value)!;

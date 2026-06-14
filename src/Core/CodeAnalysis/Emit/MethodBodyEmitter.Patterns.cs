@@ -265,7 +265,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.OpCode(ILOpCode.Unbox_any);
             this.il.Token(this.outer.GetElementTypeToken(tp.TargetType));
         }
-        else if (tp.TargetType?.ClrType != typeof(object))
+        else if (tp.TargetType?.ClrType.IsSameAs(typeof(object)) != true)
         {
             this.il.OpCode(ILOpCode.Castclass);
             this.il.Token(this.outer.GetElementTypeToken(tp.TargetType));

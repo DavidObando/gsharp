@@ -2679,7 +2679,7 @@ public sealed class Binder
                     var openIEnumerable = typeof(System.Collections.Generic.IEnumerable<>);
                     if (argClrSeq != null)
                     {
-                        var matchedSeq = argClrSeq.IsGenericType && argClrSeq.GetGenericTypeDefinition() == openIEnumerable
+                        var matchedSeq = argClrSeq.IsGenericType && argClrSeq.GetGenericTypeDefinition().IsSameAs(openIEnumerable)
                             ? argClrSeq
                             : FindMatchingInterface(argClrSeq, openIEnumerable);
                         if (matchedSeq != null)
@@ -2708,7 +2708,7 @@ public sealed class Binder
                     var openIAsyncEnumerable = typeof(System.Collections.Generic.IAsyncEnumerable<>);
                     if (argClrAseq != null)
                     {
-                        var matchedAseq = argClrAseq.IsGenericType && argClrAseq.GetGenericTypeDefinition() == openIAsyncEnumerable
+                        var matchedAseq = argClrAseq.IsGenericType && argClrAseq.GetGenericTypeDefinition().IsSameAs(openIAsyncEnumerable)
                             ? argClrAseq
                             : FindMatchingInterface(argClrAseq, openIAsyncEnumerable);
                         if (matchedAseq != null)
@@ -2820,7 +2820,7 @@ public sealed class Binder
         {
             foreach (var iface in clrType.GetInterfaces())
             {
-                if (iface.IsGenericType && iface.GetGenericTypeDefinition() == openDefinition)
+                if (iface.IsGenericType && iface.GetGenericTypeDefinition().IsSameAs(openDefinition))
                 {
                     return iface;
                 }

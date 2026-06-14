@@ -18,15 +18,27 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// than a string name, so renaming an attribute type or shadowing it in
 /// user code never breaks compiler semantics.
 /// </summary>
+/// <remarks>
+/// Issue #835 / ADR-0084 §L5: every recogniser below compares by
+/// <see cref="Type.FullName"/> (via <see cref="ClrTypeUtilities.IsSameAs"/>)
+/// rather than CLR reference identity (<c>clrType.IsSameAs(typeof(X))</c>). The
+/// reference-identity form silently regresses on the BuildTask path, where
+/// imported attribute types are materialised through a
+/// <see cref="System.Reflection.MetadataLoadContext"/> and therefore are
+/// never reference-equal to the gsc host process's <c>typeof()</c> instances.
+/// </remarks>
 internal static class KnownAttributes
 {
-    private static readonly HashSet<Type> ReservedForCompilerSet = new()
+    // FullName strings instead of typeof(...) so MetadataLoadContext-loaded
+    // attribute types match against the reserved set just like host-process
+    // ones do (issue #835).
+    private static readonly HashSet<string> ReservedForCompilerNames = new(StringComparer.Ordinal)
     {
-        typeof(System.Runtime.CompilerServices.ExtensionAttribute),
-        typeof(System.Runtime.CompilerServices.AsyncStateMachineAttribute),
-        typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute),
-        typeof(System.Runtime.CompilerServices.NullableAttribute),
-        typeof(System.Runtime.CompilerServices.NullableContextAttribute),
+        "System.Runtime.CompilerServices.ExtensionAttribute",
+        "System.Runtime.CompilerServices.AsyncStateMachineAttribute",
+        "System.Runtime.CompilerServices.CompilerGeneratedAttribute",
+        "System.Runtime.CompilerServices.NullableAttribute",
+        "System.Runtime.CompilerServices.NullableContextAttribute",
     };
 
     /// <summary>
@@ -38,7 +50,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> if the attribute is reserved for the compiler.</returns>
     public static bool IsReservedForCompiler(Type clrType)
     {
-        return clrType != null && ReservedForCompilerSet.Contains(clrType);
+        return clrType?.FullName != null && ReservedForCompilerNames.Contains(clrType.FullName);
     }
 
     /// <summary>
@@ -49,7 +61,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[Obsolete]</c>.</returns>
     public static bool IsObsolete(BoundAttribute attribute)
     {
-        return attribute?.AttributeType?.ClrType == typeof(System.ObsoleteAttribute);
+        return attribute?.AttributeType?.ClrType.IsSameAs(typeof(System.ObsoleteAttribute)) == true;
     }
 
     /// <summary>
@@ -65,7 +77,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[DllImport]</c>.</returns>
     public static bool IsDllImport(Type clrType)
     {
-        return clrType == typeof(System.Runtime.InteropServices.DllImportAttribute);
+        return clrType.IsSameAs(typeof(System.Runtime.InteropServices.DllImportAttribute));
     }
 
     /// <summary>
@@ -90,7 +102,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[NotNullWhen]</c>.</returns>
     public static bool IsNotNullWhen(Type clrType)
     {
-        return clrType == typeof(System.Diagnostics.CodeAnalysis.NotNullWhenAttribute);
+        return clrType.IsSameAs(typeof(System.Diagnostics.CodeAnalysis.NotNullWhenAttribute));
     }
 
     /// <summary>
@@ -112,7 +124,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[MaybeNullWhen]</c>.</returns>
     public static bool IsMaybeNullWhen(Type clrType)
     {
-        return clrType == typeof(System.Diagnostics.CodeAnalysis.MaybeNullWhenAttribute);
+        return clrType.IsSameAs(typeof(System.Diagnostics.CodeAnalysis.MaybeNullWhenAttribute));
     }
 
     /// <summary>
@@ -136,7 +148,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[MemberNotNull]</c>.</returns>
     public static bool IsMemberNotNull(Type clrType)
     {
-        return clrType == typeof(System.Diagnostics.CodeAnalysis.MemberNotNullAttribute);
+        return clrType.IsSameAs(typeof(System.Diagnostics.CodeAnalysis.MemberNotNullAttribute));
     }
 
     /// <summary>
@@ -158,7 +170,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[MemberNotNullWhen]</c>.</returns>
     public static bool IsMemberNotNullWhen(Type clrType)
     {
-        return clrType == typeof(System.Diagnostics.CodeAnalysis.MemberNotNullWhenAttribute);
+        return clrType.IsSameAs(typeof(System.Diagnostics.CodeAnalysis.MemberNotNullWhenAttribute));
     }
 
     /// <summary>
@@ -299,7 +311,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[EnumeratorCancellation]</c>.</returns>
     public static bool IsEnumeratorCancellation(Type clrType)
     {
-        return clrType == typeof(System.Runtime.CompilerServices.EnumeratorCancellationAttribute);
+        return clrType.IsSameAs(typeof(System.Runtime.CompilerServices.EnumeratorCancellationAttribute));
     }
 
     /// <summary>
@@ -350,7 +362,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[Conditional]</c>.</returns>
     public static bool IsConditional(Type clrType)
     {
-        return clrType == typeof(System.Diagnostics.ConditionalAttribute);
+        return clrType.IsSameAs(typeof(System.Diagnostics.ConditionalAttribute));
     }
 
     /// <summary>
@@ -542,7 +554,7 @@ internal static class KnownAttributes
 
         var current = clr;
         var isSelf = true;
-        while (current != null && current != typeof(object))
+        while (current != null && !current.IsSameAs(typeof(object)))
         {
             IList<System.Reflection.CustomAttributeData> data;
             try
@@ -623,7 +635,7 @@ internal static class KnownAttributes
 
         foreach (var attr in attributes)
         {
-            if (attr?.AttributeType?.ClrType != typeof(AttributeUsageAttribute))
+            if (attr?.AttributeType?.ClrType.IsSameAs(typeof(AttributeUsageAttribute)) != true)
             {
                 continue;
             }
@@ -768,7 +780,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[LibraryImport]</c>.</returns>
     public static bool IsLibraryImport(Type clrType)
     {
-        return clrType == typeof(System.Runtime.InteropServices.LibraryImportAttribute);
+        return clrType.IsSameAs(typeof(System.Runtime.InteropServices.LibraryImportAttribute));
     }
 
     /// <summary>
@@ -818,7 +830,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[UnmanagedFunctionPointer]</c>.</returns>
     public static bool IsUnmanagedFunctionPointer(Type clrType)
     {
-        return clrType == typeof(System.Runtime.InteropServices.UnmanagedFunctionPointerAttribute);
+        return clrType.IsSameAs(typeof(System.Runtime.InteropServices.UnmanagedFunctionPointerAttribute));
     }
 
     /// <summary>
@@ -870,7 +882,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[StructLayout]</c>.</returns>
     public static bool IsStructLayout(Type clrType)
     {
-        return clrType == typeof(System.Runtime.InteropServices.StructLayoutAttribute);
+        return clrType.IsSameAs(typeof(System.Runtime.InteropServices.StructLayoutAttribute));
     }
 
     /// <summary>
@@ -921,7 +933,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[FieldOffset]</c>.</returns>
     public static bool IsFieldOffset(Type clrType)
     {
-        return clrType == typeof(System.Runtime.InteropServices.FieldOffsetAttribute);
+        return clrType.IsSameAs(typeof(System.Runtime.InteropServices.FieldOffsetAttribute));
     }
 
     /// <summary>
@@ -1084,7 +1096,7 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[MarshalAs]</c>.</returns>
     public static bool IsMarshalAs(Type clrType)
     {
-        return clrType == typeof(System.Runtime.InteropServices.MarshalAsAttribute);
+        return clrType.IsSameAs(typeof(System.Runtime.InteropServices.MarshalAsAttribute));
     }
 
     /// <summary>

@@ -322,19 +322,19 @@ public sealed class Conversion
         // ADR-0045: every value-type primitive (and every user struct)
         // boxes implicitly to `object`. Reference types convert to
         // `object` as a plain reference widening.
-        if (to?.ClrType == typeof(object) && from?.ClrType != null)
+        if (to?.ClrType.IsSameAs(typeof(object)) == true && from?.ClrType != null)
         {
             return Conversion.Implicit;
         }
 
         // Boxing conversion for user value types to System.Object.
-        if (from is StructSymbol fromStruct && !fromStruct.IsClass && to?.ClrType == typeof(object))
+        if (from is StructSymbol fromStruct && !fromStruct.IsClass && to?.ClrType.IsSameAs(typeof(object)) == true)
         {
             return Conversion.Implicit;
         }
 
         // ADR-0045 explicit unbox: `(T)objectValue` for any value-type T.
-        if (from?.ClrType == typeof(object) && to?.ClrType != null && to.ClrType.IsValueType)
+        if (from?.ClrType.IsSameAs(typeof(object)) == true && to?.ClrType != null && to.ClrType.IsValueType)
         {
             return Conversion.Explicit;
         }

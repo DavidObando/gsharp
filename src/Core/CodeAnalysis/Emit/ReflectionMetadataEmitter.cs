@@ -5782,14 +5782,14 @@ internal sealed class ReflectionMetadataEmitter
             return false;
         }
 
-        return openDef == typeof(ValueTuple<>)
-            || openDef == typeof(ValueTuple<,>)
-            || openDef == typeof(ValueTuple<,,>)
-            || openDef == typeof(ValueTuple<,,,>)
-            || openDef == typeof(ValueTuple<,,,,>)
-            || openDef == typeof(ValueTuple<,,,,,>)
-            || openDef == typeof(ValueTuple<,,,,,,>)
-            || openDef == typeof(ValueTuple<,,,,,,,>);
+        return openDef.IsSameAs(typeof(ValueTuple<>))
+            || openDef.IsSameAs(typeof(ValueTuple<,>))
+            || openDef.IsSameAs(typeof(ValueTuple<,,>))
+            || openDef.IsSameAs(typeof(ValueTuple<,,,>))
+            || openDef.IsSameAs(typeof(ValueTuple<,,,,>))
+            || openDef.IsSameAs(typeof(ValueTuple<,,,,,>))
+            || openDef.IsSameAs(typeof(ValueTuple<,,,,,,>))
+            || openDef.IsSameAs(typeof(ValueTuple<,,,,,,,>));
     }
 
     private readonly Dictionary<StructSymbol, EntityHandle> userStructTypeSpecCache = new(ReferenceEqualityComparer.Instance);
@@ -6850,7 +6850,7 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var openReturn = openMethod.ReturnType;
-        if (openReturn == null || openReturn == typeof(void))
+        if (openReturn == null || openReturn.IsSameAs(typeof(void)))
         {
             return false;
         }

@@ -927,7 +927,7 @@ internal sealed partial class ExpressionBinder
         }
 
         var openReturn = openMethod.ReturnType;
-        if (openReturn == null || openReturn == typeof(void))
+        if (openReturn == null || openReturn.IsSameAs(typeof(void)))
         {
             return null;
         }

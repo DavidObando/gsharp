@@ -45,6 +45,6 @@ public static class BuiltinFunctions
     /// <returns>An <see cref="IEnumerable{FunctionSymbol}"/>.</returns>
     public static IEnumerable<FunctionSymbol> GetAll()
         => typeof(BuiltinFunctions).GetFields(BindingFlags.Public | BindingFlags.Static)
-                                   .Where(f => f.FieldType == typeof(FunctionSymbol))
+                                   .Where(f => f.FieldType.IsSameAs(typeof(FunctionSymbol)))
                                    .Select(f => (FunctionSymbol)f.GetValue(null));
 }

@@ -234,7 +234,7 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        if ((to?.ClrType == typeof(object) || IsInterfaceTargetType(to)) && ReflectionMetadataEmitter.IsValueTypeSymbol(from))
+        if ((to?.ClrType.IsSameAs(typeof(object)) == true || IsInterfaceTargetType(to)) && ReflectionMetadataEmitter.IsValueTypeSymbol(from))
         {
             this.il.OpCode(ILOpCode.Box);
             this.il.Token(this.outer.GetElementTypeToken(from));
@@ -249,7 +249,7 @@ internal sealed partial class MethodBodyEmitter
         // reference boxed slot. The JIT elides the box when T resolves to a
         // reference type at runtime, so no perf regression.
         if (from is TypeParameterSymbol fromTp
-            && (to?.ClrType == typeof(object) || IsInterfaceTargetType(to)))
+            && (to?.ClrType.IsSameAs(typeof(object)) == true || IsInterfaceTargetType(to)))
         {
             this.il.OpCode(ILOpCode.Box);
             this.il.Token(this.outer.GetElementTypeToken(fromTp));
@@ -261,7 +261,7 @@ internal sealed partial class MethodBodyEmitter
         // reference (user-declared `InterfaceSymbol` or any CLR
         // interface), since a boxed value type held in an interface
         // slot needs `unbox.any` to surface as its native value type.
-        if ((from?.ClrType == typeof(object) || IsInterfaceSourceType(from))
+        if ((from?.ClrType.IsSameAs(typeof(object)) == true || IsInterfaceSourceType(from))
             && to?.ClrType != null && to.ClrType.IsValueType)
         {
             this.il.OpCode(ILOpCode.Unbox_any);
@@ -269,8 +269,8 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        if (from?.ClrType == typeof(object)
-            && to?.ClrType != typeof(object)
+        if (from?.ClrType.IsSameAs(typeof(object)) == true
+            && to?.ClrType.IsSameAs(typeof(object)) == false
             && to is not TypeParameterSymbol
             && !ReflectionMetadataEmitter.IsValueTypeSymbol(to))
         {
@@ -308,7 +308,7 @@ internal sealed partial class MethodBodyEmitter
             || expectedType == null
             || expectedType == TypeSymbol.Void
             || expectedType == TypeSymbol.Error
-            || expectedType?.ClrType == typeof(object))
+            || expectedType?.ClrType.IsSameAs(typeof(object)) == true)
         {
             return;
         }
@@ -367,7 +367,7 @@ internal sealed partial class MethodBodyEmitter
         // decimal is a value type with no `conv.*` opcode; route through
         // the BCL's operator methods. `op_Implicit` for widening sources
         // (every integral type → decimal) and `op_Explicit` otherwise.
-        if (to == typeof(decimal) || from == typeof(decimal))
+        if (to.IsSameAs(typeof(decimal)) || from.IsSameAs(typeof(decimal)))
         {
             return TryEmitDecimalConversion(from, to);
         }
@@ -383,23 +383,23 @@ internal sealed partial class MethodBodyEmitter
         // or r8. We pick the conv opcode that matches the *target*
         // representation.
         ILOpCode? op = null;
-        if (to == typeof(sbyte))
+        if (to.IsSameAs(typeof(sbyte)))
         {
             op = ILOpCode.Conv_i1;
         }
-        else if (to == typeof(byte))
+        else if (to.IsSameAs(typeof(byte)))
         {
             op = ILOpCode.Conv_u1;
         }
-        else if (to == typeof(short))
+        else if (to.IsSameAs(typeof(short)))
         {
             op = ILOpCode.Conv_i2;
         }
-        else if (to == typeof(ushort) || to == typeof(char))
+        else if (to.IsSameAs(typeof(ushort)) || to.IsSameAs(typeof(char)))
         {
             op = ILOpCode.Conv_u2;
         }
-        else if (to == typeof(int))
+        else if (to.IsSameAs(typeof(int)))
         {
             // From an i4-sized source the value is already i4. From i8,
             // r4, r8, nint, nuint we must narrow to i4.
@@ -410,7 +410,7 @@ internal sealed partial class MethodBodyEmitter
 
             op = ILOpCode.Conv_i4;
         }
-        else if (to == typeof(uint))
+        else if (to.IsSameAs(typeof(uint)))
         {
             if (Is32BitOrSmaller(from))
             {
@@ -419,27 +419,27 @@ internal sealed partial class MethodBodyEmitter
 
             op = ILOpCode.Conv_u4;
         }
-        else if (to == typeof(long))
+        else if (to.IsSameAs(typeof(long)))
         {
             op = ILOpCode.Conv_i8;
         }
-        else if (to == typeof(ulong))
+        else if (to.IsSameAs(typeof(ulong)))
         {
             op = ILOpCode.Conv_u8;
         }
-        else if (to == typeof(nint))
+        else if (to.IsSameAs(typeof(nint)))
         {
             op = ILOpCode.Conv_i;
         }
-        else if (to == typeof(nuint))
+        else if (to.IsSameAs(typeof(nuint)))
         {
             op = ILOpCode.Conv_u;
         }
-        else if (to == typeof(float))
+        else if (to.IsSameAs(typeof(float)))
         {
             op = ILOpCode.Conv_r4;
         }
-        else if (to == typeof(double))
+        else if (to.IsSameAs(typeof(double)))
         {
             op = ILOpCode.Conv_r8;
         }
@@ -457,7 +457,7 @@ internal sealed partial class MethodBodyEmitter
     {
         // To decimal: every numeric source has either an `op_Implicit`
         // (integrals, char) or an `op_Explicit` (float, double).
-        if (to == typeof(decimal))
+        if (to.IsSameAs(typeof(decimal)))
         {
             var op = typeof(decimal).GetMethod("op_Implicit", new[] { from })
                 ?? typeof(decimal).GetMethod("op_Explicit", new[] { from });
@@ -471,7 +471,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         // From decimal: every numeric target has an `op_Explicit`.
-        if (from == typeof(decimal))
+        if (from.IsSameAs(typeof(decimal)))
         {
             var op = typeof(decimal).GetMethod("op_Explicit", new[] { typeof(decimal) });
             // GetMethod by name+params resolves the conversion that
@@ -482,7 +482,7 @@ internal sealed partial class MethodBodyEmitter
                 if (m.Name == "op_Explicit"
                     && m.ReturnType == to
                     && m.GetParameters().Length == 1
-                    && m.GetParameters()[0].ParameterType == typeof(decimal))
+                    && m.GetParameters()[0].ParameterType.IsSameAs(typeof(decimal)))
                 {
                     op = m;
                     break;
@@ -517,44 +517,44 @@ internal sealed partial class MethodBodyEmitter
         var sourceUnsigned = IsUnsignedClrType(from);
         ILOpCode? op = null;
 
-        if (to == typeof(sbyte))
+        if (to.IsSameAs(typeof(sbyte)))
         {
             op = sourceUnsigned ? ILOpCode.Conv_ovf_i1_un : ILOpCode.Conv_ovf_i1;
         }
-        else if (to == typeof(byte))
+        else if (to.IsSameAs(typeof(byte)))
         {
             op = sourceUnsigned ? ILOpCode.Conv_ovf_u1_un : ILOpCode.Conv_ovf_u1;
         }
-        else if (to == typeof(short))
+        else if (to.IsSameAs(typeof(short)))
         {
             op = sourceUnsigned ? ILOpCode.Conv_ovf_i2_un : ILOpCode.Conv_ovf_i2;
         }
-        else if (to == typeof(ushort) || to == typeof(char))
+        else if (to.IsSameAs(typeof(ushort)) || to.IsSameAs(typeof(char)))
         {
             op = sourceUnsigned ? ILOpCode.Conv_ovf_u2_un : ILOpCode.Conv_ovf_u2;
         }
-        else if (to == typeof(int))
+        else if (to.IsSameAs(typeof(int)))
         {
             // From a same-size signed source the value already fits, but
             // from a same-size unsigned source we still need the check
             // (`uint` → `int` traps for values > Int32.MaxValue).
-            if (from == typeof(int))
+            if (from.IsSameAs(typeof(int)))
             {
                 return true;
             }
 
             op = sourceUnsigned ? ILOpCode.Conv_ovf_i4_un : ILOpCode.Conv_ovf_i4;
         }
-        else if (to == typeof(uint))
+        else if (to.IsSameAs(typeof(uint)))
         {
-            if (from == typeof(uint))
+            if (from.IsSameAs(typeof(uint)))
             {
                 return true;
             }
 
             op = sourceUnsigned ? ILOpCode.Conv_ovf_u4_un : ILOpCode.Conv_ovf_u4;
         }
-        else if (to == typeof(long))
+        else if (to.IsSameAs(typeof(long)))
         {
             // A signed widening (i1/i2/i4 → i8) needs `conv.i8` (not
             // `conv.ovf.i8`) because it can't overflow; the same holds
@@ -562,7 +562,7 @@ internal sealed partial class MethodBodyEmitter
             // long uses `conv.ovf.i8.un` to trap on the >Int64.MaxValue
             // boundary; an unsigned same-size widening (uint → long) is
             // safe but the `_un` variant still trivially succeeds.
-            if (from == typeof(long))
+            if (from.IsSameAs(typeof(long)))
             {
                 return true;
             }
@@ -571,7 +571,7 @@ internal sealed partial class MethodBodyEmitter
             {
                 op = ILOpCode.Conv_ovf_i8_un;
             }
-            else if (from == typeof(float) || from == typeof(double))
+            else if (from.IsSameAs(typeof(float)) || from.IsSameAs(typeof(double)))
             {
                 op = ILOpCode.Conv_ovf_i8;
             }
@@ -582,28 +582,28 @@ internal sealed partial class MethodBodyEmitter
                 op = ILOpCode.Conv_i8;
             }
         }
-        else if (to == typeof(ulong))
+        else if (to.IsSameAs(typeof(ulong)))
         {
-            if (from == typeof(ulong))
+            if (from.IsSameAs(typeof(ulong)))
             {
                 return true;
             }
 
             op = sourceUnsigned ? ILOpCode.Conv_ovf_u8_un : ILOpCode.Conv_ovf_u8;
         }
-        else if (to == typeof(nint))
+        else if (to.IsSameAs(typeof(nint)))
         {
             op = sourceUnsigned ? ILOpCode.Conv_ovf_i_un : ILOpCode.Conv_ovf_i;
         }
-        else if (to == typeof(nuint))
+        else if (to.IsSameAs(typeof(nuint)))
         {
             op = sourceUnsigned ? ILOpCode.Conv_ovf_u_un : ILOpCode.Conv_ovf_u;
         }
-        else if (to == typeof(float))
+        else if (to.IsSameAs(typeof(float)))
         {
             op = ILOpCode.Conv_r4;
         }
-        else if (to == typeof(double))
+        else if (to.IsSameAs(typeof(double)))
         {
             op = ILOpCode.Conv_r8;
         }
