@@ -114,9 +114,21 @@
        tools/task/ (BuildTask) and tools/compiler/ (gsc). -->
   <Target Name="PackGsharpExtensions" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
     <PropertyGroup>
+      <_GsharpCompilerProject>$(MSBuildThisFileDirectory)..\..\Compiler\Compiler.csproj</_GsharpCompilerProject>
       <_GsharpExtensionsProject>$(MSBuildThisFileDirectory)..\Gsharp.Extensions\Gsharp.Extensions.csproj</_GsharpExtensionsProject>
       <_GsharpExtensionsOutDir>$(IntermediateOutputPath)gsharp-extensions\</_GsharpExtensionsOutDir>
     </PropertyGroup>
+    <!-- Gsharp.Extensions is built with the bootstrap SDK, which requires
+         gsc.dll at out/bin/$(Configuration)/Compiler/gsc.dll. When this
+         SDK is packed directly (e.g. e2e tests running
+         `dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj`),
+         MSBuild's own ProjectReference walker doesn't traverse the
+         Compiler arrow from inside Extensions.csproj because the nested
+         MSBuild call below disables project-references. Build Compiler
+         explicitly here so its output exists before the bootstrap fires. -->
+    <MSBuild Projects="$(_GsharpCompilerProject)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration)" />
     <RemoveDir Directories="$(_GsharpExtensionsOutDir)" Condition="Exists('$(_GsharpExtensionsOutDir)')" />
     <MSBuild Projects="$(_GsharpExtensionsProject)"
              Targets="Build"
