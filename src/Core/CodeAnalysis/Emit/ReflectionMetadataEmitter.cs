@@ -1580,7 +1580,8 @@ internal sealed class ReflectionMetadataEmitter
 
             var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
                 attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
-                    | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit,
+                    | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
+                    | TypeAttributes.Sealed | TypeAttributes.Abstract,
                 @namespace: this.emitCtx.Metadata.GetOrAddString(globalsHostPkg.Name),
                 name: this.emitCtx.Metadata.GetOrAddString("<Program>"),
                 baseType: this.wellKnown.ObjectTypeRef,
@@ -1602,7 +1603,8 @@ internal sealed class ReflectionMetadataEmitter
             var fieldListRow = programFirstFieldRow + globals.Length;
             var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
                 attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
-                    | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit,
+                    | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
+                    | TypeAttributes.Sealed | TypeAttributes.Abstract,
                 @namespace: this.emitCtx.Metadata.GetOrAddString(pkg.Name),
                 name: this.emitCtx.Metadata.GetOrAddString("<Program>"),
                 baseType: this.wellKnown.ObjectTypeRef,
@@ -4093,9 +4095,27 @@ internal sealed class ReflectionMetadataEmitter
             paramHandles.Add((p, paramHandle));
         }
 
+        // ADR-0084 §L5 / issue #806: honour `@MethodImpl(MethodImplOptions.…)`
+        // as a pseudo-custom attribute. The recognised
+        // MethodImplOptions bits OR into the MethodImpl field of the
+        // emitted MethodDef so reflection (GetMethodImplementationFlags)
+        // sees AggressiveInlining / NoInlining / Synchronized / etc.
+        // without a parallel CustomAttribute row. The attribute itself is
+        // elided from EmitUserAttributes via KnownAttributes.IsPseudoCustomAttribute.
+        var implAttributes = MethodImplAttributes.IL | MethodImplAttributes.Managed;
+        var methodImpl = KnownAttributes.FindMethodImpl(function.Attributes);
+        if (methodImpl != null)
+        {
+            var opts = KnownAttributes.GetMethodImplOptions(methodImpl);
+            // MethodImplOptions bit positions match MethodImplAttributes
+            // bit positions exactly (ECMA-335 II.23.1.11), so a direct
+            // OR onto the IL|Managed default lands on the correct slot.
+            implAttributes |= (MethodImplAttributes)(int)opts;
+        }
+
         var handle = this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            implAttributes: implAttributes,
             name: this.emitCtx.Metadata.GetOrAddString(methodName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
@@ -5062,7 +5082,42 @@ internal sealed class ReflectionMetadataEmitter
             || fullName == "System.Enum"
             || fullName == "System.Attribute"
             || fullName == "System.MulticastDelegate"
-            || fullName == "System.Delegate";
+            || fullName == "System.Delegate"
+            // Issue #806: `Nullable<T>` and the `ValueTuple<…>` family
+            // are public type-forwarded types. The host-process typeof
+            // calls for these are scoped to System.Private.CoreLib; if
+            // we emit the TypeRef directly to the implementation
+            // assembly, C# consumers (which only reference the contract
+            // assemblies under Microsoft.NETCore.App.Ref/.../net10.0)
+            // fail with CS0012 "The type '…' is defined in an assembly
+            // that is not referenced". Route through System.Runtime,
+            // which carries the type forwarders, so external consumers
+            // resolve `T?` parameters and `(T, U, …)` tuple types in
+            // our public surface.
+            || fullName == "System.Nullable`1"
+            || fullName == "System.ValueTuple`1"
+            || fullName == "System.ValueTuple`2"
+            || fullName == "System.ValueTuple`3"
+            || fullName == "System.ValueTuple`4"
+            || fullName == "System.ValueTuple`5"
+            || fullName == "System.ValueTuple`6"
+            || fullName == "System.ValueTuple`7"
+            || fullName == "System.ValueTuple`8"
+            // Issue #806: iterator state-machine classes implement
+            // IEnumerable / IEnumerator / IDisposable. The host-process
+            // typeof() of these returns the implementation-assembly
+            // (System.Private.CoreLib) instance, but the public
+            // contract lives in System.Runtime (via type forwarders).
+            // Routing through System.Runtime keeps the runtime's
+            // interface-lookup happy and avoids EntryPointNotFoundException
+            // on iterator `GetEnumerator` dispatch from C# consumers.
+            || fullName == "System.IDisposable"
+            || fullName == "System.Collections.IEnumerable"
+            || fullName == "System.Collections.IEnumerator"
+            || fullName == "System.Collections.Generic.IEnumerable`1"
+            || fullName == "System.Collections.Generic.IEnumerator`1"
+            || fullName == "System.Collections.Generic.IAsyncEnumerable`1"
+            || fullName == "System.Collections.Generic.IAsyncEnumerator`1";
     }
 
     internal TypeReferenceHandle GetTypeReference(Type type)
@@ -6426,6 +6481,15 @@ internal sealed class ReflectionMetadataEmitter
                 openDefinition = typeof(System.Collections.Generic.IAsyncEnumerable<>);
                 typeArguments = ImmutableArray.Create<TypeSymbol>(aseq.ElementType);
                 return true;
+            case NullableTypeSymbol nul when nul.UnderlyingType is TypeParameterSymbol nullableTp && nullableTp.HasValueTypeConstraint:
+                // Issue #806: a `T?` receiver where T is an open value-type
+                // type parameter has no constructed CLR `Nullable<T>` here —
+                // route member-ref encoding through the symbolic container
+                // path so the MemberRef parent is `Nullable<!!T>` against
+                // System.Runtime, not against the current assembly.
+                openDefinition = typeof(System.Nullable<>);
+                typeArguments = ImmutableArray.Create<TypeSymbol>(nullableTp);
+                return true;
             default:
                 openDefinition = null;
                 typeArguments = default;
@@ -6448,10 +6512,37 @@ internal sealed class ReflectionMetadataEmitter
         var coreObject = ChooseErasedObjectType(openDefinition);
         for (var i = 0; i < parameters.Length; i++)
         {
-            result[i] = coreObject;
+            // Issue #806: a generic parameter with the `struct`
+            // constraint cannot be closed with `System.Object`
+            // (MakeGenericType throws ArgumentException). Use a
+            // BCL value-type placeholder (`int32`) so the
+            // symbolic-container path can construct the closed
+            // type purely for parent-TypeSpec encoding. The
+            // closed type's identity is irrelevant beyond the
+            // open definition's reflection metadata.
+            var p = parameters[i];
+            if ((p.GenericParameterAttributes & System.Reflection.GenericParameterAttributes.NotNullableValueTypeConstraint) != 0)
+            {
+                result[i] = ChooseErasedValueTypeType(openDefinition);
+            }
+            else
+            {
+                result[i] = coreObject;
+            }
         }
 
         return result;
+    }
+
+    private Type ChooseErasedValueTypeType(Type openDefinition)
+    {
+        var hostInt = typeof(int);
+        if (openDefinition?.Assembly == hostInt.Assembly)
+        {
+            return hostInt;
+        }
+
+        return this.emitCtx.CoreInt32Type ?? hostInt;
     }
 
     private Type ChooseErasedObjectType(Type openDefinition)
@@ -7532,6 +7623,18 @@ internal sealed class ReflectionMetadataEmitter
         // throw GS9998 from the emitter's NotSupportedException. Recognise
         // the symbolic form directly.
         if (type is TupleTypeSymbol)
+        {
+            return true;
+        }
+
+        // Issue #806: a `T?` over a value-type-constrained type parameter
+        // lowers to `Nullable<T>` (a struct). Without recognising this
+        // symbolic form, instance-method calls on the receiver would emit
+        // `callvirt` + value-on-stack instead of `call` + managed pointer,
+        // producing PEVerify-rejected IL.
+        if (type is NullableTypeSymbol nullableTp
+            && nullableTp.UnderlyingType is TypeParameterSymbol tp
+            && tp.HasValueTypeConstraint)
         {
             return true;
         }

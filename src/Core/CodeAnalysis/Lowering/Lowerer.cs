@@ -1017,7 +1017,7 @@ public sealed class Lowerer : BoundTreeRewriter
         // Enumerator that complicates symbolic emit on every Current/Key/Value
         // read). The minor allocation cost is acceptable; correctness wins.
         System.Type openElementClr;
-        if (openDef == typeof(System.Collections.Generic.IEnumerable<>))
+        if (openDef.FullName == "System.Collections.Generic.IEnumerable`1")
         {
             openElementClr = openDef.GetGenericArguments()[0];
         }

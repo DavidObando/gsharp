@@ -108,10 +108,14 @@ public static class IteratorRewriter
         // `IEnumerable[T]` with `T` an open method type parameter). The
         // ClrType path below erases T to `object` and loses the
         // generic-parameter identity we need for the state-machine class.
+        // Issue #806: compare via FullName so the check survives the
+        // BuildTask MetadataLoadContext path (host-process `typeof()` is
+        // not reference-equal to types loaded into a separate context).
         if (type is ImportedTypeSymbol imported
             && !imported.TypeArguments.IsDefaultOrEmpty
             && imported.OpenDefinition != null
-            && (imported.OpenDefinition == typeof(IEnumerable<>) || imported.OpenDefinition == typeof(IEnumerator<>)))
+            && (imported.OpenDefinition.FullName == "System.Collections.Generic.IEnumerable`1"
+                || imported.OpenDefinition.FullName == "System.Collections.Generic.IEnumerator`1"))
         {
             return imported.TypeArguments[0];
         }
@@ -125,14 +129,15 @@ public static class IteratorRewriter
         if (clr.IsGenericType && !clr.IsGenericTypeDefinition)
         {
             var def = clr.GetGenericTypeDefinition();
-            if (def == typeof(IEnumerable<>) || def == typeof(IEnumerator<>))
+            if (def.FullName == "System.Collections.Generic.IEnumerable`1" ||
+                def.FullName == "System.Collections.Generic.IEnumerator`1")
             {
                 return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
             }
         }
 
-        if (clr == typeof(System.Collections.IEnumerable) ||
-            clr == typeof(System.Collections.IEnumerator))
+        if (clr.FullName == "System.Collections.IEnumerable" ||
+            clr.FullName == "System.Collections.IEnumerator")
         {
             return TypeSymbol.FromClrType(typeof(object));
         }

@@ -664,6 +664,7 @@ internal static class KnownAttributes
             case uint ui: result = (int)ui; return true;
             case long l: result = (int)l; return true;
             case AttributeTargets at: result = (int)at; return true;
+            case System.Runtime.CompilerServices.MethodImplOptions mio: result = (int)mio; return true;
             default: result = 0; return false;
         }
     }
@@ -964,7 +965,7 @@ internal static class KnownAttributes
     /// rows rather than a <c>CustomAttribute</c> row. The emitter elides
     /// these from the user-attribute pass to avoid producing a
     /// duplicate / misleading reflection view (ADR-0086 §6,
-    /// ADR-0092 §6, ADR-0093 §5, ADR-0096 §5).
+    /// ADR-0092 §6, ADR-0093 §5, ADR-0096 §5, ADR-0084 §L5).
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is pseudo-custom.</returns>
@@ -974,7 +975,100 @@ internal static class KnownAttributes
             || IsLibraryImport(attribute)
             || IsStructLayout(attribute)
             || IsFieldOffset(attribute)
-            || IsMarshalAs(attribute);
+            || IsMarshalAs(attribute)
+            || IsMethodImpl(attribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Runtime.CompilerServices.MethodImplAttribute"/>.
+    /// ADR-0084 §L5 / issue #806: <c>@MethodImpl(MethodImplOptions.…)</c>
+    /// is a pseudo-custom attribute — its state encodes into the
+    /// <c>MethodImpl</c> field of the MethodDef row (the bits read by
+    /// <see cref="System.Reflection.MethodBase.GetMethodImplementationFlags"/>)
+    /// rather than into a <c>CustomAttribute</c> row. Recognition is
+    /// type-identity based so shadowing the source-level name cannot
+    /// bypass the rule.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[MethodImpl]</c>.</returns>
+    public static bool IsMethodImpl(Type clrType)
+    {
+        // Use FullName matching (not typeof identity) so the recognition
+        // also fires when the attribute type comes from the consumer's
+        // referenced assembly set via MetadataLoadContext rather than
+        // the gsc host process. Issue #806: the production SDK build of
+        // Gsharp.Extensions hit this gap — every `@MethodImpl(...)` on a
+        // hot extension helper was being silently demoted to a regular
+        // CustomAttribute row, leaving the MethodImpl field unchanged
+        // (so AggressiveInlining never applied at runtime).
+        return clrType?.FullName == "System.Runtime.CompilerServices.MethodImplAttribute";
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Runtime.CompilerServices.MethodImplAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[MethodImpl]</c>.</returns>
+    public static bool IsMethodImpl(BoundAttribute attribute)
+    {
+        return IsMethodImpl(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Finds the first <c>@MethodImpl(...)</c> attribute on
+    /// <paramref name="attributes"/>, or <c>null</c> when none is present.
+    /// Recognition is type-identity based (ADR-0084 §L5 / issue #806).
+    /// </summary>
+    /// <param name="attributes">The attributes attached to a function symbol.</param>
+    /// <returns>The matching attribute, or <c>null</c>.</returns>
+    public static BoundAttribute FindMethodImpl(ImmutableArray<BoundAttribute> attributes)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (IsMethodImpl(attr))
+            {
+                return attr;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Extracts the <see cref="System.Runtime.CompilerServices.MethodImplOptions"/>
+    /// bits from a <c>@MethodImpl(...)</c> application. The recognised
+    /// constructor shapes are <c>MethodImpl()</c>,
+    /// <c>MethodImpl(MethodImplOptions options)</c>, and
+    /// <c>MethodImpl(short value)</c> — all map to the same options
+    /// bit-field at the metadata level.
+    /// </summary>
+    /// <param name="attribute">A <c>@MethodImpl</c> attribute application; may be <c>null</c>.</param>
+    /// <returns>The options bits (zero when absent or unrecognised).</returns>
+    public static System.Runtime.CompilerServices.MethodImplOptions GetMethodImplOptions(BoundAttribute attribute)
+    {
+        if (attribute == null || attribute.PositionalArguments.IsDefaultOrEmpty || attribute.PositionalArguments.Length < 1)
+        {
+            return default;
+        }
+
+        if (TryConvertToInt32(attribute.PositionalArguments[0].Value, out var raw))
+        {
+            return (System.Runtime.CompilerServices.MethodImplOptions)raw;
+        }
+
+        if (attribute.PositionalArguments[0].Value is System.Runtime.CompilerServices.MethodImplOptions options)
+        {
+            return options;
+        }
+
+        return default;
     }
 
     /// <summary>

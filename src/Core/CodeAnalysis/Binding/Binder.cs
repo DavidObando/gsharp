@@ -2374,8 +2374,14 @@ public sealed class Binder
             return false;
         }
 
-        if (clr == typeof(System.Collections.IEnumerable) ||
-            clr == typeof(System.Collections.IEnumerator))
+        // Use FullName matching rather than typeof identity: when gsc is
+        // invoked with explicit `/r:` references (the production SDK build
+        // path) the IEnumerable types come from a MetadataLoadContext, not
+        // the host process, so `clr == typeof(System.Collections.IEnumerable)`
+        // would be false even for the canonical types. The async branch below
+        // already uses FullName for the same reason.
+        if (clr.FullName == "System.Collections.IEnumerable" ||
+            clr.FullName == "System.Collections.IEnumerator")
         {
             return true;
         }
@@ -2383,8 +2389,8 @@ public sealed class Binder
         if (clr.IsGenericType && !clr.IsGenericTypeDefinition)
         {
             var def = clr.GetGenericTypeDefinition();
-            if (def == typeof(System.Collections.Generic.IEnumerable<>) ||
-                def == typeof(System.Collections.Generic.IEnumerator<>))
+            if (def.FullName == "System.Collections.Generic.IEnumerable`1" ||
+                def.FullName == "System.Collections.Generic.IEnumerator`1")
             {
                 return true;
             }

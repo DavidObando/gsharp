@@ -369,7 +369,12 @@ internal sealed class StateMachineEmitter
 
         foreach (var plan in this.IteratorPlans)
         {
-            var packageName = hostPackage?.Name ?? plan.Function.Package?.Name ?? string.Empty;
+            // Issue #806: nest each iterator SM under its kickoff function's
+            // package (<Program>), not the entry-point/host package. Falling
+            // back to the host package only when the function has no package
+            // keeps multi-namespace assemblies emitting correct NestedType
+            // rows so CLR access checks succeed at runtime.
+            var packageName = plan.Function.Package?.Name ?? hostPackage?.Name ?? string.Empty;
 
             // Issue #810: when the iterator is generic, the synthesized
             // state-machine class must itself be generic over a matching
@@ -660,7 +665,10 @@ internal sealed class StateMachineEmitter
 
         foreach (var plan in this.AsyncIteratorPlans)
         {
-            var packageName = hostPackage?.Name ?? plan.Function.Package?.Name ?? string.Empty;
+            // Issue #806: same fix as sync iterators — prefer the kickoff
+            // function's package so the SM nests under the correct
+            // <Program>.
+            var packageName = plan.Function.Package?.Name ?? hostPackage?.Name ?? string.Empty;
             var elementType = plan.ElementType;
 
             // Fields
