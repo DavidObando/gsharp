@@ -58,7 +58,7 @@ public class Issue618IndexCaptureRegressionTests
             import System.Collections.Generic
 
             func Run() int32 {
-                var m = map[string]int32{}
+                var m = map[string,int32]{}
                 var put = func(k string, v int32) { m[k] = v }
                 put("hello", 7)
                 return m["hello"]
@@ -139,7 +139,7 @@ public class Issue618IndexCaptureRegressionTests
             import System.Collections.Generic
 
             func Run() int32 {
-                var m = map[string]int32{}
+                var m = map[string,int32]{}
                 var put = func(k string, v int32) { m[k] = v }
                 var get = func(k string) int32 { return m[k] }
                 put("a", 1)

@@ -13,7 +13,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <summary>
 /// End-to-end emit + run coverage for issue #751 / ADR-0084 §L2: the
 /// receiver clause now accepts rich type spellings (nullable, generic
-/// application, tuple, nullable array, map[K]V). Each test compiles a
+/// application, tuple, nullable array, map[K,V]). Each test compiles a
 /// G# program containing an extension method declaration whose receiver
 /// previously rejected at parse time, IL-verifies the output, and
 /// executes it under <c>dotnet exec</c> to prove the dispatched call
@@ -95,11 +95,11 @@ public class Issue751RichReceiverEmitTests
             package P
             import System
 
-            func (self map[string]int32) CountKeys() int32 {
+            func (self map[string,int32]) CountKeys() int32 {
                 return self.Count
             }
 
-            var m = map[string]int32{"a": 1, "b": 2, "c": 3}
+            var m = map[string,int32]{"a": 1, "b": 2, "c": 3}
             Console.WriteLine(m.CountKeys())
             """;
 

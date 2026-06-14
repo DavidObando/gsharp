@@ -59,7 +59,7 @@ Add `a?[i]` as a **read-only** postfix operator with these semantics:
 5. **Applies to every indexable shape.**
    - G# arrays (`[N]T`).
    - G# slices (`[]T`).
-   - G# maps (`map[K]V`).
+   - G# maps (`map[K,V]`).
    - CLR indexers on imported reference types (e.g. `Dictionary[K, V]`).
    - User-defined struct/class indexers (via the same CLR indexer path).
 6. **Assignment LHS is rejected.** `a?[i] = v`, `a?[i] += v`, and

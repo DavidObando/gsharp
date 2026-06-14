@@ -14,7 +14,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Phase 3.A.4 binding and interpretation tests for the
-/// <c>map[K]V</c> type, literal, indexing, <c>len</c>, and
+/// <c>map[K,V]</c> type, literal, indexing, <c>len</c>, and
 /// <c>delete</c>.
 /// </summary>
 public class MapTypeTests
@@ -23,7 +23,7 @@ public class MapTypeTests
     public void MapLiteral_StringInt_FieldAccessReturnsValue()
     {
         var source = @"
-let m = map[string]int32{""a"": 1, ""b"": 2}
+let m = map[string,int32]{""a"": 1, ""b"": 2}
 m[""b""]
 ";
         var result = Evaluate(source);
@@ -35,7 +35,7 @@ m[""b""]
     public void MapLiteral_IntString_LenReturnsCount()
     {
         var source = @"
-let m = map[int32]string{1: ""one"", 2: ""two"", 3: ""three""}
+let m = map[int32,string]{1: ""one"", 2: ""two"", 3: ""three""}
 len(m)
 ";
         var result = Evaluate(source);
@@ -47,7 +47,7 @@ len(m)
     public void MapIndex_MissingKey_ReturnsValueTypeZero()
     {
         var source = @"
-let m = map[string]int32{""a"": 1}
+let m = map[string,int32]{""a"": 1}
 m[""missing""]
 ";
         var result = Evaluate(source);
@@ -59,7 +59,7 @@ m[""missing""]
     public void MapIndexAssignment_AddsOrUpdatesKey()
     {
         var source = @"
-var m = map[string]int32{""a"": 1}
+var m = map[string,int32]{""a"": 1}
 m[""b""] = 2
 m[""a""] = 9
 m[""a""] + m[""b""]
@@ -73,7 +73,7 @@ m[""a""] + m[""b""]
     public void MapDelete_RemovesKey_LenDecreases()
     {
         var source = @"
-var m = map[string]int32{""a"": 1, ""b"": 2}
+var m = map[string,int32]{""a"": 1, ""b"": 2}
 delete(m, ""a"")
 len(m)
 ";
@@ -86,7 +86,7 @@ len(m)
     public void MapDelete_MissingKey_NoOp()
     {
         var source = @"
-var m = map[string]int32{""a"": 1}
+var m = map[string,int32]{""a"": 1}
 delete(m, ""never_there"")
 len(m)
 ";
@@ -99,7 +99,7 @@ len(m)
     public void MapLiteral_Empty_IsAllocated()
     {
         var source = @"
-let m = map[string]int32{}
+let m = map[string,int32]{}
 len(m)
 ";
         var result = Evaluate(source);
@@ -122,7 +122,7 @@ delete(s, 0)
     public void Delete_WrongArgCount_Diagnoses()
     {
         var source = @"
-let m = map[string]int32{""a"": 1}
+let m = map[string,int32]{""a"": 1}
 delete(m)
 ";
         var result = Evaluate(source);
@@ -133,7 +133,7 @@ delete(m)
     public void MapType_TypeClause_BindsAsMapTypeSymbol()
     {
         var source = @"
-var m map[string]int32 = map[string]int32{""a"": 1}
+var m map[string,int32] = map[string,int32]{""a"": 1}
 len(m)
 ";
         var result = Evaluate(source);

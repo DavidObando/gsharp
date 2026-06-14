@@ -68,7 +68,7 @@ let n = len(""hello"")
     public void Len_Map_WithoutImport_ReportsGS0317_SuggestsCount()
     {
         var diags = Bind(@"
-let m = map[string]int32{""a"": 1}
+let m = map[string,int32]{""a"": 1}
 let n = len(m)
 ");
 
@@ -157,7 +157,7 @@ xs = append(xs, 2)
     public void Delete_WithoutImport_ReportsGS0317_SuggestsRemove()
     {
         var diags = Bind(@"
-var m = map[string]int32{""a"": 1}
+var m = map[string,int32]{""a"": 1}
 delete(m, ""a"")
 ");
 
@@ -171,7 +171,7 @@ delete(m, ""a"")
     public void Delete_WithImport_DoesNotReportGS0317()
     {
         var diags = Bind(GoImport + @"
-var m = map[string]int32{""a"": 1}
+var m = map[string,int32]{""a"": 1}
 delete(m, ""a"")
 ");
         AssertNoBuiltinGateDiagnostic(diags);
@@ -226,7 +226,7 @@ var xs = []int32{1, 2}
 let n = len(xs)
 let c = cap(xs)
 xs = append(xs, 3)
-let m = map[string]int32{""a"": 1}
+let m = map[string,int32]{""a"": 1}
 delete(m, ""a"")
 let q = len(m)
 ");
@@ -316,7 +316,7 @@ len(xs)
     public void EndToEnd_Delete_Evaluates_WithImport()
     {
         var result = Evaluate(GoImport + @"
-var m = map[string]int32{""a"": 1, ""b"": 2}
+var m = map[string,int32]{""a"": 1, ""b"": 2}
 delete(m, ""a"")
 len(m)
 ");

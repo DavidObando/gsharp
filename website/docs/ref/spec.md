@@ -172,10 +172,10 @@ Slices are backed by CLR arrays. `len` and `cap` observe array length, and `appe
 
 ### Maps
 
-Maps are written `map[K]V` and are backed by `Dictionary<K,V>` in the implementation. Map literals use key-value entries, indexing reads values, and indexed assignment updates entries.
+Maps are written `map[K,V]` and are backed by `Dictionary<K,V>` in the implementation. Map literals use key-value entries, indexing reads values, and indexed assignment updates entries.
 
 ```gsharp
-let counts = map[string]int32{"g": 1, "sharp": 2}
+let counts = map[string,int32]{"g": 1, "sharp": 2}
 ```
 
 ### Sequences
@@ -497,7 +497,7 @@ Member access and indexing chain after primaries. `a.b`, `a?.b`, `a[i]`, `a?[i]`
 
 ### Composite literals
 
-Struct literals use `TypeName{Field: value}`. Data structs also support copy/update with `expr with { Field = value }`. Array and slice literals use `[N]T{...}` or `[]T{...}`. Map literals use `map[K]V{key: value}`.
+Struct literals use `TypeName{Field: value}`. Data structs also support copy/update with `expr with { Field = value }`. Array and slice literals use `[N]T{...}` or `[]T{...}`. Map literals use `map[K,V]{key: value}`.
 
 ### Switch expressions and patterns
 

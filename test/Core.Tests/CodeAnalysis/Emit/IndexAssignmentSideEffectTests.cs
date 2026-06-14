@@ -72,7 +72,7 @@ func key() string {
     calls = calls + 1
     return ""k""
 }
-var m = map[string]int32{}
+var m = map[string,int32]{}
 m[key()] = 7
 Console.WriteLine(calls)
 Console.WriteLine(m[""k""])
@@ -87,7 +87,7 @@ Console.WriteLine(m[""k""])
     {
         const string Source = @"package main
 import System
-var m = map[string]int32{}
+var m = map[string,int32]{}
 var v = (m[""x""] = 99)
 Console.WriteLine(v)
 Console.WriteLine(m[""x""])

@@ -47,7 +47,7 @@ These names are recognized specially by the binder. They are language intrinsics
 | `len` | `len(x)` | arrays, slices, strings, maps | `int32` length/count | `Gsharp.Extensions.Go` (ADR-0083) |
 | `cap` | `cap(x)` | arrays, slices | `int32` capacity | `Gsharp.Extensions.Go` (ADR-0083) |
 | `append` | `append(slice, value)` | first argument must be `[]T`; second converts to `T` | new `[]T` containing the appended value | `Gsharp.Extensions.Go` (ADR-0083) |
-| `delete` | `delete(map, key)` | first argument must be `map[K]V`; key converts to `K` | no value; removes the key if present | `Gsharp.Extensions.Go` (ADR-0083) |
+| `delete` | `delete(map, key)` | first argument must be `map[K,V]`; key converts to `K` | no value; removes the key if present | `Gsharp.Extensions.Go` (ADR-0083) |
 | `close` | `close(ch)` | `chan T` | no value; completes the channel writer | `Gsharp.Extensions.Go` (ADR-0082) |
 | `make` | `make(chan T)` or `make(chan T, capacity)` | channel creation only | `chan T` | `Gsharp.Extensions.Go` (ADR-0082, via the inner `chan` clause) |
 | receive | `<-ch` | `chan T` | next `T` value, or the closed-channel default value | `Gsharp.Extensions.Go` (ADR-0082) |
@@ -84,12 +84,12 @@ Arrays and slices support indexing, index assignment when mutable, `len`, and `c
 
 ## Maps
 
-Map types are written `map[K]V` and are backed by `Dictionary<K,V>`. Map literals use key/value entries, indexing reads values, index assignment writes values, `delete` removes a key, and `len` returns the current count. Both `delete` and `len` require `import Gsharp.Extensions.Go` (ADR-0083); the .NET-idiomatic equivalents are `counts.Remove("missing")` and `counts.Count`.
+Map types are written `map[K,V]` and are backed by `Dictionary<K,V>`. Map literals use key/value entries, indexing reads values, index assignment writes values, `delete` removes a key, and `len` returns the current count. Both `delete` and `len` require `import Gsharp.Extensions.Go` (ADR-0083); the .NET-idiomatic equivalents are `counts.Remove("missing")` and `counts.Count`.
 
 ```gsharp
 import Gsharp.Extensions.Go
 
-var counts = map[string]int32{"gsharp": 1}
+var counts = map[string,int32]{"gsharp": 1}
 counts["gsharp"] = counts["gsharp"] + 1
 delete(counts, "missing")
 Console.WriteLine(len(counts))
@@ -163,8 +163,8 @@ G#-shaped collectors:
 | Symbol | Form | One-line description |
 | --- | --- | --- |
 | `ToSlice` | `func [T] (self sequence[T]) ToSlice() []T` | Materialise the sequence into a G# slice (`T[]` under the hood). |
-| `ToMap` (tuple form) | `func [K, V] (self sequence[(K, V)]) ToMap() map[K]V` | Build a map from a sequence of key/value tuples. Throws on duplicate keys. |
-| `ToMap` (selector form) | `func [T, K, V] (self sequence[T]) ToMap(keyFn (T) -> K, valueFn (T) -> V) map[K]V` | Project each element to a `(K, V)` pair, then build the map. |
+| `ToMap` (tuple form) | `func [K, V] (self sequence[(K, V)]) ToMap() map[K,V]` | Build a map from a sequence of key/value tuples. Throws on duplicate keys. |
+| `ToMap` (selector form) | `func [T, K, V] (self sequence[T]) ToMap(keyFn (T) -> K, valueFn (T) -> V) map[K,V]` | Project each element to a `(K, V)` pair, then build the map. |
 
 `FirstOrNil` / `LastOrNil` / `SingleOrNil` (plus the `*ValueOrNil` companions), `Indexed`, `Of`, and `Empty` carry `[MethodImpl(MethodImplOptions.AggressiveInlining)]`. The iterator-block transformers (`Windowed`, `Chunked`, `Pairwise`, `Interleave`, `Range`, `RangeStep`, `Iterate`, `Repeat`) are intentionally **not** inlined — their bodies are compiler-generated state machines that the JIT does not inline.
 

@@ -5,8 +5,8 @@
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
-/// Represents a map creation expression <c>map[K]V{k1: v1, k2: v2, …}</c>
-/// (Phase 3.A.4).
+/// Represents a map creation expression <c>map[K,V]{k1: v1, k2: v2, …}</c>
+/// (ADR-0104).
 /// </summary>
 public sealed class MapCreationExpressionSyntax : ExpressionSyntax
 {
@@ -14,7 +14,7 @@ public sealed class MapCreationExpressionSyntax : ExpressionSyntax
     /// Initializes a new instance of the <see cref="MapCreationExpressionSyntax"/> class.
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
-    /// <param name="typeClause">The leading <c>map[K]V</c> type clause.</param>
+    /// <param name="typeClause">The leading <c>map[K,V]</c> type clause.</param>
     /// <param name="openBraceToken">The opening <c>{</c> token.</param>
     /// <param name="entries">The comma-separated key/value entries.</param>
     /// <param name="closeBraceToken">The closing <c>}</c> token.</param>
@@ -35,7 +35,7 @@ public sealed class MapCreationExpressionSyntax : ExpressionSyntax
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.MapCreationExpression;
 
-    /// <summary>Gets the <c>map[K]V</c> type clause.</summary>
+    /// <summary>Gets the <c>map[K,V]</c> type clause.</summary>
     public TypeClauseSyntax TypeClause { get; }
 
     /// <summary>Gets the opening <c>{</c> token.</summary>

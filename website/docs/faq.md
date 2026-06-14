@@ -87,7 +87,7 @@ G# uses CLR-style exceptions with `try`, `catch`, `finally`, and `throw`. That c
 
 ## Are slices, maps, and sequences built in?
 
-Yes. Fixed arrays use `[N]T`, slices use `[]T`, maps use `map[K]V`, and sequences use `sequence[T]`. Slices are backed by CLR arrays, maps by dictionary-like storage, and sequences map to .NET enumerable shapes, with iterator functions using `yield`.
+Yes. Fixed arrays use `[N]T`, slices use `[]T`, maps use `map[K,V]`, and sequences use `sequence[T]`. Slices are backed by CLR arrays, maps by dictionary-like storage, and sequences map to .NET enumerable shapes, with iterator functions using `yield`.
 
 ## What editor and debugging support exists?
 

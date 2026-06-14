@@ -53,7 +53,7 @@ func makePoint() Point {
 
 var p = makePoint()
 var z Point
-var m = map[string]int32{}
+var m = map[string,int32]{}
 m[""hello""] = 7
 var v = m[""hello""]
 var miss = m[""nope""]

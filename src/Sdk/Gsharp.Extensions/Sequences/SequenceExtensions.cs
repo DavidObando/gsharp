@@ -264,7 +264,7 @@ public static class SequenceExtensions
 
     /// <summary>
     /// Collects a sequence of <c>(K, V)</c> tuples into a
-    /// <c>map[K]V</c>. The tuple shape is the G# spelling
+    /// <c>map[K,V]</c>. The tuple shape is the G# spelling
     /// <c>sequence[(K, V)]</c>; duplicate keys throw, matching
     /// <see cref="Enumerable.ToDictionary{T, K}(IEnumerable{T}, Func{T, K})"/>.
     /// </summary>
@@ -292,7 +292,7 @@ public static class SequenceExtensions
     }
 
     /// <summary>
-    /// Collects an arbitrary sequence into a <c>map[K]V</c> using
+    /// Collects an arbitrary sequence into a <c>map[K,V]</c> using
     /// caller-supplied key and value selectors.
     /// </summary>
     /// <typeparam name="T">Element type.</typeparam>

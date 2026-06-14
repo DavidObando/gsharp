@@ -132,8 +132,8 @@ G#-shaped collectors:
 
 ```
 func [T]       (self sequence[T])       ToSlice() []T
-func [K, V]    (self sequence[(K, V)])  ToMap() map[K]V
-func [T, K, V] (self sequence[T])       ToMap(keyFn (T) -> K, valueFn (T) -> V) map[K]V
+func [K, V]    (self sequence[(K, V)])  ToMap() map[K,V]
+func [T, K, V] (self sequence[T])       ToMap(keyFn (T) -> K, valueFn (T) -> V) map[K,V]
 ```
 
 ### Performance — `AggressiveInlining`
@@ -211,12 +211,12 @@ hatch under `src/Sdk/Gsharp.Extensions/*.cs` works today.
   only accepted an identifier or an `[N]T` / `[]T` receiver type;
   the scanner now reads any balanced bracket region as the
   candidate type clause, so `(self T?)`, `(self sequence[T])`,
-  `(self map[K]V)`, `(self (int32, string)?)`, and arbitrary
+  `(self map[K,V])`, `(self (int32, string)?)`, and arbitrary
   combinations are recognised by the parser and the function
   retains its extension-method status. The binder + emit pipeline
   also accept call-site dispatch when the receiver is *closed*
   (concrete) — `string?`, `(int32, string)`, `[]int32?`,
-  `map[string]int32`. **Binder-side closed by
+  `map[string,int32]`. **Binder-side closed by
   [issue #773](https://github.com/DavidObando/gsharp/issues/773).**
   `BoundScope.TryLookupExtensionFunction` now falls back to
   receiver-type unification when the fast-path exact-equality
@@ -539,7 +539,7 @@ of that migration, not left behind as dead code.
   reach for `Enumerable.Range`, `FirstOrDefault`, or hand-rolled
   null-check chains now have a single Extensions surface that
   matches the rest of the language. The collectors (`ToSlice`,
-  `ToMap`) project to G#'s native `[]T` and `map[K]V` instead of
+  `ToMap`) project to G#'s native `[]T` and `map[K,V]` instead of
   to BCL `T[]` and `Dictionary<K, V>`, removing a friction point
   in the tour and the standard-library reference.
 - **Positive — dogfooding pressure.** Shipping a real assembly

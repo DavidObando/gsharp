@@ -34,7 +34,7 @@ Console.WriteLine(xs[3])
 Console.WriteLine(len("hello"))
 
 // len / delete on a map.
-var m = map[string]int32{"a": 1, "b": 2, "c": 3}
+var m = map[string,int32]{"a": 1, "b": 2, "c": 3}
 Console.WriteLine(len(m))
 delete(m, "b")
 Console.WriteLine(len(m))

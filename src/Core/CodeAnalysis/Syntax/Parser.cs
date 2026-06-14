@@ -2801,7 +2801,7 @@ public class Parser
         //   '(' ident <type-clause> ')' (ident | operator) ( '(' | '[' )
         // The original implementation hard-coded a tiny subset of type-clause
         // spellings (bare identifier, `[N]T` / `[]T`). That excluded common
-        // shapes like `T?`, `sequence[T]`, `map[K]V`, `(int, T)`, and
+        // shapes like `T?`, `sequence[T]`, `map[K,V]`, `(int, T)`, and
         // combinations thereof, silently demoting an extension-method
         // declaration to a malformed regular function. Rather than mirror
         // the entire type grammar here we scan the candidate receiver as a
@@ -3208,14 +3208,49 @@ public class Parser
 
     private TypeClauseSyntax ParseMapTypeClause()
     {
-        // Phase 3.A.4: map type clause `map[K]V` with optional trailing `?`.
+        // ADR-0104 / issue #805: canonical map type clause `map[K,V]` with optional trailing `?`.
+        // For one release we still *recognize* the legacy Go-flavored shape
+        // `map[K]V` so we can emit GS0366 with a span-accurate "did you mean
+        // 'map[K,V]'?" diagnostic, then bind it as if the new spelling had
+        // been written. No deprecation window — this is the breaking change
+        // for v0.2 called out in ADR-0104.
         var mapKeyword = MatchToken(SyntaxKind.MapKeyword);
         var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
         var keyType = ParseTypeClause();
-        var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
-        var valueType = ParseTypeClause();
+
+        SyntaxToken commaToken = null;
+        SyntaxToken closeBracket;
+        TypeClauseSyntax valueType;
+        if (Current.Kind == SyntaxKind.CommaToken)
+        {
+            commaToken = MatchToken(SyntaxKind.CommaToken);
+            valueType = ParseTypeClause();
+            closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        }
+        else
+        {
+            // Legacy `map[K]V` shape: consume the close-bracket, then the
+            // value type that follows, then point GS0366 at the whole span.
+            closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+            valueType = ParseTypeClause();
+
+            var legacySpan = TextSpan.FromBounds(mapKeyword.Span.Start, valueType.Span.End);
+            var legacyLocation = new TextLocation(syntaxTree.Text, legacySpan);
+            var keyText = syntaxTree.Text.ToString(keyType.Span);
+            var valueText = syntaxTree.Text.ToString(valueType.Span);
+            Diagnostics.ReportLegacyMapTypeClauseSyntax(legacyLocation, keyText, valueText);
+        }
+
         var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
-        return new TypeClauseSyntax(syntaxTree, mapKeyword, openBracket, keyType, closeBracket, valueType, question);
+        return new TypeClauseSyntax(
+            syntaxTree,
+            mapKeyword,
+            openBracket,
+            keyType,
+            commaToken,
+            valueType,
+            closeBracket,
+            question);
     }
 
     private TypeClauseSyntax ParseChanTypeClause()
@@ -4252,7 +4287,7 @@ public class Parser
     {
         // A binding clause is always followed by `=`; if we see `=` directly
         // there is no type annotation. Otherwise reuse the regular optional
-        // type-clause parser (which already handles `[]T`, `map[K]V`, `T?`,
+        // type-clause parser (which already handles `[]T`, `map[K,V]`, `T?`,
         // `chan T`, etc.).
         if (Current.Kind == SyntaxKind.EqualsToken)
         {
@@ -6080,7 +6115,7 @@ public class Parser
 
     private ExpressionSyntax ParseMapCreationExpression()
     {
-        // Phase 3.A.4: map literal `map[K]V{k1: v1, k2: v2, …}`.
+        // ADR-0104: map literal `map[K,V]{k1: v1, k2: v2, …}`.
         var typeClause = ParseMapTypeClause();
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
         var entries = ParseMapEntries();

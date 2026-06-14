@@ -24,12 +24,12 @@ Numeric operators are defined for matching primitive types; G# does not silently
 
 ## Arrays, slices, and maps
 
-Arrays have fixed length and are written `[N]T`. Slices are written `[]T` and are backed by CLR arrays in the current implementation. `append` returns a new array-backed value after copying. Maps are written `map[K]V` and are backed by `Dictionary<K,V>`.
+Arrays have fixed length and are written `[N]T`. Slices are written `[]T` and are backed by CLR arrays in the current implementation. `append` returns a new array-backed value after copying. Maps are written `map[K,V]` and are backed by `Dictionary<K,V>`.
 
 ```gsharp
 let numbers = []int32{1, 2, 3}
 let fixed = [3]int32{1, 2, 3}
-let names = map[int32]string{1: "one", 2: "two"}
+let names = map[int32,string]{1: "one", 2: "two"}
 ```
 
 Slice design rationale is in [ADR-0016](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0016-slice-storage.md).

@@ -265,7 +265,7 @@ public class Issue693DictionaryConstructionEmitTests
     [Fact]
     public void Regression_MapLiteralStillCompilesAndRuns()
     {
-        // Negative regression: G#'s `map[K]V{...}` literal syntax must
+        // Negative regression: G#'s `map[K,V]{...}` literal syntax must
         // continue to work alongside the multi-type-arg Dictionary
         // construction. The disambiguation only triggers on an
         // identifier-headed `[`, so the `map` keyword path is untouched.
@@ -274,7 +274,7 @@ public class Issue693DictionaryConstructionEmitTests
             import System
             import Gsharp.Extensions.Go
 
-            let m = map[string]int32 { "a": 1, "b": 2 }
+            let m = map[string,int32] { "a": 1, "b": 2 }
             Console.WriteLine(len(m))
             """;
 

@@ -3448,6 +3448,25 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports GS0366 — ADR-0104 / issue #805: the legacy Go-flavored
+    /// <c>map[K]V</c> type-clause spelling has been removed in v0.2. Maps
+    /// are now spelled <c>map[K,V]</c> with both type arguments inside the
+    /// brackets.
+    /// </summary>
+    /// <param name="location">The source location spanning the offending
+    /// <c>map[K]V</c> shape (from <c>map</c> through the value type).</param>
+    /// <param name="keyTypeText">The source text of the key type clause.</param>
+    /// <param name="valueTypeText">The source text of the value type clause.</param>
+    public void ReportLegacyMapTypeClauseSyntax(TextLocation location, string keyTypeText, string valueTypeText)
+    {
+        Report(
+            location,
+            "GS0366",
+            $"The 'map[K]V' type-clause spelling has been removed; use 'map[{keyTypeText},{valueTypeText}]' instead (ADR-0104).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Reports GS0330 — ADR-0089 / issue #755: <c>static let</c> inside an
     /// interface declaration is reserved for a future release. The minimal
     /// static-virtual interface members feature only accepts

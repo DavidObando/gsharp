@@ -699,7 +699,7 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitMapLiteral(BoundMapLiteralExpression literal)
     {
-        // Phase 3.A.4 emit: `map[K]V{k1: v1, ...}` lowers to
+        // ADR-0104 emit: `map[K,V]{k1: v1, ...}` lowers to
         // `newobj Dictionary<K,V>::.ctor()` then a (dup; key; value; callvirt set_Item)
         // sequence per entry. Using set_Item rather than Add so duplicate keys
         // overwrite (matching Go semantics; ParseMapEntries does not dedup).

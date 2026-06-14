@@ -118,7 +118,7 @@ public class Issue709NullCoalescingAssignmentEmitTests
             import System
 
             func main() {
-                var m = map[string]string?{}
+                var m = map[string,string?]{}
                 m["k"] = nil
                 m["k"] ??= "v"
                 Console.WriteLine(m["k"])

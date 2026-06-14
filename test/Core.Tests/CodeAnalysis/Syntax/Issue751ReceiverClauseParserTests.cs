@@ -12,7 +12,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 /// Parser-level coverage for issue #751 / ADR-0084 §L2: the receiver
 /// clause `func (recv RecvType) Name(...)` must accept the full type
 /// grammar — nullable spellings (`T?`), generic applications
-/// (`sequence[T]`, `map[K]V`), array+nullable combinations (`[]T?`),
+/// (`sequence[T]`, `map[K,V]`), array+nullable combinations (`[]T?`),
 /// tuple types (`(int32, T)`), and arbitrary nesting (`sequence[T]?`).
 /// Prior to the fix, <c>LooksLikeReceiverClause</c> only matched a
 /// bare identifier or `[N]T` / `[]T` and silently demoted the rest to
@@ -25,7 +25,7 @@ public class Issue751ReceiverClauseParserTests
     [InlineData("func (self sequence[T]) M[T]() { }", "M")]
     [InlineData("func (self sequence[T]?) M[T]() { }", "M")]
     [InlineData("func (self []T?) M[T]() { }", "M")]
-    [InlineData("func (self map[K]V) M[K, V]() { }", "M")]
+    [InlineData("func (self map[K,V]) M[K, V]() { }", "M")]
     [InlineData("func (self []T) M[T]() { }", "M")]
     [InlineData("func (self [3]int32) M() { }", "M")]
     [InlineData("func (self int32) M() { }", "M")]

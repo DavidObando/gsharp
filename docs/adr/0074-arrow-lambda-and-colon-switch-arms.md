@@ -218,7 +218,7 @@ Positive:
   per-pass changes.
 - Switch-expression arms now read like every other C-family case
   label: `case Pattern: value`.
-- `:` is consistent with G#'s existing uses (`map[K]V{k: v}`, named
+- `:` is consistent with G#'s existing uses (`map[K,V]{k: v}`, named
   arguments, label statements, `if let x: T?`) — programmers do not
   have to learn a new separator.
 - The deprecation window is observable through `GS0302`, so existing

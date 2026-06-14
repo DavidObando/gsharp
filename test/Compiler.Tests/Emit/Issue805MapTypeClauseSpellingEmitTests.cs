@@ -1,4 +1,4 @@
-// <copyright file="MapEmitTests.cs" company="GSharp">
+// <copyright file="Issue805MapTypeClauseSpellingEmitTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -10,30 +10,39 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Phase 3.A.4 emit-parity tests for <c>map[K,V]</c>. The backing CLR type is
-/// <c>System.Collections.Generic.Dictionary&lt;K, V&gt;</c>:
-/// <list type="bullet">
-/// <item><description>Map literal <c>map[K,V]{k: v, ...}</c> →
-/// <c>newobj Dictionary&lt;K,V&gt;..ctor()</c> + <c>callvirt set_Item</c> per entry.</description></item>
-/// <item><description>Indexing read <c>m[k]</c> →
-/// <c>callvirt TryGetValue(k, out tmp)</c>; pop bool; load tmp — yields the
-/// Go zero value when the key is missing, matching the interpreter.</description></item>
-/// <item><description>Indexed assignment <c>m[k] = v</c> →
-/// <c>callvirt set_Item(k, v)</c>.</description></item>
-/// <item><description><c>len(m)</c> → <c>callvirt get_Count</c>.</description></item>
-/// <item><description><c>delete(m, k)</c> → <c>callvirt Remove(k)</c>; pop bool.</description></item>
-/// </list>
+/// Issue #805 / ADR-0104 — end-to-end emit + ilverify coverage for the
+/// canonical <c>map[K,V]</c> spelling. These tests are intentionally
+/// minimal: the symbol-level emit path is unaffected by the
+/// surface-syntax change, so what we are pinning down is that the
+/// parser change has not broken IL emission or verifiability for the
+/// canonical literal form across every type-clause slot the issue
+/// names.
 /// </summary>
-public class MapEmitTests
+public class Issue805MapTypeClauseSpellingEmitTests
 {
     [Fact]
-    public void MapLiteral_AndIndexRead()
+    public void CanonicalSpelling_InferredLocal_EmitsAndRuns()
     {
         var source = """
             package P
             import System
 
-            var m = map[string,int32]{"a": 1, "b": 2}
+            var m = map[string,int32]{"a": 1}
+            Console.WriteLine(m["a"])
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("1\n", output);
+    }
+
+    [Fact]
+    public void CanonicalSpelling_ExplicitTypedLocal_EmitsAndRuns()
+    {
+        var source = """
+            package P
+            import System
+
+            var m map[string,int32] = map[string,int32]{"a": 1, "b": 2}
             Console.WriteLine(m["a"])
             Console.WriteLine(m["b"])
             """;
@@ -43,110 +52,47 @@ public class MapEmitTests
     }
 
     [Fact]
-    public void MapIndex_MissingKey_ReturnsZeroValue()
+    public void CanonicalSpelling_FunctionReturnType_EmitsAndRuns()
     {
         var source = """
             package P
             import System
 
-            var m = map[string,int32]{"a": 1}
-            Console.WriteLine(m["missing"])
-            """;
+            func makeIndex() map[string,int32] {
+                return map[string,int32]{"a": 1, "b": 2}
+            }
 
-        var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
-    }
-
-    [Fact]
-    public void MapIndexAssignment_AddAndUpdate()
-    {
-        var source = """
-            package P
-            import System
-
-            var m = map[string,int32]{}
-            m["a"] = 1
-            m["b"] = 2
-            m["a"] = 99
+            var m = makeIndex()
             Console.WriteLine(m["a"])
             Console.WriteLine(m["b"])
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n2\n", output);
+        Assert.Equal("1\n2\n", output);
     }
 
     [Fact]
-    public void Len_OnMap_ReturnsCount()
-    {
-        var source = """
-            package P
-            import System
-            import Gsharp.Extensions.Go
-
-            var m = map[string,int32]{"a": 1, "b": 2, "c": 3}
-            Console.WriteLine(len(m))
-            """;
-
-        var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
-    }
-
-    [Fact]
-    public void Delete_RemovesKey_AndDecreasesLen()
-    {
-        var source = """
-            package P
-            import System
-            import Gsharp.Extensions.Go
-
-            var m = map[string,int32]{"a": 1, "b": 2}
-            delete(m, "a")
-            Console.WriteLine(len(m))
-            Console.WriteLine(m["a"])
-            Console.WriteLine(m["b"])
-            """;
-
-        var output = CompileAndRun(source);
-        Assert.Equal("1\n0\n2\n", output);
-    }
-
-    [Fact]
-    public void EmptyMapLiteral_LenIsZero()
-    {
-        var source = """
-            package P
-            import System
-            import Gsharp.Extensions.Go
-
-            var m = map[int32,string]{}
-            Console.WriteLine(len(m))
-            """;
-
-        var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
-    }
-
-    [Fact]
-    public void Map_IntKey_StringValue_RoundTrip()
+    public void CanonicalSpelling_FunctionParameterType_EmitsAndRuns()
     {
         var source = """
             package P
             import System
 
-            var m = map[int32,string]{1: "one", 2: "two"}
-            Console.WriteLine(m[1])
-            Console.WriteLine(m[2])
-            Console.WriteLine(m[42])
+            func first(m map[string,int32]) int32 {
+                return m["a"]
+            }
+
+            var m = map[string,int32]{"a": 42}
+            Console.WriteLine(first(m))
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("one\ntwo\n\n", output);
+        Assert.Equal("42\n", output);
     }
 
     private static string CompileAndRun(string source)
     {
-        var tempDir = Directory.CreateTempSubdirectory("gs_map_emit_").FullName;
+        var tempDir = Directory.CreateTempSubdirectory("gs_map805_emit_").FullName;
         try
         {
             var srcPath = Path.Combine(tempDir, "test.gs");

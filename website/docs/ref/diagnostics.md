@@ -1436,3 +1436,55 @@ Cross-references:
 - Issues #799 (this feature), #792 (dogfooded `Optional`/`Sequences` port), #706 (parent tracker).
 
 
+## Map type-clause spelling removal (GS0366)
+
+ADR-0104 / issue #805. The legacy Go-flavored map type-clause spelling
+`map[K]V` (key inside the brackets, value outside) has been **removed**
+in v0.2. The canonical G# spelling is `map[K,V]` with both type
+arguments inside the brackets, separated by a comma — the same
+single-bracket / comma-separated shape every other multi-argument type
+clause already uses (`Foo[T1, T2]`, `Dictionary[K, V]`,
+`func(P1, P2) R`, `(K, V)` tuple). There is no deprecation window;
+the parser emits `GS0366` and the program does not compile.
+
+| Code | Severity | Message |
+|----|----------|-------------|
+| GS0366 | Error | The `map[K]V` type-clause spelling has been removed; use `map[{key},{value}]` instead (ADR-0104). |
+
+Cause/fix:
+
+- Replace every type-clause occurrence of `map[K]V` with `map[K,V]`.
+  The migration is purely syntactic — symbol identity, binding,
+  lowering, and emit are unaffected, and the runtime backing type
+  remains `System.Collections.Generic.Dictionary<K, V>`.
+
+```diff
+- var m = map[string]int32{"a": 1}
++ var m = map[string,int32]{"a": 1}
+
+- func makeIndex() map[string]Person { … }
++ func makeIndex() map[string,Person] { … }
+
+- func (self map[K]V) CountKeys() int32 { … }
++ func (self map[K,V]) CountKeys() int32 { … }
+```
+
+Map index/use sites are unchanged — only the **type-clause** spelling
+moves. `m["a"]`, `len(m)`, `delete(m, k)`, and the map literal entry
+form `{k: v, …}` are all unaffected.
+
+The parser still recognises the legacy shape long enough to emit a
+span-accurate diagnostic that quotes the exact replacement, so IDE
+quick-fixes can patch the whole construct in one edit. Mixed-form
+files produce one `GS0366` per legacy occurrence with **no cascade
+errors** — the parser binds the recovered shape to the same
+`MapTypeSymbol` so downstream binding proceeds unchanged.
+
+Cross-references:
+
+- ADR-0104 — map type clause canonical spelling.
+- ADR-0020 — Go-style `[T]` generic type-parameter brackets.
+- ADR-0040 — `sequence[T]` (the other contextual-keyword type clause).
+- Issues #805 (this change), #706 (parent tracker).
+
+

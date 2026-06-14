@@ -24,7 +24,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 /// lock that contract in at the parser layer.
 /// </para>
 /// <para>
-/// G#'s only map-literal syntax is <c>map[K]V{ k: v, … }</c> with the
+/// G#'s only map-literal syntax is <c>map[K,V]{ k: v, … }</c> with the
 /// explicit <c>map</c> keyword, so it cannot syntactically collide with
 /// <c>Dictionary[K, V]()</c>; the disambiguation that matters is the
 /// indexer/generic-call split, exercised here.
@@ -248,12 +248,12 @@ func run(m Dictionary[string, int32]) int32 {
     [Fact]
     public void MapLiteral_With_Map_Keyword_Still_Parses_As_MapCreation()
     {
-        // Negative regression: `map[K]V{ k: v, … }` (G#'s only map-literal
+        // Negative regression: `map[K,V]{ k: v, … }` (G#'s only map-literal
         // syntax) must continue to parse as a MapCreationExpression — the
         // multi-type-arg disambiguation only fires on identifier-headed
         // bracketed expressions, never after the `map` keyword.
         const string source = @"
-let m = map[string]int32 { ""a"": 1, ""b"": 2 }
+let m = map[string,int32] { ""a"": 1, ""b"": 2 }
 ";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);

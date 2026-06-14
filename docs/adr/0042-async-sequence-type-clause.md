@@ -48,7 +48,7 @@ let factory func() async sequence[int] = gen
 
 // Pointer pointee, map value, chan element, nullable wrap
 let opt async sequence[int]? = nil
-let m map[string]async sequence[int]
+let m map[string,async sequence[int]]
 ```
 
 All of the above resolve to the same `AsyncSequenceTypeSymbol` and therefore the same CLR type as the explicit `IAsyncEnumerable[T]` spelling and the ADR-0041 implicit-swap form.
@@ -67,7 +67,7 @@ All three produce identical IL and identical symbols. The implicit swap remains 
 
 ### Restriction: `async` is only valid before `sequence` in type-clause position
 
-`async` as a type-clause prefix is reserved for the iterator alias. `async map[K]V`, `async chan T`, `async []T`, `async *T`, etc. are explicitly rejected with a diagnostic. Generalizing the modifier to function-type clauses (`async func(P) R` ≡ `func(P) Task[R]`) is the subject of ADR-0043; this ADR leaves the door open without committing.
+`async` as a type-clause prefix is reserved for the iterator alias. `async map[K,V]`, `async chan T`, `async []T`, `async *T`, etc. are explicitly rejected with a diagnostic. Generalizing the modifier to function-type clauses (`async func(P) R` ≡ `func(P) Task[R]`) is the subject of ADR-0043; this ADR leaves the door open without committing.
 
 ## Consequences
 
@@ -80,7 +80,7 @@ Positive:
 
 Negative:
 
-- Introduces a *two-token* type-clause shape (`async sequence[T]`) — a small departure from GSharp's existing single-prefix type forms (`*T`, `[]T`, `chan T`, `sequence[T]`, `map[K]V`). Mitigation: the parallel with `async func` makes the shape immediately recognizable.
+- Introduces a *two-token* type-clause shape (`async sequence[T]`) — a small departure from GSharp's existing single-prefix type forms (`*T`, `[]T`, `chan T`, `sequence[T]`, `map[K,V]`). Mitigation: the parallel with `async func` makes the shape immediately recognizable.
 - Three legal spellings exist for the same async-iterator return type. Style guidance picks one canonical form; the language remains permissive.
 
 Neutral:
@@ -102,7 +102,7 @@ Rejected: the grammar change (single parser branch) is the same regardless of ho
 
 The status quo after ADR-0041. Rejected: the parameter/local/field asymmetry is visible in every consumer-side declaration and the implementation cost is small.
 
-### D. Generalize `async` to all type-clause prefixes in this ADR (`async map[K]V`, `async chan T`, etc.)
+### D. Generalize `async` to all type-clause prefixes in this ADR (`async map[K,V]`, `async chan T`, etc.)
 
 Rejected as overreach. None of the other forms have an existing BCL counterpart, and conflating the modifier across unrelated shapes would erode its meaning. Function-type clauses (`async func(P) R`) are tracked separately in ADR-0043.
 

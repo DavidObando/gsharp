@@ -17,7 +17,7 @@ Async iterators (`IAsyncEnumerable[T]`) are aspirational but blocked until sync 
 
 ### 1. Introduce `sequence[T]` as a type alias for `IEnumerable[T]`
 
-By analogy with `map[K]V` aliasing `Dictionary[K, V]` (Phase 3.A.4), `sequence[T]` is the GSharp-flavored spelling of `System.Collections.Generic.IEnumerable<T>`. Both forms are interchangeable in declarations, parameter types, return types, and assignments. At the CLR metadata level they are the same type — no wrapper, no indirection.
+By analogy with `map[K,V]` aliasing `Dictionary[K, V]` (Phase 3.A.4), `sequence[T]` is the GSharp-flavored spelling of `System.Collections.Generic.IEnumerable<T>`. Both forms are interchangeable in declarations, parameter types, return types, and assignments. At the CLR metadata level they are the same type — no wrapper, no indirection.
 
 The `sequence` keyword is contextual: it is recognized only in type-annotation position (before `[`), and remains a valid identifier elsewhere.
 
@@ -43,7 +43,7 @@ This slice does not implement `yield break`. The GSharp answer for early termina
 
 ### `sequence[T]` type
 
-Parses identically to `map[K]V`: the contextual keyword `sequence` followed by `[`, a type clause, and `]`. Example:
+Parses identically to `map[K,V]`: the contextual keyword `sequence` followed by `[`, a type clause, and `]`. Example:
 
 ```gsharp
 func fib(max: int) sequence[int] {

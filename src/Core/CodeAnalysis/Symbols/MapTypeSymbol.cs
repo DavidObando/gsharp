@@ -9,12 +9,13 @@ using System.Collections.Generic;
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
-/// Represents a Go-style map type <c>map[K]V</c>.
+/// Represents a G# map type <c>map[K,V]</c>.
 /// </summary>
 /// <remarks>
-/// Phase 3.A.4 — backing representation is the CLR
+/// ADR-0104 (supersedes Phase 3.A.4 Go-flavored <c>map[K]V</c>) — backing
+/// representation is the CLR
 /// <c>System.Collections.Generic.Dictionary&lt;K, V&gt;</c>. The literal
-/// form <c>map[K]V{k: v, …}</c> populates a freshly allocated dictionary;
+/// form <c>map[K,V]{k: v, …}</c> populates a freshly allocated dictionary;
 /// <c>m[k]</c> indexes it; the <c>delete(m, k)</c> built-in removes a
 /// key; <c>len(m)</c> returns <c>Count</c>. Instances are cached per
 /// <c>(K, V)</c> pair so identical map types compare by reference.
@@ -24,7 +25,7 @@ public sealed class MapTypeSymbol : TypeSymbol
     private static readonly ConcurrentDictionary<(TypeSymbol, TypeSymbol), MapTypeSymbol> Cache = new();
 
     private MapTypeSymbol(TypeSymbol keyType, TypeSymbol valueType)
-        : base($"map[{keyType.Name}]{valueType.Name}", MakeClrType(keyType, valueType))
+        : base($"map[{keyType.Name},{valueType.Name}]", MakeClrType(keyType, valueType))
     {
         KeyType = keyType;
         ValueType = valueType;
