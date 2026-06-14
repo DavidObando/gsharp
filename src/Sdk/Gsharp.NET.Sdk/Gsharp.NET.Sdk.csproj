@@ -51,7 +51,7 @@
   </ItemGroup>
 
   <!-- ADR-0084 §L5 / issue #806. The previous topology had this SDK
-       csproj reference Gsharp.Extensions.proj (Private="false"
+       csproj reference Gsharp.Extensions.csproj (Private="false"
        ReferenceOutputAssembly="false") to ensure Extensions was built
        before PackGsharpExtensions ran. That arrow has been REMOVED:
        Gsharp.Extensions now references this project (so it builds
@@ -115,7 +115,7 @@
   <Target Name="PackGsharpExtensions" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
     <PropertyGroup>
       <_GsharpCompilerProject>$(MSBuildThisFileDirectory)..\..\Compiler\Compiler.csproj</_GsharpCompilerProject>
-      <_GsharpExtensionsProject>$(MSBuildThisFileDirectory)..\Gsharp.Extensions\Gsharp.Extensions.proj</_GsharpExtensionsProject>
+      <_GsharpExtensionsProject>$(MSBuildThisFileDirectory)..\Gsharp.Extensions\Gsharp.Extensions.csproj</_GsharpExtensionsProject>
       <_GsharpExtensionsOutDir>$(IntermediateOutputPath)gsharp-extensions\</_GsharpExtensionsOutDir>
     </PropertyGroup>
     <!-- Gsharp.Extensions is built with the bootstrap SDK, which requires

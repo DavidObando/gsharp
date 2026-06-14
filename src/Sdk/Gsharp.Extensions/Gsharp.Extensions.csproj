@@ -90,7 +90,7 @@
 
   <!-- ProjectReference the in-tree Compiler + Gsharp.NET.Sdk projects so
        MSBuild walks the topology Compiler.csproj → Gsharp.NET.Sdk.csproj
-       → Gsharp.Extensions.proj when `dotnet build GSharp.sln` is run.
+       → Gsharp.Extensions.csproj when `dotnet build GSharp.sln` is run.
        The bootstrap targets resolve gsc.dll + BuildTask.dll from the
        in-tree out/bin/$(Configuration)/{Compiler,Gsharp.NET.Sdk}/
        directories at CoreCompile time; both inputs must exist before
