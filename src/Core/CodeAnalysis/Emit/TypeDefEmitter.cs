@@ -1045,6 +1045,13 @@ internal sealed class TypeDefEmitter
                     }
                 });
 
+        // ADR-0101 follow-up / issue #819: stamp `[ParamArrayAttribute]` on
+        // the trailing variadic primary-ctor parameter so C# / F# / VB
+        // consumers see `params` at the construction site. Adding Parameter
+        // rows here also gives every primary-ctor parameter a metadata name
+        // (parallel to the explicit `init(...)` emit path).
+        var firstParamHandle = this.AddPrimaryCtorParameterRows(parameters);
+
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
@@ -1052,7 +1059,7 @@ internal sealed class TypeDefEmitter
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
-            parameterList: this.nextParameterHandle());
+            parameterList: firstParamHandle);
     }
 
     /// <summary>
@@ -1090,6 +1097,13 @@ internal sealed class TypeDefEmitter
                     }
                 });
 
+        // ADR-0101 follow-up / issue #819: stamp `[ParamArrayAttribute]` on
+        // the trailing variadic primary-ctor parameter so C# / F# / VB
+        // consumers see `params` at the construction site. Adding Parameter
+        // rows here also gives every primary-ctor parameter a metadata name
+        // (parallel to the explicit `init(...)` emit path).
+        var firstParamHandle = this.AddPrimaryCtorParameterRows(parameters);
+
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
@@ -1097,7 +1111,45 @@ internal sealed class TypeDefEmitter
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
-            parameterList: this.nextParameterHandle());
+            parameterList: firstParamHandle);
+    }
+
+    /// <summary>
+    /// ADR-0101 follow-up / issue #819: emits one <c>Parameter</c> row per
+    /// primary-constructor parameter, giving each a metadata name and
+    /// stamping <c>[ParamArrayAttribute]</c> on the trailing variadic
+    /// parameter (when present). Returns the handle of the first emitted
+    /// row — or the next available row when the parameter list is empty —
+    /// suitable to feed into <c>AddMethodDefinition.parameterList</c>.
+    /// Primary-ctor parameters never carry <c>ref</c> / <c>out</c> / <c>in</c>
+    /// modifiers (the binder rejects those with <c>GS9032</c>), so this
+    /// helper does not stamp <see cref="ParameterAttributes.In"/> /
+    /// <see cref="ParameterAttributes.Out"/> or the
+    /// <c>IsReadOnlyAttribute</c> modreq.
+    /// </summary>
+    private ParameterHandle AddPrimaryCtorParameterRows(ImmutableArray<ParameterSymbol> parameters)
+    {
+        if (parameters.IsDefaultOrEmpty)
+        {
+            return this.nextParameterHandle();
+        }
+
+        var first = this.nextParameterHandle();
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var p = parameters[i];
+            var paramHandle = this.emitCtx.Metadata.AddParameter(
+                attributes: ParameterAttributes.None,
+                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
+                sequenceNumber: i + 1);
+
+            if (p.IsVariadic)
+            {
+                this.emitParamArrayAttributeOnParameter(paramHandle);
+            }
+        }
+
+        return first;
     }
 
     /// <summary>

@@ -151,7 +151,10 @@ let v = Tags()
   (initialisation default, mutability of the underlying array).
   The binder currently accepts the syntax on the primary-ctor path
   but call binding for primary ctors continues to follow the
-  fixed-arity rule. A follow-up may lift this.
+  fixed-arity rule. **Lifted in ADR-0103 (#819)**: the variadic
+  parameter promotes to a `[]T` auto-field with the same name and
+  call binding uses the same pack / pass-through dance as the
+  explicit-`init` form.
 
 #### 5. Lambdas (function-literal and arrow form)
 

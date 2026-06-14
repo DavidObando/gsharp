@@ -137,6 +137,14 @@ enum Result { Ok, Failed }
 
 Classes can have primary constructors, explicit `init` constructors, base clauses, fields, methods, properties, events, and `shared` static members. Base classes must be open to derive from; overriding uses `override`.
 
+A primary-constructor parameter list accepts a trailing variadic `name ...T` parameter (`class`, `struct`, `data class`, `data struct`, `inline struct`). The variadic param promotes to a `[]T` auto-field with the same name and call binding follows the standard variadic pack / pass-through rules. See [ADR-0103](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0103-primary-ctor-variadic.md).
+
+```gsharp
+class Tags(name string, tags ...string) { }
+
+let t = Tags("project", "a", "b", "c")   // t.tags is []string{"a", "b", "c"}
+```
+
 ## Properties, events, and static members
 
 Properties use contextual `prop` and may have accessors. Events use contextual `event` and may declare `add`, `remove`, and `raise` accessors. Static members live in a contextual `shared` block.
