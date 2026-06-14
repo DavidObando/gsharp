@@ -15,16 +15,20 @@ import type {Optional} from 'utility-types';
 function registerGSharp(Prism: typeof PrismNamespace): void {
   // Reserved keywords recognized by the lexer (SyntaxFacts.GetKeywordKind).
   const keywords =
-    /\b(?:async|await|break|case|catch|chan|class|const|continue|default|defer|else|enum|fallthrough|finally|for|func|go|goto|if|import|interface|internal|is|let|map|open|operator|override|package|private|public|range|return|scope|sealed|select|sequence|struct|switch|throw|try|type|using|var)\b/;
+    /\b(?:as|async|await|break|case|catch|chan|class|const|continue|default|defer|do|else|enum|fallthrough|finally|for|func|go|goto|guard|if|import|interface|internal|is|let|map|open|operator|override|package|private|public|range|return|scope|sealed|select|sequence|struct|switch|throw|try|type|using|var|while)\b/;
 
   // Contextual keywords: ordinary identifiers that act as keywords in context.
+  // `record` was removed in v0.2; the lexer still recognises it so the parser
+  // can emit the GS0307 migration diagnostic, so we keep it here for fidelity.
   const contextualKeywords =
-    /\b(?:record|data|inline|get|set|yield|in|out|where)\b/;
+    /\b(?:add|data|delegate|event|get|in|init|inline|make|nameof|out|prop|raise|record|remove|scoped|set|shared|typeof|when|where|with|yield)\b/;
 
   // Built-in primitive type names (TypeSymbol). Width-bearing names are
-  // canonical; there is intentionally no `int`/`long`/`byte` alias.
+  // canonical; friendly aliases (`int`, `long`, etc.) are accepted by the
+  // binder but resolve to the canonical names — we highlight both so source
+  // that uses either spelling renders consistently.
   const builtinTypes =
-    /\b(?:bool|uint8|int8|int16|uint16|int32|uint32|int64|uint64|nint|nuint|float32|float64|decimal|char|string|object|void)\b/;
+    /\b(?:bool|byte|char|decimal|double|float|float32|float64|int|int8|int16|int32|int64|long|nint|nuint|object|sbyte|short|string|uint|uint8|uint16|uint32|uint64|ulong|ushort|void)\b/;
 
   Prism.languages.gsharp = {
     comment: [
@@ -71,7 +75,7 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
       {
         // Type after declaration keywords.
         pattern:
-          /(\b(?:class|struct|enum|interface|record|type)\s+)[A-Za-z_]\w*/,
+          /(\b(?:class|struct|enum|interface|type)\s+)[A-Za-z_]\w*/,
         lookbehind: true,
       },
       {
@@ -98,7 +102,9 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
     // Function/attribute names at call/declaration sites.
     function: /\b[A-Za-z_]\w*(?=\s*[<(])/,
     operator:
-      /\+\+|--|<-|->|:=|&&|\|\||==|!=|<=|>=|<<|>>|\.\.\.|&\^|[+\-*/%&|^!<>=]=?|[~?:.]/,
+      // Order matters in Prism alternations — list multi-character operators
+      // first so they win over their single-character prefixes.
+      /\?\?=|\?\?|\?\.|\?\[|!!|\+\+|--|<-|->|=>|:=|&&|\|\||==|!=|<=|>=|<<=|>>=|<<|>>|\.\.\.|&\^|[+\-*/%&|^!<>=]=?|[~?:.]/,
     punctuation: /[{}[\];(),]/,
   };
 
