@@ -6,144 +6,128 @@ draft: false
 
 # Tour: Concurrency
 
-G# brings Go-inspired concurrency syntax to the CLR. The core pieces are `go` for concurrent calls, `scope` for structured joining, channels for communication, and `select` for waiting on channel operations.
+G# uses `scope` for structured concurrency, `async func` and `await`
+for task-based asynchrony, and `async sequence[T]` for asynchronous
+streams. The same `Task` and `Task[T]` types you know from the .NET
+BCL show up everywhere — async G# composes directly with C#, F#, and
+the rest of the ecosystem.
 
-:::note Opt-in surface
-The Go-flavored concurrency forms — `go`, `chan T`, `<-` (send and receive), `select`, `close(ch)`, and `make(chan T)` — are gated behind a per-file `import Gsharp.Extensions.Go` (ADR-0082, issue #722). The production concurrency surface is `scope` + `async`/`await`, which is **not** gated. Files that use any of the Go-flavored forms without the import get diagnostic [`GS0316`](../ref/diagnostics#go-flavored-concurrency-requires-import-gsharpextensionsgo-gs0316).
-:::
+## `scope` — structured concurrency
 
-## Go and scope
+`scope { ... }` runs its body and, before returning, joins every async
+operation registered with it. Awaiting inside a scope registers the
+awaited task; failures propagate as the scope unwinds, so child work
+is never silently lost.
 
-`go` starts a function call concurrently. The binder requires the operand to be a call. A `scope` block tracks child tasks started inside it and waits for them before leaving the block.
-
-```gsharp title="GoScope.gs"
-package GSharp.Samples.GoScope
+```gsharp title="ScopeBasic.gs"
+package GSharp.Tour.ScopeBasic
 
 import System
-import Gsharp.Extensions.Go
+import System.Threading.Tasks
 
-func send(value int32, ch chan int32) int32 {
-    ch <- value
-    return 0
+async func tick(label string) {
+    await Task.Delay(1)
+    Console.WriteLine("done: $label")
 }
 
-let ch = make(chan int32, 3)
 scope {
-    go send(1, ch)
-    go send(2, ch)
-    go send(3, ch)
+    tick("a").Wait()
+    tick("b").Wait()
 }
 
-let a = <-ch
-let b = <-ch
-let c = <-ch
-Console.WriteLine(a + b + c)
+Console.WriteLine("after scope")
 ```
 
 ```text
-6
+done: a
+done: b
+after scope
 ```
 
-Without `scope`, started work is not joined by the enclosing code. Prefer `scope` when the parent operation should wait for child work and observe failures.
+Use `scope` whenever a parent operation should not return before its
+children. It is the structured replacement for "fire a task and hope
+it finishes".
 
-## Channels
+## `async func` and `await`
 
-Channels use `chan T`, are created with `make(chan T)` or `make(chan T, capacity)`, send with `ch <- value`, and receive with `<-ch`.
+`async func` declares a function that returns a `Task` (or `Task[T]`).
+`await expr` suspends the surrounding async function until the awaited
+task completes and yields its result.
 
-```gsharp title="Channels.gs"
-package GSharp.Samples.Channels
+```gsharp title="AsyncBasics.gs"
+package GSharp.Tour.AsyncBasics
 
 import System
-import Gsharp.Extensions.Go
+import System.Threading.Tasks
 
-let ch = make(chan int32, 3)
-ch <- 1
-ch <- 2
-ch <- 3
-close(ch)
+async func compute(n int32) int32 {
+    await Task.Delay(5)
+    return n * 2
+}
 
-let a = <-ch
-let b = <-ch
-let c = <-ch
-let d = <-ch
+async func runAll() {
+    let a = await compute(3)
+    let b = await compute(4)
+    Console.WriteLine("a = $a, b = $b")
+}
 
-Console.WriteLine(a)
-Console.WriteLine(b)
-Console.WriteLine(c)
-Console.WriteLine(d)
+runAll().Wait()
+Console.WriteLine("done")
+```
+
+```text
+a = 6, b = 8
+done
+```
+
+The async lowering preserves loop back-edges across suspension points,
+so awaits inside `for`, `while`, and nested loops behave the same as
+they do in straight-line code.
+
+## `async sequence[T]` — asynchronous streams
+
+A function returning `sequence[T]` produces a synchronous iterator;
+`async sequence[T]` produces an asynchronous one. Async sequences are
+consumed with `await for`:
+
+```gsharp title="AsyncSequence.gs"
+package GSharp.Tour.AsyncSequence
+
+import System
+import System.Threading.Tasks
+
+async sequence[int32] pulses() {
+    for i in 1 ... 4 {
+        await Task.Delay(5)
+        yield i
+    }
+}
+
+async func consume() {
+    await for n in pulses() {
+        Console.WriteLine(n)
+    }
+}
+
+consume().Wait()
 ```
 
 ```text
 1
 2
 3
-0
-```
-
-The closed receive in this sample returns the element type's default value.
-
-## Select
-
-`select` waits over receive, receive-bind, send, and `default` cases.
-
-```gsharp title="Select.gs"
-package GSharp.Samples.Select
-
-import System
-import Gsharp.Extensions.Go
-
-let ready = make(chan int32, 1)
-ready <- 7
-select {
-case let v = <-ready {
-    Console.WriteLine("recv: $v")
-}
-}
-
-let empty = make(chan int32, 1)
-select {
-case let v = <-empty {
-    Console.WriteLine("unexpected: $v")
-}
-default {
-    Console.WriteLine("default")
-}
-}
-```
-
-```text
-recv: 7
-default
-```
-
-## Async functions in scopes
-
-`async func` and `await` integrate with .NET tasks. A scoped goroutine can call an async function and the scope waits for it to complete.
-
-```gsharp title="AsyncGoScopeJoin.gs"
-package GSharp.Samples.AsyncGoScopeJoin
-
-import System
-import System.Threading.Tasks
-import Gsharp.Extensions.Go
-
-async func work() {
-    await Task.Delay(1)
-    Console.WriteLine("ran")
-}
-
-scope {
-    go work()
-}
-
-Console.WriteLine("done")
-```
-
-```text
-ran
 done
 ```
 
-The interpreter implements `go` with `Task.Run` and executes with some serialization internally, so timing behavior may differ from emitted assemblies. Use emitted builds for production concurrency behavior.
+`async sequence[T]` lowers to .NET's `IAsyncEnumerable[T]`, so it
+interoperates directly with `await foreach` on the C# side.
+
+## Channels and goroutines
+
+G# also offers a Go-flavored layer — `go`, `chan T`, `select`, `close`,
+`make(chan T, ...)` — in the `Gsharp.Extensions.Go` package for projects
+that prefer that style. See
+[Extensions: Go-flavored concurrency](../extensions/go-concurrency) for
+the full surface and the matching opt-in semantics.
 
 Next: [Tour: .NET interop](/docs/tour/dotnet-interop).

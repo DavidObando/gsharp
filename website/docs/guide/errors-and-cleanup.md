@@ -39,7 +39,6 @@ Console.WriteLine(caught)
 
 Catch clauses name a local and may specify a type. Prefer specific exception types at library boundaries and reserve broad catches for top-level reporting or cleanup.
 
-Error-handling rationale is in [ADR-0005](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0005-error-handling.md).
 
 ## Nullable absence is not an exception
 
@@ -51,11 +50,11 @@ let display = user?.Name ?: "anonymous"
 
 ## Defer
 
-`defer call()` schedules a call to run when the current scope exits. The parser accepts an expression, but binding requires a call. Keep deferred calls short and side-effect focused, such as unlocking, closing, or logging.
+`defer call` schedules a call to run when the current scope exits. The parser accepts an expression, but binding requires a call. Keep deferred calls short and side-effect focused, such as unlocking, closing, or logging.
 
 ```gsharp
-lock.Enter()
-defer lock.Exit()
+lock.Enter
+defer lock.Exit
 ```
 
 ## Using
@@ -68,7 +67,6 @@ using let stream = File.OpenRead(path)
 
 Use `using` when a value owns an unmanaged or disposable resource. Use `defer` when the cleanup operation is not itself represented by an `IDisposable` value.
 
-The scope rules for `defer` and `using` are covered by [ADR-0030](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0030-defer-and-using-block-scope.md).
 
 ## Finally and structured cleanup
 

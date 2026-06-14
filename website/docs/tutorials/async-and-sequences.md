@@ -6,34 +6,21 @@ draft: false
 
 # Tutorial: Async and sequences
 
-In this tutorial, you will call .NET `Task` APIs from `async func`, await inside loops, and learn where sequences fit into the language model.
+In this tutorial, you will call .NET `Task` APIs from `async func`,
+`await` inside loops, and learn how `sequence[T]` and
+`async sequence[T]` fit into the language.
 
 ## Prerequisites
 
 - A working G# project.
-- Familiarity with `scope` and `go` from [Concurrency](./concurrency).
+- Familiarity with `scope` and `async func` from [Concurrency](./concurrency).
 
 ## 1. Write an async function
 
-An `async func` can await BCL tasks and return a value. A value return is surfaced as a `Task[T]` to callers:
+An `async func` returns a `Task` (or `Task[T]` for a value return). The
+body can `await` any `Task`/`Task[T]` from the .NET BCL:
 
 ```gsharp title="AsyncTask.gs"
-// file: aspirational/AsyncTask.gs
-//
-// Phase 5 exit sample. Pure async/await interoperating with the BCL `Task`
-// surface — `async func` declarations (5.1), `await` (5.1+5.2), and a top-level
-// `scope { go runAll() }` (5.7) to drive an async entry point synchronously
-// from a script-mode top level. `await Task.Delay(ms)` exercises BCL `Task`
-// interop directly. Equivalent shapes work with `Task<T>`-returning APIs
-// elsewhere in the BCL.
-//
-// HttpClient end-to-end interop (constructable imported types, instance member
-// access on imported instances) is a Phase-5 polish follow-up — tracked as an
-// open item in ADR-0022 §Consequences / coverage-matrix.md. This sample
-// demonstrates the *async/await* half of that exit criterion against
-// `Task.Delay`; once imported-type construction lands, the same shape applies
-// to `HttpClient.GetStringAsync`.
-
 package GSharp.Samples.AsyncTask
 
 import System
@@ -52,10 +39,7 @@ async func runAll() int32 {
     return 0
 }
 
-scope {
-    go runAll()
-}
-
+runAll().Wait()
 Console.WriteLine("done")
 ```
 
@@ -67,22 +51,16 @@ b = 8
 done
 ```
 
-The top-level script uses `scope { go runAll() }` to drive the async entry point and wait for it before printing `done`.
+Wrapping the call in `scope { runAll().Wait() }` would join the async
+work as part of the structured-concurrency block — useful when the
+parent operation owns child work that must complete first.
 
 ## 2. Return value types from async functions
 
-The compiler constructs the matching `Task[T]` return type for value-type results such as `int32`, `bool`, and `float64`:
+The compiler constructs the matching `Task[T]` return type for any
+value-typed result — `int32`, `bool`, `float64`, and so on:
 
 ```gsharp title="AsyncValueReturns.gs"
-// file: AsyncValueReturns.gs
-//
-// Regression coverage for issue #290: `async func`s whose kickoff returns a
-// VALUE type (so the synthesized return is `Task<T>` for a value `T`) must
-// build and run. The bug surfaced only on the SDK build path, where reference
-// assemblies are loaded through a MetadataLoadContext and `Task<T>` had to be
-// constructed with a type argument projected into that same context. This
-// sample exercises int32, bool, and float64 async returns end-to-end.
-
 package GSharp.Samples.AsyncValueReturns
 
 import System
@@ -113,10 +91,7 @@ async func driver() int32 {
     return i
 }
 
-scope {
-    go driver()
-}
-
+driver().Wait()
 Console.WriteLine("done")
 ```
 
@@ -131,18 +106,11 @@ done
 
 ## 3. Await inside loops
 
-The async lowering preserves loop back-edges across suspension points. A loop with one await per iteration runs every iteration:
+The async lowering preserves loop back-edges across suspension points,
+so awaits compose with `for`, `while`, multiple-await iterations, and
+nested loops without special handling:
 
 ```gsharp title="AsyncAwaitInLoop.gs"
-// file: AsyncAwaitInLoop.gs
-// Regression for issue #292: `await` inside a loop body must iterate the loop
-// the correct number of times. Previously a single `await` in a `for cond`
-// body caused the loop to run only once because the suspension/resume split
-// dropped the loop's condition-test back-edge. The async state-machine
-// lowering runs over the already-flattened (goto/label) loop form, so the
-// resume label sits between the body and the back-edge and every iteration
-// re-tests the condition. `Task.Delay` forces a real suspension on each pass.
-
 package GSharp.Samples.AsyncAwaitInLoop
 
 import System
@@ -173,12 +141,6 @@ done
 Multiple awaits in one iteration also resume correctly:
 
 ```gsharp title="AsyncMultiAwaitInLoop.gs"
-// file: AsyncMultiAwaitInLoop.gs
-// Regression for issue #292 (multi-await shape): two `await`s in a single loop
-// iteration previously produced a runtime InvalidProgramException because the
-// second suspension point's resume label/back-edge structure was malformed.
-// A counted `for` with two awaits per iteration locks in deterministic output.
-
 package GSharp.Samples.AsyncMultiAwaitInLoop
 
 import System
@@ -212,12 +174,6 @@ done
 Nested loops work the same way:
 
 ```gsharp title="AsyncAwaitInNestedLoop.gs"
-// file: AsyncAwaitInNestedLoop.gs
-// Regression for issue #292 (nested-loop shape): an `await` in the inner loop
-// body, with an additional `await` in the outer loop body, must iterate both
-// loops the correct number of times. Exercises multiple distinct resume states
-// whose resume labels sit inside two levels of flattened loop back-edges.
-
 package GSharp.Samples.AsyncAwaitInNestedLoop
 
 import System
@@ -251,9 +207,11 @@ i=1 j=1
 done
 ```
 
-## 4. Understand sequences
+## 4. Use `sequence[T]` for synchronous iterators
 
-G# has `sequence[T]` for synchronous iterators and `async sequence[T]` for async streams. Iterator functions return a sequence and use `yield`. Async streams are consumed with `await for x in stream`. (The legacy `await for x := range stream` Go-style spelling was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md).) The type-clause forms are part of the current grammar even when a specific sample focuses on async tasks rather than stream construction.
+A function declared to return `sequence[T]` uses `yield` to produce
+values lazily; the compiler emits a synchronous iterator that
+materializes each value on demand.
 
 ```gsharp
 func numbers() sequence[int32] {
@@ -261,14 +219,48 @@ func numbers() sequence[int32] {
     yield 2
     yield 3
 }
+
+for n in numbers() {
+    Console.WriteLine(n)
+}
 ```
 
-When you need .NET async APIs, use `async func` and `await`. When you need a lazy stream of values, use `sequence[T]` or `async sequence[T]`.
+## 5. Use `async sequence[T]` for async streams
+
+`async sequence[T]` is the asynchronous counterpart — it lowers to
+.NET's `IAsyncEnumerable[T]` and is consumed with `await for`:
+
+```gsharp
+import System
+import System.Threading.Tasks
+
+async sequence[int32] pulses() {
+    for i in 1 ... 4 {
+        await Task.Delay(5)
+        yield i
+    }
+}
+
+async func consume() {
+    await for n in pulses() {
+        Console.WriteLine(n)
+    }
+}
+
+consume().Wait()
+```
+
+When you need to call into .NET async APIs, use `async func` and
+`await`. When you want a lazy stream of values, use `sequence[T]`
+synchronously or `async sequence[T]` for asynchronous pulls.
 
 ## What you learned
 
 - `async func` integrates with .NET `Task` APIs.
-- `await` is a prefix expression inside async functions.
+- `await` is a prefix expression that suspends the surrounding async
+  function.
 - Async functions returning values surface as `Task[T]`.
-- Loop lowering preserves awaits in simple, multiple, and nested loop shapes.
-- Sequences use `yield`; async sequences use `await for` when consumed.
+- Loop lowering preserves awaits in simple, multiple, and nested loop
+  shapes — no special handling required.
+- Sequences use `yield`; async sequences are consumed with `await for`
+  and interoperate with `IAsyncEnumerable[T]`.

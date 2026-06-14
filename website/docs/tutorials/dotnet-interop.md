@@ -9,7 +9,7 @@ draft: false
 In this tutorial, you will import CLR namespaces, call constructors and methods, subscribe to events, pass delegates, use extension functions, and rely on operator overloads.
 
 :::note
-Passing G# func literals to imported CLR methods works on the compiler emit path, such as SDK builds or `gsc /out`. It does not work in the interpreter path used when `gsc` runs without `/out`.
+Passing G# lambdas to imported CLR methods works on the compiler emit path, such as SDK builds or `gsc /out`. It does not work in the interpreter path used when `gsc` runs without `/out`.
 :::
 
 ## Prerequisites
@@ -60,10 +60,7 @@ G# classes can inherit imported base classes and call base constructors:
 
 ```gsharp title="ImportedBaseClass.gs"
 // file: ImportedBaseClass.gs
-// Issue #296: a GSharp `class` can inherit from an IMPORTED (CLR) base class.
-// Previously `class X : SomeImportedType { }` reported GS0157
-// "Cannot find type" even though the type resolved for construction / static
-// use. This sample proves the full scenario end-to-end:
+// Demonstrates that a G# `class` can inherit from an imported CLR base class:
 //   * base-type name resolution against imported CLR types (simple + qualified)
 //   * the emitted class extends the imported base in metadata
 //   * base construction chains to the imported parameterless ctor
@@ -124,12 +121,9 @@ An extension function lowers to a CLR extension method. Static extension contain
 
 ```gsharp title="ExtensionFunctions.gs"
 // file: ExtensionFunctions.gs
-// Phase 3.B.6 / ADR-0019: extension functions. A Go-style receiver clause
-// `func (recv T) Name(args) ret { ... }` declares a function that is
-// invoked at the call site as if it were an instance method on the
-// receiver type. Extensions apply to types owned by another package, CLR
-// types, and primitives. Same-package user types now bind as methods with
-// receivers (Phase 6.4).
+// A receiver clause declares a function that is invoked at the call site as
+// if it were an instance method on the receiver type. Extensions apply to
+// types owned by another package, CLR types, and primitives.
 
 package GSharp.Example.ExtensionFunctions
 
@@ -164,11 +158,9 @@ Generic extension functions use bracket type parameters:
 
 ```gsharp title="GenericExtensionFunctions.gs"
 // file: GenericExtensionFunctions.gs
-// Issue #326: extension functions can declare type parameters. A Go-style
-// receiver clause `func (recv R) Name[T](args) ret { ... }` combines the
-// extension-function form (Phase 3.B.6 / ADR-0019) with generic type
-// parameters (Phase 4.1 / ADR-0020). Type arguments are resolved either by
-// inference from the call-site arguments or from an explicit `[T]` list.
+// Extension functions can declare type parameters. Type arguments are
+// resolved either by inference from the call-site arguments or from an
+// explicit `[T]` list.
 
 package GSharp.Example.GenericExtensionFunctions
 
@@ -214,11 +206,9 @@ You can also call imported LINQ extension methods from G#:
 
 ```gsharp title="LinqExtensions.gs"
 // file: LinqExtensions.gs
-// Issue #294: BCL/library [Extension] methods are callable with instance
-// ("receiver") syntax, e.g. `sequence.Where(pred)`, not only statically as
-// `Enumerable.Where(sequence, pred)`. System.Linq.Enumerable extension methods
-// over IEnumerable<T> exercise generic type inference from the receiver and
-// from the predicate/projection arguments.
+// BCL/library `[Extension]` methods are callable with instance syntax, such
+// as `sequence.Where(pred)`, not only statically as
+// `Enumerable.Where(sequence, pred)`.
 
 package GSharp.Example.LinqExtensions
 
@@ -235,19 +225,19 @@ list.Add(5)
 list.Add(6)
 
 // Single generic extension method, type inferred from the receiver.
-var evens = list.Where(func(x int32) bool { return x % 2 == 0 })
+var evens = list.Where((x int32) -> x % 2 == 0)
 for v in evens {
     Console.WriteLine(v)
 }
 
 // Chained generic extension methods: Where -> Select.
-var doubledEvens = list.Where(func(x int32) bool { return x % 2 == 0 }).Select(func(x int32) int32 { return x * 10 })
+var doubledEvens = list.Where((x int32) -> x % 2 == 0).Select((x int32) -> x * 10)
 for v in doubledEvens {
     Console.WriteLine(v)
 }
 
 // Terminal aggregate extension methods.
-Console.WriteLine(list.Where(func(x int32) bool { return x > 3 }).Count())
+Console.WriteLine(list.Where((x int32) -> x > 3).Count())
 Console.WriteLine(list.Sum())
 ```
 
@@ -271,7 +261,7 @@ Events use `+=` and `-=` with delegate-compatible handlers:
 ```gsharp title="EventSubscription.gs"
 // file: EventSubscription.gs
 // Stream B′ demo: subscribing to a CLR event with `+=` and unsubscribing
-// with `-=`. Function literals automatically materialize as the event's
+// with `-=`. Lambdas automatically materialize as the event's
 // declared delegate type when their signature matches.
 
 package GSharp.Example.EventSubscription
@@ -280,9 +270,7 @@ import System
 
 var domain = AppDomain.CurrentDomain
 
-domain.ProcessExit += func(sender Object, e EventArgs) {
-    Console.WriteLine("would only fire if not removed")
-}
+domain.ProcessExit += (sender Object, e EventArgs) -> { Console.WriteLine("would only fire if not removed") }
 
 Console.WriteLine("subscribed")
 ```
@@ -296,35 +284,31 @@ would only fire if not removed
 
 ## 5. Convert functions to delegates
 
-A G# func literal can convert to a delegate on the emit path:
+A G# lambda can convert to a delegate on the emit path:
 
 ```gsharp title="FuncToDelegate.gs"
 // file: FuncToDelegate.gs
 //
-// Issue #295 (related to #255): a GSharp function value converts to a
-// compatible CLR delegate type in ALL positions, not only as a direct call
-// argument. This sample exercises the previously-rejected assignment and
-// return positions (which used to fail with `error GS0155`), plus a
-// func-typed value adapted to a named delegate type. The resulting delegates
-// are invoked to prove the materialization is correct at runtime.
+// Demonstrates lambda-to-delegate conversion in return and assignment positions,
+// plus a function-typed value adapted to a named delegate type.
 
 package GSharp.Samples.FuncToDelegate
 
 import System
 
-// Return position: a factory that RETURNS a delegate built from a func literal.
+// Return position: a factory that returns a delegate built from a lambda.
 func makeDoubler() Func[int32, int32] {
-    return func(x int32) int32 { return x * 2 }
+    return (x int32) -> x * 2
 }
 
-// Assignment position: a func literal assigned to a named generic delegate.
-var isBig Predicate[int32] = func(x int32) bool { return x > 2 }
+// Assignment position: a lambda assigned to a named generic delegate.
+var isBig Predicate[int32] = (x int32) -> x > 2
 
-// Assignment position: a func literal assigned to a parameterless delegate.
-var greet Action = func() { Console.WriteLine("hello from Action") }
+// Assignment position: a lambda assigned to a parameterless delegate.
+var greet Action = () -> { Console.WriteLine("hello from Action") }
 
-// A func-typed value adapted to a named delegate type (delegate adaptation).
-var raw = func(x int32) int32 { return x + 100 }
+// A function-typed value adapted to a named delegate type (delegate adaptation).
+var raw = (x int32) -> x + 100
 var bump Func[int32, int32] = raw
 
 var doubler = makeDoubler()
@@ -351,24 +335,19 @@ System delegate types work too:
 ```gsharp title="FuncToSystemDelegate.gs"
 // file: FuncToSystemDelegate.gs
 //
-// Issue #323: a Func[...] (or native `(T) -> R`) value widens implicitly to
-// System.Delegate (the common base of every delegate). This used to fail with
-// `error GS0155`. Both forms are exercised:
-//   * the var form: a named/generic delegate value assigned to a Delegate slot
-//   * the lambda-literal form: a func literal assigned directly to a Delegate
-// The resulting System.Delegate values expose their target method, proving the
-// widening is a correct reference upcast at runtime.
+// A `Func[...]` (or native `(T) -> R`) value widens implicitly to
+// `System.Delegate`, the common base of every delegate.
 
 package GSharp.Samples.FuncToSystemDelegate
 
 import System
 
 // var form: a named generic delegate value widens to System.Delegate.
-var f Func[string] = func() string { return "hi" }
+var f Func[string] = () -> "hi"
 var d Delegate = f
 
-// lambda-literal form: a func literal assigned straight to a Delegate slot.
-var g Delegate = func() string { return "yo" }
+// lambda-literal form: a lambda assigned straight to a Delegate slot.
+var g Delegate = () -> "yo"
 
 Console.WriteLine(d.Method.Name)
 Console.WriteLine(g.Method.Name)
@@ -385,9 +364,9 @@ Method groups can convert to delegates, both for G# methods and CLR methods:
 
 ```gsharp title="MethodGroupToDelegate.gs"
 // file: MethodGroupToDelegate.gs
-// Issue #324: a named function used as a method group converts directly to a
-// delegate value, mirroring the C#/F# idiom. This sample exercises every
-// supported target shape: a generic `Func[...]`, the native `(...) -> R` type,
+// A named function used as a method group converts directly to a delegate
+// value, mirroring the C#/F# idiom. This sample exercises every supported
+// target shape: a generic `Func[...]`, the native `(...) -> R` type,
 // passing a method group as a callback argument, and an `Action[...]` (void
 // return). No lambda wrapping is required.
 
@@ -438,9 +417,9 @@ method groups work
 
 ```gsharp title="ClrMethodGroupToDelegate.gs"
 // file: ClrMethodGroupToDelegate.gs
-// Issue #337: a CLR member method group converts directly to a delegate value,
-// mirroring the named-function method-group support from #324/#332. This
-// sample exercises every supported shape:
+// A CLR member method group converts directly to a delegate value, mirroring
+// named-function method-group support. This sample exercises every supported
+// shape:
 //   * a static member group on an imported type (Console.WriteLine, Int32.Parse),
 //   * an instance member group that captures its receiver (StringBuilder.Append),
 //   * overload selection driven by the target delegate signature.
@@ -483,32 +462,29 @@ Delegate invocation uses normal call syntax:
 ```gsharp title="DelegateCallSyntax.gs"
 // file: DelegateCallSyntax.gs
 //
-// Issue #325: a variable whose type is a CLR delegate (e.g. `Func[...]`,
-// `Predicate[...]`, `Action`) is invocable with call syntax `f(x)`, exactly
-// like a native G# func-typed variable. Previously this required the explicit
-// `.Invoke(...)` form and `f(x)` failed with `GS0131: 'f' is not a function`.
-// Each delegate below is invoked through call syntax to prove the lowering to
-// `Invoke` is correct at runtime.
+// A variable whose type is a CLR delegate (e.g. `Func[...]`, `Predicate[...]`,
+// `Action`) is invocable with call syntax `f(x)`, exactly like a native G#
+// function-typed variable.
 
 package GSharp.Samples.DelegateCallSyntax
 
 import System
 
 // Generic Func delegate invoked via call syntax.
-var increment Func[int32, int32] = func(x int32) int32 { return x + 1 }
+var increment Func[int32, int32] = (x int32) -> x + 1
 Console.WriteLine(increment(41))
 
 // Two-argument Func delegate invoked via call syntax.
-var add Func[int32, int32, int32] = func(a int32, b int32) int32 { return a + b }
+var add Func[int32, int32, int32] = (a int32, b int32) -> a + b
 Console.WriteLine(add(20, 22))
 
 // Predicate delegate invoked via call syntax.
-var isBig Predicate[int32] = func(x int32) bool { return x > 2 }
+var isBig Predicate[int32] = (x int32) -> x > 2
 Console.WriteLine(isBig(5))
 Console.WriteLine(isBig(1))
 
 // Parameterless Action delegate invoked via call syntax.
-var greet Action = func() { Console.WriteLine("hello from Action") }
+var greet Action = () -> { Console.WriteLine("hello from Action") }
 greet()
 
 // Call syntax and Invoke produce the same result.
@@ -534,7 +510,6 @@ Imported CLR operators bind through ordinary G# operators:
 
 ```gsharp title="Operators.gs"
 // file: Operators.gs
-// Stream D / ADR-0035: receiver-form `operator` keyword on a GSharp struct.
 // Defines binary `+`, binary `==` / `!=`, and unary `-` on Vector2 and uses
 // them at call sites just like built-in operator syntax.
 package GSharp.Sample.Operators
@@ -588,19 +563,13 @@ True
 True
 ```
 
-Optional CLR arguments can be omitted at the call site. G# user-defined functions do not have default parameter values, but imported CLR metadata does:
+Optional CLR arguments can be omitted at the call site. G# user-defined functions can also declare compile-time-constant defaults, and imported CLR metadata exposes defaults too:
 
 ```gsharp title="OptionalExtensionArgs.gs"
 // file: OptionalExtensionArgs.gs
-// Issue #327: imported [Extension] methods with trailing optional/default
-// parameters are callable while omitting those arguments. Mirrors
-// HttpResponse.WriteAsync(text) — whose string-only overload has a
-// `CancellationToken cancellationToken = default` trailing parameter — using
-// the dependency-free System.Linq.Enumerable.CountBy<TSource,TKey>(
-//   this IEnumerable<TSource> source,
-//   Func<TSource,TKey> keySelector,
-//   IEqualityComparer<TKey> comparer = null)
-// extension, called with only the key selector (the optional comparer omitted).
+// Imported `[Extension]` methods with trailing optional/default parameters are
+// callable while omitting those arguments. This uses
+// `Enumerable.CountBy<TSource,TKey>` with only the key selector.
 
 package GSharp.Example.OptionalExtensionArgs
 
@@ -618,7 +587,7 @@ list.Add(6)
 
 // CountBy groups by the key selector; the optional comparer argument is
 // omitted, so it must resolve to the trailing-optional overload.
-var counts = list.CountBy(func(x int32) int32 { return x % 2 })
+var counts = list.CountBy((x int32) -> x % 2)
 for kv in counts {
     Console.WriteLine(kv.Key)
     Console.WriteLine(kv.Value)
@@ -638,5 +607,5 @@ Expected output:
 
 - Imports bind both G# packages and CLR namespaces.
 - Constructors, inheritance, properties, events, operators, and extension methods are available from CLR metadata.
-- G# function values and method groups can become delegates on the emit path.
-- Interpreter-only runs do not support passing G# func literals to imported CLR methods; use SDK builds or `gsc /out` for that scenario.
+- G# lambdas, function values, and method groups can become delegates on the emit path.
+- Interpreter-only runs do not support passing G# lambdas to imported CLR methods; use SDK builds or `gsc /out` for that scenario.

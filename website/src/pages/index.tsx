@@ -31,9 +31,11 @@ function HomepageHeader() {
             </Heading>
             <p className={styles.heroSubtitle}>{siteConfig.tagline}</p>
             <p className={styles.heroLede}>
-              G# blends Go&apos;s clarity — packages, <code>func</code>,
-              goroutines, channels and <code>defer</code> — with the .NET
-              runtime and its libraries. Source compiles directly to managed
+              G# brings Go-, Kotlin-, and Swift-style ergonomics —
+              packages, <code>func</code>, <code>data class</code>,
+              nullable handling with <code>if&nbsp;let</code>,
+              structured concurrency with <code>scope</code> — to the
+              .NET runtime. Source compiles directly to managed
               assemblies.
             </p>
             <div className={styles.buttons}>
@@ -65,7 +67,7 @@ export default function Home(): ReactNode {
   return (
     <Layout
       title={`${siteConfig.title} — ${siteConfig.tagline}`}
-      description="G# is a Go-inspired programming language that compiles to the .NET runtime.">
+      description="G# is a modern .NET language that brings Go, Kotlin, and Swift ergonomics to the CLR.">
       <HomepageHeader />
       <main>
         <HomepageFeatures />

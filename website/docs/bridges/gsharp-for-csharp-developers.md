@@ -6,7 +6,7 @@ draft: false
 
 # G# for C# developers
 
-G# is a .NET language with Go-inspired syntax. It emits CLR assemblies, imports CLR namespaces, and interoperates with C#, but it chooses packages, functions, structural data types, channels, and explicit width-bearing primitives.
+G# is a modern .NET language with concise syntax influenced by Go, Kotlin, and Swift. It emits CLR assemblies, imports CLR namespaces, and interoperates with C#, but it chooses packages, functions, structural data types, channels, and explicit width-bearing primitives.
 
 ## Quick comparison
 
@@ -16,30 +16,28 @@ G# is a .NET language with Go-inspired syntax. It emits CLR assemblies, imports 
 | `using System;` | `import System` | Imports bring CLR namespaces and G# packages into scope. |
 | `static void Main()` | top-level statements or `func Main()` | SDK projects synthesize an entry point; an explicit entry point is named `Main`. |
 | `void M()` | `func M()` | Functions can be package-level or members. |
-| method declaration in a class | class-body `func M()` (canonical) or `func (r Receiver) M()` for unowned types | Per [ADR-0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md), receiver clauses on owned types emit the `GS0314` warning — declare the method inside the class body instead. |
-| `int` | `int32` (canonical) or `int` (alias, ADR-0098) | The friendly `int` / `long` / `byte` / `float` aliases resolve to the canonical width-bearing names at the binder; canonical spellings are preferred in public APIs. |
-| `long` | `int64` (canonical) or `long` (alias, ADR-0098) | CLR signatures stay obvious in source. |
-| `var x = ...;` | `let x = ...` or `var x = ...` | `let` is immutable; `var` is mutable. (The short `x := ...` form was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md).) |
+| method declaration in a class | class-body `func M()` (canonical) or `func (r Receiver) M()` for unowned types | Receiver clauses on owned types emit the `GS0314` warning — declare the method inside the class body instead. |
+| `int` | `int32` (canonical) or `int` (alias) | The friendly `int` / `long` / `byte` / `float` aliases resolve to the canonical width-bearing names at the binder; canonical spellings are preferred in public APIs. |
+| `long` | `int64` (canonical) or `long` (alias) | CLR signatures stay obvious in source. |
+| `var x = ...;` | `let x = ...` or `var x = ...` | `let` is immutable; `var` is mutable. |
 | object initializer `new T { F = v }` | brace initializer `T{F: v}` | Data structs also offer `.copy(F: v)` and `with` copy/update. |
-| `record struct` | `data struct` | The `record` keyword was removed by ADR-0078; `data struct Name(...)` is the canonical spelling. |
-| `record class` | `data class` | Reference-typed record. |
+| structural value/reference aggregate | `data struct` / `data class` | Structural value or reference aggregates. |
 | `readonly struct CustomerId` | `inline struct CustomerId(value string)` | Inline structs are nominal single-field wrappers. |
 | `Task<T>` | `Task[T]` | Generic type arguments use brackets. |
 | `async Task<T>` | `async func ... T` | Await is available inside async functions. |
 | `IEnumerable<T>` iterator | `sequence[T]` with `yield` | Async streams use `async sequence[T]`. |
-| `lock` and tasks | `go`, `chan T`, `select`, `scope` | G# adds Go-shaped structured concurrency. |
+| `lock` and tasks | `go`, `chan T`, `select`, `scope` | G# adds structured concurrency over .NET tasks and channels. |
 | `using var` or `using (...)` | `using` and `defer` | Defer and using cleanup at block exit. |
-| `void M(int x = 0)` | `func M(x int32 = 0)` | G# functions support optional parameters with constant defaults (ADR-0063). |
-| `void M(int x, int y); void M(int x);` | overloads of `M(int32, int32)` / `M(int32)` | G# functions support overloading on parameter shape (ADR-0063); duplicates report `GS0264`. |
-| named arg `M(timeout: 30)` | `M(timeout: 30)` (legacy `M(timeout = 30)` deprecated, GS0315) | Named arguments at call sites for user functions, methods, constructors, extensions, and CLR methods. The `=` separator emits the `GS0315` warning ([ADR-0080](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0080-deprecate-equals-named-arguments.md)) and is removed in a later release. |
-| `ref int M(int[] a, int i)` | `func M(a []int32, i int32) ref int32` paired with `return ref a[i]` | Ref returns (ADR-0060 follow-up). |
+| `void M(int x = 0)` | `func M(x int32 = 0)` | G# functions support optional parameters with constant defaults. |
+| `void M(int x, int y); void M(int x);` | overloads of `M(int32, int32)` / `M(int32)` | G# functions support overloading on parameter shape; duplicates report `GS0264`. |
+| `ref int M(int[] a, int i)` | `func M(a []int32, i int32) ref int32` paired with `return ref a[i]` | Ref returns. |
 | `ref int local = ref arr[i]` | `let ref local = arr[i]` or `var ref local = arr[i]` | Ref-aliasing locals. |
-| `out int n` parameter / `M(out var n)` | `out n int32` / `M(out var n)` | Ref-kind parameters and inline `out` declarations (ADR-0060). |
-| `delegate void Handler(object sender)` | `type Handler = delegate func(sender Object)` | Named delegate types (ADR-0059). |
-| `cond ? a : b` | `cond ? a : b` | Ternary expression (ADR-0062). |
-| `/// <summary>…</summary>` XML doc | `/// summary text` Markdown doc | Markdown documentation comments round-trip to CLR XML (ADR-0057). |
-| lambda `x => x + 1` | `(x int32) -> x + 1` (or `func(x int32) int32 { return x + 1 }`) | Arrow lambdas (ADR-0074) and func literals are both valid; the arrow form is the canonical one-liner. |
-| extension method | `func (r Receiver) M()` on a non-owned `Receiver` | A receiver clause declares a CLR-visible extension method. The receiver type must be a type the package does not own ([ADR-0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md)). |
+| `out int n` parameter / `M(out var n)` | `out n int32` / `M(out var n)` | Ref-kind parameters and inline `out` declarations. |
+| `delegate void Handler(object sender)` | `type Handler = delegate func(sender Object)` | Named delegate types. |
+| `cond ? a : b` | `cond ? a : b` | Ternary expression. |
+| `/// <summary>…</summary>` XML doc | `/// summary text` Markdown doc | Markdown documentation comments round-trip to CLR XML. |
+| lambda `x => x + 1` | `(x int32) -> x + 1` | Arrow lambdas are the canonical lambda literal form. |
+| extension method | `func (r Receiver) M()` on a non-owned `Receiver` | A receiver clause declares a CLR-visible extension method. The receiver type must be a type the package does not own. |
 
 ## Packages replace namespaces in source
 
@@ -67,11 +65,11 @@ func add(a int32, b int32) int32 {
 
 ## Primitive names make CLR widths explicit
 
-C# source uses aliases such as `int` and `long`. G# canonical spellings are the width-bearing `int32`, `int64`, `uint32`, `float64`, and so on — that makes interop signatures visually match CLR metadata. ADR-0098 / issue #729 additionally accepts the C#-style aliases `int`, `uint`, `long`, `ulong`, `short`, `ushort`, `byte`, `sbyte`, `float`, and `double` as a strict superset; they resolve at the binder to the canonical type, so diagnostics and IL always print the width-bearing name. Prefer the canonical spellings in public library APIs and reach for the friendly aliases inside function bodies and local code where brevity helps reading.
+C# source uses aliases such as `int` and `long`. G# canonical spellings are the width-bearing `int32`, `int64`, `uint32`, `float64`, and so on — that makes interop signatures visually match CLR metadata. G# also accepts the C#-style aliases `int`, `uint`, `long`, `ulong`, `short`, `ushort`, `byte`, `sbyte`, `float`, and `double` as a strict superset; they resolve at the binder to the canonical type, so diagnostics and IL always print the width-bearing name. Prefer the canonical spellings in public library APIs and reach for the friendly aliases inside function bodies and local code where brevity helps reading.
 
 ## Defaults, named arguments, and overloading
 
-G# user functions support optional parameters with compile-time-constant defaults, named arguments at the call site, and overload sets — all introduced in ADR-0063 and complementary issues:
+G# user functions support optional parameters with compile-time-constant defaults, named arguments at the call site, and overload sets:
 
 ```gsharp
 func greet(name string = "world", excited bool = false) string {
@@ -79,7 +77,7 @@ func greet(name string = "world", excited bool = false) string {
 }
 
 // Default values: both optional.
-let a = greet()                      // "hi, world"
+let a = greet()                    // "hi, world"
 let b = greet("Ada")                 // "hi, Ada"
 
 // Named arguments: arrive in any order, skip leading defaults.
@@ -91,11 +89,11 @@ func area(width int32, height int32) int32 { return width * height }
 func area(side int32) int32                { return side * side }
 ```
 
-Imported CLR methods that expose `[Optional]` arguments work the same way G# defaults do, and CLR overload sets resolve identically. The legacy `name = value` named-argument form is deprecated in this release ([ADR-0080](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0080-deprecate-equals-named-arguments.md), `GS0315`) and removed in a later release; rewrite to `name: value` everywhere — including `.copy(...)` calls and attribute argument lists.
+Imported CLR methods that expose `[Optional]` arguments work the same way G# defaults do, and CLR overload sets resolve identically. Use the `name: value` spelling for named arguments, including `.copy(...)` calls and attribute argument lists; `GS0315` identifies the older separator form.
 
 ## Data shapes are richer than plain classes
 
-Use `class` for reference identity and inheritance. Use `struct` for value aggregates. Use `data class` or `data struct` for structural equality, copy/update, and deconstruction. Use `inline struct` when you want a nominal wrapper over one value. Use `sealed class` for a Kotlin-style closed hierarchy, and a payload-bearing `enum` for a discriminated union (ADR-0078).
+Use `class` for reference identity and inheritance. Use `struct` for value aggregates. Use `data class` or `data struct` for structural equality, copy/update, and deconstruction. Use `inline struct` when you want a nominal wrapper over one value. Use `sealed class` for a Kotlin-style closed hierarchy, and a payload-bearing `enum` for a discriminated union.
 
 ```gsharp
 data struct Point {
@@ -109,7 +107,7 @@ let moved = p.copy(X: 3)
 let (px, py) = p
 ```
 
-## Concurrency is Go-shaped and .NET-backed
+## Concurrency is structured and .NET-backed
 
 G# adds `go`, `chan T`, `select`, and `scope`. The lowering targets .NET tasks and channels, so code can coordinate with CLR async APIs while retaining concise channel syntax.
 
@@ -126,15 +124,15 @@ default {
 }
 ```
 
-## Lambdas are func literals
+## Lambdas use arrow syntax
 
-Lambdas are written as `func` literals with explicit parameter and return types, including delegate conversions on the emit path:
+Lambdas use arrow syntax, with delegate conversions on the emit path:
 
 ```gsharp
-let twice = func(x int32) int32 { return x * 2 }
+let twice = (x int32) -> x * 2
 ```
 
-Passing G# func literals to imported CLR methods is supported when you build through the SDK or `gsc /out`. The interpreter path does not support that conversion.
+Passing G# lambdas to imported CLR methods is supported when you build through the SDK or `gsc /out`. The interpreter path does not support that conversion.
 
 ## Where to go next
 

@@ -25,7 +25,7 @@ if n > 0 {
 }
 ```
 
-## `if` as a value (ADR-0064)
+## `if` as a value
 
 `if` can also sit in expression position. The form requires a terminal `else`, supports `else if` chains, and may use multi-statement blocks whose trailing expression is the branch value.
 
@@ -42,7 +42,7 @@ let title = if user.IsAdmin {
 
 The result type is the common type of all branch tails (same rule as the ternary `?:` operator). Missing the terminal `else` in value position reports `GS0276`; an empty block reports `GS0277`; branches with no common type report `GS0263`. The statement form is unchanged — `if cond { … }` (no else) still parses and behaves exactly as before.
 
-## `if let` and `guard let` — nullable bindings (ADR-0071)
+## `if let` and `guard let` — nullable bindings
 
 `if let name = expr { ... }` strips the nullable layer from a value and binds
 the underlying non-null view to `name` inside the then-branch. The companion
@@ -79,10 +79,9 @@ if let a = left, let b = right {
 The binding's initializer must have a nullable type (`T?`). The else-block of
 `guard let` must end in `return`, `throw`, `break`, or `continue` (or be a
 nested block whose last statement does the same). Inside the body, reads of
-the binding compose with the rest of the smart-cast machinery from
-[ADR-0069](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0069-smart-cast-flow-narrowing.md).
+the binding compose with the rest of the smart-cast machinery.
 
-## `??=` — null-coalescing compound assignment (ADR-0072)
+## `??=` — null-coalescing compound assignment
 
 `a ??= b` is the compound shorthand for *"if `a` is currently `nil`,
 evaluate `b` and write the result into `a`."* The right-hand side is
@@ -160,9 +159,7 @@ two
 2
 ```
 
-The legacy `for x := range values` Go-style spelling was removed by [ADR-0077](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0077-drop-colon-equals-short-variable-declaration.md); use the `for x in values` form everywhere.
-
-## While and do-while (ADR-0070)
+## While and do-while
 
 `while cond { ... }` evaluates `cond` first and runs the body while it is true.
 `do { ... } while cond` is the post-test variant: the body always runs at least
@@ -191,7 +188,7 @@ do {
 5
 ```
 
-## Labeled break and continue (ADR-0070)
+## Labeled break and continue
 
 Loops can be prefixed with a `label:` declaration. `break label` and
 `continue label` then jump out of (or to the next iteration of) the named
@@ -287,7 +284,7 @@ for n in nums {
 101 -> huge
 ```
 
-## Smart casts (flow narrowing) — ADR-0069 (+ issue #712 addendum)
+## Smart casts (flow narrowing)
 
 After a successful `is` (or `!is`) test against a local, parameter, or read-only top-level `let`, G# automatically narrows the receiver to the tested type for the rest of the flow region. No explicit `as`-cast is required.
 
@@ -341,6 +338,6 @@ func Describe(a Animal) string {
 }
 ```
 
-Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region. Fields, properties, and indexed expressions are never narrowed because their reads are not idempotent. See ADR-0069 (and its issue #712 addendum) for the full rules.
+Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region. Fields, properties, and indexed expressions are never narrowed because their reads are not idempotent.
 
 Next: [Tour: Concurrency](/docs/tour/concurrency).
