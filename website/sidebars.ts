@@ -45,8 +45,16 @@ const sidebars: SidebarsConfig = {
         'guide/declarations-and-packages',
         'guide/types-and-values',
         'guide/expressions-and-statements',
-        'guide/concurrency-async',
+        'guide/concurrency',
         'guide/errors-and-cleanup',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Extensions',
+      items: [
+        'extensions/go-concurrency',
+        'extensions/go-builtins',
       ],
     },
     {

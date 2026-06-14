@@ -6,183 +6,144 @@ draft: false
 
 # Tutorial: Concurrency
 
-In this tutorial, you will use G#'s Go-shaped concurrency surface: `go`, channels, `select`, and `scope`. The surface is Go-inspired, but it lowers to .NET tasks and `System.Threading.Channels`.
+In this tutorial, you will use G#'s always-available concurrency
+surface: `scope` for structured concurrency, `async func` and `await`
+for task-based asynchrony, and `async sequence[T]` for asynchronous
+streams.
+
+The Go-flavored layer — `go`, channels, and `select` — is an opt-in
+extension and lives in
+[Extensions: Go-flavored concurrency](../extensions/go-concurrency).
+Read that page when you specifically want goroutine-shaped code; this
+tutorial focuses on the surface that ships unannotated.
 
 ## Prerequisites
 
 - A working G# project.
 - Basic familiarity with functions and loops.
 
-## 1. Send and receive on a channel
+## 1. Run async work inside `scope`
 
-Create channels with `make(chan T)` or `make(chan T, capacity)`. Send with `ch <- value` and receive with `<-ch`:
+`scope { ... }` runs its body and waits for every async operation
+registered with it before returning. Awaiting inside a scope registers
+the awaited task — so unlike a bare `Task.Run` that you forget about,
+work inside a `scope` cannot silently outlive its parent.
 
-```gsharp title="Channels.gs"
-// file: Channels.gs
-//
-// Phase E exit sample. Exercises the channel emit path landed in this PR
-// without yet requiring goroutines (Phase F) or select (Phase G): create a
-// buffered channel, send values into it, drain them in source order, then
-// close it and observe the closed-channel default value via receive.
-
-package GSharp.Samples.Channels
+```gsharp title="ScopeBasic.gs"
+package GSharp.Tour.ScopeBasic
 
 import System
+import System.Threading.Tasks
 
-let ch = make(chan int32, 3)
-ch <- 1
-ch <- 2
-ch <- 3
-close(ch)
+async func tick(label string) {
+    await Task.Delay(1)
+    Console.WriteLine("done: $label")
+}
 
-let a = <-ch
-let b = <-ch
-let c = <-ch
-let d = <-ch
+scope {
+    tick("a").Wait()
+    tick("b").Wait()
+}
 
-Console.WriteLine(a)
-Console.WriteLine(b)
-Console.WriteLine(c)
-Console.WriteLine(d)
+Console.WriteLine("after scope")
 ```
 
 Expected output:
 
 ```text
-1
-2
-3
-0
+done: a
+done: b
+after scope
 ```
 
-Receiving from a closed, drained channel returns the element type's zero value.
+If `tick` throws, the exception propagates out of the scope and you can
+catch it (or let it bubble) just like any other exception.
 
-## 2. Join goroutines with `scope`
+## 2. Write an `async func`
 
-A `go` statement starts a function call concurrently. Inside `scope`, child tasks are registered and joined before control leaves the block:
+`async func` returns a `Task` (for `void`) or `Task[T]` (for a value
+return). Inside the body you can `await` any awaitable — most commonly
+a `Task` from the .NET BCL:
 
-```gsharp title="GoScope.gs"
-// file: GoScope.gs
-//
-// Phase F exit sample. Exercises emitted `go` statements registered with an
-// enclosing `scope`: each goroutine captures the shared buffered channel,
-// sends a value, and the scope waits before the main body drains the channel.
-
-package GSharp.Samples.GoScope
+```gsharp title="AsyncTask.gs"
+package GSharp.Samples.AsyncTask
 
 import System
+import System.Threading.Tasks
 
-func send(value int32, ch chan int32) int32 {
-    ch <- value
+async func compute(n int32) int32 {
+    await Task.Delay(5)
+    return n * 2
+}
+
+async func runAll() int32 {
+    let a = await compute(3)
+    let b = await compute(4)
+    Console.WriteLine("a = $a")
+    Console.WriteLine("b = $b")
     return 0
 }
 
-let ch = make(chan int32, 3)
-scope {
-    go send(1, ch)
-    go send(2, ch)
-    go send(3, ch)
-}
-
-let a = <-ch
-let b = <-ch
-let c = <-ch
-Console.WriteLine(a + b + c)
+runAll().Wait()
+Console.WriteLine("done")
 ```
 
 Expected output:
 
 ```text
-6
+a = 6
+b = 8
+done
 ```
 
-Use `scope` for structured concurrency. A free `go` outside `scope` is fire-and-forget and has a weaker exception story.
+`runAll` returns `Task[int32]` — the compiler constructs `Task[T]` for
+any value-typed result (`int32`, `bool`, `float64`, …) automatically.
 
-## 3. Select among channel operations
+## 3. Await inside loops
 
-`select` can receive, bind a received value, send, or run a `default` arm when nothing is ready:
+The async lowering preserves loop back-edges across suspension points,
+so a single `await` inside a loop iterates the loop the expected number
+of times:
 
-```gsharp title="Select.gs"
-// file: Select.gs
-//
-// Phase G exit sample. Exercises emitted select receive, send, default,
-// and blocking WhenAny retry paths deterministically.
-
-package GSharp.Samples.Select
+```gsharp title="AsyncAwaitInLoop.gs"
+package GSharp.Samples.AsyncAwaitInLoop
 
 import System
-import System.Threading
+import System.Threading.Tasks
 
-func delayedSend(ch chan int32) int32 {
-    Thread.Sleep(10)
-    ch <- 40
-    return 0
-}
-
-let ready = make(chan int32, 1)
-ready <- 7
-select {
-case let v = <-ready {
-    Console.WriteLine("recv: $v")
-}
-}
-
-let sendCh = make(chan int32, 1)
-select {
-case sendCh <- 11 {
-    Console.WriteLine("sent")
-}
-}
-let sentValue = <-sendCh
-Console.WriteLine(sentValue)
-
-let empty = make(chan int32, 1)
-select {
-case let v = <-empty {
-    Console.WriteLine("unexpected: $v")
-}
-default {
-    Console.WriteLine("default")
-}
-}
-
-let blocking = make(chan int32)
-scope {
-    go delayedSend(blocking)
-    select {
-    case let v = <-blocking {
-        Console.WriteLine("blocked: $v")
-    }
+async func loopy() {
+    var n = 0
+    for n < 3 {
+        await Task.Delay(1)
+        n = n + 1
+        Console.WriteLine("tick $n")
     }
 }
+
+loopy().Wait()
+Console.WriteLine("done")
 ```
 
 Expected output:
 
 ```text
-recv: 7
-sent
-11
-default
-blocked: 40
+tick 1
+tick 2
+tick 3
+done
 ```
 
-The implementation re-checks ready cases in source order after waiting, so deterministic samples can rely on preloaded channels.
+The same is true of multiple awaits in one iteration, and of nested
+loops with awaits at different levels. You can rely on it as a basic
+language guarantee.
 
-## 4. Join async work launched with `go`
+## 4. Combine `scope` with an async operation
 
-A scoped `go` can target an `async func`; the scope waits for the returned task:
+A `scope` can wrap any async-call site and become its join point. When
+the scope returns, the work has either completed or thrown.
 
-```gsharp title="AsyncGoScopeJoin.gs"
-// file: AsyncGoScopeJoin.gs
-//
-// Regression for #291: a `scope { go asyncFunc() }` must run the spawned async
-// task to completion (structured join) before the scope — and therefore the
-// trailing top-level statement — completes. Before the fix the go-thunk was
-// emitted as an `Action` that discarded the returned `Task`, so the scope never
-// awaited it and "ran" was never observed before "done".
-
-package GSharp.Samples.AsyncGoScopeJoin
+```gsharp title="ScopeAsync.gs"
+package GSharp.Tour.ScopeAsync
 
 import System
 import System.Threading.Tasks
@@ -193,7 +154,7 @@ async func work() {
 }
 
 scope {
-    go work()
+    work().Wait()
 }
 
 Console.WriteLine("done")
@@ -206,93 +167,24 @@ ran
 done
 ```
 
-## 5. Put the pieces together
+Combine `scope` with `using` to make resource lifetimes obvious:
 
-The `PortScan` sample combines scoped goroutines, buffered channels, a draining loop, and a timeout channel:
-
-```gsharp title="PortScan.gs"
-// file: aspirational/PortScan.gs
-//
-// Phase 5 exit sample. Combines the entire Go-shaped concurrency surface that
-// landed in Phase 5: `chan T` (5.4), send/receive (5.5), `go` (5.3), structured
-// concurrency `scope { ... }` (5.7), and a `select { ... }` with a timeout arm
-// (5.6) — all on the interpreter backend. The synthetic "scanner" assigns even
-// ports as open and odd ports as closed; the timeout demo prefers a pre-loaded
-// timeout channel over a worker that never sends.
-//
-// Lives under samples/aspirational/ because Phase 5 emit is deferred (ADR-0022
-// §Consequences). The matching test harness — AspirationalSamplesTests in
-// test/Core.Tests/LanguageConformance — runs this through the interpreter and
-// matches stdout against PortScan.golden.
-
-package GSharp.Samples.PortScan
-
-import System
-import System.Threading
-
-func scan(port int32, results chan int32) int32 {
-    Thread.Sleep(5)
-    if port % 2 == 0 {
-        results <- port
-    } else {
-        results <- 0
-    }
-    return 0
-}
-
-let results = make(chan int32, 4)
+```gsharp
 scope {
-    go scan(80, results)
-    go scan(81, results)
-    go scan(443, results)
-    go scan(8080, results)
-}
-
-// After the scope exits, all four results are buffered on `results`. Drain
-// them through a `select` with a single receive arm — exercises the source-
-// order TryRead path of the select algorithm without any racing.
-var opened = 0
-var i = 0
-for i < 4 {
-    select {
-    case let v = <-results {
-        if v > 0 {
-            opened = opened + 1
-        }
-    }
-    }
-    i = i + 1
-}
-Console.WriteLine("open ports: $opened")
-
-// Timeout demo: a slow worker that never arrives, raced against a buffered
-// "timeout" channel pre-loaded with a sentinel. The select picks the ready
-// arm deterministically (source order, TryRead succeeds first).
-let slow = make(chan int32, 1)
-let timeoutCh = make(chan int32, 1)
-timeoutCh <- 1
-select {
-case let v = <-slow {
-    Console.WriteLine("got value: $v")
-}
-case <-timeoutCh {
-    Console.WriteLine("timed out")
-}
+    using let stream = File.OpenRead(path)
+    let total = await ProcessAsync(stream)
+    Console.WriteLine("total: $total")
 }
 ```
-
-Expected output:
-
-```text
-open ports: 2
-timed out
-```
-
-This sample lives under the repository's aspirational samples because it documents the full concurrency story, including areas that originally shipped on the interpreter path before emit parity work.
 
 ## What you learned
 
-- Channels are typed as `chan T` and created with `make`.
-- `go f(args)` requires a call expression.
-- `scope` is the structured way to wait for spawned work and propagate failures.
-- `select` coordinates receive, send, and default cases.
+- `scope { ... }` is the structured-concurrency block: child async work
+  is joined before the scope returns, and failures propagate.
+- `async func` integrates with .NET `Task`/`Task[T]` APIs.
+- `await` is a prefix expression usable only inside async contexts.
+- Awaits compose with loops, nested loops, and ordinary control flow
+  with no special handling required.
+- The Go-flavored concurrency layer (`go`, channels, `select`) is an
+  opt-in extension — see
+  [Extensions: Go-flavored concurrency](../extensions/go-concurrency).
