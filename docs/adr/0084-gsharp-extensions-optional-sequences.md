@@ -440,14 +440,15 @@ of that migration, not left behind as dead code.
   The G#-source port of `Gsharp.Extensions.Sequences` itself
   remains deferred: the public API surface still requires `params`
   parameters on shared-class methods (variadic is currently
-  top-level-only per ADR-0101 / GS0146), `(K, V)` value-tuple
-  return shapes on extension methods (`Indexed` / `Pairwise`), and
-  `T?` overload disambiguation for the `*OrNil` reference-vs-value
-  splits — none of which were in scope for #810. The C# escape
+  top-level-only per ADR-0101 / GS0146), ~~`(K, V)` value-tuple
+  return shapes on extension methods (`Indexed` / `Pairwise`)~~
+  (closed by issue #813), and ~~`T?` overload disambiguation for
+  the `*OrNil` reference-vs-value splits~~ (closed by issue #814)
+  — neither of the latter two were in scope for #810. The C# escape
   hatch under `src/Sdk/Gsharp.Extensions/Sequences/` stays in
-  place for that follow-up; the emit fix unblocks anyone who wants
-  to author non-variadic, non-tuple G# iterators in their own
-  projects today.
+  place for the remaining `params` follow-up; the emit fix unblocks
+  anyone who wants to author non-variadic, non-tuple G# iterators
+  in their own projects today.
 
   Issue #813 closes the value-tuple return-shape gap left by #810.
   Iterators whose element type is a tuple — `func Indexed[T]()
@@ -490,6 +491,47 @@ of that migration, not left behind as dead code.
   return shapes), and
   `test/Interpreter.Tests/Issue813TupleSequenceReturnInterpreterTests.cs`
   for tree-walking parity at the closed instantiation.
+
+  Issue #814 closes the third remaining §L5 bullet: same-name
+  overload pairs that are distinguished *only* by `[T class]` vs
+  `[T struct]` constraints (the exact shape required by
+  `Sequences.FirstOrNil` / `LastOrNil` / `SingleOrNil`) now bind,
+  emit verifier-clean IL, and execute through both the compiler and
+  the interpreter. ADR-0088 (#750) added the constraint-aware
+  filter for *imported* methods and ADR-0097 (#775) gave G# the
+  syntactic spelling, but the emit side encoded `T?` as bare
+  `!!T` (so even with `T : class` the `ldnull` → `T` shape was
+  rejected by ilverify, and with `T : struct` the `Nullable<T>`
+  semantics were lost outright). The fix encodes
+  `NullableTypeSymbol(TypeParameterSymbol)` as
+  `GENERICINST Nullable<MVAR/VAR>` whenever the underlying TP
+  carries `HasValueTypeConstraint` (driving both `EncodeTypeSymbol`
+  and `GetElementTypeToken` to land on a `Nullable<!!T>` TypeSpec),
+  threads the `nil` → `Nullable<TP>` literal conversion through the
+  same `BoundDefaultExpression` lowering used for closed
+  nullables (so `EmitDefault` materialises a `ldloca; initobj`
+  pair instead of the unverifiable `ldnull`), and synthesises a
+  TypeSpec-parented `Nullable<!!T>::.ctor(!0)` MemberRef (cached
+  per open TP) so the value-type lift of a concrete `T` value into
+  `T?` resolves correctly under instantiation. The interpreter side
+  re-routes `MethodInfo.Invoke` / `PropertyInfo.GetValue` whenever
+  the literal declaring type is unassignable from the receiver's
+  runtime type — the lowered `for v in self` loop carries the
+  symbolic `IEnumerable<object>::GetEnumerator` MethodInfo, but
+  `int[]` does not implement `IEnumerable<object>` (CLR array
+  covariance is reference-only), so the new
+  `ResolveMethodForReceiver` / `ResolvePropertyOrFieldForReceiver`
+  helpers walk the receiver's generic interface map to find the
+  matching closed `IEnumerable<int>` / `IEnumerator<int>` member.
+  Coverage:
+  `test/Core.Tests/CodeAnalysis/Binding/Issue814OrNilOverloadTests.cs`
+  for the binder + interpreter (eight tests covering both `class`
+  and `struct` resolution across all three `*OrNil` helpers,
+  diagnostic for unconstrained call sites, and end-to-end
+  tree-walking execution), and
+  `test/Compiler.Tests/Emit/Issue814OrNilOverloadEmitTests.cs`
+  for the IL-verified emit path (eight tests, all `IlVerifier.Verify`
+  clean).
 
 ## Consequences
 

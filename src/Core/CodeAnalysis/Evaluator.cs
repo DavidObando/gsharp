@@ -1517,12 +1517,61 @@ public sealed class Evaluator
             return fieldValue;
         }
 
-        return node.Member switch
+        // Issue #814 / ADR-0084 §L5: mirror ResolveMethodForReceiver for
+        // PropertyInfo. `IEnumerator<object>::Current` access against a
+        // value-type-element enumerator (e.g. `SZGenericArrayEnumerator<int>`
+        // from `int[].GetEnumerator()`) fails because the receiver doesn't
+        // implement `IEnumerator<object>`. Route through the matching
+        // closed-generic interface on the receiver's runtime type.
+        var member = ResolvePropertyOrFieldForReceiver(node.Member, receiver);
+
+        return member switch
         {
             System.Reflection.PropertyInfo p => p.GetValue(receiver),
             System.Reflection.FieldInfo f => f.GetValue(receiver),
             _ => throw new EvaluatorException($"Unsupported CLR member kind '{node.Member.MemberType}'.", node),
         };
+    }
+
+    private static System.Reflection.MemberInfo ResolvePropertyOrFieldForReceiver(System.Reflection.MemberInfo member, object receiver)
+    {
+        if (receiver == null || member == null)
+        {
+            return member;
+        }
+
+        var declaring = member.DeclaringType;
+        if (declaring == null || declaring.IsAssignableFrom(receiver.GetType()))
+        {
+            return member;
+        }
+
+        var receiverType = receiver.GetType();
+
+        if (declaring.IsGenericType)
+        {
+            var openDecl = declaring.GetGenericTypeDefinition();
+            foreach (var iface in receiverType.GetInterfaces())
+            {
+                if (!iface.IsGenericType || iface.GetGenericTypeDefinition() != openDecl)
+                {
+                    continue;
+                }
+
+                System.Reflection.MemberInfo candidate = member.MemberType switch
+                {
+                    System.Reflection.MemberTypes.Property => iface.GetProperty(member.Name),
+                    System.Reflection.MemberTypes.Field => iface.GetField(member.Name),
+                    _ => null,
+                };
+                if (candidate != null)
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return member;
     }
 
     // Issue #517: matches `Nullable<T>::get_Value` / `get_HasValue` against
@@ -3558,9 +3607,91 @@ public sealed class Evaluator
         var args = new object[node.Arguments.Length];
         var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
 
-        var result = node.Method.Invoke(receiver, args);
+        var method = ResolveMethodForReceiver(node.Method, receiver);
+
+        var result = method.Invoke(receiver, args);
         WriteBackRefSlots(refSlots, args);
         return result;
+    }
+
+    // Issue #814 / ADR-0084 §L5: when an open generic extension method is
+    // invoked through the interpreter (e.g. `arr.FirstOrNil()` against an
+    // `int[]`), the lowered `for v in self` loop carries a
+    // `System.Collections.Generic.IEnumerable<object>::GetEnumerator`
+    // MethodInfo because the binder/lowerer routes through the symbolic
+    // open shape. `MethodInfo.Invoke` against an `int[]` receiver then fails
+    // because `int[]` does not implement `IEnumerable<object>` (CLR array
+    // covariance is reference-only). Re-route through the matching closed
+    // generic interface on the receiver's runtime type when the literal
+    // declaring type is unassignable but a sibling closed instantiation is.
+    // The lookup also walks inherited interfaces (e.g. `MoveNext` lives on
+    // the non-generic `IEnumerator` even when the receiver is reached via
+    // `IEnumerator<T>`).
+    private static System.Reflection.MethodInfo ResolveMethodForReceiver(System.Reflection.MethodInfo method, object receiver)
+    {
+        if (receiver == null || method == null)
+        {
+            return method;
+        }
+
+        var declaring = method.DeclaringType;
+        if (declaring == null || declaring.IsAssignableFrom(receiver.GetType()))
+        {
+            return method;
+        }
+
+        var receiverType = receiver.GetType();
+        var paramTypes = System.Array.ConvertAll(method.GetParameters(), p => p.ParameterType);
+
+        if (declaring.IsGenericType)
+        {
+            var openDecl = declaring.GetGenericTypeDefinition();
+            foreach (var iface in receiverType.GetInterfaces())
+            {
+                if (!iface.IsGenericType || iface.GetGenericTypeDefinition() != openDecl)
+                {
+                    continue;
+                }
+
+                var candidate = iface.GetMethod(
+                    method.Name,
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                    binder: null,
+                    types: paramTypes,
+                    modifiers: null);
+                if (candidate != null)
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        // Fall-back search: the method (e.g. `MoveNext`) may live on a
+        // parent non-generic interface that the receiver also implements.
+        // Find it by name+arity across every interface and the receiver
+        // type itself; this works for `IEnumerator::MoveNext` reached via
+        // `IEnumerator<int>` and similar inheritance.
+        foreach (var iface in receiverType.GetInterfaces())
+        {
+            var candidate = iface.GetMethod(
+                method.Name,
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                binder: null,
+                types: paramTypes,
+                modifiers: null);
+            if (candidate != null)
+            {
+                return candidate;
+            }
+        }
+
+        var direct = receiverType.GetMethod(
+            method.Name,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+            binder: null,
+            types: paramTypes,
+            modifiers: null);
+        return direct ?? method;
     }
 
     // Issue #517: `GetValueOrDefault()` and `GetValueOrDefault(T)` against the
