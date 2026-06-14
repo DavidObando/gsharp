@@ -1,45 +1,158 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project>
 
   <!--
-    ADR-0082 / issue #722. The Gsharp.Extensions assembly is the single
-    physical .dll that backs every `import Gsharp.Extensions.<X>` namespace:
+    ADR-0084 §L5 / issue #806. The Gsharp.Extensions assembly is now
+    authored in idiomatic G# (`.gs`) and built with the bootstrap SDK
+    landed in issue #792 / PR #793. The bootstrap is a build-time-only
+    mirror of Gsharp.NET.Sdk that compiles `.gs` sources against the
+    in-tree gsc.dll + BuildTask.dll WITHOUT auto-referencing
+    `Gsharp.Extensions.dll` (that auto-reference is exactly the cycle
+    the bootstrap exists to break: an assembly cannot reference itself
+    while being built).
 
+    Layout:
       * Gsharp.Extensions.Go         — gates Go-flavored concurrency
-                                       (this PR / #722) and, in a follow-up,
-                                       Go-style built-ins (#723).
-      * Gsharp.Extensions.Optional   — Option/Result helpers (#724).
-      * Gsharp.Extensions.Sequences  — LINQ-shaped sequence helpers (#724).
+                                       (legacy C# marker, see Go/).
+      * Gsharp.Extensions.Optional   — G# Option helpers (Optional/).
+      * Gsharp.Extensions.Sequences  — G# Sequence helpers (Sequences/).
 
-    The assembly is bundled inside the Gsharp.NET.Sdk NuGet (Pack target in
-    Gsharp.NET.Sdk.csproj) under tools/extensions/ and is auto-referenced
-    from Sdk/Sdk.props so consumer .gsproj projects do not need an explicit
-    <PackageReference>. The import statement is what gates use — the
-    project reference is an implementation detail mirroring the implicit
-    mscorlib reference (see build/Gsharp.NET.Core.Sdk.targets).
+    Gsharp.NET.Sdk pulls the compiled .dll into its tools/extensions/
+    subtree at pack time; consumer .gsproj projects get the assembly
+    auto-referenced from build/Gsharp.NET.Sdk.props.
+
+    NOTE: This file keeps the `.csproj` extension (rather than `.gsproj`)
+    so existing tooling — GSharp.sln, the `PackGsharpExtensions` target
+    in Gsharp.NET.Sdk.csproj, and the `test/Extensions.Tests` project
+    reference — continues to resolve without further changes. The
+    project format is project-extension-agnostic; what matters is the
+    body. We swap the C# pipeline for the G# bootstrap by overriding
+    the Language and CoreCompile target below.
   -->
 
   <PropertyGroup>
+    <Language>Gsharp</Language>
+    <DefaultLanguageSourceExtension>.gs</DefaultLanguageSourceExtension>
+
+    <!-- The repo's build/gsharp.build.props pins OutputPath to
+         $(OutRoot)/bin/$(Configuration)/$(MSBuildProjectName) and
+         AssemblyName to GSharp.$(MSBuildProjectName). We override
+         AssemblyName below to match ADR-0082's promised on-disk name
+         (Gsharp.Extensions.dll, not GSharp.Gsharp.Extensions.dll). -->
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Gsharp.Extensions</RootNamespace>
     <AssemblyName>Gsharp.Extensions</AssemblyName>
 
-    <!-- Library only: not packed as its own NuGet. Gsharp.NET.Sdk pulls the
-         compiled .dll into its tools/extensions/ subtree. -->
+    <!-- Library only: not packed as its own NuGet. Gsharp.NET.Sdk
+         pulls the compiled .dll into its tools/extensions/ subtree. -->
     <IsPackable>false</IsPackable>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <OutputType>Library</OutputType>
 
-    <!-- The pinned build infrastructure (build/gsharp.build.props) defaults
-         AssemblyName to GSharp.$(MSBuildProjectName); we override above so
-         the on-disk file is Gsharp.Extensions.dll as documented in ADR-0082.
-         Likewise force the XML doc file under the canonical assembly name. -->
+    <!-- Force the XML doc file under the canonical assembly name (the
+         shared build/gsharp.build.props default uses
+         GSharp.$(MSBuildProjectName)). -->
     <DocumentationFile>$(OutputPath)/$(AssemblyName).xml</DocumentationFile>
 
-    <!-- ADR-0084 / issue #724. The Optional helpers in
-         Gsharp.Extensions.Optional are typed against `T?` on both
-         reference- and value-type receivers. Opt this assembly into the
-         nullable-annotation context so the `T?` spelling resolves and so
-         the surface accurately advertises which slots accept nil. -->
-    <Nullable>enable</Nullable>
+    <!-- The bootstrap targets resolve gsc + BuildTask from the in-tree
+         out/bin/$(Configuration)/{Compiler,Gsharp.NET.Sdk}/ directories.
+         Force a deterministic build so dogfood-built Extensions.dll is
+         byte-identical across runs. -->
+    <Deterministic>true</Deterministic>
+
+    <!-- The repo-wide build/gsharp.build.props enables StyleCop for
+         every non-test C# project. StyleCop has no analyzers for `.gs`,
+         so suppress its rule set + bundle injection here to avoid
+         spurious warnings (and so `dotnet build` doesn't fail on
+         TreatWarningsAsErrors when StyleCop reports on the now-empty
+         C# source set). -->
+    <NoWarn>$(NoWarn);SA0001</NoWarn>
+    <RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>
+    <RunAnalyzers>false</RunAnalyzers>
+
+    <!-- Don't emit a synthetic AssemblyInfo.cs into the `.gs`
+         compilation; the G# compiler doesn't read it. The bootstrap
+         BuildTask injects assembly-level attributes through gsc's own
+         CLI surface where needed. Likewise suppress the
+         Nerdbank.GitVersioning version-attribute injection (it appends
+         a generated `.cs` file to @(Compile) which the G# parser
+         rejects). -->
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateAssemblyVersionInfo>false</GenerateAssemblyVersionInfo>
+
+    <!-- Microsoft.NET.Sdk's `ImplicitUsings=enable` (defaulted on by
+         build/gsharp.build.props) emits a `GlobalUsings.g.cs` into
+         @(Compile). G# has its own `import` machinery and doesn't
+         consume C# global usings; opt out so the file isn't generated. -->
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+
+  <!-- ProjectReference the in-tree Compiler + Gsharp.NET.Sdk projects so
+       MSBuild walks the topology Compiler.csproj → Gsharp.NET.Sdk.csproj
+       → Gsharp.Extensions.csproj when `dotnet build GSharp.sln` is run.
+       The bootstrap targets resolve gsc.dll + BuildTask.dll from the
+       in-tree out/bin/$(Configuration)/{Compiler,Gsharp.NET.Sdk}/
+       directories at CoreCompile time; both inputs must exist before
+       Extensions builds.
+
+       The previous topology had Gsharp.NET.Sdk → Gsharp.Extensions for
+       pack-time ordering; that reverse arrow has been removed from the
+       SDK csproj as part of ADR-0084 §L5 / issue #806 (see the comment
+       there) so this forward arrow can exist without creating a cycle.
+
+       ReferenceOutputAssembly="false" keeps these references build-only
+       (the Compiler and BuildTask are toolchain, not runtime deps). -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\Compiler\Compiler.csproj"
+                      Private="false"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="..\Gsharp.NET.Sdk\Gsharp.NET.Sdk.csproj"
+                      Private="false"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+
+  <!-- Reset @(Compile) to only `.gs` files. Microsoft.NET.Sdk adds
+       `**\*.cs` to @(Compile) by default — and downstream targets
+       (Nerdbank.GitVersioning, ImplicitUsings, AssemblyInfo) inject
+       additional generated `.cs` files into the item set during target
+       execution. None of those are consumable by gsc, so we strip
+       them all and rebuild @(Compile) from scratch with just our
+       `.gs` sources, running BeforeTargets="CoreCompile" so the
+       cleanup catches even the late target-injected items. -->
+  <Target Name="_GsharpExtensionsResetCompileItems" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <Compile Remove="@(Compile)" />
+      <Compile Include="$(MSBuildProjectDirectory)\**\*.gs"
+               Exclude="$(MSBuildProjectDirectory)\bin\**\*.gs;$(MSBuildProjectDirectory)\obj\**\*.gs" />
+    </ItemGroup>
+  </Target>
+
+  <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.props" />
+  <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.targets" />
+  <Import Project="..\Gsharp.NET.Sdk.Bootstrap\build\Gsharp.NET.Sdk.Bootstrap.targets" />
+
+  <!-- Override AssemblyName / TargetName / TargetFileName AFTER all SDK
+       imports. build/gsharp.build.props (auto-imported via the root
+       Directory.Build.props) sets `<AssemblyName>GSharp.$(MSBuildProjectName)</AssemblyName>`
+       so consumers see `GSharp.Gsharp.Extensions.dll`; ADR-0082 / issue
+       #806 promises the on-disk name `Gsharp.Extensions.dll` (the SDK
+       pack target also bakes that exact name into its
+       `tools/extensions/` payload). We post-process the property here
+       so we win over any prior assignment ordering. -->
+  <PropertyGroup>
+    <AssemblyName>Gsharp.Extensions</AssemblyName>
+    <TargetName>$(AssemblyName)</TargetName>
+    <!-- TargetFileName is computed once during evaluation as
+         `$(TargetName)$(TargetExt)` and then condition-guarded, so a
+         second pass through Microsoft.Common.CurrentVersion.targets
+         won't refresh it when we change AssemblyName here. Recompute
+         explicitly so consuming projects (Interpreter.Tests,
+         Extensions.Tests) see the correct on-disk file name when they
+         resolve our ProjectReference. -->
+    <TargetFileName>$(TargetName)$(TargetExt)</TargetFileName>
+    <TargetPath>$(OutputPath)$(TargetFileName)</TargetPath>
   </PropertyGroup>
 
 </Project>
+
