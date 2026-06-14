@@ -190,6 +190,19 @@ public sealed class ImportedClassSymbol : Symbol
                     // Issue #661: Nullable<UserEnum> — map to Nullable<int>.
                     t = typeof(int?);
                 }
+                else if (MemberLookup.TryProjectErasedClrType(arguments[i].Type, out var erased))
+                {
+                    // Issue #833: argument carries an open method/type
+                    // parameter (e.g. `T`, `[]T`, `IEnumerable[T]`). The
+                    // overload-resolution layer needs *some* CLR type to
+                    // unify against the candidate's open generic parameter,
+                    // so project the TP positions to `object` (and slices
+                    // to `object[]`). Symbolic recovery for the return
+                    // type and MethodSpec args happens via
+                    // BuildSymbolicMethodTypeArgs +
+                    // ResolveCallReturnTypeFromSymbolicTypeArgs below.
+                    t = erased;
+                }
                 else
                 {
                     return false;
@@ -233,6 +246,20 @@ public sealed class ImportedClassSymbol : Symbol
                     && position < typeArgSymbols.Length)
                 {
                     returnOverride = typeArgSymbols[position];
+                }
+
+                // Issue #833: when the open return type *contains* (but is not
+                // exactly) a method type parameter that aligns with an in-scope
+                // G# type parameter (e.g. `Enumerable.Empty[T]() IEnumerable[T]`),
+                // recover the symbolic projection so the call site doesn't keep
+                // the type-erased `IEnumerable<object>`.
+                if (returnOverride == null)
+                {
+                    var symbolicArgVector = MemberLookup.BuildSymbolicArgTypeVector(
+                        receiverType: null,
+                        ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+                    var symbolicMethodTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(result.Best, typeArgSymbols, symbolicArgVector);
+                    returnOverride = MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(result.Best, symbolicMethodTypeArgs, receiverType: null);
                 }
 
                 function = new ImportedFunctionSymbol(text, this, result.Best, callExpression, returnOverride);

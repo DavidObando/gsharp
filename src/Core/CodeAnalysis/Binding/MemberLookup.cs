@@ -440,6 +440,31 @@ internal sealed class MemberLookup
     /// <param name="typeArguments">The symbolic arguments at the same ordinals as <paramref name="openDefinition"/>'s generic parameters.</param>
     /// <returns>The symbolic <see cref="TypeSymbol"/> projection.</returns>
     public static TypeSymbol MapOpenClrTypeToSymbolic(Type openClr, Type openDefinition, ImmutableArray<TypeSymbol> typeArguments)
+        => MapOpenClrTypeToSymbolic(openClr, openDefinition, typeArguments, openMethodDefinition: null, methodTypeArguments: default);
+
+    /// <summary>
+    /// Issue #833: extended mapping entry point that also substitutes
+    /// <em>method</em> generic parameters (<c>MVar(idx)</c>) using the
+    /// symbolic arguments at the corresponding ordinals on
+    /// <paramref name="openMethodDefinition"/>. This is the call-site
+    /// sibling of the open-receiver substitution from #794: it allows
+    /// <c>Enumerable.Empty[T]()</c> to surface its open <c>IEnumerable&lt;TResult&gt;</c>
+    /// return as the symbolic <c>IEnumerable[T]</c> (rather than the
+    /// type-erased <c>IEnumerable&lt;object&gt;</c>) and <c>[]T{}.ToArray()</c>
+    /// to surface its open <c>TSource[]</c> return as <c>[]T</c>.
+    /// </summary>
+    /// <param name="openClr">The open CLR type to map.</param>
+    /// <param name="openDefinition">The open generic <em>type</em> definition the parameters of <paramref name="openClr"/> may bind against. May be <see langword="null"/>.</param>
+    /// <param name="typeArguments">The symbolic arguments at the same ordinals as <paramref name="openDefinition"/>'s generic parameters; may be default/empty.</param>
+    /// <param name="openMethodDefinition">The open generic <em>method</em> definition the parameters of <paramref name="openClr"/> may bind against. May be <see langword="null"/>.</param>
+    /// <param name="methodTypeArguments">The symbolic arguments at the same ordinals as <paramref name="openMethodDefinition"/>'s generic parameters; may be default/empty.</param>
+    /// <returns>The symbolic <see cref="TypeSymbol"/> projection.</returns>
+    public static TypeSymbol MapOpenClrTypeToSymbolic(
+        Type openClr,
+        Type openDefinition,
+        ImmutableArray<TypeSymbol> typeArguments,
+        MethodInfo openMethodDefinition,
+        ImmutableArray<TypeSymbol> methodTypeArguments)
     {
         if (openClr == null)
         {
@@ -448,6 +473,8 @@ internal sealed class MemberLookup
 
         if (openClr.IsGenericParameter)
         {
+            // Type-level parameter (declared on a generic type): map through
+            // the receiver/container's symbolic TypeArguments.
             var declaring = openClr.DeclaringType;
             if (declaring != null && openDefinition != null && !typeArguments.IsDefaultOrEmpty)
             {
@@ -462,6 +489,27 @@ internal sealed class MemberLookup
                 }
             }
 
+            // Issue #833: method-level parameter (declared on a generic method).
+            // The CLR reports DeclaringMethod != null and DeclaringType == null
+            // for these; substitute via the parallel method-type-args slot.
+            if (openClr.DeclaringMethod != null && !methodTypeArguments.IsDefaultOrEmpty)
+            {
+                if (openMethodDefinition == null
+                    || ReferenceEquals(openClr.DeclaringMethod, openMethodDefinition)
+                    || openClr.DeclaringMethod.MetadataToken == openMethodDefinition.MetadataToken)
+                {
+                    var pos = openClr.GenericParameterPosition;
+                    if ((uint)pos < (uint)methodTypeArguments.Length)
+                    {
+                        var mapped = methodTypeArguments[pos];
+                        if (mapped != null)
+                        {
+                            return mapped;
+                        }
+                    }
+                }
+            }
+
             return TypeSymbol.FromClrType(openClr);
         }
 
@@ -470,10 +518,12 @@ internal sealed class MemberLookup
         // CLR `Type` reports `IsArray` for those, not `IsGenericType`. Recurse
         // on the element type and surface a G# slice (`[]T`) so the call site
         // sees the symbolic projection rather than the erased `object[]`.
+        // Issue #833 extends the recursion to method-level parameters so
+        // `Enumerable.ToArray[T](IEnumerable[T]) → T[]` surfaces as `[]T`.
         if (openClr.IsArray && openClr.GetArrayRank() == 1)
         {
             var openElement = openClr.GetElementType();
-            var mappedElement = MapOpenClrTypeToSymbolic(openElement, openDefinition, typeArguments);
+            var mappedElement = MapOpenClrTypeToSymbolic(openElement, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
             if (TypeSymbol.ContainsTypeParameter(mappedElement))
             {
                 return SliceTypeSymbol.Get(mappedElement);
@@ -488,7 +538,7 @@ internal sealed class MemberLookup
         if (openClr.IsByRef)
         {
             var openPointee = openClr.GetElementType();
-            var mappedPointee = MapOpenClrTypeToSymbolic(openPointee, openDefinition, typeArguments);
+            var mappedPointee = MapOpenClrTypeToSymbolic(openPointee, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
             if (TypeSymbol.ContainsTypeParameter(mappedPointee))
             {
                 return ByRefTypeSymbol.Get(mappedPointee);
@@ -504,7 +554,7 @@ internal sealed class MemberLookup
             var anyParam = false;
             foreach (var a in openArgs)
             {
-                var mapped = MapOpenClrTypeToSymbolic(a, openDefinition, typeArguments);
+                var mapped = MapOpenClrTypeToSymbolic(a, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
                 symbolic.Add(mapped);
                 if (TypeSymbol.ContainsTypeParameter(mapped))
                 {
@@ -549,6 +599,245 @@ internal sealed class MemberLookup
         }
 
         return TypeSymbol.FromClrType(openClr);
+    }
+
+    /// <summary>
+    /// Issue #833: structural unification that recovers the symbolic
+    /// type-argument vector for an open generic CLR method when the call
+    /// site did <em>not</em> supply an explicit <c>[T1, T2]</c> list.
+    /// Walks every <c>(openParameter, symbolicArgument)</c> pair in
+    /// parallel and records the symbolic shape sitting at each
+    /// <c>MVar(idx)</c> slot, then returns the per-ordinal vector. When
+    /// some slot is still missing the corresponding entry is <see langword="null"/>
+    /// — callers must treat <see langword="null"/> as "no symbolic
+    /// override; fall back to the closed-CLR projection".
+    /// </summary>
+    /// <param name="openMethod">The open generic method definition.</param>
+    /// <param name="symbolicArgTypes">Symbolic argument types in call order (receiver included as slot 0 for extension methods).</param>
+    /// <returns>An array sized to the open method's generic-parameter arity, with one entry per ordinal (<see langword="null"/> when unrecovered).</returns>
+    public static TypeSymbol[] InferSymbolicMethodTypeArguments(
+        MethodInfo openMethod,
+        ImmutableArray<TypeSymbol> symbolicArgTypes)
+    {
+        if (openMethod == null || !openMethod.IsGenericMethodDefinition)
+        {
+            return Array.Empty<TypeSymbol>();
+        }
+
+        var arity = openMethod.GetGenericArguments().Length;
+        var result = new TypeSymbol[arity];
+
+        var openParams = openMethod.GetParameters();
+        var pairs = Math.Min(openParams.Length, symbolicArgTypes.IsDefault ? 0 : symbolicArgTypes.Length);
+        for (int i = 0; i < pairs; i++)
+        {
+            UnifyForMethodTypeArgs(openParams[i].ParameterType, symbolicArgTypes[i], openMethod, result);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Issue #833 (sibling to #794 on the call-site argument side): when the
+    /// imported generic method's open return type <em>contains</em> a method
+    /// type parameter that maps to an in-scope G# type parameter, substitute
+    /// the open return with the symbolic projection so the call site surfaces
+    /// e.g. <c>IEnumerable[T]</c> rather than the type-erased
+    /// <c>IEnumerable&lt;object&gt;</c>. <paramref name="symbolicMethodTypeArgs"/>
+    /// carries the resolved symbolic arguments at MVar ordinals (explicit-list
+    /// or inferred via <see cref="InferSymbolicMethodTypeArguments"/>).
+    /// Returns <see langword="null"/> when no symbolic substitution applies, so
+    /// callers keep their existing return-type derivation.
+    /// </summary>
+    /// <param name="closed">The closed generic method selected by overload resolution.</param>
+    /// <param name="symbolicMethodTypeArgs">Per-MVar symbolic type arguments; entries may be <see langword="null"/>.</param>
+    /// <param name="receiverType">The receiver's static type symbol (for type-level Var substitution); may be <see langword="null"/>.</param>
+    /// <returns>The override return type symbol, or <see langword="null"/>.</returns>
+    public static TypeSymbol ResolveCallReturnTypeFromSymbolicTypeArgs(
+        MethodInfo closed,
+        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs,
+        TypeSymbol receiverType)
+    {
+        if (closed == null || !closed.IsGenericMethod)
+        {
+            return null;
+        }
+
+        if (symbolicMethodTypeArgs.IsDefaultOrEmpty || !symbolicMethodTypeArgs.Any(s => s != null))
+        {
+            return null;
+        }
+
+        var openMethod = closed.IsGenericMethodDefinition ? closed : closed.GetGenericMethodDefinition();
+        var openReturn = openMethod.ReturnType;
+        if (openReturn == null || openReturn == typeof(void))
+        {
+            return null;
+        }
+
+        Type receiverOpenDef = null;
+        ImmutableArray<TypeSymbol> receiverTypeArgs = default;
+        if (receiverType is ImportedTypeSymbol imp && imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty)
+        {
+            receiverOpenDef = imp.OpenDefinition;
+            receiverTypeArgs = imp.TypeArguments;
+        }
+
+        var mapped = MapOpenClrTypeToSymbolic(openReturn, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs);
+        return TypeSymbol.ContainsTypeParameter(mapped) ? mapped : null;
+    }
+
+    /// <summary>
+    /// Issue #833: build the per-MVar symbolic type-argument vector for an
+    /// imported generic-method call. When the call site supplied an explicit
+    /// <c>[T1, T2]</c> list (<paramref name="explicitTypeArgSymbols"/> is
+    /// non-default), those symbols are used directly. Otherwise the vector
+    /// is inferred from the call's symbolic argument types
+    /// (<paramref name="symbolicArgTypes"/>) via structural unification.
+    /// Returns <see langword="default"/> when the method is not generic or
+    /// no symbolic information can be recovered.
+    /// </summary>
+    /// <param name="closed">The closed generic method selected by overload resolution.</param>
+    /// <param name="explicitTypeArgSymbols">The explicit symbols, or default when none were supplied.</param>
+    /// <param name="symbolicArgTypes">Symbolic argument types in call order (receiver first when applicable).</param>
+    /// <returns>The per-MVar vector (length == open arity), or default when nothing recoverable.</returns>
+    public static ImmutableArray<TypeSymbol> BuildSymbolicMethodTypeArgs(
+        MethodInfo closed,
+        ImmutableArray<TypeSymbol> explicitTypeArgSymbols,
+        ImmutableArray<TypeSymbol> symbolicArgTypes)
+    {
+        if (closed == null || !closed.IsGenericMethod)
+        {
+            return default;
+        }
+
+        var openMethod = closed.IsGenericMethodDefinition ? closed : closed.GetGenericMethodDefinition();
+        var arity = openMethod.GetGenericArguments().Length;
+        if (arity == 0)
+        {
+            return default;
+        }
+
+        var inferred = !symbolicArgTypes.IsDefault && symbolicArgTypes.Length > 0
+            ? InferSymbolicMethodTypeArguments(openMethod, symbolicArgTypes)
+            : new TypeSymbol[arity];
+
+        // Explicit list takes precedence at each slot when present.
+        if (!explicitTypeArgSymbols.IsDefaultOrEmpty)
+        {
+            for (int i = 0; i < arity && i < explicitTypeArgSymbols.Length; i++)
+            {
+                if (explicitTypeArgSymbols[i] != null)
+                {
+                    inferred[i] = explicitTypeArgSymbols[i];
+                }
+            }
+        }
+
+        var anySymbolic = false;
+        for (int i = 0; i < inferred.Length; i++)
+        {
+            if (inferred[i] != null && TypeSymbol.ContainsTypeParameter(inferred[i]))
+            {
+                anySymbolic = true;
+                break;
+            }
+        }
+
+        if (!anySymbolic)
+        {
+            return default;
+        }
+
+        return ImmutableArray.Create(inferred);
+    }
+
+    /// <summary>
+    /// Issue #833: convenience helper that builds the
+    /// (receiver, arguments) → symbolic-type vector consumed by
+    /// <see cref="InferSymbolicMethodTypeArguments"/>.
+    /// </summary>
+    /// <param name="receiverType">The receiver's symbolic type (for instance/extension calls); may be <see langword="null"/> for static calls.</param>
+    /// <param name="argumentTypes">The bound arguments' symbolic types.</param>
+    /// <returns>An immutable array with receiver-first ordering when present.</returns>
+    public static ImmutableArray<TypeSymbol> BuildSymbolicArgTypeVector(TypeSymbol receiverType, ImmutableArray<TypeSymbol> argumentTypes)
+    {
+        var argCount = argumentTypes.IsDefault ? 0 : argumentTypes.Length;
+        var count = (receiverType != null ? 1 : 0) + argCount;
+        if (count == 0)
+        {
+            return ImmutableArray<TypeSymbol>.Empty;
+        }
+
+        var b = ImmutableArray.CreateBuilder<TypeSymbol>(count);
+        if (receiverType != null)
+        {
+            b.Add(receiverType);
+        }
+
+        if (argCount > 0)
+        {
+            foreach (var a in argumentTypes)
+            {
+                b.Add(a);
+            }
+        }
+
+        return b.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #833: projects a <see cref="TypeSymbol"/> that may contain
+    /// open type/method parameters to a CLR <see cref="System.Type"/>
+    /// using <c>object</c> as the erasure placeholder. This lets
+    /// overload resolution match the open generic candidate (the real
+    /// symbolic substitution is recovered downstream via
+    /// <see cref="BuildSymbolicMethodTypeArgs"/> +
+    /// <see cref="ResolveCallReturnTypeFromSymbolicTypeArgs"/>).
+    /// </summary>
+    /// <param name="t">The argument's bound type.</param>
+    /// <param name="erased">On success, an erased CLR projection.</param>
+    /// <returns><see langword="true"/> when an erasure projection exists.</returns>
+    public static bool TryProjectErasedClrType(TypeSymbol t, out Type erased)
+    {
+        erased = null;
+        if (t == null)
+        {
+            return false;
+        }
+
+        if (t.ClrType != null)
+        {
+            erased = t.ClrType;
+            return true;
+        }
+
+        switch (t)
+        {
+            case TypeParameterSymbol:
+                erased = typeof(object);
+                return true;
+            case SliceTypeSymbol slice:
+                if (TryProjectErasedClrType(slice.ElementType, out var sliceElement))
+                {
+                    erased = sliceElement.MakeArrayType();
+                    return true;
+                }
+
+                return false;
+            case ArrayTypeSymbol array:
+                if (TryProjectErasedClrType(array.ElementType, out var arrayElement))
+                {
+                    erased = arrayElement.MakeArrayType();
+                    return true;
+                }
+
+                return false;
+            case NullableTypeSymbol nullable when nullable.UnderlyingType != null:
+                return TryProjectErasedClrType(nullable.UnderlyingType, out erased);
+            default:
+                return false;
+        }
     }
 
     /// <summary>
@@ -1108,5 +1397,174 @@ internal sealed class MemberLookup
         }
 
         return false;
+    }
+
+    private static void UnifyForMethodTypeArgs(Type openClr, TypeSymbol actual, MethodInfo openMethod, TypeSymbol[] result)
+    {
+        if (openClr == null || actual == null)
+        {
+            return;
+        }
+
+        // Open MVar(i) → record the actual symbolic shape (first wins).
+        if (openClr.IsGenericParameter && openClr.DeclaringMethod != null)
+        {
+            if (ReferenceEquals(openClr.DeclaringMethod, openMethod)
+                || openClr.DeclaringMethod.MetadataToken == openMethod.MetadataToken)
+            {
+                var pos = openClr.GenericParameterPosition;
+                if ((uint)pos < (uint)result.Length && result[pos] == null)
+                {
+                    result[pos] = StripNullability(actual);
+                }
+            }
+
+            return;
+        }
+
+        // T[] / []T (open array element).
+        if (openClr.IsArray && openClr.GetArrayRank() == 1)
+        {
+            var openElement = openClr.GetElementType();
+            var actualElement = TryGetElementType(actual);
+            if (actualElement != null)
+            {
+                UnifyForMethodTypeArgs(openElement, actualElement, openMethod, result);
+            }
+
+            return;
+        }
+
+        if (openClr.IsByRef)
+        {
+            var openPointee = openClr.GetElementType();
+            if (actual is ByRefTypeSymbol bf)
+            {
+                UnifyForMethodTypeArgs(openPointee, bf.PointeeType, openMethod, result);
+            }
+            else
+            {
+                UnifyForMethodTypeArgs(openPointee, actual, openMethod, result);
+            }
+
+            return;
+        }
+
+        if (openClr.IsGenericType && !openClr.IsGenericTypeDefinition)
+        {
+            var openDef = openClr.GetGenericTypeDefinition();
+            var openArgs = openClr.GetGenericArguments();
+
+            // Pattern A: actual is an ImportedTypeSymbol whose OpenDefinition matches exactly.
+            if (actual is ImportedTypeSymbol imp
+                && imp.OpenDefinition != null
+                && imp.OpenDefinition == openDef
+                && !imp.TypeArguments.IsDefaultOrEmpty
+                && imp.TypeArguments.Length == openArgs.Length)
+            {
+                for (int j = 0; j < openArgs.Length; j++)
+                {
+                    UnifyForMethodTypeArgs(openArgs[j], imp.TypeArguments[j], openMethod, result);
+                }
+
+                return;
+            }
+
+            // Pattern B: open formal is IEnumerable<T> / IEnumerable<...> and
+            // actual is a slice/array/sequence — the element type lifts as the
+            // single substitution.
+            if (openArgs.Length == 1)
+            {
+                var actualElement = TryGetElementType(actual);
+                if (actualElement != null)
+                {
+                    UnifyForMethodTypeArgs(openArgs[0], actualElement, openMethod, result);
+                    return;
+                }
+            }
+
+            // Pattern C: actual is an ImportedTypeSymbol whose OpenDefinition is
+            // a derived/implementing shape (e.g. List<T> formal-matched against
+            // IEnumerable<TSource>). Walk the actual's interfaces/base.
+            if (actual is ImportedTypeSymbol imp2 && imp2.OpenDefinition != null && !imp2.TypeArguments.IsDefaultOrEmpty)
+            {
+                if (TryMapThroughImplemented(imp2, openDef, out var liftedArgs))
+                {
+                    for (int j = 0; j < openArgs.Length && j < liftedArgs.Length; j++)
+                    {
+                        UnifyForMethodTypeArgs(openArgs[j], liftedArgs[j], openMethod, result);
+                    }
+                }
+            }
+        }
+    }
+
+    private static TypeSymbol StripNullability(TypeSymbol t)
+    {
+        if (t is NullableTypeSymbol nn && nn.UnderlyingType != null)
+        {
+            return nn.UnderlyingType;
+        }
+
+        return t;
+    }
+
+    private static TypeSymbol TryGetElementType(TypeSymbol t)
+    {
+        return t switch
+        {
+            SliceTypeSymbol s => s.ElementType,
+            ArrayTypeSymbol a => a.ElementType,
+            SequenceTypeSymbol seq => seq.ElementType,
+            AsyncSequenceTypeSymbol aseq => aseq.ElementType,
+            _ => null,
+        };
+    }
+
+    private static bool TryMapThroughImplemented(ImportedTypeSymbol imp, Type targetOpenDef, out ImmutableArray<TypeSymbol> liftedArgs)
+    {
+        liftedArgs = default;
+        if (imp.OpenDefinition == null)
+        {
+            return false;
+        }
+
+        // Walk the open definition's interfaces/base for an instantiation of
+        // targetOpenDef, then substitute the symbolic args back through.
+        foreach (var iface in EnumerateOpenInterfacesAndBases(imp.OpenDefinition))
+        {
+            if (!iface.IsGenericType || iface.GetGenericTypeDefinition() != targetOpenDef)
+            {
+                continue;
+            }
+
+            var openArgs = iface.GetGenericArguments();
+            var lifted = ImmutableArray.CreateBuilder<TypeSymbol>(openArgs.Length);
+            foreach (var oa in openArgs)
+            {
+                lifted.Add(MapOpenClrTypeToSymbolic(oa, imp.OpenDefinition, imp.TypeArguments));
+            }
+
+            liftedArgs = lifted.MoveToImmutable();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<Type> EnumerateOpenInterfacesAndBases(Type openDef)
+    {
+        yield return openDef;
+        foreach (var iface in openDef.GetInterfaces())
+        {
+            yield return iface;
+        }
+
+        var baseType = openDef.BaseType;
+        while (baseType != null && baseType != typeof(object))
+        {
+            yield return baseType;
+            baseType = baseType.BaseType;
+        }
     }
 }

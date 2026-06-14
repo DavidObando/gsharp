@@ -26,16 +26,20 @@ package Gsharp.Extensions.Sequences
 
 import System
 import System.Collections.Generic
+import System.Linq
 import System.Runtime.CompilerServices
 
 class Sequences {
     shared {
         // ---- Empty: zero-allocation empty sequence -----------------------
-        // Delegates to `Array.Empty[T]()` so each call returns the cached
-        // singleton — never a per-call allocation.
+        // Issue #833 (lifted): now that open-T generic-method calls
+        // preserve the symbolic return type, delegate to the BCL's own
+        // cached singleton instead of `Array.Empty[T]()`. Both surface
+        // the same shared instance under `IEnumerable[T]`; this matches
+        // the inlined shape ADR-0084 §L5 originally specified.
         @MethodImpl(MethodImplOptions.AggressiveInlining)
         func Empty[T]() IEnumerable[T] {
-            return Array.Empty[T]()
+            return Enumerable.Empty[T]()
         }
 
         // ---- Of: inline literal sequence ---------------------------------
