@@ -1025,7 +1025,7 @@ internal sealed class StateMachineEmitter
                     continue;
                 }
 
-                if (userParam.Type?.ClrType != typeof(System.Threading.CancellationToken))
+                if (userParam.Type?.ClrType.IsSameAs(typeof(System.Threading.CancellationToken)) != true)
                 {
                     // Binder already reported GS0207; skip emit-time threading.
                     continue;

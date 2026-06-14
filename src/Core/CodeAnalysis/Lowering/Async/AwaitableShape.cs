@@ -6,6 +6,7 @@ using System;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 
@@ -93,7 +94,7 @@ public sealed class AwaitableShape
             "GetAwaiter",
             Type.EmptyTypes);
 
-        if (getAwaiter == null || getAwaiter.ReturnType == null || getAwaiter.ReturnType == typeof(void))
+        if (getAwaiter == null || getAwaiter.ReturnType == null || getAwaiter.ReturnType.IsSameAs(typeof(void)))
         {
             return null;
         }

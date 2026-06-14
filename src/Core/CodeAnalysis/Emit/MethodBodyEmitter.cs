@@ -361,7 +361,7 @@ internal sealed partial class MethodBodyEmitter
 
     private static bool IsObjectStackType(TypeSymbol type)
     {
-        if (type == TypeSymbol.Object || type?.ClrType == typeof(object))
+        if (type == TypeSymbol.Object || type?.ClrType.IsSameAs(typeof(object)) == true)
         {
             return true;
         }
@@ -412,23 +412,23 @@ internal sealed partial class MethodBodyEmitter
     }
 
     private static bool IsUnsignedClrType(Type t)
-        => t == typeof(byte) || t == typeof(ushort) || t == typeof(uint)
-            || t == typeof(ulong) || t == typeof(nuint) || t == typeof(char);
+        => t.IsSameAs(typeof(byte)) || t.IsSameAs(typeof(ushort)) || t.IsSameAs(typeof(uint))
+            || t.IsSameAs(typeof(ulong)) || t.IsSameAs(typeof(nuint)) || t.IsSameAs(typeof(char));
 
     private static bool IsNumericClrType(Type t)
-        => t == typeof(sbyte) || t == typeof(byte)
-            || t == typeof(short) || t == typeof(ushort)
-            || t == typeof(int) || t == typeof(uint)
-            || t == typeof(long) || t == typeof(ulong)
-            || t == typeof(nint) || t == typeof(nuint)
-            || t == typeof(float) || t == typeof(double)
-            || t == typeof(decimal) || t == typeof(char);
+        => t.IsSameAs(typeof(sbyte)) || t.IsSameAs(typeof(byte))
+            || t.IsSameAs(typeof(short)) || t.IsSameAs(typeof(ushort))
+            || t.IsSameAs(typeof(int)) || t.IsSameAs(typeof(uint))
+            || t.IsSameAs(typeof(long)) || t.IsSameAs(typeof(ulong))
+            || t.IsSameAs(typeof(nint)) || t.IsSameAs(typeof(nuint))
+            || t.IsSameAs(typeof(float)) || t.IsSameAs(typeof(double))
+            || t.IsSameAs(typeof(decimal)) || t.IsSameAs(typeof(char));
 
     private static bool Is32BitOrSmaller(Type t)
-        => t == typeof(sbyte) || t == typeof(byte)
-            || t == typeof(short) || t == typeof(ushort)
-            || t == typeof(int) || t == typeof(uint)
-            || t == typeof(char) || t == typeof(bool);
+        => t.IsSameAs(typeof(sbyte)) || t.IsSameAs(typeof(byte))
+            || t.IsSameAs(typeof(short)) || t.IsSameAs(typeof(ushort))
+            || t.IsSameAs(typeof(int)) || t.IsSameAs(typeof(uint))
+            || t.IsSameAs(typeof(char)) || t.IsSameAs(typeof(bool));
 
     private static bool IsReferenceCompatible(TypeSymbol a, TypeSymbol b)
     {
@@ -439,7 +439,7 @@ internal sealed partial class MethodBodyEmitter
 
         // ADR-0045: any reference type widens to `object` at the IL
         // level as a no-op; the slot already holds the reference.
-        if (b?.ClrType == typeof(object) && a?.ClrType != null && !a.ClrType.IsValueType)
+        if (b?.ClrType.IsSameAs(typeof(object)) == true && a?.ClrType != null && !a.ClrType.IsValueType)
         {
             return true;
         }

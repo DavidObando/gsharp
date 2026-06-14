@@ -551,7 +551,7 @@ public static class SymbolDisplay
 
         builder.Punctuation(")");
 
-        if (method.ReturnType != typeof(void))
+        if (!method.ReturnType.IsSameAs(typeof(void)))
         {
             builder.Space();
             builder.Type(FormatClrTypeName(method.ReturnType, format.QualifyNames));
@@ -586,7 +586,7 @@ public static class SymbolDisplay
             return "void";
         }
 
-        if (clrType == typeof(void))
+        if (clrType.IsSameAs(typeof(void)))
         {
             return "void";
         }
@@ -636,103 +636,103 @@ public static class SymbolDisplay
 
     private static bool TryGetGSharpPrimitiveName(Type clrType, out string name)
     {
-        if (clrType == typeof(bool))
+        if (clrType.IsSameAs(typeof(bool)))
         {
             name = "bool";
             return true;
         }
 
-        if (clrType == typeof(byte))
+        if (clrType.IsSameAs(typeof(byte)))
         {
             name = "uint8";
             return true;
         }
 
-        if (clrType == typeof(sbyte))
+        if (clrType.IsSameAs(typeof(sbyte)))
         {
             name = "int8";
             return true;
         }
 
-        if (clrType == typeof(short))
+        if (clrType.IsSameAs(typeof(short)))
         {
             name = "int16";
             return true;
         }
 
-        if (clrType == typeof(ushort))
+        if (clrType.IsSameAs(typeof(ushort)))
         {
             name = "uint16";
             return true;
         }
 
-        if (clrType == typeof(int))
+        if (clrType.IsSameAs(typeof(int)))
         {
             name = "int32";
             return true;
         }
 
-        if (clrType == typeof(uint))
+        if (clrType.IsSameAs(typeof(uint)))
         {
             name = "uint32";
             return true;
         }
 
-        if (clrType == typeof(long))
+        if (clrType.IsSameAs(typeof(long)))
         {
             name = "int64";
             return true;
         }
 
-        if (clrType == typeof(ulong))
+        if (clrType.IsSameAs(typeof(ulong)))
         {
             name = "uint64";
             return true;
         }
 
-        if (clrType == typeof(nint))
+        if (clrType.IsSameAs(typeof(nint)))
         {
             name = "nint";
             return true;
         }
 
-        if (clrType == typeof(nuint))
+        if (clrType.IsSameAs(typeof(nuint)))
         {
             name = "nuint";
             return true;
         }
 
-        if (clrType == typeof(float))
+        if (clrType.IsSameAs(typeof(float)))
         {
             name = "float32";
             return true;
         }
 
-        if (clrType == typeof(double))
+        if (clrType.IsSameAs(typeof(double)))
         {
             name = "float64";
             return true;
         }
 
-        if (clrType == typeof(decimal))
+        if (clrType.IsSameAs(typeof(decimal)))
         {
             name = "decimal";
             return true;
         }
 
-        if (clrType == typeof(char))
+        if (clrType.IsSameAs(typeof(char)))
         {
             name = "char";
             return true;
         }
 
-        if (clrType == typeof(string))
+        if (clrType.IsSameAs(typeof(string)))
         {
             name = "string";
             return true;
         }
 
-        if (clrType == typeof(object))
+        if (clrType.IsSameAs(typeof(object)))
         {
             name = "object";
             return true;

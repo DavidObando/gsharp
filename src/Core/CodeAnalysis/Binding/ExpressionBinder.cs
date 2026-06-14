@@ -648,7 +648,7 @@ internal sealed partial class ExpressionBinder
         }
 
         var resultClrType = shape.ResultType;
-        if (resultClrType == typeof(void))
+        if (resultClrType.IsSameAs(typeof(void)))
         {
             element = TypeSymbol.Void;
         }

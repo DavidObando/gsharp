@@ -1170,27 +1170,27 @@ internal sealed partial class MethodBodyEmitter
     private void EmitLoadIndirect(TypeSymbol pointeeType)
     {
         var clrType = pointeeType?.ClrType;
-        if (clrType == typeof(int) || clrType == typeof(uint))
+        if (clrType.IsSameAs(typeof(int)) || clrType.IsSameAs(typeof(uint)))
         {
             this.il.OpCode(ILOpCode.Ldind_i4);
         }
-        else if (clrType == typeof(long) || clrType == typeof(ulong))
+        else if (clrType.IsSameAs(typeof(long)) || clrType.IsSameAs(typeof(ulong)))
         {
             this.il.OpCode(ILOpCode.Ldind_i8);
         }
-        else if (clrType == typeof(float))
+        else if (clrType.IsSameAs(typeof(float)))
         {
             this.il.OpCode(ILOpCode.Ldind_r4);
         }
-        else if (clrType == typeof(double))
+        else if (clrType.IsSameAs(typeof(double)))
         {
             this.il.OpCode(ILOpCode.Ldind_r8);
         }
-        else if (clrType == typeof(short) || clrType == typeof(ushort) || clrType == typeof(char))
+        else if (clrType.IsSameAs(typeof(short)) || clrType.IsSameAs(typeof(ushort)) || clrType.IsSameAs(typeof(char)))
         {
             this.il.OpCode(ILOpCode.Ldind_i2);
         }
-        else if (clrType == typeof(byte) || clrType == typeof(sbyte) || clrType == typeof(bool))
+        else if (clrType.IsSameAs(typeof(byte)) || clrType.IsSameAs(typeof(sbyte)) || clrType.IsSameAs(typeof(bool)))
         {
             this.il.OpCode(ILOpCode.Ldind_i1);
         }
@@ -1209,27 +1209,27 @@ internal sealed partial class MethodBodyEmitter
     private void EmitStoreIndirect(TypeSymbol pointeeType)
     {
         var clrType = pointeeType?.ClrType;
-        if (clrType == typeof(int) || clrType == typeof(uint))
+        if (clrType.IsSameAs(typeof(int)) || clrType.IsSameAs(typeof(uint)))
         {
             this.il.OpCode(ILOpCode.Stind_i4);
         }
-        else if (clrType == typeof(long) || clrType == typeof(ulong))
+        else if (clrType.IsSameAs(typeof(long)) || clrType.IsSameAs(typeof(ulong)))
         {
             this.il.OpCode(ILOpCode.Stind_i8);
         }
-        else if (clrType == typeof(float))
+        else if (clrType.IsSameAs(typeof(float)))
         {
             this.il.OpCode(ILOpCode.Stind_r4);
         }
-        else if (clrType == typeof(double))
+        else if (clrType.IsSameAs(typeof(double)))
         {
             this.il.OpCode(ILOpCode.Stind_r8);
         }
-        else if (clrType == typeof(short) || clrType == typeof(ushort) || clrType == typeof(char))
+        else if (clrType.IsSameAs(typeof(short)) || clrType.IsSameAs(typeof(ushort)) || clrType.IsSameAs(typeof(char)))
         {
             this.il.OpCode(ILOpCode.Stind_i2);
         }
-        else if (clrType == typeof(byte) || clrType == typeof(sbyte) || clrType == typeof(bool))
+        else if (clrType.IsSameAs(typeof(byte)) || clrType.IsSameAs(typeof(sbyte)) || clrType.IsSameAs(typeof(bool)))
         {
             this.il.OpCode(ILOpCode.Stind_i1);
         }

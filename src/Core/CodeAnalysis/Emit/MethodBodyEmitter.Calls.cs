@@ -423,7 +423,7 @@ internal sealed partial class MethodBodyEmitter
             .First(m => m.Name == nameof(System.Threading.Channels.Channel.CreateBounded)
                 && m.IsGenericMethodDefinition
                 && m.GetParameters().Length == 1
-                && m.GetParameters()[0].ParameterType == typeof(System.Threading.Channels.BoundedChannelOptions));
+                && m.GetParameters()[0].ParameterType.IsSameAs(typeof(System.Threading.Channels.BoundedChannelOptions)));
         var bounded = openBounded.MakeGenericMethod(elementClr);
         this.il.Call(this.outer.GetMethodEntityHandle(bounded));
     }

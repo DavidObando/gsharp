@@ -212,7 +212,7 @@ public sealed class AsyncMethodBuilderInfo
 
         // 2. async void / async Task / async Task<T> / async ValueTask*
         //    / async IAsyncEnumerable<T> / async IAsyncEnumerator<T>.
-        if (kickoffReturnClrType == typeof(void) || kickoffReturnClrType.FullName == "System.Void")
+        if (kickoffReturnClrType.IsSameAs(typeof(void)))
         {
             var builder = CoreType("System.Runtime.CompilerServices.AsyncVoidMethodBuilder");
             return (AsyncMethodBuilderKind.Void, builder, typeof(void));
@@ -240,7 +240,7 @@ public sealed class AsyncMethodBuilderInfo
         // 3. Custom task-like via [AsyncMethodBuilder] on the return type.
         // ADR-0047 §6: recognised by type identity, not string name.
         var attributeType = kickoffReturnClrType.GetCustomAttributesData()
-            .FirstOrDefault(a => a.AttributeType == typeof(System.Runtime.CompilerServices.AsyncMethodBuilderAttribute));
+            .FirstOrDefault(a => a.AttributeType.IsSameAs(typeof(System.Runtime.CompilerServices.AsyncMethodBuilderAttribute)));
         if (attributeType != null && attributeType.ConstructorArguments.Count == 1)
         {
             var customBuilder = attributeType.ConstructorArguments[0].Value as Type;
@@ -264,7 +264,7 @@ public sealed class AsyncMethodBuilderInfo
 
         if (openOrClosed.IsGenericTypeDefinition)
         {
-            if (resultType == null || resultType == typeof(void))
+            if (resultType == null || resultType.IsSameAs(typeof(void)))
             {
                 return null;
             }
@@ -410,7 +410,7 @@ public sealed class AsyncMethodBuilderInfo
         // SetResult: no-arg for void / Task, single-arg for generic.
         MethodInfo setResult;
         if (kind == AsyncMethodBuilderKind.GenericTask
-            || (kind == AsyncMethodBuilderKind.Custom && resultType != null && resultType != typeof(void)))
+            || (kind == AsyncMethodBuilderKind.Custom && resultType != null && !resultType.IsSameAs(typeof(void))))
         {
             setResult = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
                 builderType, "SetResult", new[] { resultType });

@@ -598,7 +598,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     resultType,
                     ImmutableArray<BoundExpression>.Empty);
 
-                bool hasResult = resultType != TypeSymbol.Void && resultType.ClrType != typeof(void);
+                bool hasResult = resultType != TypeSymbol.Void && !resultType.ClrType.IsSameAs(typeof(void));
 
                 if (resultTarget != null && hasResult)
                 {

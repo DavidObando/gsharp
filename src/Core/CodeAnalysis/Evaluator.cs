@@ -822,13 +822,13 @@ public sealed class Evaluator
             var idx = 1;
             if (wantAlign)
             {
-                ok = ps[idx].ParameterType == typeof(int);
+                ok = ps[idx].ParameterType.IsSameAs(typeof(int));
                 idx++;
             }
 
             if (ok && wantFormat)
             {
-                ok = ps[idx].ParameterType == typeof(string);
+                ok = ps[idx].ParameterType.IsSameAs(typeof(string));
             }
 
             if (ok)
@@ -2989,7 +2989,7 @@ public sealed class Evaluator
             .First(m => m.Name == nameof(Channel.CreateBounded)
                 && m.IsGenericMethodDefinition
                 && m.GetParameters().Length == 1
-                && m.GetParameters()[0].ParameterType == typeof(BoundedChannelOptions));
+                && m.GetParameters()[0].ParameterType.IsSameAs(typeof(BoundedChannelOptions)));
         return bounded.MakeGenericMethod(elementClr).Invoke(null, new object[] { options });
     }
 
@@ -3483,13 +3483,13 @@ public sealed class Evaluator
 
     private static bool IsSupportedNumericClrType(Type t)
     {
-        return t == typeof(sbyte) || t == typeof(byte)
-            || t == typeof(short) || t == typeof(ushort)
-            || t == typeof(int) || t == typeof(uint)
-            || t == typeof(long) || t == typeof(ulong)
-            || t == typeof(nint) || t == typeof(nuint)
-            || t == typeof(float) || t == typeof(double)
-            || t == typeof(decimal) || t == typeof(char);
+        return t.IsSameAs(typeof(sbyte)) || t.IsSameAs(typeof(byte))
+            || t.IsSameAs(typeof(short)) || t.IsSameAs(typeof(ushort))
+            || t.IsSameAs(typeof(int)) || t.IsSameAs(typeof(uint))
+            || t.IsSameAs(typeof(long)) || t.IsSameAs(typeof(ulong))
+            || t.IsSameAs(typeof(nint)) || t.IsSameAs(typeof(nuint))
+            || t.IsSameAs(typeof(float)) || t.IsSameAs(typeof(double))
+            || t.IsSameAs(typeof(decimal)) || t.IsSameAs(typeof(char));
     }
 
     private static object UncheckedNumericConvert(object value, Type to)
@@ -3500,12 +3500,12 @@ public sealed class Evaluator
         {
             // decimal → primitive is checked at the BCL level even for
             // unchecked casts; route through (long) first when applicable.
-            if (to == typeof(float))
+            if (to.IsSameAs(typeof(float)))
             {
                 return (float)dv;
             }
 
-            if (to == typeof(double))
+            if (to.IsSameAs(typeof(double)))
             {
                 return (double)dv;
             }
@@ -3513,7 +3513,7 @@ public sealed class Evaluator
             return UncheckedNumericConvert((long)dv, to);
         }
 
-        if (to == typeof(decimal))
+        if (to.IsSameAs(typeof(decimal)))
         {
             return Convert.ToDecimal(value, System.Globalization.CultureInfo.InvariantCulture);
         }
@@ -3526,12 +3526,12 @@ public sealed class Evaluator
 
         if (value is double dbv)
         {
-            if (to == typeof(float))
+            if (to.IsSameAs(typeof(float)))
             {
                 return (float)dbv;
             }
 
-            if (to == typeof(double))
+            if (to.IsSameAs(typeof(double)))
             {
                 return dbv;
             }
@@ -3559,19 +3559,19 @@ public sealed class Evaluator
 
         return to switch
         {
-            Type t when t == typeof(sbyte) => unchecked((sbyte)asLong),
-            Type t when t == typeof(byte) => unchecked((byte)asLong),
-            Type t when t == typeof(short) => unchecked((short)asLong),
-            Type t when t == typeof(ushort) => unchecked((ushort)asLong),
-            Type t when t == typeof(int) => unchecked((int)asLong),
-            Type t when t == typeof(uint) => unchecked((uint)asLong),
-            Type t when t == typeof(long) => asLong,
-            Type t when t == typeof(ulong) => unchecked((ulong)asLong),
-            Type t when t == typeof(nint) => (nint)asLong,
-            Type t when t == typeof(nuint) => unchecked((nuint)(ulong)asLong),
-            Type t when t == typeof(float) => (float)asLong,
-            Type t when t == typeof(double) => (double)asLong,
-            Type t when t == typeof(char) => unchecked((char)asLong),
+            Type t when t.IsSameAs(typeof(sbyte)) => unchecked((sbyte)asLong),
+            Type t when t.IsSameAs(typeof(byte)) => unchecked((byte)asLong),
+            Type t when t.IsSameAs(typeof(short)) => unchecked((short)asLong),
+            Type t when t.IsSameAs(typeof(ushort)) => unchecked((ushort)asLong),
+            Type t when t.IsSameAs(typeof(int)) => unchecked((int)asLong),
+            Type t when t.IsSameAs(typeof(uint)) => unchecked((uint)asLong),
+            Type t when t.IsSameAs(typeof(long)) => asLong,
+            Type t when t.IsSameAs(typeof(ulong)) => unchecked((ulong)asLong),
+            Type t when t.IsSameAs(typeof(nint)) => (nint)asLong,
+            Type t when t.IsSameAs(typeof(nuint)) => unchecked((nuint)(ulong)asLong),
+            Type t when t.IsSameAs(typeof(float)) => (float)asLong,
+            Type t when t.IsSameAs(typeof(double)) => (double)asLong,
+            Type t when t.IsSameAs(typeof(char)) => unchecked((char)asLong),
             _ => Convert.ChangeType(value, to, System.Globalization.CultureInfo.InvariantCulture),
         };
     }

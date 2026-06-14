@@ -125,21 +125,21 @@ internal sealed class ConversionEmitter
     /// <param name="type">CLR type whose default value should be pushed.</param>
     public void EmitDefaultValue(InstructionEncoder il, Type type)
     {
-        if (type == typeof(int) || type == typeof(bool) || type == typeof(byte)
-            || type == typeof(short) || type == typeof(char))
+        if (type.IsSameAs(typeof(int)) || type.IsSameAs(typeof(bool)) || type.IsSameAs(typeof(byte))
+            || type.IsSameAs(typeof(short)) || type.IsSameAs(typeof(char)))
         {
             il.LoadConstantI4(0);
         }
-        else if (type == typeof(long))
+        else if (type.IsSameAs(typeof(long)))
         {
             il.LoadConstantI8(0);
         }
-        else if (type == typeof(float))
+        else if (type.IsSameAs(typeof(float)))
         {
             il.OpCode(ILOpCode.Ldc_r4);
             il.CodeBuilder.WriteSingle(0.0f);
         }
-        else if (type == typeof(double))
+        else if (type.IsSameAs(typeof(double)))
         {
             il.OpCode(ILOpCode.Ldc_r8);
             il.CodeBuilder.WriteDouble(0.0);

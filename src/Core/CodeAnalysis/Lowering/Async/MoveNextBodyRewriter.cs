@@ -100,7 +100,7 @@ public static class MoveNextBodyRewriter
             allLocals.Add(cachedStateLocal);
 
             var builderInfo = plan.StateMachine.BuilderInfo;
-            if (builderInfo.ResultType != null && builderInfo.ResultType != typeof(void))
+            if (builderInfo.ResultType != null && !builderInfo.ResultType.IsSameAs(typeof(void)))
             {
                 var resultType = plan.StateMachine.ResultTypeSymbol ?? TypeSymbol.FromClrType(builderInfo.ResultType);
                 this.retValLocal = new LocalVariableSymbol(
@@ -785,7 +785,7 @@ public static class MoveNextBodyRewriter
                     resultType,
                     ImmutableArray<BoundExpression>.Empty);
 
-                bool hasResult = resultType != TypeSymbol.Void && resultType.ClrType != typeof(void);
+                bool hasResult = resultType != TypeSymbol.Void && !resultType.ClrType.IsSameAs(typeof(void));
 
                 if (resultTarget != null && hasResult)
                 {

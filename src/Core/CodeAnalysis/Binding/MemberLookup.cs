@@ -355,7 +355,7 @@ internal sealed class MemberLookup
             binder: null,
             types: Type.EmptyTypes,
             modifiers: null);
-        if (moveNext?.ReturnType != typeof(bool))
+        if (moveNext?.ReturnType.IsSameAs(typeof(bool)) != true)
         {
             elementType = null;
             return false;
@@ -670,7 +670,7 @@ internal sealed class MemberLookup
 
         var openMethod = closed.IsGenericMethodDefinition ? closed : closed.GetGenericMethodDefinition();
         var openReturn = openMethod.ReturnType;
-        if (openReturn == null || openReturn == typeof(void))
+        if (openReturn == null || openReturn.IsSameAs(typeof(void)))
         {
             return null;
         }
@@ -911,7 +911,7 @@ internal sealed class MemberLookup
             anyVariadic |= paramArray;
         }
 
-        var returnType = invoke.ReturnType == typeof(void)
+        var returnType = invoke.ReturnType.IsSameAs(typeof(void))
             ? TypeSymbol.Void
             : invoke.ReturnType.ContainsGenericParameters
                 ? TypeSymbol.Object
@@ -1561,7 +1561,7 @@ internal sealed class MemberLookup
         }
 
         var baseType = openDef.BaseType;
-        while (baseType != null && baseType != typeof(object))
+        while (baseType != null && !baseType.IsSameAs(typeof(object)))
         {
             yield return baseType;
             baseType = baseType.BaseType;

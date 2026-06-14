@@ -595,59 +595,59 @@ internal sealed class CustomAttributeEncoder
 
     private void EncodeClrTypeForCtorSig(SignatureTypeEncoder enc, Type t)
     {
-        if (t == typeof(bool))
+        if (t.IsSameAs(typeof(bool)))
         {
             enc.Boolean();
         }
-        else if (t == typeof(char))
+        else if (t.IsSameAs(typeof(char)))
         {
             enc.Char();
         }
-        else if (t == typeof(sbyte))
+        else if (t.IsSameAs(typeof(sbyte)))
         {
             enc.SByte();
         }
-        else if (t == typeof(byte))
+        else if (t.IsSameAs(typeof(byte)))
         {
             enc.Byte();
         }
-        else if (t == typeof(short))
+        else if (t.IsSameAs(typeof(short)))
         {
             enc.Int16();
         }
-        else if (t == typeof(ushort))
+        else if (t.IsSameAs(typeof(ushort)))
         {
             enc.UInt16();
         }
-        else if (t == typeof(int))
+        else if (t.IsSameAs(typeof(int)))
         {
             enc.Int32();
         }
-        else if (t == typeof(uint))
+        else if (t.IsSameAs(typeof(uint)))
         {
             enc.UInt32();
         }
-        else if (t == typeof(long))
+        else if (t.IsSameAs(typeof(long)))
         {
             enc.Int64();
         }
-        else if (t == typeof(ulong))
+        else if (t.IsSameAs(typeof(ulong)))
         {
             enc.UInt64();
         }
-        else if (t == typeof(float))
+        else if (t.IsSameAs(typeof(float)))
         {
             enc.Single();
         }
-        else if (t == typeof(double))
+        else if (t.IsSameAs(typeof(double)))
         {
             enc.Double();
         }
-        else if (t == typeof(string))
+        else if (t.IsSameAs(typeof(string)))
         {
             enc.String();
         }
-        else if (t == typeof(object))
+        else if (t.IsSameAs(typeof(object)))
         {
             enc.Object();
         }
@@ -680,55 +680,55 @@ internal sealed class CustomAttributeEncoder
             return;
         }
 
-        if (paramType == typeof(bool))
+        if (paramType.IsSameAs(typeof(bool)))
         {
             bb.WriteBoolean((bool)value);
         }
-        else if (paramType == typeof(char))
+        else if (paramType.IsSameAs(typeof(char)))
         {
             bb.WriteUInt16((char)value);
         }
-        else if (paramType == typeof(sbyte))
+        else if (paramType.IsSameAs(typeof(sbyte)))
         {
             bb.WriteSByte(Convert.ToSByte(value));
         }
-        else if (paramType == typeof(byte))
+        else if (paramType.IsSameAs(typeof(byte)))
         {
             bb.WriteByte(Convert.ToByte(value));
         }
-        else if (paramType == typeof(short))
+        else if (paramType.IsSameAs(typeof(short)))
         {
             bb.WriteInt16(Convert.ToInt16(value));
         }
-        else if (paramType == typeof(ushort))
+        else if (paramType.IsSameAs(typeof(ushort)))
         {
             bb.WriteUInt16(Convert.ToUInt16(value));
         }
-        else if (paramType == typeof(int))
+        else if (paramType.IsSameAs(typeof(int)))
         {
             bb.WriteInt32(Convert.ToInt32(value));
         }
-        else if (paramType == typeof(uint))
+        else if (paramType.IsSameAs(typeof(uint)))
         {
             bb.WriteUInt32(Convert.ToUInt32(value));
         }
-        else if (paramType == typeof(long))
+        else if (paramType.IsSameAs(typeof(long)))
         {
             bb.WriteInt64(Convert.ToInt64(value));
         }
-        else if (paramType == typeof(ulong))
+        else if (paramType.IsSameAs(typeof(ulong)))
         {
             bb.WriteUInt64(Convert.ToUInt64(value));
         }
-        else if (paramType == typeof(float))
+        else if (paramType.IsSameAs(typeof(float)))
         {
             bb.WriteSingle(Convert.ToSingle(value));
         }
-        else if (paramType == typeof(double))
+        else if (paramType.IsSameAs(typeof(double)))
         {
             bb.WriteDouble(Convert.ToDouble(value));
         }
-        else if (paramType == typeof(string))
+        else if (paramType.IsSameAs(typeof(string)))
         {
             bb.WriteSerializedString((string)value);
         }
@@ -743,7 +743,7 @@ internal sealed class CustomAttributeEncoder
         {
             WriteCustomAttributeArrayArg(bb, paramType.GetElementType()!, value);
         }
-        else if (paramType == typeof(object))
+        else if (paramType.IsSameAs(typeof(object)))
         {
             // ECMA-335 II.23.3: boxed object argument carries the
             // FieldOrPropType tag of the runtime type then the value.
@@ -860,55 +860,55 @@ internal sealed class CustomAttributeEncoder
     private static void WriteCustomAttributeFieldOrPropertyType(BlobBuilder bb, Type t)
     {
         // ECMA-335 II.23.3 — element-type byte for a FIELD/PROPERTY tag.
-        if (t == typeof(bool))
+        if (t.IsSameAs(typeof(bool)))
         {
             bb.WriteByte(0x02);
         }
-        else if (t == typeof(char))
+        else if (t.IsSameAs(typeof(char)))
         {
             bb.WriteByte(0x03);
         }
-        else if (t == typeof(sbyte))
+        else if (t.IsSameAs(typeof(sbyte)))
         {
             bb.WriteByte(0x04);
         }
-        else if (t == typeof(byte))
+        else if (t.IsSameAs(typeof(byte)))
         {
             bb.WriteByte(0x05);
         }
-        else if (t == typeof(short))
+        else if (t.IsSameAs(typeof(short)))
         {
             bb.WriteByte(0x06);
         }
-        else if (t == typeof(ushort))
+        else if (t.IsSameAs(typeof(ushort)))
         {
             bb.WriteByte(0x07);
         }
-        else if (t == typeof(int))
+        else if (t.IsSameAs(typeof(int)))
         {
             bb.WriteByte(0x08);
         }
-        else if (t == typeof(uint))
+        else if (t.IsSameAs(typeof(uint)))
         {
             bb.WriteByte(0x09);
         }
-        else if (t == typeof(long))
+        else if (t.IsSameAs(typeof(long)))
         {
             bb.WriteByte(0x0A);
         }
-        else if (t == typeof(ulong))
+        else if (t.IsSameAs(typeof(ulong)))
         {
             bb.WriteByte(0x0B);
         }
-        else if (t == typeof(float))
+        else if (t.IsSameAs(typeof(float)))
         {
             bb.WriteByte(0x0C);
         }
-        else if (t == typeof(double))
+        else if (t.IsSameAs(typeof(double)))
         {
             bb.WriteByte(0x0D);
         }
-        else if (t == typeof(string))
+        else if (t.IsSameAs(typeof(string)))
         {
             bb.WriteByte(0x0E);
         }
@@ -917,7 +917,7 @@ internal sealed class CustomAttributeEncoder
             // 0x50 — System.Type (no payload byte; the FixedArg holds the SerString).
             bb.WriteByte(0x50);
         }
-        else if (t == typeof(object))
+        else if (t.IsSameAs(typeof(object)))
         {
             // 0x51 — boxed object. The FixedArg writer prefixes the runtime
             // type tag and value when emitting the argument body.

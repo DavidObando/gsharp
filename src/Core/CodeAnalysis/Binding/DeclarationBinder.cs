@@ -3036,7 +3036,7 @@ internal sealed class DeclarationBinder
                     var ecAttr = KnownAttributes.FindEnumeratorCancellation(paramAttrs);
                     if (ecAttr != null)
                     {
-                        if (parameterSymbol.Type?.ClrType != typeof(System.Threading.CancellationToken))
+                        if (parameterSymbol.Type?.ClrType.IsSameAs(typeof(System.Threading.CancellationToken)) != true)
                         {
                             Diagnostics.ReportEnumeratorCancellationWrongType(
                                 parameterSyntax.Location,

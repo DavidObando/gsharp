@@ -44,14 +44,30 @@ internal static class ClrTypeUtilities
     /// <param name="a">First type.</param>
     /// <param name="b">Second type.</param>
     /// <returns><c>true</c> when both types are non-null and denote the same logical CLR type.</returns>
-    public static bool AreSame(Type a, Type b)
+    public static bool AreSame(Type a, Type b) => IsSameAs(a, b);
+
+    /// <summary>
+    /// Extension-method companion to <see cref="AreSame(Type, Type)"/>. Reads more
+    /// naturally at call sites that historically used
+    /// <c>clrType == typeof(SomeType)</c> reference-identity comparisons —
+    /// issue #835 — and prevents the silent feature drops that occur when the
+    /// left-hand <see cref="Type"/> was materialised through a
+    /// <see cref="System.Reflection.MetadataLoadContext"/> rather than the host
+    /// process's <c>typeof()</c>.
+    /// </summary>
+    /// <param name="self">The candidate type, typically a CLR type extracted
+    /// from imported metadata. May be <c>null</c>.</param>
+    /// <param name="other">The expected canonical type, typically a host
+    /// <c>typeof(...)</c> literal.</param>
+    /// <returns><c>true</c> when both types denote the same logical CLR type.</returns>
+    public static bool IsSameAs(this Type self, Type other)
     {
-        if (a is null || b is null)
+        if (self is null || other is null)
         {
             return false;
         }
 
-        if (ReferenceEquals(a, b))
+        if (ReferenceEquals(self, other))
         {
             return true;
         }
@@ -60,20 +76,20 @@ internal static class ClrTypeUtilities
         // embeds the element's assembly-qualified name when the element is
         // itself a constructed generic, so arrays of cross-context generics
         // require structural comparison.
-        if (a.IsArray && b.IsArray)
+        if (self.IsArray && other.IsArray)
         {
-            return a.GetArrayRank() == b.GetArrayRank()
-                && AreSame(a.GetElementType(), b.GetElementType());
+            return self.GetArrayRank() == other.GetArrayRank()
+                && IsSameAs(self.GetElementType(), other.GetElementType());
         }
 
-        if (a.IsByRef && b.IsByRef)
+        if (self.IsByRef && other.IsByRef)
         {
-            return AreSame(a.GetElementType(), b.GetElementType());
+            return IsSameAs(self.GetElementType(), other.GetElementType());
         }
 
-        if (a.IsPointer && b.IsPointer)
+        if (self.IsPointer && other.IsPointer)
         {
-            return AreSame(a.GetElementType(), b.GetElementType());
+            return IsSameAs(self.GetElementType(), other.GetElementType());
         }
 
         // Constructed (closed) generics: compare the open definition's
@@ -82,19 +98,19 @@ internal static class ClrTypeUtilities
         // is the cross-reflection-context fix that closes issue #504-reopen
         // for `Nullable<T>` and applies equally to any other constructed
         // generic with a leaf-FullName-matchable type argument.
-        if (a.IsGenericType && b.IsGenericType
-            && !a.IsGenericTypeDefinition && !b.IsGenericTypeDefinition)
+        if (self.IsGenericType && other.IsGenericType
+            && !self.IsGenericTypeDefinition && !other.IsGenericTypeDefinition)
         {
             if (!string.Equals(
-                    a.GetGenericTypeDefinition().FullName,
-                    b.GetGenericTypeDefinition().FullName,
+                    self.GetGenericTypeDefinition().FullName,
+                    other.GetGenericTypeDefinition().FullName,
                     StringComparison.Ordinal))
             {
                 return false;
             }
 
-            var aArgs = a.GetGenericArguments();
-            var bArgs = b.GetGenericArguments();
+            var aArgs = self.GetGenericArguments();
+            var bArgs = other.GetGenericArguments();
             if (aArgs.Length != bArgs.Length)
             {
                 return false;
@@ -102,7 +118,7 @@ internal static class ClrTypeUtilities
 
             for (var i = 0; i < aArgs.Length; i++)
             {
-                if (!AreSame(aArgs[i], bArgs[i]))
+                if (!IsSameAs(aArgs[i], bArgs[i]))
                 {
                     return false;
                 }
@@ -111,7 +127,7 @@ internal static class ClrTypeUtilities
             return true;
         }
 
-        return string.Equals(a.FullName, b.FullName, StringComparison.Ordinal);
+        return string.Equals(self.FullName, other.FullName, StringComparison.Ordinal);
     }
 
     /// <summary>

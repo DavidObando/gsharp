@@ -979,12 +979,12 @@ internal sealed class LambdaBinder
         }
 
         var clr = returnType.ClrType;
-        if (clr == typeof(System.Threading.Tasks.Task))
+        if (clr.IsSameAs(typeof(System.Threading.Tasks.Task)))
         {
             return TypeSymbol.Void;
         }
 
-        if (clr.IsGenericType && clr.GetGenericTypeDefinition() == typeof(System.Threading.Tasks.Task<>))
+        if (clr.IsGenericType && clr.GetGenericTypeDefinition().IsSameAs(typeof(System.Threading.Tasks.Task<>)))
         {
             // The unwrapped awaited type lives in the generic argument slot.
             return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);

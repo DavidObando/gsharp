@@ -877,7 +877,7 @@ public sealed class Lowerer : BoundTreeRewriter
                 binder: null,
                 types: System.Type.EmptyTypes,
                 modifiers: null);
-            if (ownDispose != null && ownDispose.ReturnType == typeof(void))
+            if (ownDispose != null && ownDispose.ReturnType.IsSameAs(typeof(void)))
             {
                 disposeMethod = ownDispose;
             }
