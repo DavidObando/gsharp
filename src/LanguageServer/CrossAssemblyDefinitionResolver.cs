@@ -64,6 +64,16 @@ internal static class CrossAssemblyDefinitionResolver
             return true;
         }
 
+        // Tier 3 — source-text search. Preferred over the PDB for workspace-local assemblies
+        // because it lands on the actual type-declaration identifier; the PDB only knows method
+        // sequence points, so it lands on the first executable line (e.g. inside a constructor)
+        // and can't locate types with no method bodies (interfaces). Only does real work for
+        // assemblies built from a project under the workspace; everything else falls through.
+        if (TryResolveTypeBySourceSearch(assemblyPath, type, out location))
+        {
+            return true;
+        }
+
         if (PdbSourceLocator.TryGetTypeSourceLocation(assemblyPath, type.MetadataToken, out var pdbLocation))
         {
             location = ToLocation(pdbLocation);
@@ -99,6 +109,13 @@ internal static class CrossAssemblyDefinitionResolver
             && declaringType != null
             && workspace.TryGetProjectByOutputAssembly(assemblyPath, out var siblingProject)
             && TryResolveMethodInSiblingProject(siblingProject, declaringType, method, out location))
+        {
+            return true;
+        }
+
+        // Tier 3 — source-text search (preferred over the PDB for workspace-local assemblies; the
+        // PDB token from a stripped ref-assembly often doesn't match the runtime PDB).
+        if (TryResolveMemberBySourceSearch(assemblyPath, declaringType, method.Name, out location))
         {
             return true;
         }
@@ -146,6 +163,11 @@ internal static class CrossAssemblyDefinitionResolver
             return true;
         }
 
+        if (TryResolveMemberBySourceSearch(assemblyPath, declaringType, property.Name, out location))
+        {
+            return true;
+        }
+
         var accessor = property.GetGetMethod(nonPublic: true) ?? property.GetSetMethod(nonPublic: true);
         if (accessor != null && PdbSourceLocator.TryGetMethodSourceLocation(assemblyPath, accessor.MetadataToken, out var pdbLocation))
         {
@@ -188,6 +210,11 @@ internal static class CrossAssemblyDefinitionResolver
             return true;
         }
 
+        if (TryResolveMemberBySourceSearch(assemblyPath, declaringType, field.Name, out location))
+        {
+            return true;
+        }
+
         return declaringType != null && TryResolveType(workspace, declaringType, out location);
     }
 
@@ -221,6 +248,11 @@ internal static class CrossAssemblyDefinitionResolver
             return true;
         }
 
+        if (TryResolveMemberBySourceSearch(assemblyPath, declaringType, evt.Name, out location))
+        {
+            return true;
+        }
+
         var accessor = evt.GetAddMethod(nonPublic: true) ?? evt.GetRemoveMethod(nonPublic: true);
         if (accessor != null && PdbSourceLocator.TryGetMethodSourceLocation(assemblyPath, accessor.MetadataToken, out var pdbLocation))
         {
@@ -229,6 +261,223 @@ internal static class CrossAssemblyDefinitionResolver
         }
 
         return declaringType != null && TryResolveType(workspace, declaringType, out location);
+    }
+
+    internal static bool TryResolveTypeBySourceSearch(string assemblyPath, Type type, out Location location)
+    {
+        location = null;
+
+        var projectDirectory = DeriveProjectDirectory(assemblyPath);
+        if (projectDirectory == null || !System.IO.Directory.Exists(projectDirectory))
+        {
+            return false;
+        }
+
+        var simpleName = type.Name;
+        var backtick = simpleName.IndexOf('`');
+        if (backtick > 0)
+        {
+            simpleName = simpleName.Substring(0, backtick);
+        }
+
+        if (string.IsNullOrEmpty(simpleName))
+        {
+            return false;
+        }
+
+        // Match a C#/G# type declaration: a type keyword, optional modifiers/`record struct`,
+        // then the simple name as a whole word, all before any `{`, `:`, `(`, or end of line.
+        var pattern = @"\b(?:interface|class|struct|enum|record)\b[^\r\n{:(]*?\b"
+            + System.Text.RegularExpressions.Regex.Escape(simpleName) + @"\b";
+        var regex = new System.Text.RegularExpressions.Regex(pattern);
+
+        foreach (var sourceFile in EnumerateProjectSources(projectDirectory))
+        {
+            string text;
+            try
+            {
+                text = System.IO.File.ReadAllText(sourceFile);
+            }
+            catch (System.IO.IOException)
+            {
+                continue;
+            }
+
+            var match = regex.Match(text);
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            // Point at the type name itself, not the leading keyword.
+            var nameIndex = text.IndexOf(simpleName, match.Index, StringComparison.Ordinal);
+            if (nameIndex < 0)
+            {
+                nameIndex = match.Index;
+            }
+
+            var (line, character) = OffsetToLineColumn(text, nameIndex);
+            location = new Location
+            {
+                Uri = DocumentUri.FromFileSystemPath(sourceFile),
+                Range = new Range(new Position(line, character), new Position(line, character + simpleName.Length)),
+            };
+            return true;
+        }
+
+        return false;
+    }
+
+    // Tier-3 member navigation: scans the declaring type's source file(s) (under the workspace)
+    // for a member declaration of memberName. Distinguishes a declaration from a call/usage by
+    // requiring the member name to be preceded, on the same line, by a return/field type (and
+    // optional modifiers) and followed by `(`, `{`, `=`, or `;`. Best-effort: returns the first
+    // plausible declaration found.
+    internal static bool TryResolveMemberBySourceSearch(string assemblyPath, Type declaringType, string memberName, out Location location)
+    {
+        location = null;
+        if (declaringType == null || string.IsNullOrEmpty(memberName))
+        {
+            return false;
+        }
+
+        var projectDirectory = DeriveProjectDirectory(assemblyPath);
+        if (projectDirectory == null || !System.IO.Directory.Exists(projectDirectory))
+        {
+            return false;
+        }
+
+        var typeName = declaringType.Name;
+        var backtick = typeName.IndexOf('`');
+        if (backtick > 0)
+        {
+            typeName = typeName.Substring(0, backtick);
+        }
+
+        var typeRegex = new System.Text.RegularExpressions.Regex(
+            @"\b(?:interface|class|struct|enum|record)\b[^\r\n{:(]*?\b"
+            + System.Text.RegularExpressions.Regex.Escape(typeName) + @"\b");
+
+        // A member declaration line: leading indentation, optional attributes, optional modifiers,
+        // a return/field type token, then the member name, then `(` (method), `<` (generic method),
+        // `{` (property), `=` (expression body / field init), or `;` (field / abstract member).
+        var memberRegex = new System.Text.RegularExpressions.Regex(
+            @"(?m)^[ \t]*(?:\[[^\]]*\][ \t]*)*(?:[\w.<>\[\],?]+[ \t]+)+"
+            + System.Text.RegularExpressions.Regex.Escape(memberName)
+            + @"[ \t]*(?:<[^>]*>)?[ \t]*[({=;]");
+
+        foreach (var sourceFile in EnumerateProjectSources(projectDirectory))
+        {
+            string text;
+            try
+            {
+                text = System.IO.File.ReadAllText(sourceFile);
+            }
+            catch (System.IO.IOException)
+            {
+                continue;
+            }
+
+            // Only search files that declare the owning type (handles partial types across files
+            // and avoids matching a same-named member on an unrelated type).
+            if (!typeRegex.IsMatch(text))
+            {
+                continue;
+            }
+
+            var match = memberRegex.Match(text);
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            var nameIndex = text.IndexOf(memberName, match.Index, StringComparison.Ordinal);
+            if (nameIndex < 0)
+            {
+                nameIndex = match.Index;
+            }
+
+            var (line, character) = OffsetToLineColumn(text, nameIndex);
+            location = new Location
+            {
+                Uri = DocumentUri.FromFileSystemPath(sourceFile),
+                Range = new Range(new Position(line, character), new Position(line, character + memberName.Length)),
+            };
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Derives the owning project directory from a built assembly path by trimming everything
+    /// at and below the MSBuild <c>obj</c> (or <c>bin</c>) output folder, e.g.
+    /// <c>/repo/src/Lib/obj/Debug/net10.0/ref/Lib.dll</c> → <c>/repo/src/Lib</c>.
+    /// </summary>
+    private static string DeriveProjectDirectory(string assemblyPath)
+    {
+        var directory = System.IO.Path.GetDirectoryName(assemblyPath);
+        while (!string.IsNullOrEmpty(directory))
+        {
+            var leaf = System.IO.Path.GetFileName(directory);
+            var parent = System.IO.Path.GetDirectoryName(directory);
+            if (string.Equals(leaf, "obj", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(leaf, "bin", StringComparison.OrdinalIgnoreCase))
+            {
+                return parent;
+            }
+
+            directory = parent;
+        }
+
+        return null;
+    }
+
+    private static System.Collections.Generic.IEnumerable<string> EnumerateProjectSources(string projectDirectory)
+    {
+        System.Collections.Generic.IEnumerable<string> files;
+        try
+        {
+            files = System.IO.Directory
+                .EnumerateFiles(projectDirectory, "*.cs", System.IO.SearchOption.AllDirectories)
+                .Concat(System.IO.Directory.EnumerateFiles(projectDirectory, "*.gs", System.IO.SearchOption.AllDirectories));
+        }
+        catch (System.IO.IOException)
+        {
+            yield break;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            yield break;
+        }
+
+        foreach (var file in files)
+        {
+            // Skip generated output so a copy in obj/ doesn't shadow the real source.
+            if (file.Contains($"{System.IO.Path.DirectorySeparatorChar}obj{System.IO.Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                || file.Contains($"{System.IO.Path.DirectorySeparatorChar}bin{System.IO.Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            yield return file;
+        }
+    }
+
+    private static (int Line, int Character) OffsetToLineColumn(string text, int offset)
+    {
+        var line = 0;
+        var lineStart = 0;
+        for (var i = 0; i < offset && i < text.Length; i++)
+        {
+            if (text[i] == '\n')
+            {
+                line++;
+                lineStart = i + 1;
+            }
+        }
+
+        return (line, offset - lineStart);
     }
 
     private static bool TryResolveTypeInSiblingProject(ProjectState siblingProject, Type type, out Location location)

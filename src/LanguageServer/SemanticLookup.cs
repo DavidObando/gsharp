@@ -122,11 +122,17 @@ public static class SemanticLookup
     /// types for member completions on arbitrary expressions.
     /// </summary>
     /// <param name="compilation">The compilation to inspect.</param>
+    /// <param name="tree">The syntax tree the offset belongs to; scopes the function search to that file.</param>
     /// <param name="offset">The source offset of the expression.</param>
     /// <returns>The enclosing function symbol and the in-scope local symbols.</returns>
-    public static (FunctionSymbol Function, IReadOnlyList<VariableSymbol> Locals) GetExpressionBindingContext(Compilation compilation, int offset)
+    public static (FunctionSymbol Function, IReadOnlyList<VariableSymbol> Locals) GetExpressionBindingContext(Compilation compilation, SyntaxTree tree, int offset)
     {
-        var funcDecl = FindNodes<FunctionDeclarationSyntax>(compilation.SyntaxTrees.Select(t => t.Root))
+        // Spans are per-file offsets; restrict the search to the supplied tree so a function
+        // in another file can't be chosen by offset overlap in a multi-file compilation.
+        var roots = tree != null
+            ? new[] { tree.Root }
+            : compilation.SyntaxTrees.Select(t => t.Root);
+        var funcDecl = FindNodes<FunctionDeclarationSyntax>(roots)
             .Where(f => f.Span.Start <= offset && offset <= f.Span.End)
             .OrderBy(f => f.Span.Length)
             .FirstOrDefault();
@@ -792,12 +798,27 @@ public static class SemanticLookup
         // per CodeLens request) this dominated request latency. Precomputing the
         // per-tree node lists in BuildModelUncached makes those fallback paths
         // O(number of decls), not O(number of nodes across the workspace).
-        private FunctionDeclarationSyntax[] cachedFunctionDeclarations;
-        private StructDeclarationSyntax[] cachedStructDeclarations;
+        // Per-file views keyed by file name. The Resolve fallback runs FindContainingFunction /
+        // ResolveImplicitThisMember for *every* identifier token in *every* tree when the reference
+        // index is built (CodeLens / FindReferences). Iterating a whole-workspace flat list per
+        // token is O(tokens x decls) and took ~145s to build the index on a 54-file project.
+        // Bucketing by file makes each token scan only its own file's declarations. Keyed by file
+        // name (not tree instance) so interpolation-hole tokens — whose re-parsed sub-tree shares
+        // the file name and uses absolute spans — land in the right bucket.
+        private Dictionary<string, FunctionDeclarationSyntax[]> cachedFunctionsByFile;
+        private Dictionary<string, StructDeclarationSyntax[]> cachedStructsByFile;
         private Dictionary<SyntaxTree, AccessorExpressionSyntax[]> cachedAccessorsByTree;
         private Dictionary<SyntaxTree, FieldAssignmentExpressionSyntax[]> cachedFieldAssignmentsByTree;
         private Dictionary<SyntaxTree, ForRangeStatementSyntax[]> cachedForRangesByTree;
         private Dictionary<SyntaxTree, AwaitForRangeStatementSyntax[]> cachedAwaitForRangesByTree;
+
+        // (file, span) of every member-access identifier and field-assignment identifier. Resolve
+        // runs ResolveAsMemberAccess + IsRightOfMemberAccess for *every* token; without this set
+        // each non-member token (the vast majority) still scanned its file's accessors twice. An
+        // O(1) span lookup lets non-member tokens bail out immediately, which is the dominant cost
+        // of the reference-index build.
+        private HashSet<(string, int, int)> memberAccessTokenSpans;
+        private HashSet<(string, int, int)> fieldAssignmentTokenSpans;
 
         public SemanticModel(
             Compilation compilation,
@@ -826,16 +847,79 @@ public static class SemanticLookup
                 }
             }
 
-            // Precompute per-compilation node lists once so the Resolve fallback
-            // chain doesn't re-walk every tree on every token. See the field
-            // declarations above for the motivation.
-            var trees = this.compilation.SyntaxTrees;
-            this.cachedFunctionDeclarations = FindNodes<FunctionDeclarationSyntax>(trees.Select(t => t.Root)).ToArray();
-            this.cachedStructDeclarations = FindNodes<StructDeclarationSyntax>(trees.Select(t => t.Root)).ToArray();
-            this.cachedAccessorsByTree = trees.ToDictionary(t => t, t => FindNodes<AccessorExpressionSyntax>(t.Root).ToArray());
-            this.cachedFieldAssignmentsByTree = trees.ToDictionary(t => t, t => FindNodes<FieldAssignmentExpressionSyntax>(t.Root).ToArray());
-            this.cachedForRangesByTree = trees.ToDictionary(t => t, t => FindNodes<ForRangeStatementSyntax>(t.Root).ToArray());
-            this.cachedAwaitForRangesByTree = trees.ToDictionary(t => t, t => FindNodes<AwaitForRangeStatementSyntax>(t.Root).ToArray());
+            // Precompute per-compilation node lists. Resolve's fallback chain and the reference
+            // index need function/struct/accessor/field-assignment/for-range nodes; collecting all
+            // of them in a single parallel pass over each tree (instead of six separate FindNodes
+            // walks) keeps the per-edit SemanticModel rebuild cheap on large workspaces.
+            var treeArray = this.compilation.SyntaxTrees.ToArray();
+            var buckets = new NodeBuckets[treeArray.Length];
+            System.Threading.Tasks.Parallel.For(0, treeArray.Length, i => buckets[i] = CollectNodes(treeArray[i].Root));
+
+            this.cachedAccessorsByTree = new Dictionary<SyntaxTree, AccessorExpressionSyntax[]>(treeArray.Length);
+            this.cachedFieldAssignmentsByTree = new Dictionary<SyntaxTree, FieldAssignmentExpressionSyntax[]>(treeArray.Length);
+            this.cachedForRangesByTree = new Dictionary<SyntaxTree, ForRangeStatementSyntax[]>(treeArray.Length);
+            this.cachedAwaitForRangesByTree = new Dictionary<SyntaxTree, AwaitForRangeStatementSyntax[]>(treeArray.Length);
+            var functionsByFile = new Dictionary<string, List<FunctionDeclarationSyntax>>();
+            var structsByFile = new Dictionary<string, List<StructDeclarationSyntax>>();
+            this.memberAccessTokenSpans = new HashSet<(string, int, int)>();
+            this.fieldAssignmentTokenSpans = new HashSet<(string, int, int)>();
+
+            for (var i = 0; i < treeArray.Length; i++)
+            {
+                var tree = treeArray[i];
+                var bucket = buckets[i];
+                this.cachedAccessorsByTree[tree] = bucket.Accessors.ToArray();
+                this.cachedFieldAssignmentsByTree[tree] = bucket.FieldAssignments.ToArray();
+                this.cachedForRangesByTree[tree] = bucket.ForRanges.ToArray();
+                this.cachedAwaitForRangesByTree[tree] = bucket.AwaitForRanges.ToArray();
+
+                var fileName = tree.Text?.FileName ?? string.Empty;
+                if (bucket.Functions.Count > 0)
+                {
+                    if (!functionsByFile.TryGetValue(fileName, out var fns))
+                    {
+                        fns = new List<FunctionDeclarationSyntax>();
+                        functionsByFile[fileName] = fns;
+                    }
+
+                    fns.AddRange(bucket.Functions);
+                }
+
+                if (bucket.Structs.Count > 0)
+                {
+                    if (!structsByFile.TryGetValue(fileName, out var sts))
+                    {
+                        sts = new List<StructDeclarationSyntax>();
+                        structsByFile[fileName] = sts;
+                    }
+
+                    sts.AddRange(bucket.Structs);
+                }
+
+                foreach (var accessor in bucket.Accessors)
+                {
+                    foreach (var memberToken in EnumerateAccessorMemberTokens(accessor.RightPart))
+                    {
+                        var key = SpanKey(memberToken);
+                        if (key.HasValue)
+                        {
+                            this.memberAccessTokenSpans.Add(key.Value);
+                        }
+                    }
+                }
+
+                foreach (var assign in bucket.FieldAssignments)
+                {
+                    var key = SpanKey(assign.FieldIdentifier);
+                    if (key.HasValue)
+                    {
+                        this.fieldAssignmentTokenSpans.Add(key.Value);
+                    }
+                }
+            }
+
+            this.cachedFunctionsByFile = functionsByFile.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToArray());
+            this.cachedStructsByFile = structsByFile.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToArray());
         }
 
         public Symbol Resolve(SyntaxToken token)
@@ -941,10 +1025,18 @@ public static class SemanticLookup
 
         private Dictionary<Symbol, List<SyntaxToken>> BuildReferencesIndex()
         {
-            var index = new Dictionary<Symbol, List<SyntaxToken>>();
-            foreach (var tree in this.compilation.SyntaxTrees)
+            // Resolving every identifier token in the workspace is the dominant cost of the index
+            // build (the only thing that touches the model is read-only — all lookup tables are
+            // built once in the constructor — so the per-tree walks are independent). Resolve them
+            // in parallel across trees, then merge the per-tree partials in tree order to preserve
+            // a stable reference ordering.
+            var trees = this.compilation.SyntaxTrees;
+            var partials = new Dictionary<Symbol, List<SyntaxToken>>[trees.Length];
+
+            System.Threading.Tasks.Parallel.For(0, trees.Length, i =>
             {
-                foreach (var token in EnumerateTokens(tree.Root))
+                var local = new Dictionary<Symbol, List<SyntaxToken>>();
+                foreach (var token in EnumerateTokens(trees[i].Root))
                 {
                     if (token.IsMissing || token.Kind != SyntaxKind.IdentifierToken)
                     {
@@ -957,13 +1049,30 @@ public static class SemanticLookup
                         continue;
                     }
 
-                    if (!index.TryGetValue(symbol, out var list))
+                    if (!local.TryGetValue(symbol, out var list))
                     {
                         list = new List<SyntaxToken>();
-                        index[symbol] = list;
+                        local[symbol] = list;
                     }
 
                     list.Add(token);
+                }
+
+                partials[i] = local;
+            });
+
+            var index = new Dictionary<Symbol, List<SyntaxToken>>();
+            foreach (var partial in partials)
+            {
+                foreach (var pair in partial)
+                {
+                    if (!index.TryGetValue(pair.Key, out var list))
+                    {
+                        list = new List<SyntaxToken>();
+                        index[pair.Key] = list;
+                    }
+
+                    list.AddRange(pair.Value);
                 }
             }
 
@@ -978,6 +1087,31 @@ public static class SemanticLookup
             }
 
             return (token.SyntaxTree.Text.FileName ?? string.Empty, token.Span.Start, token.Span.End);
+        }
+
+        private static IEnumerable<SyntaxToken> EnumerateAccessorMemberTokens(ExpressionSyntax rightPart)
+        {
+            switch (rightPart)
+            {
+                case NameExpressionSyntax name:
+                    yield return name.IdentifierToken;
+                    break;
+                case CallExpressionSyntax call:
+                    yield return call.Identifier;
+                    break;
+                case AccessorExpressionSyntax nested:
+                    foreach (var t in EnumerateAccessorMemberTokens(nested.LeftPart))
+                    {
+                        yield return t;
+                    }
+
+                    foreach (var t in EnumerateAccessorMemberTokens(nested.RightPart))
+                    {
+                        yield return t;
+                    }
+
+                    break;
+            }
         }
 
         private static Symbol LookupMember(StructSymbol structSymbol, string memberName)
@@ -1025,7 +1159,13 @@ public static class SemanticLookup
             // implicit `this` receiver.
             StructDeclarationSyntax enclosing = null;
             var enclosingBodyLength = int.MaxValue;
-            foreach (var decl in this.cachedStructDeclarations)
+            var fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty;
+            if (!this.cachedStructsByFile.TryGetValue(fileName, out var structs))
+            {
+                return null;
+            }
+
+            foreach (var decl in structs)
             {
                 foreach (var method in decl.Methods)
                 {
@@ -1075,40 +1215,18 @@ public static class SemanticLookup
 
         private bool IsRightOfMemberAccess(SyntaxToken token)
         {
-            // Cheap text-free check used to suppress fallback lookups. A token whose tree
-            // contains an AccessorExpressionSyntax or FieldAssignmentExpressionSyntax at this
-            // span is treated as a member name, and must not be resolved by name as a local
-            // or global.
-            if (token?.SyntaxTree == null)
+            // Cheap text-free check used to suppress fallback lookups. A token whose span is the
+            // member identifier of an AccessorExpressionSyntax or the field identifier of a
+            // FieldAssignmentExpressionSyntax is treated as a member name, and must not be
+            // resolved by name as a local or global. Backed by the precomputed O(1) span sets.
+            var spanKey = SpanKey(token);
+            if (!spanKey.HasValue)
             {
                 return false;
             }
 
-            if (this.cachedAccessorsByTree.TryGetValue(token.SyntaxTree, out var accessors))
-            {
-                foreach (var accessor in accessors)
-                {
-                    if (accessor.RightPart.Span.Start <= token.Span.Start
-                        && token.Span.End <= accessor.RightPart.Span.End
-                        && AccessorRightContainsMemberToken(accessor.RightPart, token))
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            if (this.cachedFieldAssignmentsByTree.TryGetValue(token.SyntaxTree, out var assignments))
-            {
-                foreach (var assign in assignments)
-                {
-                    if (TokenMatches(assign.FieldIdentifier, token))
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
+            return this.memberAccessTokenSpans.Contains(spanKey.Value)
+                || this.fieldAssignmentTokenSpans.Contains(spanKey.Value);
         }
 
         private static bool AccessorRightContainsMemberToken(ExpressionSyntax rightPart, SyntaxToken token)
@@ -1129,56 +1247,54 @@ public static class SemanticLookup
 
         private Symbol ResolveAsMemberAccess(SyntaxToken token)
         {
-            if (token == null || token.Kind != SyntaxKind.IdentifierToken)
+            if (token?.SyntaxTree == null || token.Kind != SyntaxKind.IdentifierToken)
             {
                 return null;
             }
 
-            // Walk the token's own tree first (covers the common case and works even when
-            // the compilation does not contain this tree — e.g. a stale DocumentContent).
-            // Then walk every compilation tree to support cross-file resolution.
-            var trees = new HashSet<SyntaxTree>();
-            if (token.SyntaxTree != null)
+            // A token physically lives in exactly one file, so its enclosing member-access
+            // expression is in that same tree (or, for an interpolation hole, the hole's
+            // re-parsed sub-tree which the token already points at). Scanning every compilation
+            // tree here was both wrong (spans are per-file offsets) and O(tokens x all-accessors)
+            // — it made the reference-index build take ~145s on a 54-file project.
+            var tree = token.SyntaxTree;
+
+            // Fast path: the vast majority of tokens are not member-access targets. An O(1) span
+            // check lets them bail out before scanning the file's accessors/assignments.
+            var spanKey = SpanKey(token);
+            if (!spanKey.HasValue
+                || (!this.memberAccessTokenSpans.Contains(spanKey.Value) && !this.fieldAssignmentTokenSpans.Contains(spanKey.Value)))
             {
-                trees.Add(token.SyntaxTree);
+                return null;
             }
 
-            foreach (var t in this.compilation.SyntaxTrees)
+            foreach (var accessor in this.GetAccessorsForTree(tree)
+                         .Where(a => a.RightPart.Span.Start <= token.Span.Start && token.Span.End <= a.RightPart.Span.End)
+                         .OrderBy(a => a.Span.Length))
             {
-                trees.Add(t);
-            }
-
-            foreach (var tree in trees)
-            {
-                var accessors = this.GetAccessorsForTree(tree);
-                foreach (var accessor in accessors
-                             .Where(a => a.RightPart.Span.Start <= token.Span.Start && token.Span.End <= a.RightPart.Span.End)
-                             .OrderBy(a => a.Span.Length))
+                if (TryDriveAccessorTarget(tree, accessor.RightPart, accessor.LeftPart, token, out var receiverExpr, out var memberName))
                 {
-                    if (TryDriveAccessorTarget(tree, accessor.RightPart, accessor.LeftPart, token, out var receiverExpr, out var memberName))
-                    {
-                        var receiverType = this.ResolveReceiverTypeSymbol(tree, receiverExpr);
-                        var member = LookupTypeMember(receiverType, memberName);
-                        if (member != null)
-                        {
-                            return member;
-                        }
-                    }
-                }
-
-                foreach (var assign in this.GetFieldAssignmentsForTree(tree))
-                {
-                    if (!TokenMatches(assign.FieldIdentifier, token))
-                    {
-                        continue;
-                    }
-
-                    var receiverType = AsTypeSymbol(this.Resolve(assign.Receiver));
-                    var member = LookupTypeMember(receiverType, assign.FieldIdentifier.Text);
+                    var receiverType = this.ResolveReceiverTypeSymbol(tree, receiverExpr);
+                    var member = LookupTypeMember(receiverType, memberName);
                     if (member != null)
                     {
                         return member;
                     }
+                }
+            }
+
+            foreach (var assign in this.GetFieldAssignmentsForTree(tree))
+            {
+                if (!TokenMatches(assign.FieldIdentifier, token))
+                {
+                    continue;
+                }
+
+                var receiverType = AsTypeSymbol(this.Resolve(assign.Receiver));
+                var member = LookupTypeMember(receiverType, assign.FieldIdentifier.Text);
+                if (member != null)
+                {
+                    return member;
                 }
             }
 
@@ -1311,7 +1427,13 @@ public static class SemanticLookup
         {
             FunctionDeclarationSyntax best = null;
             var bestLength = int.MaxValue;
-            foreach (var f in this.cachedFunctionDeclarations)
+            var fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty;
+            if (!this.cachedFunctionsByFile.TryGetValue(fileName, out var functions))
+            {
+                return null;
+            }
+
+            foreach (var f in functions)
             {
                 if (f.Span.Start <= token.Span.Start && token.Span.End <= f.Span.End && f.Span.Length < bestLength)
                 {
@@ -1411,6 +1533,58 @@ public static class SemanticLookup
                 "void" => TypeSymbol.Void,
                 _ => null,
             };
+        }
+
+        private static NodeBuckets CollectNodes(SyntaxNode root)
+        {
+            var buckets = new NodeBuckets();
+            CollectNodes(root, buckets);
+            return buckets;
+        }
+
+        private static void CollectNodes(SyntaxNode node, NodeBuckets buckets)
+        {
+            switch (node)
+            {
+                case FunctionDeclarationSyntax f:
+                    buckets.Functions.Add(f);
+                    break;
+                case StructDeclarationSyntax s:
+                    buckets.Structs.Add(s);
+                    break;
+                case AccessorExpressionSyntax a:
+                    buckets.Accessors.Add(a);
+                    break;
+                case FieldAssignmentExpressionSyntax fa:
+                    buckets.FieldAssignments.Add(fa);
+                    break;
+                case ForRangeStatementSyntax fr:
+                    buckets.ForRanges.Add(fr);
+                    break;
+                case AwaitForRangeStatementSyntax afr:
+                    buckets.AwaitForRanges.Add(afr);
+                    break;
+            }
+
+            foreach (var child in node.GetChildren())
+            {
+                CollectNodes(child, buckets);
+            }
+        }
+
+        private sealed class NodeBuckets
+        {
+            public List<FunctionDeclarationSyntax> Functions { get; } = new();
+
+            public List<StructDeclarationSyntax> Structs { get; } = new();
+
+            public List<AccessorExpressionSyntax> Accessors { get; } = new();
+
+            public List<FieldAssignmentExpressionSyntax> FieldAssignments { get; } = new();
+
+            public List<ForRangeStatementSyntax> ForRanges { get; } = new();
+
+            public List<AwaitForRangeStatementSyntax> AwaitForRanges { get; } = new();
         }
     }
 }

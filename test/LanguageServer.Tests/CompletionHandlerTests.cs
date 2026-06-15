@@ -125,6 +125,46 @@ public class CompletionHandlerTests
     }
 
     [Fact]
+    public void ComputeCompletions_AfterDotOnImplicitThisProperty_OffersMemberTypeMembers()
+    {
+        // `Item.` where Item is a property of the enclosing class (implicit-this access).
+        // Previously the receiver switch had no PropertySymbol case, so this returned nothing.
+        const string source = "class Inner {\n    prop Value int32\n}\nclass Outer {\n    prop Item Inner\n    func F() {\n        Item.\n    }\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var items = CompletionComputer.ComputeCompletions(content, After(source, "Item."));
+
+        Assert.Contains(items, i => i.Label == "Value");
+        Assert.DoesNotContain(items, i => i.Kind == CompletionItemKind.Keyword);
+    }
+
+    [Fact]
+    public void ComputeCompletions_AfterDotOnImplicitThisField_OffersMemberTypeMembers()
+    {
+        // `item.` where item is a field of the enclosing class (implicit-this access).
+        const string source = "class Inner {\n    prop Value int32\n}\nclass Outer {\n    var item Inner\n    func F() {\n        item.\n    }\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var items = CompletionComputer.ComputeCompletions(content, After(source, "item."));
+
+        Assert.Contains(items, i => i.Label == "Value");
+        Assert.DoesNotContain(items, i => i.Kind == CompletionItemKind.Keyword);
+    }
+
+    [Fact]
+    public void ComputeCompletions_AfterDotOnImplicitThisPropertyOfPrimitiveType_OffersClrMembers()
+    {
+        // Matches the reported case: a property of a primitive type accessed via implicit this.
+        const string source = "class Rect {\n    prop Width int32\n    func Area() {\n        Width.\n    }\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var items = CompletionComputer.ComputeCompletions(content, After(source, "Width."));
+
+        Assert.Contains(items, i => i.Label == "ToString" && i.Kind == CompletionItemKind.Method);
+        Assert.DoesNotContain(items, i => i.Kind == CompletionItemKind.Keyword);
+    }
+
+    [Fact]
     public void ComputeCompletions_AfterDotOnEnumType_OffersEnumMembers()
     {
         const string source = "enum Color { Red, Green, Blue }\nfunc use() {\nColor.\n}\n";
