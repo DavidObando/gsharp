@@ -235,17 +235,7 @@ public sealed class AssemblyDocumentationProvider
     // XML documentation alongside the reference assemblies.
     private static string DiscoverXmlPath(Assembly assembly)
     {
-        string location;
-        try
-        {
-            location = assembly.Location;
-        }
-        catch (NotSupportedException)
-        {
-            return null;
-        }
-
-        if (string.IsNullOrEmpty(location))
+        if (!GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.TryGetAssemblyPath(assembly, out var location))
         {
             return null;
         }

@@ -13,6 +13,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Runtime.CompilerServices;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -54,6 +55,14 @@ public sealed class ReferenceResolver : IDisposable
     private readonly ImmutableArray<Assembly> assemblies;
     private readonly MetadataLoadContext metadataContext;
     private readonly ImmutableArray<string> missingTransitiveReferences;
+
+    // Process-wide registry of original on-disk paths for assemblies loaded
+    // via LoadFromByteArray (whose Assembly.Location is empty). Populated by
+    // FallbackMetadataAssemblyResolver and consulted by TryGetAssemblyPath /
+    // AssemblyDocumentationProvider so doc-XML discovery and cross-assembly
+    // navigation keep working after #853 (which switched ref-pack loading
+    // from PathAssemblyResolver to LoadFromByteArray to avoid file locking).
+    private static readonly ConditionalWeakTable<Assembly, string> AssemblyOriginalPaths = new();
 
     // Memoizes TryResolveType results for the lifetime of this resolver.
     //
@@ -140,6 +149,53 @@ public sealed class ReferenceResolver : IDisposable
     /// (issue #340).
     /// </summary>
     public ImmutableArray<string> MissingTransitiveReferences => missingTransitiveReferences;
+
+    /// <summary>
+    /// Recovers the on-disk path that <paramref name="assembly"/> was
+    /// originally loaded from. Falls back to the per-process registry that
+    /// <see cref="ReferenceResolver"/> populates whenever an assembly is read
+    /// into a <see cref="MetadataLoadContext"/> from in-memory bytes (so
+    /// MSBuild's <c>CopyRefAssembly</c> task is not blocked — see #853 / #858),
+    /// which is the case where <see cref="Assembly.Location"/> returns the
+    /// empty string. Used by
+    /// <c>AssemblyDocumentationProvider.DiscoverXmlPath</c> to locate the
+    /// companion XML doc file, and by
+    /// <c>CrossAssemblyDefinitionResolver</c> to locate the originating
+    /// sibling project / portable PDB for cross-assembly Go-to-Definition.
+    /// </summary>
+    /// <param name="assembly">An assembly returned by a resolver.</param>
+    /// <param name="path">The original on-disk path on success.</param>
+    /// <returns><see langword="true"/> when a non-empty path was recovered.</returns>
+    public static bool TryGetAssemblyPath(Assembly assembly, out string path)
+    {
+        path = null;
+        if (assembly == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var location = assembly.Location;
+            if (!string.IsNullOrEmpty(location))
+            {
+                path = location;
+                return true;
+            }
+        }
+        catch (NotSupportedException)
+        {
+            // Dynamic / in-memory assemblies throw on Location access; fall through.
+        }
+
+        if (AssemblyOriginalPaths.TryGetValue(assembly, out var registered) && !string.IsNullOrEmpty(registered))
+        {
+            path = registered;
+            return true;
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Gets a resolver that searches the runtime's currently loaded
@@ -544,6 +600,16 @@ public sealed class ReferenceResolver : IDisposable
             $"Core type '{fullName}' could not be resolved from the supplied references.");
     }
 
+    private static void RegisterAssemblyOriginalPath(Assembly assembly, string path)
+    {
+        if (assembly == null || string.IsNullOrEmpty(path))
+        {
+            return;
+        }
+
+        AssemblyOriginalPaths.AddOrUpdate(assembly, path);
+    }
+
     private static ImmutableArray<Assembly> BuildHostAssemblies()
     {
         var builder = ImmutableArray.CreateBuilder<Assembly>();
@@ -738,6 +804,7 @@ public sealed class ReferenceResolver : IDisposable
     private sealed class FallbackMetadataAssemblyResolver : MetadataAssemblyResolver
     {
         private readonly Dictionary<string, byte[]> assemblyBytes = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> assemblyPaths = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> unresolved = new(StringComparer.OrdinalIgnoreCase);
         private readonly object gate = new();
 
@@ -756,6 +823,7 @@ public sealed class ReferenceResolver : IDisposable
                         var bytes = new byte[fs.Length];
                         fs.ReadExactly(bytes);
                         assemblyBytes[fileName] = bytes;
+                        assemblyPaths[fileName] = path;
                     }
                     catch (Exception ex) when (
                         ex is IOException or UnauthorizedAccessException or BadImageFormatException)
@@ -764,6 +832,17 @@ public sealed class ReferenceResolver : IDisposable
                     }
                 }
             }
+        }
+
+        public bool TryGetOriginalPath(string simpleName, out string path)
+        {
+            if (!string.IsNullOrEmpty(simpleName))
+            {
+                return assemblyPaths.TryGetValue(simpleName, out path);
+            }
+
+            path = null;
+            return false;
         }
 
         public IEnumerable<string> UnresolvedSimpleNames
@@ -784,16 +863,22 @@ public sealed class ReferenceResolver : IDisposable
         public Assembly LoadFromPath(MetadataLoadContext context, string path)
         {
             var fileName = Path.GetFileNameWithoutExtension(path);
+            Assembly asm;
             if (assemblyBytes.TryGetValue(fileName, out var bytes))
             {
-                return context.LoadFromByteArray(bytes);
+                asm = context.LoadFromByteArray(bytes);
+            }
+            else
+            {
+                // Fallback: read from disk with sharing flags.
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                var buffer = new byte[fs.Length];
+                fs.ReadExactly(buffer);
+                asm = context.LoadFromByteArray(buffer);
             }
 
-            // Fallback: read from disk with sharing flags.
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            var buffer = new byte[fs.Length];
-            fs.ReadExactly(buffer);
-            return context.LoadFromByteArray(buffer);
+            RegisterAssemblyOriginalPath(asm, path);
+            return asm;
         }
 
         public override Assembly Resolve(MetadataLoadContext context, AssemblyName assemblyName)
@@ -803,7 +888,13 @@ public sealed class ReferenceResolver : IDisposable
             {
                 try
                 {
-                    return context.LoadFromByteArray(bytes);
+                    var asm = context.LoadFromByteArray(bytes);
+                    if (assemblyPaths.TryGetValue(simpleName, out var originalPath))
+                    {
+                        RegisterAssemblyOriginalPath(asm, originalPath);
+                    }
+
+                    return asm;
                 }
                 catch (Exception ex) when (
                     ex is FileNotFoundException

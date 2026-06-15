@@ -559,19 +559,10 @@ internal static class CrossAssemblyDefinitionResolver
 
     private static string TryGetAssemblyPath(Assembly assembly)
     {
-        if (assembly == null)
-        {
-            return null;
-        }
-
-        try
-        {
-            var location = assembly.Location;
-            return string.IsNullOrEmpty(location) ? null : location;
-        }
-        catch (NotSupportedException)
-        {
-            return null;
-        }
+        // Delegates to ReferenceResolver.TryGetAssemblyPath which falls back
+        // to the per-process registry of original paths for assemblies loaded
+        // via MetadataLoadContext.LoadFromByteArray (whose Assembly.Location
+        // is the empty string). See #853 / #858.
+        return ReferenceResolver.TryGetAssemblyPath(assembly, out var path) ? path : null;
     }
 }
