@@ -57,16 +57,25 @@
       "end": "\"",
       "applyEndPatternLast": true,
       "patterns": [
-        {
-          "name": "constant.character.escape.quote.gsharp",
-          "match": "\"\""
-        },
+        { "include": "#string-escape" },
         {
           "name": "constant.character.escape.dollar.gsharp",
           "match": "\\$\\$"
         },
         { "include": "#interpolation-braced" },
         { "include": "#interpolation-ident" }
+      ]
+    },
+    "string-escape": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.gsharp",
+          "match": "\\\\(['\"\\\\0abfnrtv]|x[0-9A-Fa-f]{1,4}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})"
+        },
+        {
+          "name": "invalid.illegal.unrecognized-string-escape.gsharp",
+          "match": "\\\\."
+        }
       ]
     },
     "raw-string": {
