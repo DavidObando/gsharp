@@ -226,6 +226,24 @@ public class ProjectState
 
             var trees = syntaxTrees.Values.ToArray();
             var resolver = GetOrBuildResolver_NoLock();
+
+            // ADR-0105 (Phase 2): attempt the incremental fast path — a single
+            // file changed and that change is a body-only edit, so we can reuse
+            // the previous compilation's BoundGlobalScope (and therefore every
+            // symbol instance) and let the BoundBodyCache serve every unchanged
+            // file's bodies, re-binding only the edited file. On any mismatch
+            // this returns null and we fall back to a full rebuild below
+            // (over-invalidation is always safe; under-invalidation would be a
+            // correctness bug).
+            var incremental = TryBuildIncrementalCompilation_NoLock(trees, resolver);
+            if (incremental != null)
+            {
+                compilation = incremental;
+                compilation.BodyCache = bodyCache;
+                isDirty = false;
+                return compilation;
+            }
+
             if (trees.Length == 0)
             {
                 compilation = resolver != null
@@ -250,6 +268,113 @@ public class ProjectState
             isDirty = false;
             return compilation;
         }
+    }
+
+    /// <summary>
+    /// ADR-0105 (Phase 2): attempts to construct the next <see cref="Compilation"/>
+    /// incrementally when the only change since <see cref="compilation"/> is a
+    /// body-only edit to a single file. On success returns a new compilation
+    /// that reuses the previous <c>BoundGlobalScope</c> (with the edited file's
+    /// symbols re-pointed at the new syntax) and marks the edited tree dirty so
+    /// only its bodies are re-bound; every other file's bodies are served from
+    /// the shared <see cref="bodyCache"/>. Returns <see langword="null"/> for
+    /// every other edit shape (signature edit, import/package/alias change,
+    /// multiple files changed, add/remove, or a reference change), forcing the
+    /// caller's full rebuild. Must be called under <see cref="compilationLock"/>.
+    /// </summary>
+    /// <param name="trees">The current set of syntax trees.</param>
+    /// <param name="resolver">The current reference resolver (may be null).</param>
+    /// <returns>An incrementally-built compilation, or <see langword="null"/> to fall back.</returns>
+    private Compilation TryBuildIncrementalCompilation_NoLock(SyntaxTree[] trees, ReferenceResolver resolver)
+    {
+        var previous = compilation;
+        if (previous == null || trees.Length == 0)
+        {
+            return null;
+        }
+
+        // A reference (.rsp) change is project-wide — fall back. Comparing the
+        // resolver instance is sufficient: GetOrBuildResolver_NoLock returns the
+        // same cached instance until references change, when it is rebuilt.
+        if (!ReferenceEquals(previous.References, resolver))
+        {
+            return null;
+        }
+
+        // The REPL/append chain shape is not produced here; only handle the flat
+        // single-compilation shape the language server builds.
+        if (previous.Previous != null)
+        {
+            return null;
+        }
+
+        // Pair the previous and current trees by file path. Any added or removed
+        // file makes this not a single-file body edit.
+        var previousTrees = previous.SyntaxTrees;
+        if (previousTrees.Length != trees.Length)
+        {
+            return null;
+        }
+
+        var previousByPath = new Dictionary<string, SyntaxTree>(previousTrees.Length, StringComparer.OrdinalIgnoreCase);
+        foreach (var tree in previousTrees)
+        {
+            var name = tree.Text?.FileName;
+            if (string.IsNullOrEmpty(name))
+            {
+                return null;
+            }
+
+            previousByPath[NormalizePath(name)] = tree;
+        }
+
+        SyntaxTree changedPrevious = null;
+        SyntaxTree changedUpdated = null;
+        foreach (var tree in trees)
+        {
+            var name = tree.Text?.FileName;
+            if (string.IsNullOrEmpty(name) || !previousByPath.TryGetValue(NormalizePath(name), out var prevTree))
+            {
+                return null;
+            }
+
+            if (ReferenceEquals(prevTree, tree))
+            {
+                continue;
+            }
+
+            if (changedUpdated != null)
+            {
+                // More than one file changed — fall back.
+                return null;
+            }
+
+            changedPrevious = prevTree;
+            changedUpdated = tree;
+        }
+
+        if (changedUpdated == null)
+        {
+            // Nothing actually changed (should not happen when dirty), but if so
+            // there is nothing to rebind — let the caller reuse normally.
+            return null;
+        }
+
+        // Reuse the previous global scope and re-point the edited file's symbols
+        // at the new syntax. This both validates the edit is body-only and (on
+        // success) performs the only mutation. On failure nothing is mutated.
+        var reusedScope = previous.GlobalScope;
+        if (!Core.CodeAnalysis.Binding.IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(reusedScope, changedPrevious, changedUpdated))
+        {
+            return null;
+        }
+
+        var incremental = resolver != null
+            ? new Compilation(resolver, trees)
+            : new Compilation(trees);
+        incremental.ReusedGlobalScope = reusedScope;
+        incremental.DirtyBodyTrees = System.Collections.Immutable.ImmutableHashSet.Create(changedUpdated);
+        return incremental;
     }
 
     private void RefreshReferencesFromSourceFile_NoLock()

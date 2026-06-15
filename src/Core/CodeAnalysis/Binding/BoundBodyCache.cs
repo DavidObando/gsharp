@@ -42,20 +42,28 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <para>
 /// <strong>Soundness gate (critical — read ADR-0105 "Stable symbol identity"
 /// and "Determinism").</strong> A lowered body references symbols drawn from a
-/// particular <see cref="BoundGlobalScope"/>. Until ADR-0105 Phase 2 introduces
-/// per-file symbol tables with stable symbol identity, every fresh
-/// <see cref="Compilation.Compilation"/> allocates <em>fresh</em> symbol
-/// instances, so a body cached against compilation <c>N</c>'s symbols cannot be
-/// spliced into compilation <c>N+1</c> without silently referencing stale
-/// symbols. To keep emit and diagnostics bit-for-bit identical to the
-/// full-rebuild path, reuse is therefore gated on the cached body having been
-/// bound against the <em>same</em> <see cref="BoundGlobalScope"/> instance
-/// (reference equality), which guarantees the referenced symbols are the exact
-/// same instances. Across language-server edits this gate is (by design)
-/// almost never satisfied — Phase 1 lands the infrastructure with a near-zero
-/// hit-rate and no user-visible effect, exactly as ADR-0105 states. Phase 2
-/// will replace this gate with a symbol-identity-based check so that body-only
-/// edits hit.
+/// particular <see cref="BoundGlobalScope"/>: the member's own parameters and
+/// locals, the sibling functions/types it calls, and so on. Splicing such a
+/// body into a different compilation is only sound if those referenced symbol
+/// <em>instances</em> are the exact instances that compilation uses (the
+/// emitter and binder key members by reference identity, not by signature).
+/// </para>
+/// <para>
+/// ADR-0105 <strong>Phase 2</strong> establishes that identity: a body-only,
+/// single-file edit produces a new <see cref="Compilation.Compilation"/> that
+/// <em>reuses the prior compilation's symbol instances</em> (the edited file's
+/// declarations are re-pointed at the freshly-parsed syntax via
+/// <see cref="IncrementalGlobalScopeReuse"/>; every other file's symbols flow
+/// through unchanged). Because the symbol instances survive across the edit,
+/// the soundness gate is the <em>symbol identity of the member</em>: a cached
+/// body is reused only when the member symbol presented on lookup is the
+/// <em>same instance</em> that produced the stored body
+/// (<see cref="object.ReferenceEquals(object, object)"/> on the member). On the
+/// from-scratch / full-rebuild path every member is a fresh instance, so the
+/// gate correctly forces a re-bind there (a stale-symbol splice can never
+/// occur). This replaces Phase 1's <see cref="BoundGlobalScope"/>-reference
+/// gate, which never hit across compilations because each one allocated fresh
+/// symbols.
 /// </para>
 /// <para>
 /// The cached entry carries both the lowered <see cref="BoundBlockStatement"/>
@@ -120,20 +128,18 @@ public sealed class BoundBodyCache
     /// <summary>
     /// Attempts a <em>sound</em> reuse of a previously cached lowered body for
     /// <paramref name="member"/>. A hit is returned only when the stable key
-    /// matches <em>and</em> the cached body was bound against the same
-    /// <paramref name="scope"/> instance (the soundness gate described on this
-    /// type). On a sound hit, <paramref name="loweredBody"/> and
-    /// <paramref name="diagnostics"/> are exactly what a from-scratch bind would
-    /// have produced.
+    /// matches <em>and</em> the cached body was bound for the same
+    /// <paramref name="member"/> symbol instance (the symbol-identity soundness
+    /// gate described on this type). On a sound hit, <paramref name="loweredBody"/>
+    /// and <paramref name="diagnostics"/> are exactly what a from-scratch bind
+    /// would have produced.
     /// </summary>
-    /// <param name="scope">The global scope the current bind is running against.</param>
     /// <param name="member">The member symbol whose body is being bound.</param>
     /// <param name="bodySyntax">The body syntax that would be bound and lowered.</param>
     /// <param name="loweredBody">The reused lowered body, on a sound hit.</param>
     /// <param name="diagnostics">The reused per-body diagnostics, on a sound hit.</param>
     /// <returns><see langword="true"/> on a sound hit; otherwise <see langword="false"/>.</returns>
     public bool TryReuse(
-        BoundGlobalScope scope,
         FunctionSymbol member,
         SyntaxNode bodySyntax,
         out BoundBlockStatement loweredBody,
@@ -142,12 +148,12 @@ public sealed class BoundBodyCache
         loweredBody = null;
         diagnostics = ImmutableArray<Diagnostic>.Empty;
 
-        if (scope == null || !TryCreateKey(member, bodySyntax, out var key))
+        if (!TryCreateKey(member, bodySyntax, out var key))
         {
             return false;
         }
 
-        if (entries.TryGetValue(key, out var entry) && ReferenceEquals(entry.Scope, scope))
+        if (entries.TryGetValue(key, out var entry) && ReferenceEquals(entry.Member, member))
         {
             loweredBody = entry.LoweredBody;
             diagnostics = entry.Diagnostics;
@@ -161,27 +167,25 @@ public sealed class BoundBodyCache
 
     /// <summary>
     /// Stores a freshly bound and lowered body (and its diagnostics) for later
-    /// reuse, tagged with the <paramref name="scope"/> it was bound against so
-    /// the soundness gate can be enforced on lookup.
+    /// reuse, tagged with the <paramref name="member"/> instance it was bound
+    /// for so the symbol-identity soundness gate can be enforced on lookup.
     /// </summary>
-    /// <param name="scope">The global scope the body was bound against.</param>
     /// <param name="member">The member symbol whose body was bound.</param>
     /// <param name="bodySyntax">The body syntax that was bound and lowered.</param>
     /// <param name="loweredBody">The lowered body to cache.</param>
     /// <param name="diagnostics">The per-body diagnostics to cache alongside the body.</param>
     public void Store(
-        BoundGlobalScope scope,
         FunctionSymbol member,
         SyntaxNode bodySyntax,
         BoundBlockStatement loweredBody,
         ImmutableArray<Diagnostic> diagnostics)
     {
-        if (scope == null || loweredBody == null || !TryCreateKey(member, bodySyntax, out var key))
+        if (loweredBody == null || !TryCreateKey(member, bodySyntax, out var key))
         {
             return;
         }
 
-        entries[key] = new Entry(scope, loweredBody, diagnostics.IsDefault ? ImmutableArray<Diagnostic>.Empty : diagnostics);
+        entries[key] = new Entry(member, loweredBody, diagnostics.IsDefault ? ImmutableArray<Diagnostic>.Empty : diagnostics);
         Interlocked.Increment(ref stores);
     }
 
@@ -200,14 +204,14 @@ public sealed class BoundBodyCache
 
     private sealed class Entry
     {
-        public Entry(BoundGlobalScope scope, BoundBlockStatement loweredBody, ImmutableArray<Diagnostic> diagnostics)
+        public Entry(FunctionSymbol member, BoundBlockStatement loweredBody, ImmutableArray<Diagnostic> diagnostics)
         {
-            Scope = scope;
+            Member = member;
             LoweredBody = loweredBody;
             Diagnostics = diagnostics;
         }
 
-        public BoundGlobalScope Scope { get; }
+        public FunctionSymbol Member { get; }
 
         public BoundBlockStatement LoweredBody { get; }
 

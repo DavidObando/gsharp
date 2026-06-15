@@ -822,6 +822,31 @@ public sealed class Binder
     /// </param>
     /// <returns>A bound program.</returns>
     public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver references, BoundBodyCache cache)
+        => BindProgram(globalScope, references, cache, dirtyTrees: null);
+
+    /// <summary>
+    /// Produces a bound program, optionally reusing previously bound member
+    /// bodies from <paramref name="cache"/> and, for ADR-0105 Phase 2 delta
+    /// binding, <em>forcing a fresh re-bind</em> of every member whose body
+    /// syntax belongs to a tree in <paramref name="dirtyTrees"/>.
+    /// </summary>
+    /// <param name="globalScope">The global scope.</param>
+    /// <param name="references">The reference resolver (see other overloads).</param>
+    /// <param name="cache">The optional per-project bound-body cache.</param>
+    /// <param name="dirtyTrees">
+    /// ADR-0105 Phase 2: the set of freshly-parsed syntax trees whose member
+    /// bodies must be re-bound from scratch (and re-stored) rather than served
+    /// from <paramref name="cache"/>. This is how the language server's
+    /// incremental path re-binds <em>only</em> the edited file's bodies while
+    /// the symbol instances are reused: members in an unedited file hit the
+    /// cache by symbol identity, members in the edited (dirty) file are always
+    /// rebound so their lowered bodies and diagnostics reflect the new source
+    /// text and spans exactly as a full rebuild would. <see langword="null"/>
+    /// (or empty) means "no dirty trees" — every member may be served from the
+    /// cache when the soundness gate allows it.
+    /// </param>
+    /// <returns>A bound program.</returns>
+    public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver references, BoundBodyCache cache, ImmutableHashSet<SyntaxTree> dirtyTrees)
     {
         var parentScope = CreateParentScope(globalScope, references, preprocessorSymbols: globalScope?.PreprocessorSymbols);
 
@@ -846,7 +871,7 @@ public sealed class Binder
                     continue;
                 }
 
-                var loweredBody = BindBodyWithCache(cache, globalScope, function, function.Declaration.Body, diagnostics, () =>
+                var loweredBody = BindBodyWithCache(cache, dirtyTrees, function, function.Declaration.Body, diagnostics, () =>
                 {
                     var binder = new Binder(parentScope, function);
                     var body = binder.statements.BindStatement(function.Declaration.Body);
@@ -882,7 +907,7 @@ public sealed class Binder
 
             foreach (var method in structSym.Methods)
             {
-                var loweredBody = BindBodyWithCache(cache, globalScope, method, method.Declaration.Body, diagnostics, () =>
+                var loweredBody = BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
                 {
                     var binder = new Binder(parentScope, method);
                     var body = binder.statements.BindStatement(method.Declaration.Body);
@@ -921,7 +946,7 @@ public sealed class Binder
                     continue;
                 }
 
-                BindInterfaceMethodBody(cache, globalScope, parentScope, method, functionBodies, diagnostics);
+                BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics);
             }
         }
 
@@ -943,7 +968,7 @@ public sealed class Binder
                     continue;
                 }
 
-                BindInterfaceMethodBody(cache, globalScope, parentScope, method, functionBodies, diagnostics);
+                BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics);
             }
         }
 
@@ -963,7 +988,7 @@ public sealed class Binder
                         continue;
                     }
 
-                    BindInterfaceMethodBody(cache, globalScope, parentScope, method, functionBodies, diagnostics);
+                    BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics);
                 }
             }
 
@@ -976,7 +1001,7 @@ public sealed class Binder
                         continue;
                     }
 
-                    BindInterfaceMethodBody(cache, globalScope, parentScope, method, functionBodies, diagnostics);
+                    BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics);
                 }
             }
         }
@@ -1003,7 +1028,7 @@ public sealed class Binder
                     continue;
                 }
 
-                var ctorLoweredBody = BindBodyWithCache(cache, globalScope, ctor.Function, ctor.Declaration.Body, diagnostics, () =>
+                var ctorLoweredBody = BindBodyWithCache(cache, dirtyTrees, ctor.Function, ctor.Declaration.Body, diagnostics, () =>
                 {
                     var ctorBinder = new Binder(parentScope, ctor.Function);
                     var ctorBody = ctorBinder.statements.BindStatement(ctor.Declaration.Body);
@@ -1035,7 +1060,7 @@ public sealed class Binder
                 continue;
             }
 
-            BindStructMemberBody(cache, globalScope, parentScope, deinit.Function, deinit.Declaration.Body, structSym, functionBodies, diagnostics);
+            BindStructMemberBody(cache, dirtyTrees, parentScope, deinit.Function, deinit.Declaration.Body, structSym, functionBodies, diagnostics);
         }
 
         // ADR-0051: bind computed property accessor bodies. These are analogous
@@ -1053,12 +1078,12 @@ public sealed class Binder
 
                     if (prop.GetterSymbol != null && prop.GetterBodySyntax != null)
                     {
-                        BindStructMemberBody(cache, globalScope, parentScope, prop.GetterSymbol, prop.GetterBodySyntax, structSym, functionBodies, diagnostics, prop.GetterBodySyntax.OpenBraceToken.Location);
+                        BindStructMemberBody(cache, dirtyTrees, parentScope, prop.GetterSymbol, prop.GetterBodySyntax, structSym, functionBodies, diagnostics, prop.GetterBodySyntax.OpenBraceToken.Location);
                     }
 
                     if (prop.SetterSymbol != null && prop.SetterBodySyntax != null)
                     {
-                        BindStructMemberBody(cache, globalScope, parentScope, prop.SetterSymbol, prop.SetterBodySyntax, structSym, functionBodies, diagnostics);
+                        BindStructMemberBody(cache, dirtyTrees, parentScope, prop.SetterSymbol, prop.SetterBodySyntax, structSym, functionBodies, diagnostics);
                     }
                 }
             }
@@ -1075,18 +1100,18 @@ public sealed class Binder
 
                     if (ev.AddMethodSymbol != null && ev.AddBodySyntax != null)
                     {
-                        BindStructMemberBody(cache, globalScope, parentScope, ev.AddMethodSymbol, ev.AddBodySyntax, structSym, functionBodies, diagnostics);
+                        BindStructMemberBody(cache, dirtyTrees, parentScope, ev.AddMethodSymbol, ev.AddBodySyntax, structSym, functionBodies, diagnostics);
                     }
 
                     if (ev.RemoveMethodSymbol != null && ev.RemoveBodySyntax != null)
                     {
-                        BindStructMemberBody(cache, globalScope, parentScope, ev.RemoveMethodSymbol, ev.RemoveBodySyntax, structSym, functionBodies, diagnostics);
+                        BindStructMemberBody(cache, dirtyTrees, parentScope, ev.RemoveMethodSymbol, ev.RemoveBodySyntax, structSym, functionBodies, diagnostics);
                     }
 
                     // Issue #257: bind raise accessor body.
                     if (ev.RaiseMethodSymbol != null && ev.RaiseBodySyntax != null)
                     {
-                        BindStructMemberBody(cache, globalScope, parentScope, ev.RaiseMethodSymbol, ev.RaiseBodySyntax, structSym, functionBodies, diagnostics);
+                        BindStructMemberBody(cache, dirtyTrees, parentScope, ev.RaiseMethodSymbol, ev.RaiseBodySyntax, structSym, functionBodies, diagnostics);
                     }
                 }
             }
@@ -1109,12 +1134,12 @@ public sealed class Binder
 
                 if (prop.GetterSymbol != null && prop.GetterBodySyntax != null)
                 {
-                    BindStructMemberBody(cache, globalScope, parentScope, prop.GetterSymbol, prop.GetterBodySyntax, structSym, functionBodies, diagnostics, prop.GetterBodySyntax.OpenBraceToken.Location);
+                    BindStructMemberBody(cache, dirtyTrees, parentScope, prop.GetterSymbol, prop.GetterBodySyntax, structSym, functionBodies, diagnostics, prop.GetterBodySyntax.OpenBraceToken.Location);
                 }
 
                 if (prop.SetterSymbol != null && prop.SetterBodySyntax != null)
                 {
-                    BindStructMemberBody(cache, globalScope, parentScope, prop.SetterSymbol, prop.SetterBodySyntax, structSym, functionBodies, diagnostics);
+                    BindStructMemberBody(cache, dirtyTrees, parentScope, prop.SetterSymbol, prop.SetterBodySyntax, structSym, functionBodies, diagnostics);
                 }
             }
         }
@@ -1136,18 +1161,18 @@ public sealed class Binder
 
                 if (ev.AddMethodSymbol != null && ev.AddBodySyntax != null)
                 {
-                    BindStructMemberBody(cache, globalScope, parentScope, ev.AddMethodSymbol, ev.AddBodySyntax, structSym, functionBodies, diagnostics);
+                    BindStructMemberBody(cache, dirtyTrees, parentScope, ev.AddMethodSymbol, ev.AddBodySyntax, structSym, functionBodies, diagnostics);
                 }
 
                 if (ev.RemoveMethodSymbol != null && ev.RemoveBodySyntax != null)
                 {
-                    BindStructMemberBody(cache, globalScope, parentScope, ev.RemoveMethodSymbol, ev.RemoveBodySyntax, structSym, functionBodies, diagnostics);
+                    BindStructMemberBody(cache, dirtyTrees, parentScope, ev.RemoveMethodSymbol, ev.RemoveBodySyntax, structSym, functionBodies, diagnostics);
                 }
 
                 // Issue #257: bind raise accessor body for static events.
                 if (ev.RaiseMethodSymbol != null && ev.RaiseBodySyntax != null)
                 {
-                    BindStructMemberBody(cache, globalScope, parentScope, ev.RaiseMethodSymbol, ev.RaiseBodySyntax, structSym, functionBodies, diagnostics);
+                    BindStructMemberBody(cache, dirtyTrees, parentScope, ev.RaiseMethodSymbol, ev.RaiseBodySyntax, structSym, functionBodies, diagnostics);
                 }
             }
         }
@@ -1167,7 +1192,7 @@ public sealed class Binder
                     continue;
                 }
 
-                BindStructMethodBody(cache, globalScope, parentScope, method, structSym, functionBodies, diagnostics);
+                BindStructMethodBody(cache, dirtyTrees, parentScope, method, structSym, functionBodies, diagnostics);
             }
         }
 
@@ -1197,8 +1222,8 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// ADR-0105 (Phase 1) helper shared by every member-body bind site in
-    /// <see cref="BindProgram(BoundGlobalScope, ReferenceResolver, BoundBodyCache)"/>.
+    /// ADR-0105 helper shared by every member-body bind site in
+    /// <see cref="BindProgram(BoundGlobalScope, ReferenceResolver, BoundBodyCache, ImmutableHashSet{SyntaxTree})"/>.
     /// On a <em>sound</em> cache hit it returns the cached lowered body and
     /// appends the cached per-body diagnostics; otherwise it invokes
     /// <paramref name="bindAndLower"/> (which performs the exact same
@@ -1208,7 +1233,13 @@ public sealed class Binder
     /// the full-rebuild path with no behavioral difference.
     /// </summary>
     /// <param name="cache">The optional bound-body cache.</param>
-    /// <param name="globalScope">The global scope the bind is running against (the soundness-gate token).</param>
+    /// <param name="dirtyTrees">
+    /// ADR-0105 Phase 2: when <paramref name="bodySyntax"/> belongs to one of
+    /// these freshly-parsed (edited) trees, the cache read is <em>bypassed</em>
+    /// so the body is always rebound from scratch (and re-stored) — its lowered
+    /// form and diagnostics then reflect the new source text and spans exactly
+    /// as a full rebuild would. <see langword="null"/> means no dirty trees.
+    /// </param>
     /// <param name="member">The member symbol whose body is being bound.</param>
     /// <param name="bodySyntax">The body syntax that will be bound and lowered.</param>
     /// <param name="diagnostics">The program-level diagnostics accumulator to append to.</param>
@@ -1216,15 +1247,20 @@ public sealed class Binder
     /// <returns>The lowered body — reused on a sound hit, freshly produced otherwise.</returns>
     private static BoundBlockStatement BindBodyWithCache(
         BoundBodyCache cache,
-        BoundGlobalScope globalScope,
+        ImmutableHashSet<SyntaxTree> dirtyTrees,
         FunctionSymbol member,
         SyntaxNode bodySyntax,
         ImmutableArray<Diagnostic>.Builder diagnostics,
         Func<(BoundBlockStatement Body, ImmutableArray<Diagnostic> Diagnostics)> bindAndLower)
     {
-        if (cache != null
+        var isDirty = dirtyTrees != null
+            && bodySyntax?.SyntaxTree != null
+            && dirtyTrees.Contains(bodySyntax.SyntaxTree);
+
+        if (!isDirty
+            && cache != null
             && bodySyntax != null
-            && cache.TryReuse(globalScope, member, bodySyntax, out var reusedBody, out var reusedDiagnostics))
+            && cache.TryReuse(member, bodySyntax, out var reusedBody, out var reusedDiagnostics))
         {
             diagnostics.AddRange(reusedDiagnostics);
             return reusedBody;
@@ -1232,7 +1268,7 @@ public sealed class Binder
 
         var (body, bodyDiagnostics) = bindAndLower();
         diagnostics.AddRange(bodyDiagnostics);
-        cache?.Store(globalScope, member, bodySyntax, body, bodyDiagnostics);
+        cache?.Store(member, bodySyntax, body, bodyDiagnostics);
         return body;
     }
 
@@ -1244,20 +1280,20 @@ public sealed class Binder
     /// through <see cref="BindBodyWithCache"/> and registers the body.
     /// </summary>
     /// <param name="cache">The optional bound-body cache.</param>
-    /// <param name="globalScope">The global scope (soundness-gate token).</param>
+    /// <param name="dirtyTrees">ADR-0105 Phase 2: freshly-parsed (edited) trees whose member bodies must be rebound rather than served from the cache.</param>
     /// <param name="parentScope">The parent scope bodies are bound against.</param>
     /// <param name="method">The interface method whose body is being bound.</param>
     /// <param name="functionBodies">The function-body map to register the lowered body in.</param>
     /// <param name="diagnostics">The program-level diagnostics accumulator.</param>
     private static void BindInterfaceMethodBody(
         BoundBodyCache cache,
-        BoundGlobalScope globalScope,
+        ImmutableHashSet<SyntaxTree> dirtyTrees,
         BoundScope parentScope,
         FunctionSymbol method,
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
-        var loweredBody = BindBodyWithCache(cache, globalScope, method, method.Declaration.Body, diagnostics, () =>
+        var loweredBody = BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
         {
             var binder = new Binder(parentScope, method);
             var body = binder.statements.BindStatement(method.Declaration.Body);
@@ -1282,7 +1318,7 @@ public sealed class Binder
     /// through <see cref="BindBodyWithCache"/> and registers the body.
     /// </summary>
     /// <param name="cache">The optional bound-body cache.</param>
-    /// <param name="globalScope">The global scope (soundness-gate token).</param>
+    /// <param name="dirtyTrees">ADR-0105 Phase 2: freshly-parsed (edited) trees whose member bodies must be rebound rather than served from the cache.</param>
     /// <param name="parentScope">The parent scope bodies are bound against.</param>
     /// <param name="member">The member whose body is being bound.</param>
     /// <param name="bodySyntax">The body syntax to bind and lower.</param>
@@ -1292,7 +1328,7 @@ public sealed class Binder
     /// <param name="allPathsReturnLocation">When non-null, the location at which to report a missing all-paths return.</param>
     private static void BindStructMemberBody(
         BoundBodyCache cache,
-        BoundGlobalScope globalScope,
+        ImmutableHashSet<SyntaxTree> dirtyTrees,
         BoundScope parentScope,
         FunctionSymbol member,
         StatementSyntax bodySyntax,
@@ -1301,7 +1337,7 @@ public sealed class Binder
         ImmutableArray<Diagnostic>.Builder diagnostics,
         TextLocation? allPathsReturnLocation = null)
     {
-        var loweredBody = BindBodyWithCache(cache, globalScope, member, bodySyntax, diagnostics, () =>
+        var loweredBody = BindBodyWithCache(cache, dirtyTrees, member, bodySyntax, diagnostics, () =>
         {
             var binder = new Binder(parentScope, member);
             var body = binder.statements.BindStatement(bodySyntax);
@@ -1326,7 +1362,7 @@ public sealed class Binder
     /// and registers the body.
     /// </summary>
     /// <param name="cache">The optional bound-body cache.</param>
-    /// <param name="globalScope">The global scope (soundness-gate token).</param>
+    /// <param name="dirtyTrees">ADR-0105 Phase 2: freshly-parsed (edited) trees whose member bodies must be rebound rather than served from the cache.</param>
     /// <param name="parentScope">The parent scope bodies are bound against.</param>
     /// <param name="method">The method whose body is being bound.</param>
     /// <param name="structSym">The declaring type used as the lowering context.</param>
@@ -1334,14 +1370,14 @@ public sealed class Binder
     /// <param name="diagnostics">The program-level diagnostics accumulator.</param>
     private static void BindStructMethodBody(
         BoundBodyCache cache,
-        BoundGlobalScope globalScope,
+        ImmutableHashSet<SyntaxTree> dirtyTrees,
         BoundScope parentScope,
         FunctionSymbol method,
         StructSymbol structSym,
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
-        var loweredBody = BindBodyWithCache(cache, globalScope, method, method.Declaration.Body, diagnostics, () =>
+        var loweredBody = BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
         {
             var binder = new Binder(parentScope, method);
             var body = binder.statements.BindStatement(method.Declaration.Body);
