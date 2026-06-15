@@ -307,8 +307,28 @@ public class HoverHandlerTests
     {
         var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location);
         var dotnetRoot = Directory.GetParent(runtimeDir).Parent.Parent.FullName;
-        var tfm = $"net{System.Environment.Version.Major}.0";
-        var refDir = Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref", System.Environment.Version.ToString(3), "ref", tfm);
+        var major = System.Environment.Version.Major;
+        var tfm = $"net{major}.0";
+
+        // Discover the actual installed ref pack directory. Globbing rather
+        // than hard-coding Environment.Version.ToString(3) tolerates the
+        // common CI shape where the running runtime (e.g. "10.0.0") and the
+        // installed ref pack (e.g. "10.0.9") have different patch versions
+        // (#858). Pick the highest-versioned ref pack whose TFM directory
+        // exists.
+        var packRoot = Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref");
+        Assert.True(Directory.Exists(packRoot), $"Ref pack root '{packRoot}' not found.");
+
+        var refDir = Directory.EnumerateDirectories(packRoot)
+            .Select(d => new { Dir = d, Ref = Path.Combine(d, "ref", tfm) })
+            .Where(x => Directory.Exists(x.Ref))
+            .OrderByDescending(x => TryParseVersion(Path.GetFileName(x.Dir)))
+            .Select(x => x.Ref)
+            .FirstOrDefault();
+
+        Assert.NotNull(refDir);
         return ReferenceResolver.WithReferences(Directory.GetFiles(refDir, "*.dll"));
+
+        static Version TryParseVersion(string s) => Version.TryParse(s, out var v) ? v : new Version(0, 0);
     }
 }
