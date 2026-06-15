@@ -20,8 +20,14 @@ using Range = GSharp.LanguageServer.Protocol.Range;
 namespace GSharp.LanguageServer.Server;
 
 /// <summary>
-/// Hosts the LSP method handlers and dispatches them through StreamJsonRpc. All handlers are
-/// serialized through a single gate so document mutations are applied before subsequent reads.
+/// Hosts the LSP method handlers and dispatches them through StreamJsonRpc. Concurrency
+/// follows Roslyn's RequestExecutionQueue model: mutating ("write") requests
+/// (didOpen/didChange/didSave/didClose/watchedFiles) hold a single gate for their brief
+/// body so the mutation is fully applied before later requests snapshot, while non-mutating
+/// ("read") requests only take the gate to capture an ordered, immutable document snapshot
+/// and then run their computation off the gate on the thread pool. This keeps reads fully
+/// concurrent and ensures a slow read (e.g. the first cold workspace bind) never blocks
+/// other reads or editing.
 /// </summary>
 public sealed class LspServer
 {
@@ -275,163 +281,230 @@ public sealed class LspServer
     }
 
     [JsonRpcMethod("textDocument/hover", UseSingleObjectParameterDeserialization = true)]
-    public Task<Hover> HoverAsync(HoverParams request)
-        => this.GuardAsync(() => this.TryGet(request.TextDocument, out var content)
-            ? HoverComputer.ComputeHover(content, request.Position)
-            : null);
+    public Task<Hover> HoverAsync(HoverParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => HoverComputer.ComputeHover(content, request.Position),
+            null,
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/definition", UseSingleObjectParameterDeserialization = true)]
-    public Task<Location> DefinitionAsync(DefinitionParams request)
-        => this.GuardAsync(() => this.TryGet(request.TextDocument, out var content)
-            ? DefinitionComputer.ComputeDefinition(request.TextDocument.Uri, content, request.Position)
-            : null);
+    public Task<Location> DefinitionAsync(DefinitionParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => DefinitionComputer.ComputeDefinition(request.TextDocument.Uri, content, request.Position),
+            null,
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/references", UseSingleObjectParameterDeserialization = true)]
-    public Task<Location[]> ReferencesAsync(ReferenceParams request)
-        => this.GuardAsync(() => this.TryGet(request.TextDocument, out var content)
-            ? ReferencesComputer.ComputeReferences(request.TextDocument.Uri, content, request.Position, request.Context?.IncludeDeclaration ?? false).ToArray()
-            : Array.Empty<Location>());
+    public Task<Location[]> ReferencesAsync(ReferenceParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => ReferencesComputer.ComputeReferences(request.TextDocument.Uri, content, request.Position, request.Context?.IncludeDeclaration ?? false).ToArray(),
+            Array.Empty<Location>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/documentHighlight", UseSingleObjectParameterDeserialization = true)]
-    public Task<DocumentHighlight[]> DocumentHighlightAsync(DocumentHighlightParams request)
-        => this.GuardAsync(() =>
-        {
-            if (!this.TryGet(request.TextDocument, out var content))
+    public Task<DocumentHighlight[]> DocumentHighlightAsync(DocumentHighlightParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) =>
             {
-                return Array.Empty<DocumentHighlight>();
-            }
-
-            var tokens = ReferencesComputer.ComputeReferenceTokens(content, request.Position, includeDeclaration: true);
-            return tokens.Select(t => new DocumentHighlight
-            {
-                Range = SemanticLookup.ToRange(t),
-                Kind = DocumentHighlightKind.Text,
-            }).ToArray();
-        });
+                var tokens = ReferencesComputer.ComputeReferenceTokens(content, request.Position, includeDeclaration: true);
+                return tokens.Select(t => new DocumentHighlight
+                {
+                    Range = SemanticLookup.ToRange(t),
+                    Kind = DocumentHighlightKind.Text,
+                }).ToArray();
+            },
+            Array.Empty<DocumentHighlight>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/documentSymbol", UseSingleObjectParameterDeserialization = true)]
-    public Task<SymbolInformationOrDocumentSymbol[]> DocumentSymbolAsync(DocumentSymbolParams request)
-        => this.GuardAsync(() => this.TryGet(request.TextDocument, out var content)
-            ? DocumentSymbolComputer.ComputeDocumentSymbols(content).ToArray()
-            : Array.Empty<SymbolInformationOrDocumentSymbol>());
+    public Task<SymbolInformationOrDocumentSymbol[]> DocumentSymbolAsync(DocumentSymbolParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => DocumentSymbolComputer.ComputeDocumentSymbols(content).ToArray(),
+            Array.Empty<SymbolInformationOrDocumentSymbol>(),
+            cancellationToken);
 
     [JsonRpcMethod("workspace/symbol", UseSingleObjectParameterDeserialization = true)]
-    public Task<WorkspaceSymbol[]> WorkspaceSymbolAsync(WorkspaceSymbolParams request)
-        => this.GuardAsync(() =>
-        {
-            var query = request.Query ?? string.Empty;
-            var results = new List<WorkspaceSymbol>();
-            foreach (var pair in this.documentContentService.AllDocuments)
+    public Task<WorkspaceSymbol[]> WorkspaceSymbolAsync(WorkspaceSymbolParams request, CancellationToken cancellationToken = default)
+        => this.ReadWorkspaceAsync(
+            (docs, ct) =>
             {
-                WorkspaceSymbolHandler.CollectSymbols(results, pair.Key, pair.Value, query);
-            }
+                var query = request.Query ?? string.Empty;
+                var results = new List<WorkspaceSymbol>();
+                foreach (var pair in docs)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    WorkspaceSymbolHandler.CollectSymbols(results, pair.Key, pair.Value, query);
+                }
 
-            return results.ToArray();
-        });
+                return results.ToArray();
+            },
+            Array.Empty<WorkspaceSymbol>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/completion", UseSingleObjectParameterDeserialization = true)]
-    public Task<CompletionList> CompletionAsync(CompletionParams request)
-        => this.GuardAsync(() => this.TryGet(request.TextDocument, out var content)
-            ? new CompletionList(CompletionComputer.ComputeCompletions(content, request.Position))
-            : new CompletionList());
+    public Task<CompletionList> CompletionAsync(CompletionParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => new CompletionList(CompletionComputer.ComputeCompletions(content, request.Position)),
+            new CompletionList(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/signatureHelp", UseSingleObjectParameterDeserialization = true)]
-    public Task<SignatureHelp> SignatureHelpAsync(SignatureHelpParams request)
-        => this.GuardAsync(() => this.TryGet(request.TextDocument, out var content)
-            ? SignatureHelpComputer.ComputeSignatureHelp(content, request.Position)
-            : null);
+    public Task<SignatureHelp> SignatureHelpAsync(SignatureHelpParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => SignatureHelpComputer.ComputeSignatureHelp(content, request.Position),
+            null,
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/rename", UseSingleObjectParameterDeserialization = true)]
-    public Task<WorkspaceEdit> RenameAsync(RenameParams request)
-        => this.GuardAsync(() => this.TryGet(request.TextDocument, out var content)
-            ? RenameComputer.ComputeRename(request.TextDocument.Uri, content, request.Position, request.NewName)
-            : null);
+    public Task<WorkspaceEdit> RenameAsync(RenameParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => RenameComputer.ComputeRename(request.TextDocument.Uri, content, request.Position, request.NewName),
+            null,
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/prepareRename", UseSingleObjectParameterDeserialization = true)]
-    public Task<Range> PrepareRenameAsync(PrepareRenameParams request)
-        => this.GuardAsync(() => this.ComputePrepareRename(request));
+    public Task<Range> PrepareRenameAsync(PrepareRenameParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => this.ComputePrepareRename(content, request),
+            null,
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/codeAction", UseSingleObjectParameterDeserialization = true)]
-    public Task<CommandOrCodeActionContainer> CodeActionAsync(CodeActionParams request)
-        => this.GuardAsync(() => this.TryGet(request.TextDocument, out var content)
-            ? CodeActionComputer.ComputeCodeActions(request.TextDocument.Uri, content, request.Range)
-            : new CommandOrCodeActionContainer());
+    public Task<CommandOrCodeActionContainer> CodeActionAsync(CodeActionParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => CodeActionComputer.ComputeCodeActions(request.TextDocument.Uri, content, request.Range),
+            new CommandOrCodeActionContainer(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/codeLens", UseSingleObjectParameterDeserialization = true)]
-    public Task<CodeLens[]> CodeLensAsync(CodeLensParams request)
-        => this.GuardAsync(() => this.TryGet(request.TextDocument, out var content)
-            ? CodeLensComputer.ComputeLenses(content, request.TextDocument.Uri?.ToString()).ToArray()
-            : Array.Empty<CodeLens>());
+    public Task<CodeLens[]> CodeLensAsync(CodeLensParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => CodeLensComputer.ComputeLenses(content, request.TextDocument.Uri?.ToString()).ToArray(),
+            Array.Empty<CodeLens>(),
+            cancellationToken);
 
     [JsonRpcMethod("gsharp/discoverTests")]
-    public Task<TestDiscoveryItem[]> DiscoverTestsAsync()
-        => this.GuardAsync(() =>
-        {
-            var results = new List<TestDiscoveryItem>();
-            foreach (var pair in this.documentContentService.AllDocuments)
+    public Task<TestDiscoveryItem[]> DiscoverTestsAsync(CancellationToken cancellationToken = default)
+        => this.ReadWorkspaceAsync(
+            (docs, ct) =>
             {
-                results.AddRange(TestDiscoveryComputer.ComputeTests(pair.Key, pair.Value));
-            }
+                var results = new List<TestDiscoveryItem>();
+                foreach (var pair in docs)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    results.AddRange(TestDiscoveryComputer.ComputeTests(pair.Key, pair.Value));
+                }
 
-            return results.ToArray();
-        });
+                return results.ToArray();
+            },
+            Array.Empty<TestDiscoveryItem>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/inlayHint", UseSingleObjectParameterDeserialization = true)]
-    public Task<InlayHint[]> InlayHintAsync(InlayHintParams request)
-        => this.GuardAsync(() => this.TryGet(request.TextDocument, out var content)
-            ? InlayHintComputer.ComputeHints(content).ToArray()
-            : Array.Empty<InlayHint>());
+    public Task<InlayHint[]> InlayHintAsync(InlayHintParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => InlayHintComputer.ComputeHints(content).ToArray(),
+            Array.Empty<InlayHint>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/foldingRange", UseSingleObjectParameterDeserialization = true)]
-    public Task<FoldingRange[]> FoldingRangeAsync(FoldingRangeParams request)
-        => this.GuardAsync(() => this.TryGet(request.TextDocument, out var content)
-            ? FoldingComputer.ComputeFoldings(content).ToArray()
-            : Array.Empty<FoldingRange>());
+    public Task<FoldingRange[]> FoldingRangeAsync(FoldingRangeParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => FoldingComputer.ComputeFoldings(content).ToArray(),
+            Array.Empty<FoldingRange>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/selectionRange", UseSingleObjectParameterDeserialization = true)]
-    public Task<SelectionRange[]> SelectionRangeAsync(SelectionRangeParams request)
-        => this.GuardAsync(() =>
-        {
-            if (!this.TryGet(request.TextDocument, out var content) || request.Positions == null)
-            {
-                return Array.Empty<SelectionRange>();
-            }
-
-            return request.Positions.Select(p => SelectionRangeComputer.ComputeSelectionRange(content, p)).ToArray();
-        });
+    public Task<SelectionRange[]> SelectionRangeAsync(SelectionRangeParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => request.Positions == null
+                ? Array.Empty<SelectionRange>()
+                : request.Positions.Select(p => SelectionRangeComputer.ComputeSelectionRange(content, p)).ToArray(),
+            Array.Empty<SelectionRange>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/semanticTokens/full", UseSingleObjectParameterDeserialization = true)]
-    public Task<SemanticTokens> SemanticTokensFullAsync(SemanticTokensParams request)
-        => this.GuardAsync(() => this.ComputeSemanticTokens(request.TextDocument));
+    public Task<SemanticTokens> SemanticTokensFullAsync(SemanticTokensParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => this.ComputeSemanticTokens(content),
+            EmptySemanticTokens(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/semanticTokens/range", UseSingleObjectParameterDeserialization = true)]
-    public Task<SemanticTokens> SemanticTokensRangeAsync(SemanticTokensRangeParams request)
-        => this.GuardAsync(() => this.ComputeSemanticTokens(request.TextDocument));
+    public Task<SemanticTokens> SemanticTokensRangeAsync(SemanticTokensRangeParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => this.ComputeSemanticTokens(content),
+            EmptySemanticTokens(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/formatting", UseSingleObjectParameterDeserialization = true)]
-    public Task<TextEdit[]> FormattingAsync(DocumentFormattingParams request)
-        => this.GuardAsync(() => this.FormatDocument(request.TextDocument));
+    public Task<TextEdit[]> FormattingAsync(DocumentFormattingParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => this.FormatDocument(content),
+            Array.Empty<TextEdit>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/rangeFormatting", UseSingleObjectParameterDeserialization = true)]
-    public Task<TextEdit[]> RangeFormattingAsync(DocumentRangeFormattingParams request)
-        => this.GuardAsync(() => this.FormatDocument(request.TextDocument));
+    public Task<TextEdit[]> RangeFormattingAsync(DocumentRangeFormattingParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => this.FormatDocument(content),
+            Array.Empty<TextEdit>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/onTypeFormatting", UseSingleObjectParameterDeserialization = true)]
-    public Task<TextEdit[]> OnTypeFormattingAsync(DocumentOnTypeFormattingParams request)
-        => this.GuardAsync(() => this.FormatDocument(request.TextDocument));
+    public Task<TextEdit[]> OnTypeFormattingAsync(DocumentOnTypeFormattingParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => this.FormatDocument(content),
+            Array.Empty<TextEdit>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/implementation", UseSingleObjectParameterDeserialization = true)]
-    public Task<Location[]> ImplementationAsync(ImplementationParams request)
-        => this.GuardAsync(() => this.ComputeImplementation(request));
+    public Task<Location[]> ImplementationAsync(ImplementationParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => this.ComputeImplementation(content, request),
+            Array.Empty<Location>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/typeDefinition", UseSingleObjectParameterDeserialization = true)]
-    public Task<Location[]> TypeDefinitionAsync(TypeDefinitionParams request)
-        => this.GuardAsync(() => this.ComputeTypeDefinition(request));
+    public Task<Location[]> TypeDefinitionAsync(TypeDefinitionParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => this.ComputeTypeDefinition(content, request),
+            Array.Empty<Location>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/linkedEditingRange", UseSingleObjectParameterDeserialization = true)]
-    public Task<LinkedEditingRanges> LinkedEditingRangeAsync(LinkedEditingRangeParams request)
-        => this.GuardAsync(() => this.ComputeLinkedEditingRanges(request));
+    public Task<LinkedEditingRanges> LinkedEditingRangeAsync(LinkedEditingRangeParams request, CancellationToken cancellationToken = default)
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) => this.ComputeLinkedEditingRanges(content, request),
+            null,
+            cancellationToken);
 
+    // Mutating ("write") path. Mirrors Roslyn's RequestExecutionQueue handling of
+    // MutatesSolutionState=true requests: the gate is held for the whole (brief,
+    // parse-only) body so the mutation is fully applied before any later request
+    // captures its snapshot. didOpen/didChange/didSave/didClose/watchedFiles use this.
     private async Task<T> GuardAsync<T>(Func<T> body, [System.Runtime.CompilerServices.CallerMemberName] string caller = null)
     {
         await this.gate.WaitAsync().ConfigureAwait(false);
@@ -463,6 +536,130 @@ public sealed class LspServer
             this.gate.Release();
         }
     }
+
+    // Non-mutating ("read") path. Mirrors Roslyn's RequestExecutionQueue handling of
+    // non-mutating requests: the request's snapshot (here, the immutable DocumentContent)
+    // is captured serially under the gate so it reflects every prior mutation, and the
+    // gate is held only for that O(1) capture. The actual computation then runs OFF the
+    // gate on the thread pool via Task.Run so that:
+    //   * concurrent read requests never serialize behind one another, and
+    //   * a long-running read (e.g. the first cold full-workspace bind, ~17s on a large
+    //     workspace) never blocks unrelated reads or, crucially, a didChange while typing.
+    // Roslyn likewise dispatches non-mutating work via Task.Run "to enforce parallelizability".
+    // CancellationToken is honored end-to-end: StreamJsonRpc maps the LSP $/cancelRequest
+    // notification onto this token, so superseded hovers/highlights abort instead of
+    // consuming a thread-pool thread to completion.
+    private async Task<T> ReadDocumentAsync<T>(
+        TextDocumentIdentifier identifier,
+        Func<DocumentContent, CancellationToken, T> compute,
+        T missing,
+        CancellationToken cancellationToken,
+        [System.Runtime.CompilerServices.CallerMemberName] string caller = null)
+    {
+        DocumentContent content;
+        try
+        {
+            await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                if (!this.TryGet(identifier, out content) || content == null)
+                {
+                    return missing;
+                }
+            }
+            finally
+            {
+                this.gate.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Issue #816: even the snapshot lookup can throw (a faulted content service).
+            // Degrade to "no result" rather than surfacing an error popup to the client.
+            LogHandlerException(caller, ex);
+            return missing;
+        }
+
+        return await Task.Run(
+            () =>
+            {
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return compute(content, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    LogHandlerException(caller, ex);
+                    return missing;
+                }
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    // Non-mutating read over the whole open-document set (workspace symbols, test
+    // discovery). The document list is snapshotted under the gate, then enumerated and
+    // computed off the gate, identical in spirit to <see cref="ReadDocumentAsync{T}"/>.
+    private async Task<T> ReadWorkspaceAsync<T>(
+        Func<IReadOnlyList<KeyValuePair<string, DocumentContent>>, CancellationToken, T> compute,
+        T missing,
+        CancellationToken cancellationToken,
+        [System.Runtime.CompilerServices.CallerMemberName] string caller = null)
+    {
+        IReadOnlyList<KeyValuePair<string, DocumentContent>> documents;
+        try
+        {
+            await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                documents = this.documentContentService.AllDocuments.ToList();
+            }
+            finally
+            {
+                this.gate.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            LogHandlerException(caller, ex);
+            return missing;
+        }
+
+        return await Task.Run(
+            () =>
+            {
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return compute(documents, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    LogHandlerException(caller, ex);
+                    return missing;
+                }
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static SemanticTokens EmptySemanticTokens()
+        => new SemanticTokens { Data = System.Collections.Immutable.ImmutableArray<int>.Empty };
 
     private static void LogHandlerException(string handler, Exception ex)
     {
@@ -613,13 +810,8 @@ public sealed class LspServer
         return Convert.ToHexString(bytes);
     }
 
-    private SemanticTokens ComputeSemanticTokens(TextDocumentIdentifier identifier)
+    private SemanticTokens ComputeSemanticTokens(DocumentContent content)
     {
-        if (!this.TryGet(identifier, out var content))
-        {
-            return new SemanticTokens { Data = System.Collections.Immutable.ImmutableArray<int>.Empty };
-        }
-
         var document = new SemanticTokensDocument(SemanticTokensHandler.Legend);
         var builder = document.Create();
         SemanticTokensComputer.Tokenize(builder, content);
@@ -627,13 +819,8 @@ public sealed class LspServer
         return document.GetSemanticTokens();
     }
 
-    private TextEdit[] FormatDocument(TextDocumentIdentifier identifier)
+    private TextEdit[] FormatDocument(DocumentContent content)
     {
-        if (!this.TryGet(identifier, out var content))
-        {
-            return Array.Empty<TextEdit>();
-        }
-
         var sourceText = content.SyntaxTree.Text;
         var originalText = sourceText.ToString();
         var formatted = FormattingEngine.Format(originalText);
@@ -654,13 +841,8 @@ public sealed class LspServer
         };
     }
 
-    private Range ComputePrepareRename(PrepareRenameParams request)
+    private Range ComputePrepareRename(DocumentContent content, PrepareRenameParams request)
     {
-        if (!this.TryGet(request.TextDocument, out var content))
-        {
-            return null;
-        }
-
         var offset = SemanticLookup.ToOffset(content, request.Position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         if (token == null || token.Kind != SyntaxKind.IdentifierToken)
@@ -678,13 +860,8 @@ public sealed class LspServer
         return SemanticLookup.CanRename(symbol) ? SemanticLookup.ToRange(token) : null;
     }
 
-    private Location[] ComputeImplementation(ImplementationParams request)
+    private Location[] ComputeImplementation(DocumentContent content, ImplementationParams request)
     {
-        if (!this.TryGet(request.TextDocument, out var content))
-        {
-            return Array.Empty<Location>();
-        }
-
         var offset = SemanticLookup.ToOffset(content, request.Position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         if (token == null || token.Kind != SyntaxKind.IdentifierToken)
@@ -720,13 +897,8 @@ public sealed class LspServer
         return locations.ToArray();
     }
 
-    private Location[] ComputeTypeDefinition(TypeDefinitionParams request)
+    private Location[] ComputeTypeDefinition(DocumentContent content, TypeDefinitionParams request)
     {
-        if (!this.TryGet(request.TextDocument, out var content))
-        {
-            return Array.Empty<Location>();
-        }
-
         var offset = SemanticLookup.ToOffset(content, request.Position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         if (token == null || token.Kind != SyntaxKind.IdentifierToken)
@@ -770,13 +942,8 @@ public sealed class LspServer
         };
     }
 
-    private LinkedEditingRanges ComputeLinkedEditingRanges(LinkedEditingRangeParams request)
+    private LinkedEditingRanges ComputeLinkedEditingRanges(DocumentContent content, LinkedEditingRangeParams request)
     {
-        if (!this.TryGet(request.TextDocument, out var content))
-        {
-            return null;
-        }
-
         var tree = content.SyntaxTree;
         var offset = SemanticLookup.ToOffset(content, request.Position);
         var token = SemanticLookup.FindTokenAt(tree, offset);

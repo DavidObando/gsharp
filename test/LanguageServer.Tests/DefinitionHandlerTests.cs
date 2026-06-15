@@ -65,4 +65,48 @@ public class DefinitionHandlerTests
 
         Assert.Null(location);
     }
+
+    [Fact]
+    public void ComputeDefinition_PropertyUsageGoesToDeclaration()
+    {
+        // Implicit-this property usage (`Width` inside a method) must navigate to the
+        // property declaration. Previously FindDeclarationToken had no PropertySymbol case.
+        const string source = "class Rect {\n    prop Width int32\n    func Double() int32 { return Width + Width }\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var uri = DocumentUri.From("file:///def.gs");
+
+        var location = DefinitionComputer.ComputeDefinition(uri, content, LanguageServerTestHelpers.PositionOf(source, "Width", 1));
+
+        Assert.NotNull(location);
+        Assert.Equal(uri, location.Uri);
+        // Declaration identifier "Width" is on line 1 (0-based).
+        Assert.Equal(1, location.Range.Start.Line);
+    }
+
+    [Fact]
+    public void ComputeDefinition_ExplicitPropertyAccessGoesToDeclaration()
+    {
+        // `this.Width` member access must navigate to the property declaration.
+        const string source = "class Rect {\n    prop Width int32\n    func Get() int32 { return this.Width }\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var uri = DocumentUri.From("file:///def.gs");
+
+        var location = DefinitionComputer.ComputeDefinition(uri, content, LanguageServerTestHelpers.PositionOf(source, "Width", 1));
+
+        Assert.NotNull(location);
+        Assert.Equal(1, location.Range.Start.Line);
+    }
+
+    [Fact]
+    public void ComputeDefinition_MethodUsageGoesToDeclaration()
+    {
+        const string source = "class Calc {\n    func Add(a int32, b int32) int32 { return a + b }\n    func Run() int32 { return Add(1, 2) }\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var uri = DocumentUri.From("file:///def.gs");
+
+        var location = DefinitionComputer.ComputeDefinition(uri, content, LanguageServerTestHelpers.PositionOf(source, "Add", 1));
+
+        Assert.NotNull(location);
+        Assert.Equal(1, location.Range.Start.Line);
+    }
 }

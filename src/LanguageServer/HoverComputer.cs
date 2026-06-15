@@ -1025,6 +1025,8 @@ public static class DefinitionComputer
             StructSymbol s when s.Declaration != null => s.Declaration.Identifier,
             EnumSymbol e when e.Declaration != null => e.Declaration.Identifier,
             EnumMemberSymbol m => FindEnumMemberToken(m),
+            PropertySymbol p when p.Declaration != null => p.Declaration.Identifier,
+            EventSymbol ev when ev.Declaration != null => ev.Declaration.Identifier,
             FieldSymbol field => FindFieldToken(compilation, field),
             VariableSymbol variable => FindVariableToken(compilation, variable),
             _ => null,
@@ -1432,7 +1434,7 @@ public static class CompletionComputer
             var receiverExpression = ReconstructReceiverExpression(content, chainRoot, accessor);
             if (receiverExpression != null)
             {
-                var (function, locals) = SemanticLookup.GetExpressionBindingContext(compilation, offset);
+                var (function, locals) = SemanticLookup.GetExpressionBindingContext(compilation, content.SyntaxTree, offset);
                 var receiverType = GSharp.Core.CodeAnalysis.Binding.Binder.TryInferExpressionType(
                     compilation.GlobalScope,
                     compilation.References,
@@ -1456,6 +1458,15 @@ public static class CompletionComputer
         {
             case VariableSymbol variable:
                 AddInstanceTypeMembers(items, seen, variable.Type);
+                break;
+            case PropertySymbol property:
+                AddInstanceTypeMembers(items, seen, property.Type);
+                break;
+            case FieldSymbol field:
+                AddInstanceTypeMembers(items, seen, field.Type);
+                break;
+            case EventSymbol @event:
+                AddInstanceTypeMembers(items, seen, @event.Type);
                 break;
             case EnumSymbol enumSymbol:
                 AddEnumMembers(items, seen, enumSymbol);
