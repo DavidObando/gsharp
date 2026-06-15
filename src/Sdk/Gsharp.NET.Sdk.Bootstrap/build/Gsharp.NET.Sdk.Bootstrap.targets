@@ -35,6 +35,10 @@
     <!-- Take ownership of CoreCompile; the only dependency is the standard
          _ComputeNonExistentFileProperty helper. -->
     <CoreCompileDependsOn>_ComputeNonExistentFileProperty</CoreCompileDependsOn>
+
+    <!-- Issue #855: set DocumentationFile here (in targets) where
+         IntermediateOutputPath and TargetName are resolved. -->
+    <DocumentationFile Condition=" '$(GenerateDocumentationFile)' == 'true' and '$(DocumentationFile)' == '' ">$(IntermediateOutputPath)$(TargetName).xml</DocumentationFile>
   </PropertyGroup>
 
   <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.BuildTask" Condition="Exists('$(GsharpToolFullPath)')" />
