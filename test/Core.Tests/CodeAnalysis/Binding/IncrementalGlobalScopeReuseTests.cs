@@ -251,25 +251,308 @@ public class IncrementalGlobalScopeReuseTests
     }
 
     /// <summary>
-    /// A file containing a computed property (an accessor body this phase does
-    /// not re-point) is rejected even for a plain body edit elsewhere in it, so
-    /// reuse falls back rather than risk stale accessor spans.
+    /// ADR-0105 Phase 2 (broadened member surface) — a body-only edit to a
+    /// method in a file that <em>also</em> contains a constructor now takes the
+    /// fast path: the reused constructor and method symbols are re-pointed at
+    /// the new syntax and the result is bit-for-bit identical to a full rebuild.
+    /// This is the headline repro fix (test files with <c>init()</c>).
     /// </summary>
     [Fact]
-    public void ComputedProperty_File_IsRejected_ByReuse()
+    public void Constructor_File_BodyEdit_TakesFastPath_AndIsByteIdentical()
     {
         var fileA = Parse("A.gs", """
             package P
-            struct Counter {
-                var value int
-
-                func Bump() int {
-                    value = value + 1
-                    return value
+            class Rect {
+                var Width int32
+                var Height int32
+                init(w int32, h int32) {
+                    Width = w
+                    Height = h
                 }
+                func Area() int32 {
+                    return Width * Height
+                }
+            }
+            """);
+        var fileB = Parse("B.gs", """
+            package P
+            func MakeArea() int32 {
+                var r = Rect(3, 4)
+                return r.Area()
+            }
+            """);
 
-                var Doubled int {
-                    get { return value * 2 }
+        var scope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(fileA, fileB));
+        var cache = new BoundBodyCache();
+        Binder.BindProgram(scope, references: null, cache); // populate
+        var hitsBefore = cache.Hits;
+
+        // Edit a method body, leaving the constructor's signature (and the whole
+        // skeleton) byte-identical.
+        var editedA = Parse("A.gs", """
+            package P
+            class Rect {
+                var Width int32
+                var Height int32
+                init(w int32, h int32) {
+                    Width = w
+                    Height = h
+                }
+                func Area() int32 {
+                    return Width * Height + 0
+                }
+            }
+            """);
+
+        Assert.True(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope, fileA, editedA));
+        var fast = Binder.BindProgram(scope, references: null, cache, ImmutableHashSet.Create(editedA));
+
+        // B's body is served from the cache (unchanged); A's bodies were forced
+        // to re-bind (dirty).
+        Assert.True(cache.Hits > hitsBefore);
+
+        var fullScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(editedA, fileB));
+        var full = Binder.BindProgram(fullScope, references: null);
+
+        Assert.Equal(EmitToBytes(full), EmitToBytes(fast));
+        Assert.Equal(Print(full.Diagnostics), Print(fast.Diagnostics));
+    }
+
+    /// <summary>
+    /// A body-only edit also takes the fast path when the file additionally
+    /// declares a constructor whose <em>own</em> body is the thing being edited.
+    /// </summary>
+    [Fact]
+    public void Constructor_BodyEdit_RebindsConstructorBody()
+    {
+        var fileA = Parse("A.gs", """
+            package P
+            class Box {
+                var V int32
+                init(v int32) {
+                    V = v
+                }
+            }
+            """);
+        var scope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(fileA));
+        var cache = new BoundBodyCache();
+        Binder.BindProgram(scope, references: null, cache);
+
+        var editedA = Parse("A.gs", """
+            package P
+            class Box {
+                var V int32
+                init(v int32) {
+                    V = v + 1
+                }
+            }
+            """);
+
+        Assert.True(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope, fileA, editedA));
+        var fast = Binder.BindProgram(scope, references: null, cache, ImmutableHashSet.Create(editedA));
+
+        var fullScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(editedA));
+        var full = Binder.BindProgram(fullScope, references: null);
+
+        // The constructor body re-bound to the new text and matches a full
+        // rebuild byte-for-byte.
+        foreach (var fastFn in fast.Functions.Keys)
+        {
+            var fullFn = full.Functions.Keys.Single(f => f.Name == fastFn.Name && f.Parameters.Length == fastFn.Parameters.Length);
+            Assert.Equal(Print(full.Functions[fullFn]), Print(fast.Functions[fastFn]));
+        }
+
+        Assert.Equal(EmitToBytes(full), EmitToBytes(fast));
+    }
+
+    /// <summary>
+    /// A body-only edit to a method in a file that also declares a computed
+    /// property takes the fast path; the property's accessor body is re-pointed
+    /// at the new tree and the program is byte-identical to a full rebuild.
+    /// </summary>
+    [Fact]
+    public void ComputedProperty_File_BodyEdit_TakesFastPath_AndIsByteIdentical()
+    {
+        var fileA = Parse("A.gs", """
+            package P
+            class Counter {
+                var n int32
+                prop Doubled int32 {
+                    get { return n * 2 }
+                }
+                func Bump() int32 {
+                    return n + 1
+                }
+            }
+            """);
+        var scope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(fileA));
+        var cache = new BoundBodyCache();
+        Binder.BindProgram(scope, references: null, cache);
+
+        // Edit the getter accessor body itself.
+        var editedA = Parse("A.gs", """
+            package P
+            class Counter {
+                var n int32
+                prop Doubled int32 {
+                    get { return n * 3 }
+                }
+                func Bump() int32 {
+                    return n + 1
+                }
+            }
+            """);
+
+        Assert.True(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope, fileA, editedA));
+        var fast = Binder.BindProgram(scope, references: null, cache, ImmutableHashSet.Create(editedA));
+
+        var fullScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(editedA));
+        var full = Binder.BindProgram(fullScope, references: null);
+
+        Assert.Equal(EmitToBytes(full), EmitToBytes(fast));
+        Assert.Equal(Print(full.Diagnostics), Print(fast.Diagnostics));
+
+        // The re-pointed getter body reflects the edit.
+        var getter = fast.Functions.Keys.Single(f => f.Name == "get_Doubled");
+        Assert.Contains("3", Print(fast.Functions[getter]));
+    }
+
+    /// <summary>
+    /// A body-only edit to an explicit-event accessor (add/remove/raise) takes
+    /// the fast path and is byte-identical to a full rebuild.
+    /// </summary>
+    [Fact]
+    public void ExplicitEvent_File_BodyEdit_TakesFastPath_AndIsByteIdentical()
+    {
+        var fileA = Parse("A.gs", """
+            package P
+            class Notifier {
+                var c int32
+                public event Changed func() {
+                    add { }
+                    remove { }
+                    raise { }
+                }
+                func Ping() int32 {
+                    return c + 1
+                }
+            }
+            """);
+        var scope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(fileA));
+        var cache = new BoundBodyCache();
+        Binder.BindProgram(scope, references: null, cache);
+
+        var editedA = Parse("A.gs", """
+            package P
+            class Notifier {
+                var c int32
+                public event Changed func() {
+                    add { }
+                    remove { }
+                    raise { }
+                }
+                func Ping() int32 {
+                    return c + 2
+                }
+            }
+            """);
+
+        Assert.True(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope, fileA, editedA));
+        var fast = Binder.BindProgram(scope, references: null, cache, ImmutableHashSet.Create(editedA));
+
+        var fullScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(editedA));
+        var full = Binder.BindProgram(fullScope, references: null);
+
+        Assert.Equal(EmitToBytes(full), EmitToBytes(fast));
+        Assert.Equal(Print(full.Diagnostics), Print(fast.Diagnostics));
+    }
+
+    /// <summary>
+    /// A body-only edit to a default-interface-method body takes the fast path
+    /// and is byte-identical to a full rebuild.
+    /// </summary>
+    [Fact]
+    public void InterfaceDefaultMethod_BodyEdit_TakesFastPath_AndIsByteIdentical()
+    {
+        var fileA = Parse("A.gs", """
+            package P
+            interface IGreeter {
+                func Hello() string {
+                    return "hi"
+                }
+            }
+            """);
+        var scope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(fileA));
+        var cache = new BoundBodyCache();
+        Binder.BindProgram(scope, references: null, cache);
+
+        var editedA = Parse("A.gs", """
+            package P
+            interface IGreeter {
+                func Hello() string {
+                    return "hello"
+                }
+            }
+            """);
+
+        Assert.True(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope, fileA, editedA));
+        var fast = Binder.BindProgram(scope, references: null, cache, ImmutableHashSet.Create(editedA));
+
+        var fullScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(editedA));
+        var full = Binder.BindProgram(fullScope, references: null);
+
+        Assert.Equal(EmitToBytes(full), EmitToBytes(fast));
+        Assert.Equal(Print(full.Diagnostics), Print(fast.Diagnostics));
+
+        var hello = fast.Functions.Keys.Single(f => f.Name == "Hello");
+        Assert.Contains("hello", Print(fast.Functions[hello]));
+    }
+
+    /// <summary>
+    /// A constructor <em>signature</em> edit (changing a ctor parameter type) is
+    /// not a body-only edit, so reuse is refused and the caller full-rebuilds.
+    /// </summary>
+    [Fact]
+    public void ConstructorSignatureEdit_IsRejected_ByReuse()
+    {
+        var fileA = Parse("A.gs", """
+            package P
+            class Box {
+                var V int32
+                init(v int32) {
+                    V = v
+                }
+            }
+            """);
+        var scope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(fileA));
+
+        // Constructor parameter type changed int32 -> int64: a signature edit.
+        var editedA = Parse("A.gs", """
+            package P
+            class Box {
+                var V int32
+                init(v int64) {
+                    V = v
+                }
+            }
+            """);
+
+        Assert.False(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope, fileA, editedA));
+    }
+
+    /// <summary>
+    /// A computed-property <em>signature</em> edit (changing the property type)
+    /// makes the skeleton differ, so reuse is refused.
+    /// </summary>
+    [Fact]
+    public void ComputedPropertySignatureEdit_IsRejected_ByReuse()
+    {
+        var fileA = Parse("A.gs", """
+            package P
+            class Counter {
+                var n int32
+                prop Doubled int32 {
+                    get { return n }
                 }
             }
             """);
@@ -277,18 +560,40 @@ public class IncrementalGlobalScopeReuseTests
 
         var editedA = Parse("A.gs", """
             package P
-            struct Counter {
-                var value int
-
-                func Bump() int {
-                    value = value + 2
-                    return value
-                }
-
-                var Doubled int {
-                    get { return value * 2 }
+            class Counter {
+                var n int32
+                prop Doubled int64 {
+                    get { return n }
                 }
             }
+            """);
+
+        Assert.False(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope, fileA, editedA));
+    }
+
+    /// <summary>
+    /// Top-level statements remain an outright bail: the synthesized
+    /// <c>&lt;Main&gt;$</c> body is bound from the global scope's statements, not
+    /// a member-declaration node, so it is not re-pointable.
+    /// </summary>
+    [Fact]
+    public void TopLevelStatements_File_IsRejected_ByReuse()
+    {
+        var fileA = Parse("A.gs", """
+            package P
+            func Helper() int32 {
+                return 1
+            }
+            var x = Helper()
+            """);
+        var scope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(fileA));
+
+        var editedA = Parse("A.gs", """
+            package P
+            func Helper() int32 {
+                return 2
+            }
+            var x = Helper()
             """);
 
         Assert.False(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope, fileA, editedA));

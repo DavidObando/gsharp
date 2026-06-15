@@ -64,7 +64,7 @@ public sealed class EventSymbol : Symbol
     public bool IsStatic { get; }
 
     /// <summary>Gets the declaring syntax node, or <see langword="null"/> for synthesized events.</summary>
-    public EventDeclarationSyntax Declaration { get; }
+    public EventDeclarationSyntax Declaration { get; private set; }
 
     /// <summary>Gets or sets the synthesized backing delegate field (null for explicit accessors).</summary>
     public FieldSymbol BackingField { get; set; }
@@ -86,4 +86,21 @@ public sealed class EventSymbol : Symbol
 
     /// <summary>Gets or sets the explicit raise body syntax (issue #257). Null when no <c>raise</c> accessor is declared.</summary>
     public Syntax.BlockStatementSyntax RaiseBodySyntax { get; set; }
+
+    /// <summary>
+    /// ADR-0105 Phase 2 — re-points this (reused) event at the declaration node
+    /// of a freshly-parsed syntax tree whose event signature and accessor shape
+    /// are byte-identical to the previous one (a body-only edit). The caller is
+    /// responsible for re-pointing <see cref="AddBodySyntax"/>,
+    /// <see cref="RemoveBodySyntax"/> and <see cref="RaiseBodySyntax"/> at the
+    /// corresponding accessor bodies in the re-parsed tree. The symbol's identity
+    /// (including the add/remove/raise method symbols) is preserved so
+    /// cross-compilation reuse stays sound. Intended to be called only by
+    /// <see cref="Binding.IncrementalGlobalScopeReuse"/>.
+    /// </summary>
+    /// <param name="declaration">The corresponding declaration in the re-parsed tree.</param>
+    internal void RepointDeclaration(EventDeclarationSyntax declaration)
+    {
+        Declaration = declaration;
+    }
 }

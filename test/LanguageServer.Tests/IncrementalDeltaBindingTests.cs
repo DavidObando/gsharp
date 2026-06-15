@@ -105,4 +105,65 @@ public class IncrementalDeltaBindingTests
         Assert.Null(comp2.ReusedGlobalScope);
         Assert.NotSame(comp1.GlobalScope, comp2.GlobalScope);
     }
+
+    /// <summary>
+    /// ADR-0105 Phase 2 (broadened member surface) — the headline repro: a file
+    /// containing a constructor (<c>init()</c>) now takes the incremental fast
+    /// path for a pure in-body edit instead of falling back to a full rebuild.
+    /// </summary>
+    [Fact]
+    public void BodyOnlyEdit_FileWithConstructor_ReusesGlobalScope()
+    {
+        var project = new ProjectState("/test/project.gsproj");
+        project.UpdateFile(
+            FileA,
+            "package P\nclass Box {\n    var V int32\n    init(v int32) {\n        V = v\n    }\n    func Get() int32 {\n        return V\n    }\n}\n");
+        project.UpdateFile(FileB, "package P\nfunc Use() int32 {\n    var b = Box(1)\n    return b.Get()\n}\n");
+
+        var comp1 = project.GetCompilation();
+        _ = comp1.BoundProgram;
+        var cache = comp1.BodyCache;
+        Assert.NotNull(cache);
+        var hitsBefore = cache.Hits;
+
+        // Pure in-body edit to the method (constructor signature unchanged).
+        project.UpdateFile(
+            FileA,
+            "package P\nclass Box {\n    var V int32\n    init(v int32) {\n        V = v\n    }\n    func Get() int32 {\n        return V + 0\n    }\n}\n");
+        var comp2 = project.GetCompilation();
+
+        // Fast path engaged: the global scope (and every symbol) is reused.
+        Assert.Same(comp1.GlobalScope, comp2.ReusedGlobalScope);
+        Assert.Same(comp1.GlobalScope, comp2.GlobalScope);
+
+        _ = comp2.BoundProgram;
+
+        // b.gs was served from the cache.
+        Assert.True(cache.Hits > hitsBefore);
+    }
+
+    /// <summary>
+    /// A computed-property type change in a constructor-bearing file is a
+    /// signature edit, so the fast path is correctly refused.
+    /// </summary>
+    [Fact]
+    public void SignatureEdit_FileWithComputedProperty_FallsBackToFullRebuild()
+    {
+        var project = new ProjectState("/test/project.gsproj");
+        project.UpdateFile(
+            FileA,
+            "package P\nclass Counter {\n    var n int32\n    prop Doubled int32 {\n        get { return n }\n    }\n}\n");
+
+        var comp1 = project.GetCompilation();
+        _ = comp1.BoundProgram;
+
+        // Property type changes int32 -> int64: a signature edit.
+        project.UpdateFile(
+            FileA,
+            "package P\nclass Counter {\n    var n int32\n    prop Doubled int64 {\n        get { return n }\n    }\n}\n");
+        var comp2 = project.GetCompilation();
+
+        Assert.Null(comp2.ReusedGlobalScope);
+        Assert.NotSame(comp1.GlobalScope, comp2.GlobalScope);
+    }
 }

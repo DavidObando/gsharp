@@ -34,7 +34,7 @@ public sealed class ConstructorSymbol
     public FunctionSymbol Function { get; }
 
     /// <summary>Gets the declaring syntax node, or <see langword="null"/> when this is a compiler-synthesized constructor (ADR-0065 §5).</summary>
-    public ConstructorDeclarationSyntax Declaration { get; }
+    public ConstructorDeclarationSyntax Declaration { get; private set; }
 
     /// <summary>Gets the constructor parameters (excluding the implicit <c>this</c>).</summary>
     public System.Collections.Immutable.ImmutableArray<ParameterSymbol> Parameters => Function.Parameters;
@@ -77,5 +77,20 @@ public sealed class ConstructorSymbol
     public void MarkSynthesizedFromPrimaryConstructor()
     {
         IsSynthesizedFromPrimaryConstructor = true;
+    }
+
+    /// <summary>
+    /// ADR-0105 Phase 2 — re-points this (reused) constructor at the declaration
+    /// node of a freshly-parsed syntax tree whose constructor signature is
+    /// byte-identical to the previous one (a body-only edit). Only the backing
+    /// syntax — and therefore the body text and source spans — changes; the
+    /// symbol's identity (including <see cref="Function"/> and its parameters)
+    /// is preserved so cross-compilation reuse stays sound. Intended to be
+    /// called only by <see cref="Binding.IncrementalGlobalScopeReuse"/>.
+    /// </summary>
+    /// <param name="declaration">The corresponding declaration in the re-parsed tree.</param>
+    internal void RepointDeclaration(ConstructorDeclarationSyntax declaration)
+    {
+        Declaration = declaration;
     }
 }
