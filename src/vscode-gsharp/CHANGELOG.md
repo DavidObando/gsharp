@@ -33,3 +33,7 @@ All notable changes to the GSharp VS Code extension will be documented in this f
 - Server crash recovery with exponential backoff
 - Language status bar item (Starting → Ready → Error)
 - Project context status bar item
+
+### Fixed
+
+- TextMate string grammar now recognizes backslash escape sequences (`\"`, `\\`, `\n`, `\t`, `\0`, `\a`, `\b`, `\f`, `\r`, `\v`, `\xNN`, `\uNNNN`, `\UNNNNNNNN`) so an escaped quote like `"text \""` no longer terminates the string early and bleeds string coloring into the rest of the file; unrecognized escapes are flagged as invalid

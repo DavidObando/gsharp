@@ -62,13 +62,13 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
           },
         },
         'string-escape': {
-          pattern: /\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]+|.)/,
+          pattern: /\\(?:u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{1,4}|.)/,
           alias: 'char',
         },
       },
     },
     char: {
-      pattern: /'(?:\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]+|.)|[^'\\\r\n])'/,
+      pattern: /'(?:\\(?:u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{1,4}|.)|[^'\\\r\n])'/,
       greedy: true,
     },
     'class-name': [
