@@ -6,4 +6,18 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Sdk\Gsharp.NET.Sdk\Gsharp.NET.Sdk.csproj" />
+    <ProjectReference Include="@(GsharpCompiler)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- BuildTask derives from Microsoft.Build.Utilities.Task, so the test
+         project needs the matching assemblies on its reference closure to
+         resolve the base type. The SDK project marks them PrivateAssets="all"
+         to keep them out of its NuGet, so they don't flow transitively. -->
+    <PackageReference Include="Microsoft.Build.Framework" Version="17.13.9" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" Version="17.13.9" />
+  </ItemGroup>
+
 </Project>
