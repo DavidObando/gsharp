@@ -126,11 +126,11 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
 
         var args = new List<string>
         {
-            $"/out:{Path.Combine(this.OutputPath, this.OutputName)}.dll",
+            QuoteIfNeeded($"/out:{Path.Combine(this.OutputPath, this.OutputName)}.dll"),
         };
         if (!string.IsNullOrEmpty(this.OutputName))
         {
-            args.Add($"/assemblyname:{this.OutputName}");
+            args.Add(QuoteIfNeeded($"/assemblyname:{this.OutputName}"));
         }
 
         if (!string.IsNullOrEmpty(this.OutputType))
@@ -151,12 +151,12 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
 
         if (!string.IsNullOrEmpty(this.PdbFile))
         {
-            args.Add($"/pdb:{this.PdbFile}");
+            args.Add(QuoteIfNeeded($"/pdb:{this.PdbFile}"));
         }
 
         if (!string.IsNullOrEmpty(this.SourceLink))
         {
-            args.Add($"/sourcelink:{this.SourceLink}");
+            args.Add(QuoteIfNeeded($"/sourcelink:{this.SourceLink}"));
         }
 
         if (ParseBool(this.EmbedAllSources))
@@ -176,12 +176,12 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
 
         if (!string.IsNullOrEmpty(this.RefAssembly))
         {
-            args.Add($"/refout:{this.RefAssembly}");
+            args.Add(QuoteIfNeeded($"/refout:{this.RefAssembly}"));
         }
 
         if (!string.IsNullOrEmpty(this.DocumentationFile))
         {
-            args.Add($"/doc:{this.DocumentationFile}");
+            args.Add(QuoteIfNeeded($"/doc:{this.DocumentationFile}"));
         }
 
         if (!string.IsNullOrEmpty(this.NoWarn))
@@ -201,12 +201,12 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
 
         foreach (var r in this.References)
         {
-            args.Add($"/r:{r.ItemSpec}");
+            args.Add(QuoteIfNeeded($"/r:{r.ItemSpec}"));
         }
 
         foreach (var s in this.Compile)
         {
-            args.Add(s.ItemSpec);
+            args.Add(QuoteIfNeeded(s.ItemSpec));
         }
 
         if (!string.IsNullOrEmpty(this.ResponseFilePath))
@@ -289,6 +289,38 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         }
 
         return proc.ExitCode == 0 && !this.Log.HasLoggedErrors;
+    }
+
+    /// <summary>
+    /// Wraps <paramref name="value"/> in double quotes if it contains a
+    /// whitespace character. The gsc response file tokenizer
+    /// (<c>Program.TokenizeResponseFileLine</c>) splits on unquoted whitespace,
+    /// so any argument that embeds a space (e.g. a reference path under
+    /// <c>C:\Program Files\dotnet\...</c>) must be quoted to survive
+    /// tokenization as a single token. See issue #856.
+    /// </summary>
+    /// <param name="value">Raw argument text to be written to the response file.</param>
+    /// <returns>
+    /// <paramref name="value"/> unchanged when it is null, empty, or contains
+    /// no whitespace; otherwise the value wrapped in a single pair of double
+    /// quotes.
+    /// </returns>
+    internal static string QuoteIfNeeded(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        for (int i = 0; i < value.Length; i++)
+        {
+            if (char.IsWhiteSpace(value[i]))
+            {
+                return "\"" + value + "\"";
+            }
+        }
+
+        return value;
     }
 
     /// <summary>

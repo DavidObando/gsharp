@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="GSharp.Compiler.Tests" />
+    <InternalsVisibleTo Include="GSharp.Sdk.Tests" />
   </ItemGroup>
 
 </Project>

@@ -35,6 +35,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="GSharp.Sdk.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Package layout mirrors peachpie's SDK NuGet:
            sdk/Sdk.props, sdk/Sdk.targets
            build/Gsharp.NET.Sdk.props, build/Gsharp.NET.Current.Sdk.targets, build/Gsharp.NET.Core.Sdk.targets
