@@ -11,6 +11,14 @@
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_GsharpGetRefAssemblyForPack</TargetsForTfmSpecificContentInPackage>
   </PropertyGroup>
 
+  <!-- Phase 7.7b / Issue #855: set DocumentationFile here (in targets) where
+       IntermediateOutputPath and TargetName are already resolved by the .NET SDK.
+       Setting it in Sdk.props caused both properties to be empty, producing a
+       bare '.xml' filename. -->
+  <PropertyGroup>
+    <DocumentationFile Condition=" '$(GenerateDocumentationFile)' == 'true' and '$(DocumentationFile)' == '' ">$(IntermediateOutputPath)$(TargetName).xml</DocumentationFile>
+  </PropertyGroup>
+
   <!-- Locate and add mscorlib unless NoStdLib. Mirrors peachpie's Core.Sdk.targets. -->
   <ItemGroup Condition=" '$(NoStdLib)' != 'true' ">
     <_ExplicitReference Include="$(FrameworkPathOverride)\mscorlib.dll" Condition=" '$(FrameworkPathOverride)' != '' " />

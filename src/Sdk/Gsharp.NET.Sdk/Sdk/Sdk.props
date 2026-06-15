@@ -15,9 +15,10 @@
     <ProduceReferenceAssembly Condition=" '$(ProduceReferenceAssembly)' == '' ">true</ProduceReferenceAssembly>
 
     <!-- Phase 7.7b: enable XML documentation file generation for library
-         projects so consumers get IntelliSense / XML doc hover. -->
+         projects so consumers get IntelliSense / XML doc hover.
+         NOTE: DocumentationFile is set in Gsharp.NET.Core.Sdk.targets where
+         IntermediateOutputPath and TargetName are already resolved (#855). -->
     <GenerateDocumentationFile Condition=" '$(GenerateDocumentationFile)' == '' and '$(OutputType)' != 'Exe' ">true</GenerateDocumentationFile>
-    <DocumentationFile Condition=" '$(GenerateDocumentationFile)' == 'true' and '$(DocumentationFile)' == '' ">$(IntermediateOutputPath)$(TargetName).xml</DocumentationFile>
 
     <!-- Phase 7.7b: ensure dotnet pack produces a .snupkg symbol package
          carrying the Portable PDB alongside the main .nupkg. -->
