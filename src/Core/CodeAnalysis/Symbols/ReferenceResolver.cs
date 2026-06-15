@@ -85,6 +85,25 @@ public sealed class ReferenceResolver : IDisposable
     private static readonly Type MissTypeSentinel = typeof(NotFoundSentinel);
     private readonly ConcurrentDictionary<string, Type> resolveCache = new(StringComparer.Ordinal);
 
+    // Issue #854: a lazily-built, full-name -> Type index over every assembly in
+    // `assemblies`. The previous TryResolveType implementation scanned all
+    // references on every cache miss (Assembly.GetType per assembly), which on a
+    // project with a large reference closure — e.g. the Oahu test project pulls
+    // in the Microsoft.AspNetCore.App framework reference for 352 assemblies —
+    // costs ~1.9ms per *miss*. The binder issues tens of thousands of distinct
+    // speculative probes (one candidate per declared import for every accessor
+    // expression), so the cumulative scan cost dominated build time (~80s of a
+    // ~83s compile). Building this index once (top-level + nested type
+    // definitions plus exported type forwarders) is ~150ms for that reference
+    // set and turns every subsequent resolution into an O(1) dictionary lookup.
+    //
+    // First-writer-wins mirrors the old scan, which returned the first assembly
+    // in `assemblies` order that declared the requested name. The index is keyed
+    // by Type.FullName, which uses '+' for nested types and the `arity backtick
+    // suffix for open generics — exactly the spellings Assembly.GetType accepts
+    // and the binder already constructs (e.g. "Ns.Type`1").
+    private readonly Lazy<Dictionary<string, Type>> typeNameIndex;
+
     private ReferenceResolver(ImmutableArray<Assembly> assemblies, MetadataLoadContext metadataContext)
         : this(assemblies, metadataContext, ImmutableArray<string>.Empty)
     {
@@ -95,6 +114,9 @@ public sealed class ReferenceResolver : IDisposable
         this.assemblies = assemblies;
         this.metadataContext = metadataContext;
         this.missingTransitiveReferences = missingTransitiveReferences;
+        this.typeNameIndex = new Lazy<Dictionary<string, Type>>(
+            this.BuildTypeNameIndex,
+            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     private sealed class NotFoundSentinel
@@ -409,28 +431,11 @@ public sealed class ReferenceResolver : IDisposable
             return true;
         }
 
-        foreach (var asm in assemblies)
+        if (typeNameIndex.Value.TryGetValue(fullName, out var indexed))
         {
-            Type candidate;
-            try
-            {
-                candidate = asm.GetType(fullName, throwOnError: false, ignoreCase: false);
-            }
-            catch (FileNotFoundException)
-            {
-                continue;
-            }
-            catch (BadImageFormatException)
-            {
-                continue;
-            }
-
-            if (candidate != null)
-            {
-                resolveCache.TryAdd(fullName, candidate);
-                type = candidate;
-                return true;
-            }
+            resolveCache.TryAdd(fullName, indexed);
+            type = indexed;
+            return true;
         }
 
         resolveCache.TryAdd(fullName, MissTypeSentinel);
@@ -598,6 +603,83 @@ public sealed class ReferenceResolver : IDisposable
 
         throw new InvalidOperationException(
             $"Core type '{fullName}' could not be resolved from the supplied references.");
+    }
+
+    // Issue #854: enumerate every assembly's defined types (top-level + nested)
+    // and exported type forwarders once, building the full-name -> Type index
+    // that backs TryResolveType. Mirrors the precedence of the previous per-miss
+    // scan: assemblies are visited in `assemblies` order and the first declarer
+    // of a given full name wins (later duplicates are ignored).
+    private static void AddToTypeNameIndex(Dictionary<string, Type> index, Type t)
+    {
+        if (t?.FullName is { } name && !index.ContainsKey(name))
+        {
+            index[name] = t;
+        }
+    }
+
+    private Dictionary<string, Type> BuildTypeNameIndex()
+    {
+        var index = new Dictionary<string, Type>(StringComparer.Ordinal);
+
+        foreach (var asm in assemblies)
+        {
+            // Defined types. ReflectionTypeLoadException surfaces a partial set
+            // via Types (with nulls for the entries that failed to load); take
+            // what resolved and skip the rest, matching the old scan's
+            // best-effort behavior where unresolvable members were simply not
+            // returned.
+            Type[] definedTypes;
+            try
+            {
+                definedTypes = asm.GetTypes();
+            }
+            catch (ReflectionTypeLoadException ex)
+            {
+                definedTypes = ex.Types;
+            }
+            catch (FileNotFoundException)
+            {
+                definedTypes = Array.Empty<Type>();
+            }
+            catch (BadImageFormatException)
+            {
+                definedTypes = Array.Empty<Type>();
+            }
+
+            foreach (var t in definedTypes)
+            {
+                AddToTypeNameIndex(index, t);
+            }
+
+            // Exported type forwarders (e.g. BCL facade assemblies forward
+            // System.* types to their implementation assembly). The old scan
+            // resolved these because Assembly.GetType follows forwarders; the
+            // index must include them to preserve resolution parity. A single
+            // unresolvable forward makes GetForwardedTypes throw, so fall back
+            // to the partial set when available and otherwise skip the
+            // assembly's forwarders.
+            Type[] forwardedTypes;
+            try
+            {
+                forwardedTypes = asm.GetForwardedTypes();
+            }
+            catch (ReflectionTypeLoadException ex)
+            {
+                forwardedTypes = ex.Types;
+            }
+            catch (Exception)
+            {
+                forwardedTypes = Array.Empty<Type>();
+            }
+
+            foreach (var t in forwardedTypes)
+            {
+                AddToTypeNameIndex(index, t);
+            }
+        }
+
+        return index;
     }
 
     private static void RegisterAssemblyOriginalPath(Assembly assembly, string path)

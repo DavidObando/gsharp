@@ -179,6 +179,7 @@ internal sealed partial class ExpressionBinder
         // Build the candidate dotted prefixes (everything before the simple
         // type name), most specific first.
         var prefixCandidates = new List<string>();
+        var seenPrefixes = new HashSet<string>(System.StringComparer.Ordinal);
         if (!string.IsNullOrEmpty(namespacePrefix))
         {
             prefixCandidates.Add(namespacePrefix);
@@ -208,6 +209,17 @@ internal sealed partial class ExpressionBinder
 
         foreach (var prefix in prefixCandidates)
         {
+            // Issue #854: the candidate list frequently contains duplicate
+            // prefixes (e.g. the raw namespacePrefix also surfaces as an
+            // import-relative candidate). Resolution is deterministic per name,
+            // so probing the same prefix twice can never change the outcome —
+            // skip repeats to avoid redundant resolver lookups and, in the
+            // generic branch, redundant type-argument binding.
+            if (!seenPrefixes.Add(prefix))
+            {
+                continue;
+            }
+
             if (arity > 0)
             {
                 var mangled = prefix + "." + typeSimpleName + "`" + arity;

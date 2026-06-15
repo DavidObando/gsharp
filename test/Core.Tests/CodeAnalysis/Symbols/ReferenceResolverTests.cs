@@ -208,6 +208,33 @@ public class ReferenceResolverTests
         Assert.Null(missSecond);
     }
 
+    [Fact]
+    public void TryResolveType_ResolvesTypesAcrossEverySuppliedAssembly()
+    {
+        // Issue #854: TryResolveType is backed by a full-name index built once
+        // over the entire reference set. This guards the property the previous
+        // per-assembly scan guaranteed — that a name defined in *any* supplied
+        // assembly resolves, not just the first — so the index must span every
+        // assembly. System.String lives in the core library, System.Console in
+        // System.Console.dll, and Task`1 in System.Private.CoreLib/Threading,
+        // covering distinct assemblies in the supplied set.
+        var resolver = BuildMetadataLoadContextResolver();
+
+        Assert.True(resolver.TryResolveType("System.String", out var stringType));
+        Assert.True(resolver.TryResolveType("System.Console", out var consoleType));
+        Assert.True(resolver.TryResolveType("System.Collections.Generic.List`1", out var listType));
+
+        Assert.NotNull(stringType);
+        Assert.NotNull(consoleType);
+        Assert.NotNull(listType);
+
+        // Types must originate from the resolver's isolated MetadataLoadContext,
+        // not the gsc host runtime (a regression here would reintroduce the
+        // cross-context identity mismatches the resolver exists to prevent).
+        Assert.NotSame(typeof(string), stringType);
+        Assert.NotSame(typeof(System.Console), consoleType);
+    }
+
     private static ReferenceResolver BuildMetadataLoadContextResolver()
     {
         // Supplying explicit assembly paths forces ReferenceResolver to load
