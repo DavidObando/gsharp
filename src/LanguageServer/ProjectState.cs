@@ -21,6 +21,17 @@ public class ProjectState
 {
     private readonly object compilationLock = new();
     private readonly ConcurrentDictionary<string, SyntaxTree> syntaxTrees = new(StringComparer.OrdinalIgnoreCase);
+
+    // ADR-0105 (Phase 1): the per-project bound-body cache. It is owned here —
+    // alongside the per-edit lifecycle (UpdateFile -> Invalidate ->
+    // GetCompilation) and the warm cachedResolver — and seeded into every
+    // Compilation this project produces so unchanged member bodies can be
+    // reused across edits when reuse is provably sound. Until ADR-0105 Phase 2
+    // gives symbols stable cross-compilation identity, the cache's soundness
+    // gate makes reuse a near-no-op (it never alters emitted IL or
+    // diagnostics); the infrastructure lands now without user-visible effect.
+    private readonly Core.CodeAnalysis.Binding.BoundBodyCache bodyCache = new();
+
     private Compilation compilation;
     private bool isDirty = true;
     private IReadOnlyList<string> references = Array.Empty<string>();
@@ -227,6 +238,14 @@ public class ProjectState
                     ? new Compilation(resolver, trees)
                     : new Compilation(trees);
             }
+
+            // ADR-0105 (Phase 1): seed the project-owned body cache into the
+            // freshly constructed Compilation. The Compilation stays immutable
+            // per instance (the cache is external state set once at
+            // construction), so the language server's ConditionalWeakTable
+            // model/index caches keyed on the Compilation instance keep
+            // invalidating correctly.
+            compilation.BodyCache = bodyCache;
 
             isDirty = false;
             return compilation;

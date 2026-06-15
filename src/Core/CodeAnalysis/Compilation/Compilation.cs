@@ -139,6 +139,20 @@ public class Compilation
     public bool WarnOnMissingDocumentation { get; set; }
 
     /// <summary>
+    /// Gets or sets the optional per-project bound-body cache (ADR-0105
+    /// Phase 1). When set, <see cref="BoundProgram"/> threads it through
+    /// <see cref="Binder.BindProgram(BoundGlobalScope, ReferenceResolver, BoundBodyCache)"/>
+    /// so unchanged member bodies can be reused across compilations <em>when
+    /// reuse is provably sound</em> (see <see cref="BoundBodyCache"/>). The
+    /// cache is owned externally (by the language server's per-project
+    /// <c>ProjectState</c>) and lives across the immutable, per-edit
+    /// <see cref="Compilation"/> instances; it never changes emitted IL or
+    /// diagnostics relative to the full-rebuild path. Defaults to
+    /// <see langword="null"/>, which is exactly the historical behavior.
+    /// </summary>
+    public BoundBodyCache BodyCache { get; set; }
+
+    /// <summary>
     /// Gets the global scope.
     /// </summary>
     public BoundGlobalScope GlobalScope
@@ -169,7 +183,7 @@ public class Compilation
     /// compilation after a file edit). Hot paths such as the language server's
     /// per-keystroke diagnostics, hover, definition, and semantic-token
     /// requests should reuse this cached instance rather than re-invoking
-    /// <see cref="Binder.BindProgram"/>, which can take hundreds of
+    /// <see cref="Binder.BindProgram(BoundGlobalScope, Symbols.ReferenceResolver)"/>, which can take hundreds of
     /// milliseconds on projects with large reference graphs.
     /// </remarks>
     public BoundProgram BoundProgram
@@ -178,7 +192,7 @@ public class Compilation
         {
             if (boundProgram == null)
             {
-                var bp = Binder.BindProgram(GlobalScope, References);
+                var bp = Binder.BindProgram(GlobalScope, References, BodyCache);
                 Interlocked.CompareExchange(ref this.boundProgram, bp, null);
             }
 
