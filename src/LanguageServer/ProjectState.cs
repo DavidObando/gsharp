@@ -72,6 +72,15 @@ public class ProjectState
     public string AssemblyName { get; set; }
 
     /// <summary>
+    /// Gets or sets the project's target framework moniker (e.g. <c>net10.0</c>),
+    /// parsed from the <c>.gsproj</c> by <see cref="ProjectDiscovery"/>. Surfaced to
+    /// the VS Code Test Explorer so discovered tests can be grouped under a
+    /// <c>&lt;project&gt; (&lt;tfm&gt;)</c> node. May be <c>null</c> or empty when the
+    /// project was constructed without discovery or declares no target framework.
+    /// </summary>
+    public string TargetFramework { get; set; }
+
+    /// <summary>
     /// Gets the set of source file paths currently in this project.
     /// </summary>
     public IReadOnlyCollection<string> SourceFiles => syntaxTrees.Keys.ToList();

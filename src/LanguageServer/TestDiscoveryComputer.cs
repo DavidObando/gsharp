@@ -35,14 +35,27 @@ public static class TestDiscoveryComputer
     /// <param name="content">The document content to scan.</param>
     /// <returns>The discovered top-level test items (class groups and free test functions).</returns>
     public static IReadOnlyList<TestDiscoveryItem> ComputeTests(string uri, DocumentContent content)
+        => ComputeTests(uri, content?.SyntaxTree);
+
+    /// <summary>
+    /// Computes the discovered tests for a single syntax tree. This overload lets
+    /// workspace-wide discovery scan a project's parsed source files directly,
+    /// without requiring each file to be open in an editor buffer.
+    /// </summary>
+    /// <param name="uri">The document URI (used on every emitted item).</param>
+    /// <param name="syntaxTree">The parsed syntax tree to scan.</param>
+    /// <returns>The discovered top-level test items (class groups and free test functions).</returns>
+    public static IReadOnlyList<TestDiscoveryItem> ComputeTests(string uri, SyntaxTree syntaxTree)
     {
         var items = new List<TestDiscoveryItem>();
-        if (content?.SyntaxTree?.Root == null)
+        if (syntaxTree?.Root == null)
         {
             return items;
         }
 
-        foreach (var member in content.SyntaxTree.Root.Members)
+        var namespaceName = ComputeNamespace(syntaxTree);
+
+        foreach (var member in syntaxTree.Root.Members)
         {
             switch (member)
             {
@@ -59,10 +72,17 @@ public static class TestDiscoveryComputer
 
                     if (methods.Length > 0)
                     {
+                        // The middle grouping node is the fully-qualified type name
+                        // (<namespace>.<class>) — e.g. "Oahu.Cli.Tests.App.CredentialStoreTests" —
+                        // so the Test Explorer reads Project (tfm) / Namespace.Class / Test.
+                        var qualified = string.IsNullOrEmpty(namespaceName)
+                            ? className
+                            : namespaceName + "." + className;
+
                         items.Add(new TestDiscoveryItem
                         {
-                            Id = uri + "#" + className,
-                            Label = className,
+                            Id = uri + "#" + qualified,
+                            Label = qualified,
                             Uri = uri,
                             Line = LineOf(type.Identifier),
                             Filter = null,
@@ -75,6 +95,24 @@ public static class TestDiscoveryComputer
         }
 
         return items;
+    }
+
+    /// <summary>
+    /// Extracts the document's declared package (namespace) as a dotted string, or an
+    /// empty string when the file declares no <c>package</c>. Used to qualify the test
+    /// grouping node's label in the Test Explorer.
+    /// </summary>
+    /// <param name="syntaxTree">The parsed syntax tree to inspect.</param>
+    /// <returns>The dotted package name, or the empty string.</returns>
+    public static string ComputeNamespace(SyntaxTree syntaxTree)
+    {
+        var package = syntaxTree?.Root?.Members.OfType<PackageSyntax>().FirstOrDefault();
+        if (package == null)
+        {
+            return string.Empty;
+        }
+
+        return string.Concat(package.IdentifiersWithDots.Select(t => t.Text));
     }
 
     private static bool IsTest(FunctionDeclarationSyntax function)

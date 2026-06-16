@@ -30,6 +30,7 @@ public static class WorkspaceInitializer
         {
             var project = workspaceState.AddProject(disc.ProjectFilePath);
             project.AssemblyName = disc.AssemblyName;
+            project.TargetFramework = disc.TargetFramework;
             project.ProjectReferences = disc.ProjectReferences;
             project.ReferenceSourcePath = disc.ReferenceSourcePath;
             project.References = disc.References;

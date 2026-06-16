@@ -31,6 +31,7 @@ export async function activate(context: vscode.ExtensionContext) {
       if (serverManager) {
         logger.info('Restarting language server...');
         await serverManager.restart();
+        testing.refresh();
       }
     }),
     vscode.commands.registerCommand('gsharp.openOutput', () => {
@@ -41,7 +42,11 @@ export async function activate(context: vscode.ExtensionContext) {
   registerBuildCommands(context, diagnosticsManager, logger);
   registerProjectCommands(context);
   registerReferenceFeatures(context);
-  registerTestingFeatures(context, () => serverManager?.getClient(), logger);
+  const testing = registerTestingFeatures(context, () => serverManager?.getClient(), logger);
+
+  // The server is running once start() resolves; kick off an initial test discovery
+  // so the Test Explorer is populated immediately (even before any .gs file is opened).
+  testing.refresh();
 
   // Register debugger
   registerDebugger(context);

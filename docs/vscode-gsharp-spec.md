@@ -588,11 +588,12 @@ Since GSharp targets produce standard .NET assemblies, debugging uses the existi
 
 Integrate with VS Code's Testing API (`vscode.TestController`):
 
-1. Discover test files and methods via the language server (custom LSP request `gsharp/discoverTests`)
-2. Create `TestItem` hierarchy: Project → File → Test Function
-3. Run tests via `dotnet test` on the `.gsproj`
+1. Discover test files and methods via the language server (custom LSP request `gsharp/discoverTests`). Discovery is workspace-wide: the server scans every source file across all discovered projects (not just open editor buffers), overlaying open buffers so unsaved edits win, so the Test Explorer is fully populated after a build even before any file is opened.
+2. Build a grouped `TestItem` hierarchy: a top-level node per project labelled `<project-name> (<tfm>)` (e.g. `Oahu.Cli.Tests (net10.0)`), matching the C# Dev Kit presentation, with a middle grouping node per test class labelled with its fully-qualified type name `<namespace>.<class>` (e.g. `Oahu.Cli.Tests.App.CredentialStoreTests`), and the individual test methods beneath it.
+3. Run tests via `dotnet test` on the owning project's `.gsproj` (each project group carries its project path, so multi-project workspaces run against the correct project).
 4. Parse test results and map back to source locations
 5. Support CodeLens "Run Test | Debug Test" above test functions
+6. Keep the Test Explorer live: re-run discovery (debounced) on document edits/opens/saves and on `.gs` file-system create/delete/change events, plus an initial discovery once the language server is ready.
 
 ### 5.6 Build Diagnostics
 

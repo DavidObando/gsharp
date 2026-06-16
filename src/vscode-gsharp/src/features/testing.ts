@@ -10,6 +10,7 @@ interface TestItem {
   uri: string;
   line: number;
   filter?: string;
+  projectFile?: string;
   children?: TestItem[];
 }
 
@@ -17,11 +18,16 @@ interface TestItem {
 // token, as reported by the language server's gsharp/discoverTests response.
 const testFilters = new Map<string, string>();
 
+// Maps a vscode.TestItem id to the absolute path of the `.gsproj` that owns it, so a
+// run targets the correct project. Project grouping nodes carry the path explicitly;
+// nested items inherit it from their ancestor group during tree construction.
+const itemProjects = new Map<string, string>();
+
 export function registerTestingFeatures(
   context: vscode.ExtensionContext,
   getClient: () => LanguageClient | undefined,
   logger: Logger,
-) {
+): { refresh: () => void } {
   const testController = vscode.tests.createTestController('gsharp-tests', 'GSharp Tests');
   context.subscriptions.push(testController);
 
@@ -46,6 +52,54 @@ export function registerTestingFeatures(
     }
   };
 
+  // Keep the Test Explorer continuously in sync with the workspace. The server
+  // discovers tests across every project source file (not just open buffers), so
+  // re-running discovery on edits, opens, saves, and file-system changes is what
+  // delivers live updates as the user types or builds. A debounce coalesces bursts
+  // of keystrokes and lets the language server process the corresponding didChange
+  // notifications before we re-query.
+  let discoveryTimer: NodeJS.Timeout | undefined;
+  const scheduleDiscovery = () => {
+    if (discoveryTimer) {
+      clearTimeout(discoveryTimer);
+    }
+    discoveryTimer = setTimeout(() => {
+      discoveryTimer = undefined;
+      void discoverTests(testController, getClient, logger);
+    }, 400);
+  };
+
+  const isGSharp = (document: vscode.TextDocument) =>
+    document.languageId === 'gsharp' || document.uri.fsPath.endsWith('.gs');
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      if (isGSharp(e.document)) {
+        scheduleDiscovery();
+      }
+    }),
+    vscode.workspace.onDidOpenTextDocument((doc) => {
+      if (isGSharp(doc)) {
+        scheduleDiscovery();
+      }
+    }),
+    vscode.workspace.onDidSaveTextDocument((doc) => {
+      if (isGSharp(doc)) {
+        scheduleDiscovery();
+      }
+    }),
+    vscode.workspace.onDidCreateFiles(() => scheduleDiscovery()),
+    vscode.workspace.onDidDeleteFiles(() => scheduleDiscovery()),
+    vscode.workspace.onDidRenameFiles(() => scheduleDiscovery()),
+  );
+
+  // Catch source changes made outside the editor (e.g. branch switches, builds).
+  const watcher = vscode.workspace.createFileSystemWatcher('**/*.gs');
+  watcher.onDidCreate(() => scheduleDiscovery());
+  watcher.onDidDelete(() => scheduleDiscovery());
+  watcher.onDidChange(() => scheduleDiscovery());
+  context.subscriptions.push(watcher);
+
   // Register commands for running tests at cursor
   context.subscriptions.push(
     vscode.commands.registerCommand('gsharp.test.runInContext', async () => {
@@ -55,6 +109,8 @@ export function registerTestingFeatures(
       await runTestAtCursor(testController, getClient, logger, true);
     }),
   );
+
+  return { refresh: scheduleDiscovery };
 }
 
 async function runTestAtCursor(
@@ -154,13 +210,18 @@ async function discoverTests(
 function populateTestItems(controller: vscode.TestController, tests: TestItem[]) {
   controller.items.replace([]);
   testFilters.clear();
+  itemProjects.clear();
   for (const test of tests) {
-    const item = buildTestItem(controller, test);
+    const item = buildTestItem(controller, test, undefined);
     controller.items.add(item);
   }
 }
 
-function buildTestItem(controller: vscode.TestController, test: TestItem): vscode.TestItem {
+function buildTestItem(
+  controller: vscode.TestController,
+  test: TestItem,
+  inheritedProjectFile: string | undefined,
+): vscode.TestItem {
   const item = controller.createTestItem(test.id, test.label, vscode.Uri.parse(test.uri));
   item.range = new vscode.Range(test.line, 0, test.line, 0);
 
@@ -168,9 +229,14 @@ function buildTestItem(controller: vscode.TestController, test: TestItem): vscod
     testFilters.set(test.id, test.filter);
   }
 
+  const projectFile = test.projectFile ?? inheritedProjectFile;
+  if (projectFile) {
+    itemProjects.set(test.id, projectFile);
+  }
+
   if (test.children) {
     for (const child of test.children) {
-      item.children.add(buildTestItem(controller, child));
+      item.children.add(buildTestItem(controller, child, projectFile));
     }
   }
 
@@ -213,7 +279,8 @@ async function runTests(
 ) {
   const run = controller.createTestRun(request);
 
-  // Collect all test items to run
+  // Collect the top-level items the user asked to run (specific selection, or the
+  // whole controller when no include is given).
   const items: vscode.TestItem[] = [];
   if (request.include) {
     request.include.forEach((item) => items.push(item));
@@ -223,56 +290,142 @@ async function runTests(
 
   for (const item of items) {
     if (token.isCancellationRequested) break;
-    run.started(item);
+    forEachLeaf(item, (leaf) => run.started(leaf));
   }
 
   try {
-    // Find the project file and run tests via dotnet test
-    const projectFiles = await vscode.workspace.findFiles('**/*.gsproj', '**/node_modules/**', 1);
-    if (projectFiles.length === 0) {
+    // Group the selection by the owning project so each `dotnet test` invocation runs
+    // against the correct `.gsproj`. A multi-project workspace (e.g. several test
+    // projects) would otherwise always run against an arbitrary first project.
+    const groups = await groupItemsByProject(items);
+    if (groups.size === 0) {
       for (const item of items) {
-        run.errored(item, new vscode.TestMessage('No .gsproj file found.'));
+        forEachLeaf(item, (leaf) =>
+          run.errored(leaf, new vscode.TestMessage('No .gsproj file found.')),
+        );
       }
       run.end();
       return;
     }
 
-    const projectFile = projectFiles[0].fsPath;
-    const args = ['test', projectFile, '--logger', 'trx'];
-
-    // When specific tests are selected, restrict the run with a --filter.
-    // An empty expression (e.g. the whole suite) runs the entire project.
-    const filterExpression = request.include ? buildFilterExpression(items) : undefined;
-    if (filterExpression) {
-      args.push('--filter', filterExpression);
-    }
-
-    if (debug) {
-      await debugTests(projectFiles[0], args, items, run, logger, token);
-    } else {
-      const task = new vscode.Task(
-        { type: 'gsharp', task: 'test', project: projectFile },
-        vscode.TaskScope.Workspace,
-        'test',
-        'gsharp',
-        new vscode.ShellExecution('dotnet', args),
-      );
-
-      await vscode.tasks.executeTask(task);
-
-      // Mark all as passed (actual result parsing from TRX would be added here)
-      for (const item of items) {
-        run.passed(item);
-      }
+    for (const [projectFile, group] of groups) {
+      if (token.isCancellationRequested) break;
+      // Omit the filter when running an entire project (the project group node, or a
+      // bare "run all"); otherwise restrict the run to exactly the selected tests.
+      const filterExpression = group.runAll ? undefined : buildFilterExpression(group.items);
+      await runProject(projectFile, group.items, filterExpression, run, logger, debug, token);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     for (const item of items) {
-      run.errored(item, new vscode.TestMessage(message));
+      forEachLeaf(item, (leaf) => run.errored(leaf, new vscode.TestMessage(message)));
     }
   }
 
   run.end();
+}
+
+/**
+ * Buckets the selected items by the absolute path of the `.gsproj` that owns them.
+ * A top-level grouping node with no test filter of its own (i.e. a project group) marks
+ * its bucket as "run all", so the whole project runs without a `--filter`. Items whose
+ * project cannot be determined (loose files, or an older server) fall back to the first
+ * `.gsproj` discovered in the workspace.
+ */
+async function groupItemsByProject(
+  items: vscode.TestItem[],
+): Promise<Map<string, { items: vscode.TestItem[]; runAll: boolean }>> {
+  const groups = new Map<string, { items: vscode.TestItem[]; runAll: boolean }>();
+  let fallback: string | undefined;
+
+  for (const item of items) {
+    let projectFile = projectFileForItem(item);
+    if (!projectFile) {
+      if (fallback === undefined) {
+        const found = await vscode.workspace.findFiles('**/*.gsproj', '**/node_modules/**', 1);
+        fallback = found.length > 0 ? found[0].fsPath : '';
+      }
+      projectFile = fallback;
+    }
+
+    if (!projectFile) {
+      continue;
+    }
+
+    let group = groups.get(projectFile);
+    if (!group) {
+      group = { items: [], runAll: false };
+      groups.set(projectFile, group);
+    }
+
+    group.items.push(item);
+    if (!item.parent && !testFilters.has(item.id)) {
+      group.runAll = true;
+    }
+  }
+
+  return groups;
+}
+
+function projectFileForItem(item: vscode.TestItem): string | undefined {
+  let current: vscode.TestItem | undefined = item;
+  while (current) {
+    const projectFile = itemProjects.get(current.id);
+    if (projectFile) {
+      return projectFile;
+    }
+    current = current.parent;
+  }
+  return undefined;
+}
+
+function forEachLeaf(item: vscode.TestItem, fn: (leaf: vscode.TestItem) => void) {
+  if (item.children.size === 0) {
+    fn(item);
+    return;
+  }
+  item.children.forEach((child) => forEachLeaf(child, fn));
+}
+
+async function runProject(
+  projectFile: string,
+  items: vscode.TestItem[],
+  filterExpression: string | undefined,
+  run: vscode.TestRun,
+  logger: Logger,
+  debug: boolean,
+  token: vscode.CancellationToken,
+) {
+  const leaves: vscode.TestItem[] = [];
+  for (const item of items) {
+    forEachLeaf(item, (leaf) => leaves.push(leaf));
+  }
+
+  const args = ['test', projectFile, '--logger', 'trx'];
+  if (filterExpression) {
+    args.push('--filter', filterExpression);
+  }
+
+  const projectUri = vscode.Uri.file(projectFile);
+  if (debug) {
+    await debugTests(projectUri, args, leaves, run, logger, token);
+    return;
+  }
+
+  const task = new vscode.Task(
+    { type: 'gsharp', task: 'test', project: projectFile },
+    vscode.TaskScope.Workspace,
+    'test',
+    'gsharp',
+    new vscode.ShellExecution('dotnet', args),
+  );
+
+  await vscode.tasks.executeTask(task);
+
+  // Mark all as passed (actual result parsing from TRX would be added here).
+  for (const leaf of leaves) {
+    run.passed(leaf);
+  }
 }
 
 /**
