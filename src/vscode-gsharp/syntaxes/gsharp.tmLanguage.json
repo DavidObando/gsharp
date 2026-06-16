@@ -219,7 +219,7 @@
         },
         {
           "name": "keyword.modifier.contextual.gsharp",
-          "match": "\\b(data|delegate|event|in|init|inline|make|nameof|out|prop|raise|record|ref|remove|scoped|shared|static|typeof|when|where|with|yield)\\b"
+          "match": "\\b(data|delegate|event|in|init|inline|make|nameof|out|prop|raise|record|ref|remove|scoped|shared|typeof|when|where|with|yield)\\b"
         },
         {
           "name": "keyword.other.accessor.gsharp",

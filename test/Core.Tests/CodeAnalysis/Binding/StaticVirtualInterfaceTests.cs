@@ -14,11 +14,11 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// ADR-0089 / issue #755 — static-virtual interface members. These tests
-/// pin the binder behaviour for the new <c>static func</c> interface
-/// member shape, the generic-constraint <c>[T IFoo]</c> dispatch path
-/// (<c>T.M(args)</c>), and the diagnostics introduced for failures on
-/// the implementer side (GS0330–GS0333).
+/// ADR-0089 / issue #755 (issue #865 revision) — static-virtual interface
+/// members. These tests pin the binder behaviour for the <c>shared { … }</c>
+/// interface member shape, the generic-constraint <c>[T IFoo]</c> dispatch
+/// path (<c>T.M(args)</c>), and the diagnostics introduced for failures on the
+/// implementer side (GS0330–GS0333).
 /// </summary>
 public class StaticVirtualInterfaceTests
 {
@@ -27,7 +27,9 @@ public class StaticVirtualInterfaceTests
     {
         var source = @"
 sealed interface IZero {
-    static func Zero() int32
+    shared {
+        func Zero() int32
+    }
 }
 ";
         var result = Evaluate(source);
@@ -39,7 +41,9 @@ sealed interface IZero {
     {
         var source = @"
 sealed interface IZero {
-    static func Zero() int32 { return 0 }
+    shared {
+        func Zero() int32 { return 0 }
+    }
 }
 ";
         var result = Evaluate(source);
@@ -53,7 +57,9 @@ sealed interface IZero {
         // satisfies the interface's static-virtual abstract slot.
         var source = @"
 sealed interface IAdd {
-    static func Add(a int32, b int32) int32
+    shared {
+        func Add(a int32, b int32) int32
+    }
 }
 
 class Adder : IAdd {
@@ -71,7 +77,9 @@ class Adder : IAdd {
     {
         var source = @"
 sealed interface IAdd {
-    static func Add(a int32, b int32) int32
+    shared {
+        func Add(a int32, b int32) int32
+    }
 }
 
 class BrokenAdder : IAdd {
@@ -86,7 +94,9 @@ class BrokenAdder : IAdd {
     {
         var source = @"
 sealed interface IAdd {
-    static func Add(a int32, b int32) int32
+    shared {
+        func Add(a int32, b int32) int32
+    }
 }
 
 class WrongAdder : IAdd {
@@ -104,7 +114,9 @@ class WrongAdder : IAdd {
         // override entirely. The binder must NOT emit GS0331 here.
         var source = @"
 sealed interface IZero {
-    static func Zero() int32 { return 0 }
+    shared {
+        func Zero() int32 { return 0 }
+    }
 }
 
 class IntZero : IZero {
@@ -123,7 +135,9 @@ class IntZero : IZero {
         // because it is the only way generic-math abstractions compose.
         var source = @"
 interface IFactory {
-    static func Make() int32 { return 0 }
+    shared {
+        func Make() int32 { return 0 }
+    }
 }
 
 func Use[T IFactory]() int32 { return T.Make() }
@@ -139,7 +153,9 @@ func Use[T IFactory]() int32 { return T.Make() }
         // No diagnostics on the call site.
         var source = @"
 sealed interface IAdd {
-    static func Add(a int32, b int32) int32
+    shared {
+        func Add(a int32, b int32) int32
+    }
 }
 
 class Adder : IAdd {
@@ -164,7 +180,9 @@ Sum(Adder{}, 3, 4)
     {
         var source = @"
 sealed interface IAdd {
-    static func Add(a int32, b int32) int32
+    shared {
+        func Add(a int32, b int32) int32
+    }
 }
 
 func Wrong[T IAdd](a int32, b int32) int32 {
@@ -176,20 +194,21 @@ func Wrong[T IAdd](a int32, b int32) int32 {
     }
 
     [Fact]
-    public void InterfaceStatic_LetForm_ReportsGS0330()
+    public void InterfaceSharedBlock_NonFuncMember_ReportsGS0330()
     {
-        // ADR-0089 §3.3: `static let` in an interface is deferred to a
-        // future ADR; the binder rejects it explicitly with GS0330.
+        // Issue #865 revision: interface static state (`var` / `let` / `const`
+        // / `prop` / `event`) is deferred; only `func` members are allowed in
+        // an interface `shared { … }` block. The parser rejects the others
+        // with GS0330.
         var source = @"
 interface IBad {
-    static let Zero int32 = 0
+    shared {
+        let Zero int32 = 0
+    }
 }
 ";
         var result = Evaluate(source);
-        // The parser does not currently model `static let`; the diagnostic
-        // surface here may be parser-level (GS0005) OR the deferred-GS0330
-        // path. Both indicate the form is rejected.
-        Assert.NotEmpty(result.Diagnostics);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0330");
     }
 
     private static EvaluationResult Evaluate(string source)

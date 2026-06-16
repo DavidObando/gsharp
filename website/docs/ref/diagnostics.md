@@ -841,14 +841,18 @@ dropped-default, missing-implementer, and deferred-modifier cases.
 | GS0318 | Error | `Class '<C>' inherits conflicting default implementations of '<Name>' from interfaces '<IA>' and '<IB>'. Declare '<C>.<Name>' explicitly to disambiguate.` |
 | GS0319 | Error | `Override targets default-interface method '<Name>' that was removed in interface '<I>'.` |
 | GS0320 | Error | `Class '<C>' does not implement interface method '<I>.<Name>' and the interface does not provide a default.` |
-| GS0321 | Error | `Modifier '<modifier>' on interface method '<Name>' is not yet supported. ADR-0085 explicitly defers static-virtual, private, and sealed interface members.` |
+| GS0321 | Error | `Modifier '<modifier>' on interface method '<Name>' is not yet supported. ADR-0085 explicitly defers 'open', 'override', and 'sealed override' interface members.` |
 
 Note: as of ADR-0090 (issue #756) the `private` modifier on an interface
 method is no longer deferred and no longer fires GS0321. See the
 "Private interface helper diagnostics" section below for the GS0334–GS0337
 codes that govern private-helper visibility and override-clash detection.
-The `static` modifier is also accepted (ADR-0089 / issue #755); GS0321
-now only fires for `open` and `override` on interface methods.
+Per the issue #865 revision of ADR-0089, interface static-virtual members
+no longer use a `static` modifier — they are declared inside a
+`shared { … }` block on the interface — so `static` is no longer recognised
+on interface methods at all (the old `static func …` shape now produces a
+generic parser error). GS0321 therefore only fires today for `open`,
+`override`, and `sealed override` on interface methods.
 
 Default-interface methods (DIM) emit standard CLR DIM metadata: the
 interface's method table carries a `.method virtual` slot whose body
@@ -941,19 +945,22 @@ See ADR-0086 for the worked example, the attribute-knob table
 
 ## Static-virtual interface-member diagnostics (GS0330–GS0333)
 
-See ADR-0089 (issue #755). The DIM family lands in ADR-0085;
-ADR-0089 extends interface members with the C# 11-style
-*static-virtual* shape: `static func` declared inside an
-`interface` body. Implementers supply the static via the
-existing `shared { ... }` block; generic methods can dispatch
-through `T.M(...)` and the call site resolves to the
-implementer's static method
+See ADR-0089 (issue #755) and its issue #865 revision. The DIM family
+lands in ADR-0085; ADR-0089 extends interfaces with C# 11-style
+*static-virtual* members. Per issue #865, these members are declared
+inside a `shared { … }` block on the interface — the same `shared { … }`
+block that hosts static members on classes and structs (ADR-0053). A
+body-less `func` inside that block is an abstract static-virtual slot;
+a `func` carrying a body is a default static-virtual member.
+Implementers supply the static via their own `shared { ... }` block;
+generic methods can dispatch through `T.M(...)` and the call site
+resolves to the implementer's static method
 (`constrained. !!T  call <iface>::<method>` at the CLR level —
 ECMA-335 II.15.4.2.4 and III.2.1).
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0330 | Error | `'static let' inside an interface is not supported; the v1 ADR-0089 surface only accepts 'static func'.` |
+| GS0330 | Error | `Only 'func' members are allowed inside the 'shared' block of interface '<Name>'; interface static state is not supported in this release (ADR-0089).` |
 | GS0331 | Error | `<Kind> '<C>' does not implement static-virtual interface method '<I>.<Name>', and the interface provides no default body (ADR-0089).` |
 | GS0332 | Error | `<Kind> '<C>' declares instance method '<Name>' but interface '<I>.<Name>' is static-virtual; declare it inside a 'shared { … }' block (ADR-0089).` |
 | GS0333 | Error | `Type parameter '<T>' has no constraint that declares a static-virtual member '<Name>' (ADR-0089).` |
@@ -968,11 +975,13 @@ interface slot via a `MethodImpl` row (ECMA-335 II.22.27).
 
 Cause/fix:
 
-- **GS0330** — replace the `static let` with a `static func`
-  that returns the value, e.g. rewrite
-  `static let Zero int32 = 0` as
-  `static func Zero() int32 { return 0 }`. Per-implementer
-  constants are a future extension and not yet supported.
+- **GS0330** — only `func` members may appear inside an interface's
+  `shared { … }` block. Remove any `var` / `let` / `const` / `prop` /
+  `event` declarations from that block; per-implementer static state
+  on interfaces is a future extension and not yet supported. If you
+  want a per-implementer constant today, expose it through a
+  static-virtual property or function and have each implementer
+  return its value.
 - **GS0331** — add the missing static override inside the
   implementer's `shared { … }` block:
   `class Adder : IAdd { shared { func Add(a int32, b int32) int32 { return a + b } } }`,

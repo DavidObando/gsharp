@@ -135,6 +135,16 @@ A future follow-up may introduce `type Utils object { … }` syntax for declarin
 - No ABI impact on existing code: shared block support is additive.
 - Future `object` declarations (singleton/utility types) can reuse the same infrastructure with minimal additional work.
 
+> **Note (issue #865 revision of ADR-0089).** The same `shared { … }` block
+> also hosts static-virtual interface members on `interface` declarations.
+> Inside an interface `shared { … }` block a body-less `func` denotes an
+> abstract static-virtual slot — the one place where a `func` inside a
+> `shared { … }` block may omit its body — and a `func` carrying a body
+> denotes a default static-virtual member. Static private helpers (ADR-0090)
+> live in the same block as `private func`. Non-`func` members inside an
+> interface `shared { … }` block are rejected with GS0330 because
+> per-implementer interface static state is not supported in this release.
+
 ## Alternatives considered
 
 ### A1: `static` modifier on individual members

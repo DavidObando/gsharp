@@ -1,9 +1,23 @@
 # ADR-0089: Static-virtual interface members
 
-- **Status**: Accepted
-- **Date**: 2026-06-12
+- **Status**: Accepted (revised by issue #865)
+- **Date**: 2026-06-12 (revised 2026-06-16)
 - **Phase**: Phase 3.B.4 follow-up (interfaces); deferred-work item from ADR-0085.
-- **Related**: ADR-0085 (DIM minimal-scope), ADR-0018 (interface defaults), ADR-0020 (generics scope), ADR-0017 (method virtuality), ADR-0053 (static members), ADR-0078 (declaration head), ADR-0087 (reified generics emit audit), ADR-0088 (constraint-aware overload resolution). Issue #755 (this ADR), parent #706, sibling #756 (private interface helpers — deferred), #757 (explicit-base interface call — deferred), #726 (ADR-0085 DIM).
+- **Related**: ADR-0085 (DIM minimal-scope), ADR-0018 (interface defaults), ADR-0020 (generics scope), ADR-0017 (method virtuality), ADR-0053 (static members — `shared` block), ADR-0078 (declaration head), ADR-0087 (reified generics emit audit), ADR-0088 (constraint-aware overload resolution), ADR-0090 (private interface helpers). Issue #755 (this ADR), issue #865 (this revision), parent #706, sibling #756 (private interface helpers), #757 (explicit-base interface call — deferred), #726 (ADR-0085 DIM).
+
+## Revision (issue #865)
+
+This ADR originally introduced a `static func` modifier on interface members to declare static-virtual slots. Issue #865 reverses that surface decision: **static-virtual interface members are now declared inside a `shared { … }` block on the interface**, identical to how classes and structs already group their static members (ADR-0053). This removes the lone inconsistency where interfaces used a `static` modifier while every other type used a `shared` block.
+
+The change is a **breaking change** and is purely front-end (parser surface): the binder routing, CLR emit shape, and interpreter dispatch are unchanged.
+
+- `static func M(...)` on an interface → `shared { func M(...) }`. A body-less `func` inside the interface `shared` block is the **abstract** static slot; a `func` with a body is the **default** static slot (the body-vs-no-body discriminator is unchanged).
+- `private static func M(...)` (ADR-0090) → `shared { private func M(...) }`. Instance `private func` helpers stay directly in the interface body (unchanged).
+- `static` is **no longer a contextual keyword** anywhere in the language — it reverts to an ordinary identifier. The removed `static func` form on an interface now falls through to the generic "unexpected token" parser error (GS0005); no dedicated migration diagnostic is emitted.
+- Only `func` members are permitted inside an interface `shared` block. A non-`func` member (interface static state) is rejected with GS0330.
+
+The body of this ADR below has been updated to reflect the `shared`-block surface. Sections describing CLR metadata, dispatch, the interpreter, and the bound tree are unaffected by the revision.
+
 
 ## Context
 
@@ -23,9 +37,11 @@ GSharp interfaces may declare **static methods** that participate in generic dis
 package GSharp.Samples.StaticVirtualInterfaces
 
 sealed interface IAdd[T] {
-    static func Add(a T, b T) T
-    static func Zero() T {
-        return Add(default(T), default(T))
+    shared {
+        func Add(a T, b T) T
+        func Zero() T {
+            return Add(default(T), default(T))
+        }
     }
 }
 
@@ -50,15 +66,15 @@ func [T IAdd[T]] Sum(xs sequence[T]) T {
 
 Three things are happening here:
 
-1. **`static func` inside `interface { … }`** — abstract when the body is omitted (the implementer MUST provide), default when the body is present (the implementer MAY override). Mirrors ADR-0085's body-vs-no-body discrimination for instance DIM.
+1. **`func` inside an interface `shared { … }` block** — abstract when the body is omitted (the implementer MUST provide), default when the body is present (the implementer MAY override). Mirrors ADR-0085's body-vs-no-body discrimination for instance DIM, reusing the `shared` grouping classes/structs already use (ADR-0053). A body-less `func` is legal here precisely because it denotes an abstract slot — the one place a `shared` `func` may omit its body.
 2. **`T.Method(args)` inside a generic** — the binder routes the call to a new `BoundConstrainedStaticCallExpression` node when the receiver name resolves to a type parameter whose interface constraint declares a matching static method.
-3. **`shared { func … }` on the implementer** — the implementer's static method lives in the conventional ADR-0053 shared block; the binder threads it into the interface contract automatically by name + signature match. No new declaration shape is introduced on the implementer.
+3. **`shared { func … }` on the implementer** — the implementer's static method lives in the conventional ADR-0053 shared block; the binder threads it into the interface contract automatically by name + signature match. The interface and the implementer now use the **same** `shared`-block grouping.
 
 The constraint syntax accepts a generic type-argument list after the interface name (the "curiously-recurring" `[T IAdd[T]]` is the canonical generic-math shape). This is a new parser shape — see "Constraint grammar" below.
 
-### Why `static func` only — not `static let`
+### Why `func` only — not `let`
 
-`static let` (an interface-level constant exposed per-implementer) is not introduced in this PR. The CLR has no equivalent storage shape: a per-implementer constant must be expressed as a static-virtual *property* (or static-virtual method with no parameters) on the interface, and ADR-0051 has not yet landed static interface properties. Adding `static let` would require either an unused CLR mapping (rejected — see ADR-0085's "deferred work" entry on `private` interface helpers) or a much larger pull-in of static interface properties (rejected for scope). Implementer needs that today are covered by writing a zero-argument `static func Zero() T` — exactly the shape used in the snippet above for `Int32Adder`. A follow-up issue can introduce `static let` once static interface properties land; the parser still rejects `let` inside `interface { … }` with GS0330 (see "Diagnostics") to keep the door open.
+A `let` (an interface-level constant exposed per-implementer) is not introduced. The CLR has no equivalent storage shape: a per-implementer constant must be expressed as a static-virtual *property* (or static-virtual method with no parameters) on the interface, and ADR-0051 has not yet landed static interface properties. Adding interface static state would require either an unused CLR mapping (rejected — see ADR-0085's "deferred work" entry on `private` interface helpers) or a much larger pull-in of static interface properties (rejected for scope). Implementer needs that today are covered by writing a zero-argument `func Zero() T` inside the interface `shared` block — exactly the shape used in the snippet above for `Int32Adder`. A follow-up issue can introduce interface static state once static interface properties land; the parser rejects any non-`func` member inside an interface `shared { … }` block with GS0330 (see "Diagnostics") to keep the door open.
 
 ### Constraint grammar
 
@@ -80,9 +96,11 @@ Binder behavior:
 
 ```gs
 interface IFoo[T] {
-    static func RequiredOp(a T, b T) T        // abstract — implementer MUST provide
-    static func WithDefault() T {              // default — implementer MAY override
-        return default(T)
+    shared {
+        func RequiredOp(a T, b T) T        // abstract — implementer MUST provide
+        func WithDefault() T {              // default — implementer MAY override
+            return default(T)
+        }
     }
 }
 ```
@@ -183,23 +201,24 @@ A new bound-tree shape, `BoundConstrainedStaticCallExpression`, is introduced.
 
 | ID | Severity | Trigger |
 | --- | --- | --- |
-| **GS0330** | Error | `let` (or any other non-`func`) member appears inside `interface { … }` other than the already-accepted property/event shapes. The diagnostic identifies the offending member kind and points to this ADR for the rationale ("static interface constants require static interface properties; tracked as a follow-up"). |
+| **GS0330** | Error | A non-`func` member (`var` / `let` / `const` / `prop` / `event`) appears inside an interface `shared { … }` block. Interface static state is deferred (it requires static interface properties; tracked as a follow-up). The diagnostic names the owning interface and points to this ADR. |
 | **GS0331** | Error | A class/struct claims to implement an interface but does not declare a `shared { func … }` member that matches a required (abstract) static-virtual slot on the interface. Names the missing slot and the owning interface. |
 | **GS0332** | Error | A class/struct claims to implement an interface and declares an *instance* method whose name matches a static-virtual slot on the interface (the implementer's method must itself be static). |
 | **GS0333** | Error | A `T.M(args)` call references a member name that does not exist as a static-virtual on `T`'s interface constraint. Names the type parameter, the constraint interface, and the missing member. |
 
-GS0321 (ADR-0085's "deferred modifier on interface method" diagnostic) is updated: it no longer fires for `static`. It continues to fire for `open` / `override` / `private` on interface methods.
+GS0321 (ADR-0085's "deferred modifier on interface method" diagnostic) no longer references `static` in any form — `static` is no longer a modifier (issue #865). It continues to fire for `open` / `override` on interface methods. The removed `static func` interface form now produces the generic GS0005 ("unexpected token") parser error rather than a dedicated diagnostic.
 
 ### What is in scope
 
 | Capability | In scope? | Rationale |
 | --- | --- | --- |
-| Abstract `static func` on interfaces | ✅ | The headline feature. |
-| Default-bodied `static func` on interfaces | ✅ | Symmetric with ADR-0085's instance default — required for "shared identity element" patterns (`Zero`, `One`). |
+| Abstract `func` in interface `shared` block | ✅ | The headline feature. |
+| Default-bodied `func` in interface `shared` block | ✅ | Symmetric with ADR-0085's instance default — required for "shared identity element" patterns (`Zero`, `One`). |
 | Generic constraint `[T IAdd[T]]` with curiously-recurring generic args | ✅ | The canonical generic-math shape requires this. |
 | `T.Method(args)` dispatch inside a generic | ✅ | The only way the feature is useful. |
 | CLR `constrained. T call I::M` emission | ✅ | ECMA-335-conforming and matches C# 11's output. |
-| Implementer declared via existing `shared { … }` block | ✅ | No new declaration shape needed; reuses ADR-0053. |
+| Implementer declared via existing `shared { … }` block | ✅ | No new declaration shape needed; reuses ADR-0053. The interface side now uses the same grouping (issue #865). |
+| Private static helpers via `shared { private func … }` | ✅ | Landed via ADR-0090; declared inside the interface `shared` block (issue #865). |
 | Cross-language interop with C# producers | ✅ — emit side | A C# consumer can implement a G#-declared static-virtual interface (the emitted metadata is standard ECMA shape). |
 | Cross-language interop with C# consumers | ✅ — emit + import | A G# consumer can use a C#-defined interface with static abstracts as a constraint, dispatching `T.Method(args)` to a G# or imported implementer. |
 | Interpreter parity | ✅ | Required by the acceptance criteria. |
@@ -208,13 +227,12 @@ GS0321 (ADR-0085's "deferred modifier on interface method" diagnostic) is update
 
 | Capability | Deferred? | Rationale |
 | --- | --- | --- |
-| `static let` constants on interfaces | Deferred | Requires static interface properties, which are themselves deferred (ADR-0051 covers instance interface properties only). A zero-argument `static func` covers the use case today. |
-| Static-virtual *properties* on interfaces (`shared { prop X T { get } }` on interface) | Deferred | Requires lifting ADR-0051 into static-property territory. Out of scope for this PR; tracked as a follow-up. |
-| `static let` for the implementer of an interface as a sugar for "expose this readonly static through the interface" | Deferred | Same reason — depends on the static-property work. |
-| Explicit-base call for a static-virtual default (`base<IFoo>.M()` for statics) | Deferred (issue #757) | Same justification as ADR-0085: not required to ship the feature; symmetric with the instance-DIM deferral. |
-| `private` static-virtual helpers on interfaces | Deferred (issue #756) | Same justification as ADR-0085's private-instance deferral. |
+| Interface static state (`let` / `const` constants in the interface `shared` block) | Deferred | Requires static interface properties, which are themselves deferred (ADR-0051 covers instance interface properties only). A zero-argument `func` covers the use case today. |
+| Static-virtual *properties* on interfaces (`shared { prop X T { get } }` on interface) | Deferred | Requires lifting ADR-0051 into static-property territory. Out of scope; tracked as a follow-up. |
+| Interface static constant exposed per-implementer as a sugar for "expose this readonly static through the interface" | Deferred | Same reason — depends on the static-property work. |
+| Explicit-base call for a static-virtual default (`base[IFoo].M()` for statics) | Deferred (issue #757) | Same justification as ADR-0085: not required to ship the feature; symmetric with the instance-DIM deferral. |
 
-A static interface member that names anything other than `static func` (e.g. `static let CONST = 1`, `static prop X T`) is rejected at parse-time with GS0330 and remains rejected after this PR.
+A member inside an interface `shared { … }` block that is anything other than a `func` (e.g. `let CONST = 1`, `prop X T`) is rejected at parse-time with GS0330 and remains rejected after this revision.
 
 ## CLR / ECMA references
 

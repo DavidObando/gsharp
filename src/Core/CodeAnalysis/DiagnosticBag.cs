@@ -3467,26 +3467,27 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// Reports GS0330 — ADR-0089 / issue #755: <c>static let</c> inside an
-    /// interface declaration is reserved for a future release. The minimal
-    /// static-virtual interface members feature only accepts
-    /// <c>static func</c>.
+    /// Reports GS0330 — ADR-0089 / issue #755 (issue #865 revision): a
+    /// non-<c>func</c> member appears inside an interface <c>shared { … }</c>
+    /// block. Only static-virtual <c>func</c> members (abstract or default) are
+    /// allowed there; interface static state (<c>var</c> / <c>let</c> /
+    /// <c>const</c> / <c>prop</c> / <c>event</c>) is deferred to a future ADR.
     /// </summary>
     /// <param name="location">The source location of the offending declaration.</param>
     /// <param name="interfaceName">The owning interface name.</param>
-    public void ReportInterfaceStaticLetNotSupported(TextLocation location, string interfaceName)
+    public void ReportInterfaceSharedMemberMustBeFunc(TextLocation location, string interfaceName)
     {
         Report(
             location,
             "GS0330",
-            $"'static let' inside interface '{interfaceName}' is not supported in this release; use 'static func' (ADR-0089).",
+            $"Only 'func' members are allowed inside the 'shared' block of interface '{interfaceName}'; interface static state is not supported in this release (ADR-0089).",
             DiagnosticSeverity.Error);
     }
 
     /// <summary>
     /// Reports GS0331 — ADR-0089 / issue #755: a struct that declares it
     /// implements an interface with one or more static-virtual abstract
-    /// members does not provide the matching <c>shared static func</c>
+    /// members does not provide the matching <c>shared { func … }</c>
     /// override for some of those slots.
     /// </summary>
     /// <param name="location">The struct declaration head location.</param>

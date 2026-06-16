@@ -21,7 +21,7 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
   // `record` was removed in v0.2; the lexer still recognises it so the parser
   // can emit the GS0307 migration diagnostic, so we keep it here for fidelity.
   const contextualKeywords =
-    /\b(?:add|data|delegate|event|get|in|init|inline|make|nameof|out|prop|raise|record|ref|remove|scoped|set|shared|static|typeof|when|where|with|yield)\b/;
+    /\b(?:add|data|delegate|event|get|in|init|inline|make|nameof|out|prop|raise|record|ref|remove|scoped|set|shared|typeof|when|where|with|yield)\b/;
 
   // Built-in primitive type names (TypeSymbol). Width-bearing names are
   // canonical; friendly aliases (`int`, `long`, etc.) are accepted by the

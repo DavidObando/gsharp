@@ -389,13 +389,15 @@ class C : IMissing {
     [Fact]
     public void InterfaceDefaultMethod_StaticModifier_NowAcceptedByParser()
     {
-        // ADR-0089 / issue #755: static-virtual interface members are now
-        // accepted by the parser (with or without a default body). This
-        // test pins the new behavior — a previously-rejected source now
-        // binds with no diagnostics.
+        // ADR-0089 / issue #755 (issue #865 revision): static-virtual interface
+        // members are declared inside a `shared { … }` block (with or without a
+        // default body). This test pins the behavior — the source binds with no
+        // diagnostics.
         var source = @"
 interface IStaticy {
-    static func F() int32 { return 1 }
+    shared {
+        func F() int32 { return 1 }
+    }
 }
 ";
         var result = Evaluate(source);
@@ -430,14 +432,18 @@ c.Double(3)
     }
 
     [Fact]
-    public void PrivateInterfaceHelper_PrivateStaticModifierOrderAccepted()
+    public void PrivateInterfaceHelper_StaticAndPrivateStaticInSharedBlock_Accepted()
     {
-        // ADR-0090: `private static` and `static private` both parse.
+        // ADR-0090 (issue #865 revision): static-virtual members and private
+        // static helpers are declared together in the interface `shared { … }`
+        // block. A `private func` inside that block is a private static helper.
         var source = @"
 interface IStatics {
-    static func Get() int32 { return 7 }
-    private static func H() int32 { return 1 }
-    static private func K() int32 { return 2 }
+    shared {
+        func Get() int32 { return 7 }
+        private func H() int32 { return 1 }
+        private func K() int32 { return 2 }
+    }
 }
 ";
         var result = Evaluate(source);
