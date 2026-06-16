@@ -159,7 +159,7 @@ public sealed class StructSymbol : TypeSymbol
     public Accessibility Accessibility { get; }
 
     /// <summary>Gets the declaring syntax node.</summary>
-    public StructDeclarationSyntax Declaration { get; }
+    public StructDeclarationSyntax Declaration { get; private set; }
 
     /// <summary>Gets the package the struct lives in.</summary>
     public string PackageName { get; }
@@ -750,6 +750,20 @@ public sealed class StructSymbol : TypeSymbol
 
         var key = BuildArgsKey(typeArguments);
         return ConstructedCache.GetOrAdd((definition, key), _ => CreateConstructed(definition, typeArguments));
+    }
+
+    /// <summary>
+    /// ADR-0105 Phase 2 — re-points this (reused) struct symbol at the
+    /// declaration node of a freshly-parsed syntax tree whose declaration is
+    /// byte-identical to the previous one (a body-only edit). Only the backing
+    /// syntax — and therefore source spans — changes; the symbol's identity is
+    /// preserved so cross-compilation reuse stays sound. Intended to be called
+    /// only by <see cref="Binding.IncrementalGlobalScopeReuse"/>.
+    /// </summary>
+    /// <param name="declaration">The corresponding declaration in the re-parsed tree.</param>
+    internal void RepointDeclaration(StructDeclarationSyntax declaration)
+    {
+        Declaration = declaration;
     }
 
     private static string BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments)

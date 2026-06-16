@@ -82,7 +82,7 @@ public sealed class PropertySymbol : Symbol
     public bool IsStatic { get; }
 
     /// <summary>Gets the declaring syntax node, or <see langword="null"/> for synthesized properties.</summary>
-    public PropertyDeclarationSyntax Declaration { get; }
+    public PropertyDeclarationSyntax Declaration { get; private set; }
 
     /// <summary>Gets or sets the synthesized backing field symbol for auto-properties. Null for computed properties.</summary>
     public FieldSymbol BackingField { get; set; }
@@ -98,4 +98,21 @@ public sealed class PropertySymbol : Symbol
 
     /// <summary>Gets or sets the setter accessor body syntax (for computed properties). Null for auto-properties.</summary>
     public Syntax.BlockStatementSyntax SetterBodySyntax { get; set; }
+
+    /// <summary>
+    /// ADR-0105 Phase 2 — re-points this (reused) property at the declaration
+    /// node of a freshly-parsed syntax tree whose property signature and
+    /// accessor shape are byte-identical to the previous one (a body-only edit).
+    /// The caller is responsible for re-pointing <see cref="GetterBodySyntax"/>
+    /// and <see cref="SetterBodySyntax"/> at the corresponding accessor bodies in
+    /// the re-parsed tree. The symbol's identity (including
+    /// <see cref="GetterSymbol"/>/<see cref="SetterSymbol"/>) is preserved so
+    /// cross-compilation reuse stays sound. Intended to be called only by
+    /// <see cref="Binding.IncrementalGlobalScopeReuse"/>.
+    /// </summary>
+    /// <param name="declaration">The corresponding declaration in the re-parsed tree.</param>
+    internal void RepointDeclaration(PropertyDeclarationSyntax declaration)
+    {
+        Declaration = declaration;
+    }
 }

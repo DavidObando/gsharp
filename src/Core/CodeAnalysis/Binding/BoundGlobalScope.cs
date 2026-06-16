@@ -266,7 +266,7 @@ public sealed class BoundGlobalScope
     /// Gets the active preprocessor symbol set used by
     /// <c>[Conditional("SYMBOL")]</c> call-site elision (ADR-0047 §6 /
     /// issue #176). Threaded onto the bound global scope so that
-    /// <see cref="Binder.BindProgram"/> — which builds its own scope chain
+    /// <see cref="Binder.BindProgram(BoundGlobalScope, Symbols.ReferenceResolver)"/> — which builds its own scope chain
     /// from this snapshot — can rehydrate the same symbol set when binding
     /// function bodies. Defaults to <see cref="ImmutableHashSet{T}.Empty"/>.
     /// </summary>

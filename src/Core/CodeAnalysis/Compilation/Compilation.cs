@@ -139,6 +139,46 @@ public class Compilation
     public bool WarnOnMissingDocumentation { get; set; }
 
     /// <summary>
+    /// Gets or sets the optional per-project bound-body cache (ADR-0105
+    /// Phase 1). When set, <see cref="BoundProgram"/> threads it through
+    /// <see cref="Binder.BindProgram(BoundGlobalScope, ReferenceResolver, BoundBodyCache)"/>
+    /// so unchanged member bodies can be reused across compilations <em>when
+    /// reuse is provably sound</em> (see <see cref="BoundBodyCache"/>). The
+    /// cache is owned externally (by the language server's per-project
+    /// <c>ProjectState</c>) and lives across the immutable, per-edit
+    /// <see cref="Compilation"/> instances; it never changes emitted IL or
+    /// diagnostics relative to the full-rebuild path. Defaults to
+    /// <see langword="null"/>, which is exactly the historical behavior.
+    /// </summary>
+    public BoundBodyCache BodyCache { get; set; }
+
+    /// <summary>
+    /// Gets or sets a pre-bound <see cref="BoundGlobalScope"/> to reuse instead
+    /// of re-binding from the syntax trees (ADR-0105 Phase 2). The language
+    /// server sets this when a single-file, body-only edit lets the previous
+    /// compilation's global scope (and therefore every symbol instance) be
+    /// reused — the prerequisite for the <see cref="BoundBodyCache"/>'s
+    /// symbol-identity soundness gate to hit and for the emitter, which keys
+    /// members by reference, to remain correct. When set, <see cref="GlobalScope"/>
+    /// returns it verbatim instead of re-binding from the syntax trees.
+    /// The edited file's symbols are expected to have been re-pointed at the new
+    /// syntax via <see cref="IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit"/>
+    /// before this is set. Defaults to <see langword="null"/> (full rebuild).
+    /// </summary>
+    public BoundGlobalScope ReusedGlobalScope { get; set; }
+
+    /// <summary>
+    /// Gets or sets the set of syntax trees whose member bodies must be re-bound
+    /// from source rather than served from the <see cref="BoundBodyCache"/>
+    /// (ADR-0105 Phase 2). For a body-only edit this is the single re-parsed
+    /// file: its unchanged-but-shifted members would otherwise cache-hit and
+    /// return bodies bound at stale spans, so they are forced to rebind (which
+    /// then refreshes their cached entry). Unchanged files are absent and hit
+    /// the cache. Defaults to <see langword="null"/> (no forced re-bind).
+    /// </summary>
+    public System.Collections.Immutable.ImmutableHashSet<SyntaxTree> DirtyBodyTrees { get; set; }
+
+    /// <summary>
     /// Gets the global scope.
     /// </summary>
     public BoundGlobalScope GlobalScope
@@ -147,7 +187,8 @@ public class Compilation
         {
             if (globalScope == null)
             {
-                var globalScope = Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees, References, ImplicitSystemImport, PreprocessorSymbols, IsLibrary);
+                var globalScope = ReusedGlobalScope
+                    ?? Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees, References, ImplicitSystemImport, PreprocessorSymbols, IsLibrary);
                 Interlocked.CompareExchange(ref this.globalScope, globalScope, null);
             }
 
@@ -169,7 +210,7 @@ public class Compilation
     /// compilation after a file edit). Hot paths such as the language server's
     /// per-keystroke diagnostics, hover, definition, and semantic-token
     /// requests should reuse this cached instance rather than re-invoking
-    /// <see cref="Binder.BindProgram"/>, which can take hundreds of
+    /// <see cref="Binder.BindProgram(BoundGlobalScope, Symbols.ReferenceResolver)"/>, which can take hundreds of
     /// milliseconds on projects with large reference graphs.
     /// </remarks>
     public BoundProgram BoundProgram
@@ -178,7 +219,7 @@ public class Compilation
         {
             if (boundProgram == null)
             {
-                var bp = Binder.BindProgram(GlobalScope, References);
+                var bp = Binder.BindProgram(GlobalScope, References, BodyCache, DirtyBodyTrees);
                 Interlocked.CompareExchange(ref this.boundProgram, bp, null);
             }
 

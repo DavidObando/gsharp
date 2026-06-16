@@ -67,7 +67,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     public Accessibility Accessibility { get; }
 
     /// <summary>Gets the declaring syntax node.</summary>
-    public InterfaceDeclarationSyntax Declaration { get; }
+    public InterfaceDeclarationSyntax Declaration { get; private set; }
 
     /// <summary>Gets the package this interface lives in.</summary>
     public string PackageName { get; }
@@ -380,6 +380,22 @@ public sealed class InterfaceSymbol : TypeSymbol
     public static bool HasDefaultBody(FunctionSymbol method)
     {
         return method != null && method.Declaration?.Body != null;
+    }
+
+    /// <summary>
+    /// ADR-0105 Phase 2 — re-points this (reused) interface symbol at the
+    /// declaration node of a freshly-parsed syntax tree whose declaration is
+    /// byte-identical to the previous one (a body-only edit). Only the backing
+    /// syntax — and therefore source spans — changes; the symbol's identity and
+    /// its method symbols are preserved so cross-compilation reuse stays sound.
+    /// The interface's default/private/static-virtual method bodies are
+    /// re-pointed separately via their <see cref="FunctionSymbol.RepointDeclaration(FunctionDeclarationSyntax)"/>.
+    /// Intended to be called only by <see cref="Binding.IncrementalGlobalScopeReuse"/>.
+    /// </summary>
+    /// <param name="declaration">The corresponding declaration in the re-parsed tree.</param>
+    internal void RepointDeclaration(InterfaceDeclarationSyntax declaration)
+    {
+        Declaration = declaration;
     }
 
     private static string BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments)

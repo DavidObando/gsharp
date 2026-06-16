@@ -157,7 +157,7 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>
     /// Gets the declaration of the function.
     /// </summary>
-    public FunctionDeclarationSyntax Declaration { get; }
+    public FunctionDeclarationSyntax Declaration { get; private set; }
 
     /// <summary>
     /// Gets the package this function belongs to. <c>null</c> for built-in
@@ -296,4 +296,19 @@ public sealed class FunctionSymbol : Symbol
 
     /// <summary>Gets a value indicating whether this function is a P/Invoke stub (ADR-0086).</summary>
     public bool IsPInvoke => PInvokeMetadata != null;
+
+    /// <summary>
+    /// ADR-0105 Phase 2 — re-points this (reused) function symbol at the
+    /// declaration node of a freshly-parsed syntax tree whose member signature
+    /// is byte-identical to the previous one (a body-only edit). Only the
+    /// backing syntax — and therefore the body text and source spans — changes;
+    /// the symbol's identity and signature are preserved so cross-compilation
+    /// reuse stays sound. Intended to be called only by
+    /// <see cref="Binding.IncrementalGlobalScopeReuse"/>.
+    /// </summary>
+    /// <param name="declaration">The corresponding declaration in the re-parsed tree.</param>
+    internal void RepointDeclaration(FunctionDeclarationSyntax declaration)
+    {
+        Declaration = declaration;
+    }
 }

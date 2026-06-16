@@ -798,6 +798,56 @@ public sealed class Binder
     /// <returns>A bound program.</returns>
     public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver references = null)
     {
+        return BindProgram(globalScope, references, cache: null);
+    }
+
+    /// <summary>
+    /// Produces a bound program from the specified global scope, optionally
+    /// reusing previously bound member bodies from <paramref name="cache"/>
+    /// (ADR-0105 Phase 1).
+    /// </summary>
+    /// <param name="globalScope">The global scope.</param>
+    /// <param name="references">
+    /// The reference resolver used to resolve imported CLR types inside function
+    /// and method bodies. See the parameterless overload for details.
+    /// </param>
+    /// <param name="cache">
+    /// An optional per-project bound-body cache. When supplied, each member body
+    /// is looked up before binding; a <em>sound</em> hit (see
+    /// <see cref="BoundBodyCache"/> for the soundness gate) reuses the cached
+    /// lowered body and diagnostics verbatim, while a miss binds and lowers from
+    /// scratch and stores the result. When <see langword="null"/>, this method
+    /// behaves exactly like the full-rebuild path. The cache never changes the
+    /// emitted IL or the diagnostics relative to a from-scratch bind.
+    /// </param>
+    /// <returns>A bound program.</returns>
+    public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver references, BoundBodyCache cache)
+        => BindProgram(globalScope, references, cache, dirtyTrees: null);
+
+    /// <summary>
+    /// Produces a bound program, optionally reusing previously bound member
+    /// bodies from <paramref name="cache"/> and, for ADR-0105 Phase 2 delta
+    /// binding, <em>forcing a fresh re-bind</em> of every member whose body
+    /// syntax belongs to a tree in <paramref name="dirtyTrees"/>.
+    /// </summary>
+    /// <param name="globalScope">The global scope.</param>
+    /// <param name="references">The reference resolver (see other overloads).</param>
+    /// <param name="cache">The optional per-project bound-body cache.</param>
+    /// <param name="dirtyTrees">
+    /// ADR-0105 Phase 2: the set of freshly-parsed syntax trees whose member
+    /// bodies must be re-bound from scratch (and re-stored) rather than served
+    /// from <paramref name="cache"/>. This is how the language server's
+    /// incremental path re-binds <em>only</em> the edited file's bodies while
+    /// the symbol instances are reused: members in an unedited file hit the
+    /// cache by symbol identity, members in the edited (dirty) file are always
+    /// rebound so their lowered bodies and diagnostics reflect the new source
+    /// text and spans exactly as a full rebuild would. <see langword="null"/>
+    /// (or empty) means "no dirty trees" — every member may be served from the
+    /// cache when the soundness gate allows it.
+    /// </param>
+    /// <returns>A bound program.</returns>
+    public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver references, BoundBodyCache cache, ImmutableHashSet<SyntaxTree> dirtyTrees)
+    {
         var parentScope = CreateParentScope(globalScope, references, preprocessorSymbols: globalScope?.PreprocessorSymbols);
 
         var functionBodies = ImmutableDictionary.CreateBuilder<FunctionSymbol, BoundBlockStatement>();
@@ -821,22 +871,25 @@ public sealed class Binder
                     continue;
                 }
 
-                var binder = new Binder(parentScope, function);
-                var body = binder.statements.BindStatement(function.Declaration.Body);
-                var loweredBody = Lowerer.Lower(body);
-
-                if (function.Type != TypeSymbol.Void && !IsIteratorReturnType(function.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
+                var loweredBody = BindBodyWithCache(cache, dirtyTrees, function, function.Declaration.Body, diagnostics, () =>
                 {
-                    binder.Diagnostics.ReportAllPathsMustReturn(function.Declaration.Identifier.Location);
-                }
+                    var binder = new Binder(parentScope, function);
+                    var body = binder.statements.BindStatement(function.Declaration.Body);
+                    var lowered = Lowerer.Lower(body);
 
-                // ADR-0060 items #4/#5: out-parameter definite-assignment and
-                // 'ref'-arg unassigned-before-read checks.
-                RefKindDefiniteAssignmentAnalyzer.Analyze(loweredBody, function, binder.Diagnostics);
+                    if (function.Type != TypeSymbol.Void && !IsIteratorReturnType(function.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                    {
+                        binder.Diagnostics.ReportAllPathsMustReturn(function.Declaration.Identifier.Location);
+                    }
+
+                    // ADR-0060 items #4/#5: out-parameter definite-assignment and
+                    // 'ref'-arg unassigned-before-read checks.
+                    RefKindDefiniteAssignmentAnalyzer.Analyze(lowered, function, binder.Diagnostics);
+
+                    return (lowered, binder.Diagnostics.ToImmutableArray());
+                });
 
                 functionBodies.Add(function, loweredBody);
-
-                diagnostics.AddRange(binder.Diagnostics);
             }
 
             scope = scope.Previous;
@@ -854,17 +907,21 @@ public sealed class Binder
 
             foreach (var method in structSym.Methods)
             {
-                var binder = new Binder(parentScope, method);
-                var body = binder.statements.BindStatement(method.Declaration.Body);
-                var loweredBody = Lowerer.Lower(body, structSym);
-
-                if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
+                var loweredBody = BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
                 {
-                    binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
-                }
+                    var binder = new Binder(parentScope, method);
+                    var body = binder.statements.BindStatement(method.Declaration.Body);
+                    var lowered = Lowerer.Lower(body, structSym);
+
+                    if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                    {
+                        binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+                    }
+
+                    return (lowered, binder.Diagnostics.ToImmutableArray());
+                });
 
                 functionBodies.Add(method, loweredBody);
-                diagnostics.AddRange(binder.Diagnostics);
             }
         }
 
@@ -889,17 +946,7 @@ public sealed class Binder
                     continue;
                 }
 
-                var binder = new Binder(parentScope, method);
-                var body = binder.statements.BindStatement(method.Declaration.Body);
-                var loweredBody = Lowerer.Lower(body);
-
-                if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
-                {
-                    binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
-                }
-
-                functionBodies.Add(method, loweredBody);
-                diagnostics.AddRange(binder.Diagnostics);
+                BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics);
             }
         }
 
@@ -921,17 +968,7 @@ public sealed class Binder
                     continue;
                 }
 
-                var binder = new Binder(parentScope, method);
-                var body = binder.statements.BindStatement(method.Declaration.Body);
-                var loweredBody = Lowerer.Lower(body);
-
-                if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
-                {
-                    binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
-                }
-
-                functionBodies.Add(method, loweredBody);
-                diagnostics.AddRange(binder.Diagnostics);
+                BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics);
             }
         }
 
@@ -951,17 +988,7 @@ public sealed class Binder
                         continue;
                     }
 
-                    var binder = new Binder(parentScope, method);
-                    var body = binder.statements.BindStatement(method.Declaration.Body);
-                    var loweredBody = Lowerer.Lower(body);
-
-                    if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
-                    {
-                        binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
-                    }
-
-                    functionBodies.Add(method, loweredBody);
-                    diagnostics.AddRange(binder.Diagnostics);
+                    BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics);
                 }
             }
 
@@ -974,17 +1001,7 @@ public sealed class Binder
                         continue;
                     }
 
-                    var binder = new Binder(parentScope, method);
-                    var body = binder.statements.BindStatement(method.Declaration.Body);
-                    var loweredBody = Lowerer.Lower(body);
-
-                    if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
-                    {
-                        binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
-                    }
-
-                    functionBodies.Add(method, loweredBody);
-                    diagnostics.AddRange(binder.Diagnostics);
+                    BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics);
                 }
             }
         }
@@ -1011,19 +1028,22 @@ public sealed class Binder
                     continue;
                 }
 
-                var ctorBinder = new Binder(parentScope, ctor.Function);
-                var ctorBody = ctorBinder.statements.BindStatement(ctor.Declaration.Body);
-
-                // ADR-0065 §2 Rule 3: a `convenience init` body must begin
-                // with a `init(args)` self-delegation expression-statement.
-                if (ctor.IsConvenience)
+                var ctorLoweredBody = BindBodyWithCache(cache, dirtyTrees, ctor.Function, ctor.Declaration.Body, diagnostics, () =>
                 {
-                    VerifyConvenienceInitDelegatesFirst(ctor, ctorBody, ctorBinder.Diagnostics);
-                }
+                    var ctorBinder = new Binder(parentScope, ctor.Function);
+                    var ctorBody = ctorBinder.statements.BindStatement(ctor.Declaration.Body);
 
-                var ctorLoweredBody = Lowerer.Lower(ctorBody, structSym);
+                    // ADR-0065 §2 Rule 3: a `convenience init` body must begin
+                    // with a `init(args)` self-delegation expression-statement.
+                    if (ctor.IsConvenience)
+                    {
+                        VerifyConvenienceInitDelegatesFirst(ctor, ctorBody, ctorBinder.Diagnostics);
+                    }
+
+                    var lowered = Lowerer.Lower(ctorBody, structSym);
+                    return (lowered, ctorBinder.Diagnostics.ToImmutableArray());
+                });
                 functionBodies.Add(ctor.Function, ctorLoweredBody);
-                diagnostics.AddRange(ctorBinder.Diagnostics);
             }
         }
 
@@ -1040,11 +1060,7 @@ public sealed class Binder
                 continue;
             }
 
-            var deinitBinder = new Binder(parentScope, deinit.Function);
-            var deinitBody = deinitBinder.statements.BindStatement(deinit.Declaration.Body);
-            var loweredDeinitBody = Lowerer.Lower(deinitBody, structSym);
-            functionBodies.Add(deinit.Function, loweredDeinitBody);
-            diagnostics.AddRange(deinitBinder.Diagnostics);
+            BindStructMemberBody(cache, dirtyTrees, parentScope, deinit.Function, deinit.Declaration.Body, structSym, functionBodies, diagnostics);
         }
 
         // ADR-0051: bind computed property accessor bodies. These are analogous
@@ -1062,26 +1078,12 @@ public sealed class Binder
 
                     if (prop.GetterSymbol != null && prop.GetterBodySyntax != null)
                     {
-                        var binder = new Binder(parentScope, prop.GetterSymbol);
-                        var body = binder.statements.BindStatement(prop.GetterBodySyntax);
-                        var loweredBody = Lowerer.Lower(body, structSym);
-
-                        if (!ControlFlowGraph.AllPathsReturn(loweredBody))
-                        {
-                            binder.Diagnostics.ReportAllPathsMustReturn(prop.GetterBodySyntax.OpenBraceToken.Location);
-                        }
-
-                        functionBodies.Add(prop.GetterSymbol, loweredBody);
-                        diagnostics.AddRange(binder.Diagnostics);
+                        BindStructMemberBody(cache, dirtyTrees, parentScope, prop.GetterSymbol, prop.GetterBodySyntax, structSym, functionBodies, diagnostics, prop.GetterBodySyntax.OpenBraceToken.Location);
                     }
 
                     if (prop.SetterSymbol != null && prop.SetterBodySyntax != null)
                     {
-                        var binder = new Binder(parentScope, prop.SetterSymbol);
-                        var body = binder.statements.BindStatement(prop.SetterBodySyntax);
-                        var loweredBody = Lowerer.Lower(body, structSym);
-                        functionBodies.Add(prop.SetterSymbol, loweredBody);
-                        diagnostics.AddRange(binder.Diagnostics);
+                        BindStructMemberBody(cache, dirtyTrees, parentScope, prop.SetterSymbol, prop.SetterBodySyntax, structSym, functionBodies, diagnostics);
                     }
                 }
             }
@@ -1098,30 +1100,18 @@ public sealed class Binder
 
                     if (ev.AddMethodSymbol != null && ev.AddBodySyntax != null)
                     {
-                        var binder = new Binder(parentScope, ev.AddMethodSymbol);
-                        var body = binder.statements.BindStatement(ev.AddBodySyntax);
-                        var loweredBody = Lowerer.Lower(body, structSym);
-                        functionBodies.Add(ev.AddMethodSymbol, loweredBody);
-                        diagnostics.AddRange(binder.Diagnostics);
+                        BindStructMemberBody(cache, dirtyTrees, parentScope, ev.AddMethodSymbol, ev.AddBodySyntax, structSym, functionBodies, diagnostics);
                     }
 
                     if (ev.RemoveMethodSymbol != null && ev.RemoveBodySyntax != null)
                     {
-                        var binder = new Binder(parentScope, ev.RemoveMethodSymbol);
-                        var body = binder.statements.BindStatement(ev.RemoveBodySyntax);
-                        var loweredBody = Lowerer.Lower(body, structSym);
-                        functionBodies.Add(ev.RemoveMethodSymbol, loweredBody);
-                        diagnostics.AddRange(binder.Diagnostics);
+                        BindStructMemberBody(cache, dirtyTrees, parentScope, ev.RemoveMethodSymbol, ev.RemoveBodySyntax, structSym, functionBodies, diagnostics);
                     }
 
                     // Issue #257: bind raise accessor body.
                     if (ev.RaiseMethodSymbol != null && ev.RaiseBodySyntax != null)
                     {
-                        var binder = new Binder(parentScope, ev.RaiseMethodSymbol);
-                        var body = binder.statements.BindStatement(ev.RaiseBodySyntax);
-                        var loweredBody = Lowerer.Lower(body, structSym);
-                        functionBodies.Add(ev.RaiseMethodSymbol, loweredBody);
-                        diagnostics.AddRange(binder.Diagnostics);
+                        BindStructMemberBody(cache, dirtyTrees, parentScope, ev.RaiseMethodSymbol, ev.RaiseBodySyntax, structSym, functionBodies, diagnostics);
                     }
                 }
             }
@@ -1144,26 +1134,12 @@ public sealed class Binder
 
                 if (prop.GetterSymbol != null && prop.GetterBodySyntax != null)
                 {
-                    var binder = new Binder(parentScope, prop.GetterSymbol);
-                    var body = binder.statements.BindStatement(prop.GetterBodySyntax);
-                    var loweredBody = Lowerer.Lower(body, structSym);
-
-                    if (!ControlFlowGraph.AllPathsReturn(loweredBody))
-                    {
-                        binder.Diagnostics.ReportAllPathsMustReturn(prop.GetterBodySyntax.OpenBraceToken.Location);
-                    }
-
-                    functionBodies.Add(prop.GetterSymbol, loweredBody);
-                    diagnostics.AddRange(binder.Diagnostics);
+                    BindStructMemberBody(cache, dirtyTrees, parentScope, prop.GetterSymbol, prop.GetterBodySyntax, structSym, functionBodies, diagnostics, prop.GetterBodySyntax.OpenBraceToken.Location);
                 }
 
                 if (prop.SetterSymbol != null && prop.SetterBodySyntax != null)
                 {
-                    var binder = new Binder(parentScope, prop.SetterSymbol);
-                    var body = binder.statements.BindStatement(prop.SetterBodySyntax);
-                    var loweredBody = Lowerer.Lower(body, structSym);
-                    functionBodies.Add(prop.SetterSymbol, loweredBody);
-                    diagnostics.AddRange(binder.Diagnostics);
+                    BindStructMemberBody(cache, dirtyTrees, parentScope, prop.SetterSymbol, prop.SetterBodySyntax, structSym, functionBodies, diagnostics);
                 }
             }
         }
@@ -1185,30 +1161,18 @@ public sealed class Binder
 
                 if (ev.AddMethodSymbol != null && ev.AddBodySyntax != null)
                 {
-                    var binder = new Binder(parentScope, ev.AddMethodSymbol);
-                    var body = binder.statements.BindStatement(ev.AddBodySyntax);
-                    var loweredBody = Lowerer.Lower(body, structSym);
-                    functionBodies.Add(ev.AddMethodSymbol, loweredBody);
-                    diagnostics.AddRange(binder.Diagnostics);
+                    BindStructMemberBody(cache, dirtyTrees, parentScope, ev.AddMethodSymbol, ev.AddBodySyntax, structSym, functionBodies, diagnostics);
                 }
 
                 if (ev.RemoveMethodSymbol != null && ev.RemoveBodySyntax != null)
                 {
-                    var binder = new Binder(parentScope, ev.RemoveMethodSymbol);
-                    var body = binder.statements.BindStatement(ev.RemoveBodySyntax);
-                    var loweredBody = Lowerer.Lower(body, structSym);
-                    functionBodies.Add(ev.RemoveMethodSymbol, loweredBody);
-                    diagnostics.AddRange(binder.Diagnostics);
+                    BindStructMemberBody(cache, dirtyTrees, parentScope, ev.RemoveMethodSymbol, ev.RemoveBodySyntax, structSym, functionBodies, diagnostics);
                 }
 
                 // Issue #257: bind raise accessor body for static events.
                 if (ev.RaiseMethodSymbol != null && ev.RaiseBodySyntax != null)
                 {
-                    var binder = new Binder(parentScope, ev.RaiseMethodSymbol);
-                    var body = binder.statements.BindStatement(ev.RaiseBodySyntax);
-                    var loweredBody = Lowerer.Lower(body, structSym);
-                    functionBodies.Add(ev.RaiseMethodSymbol, loweredBody);
-                    diagnostics.AddRange(binder.Diagnostics);
+                    BindStructMemberBody(cache, dirtyTrees, parentScope, ev.RaiseMethodSymbol, ev.RaiseBodySyntax, structSym, functionBodies, diagnostics);
                 }
             }
         }
@@ -1228,17 +1192,7 @@ public sealed class Binder
                     continue;
                 }
 
-                var binder = new Binder(parentScope, method);
-                var body = binder.statements.BindStatement(method.Declaration.Body);
-                var loweredBody = Lowerer.Lower(body, structSym);
-
-                if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
-                {
-                    binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
-                }
-
-                functionBodies.Add(method, loweredBody);
-                diagnostics.AddRange(binder.Diagnostics);
+                BindStructMethodBody(cache, dirtyTrees, parentScope, method, structSym, functionBodies, diagnostics);
             }
         }
 
@@ -1265,6 +1219,179 @@ public sealed class Binder
         {
             Imports = globalScope.Imports,
         };
+    }
+
+    /// <summary>
+    /// ADR-0105 helper shared by every member-body bind site in
+    /// <see cref="BindProgram(BoundGlobalScope, ReferenceResolver, BoundBodyCache, ImmutableHashSet{SyntaxTree})"/>.
+    /// On a <em>sound</em> cache hit it returns the cached lowered body and
+    /// appends the cached per-body diagnostics; otherwise it invokes
+    /// <paramref name="bindAndLower"/> (which performs the exact same
+    /// bind/lower/post-check work the call site would have done inline),
+    /// appends the produced diagnostics, and stores the result for later reuse.
+    /// When <paramref name="cache"/> is <see langword="null"/> this is exactly
+    /// the full-rebuild path with no behavioral difference.
+    /// </summary>
+    /// <param name="cache">The optional bound-body cache.</param>
+    /// <param name="dirtyTrees">
+    /// ADR-0105 Phase 2: when <paramref name="bodySyntax"/> belongs to one of
+    /// these freshly-parsed (edited) trees, the cache read is <em>bypassed</em>
+    /// so the body is always rebound from scratch (and re-stored) — its lowered
+    /// form and diagnostics then reflect the new source text and spans exactly
+    /// as a full rebuild would. <see langword="null"/> means no dirty trees.
+    /// </param>
+    /// <param name="member">The member symbol whose body is being bound.</param>
+    /// <param name="bodySyntax">The body syntax that will be bound and lowered.</param>
+    /// <param name="diagnostics">The program-level diagnostics accumulator to append to.</param>
+    /// <param name="bindAndLower">Produces the freshly bound+lowered body and its diagnostics on a miss.</param>
+    /// <returns>The lowered body — reused on a sound hit, freshly produced otherwise.</returns>
+    private static BoundBlockStatement BindBodyWithCache(
+        BoundBodyCache cache,
+        ImmutableHashSet<SyntaxTree> dirtyTrees,
+        FunctionSymbol member,
+        SyntaxNode bodySyntax,
+        ImmutableArray<Diagnostic>.Builder diagnostics,
+        Func<(BoundBlockStatement Body, ImmutableArray<Diagnostic> Diagnostics)> bindAndLower)
+    {
+        var isDirty = dirtyTrees != null
+            && bodySyntax?.SyntaxTree != null
+            && dirtyTrees.Contains(bodySyntax.SyntaxTree);
+
+        if (!isDirty
+            && cache != null
+            && bodySyntax != null
+            && cache.TryReuse(member, bodySyntax, out var reusedBody, out var reusedDiagnostics))
+        {
+            diagnostics.AddRange(reusedDiagnostics);
+            return reusedBody;
+        }
+
+        var (body, bodyDiagnostics) = bindAndLower();
+        diagnostics.AddRange(bodyDiagnostics);
+        cache?.Store(member, bodySyntax, body, bodyDiagnostics);
+        return body;
+    }
+
+    /// <summary>
+    /// ADR-0105 (Phase 1) helper for the four structurally identical interface
+    /// member-body bind loops (default-interface methods, static-virtual
+    /// defaults, and private instance/static helpers). Each lowers without a
+    /// declaring-type context and runs the all-paths-return check, then routes
+    /// through <see cref="BindBodyWithCache"/> and registers the body.
+    /// </summary>
+    /// <param name="cache">The optional bound-body cache.</param>
+    /// <param name="dirtyTrees">ADR-0105 Phase 2: freshly-parsed (edited) trees whose member bodies must be rebound rather than served from the cache.</param>
+    /// <param name="parentScope">The parent scope bodies are bound against.</param>
+    /// <param name="method">The interface method whose body is being bound.</param>
+    /// <param name="functionBodies">The function-body map to register the lowered body in.</param>
+    /// <param name="diagnostics">The program-level diagnostics accumulator.</param>
+    private static void BindInterfaceMethodBody(
+        BoundBodyCache cache,
+        ImmutableHashSet<SyntaxTree> dirtyTrees,
+        BoundScope parentScope,
+        FunctionSymbol method,
+        ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
+        ImmutableArray<Diagnostic>.Builder diagnostics)
+    {
+        var loweredBody = BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
+        {
+            var binder = new Binder(parentScope, method);
+            var body = binder.statements.BindStatement(method.Declaration.Body);
+            var lowered = Lowerer.Lower(body);
+
+            if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+            {
+                binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+            }
+
+            return (lowered, binder.Diagnostics.ToImmutableArray());
+        });
+
+        functionBodies.Add(method, loweredBody);
+    }
+
+    /// <summary>
+    /// ADR-0105 (Phase 1) helper for struct/class member bodies bound with a
+    /// declaring-type lowering context (computed-property accessors, event
+    /// accessors and destructors). Optionally runs the all-paths-return check
+    /// at <paramref name="allPathsReturnLocation"/> when supplied. Routes
+    /// through <see cref="BindBodyWithCache"/> and registers the body.
+    /// </summary>
+    /// <param name="cache">The optional bound-body cache.</param>
+    /// <param name="dirtyTrees">ADR-0105 Phase 2: freshly-parsed (edited) trees whose member bodies must be rebound rather than served from the cache.</param>
+    /// <param name="parentScope">The parent scope bodies are bound against.</param>
+    /// <param name="member">The member whose body is being bound.</param>
+    /// <param name="bodySyntax">The body syntax to bind and lower.</param>
+    /// <param name="structSym">The declaring type used as the lowering context.</param>
+    /// <param name="functionBodies">The function-body map to register the lowered body in.</param>
+    /// <param name="diagnostics">The program-level diagnostics accumulator.</param>
+    /// <param name="allPathsReturnLocation">When non-null, the location at which to report a missing all-paths return.</param>
+    private static void BindStructMemberBody(
+        BoundBodyCache cache,
+        ImmutableHashSet<SyntaxTree> dirtyTrees,
+        BoundScope parentScope,
+        FunctionSymbol member,
+        StatementSyntax bodySyntax,
+        StructSymbol structSym,
+        ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
+        ImmutableArray<Diagnostic>.Builder diagnostics,
+        TextLocation? allPathsReturnLocation = null)
+    {
+        var loweredBody = BindBodyWithCache(cache, dirtyTrees, member, bodySyntax, diagnostics, () =>
+        {
+            var binder = new Binder(parentScope, member);
+            var body = binder.statements.BindStatement(bodySyntax);
+            var lowered = Lowerer.Lower(body, structSym);
+
+            if (allPathsReturnLocation != null && !ControlFlowGraph.AllPathsReturn(lowered))
+            {
+                binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation.Value);
+            }
+
+            return (lowered, binder.Diagnostics.ToImmutableArray());
+        });
+
+        functionBodies.Add(member, loweredBody);
+    }
+
+    /// <summary>
+    /// ADR-0105 (Phase 1) helper for struct/class <em>method</em> bodies bound
+    /// with a declaring-type lowering context (instance methods and
+    /// <c>shared</c> static methods). Runs the void/iterator-guarded
+    /// all-paths-return check, routes through <see cref="BindBodyWithCache"/>
+    /// and registers the body.
+    /// </summary>
+    /// <param name="cache">The optional bound-body cache.</param>
+    /// <param name="dirtyTrees">ADR-0105 Phase 2: freshly-parsed (edited) trees whose member bodies must be rebound rather than served from the cache.</param>
+    /// <param name="parentScope">The parent scope bodies are bound against.</param>
+    /// <param name="method">The method whose body is being bound.</param>
+    /// <param name="structSym">The declaring type used as the lowering context.</param>
+    /// <param name="functionBodies">The function-body map to register the lowered body in.</param>
+    /// <param name="diagnostics">The program-level diagnostics accumulator.</param>
+    private static void BindStructMethodBody(
+        BoundBodyCache cache,
+        ImmutableHashSet<SyntaxTree> dirtyTrees,
+        BoundScope parentScope,
+        FunctionSymbol method,
+        StructSymbol structSym,
+        ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
+        ImmutableArray<Diagnostic>.Builder diagnostics)
+    {
+        var loweredBody = BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
+        {
+            var binder = new Binder(parentScope, method);
+            var body = binder.statements.BindStatement(method.Declaration.Body);
+            var lowered = Lowerer.Lower(body, structSym);
+
+            if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+            {
+                binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+            }
+
+            return (lowered, binder.Diagnostics.ToImmutableArray());
+        });
+
+        functionBodies.Add(method, loweredBody);
     }
 
     /// <summary>
