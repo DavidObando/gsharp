@@ -189,6 +189,11 @@
             "type": "boolean",
             "default": true,
             "description": "Show inlay hints for inferred variable types."
+          },
+          "gsharp.coldStartCache.enable": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "Persist a per-project cold-start cache (`<AssemblyName>.gsproj.lscache`) so reopening a workspace skips re-enumerating reference metadata, and so references resolve after a clean or fresh clone without first rebuilding. The file is generated, safe to delete, and gitignored by default. When unset, the C# Dev Kit setting `dotnet.projectsystem.enableLanguageServiceCache` is honored as a fallback if present. Takes effect after restarting the language server (`GSharp: Restart Language Server`)."
           }
         }
       }

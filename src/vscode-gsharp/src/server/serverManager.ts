@@ -141,6 +141,14 @@ export class ServerManager {
         DOTNET_CLI_TELEMETRY_OPTOUT: '1',
       };
 
+      // ADR-0107: the server reads GSHARP_DISABLE_COLD_START_CACHE; map the
+      // gsharp.coldStartCache.enable setting (with the C# Dev Kit fallback,
+      // resolved in getServerOptions) onto it so the toggle takes effect on the
+      // next server start.
+      if (!options.coldStartCacheEnabled) {
+        env.GSHARP_DISABLE_COLD_START_CACHE = '1';
+      }
+
       const serverOptions: ServerOptions = {
         run: { command: dotnetPath, args, transport: TransportKind.stdio, options: { env } },
         debug: {
