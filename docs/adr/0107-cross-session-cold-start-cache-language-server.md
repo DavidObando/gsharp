@@ -87,7 +87,7 @@ The file is gitignored **by default** (`*.lscache`, matching the prevailing .NET
 ### Location, opt-out, and lifecycle
 
 - **Location**: next to the project file, `<AssemblyName>.gsproj.lscache`. Gitignored by default; not picked up as a compile item (the SDK globs `**/*.gs`).
-- **Opt-out**: environment variable `GSHARP_DISABLE_COLD_START_CACHE` (`1`/`true`/`on`/`yes`), mirroring C#'s setting. When set, the cache is neither read (load nor bootstrap) nor written, and the resolver stays on the cold path.
+- **Opt-out**: environment variable `GSHARP_DISABLE_COLD_START_CACHE` (`1`/`true`/`on`/`yes`), surfaced in VS Code as the `gsharp.coldStartCache.enable` setting (the extension maps the setting onto the env var at server launch). When the `gsharp` setting is left unset, the extension honors the C# Dev Kit setting `dotnet.projectsystem.enableLanguageServiceCache` as a fallback if present (read-only — G# never contributes that key), giving dual C#/G# users a single toggle. When disabled, the cache is neither read (load nor bootstrap) nor written, and the resolver stays on the cold path.
 - **Safe to delete**: deleting the file at any time is harmless; the next open rebuilds and rewrites. No method in `ColdStartCache` ever throws into the LSP pipeline — every read/write is best-effort and any error degrades to a cold build.
 - **Ownership**: `ProjectState` owns the cache lifecycle, in `GetOrBuildResolver_NoLock`, alongside the warm `ReferenceResolver` it already caches. The cache is consulted exactly once per resolver build (i.e. when the reference set changes), so steady-state editing pays nothing.
 
