@@ -104,6 +104,20 @@ public sealed class ReferenceResolver : IDisposable
     // and the binder already constructs (e.g. "Ns.Type`1").
     private readonly Lazy<Dictionary<string, Type>> typeNameIndex;
 
+    // ADR-0107 (cold-start cache): an optional, externally-supplied
+    // full-name -> declaring-assembly-index map that stands in for the eager
+    // `typeNameIndex` below. When set (via TryUseMetadataIndex), TryResolveType
+    // consults this map and materialises the actual CLR Type lazily by name —
+    // skipping the ~120ms Assembly.GetTypes()/GetForwardedTypes() enumeration of
+    // the whole reference closure that BuildTypeNameIndex performs. The map's
+    // keyset is, by construction, exactly the set of names that enumeration
+    // would have produced (it is built from a ReferenceMetadataIndex that the
+    // language server either persisted from a prior cold build or rebuilds via
+    // ExportMetadataIndex), so warm resolution is a superset of cold resolution.
+    // Null in the default/opt-out path, where the eager `typeNameIndex` is used
+    // and behaviour is byte-for-byte identical to before this ADR.
+    private Dictionary<string, int> warmNameIndex;
+
     private ReferenceResolver(ImmutableArray<Assembly> assemblies, MetadataLoadContext metadataContext)
         : this(assemblies, metadataContext, ImmutableArray<string>.Empty)
     {
@@ -431,6 +445,27 @@ public sealed class ReferenceResolver : IDisposable
             return true;
         }
 
+        // ADR-0107: warm path. When a metadata index has been adopted, resolve
+        // by consulting the persisted name -> assembly map and materialising the
+        // Type lazily, rather than building (and scanning) the eager
+        // typeNameIndex. The keyset equals the cold path's, so a name absent here
+        // is a genuine miss; a present name is materialised with an
+        // order-preserving scan fallback so first-writer-wins is honoured even if
+        // the recorded declaring assembly cannot satisfy GetType.
+        if (warmNameIndex != null)
+        {
+            if (warmNameIndex.TryGetValue(fullName, out var assemblyIndex)
+                && TryMaterializeWarmType(fullName, assemblyIndex, out var warm))
+            {
+                resolveCache.TryAdd(fullName, warm);
+                type = warm;
+                return true;
+            }
+
+            resolveCache.TryAdd(fullName, MissTypeSentinel);
+            return false;
+        }
+
         if (typeNameIndex.Value.TryGetValue(fullName, out var indexed))
         {
             resolveCache.TryAdd(fullName, indexed);
@@ -605,6 +640,75 @@ public sealed class ReferenceResolver : IDisposable
             $"Core type '{fullName}' could not be resolved from the supplied references.");
     }
 
+    /// <summary>
+    /// ADR-0107: captures this resolver's full-type-name surface — every
+    /// assembly's identity plus the defined and forwarded type full-names it
+    /// contributes, in search order — into a serialisable
+    /// <see cref="ReferenceMetadataIndex"/>. The language server persists this to
+    /// its cold-start cache so a later process can skip the
+    /// <c>Assembly.GetTypes()</c>/<c>GetForwardedTypes()</c> enumeration. This
+    /// performs the same metadata walk as the eager type-name index, so calling
+    /// it costs roughly one index build.
+    /// </summary>
+    /// <returns>A snapshot of the resolver's type-name surface.</returns>
+    public ReferenceMetadataIndex ExportMetadataIndex()
+    {
+        var identities = ImmutableArray.CreateBuilder<string>(assemblies.Length);
+        var namesByAssembly = ImmutableArray.CreateBuilder<ImmutableArray<string>>(assemblies.Length);
+
+        foreach (var asm in assemblies)
+        {
+            identities.Add(asm.GetName().FullName);
+            var names = ImmutableArray.CreateBuilder<string>();
+            foreach (var t in EnumerateDefinedAndForwardedTypes(asm))
+            {
+                if (t.FullName is { } fullName)
+                {
+                    names.Add(fullName);
+                }
+            }
+
+            namesByAssembly.Add(names.ToImmutable());
+        }
+
+        return ReferenceMetadataIndex.Create(identities.MoveToImmutable(), namesByAssembly.MoveToImmutable());
+    }
+
+    /// <summary>
+    /// ADR-0107: adopts a previously-built <see cref="ReferenceMetadataIndex"/>
+    /// as this resolver's warm type-name index, so <see cref="TryResolveType"/>
+    /// skips the eager metadata enumeration. The index is accepted only when its
+    /// recorded assembly identities match this resolver's freshly-loaded
+    /// assemblies <em>exactly</em> (same count, same
+    /// <see cref="System.Reflection.AssemblyName.FullName"/> in the same order);
+    /// any mismatch returns <see langword="false"/> and leaves the resolver on
+    /// the cold (eager) path. This identity check is defence-in-depth on top of
+    /// the cache's reference-set fingerprint: if the references somehow changed
+    /// without the fingerprint noticing, the payload is still rejected here.
+    /// Must be called before the first resolution so the warm index is in place
+    /// for binding.
+    /// </summary>
+    /// <param name="index">The candidate metadata index.</param>
+    /// <returns><see langword="true"/> when the index was adopted; otherwise <see langword="false"/>.</returns>
+    public bool TryUseMetadataIndex(ReferenceMetadataIndex index)
+    {
+        if (index is null || index.AssemblyIdentities.Length != assemblies.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < assemblies.Length; i++)
+        {
+            if (!string.Equals(index.AssemblyIdentities[i], assemblies[i].GetName().FullName, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        warmNameIndex = index.ToNameIndex();
+        return true;
+    }
+
     // Issue #854: enumerate every assembly's defined types (top-level + nested)
     // and exported type forwarders once, building the full-name -> Type index
     // that backs TryResolveType. Mirrors the precedence of the previous per-miss
@@ -618,68 +722,128 @@ public sealed class ReferenceResolver : IDisposable
         }
     }
 
+    // ADR-0107: materialise the CLR Type for a name the warm index claims is
+    // resolvable. Prefer the recorded declaring assembly; if that assembly cannot
+    // satisfy GetType (e.g. a stale/edge forwarder), fall back to an in-order scan
+    // of every assembly so resolution still finds the first declarer — exactly the
+    // precedence the eager index encodes. Returns false only if no assembly can
+    // produce the type, in which case the caller records a (conservative) miss.
+    private static Type SafeGetType(Assembly assembly, string fullName)
+    {
+        try
+        {
+            return assembly.GetType(fullName);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (BadImageFormatException)
+        {
+            return null;
+        }
+        catch (TypeLoadException)
+        {
+            return null;
+        }
+    }
+
+    private bool TryMaterializeWarmType(string fullName, int assemblyIndex, out Type type)
+    {
+        type = null;
+        if (assemblyIndex >= 0 && assemblyIndex < assemblies.Length)
+        {
+            type = SafeGetType(assemblies[assemblyIndex], fullName);
+            if (type != null)
+            {
+                return true;
+            }
+        }
+
+        foreach (var asm in assemblies)
+        {
+            type = SafeGetType(asm, fullName);
+            if (type != null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private Dictionary<string, Type> BuildTypeNameIndex()
     {
         var index = new Dictionary<string, Type>(StringComparer.Ordinal);
 
         foreach (var asm in assemblies)
         {
-            // Defined types. ReflectionTypeLoadException surfaces a partial set
-            // via Types (with nulls for the entries that failed to load); take
-            // what resolved and skip the rest, matching the old scan's
-            // best-effort behavior where unresolvable members were simply not
-            // returned.
-            Type[] definedTypes;
-            try
-            {
-                definedTypes = asm.GetTypes();
-            }
-            catch (ReflectionTypeLoadException ex)
-            {
-                definedTypes = ex.Types;
-            }
-            catch (FileNotFoundException)
-            {
-                definedTypes = Array.Empty<Type>();
-            }
-            catch (BadImageFormatException)
-            {
-                definedTypes = Array.Empty<Type>();
-            }
-
-            foreach (var t in definedTypes)
-            {
-                AddToTypeNameIndex(index, t);
-            }
-
-            // Exported type forwarders (e.g. BCL facade assemblies forward
-            // System.* types to their implementation assembly). The old scan
-            // resolved these because Assembly.GetType follows forwarders; the
-            // index must include them to preserve resolution parity. A single
-            // unresolvable forward makes GetForwardedTypes throw, so fall back
-            // to the partial set when available and otherwise skip the
-            // assembly's forwarders.
-            Type[] forwardedTypes;
-            try
-            {
-                forwardedTypes = asm.GetForwardedTypes();
-            }
-            catch (ReflectionTypeLoadException ex)
-            {
-                forwardedTypes = ex.Types;
-            }
-            catch (Exception)
-            {
-                forwardedTypes = Array.Empty<Type>();
-            }
-
-            foreach (var t in forwardedTypes)
+            foreach (var t in EnumerateDefinedAndForwardedTypes(asm))
             {
                 AddToTypeNameIndex(index, t);
             }
         }
 
         return index;
+    }
+
+    // Issue #854 / ADR-0107: enumerate one assembly's defined types (top-level +
+    // nested) followed by its exported type forwarders, tolerating the partial
+    // results that ReflectionTypeLoadException / GetForwardedTypes surface for a
+    // closure with an unresolvable member. This is the single source of truth for
+    // "which type names does this assembly contribute, and in what order"; both
+    // the eager BuildTypeNameIndex and the cache-export ExportMetadataIndex
+    // consume it so the warm and cold name sets (and their first-writer-wins
+    // precedence) are guaranteed to match.
+    private static IEnumerable<Type> EnumerateDefinedAndForwardedTypes(Assembly asm)
+    {
+        Type[] definedTypes;
+        try
+        {
+            definedTypes = asm.GetTypes();
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            definedTypes = ex.Types;
+        }
+        catch (FileNotFoundException)
+        {
+            definedTypes = Array.Empty<Type>();
+        }
+        catch (BadImageFormatException)
+        {
+            definedTypes = Array.Empty<Type>();
+        }
+
+        foreach (var t in definedTypes)
+        {
+            if (t != null)
+            {
+                yield return t;
+            }
+        }
+
+        Type[] forwardedTypes;
+        try
+        {
+            forwardedTypes = asm.GetForwardedTypes();
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            forwardedTypes = ex.Types;
+        }
+        catch (Exception)
+        {
+            forwardedTypes = Array.Empty<Type>();
+        }
+
+        foreach (var t in forwardedTypes)
+        {
+            if (t != null)
+            {
+                yield return t;
+            }
+        }
     }
 
     private static void RegisterAssemblyOriginalPath(Assembly assembly, string path)

@@ -419,19 +419,131 @@ public class ProjectState
 
     private ReferenceResolver GetOrBuildResolver_NoLock()
     {
-        if (references.Count == 0)
+        var effectiveReferences = references;
+        if (effectiveReferences.Count == 0)
+        {
+            // ADR-0107: no `.rsp` (fresh clone, or after `dotnet clean` — the
+            // `.rsp` lives in the gitignored `obj/`). Try to bootstrap the
+            // reference set from a previously-written `.lscache` so the LSP can
+            // still resolve imported types without first building. The cache
+            // re-validates every DLL (exists + size:mtime) before returning; any
+            // missing/changed reference falls back to today's empty/degraded
+            // behavior (over-invalidation is always safe).
+            var bootstrapped = ColdStartCache.TryBootstrapReferences(ProjectFilePath, AssemblyName);
+            if (bootstrapped != null && bootstrapped.Count > 0)
+            {
+                effectiveReferences = bootstrapped;
+            }
+        }
+
+        if (effectiveReferences.Count == 0)
         {
             return null;
         }
 
+        // The resolver cache is keyed on the project's own `references` identity
+        // (the `.rsp`-derived list, or the stable empty instance when there is no
+        // `.rsp`). A bootstrapped reference set is used to build the resolver but
+        // does not change that identity, so the resolver is rebuilt only when a
+        // real `.rsp` later replaces `references`.
         if (cachedResolver != null && ReferenceEquals(resolverReferences, references))
         {
             return cachedResolver;
         }
 
-        cachedResolver = ReferenceResolver.WithReferences(references);
+        cachedResolver = ReferenceResolver.WithReferences(effectiveReferences);
         resolverReferences = references;
+        WarmOrSeedColdStartCache_NoLock(cachedResolver, effectiveReferences);
         return cachedResolver;
+    }
+
+    // ADR-0107: load the persisted reference-metadata index for this project, or
+    // build and persist a fresh one. On a fingerprint-matching cache hit the
+    // resolver adopts the index and skips the ~120ms GetTypes() enumeration of the
+    // whole reference closure on this cold start. On any miss/mismatch/corruption
+    // the resolver stays cold: we build the index once (work the cold path needs
+    // anyway), adopt it for this session, and write it for next time. The
+    // fingerprint is `.rsp`-independent (reference set + source fingerprint + TFM
+    // + versions), so a cache written from a bootstrapped reference set is itself
+    // reusable. Every step is best-effort — a cache error must never disturb the
+    // LSP, so the resolver simply falls back to its eager type-name index.
+    private void WarmOrSeedColdStartCache_NoLock(ReferenceResolver resolver, IReadOnlyList<string> effectiveReferences)
+    {
+        if (resolver == null || ColdStartCache.Disabled)
+        {
+            return;
+        }
+
+        try
+        {
+            var sourceFingerprint = ComputeSourceFingerprint_NoLock();
+            var targetFramework = ProjectDiscovery.ResolveTargetFramework(ProjectFilePath);
+
+            var cached = ColdStartCache.TryLoad(
+                ProjectFilePath, AssemblyName, effectiveReferences, referenceSourcePath, sourceFingerprint, targetFramework);
+            if (cached != null && resolver.TryUseMetadataIndex(cached))
+            {
+                return;
+            }
+
+            var fresh = resolver.ExportMetadataIndex();
+            resolver.TryUseMetadataIndex(fresh);
+            ColdStartCache.Save(
+                ProjectFilePath, AssemblyName, effectiveReferences, referenceSourcePath, sourceFingerprint, targetFramework, fresh);
+        }
+        catch (Exception)
+        {
+            // Defence in depth: the cache is a performance optimization only. On
+            // any unexpected error leave the resolver on its eager cold path.
+        }
+    }
+
+    // ADR-0107: a content hash over the project's current source set — each file's
+    // project-relative path plus its in-memory text — folded into the cold-start
+    // cache fingerprint. Project-relative paths keep the hash portable across
+    // clones (so a committed `.lscache` validates on another checkout of the same
+    // sources). Any edit to any source flips the hash, conservatively invalidating
+    // the cache. Best-effort: returns an empty string on any error.
+    private string ComputeSourceFingerprint_NoLock()
+    {
+        try
+        {
+            var entries = new List<string>(syntaxTrees.Count);
+            foreach (var pair in syntaxTrees)
+            {
+                var content = pair.Value?.Text?.ToString() ?? string.Empty;
+                var relative = pair.Key;
+                try
+                {
+                    if (!string.IsNullOrEmpty(ProjectDirectory))
+                    {
+                        relative = Path.GetRelativePath(ProjectDirectory, pair.Key)
+                            .Replace(Path.DirectorySeparatorChar, '/');
+                    }
+                }
+                catch (ArgumentException)
+                {
+                    relative = pair.Key;
+                }
+
+                entries.Add(relative + "\u0000" + content);
+            }
+
+            entries.Sort(StringComparer.Ordinal);
+            var sb = new System.Text.StringBuilder();
+            foreach (var entry in entries)
+            {
+                sb.Append(entry).Append('\n');
+            }
+
+            var hash = System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
+            return Convert.ToHexString(hash).ToLowerInvariant();
+        }
+        catch (Exception)
+        {
+            return string.Empty;
+        }
     }
 
     private static bool ReferenceListsEqual(IReadOnlyList<string> a, IReadOnlyList<string> b)
