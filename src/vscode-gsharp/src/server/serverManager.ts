@@ -7,6 +7,8 @@ import {
   State,
   TransportKind,
   InitializeParams,
+  ErrorAction,
+  CloseAction,
 } from 'vscode-languageclient/node';
 
 class GSharpLanguageClient extends LanguageClient {
@@ -33,7 +35,12 @@ class GSharpLanguageClient extends LanguageClient {
   }
 }
 
-import { resolveDotnetRuntime, getServerPath } from '../utils/dotnetResolver';
+import {
+  resolveDotnetRuntime,
+  getServerPath,
+  DotnetRuntimeMissingError,
+  DOTNET_DOWNLOAD_URL,
+} from '../utils/dotnetResolver';
 import { getServerOptions } from './serverOptions';
 import { Logger } from '../utils/logger';
 
@@ -45,6 +52,7 @@ export class ServerManager {
   private restartTimer: NodeJS.Timeout | undefined;
   private startPromise: Promise<void> | undefined;
   private isStopping = false;
+  private fatalError = false;
   private statusItem: vscode.LanguageStatusItem;
 
   constructor(
@@ -100,6 +108,7 @@ export class ServerManager {
   async restart(): Promise<void> {
     await this.stop();
     this.restartCount = 0;
+    this.fatalError = false;
     await this.start();
   }
 
@@ -112,7 +121,18 @@ export class ServerManager {
 
     try {
       this.setStatus('starting');
-      const dotnetPath = await resolveDotnetRuntime(this.context);
+
+      let dotnetPath: string;
+      try {
+        dotnetPath = await resolveDotnetRuntime(this.context);
+      } catch (err) {
+        if (err instanceof DotnetRuntimeMissingError) {
+          this.reportMissingRuntime(err);
+          return;
+        }
+        throw err;
+      }
+
       const serverPath = getServerPath(this.context);
       const options = getServerOptions();
 
@@ -169,6 +189,17 @@ export class ServerManager {
           onChange: true,
           onSave: true,
         },
+        // ServerManager owns the restart policy (see handleServerStopped), so suppress
+        // the LanguageClient's own crash toasts and "crashed N times" cascade and route
+        // everything through our logger / status item instead.
+        initializationFailedHandler: (error) => {
+          this.logger.error('Language server initialization failed', error);
+          return false;
+        },
+        errorHandler: {
+          error: () => ({ action: ErrorAction.Continue, handled: true }),
+          closed: () => ({ action: CloseAction.DoNotRestart, handled: true }),
+        },
         initializationOptions: {
           formattingIndentSize: vscode.workspace
             .getConfiguration('gsharp')
@@ -223,7 +254,7 @@ export class ServerManager {
   }
 
   private handleServerStopped() {
-    if (this.isStopping || this.restartTimer) {
+    if (this.isStopping || this.fatalError || this.restartTimer) {
       return;
     }
 
@@ -263,6 +294,29 @@ export class ServerManager {
     } catch (err) {
       this.logger.warn(`Failed to stop language server cleanly: ${this.formatError(err)}`);
     }
+  }
+
+  private reportMissingRuntime(err: DotnetRuntimeMissingError) {
+    // A missing runtime is unrecoverable without user action: stop the restart loop
+    // and surface a single, actionable message instead of a stream of crash toasts.
+    this.fatalError = true;
+    this.clearRestartTimer();
+    this.client = undefined;
+    this.setStatus('error');
+    this.logger.error(err.message);
+
+    const message =
+      `${err.message} Install the .NET ${err.requiredVersion} runtime, then run ` +
+      `"GSharp: Restart Language Server".`;
+    void vscode.window
+      .showErrorMessage(message, 'Install .NET', 'Show Output')
+      .then((selection) => {
+        if (selection === 'Install .NET') {
+          void vscode.env.openExternal(vscode.Uri.parse(DOTNET_DOWNLOAD_URL));
+        } else if (selection === 'Show Output') {
+          this.logger.show();
+        }
+      });
   }
 
   private reportMissingServer(serverPath: string) {
