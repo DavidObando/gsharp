@@ -84,7 +84,7 @@ public class Issue812VariadicAdditionalSitesParserTests
         const string source = """
             package P
             interface IAdder {
-              func Add(nums ...int32) int32
+              func Add(nums ...int32) int32;
             }
             """;
         var tree = SyntaxTree.Parse(source);

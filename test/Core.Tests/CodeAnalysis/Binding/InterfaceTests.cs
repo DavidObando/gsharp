@@ -29,11 +29,57 @@ public class InterfaceTests
     {
         var source = @"
 interface IShape {
-    func Area() int32
+    func Area() int32;
 }
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void InterfaceMethod_NoBody_MissingSemicolon_DiagnosesGS0368()
+    {
+        // Issue #881: a bodyless interface func is the no-body (abstract) form
+        // and must be terminated with ';' — the universal no-body marker for
+        // func declarations (mirroring P/Invoke, ADR-0086). Omitting it is a
+        // GS0368 parse error.
+        var source = @"
+interface IShape {
+    func Area() int32
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0368");
+    }
+
+    [Fact]
+    public void InterfaceMethod_NoBody_WithSemicolon_Binds()
+    {
+        // Issue #881: the ';' no-body marker is the canonical bodyless form.
+        var source = @"
+interface IShape {
+    func Area() int32;
+    func Name() string;
+}
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void InterfaceSharedSlot_NoBody_MissingSemicolon_DiagnosesGS0368()
+    {
+        // Issue #881: the rule extends to abstract static slots inside an
+        // interface `shared { … }` block (ADR-0089).
+        var source = @"
+interface IAdd {
+    shared {
+        func Add(a int32, b int32) int32
+    }
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0368");
     }
 
     [Fact]
@@ -56,7 +102,7 @@ interface IGreeter {
     {
         var source = @"
 interface IShape {
-    func Area() int32
+    func Area() int32;
 }
 
 class Square(Side int32) : IShape {
@@ -76,7 +122,7 @@ s.Area()
     {
         var source = @"
 interface IShape {
-    func Area() int32
+    func Area() int32;
 }
 
 class Square(Side int32) : IShape {
@@ -91,11 +137,11 @@ class Square(Side int32) : IShape {
     {
         var source = @"
 interface IShape {
-    func Area() int32
+    func Area() int32;
 }
 
 interface INamed {
-    func Name() string
+    func Name() string;
 }
 
 class Square(Side int32) : IShape, INamed {
@@ -116,7 +162,7 @@ s.Area()
     {
         var source = @"
 interface IShape {
-    func Area() int32
+    func Area() int32;
 }
 
 open class Box(W int32) : IShape {
@@ -141,7 +187,7 @@ b.Area()
         var source = @"
 package GSharp.Tests.Sealed
 sealed interface IResult {
-    func Ok() bool
+    func Ok() bool;
 }
 
 class Success : IResult {
@@ -177,7 +223,7 @@ sealed interface IGood {
         var t1 = SyntaxTree.Parse(SourceText.From(@"
 package GSharp.Tests.Sealed.A
 public sealed interface IResult {
-    func Ok() bool
+    func Ok() bool;
 }
 "));
         var t2 = SyntaxTree.Parse(SourceText.From(@"
@@ -197,7 +243,7 @@ class Success : IResult {
     {
         var source = @"
 interface IBox[T any] {
-    func Get() T
+    func Get() T;
 }
 
 class Box[T any](value T) : IBox[T] {
@@ -306,7 +352,7 @@ quiet.Greet() + "":"" + loud.Greet()
         // provide the abstract one.
         var source = @"
 interface IShape {
-    func Area() int32
+    func Area() int32;
     func Describe() string { return ""shape"" }
 }
 
@@ -376,7 +422,7 @@ c.F()
         // (GS0320), not the conflict form.
         var source = @"
 interface IMissing {
-    func Required() int32
+    func Required() int32;
 }
 
 class C : IMissing {
@@ -478,7 +524,7 @@ c.Helper(3)
         // private helpers are part of the interface's own implementation.
         var source = @"
 interface IBad {
-    private func Helper(x int32) int32
+    private func Helper(x int32) int32;
 }
 ";
         var result = Evaluate(source);

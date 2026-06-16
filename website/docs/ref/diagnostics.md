@@ -842,6 +842,7 @@ dropped-default, missing-implementer, and deferred-modifier cases.
 | GS0319 | Error | `Override targets default-interface method '<Name>' that was removed in interface '<I>'.` |
 | GS0320 | Error | `Class '<C>' does not implement interface method '<I>.<Name>' and the interface does not provide a default.` |
 | GS0321 | Error | `Modifier '<modifier>' on interface method '<Name>' is not yet supported. ADR-0085 explicitly defers 'open', 'override', and 'sealed override' interface members.` |
+| GS0368 | Error | `Interface method '<Name>' has no body and must be terminated with ';' (ADR-0085); a bodyless 'func' uses ';' as its no-body marker, mirroring P/Invoke.` |
 
 Note: as of ADR-0090 (issue #756) the `private` modifier on an interface
 method is no longer deferred and no longer fires GS0321. See the
@@ -878,6 +879,10 @@ Cause/fix:
 - **GS0320** — provide a method body on the implementing class
   with the matching signature, or add a default body to the
   interface declaration.
+- **GS0368** — terminate the body-less interface method (or
+  abstract `shared { … }` static slot) with `;`, the universal
+  no-body marker for `func` declarations (issue #881). A method
+  with a `{ … }` body takes no `;`.
 - **GS0321** — remove the deferred modifier. Static interface
   members, private helper methods, and `sealed override` are
   deferred follow-ups; instance-virtual default-interface

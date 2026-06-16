@@ -180,7 +180,7 @@ public class Issue700SmartCastEmitTests
             import System
 
             interface Speaker {
-                func Describe() string
+                func Describe() string;
             }
 
             open class Animal {

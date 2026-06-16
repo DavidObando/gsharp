@@ -3744,6 +3744,27 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Error);
     }
 
+    /// <summary>
+    /// Reports GS0368 — issue #881: an interface <c>func</c> declaration with
+    /// no <c>{ … }</c> body is missing its terminating <c>;</c>. A bodyless
+    /// <c>func</c> is the no-body (abstract) form, and G# requires <c>;</c> as
+    /// the universal no-body marker for every <c>func</c> declaration (matching
+    /// the P/Invoke shape from ADR-0086). A <c>func</c> that carries a
+    /// <c>{ … }</c> block (default-interface method or default shared slot) must
+    /// not take a <c>;</c>.
+    /// </summary>
+    /// <param name="location">The source location where the <c>;</c> is
+    /// expected (immediately after the return-type clause).</param>
+    /// <param name="methodName">The name of the offending interface method.</param>
+    public void ReportInterfaceMethodMissingSemicolon(TextLocation location, string methodName)
+    {
+        Report(
+            location,
+            "GS0368",
+            $"Interface method '{methodName}' has no body and must be terminated with ';' (ADR-0085); a bodyless 'func' uses ';' as its no-body marker, mirroring P/Invoke.",
+            DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

@@ -29,7 +29,7 @@ public class KotlinStyleDeclarationGrammarTests
     [InlineData("inline struct UserId(value string)")]
     [InlineData("enum Color { Red, Green, Blue }")]
     [InlineData("enum Shape { Circle(r float64); Square(s float64) }")]
-    [InlineData("interface Drawable { func Draw() }")]
+    [InlineData("interface Drawable { func Draw(); }")]
     [InlineData("sealed interface Shape { }")]
     public void SpellingMatrix_EveryRowParses(string head)
     {

@@ -54,12 +54,12 @@ Console.WriteLine(p == q)
 ## Classes and interfaces
 
 Classes are reference-like and support primary constructors, explicit `init` constructors, fields, methods, properties, events, inheritance, and `shared` members. Classes are sealed by default for inheritance unless marked `open`. Methods that can be overridden are marked `open`; overriding methods use `override`. 
-Interfaces define method, property, and event signatures. Interface methods may carry a body — a **default-interface method** (DIM). Classes implementing the interface inherit the default unless they declare their own override.
+Interfaces define method, property, and event signatures. Interface methods may carry a body — a **default-interface method** (DIM). Classes implementing the interface inherit the default unless they declare their own override. A body-less (abstract) interface method is terminated by `;` — the universal no-body marker for `func` declarations (matching P/Invoke); a method with a `{ … }` body takes no `;`.
 
 ```gsharp
 interface IGreeter {
     func Hello() string { return "hi (default)" }
-    func Required(name string) string
+    func Required(name string) string;
 }
 
 class Quiet : IGreeter {
@@ -76,12 +76,12 @@ class Loud : IGreeter {
 
 ### Static-virtual interface members
 
-Interfaces may also expose **static-virtual** members. Per the issue #865 revision of ADR-0089 these members live inside a `shared { … }` block on the interface — the same `shared { … }` block that hosts static members on classes and structs (ADR-0053). A body-less `func` inside that block is an abstract static-virtual slot ("static abstract"); a `func` with a body is a default static-virtual member ("static virtual") that implementers may override but don't have to. Implementers supply the static via their own `shared { … }` block, and generic methods constrained by the interface can dispatch through `T.M(...)`. The implementer's static method is paired to the interface slot via a CLR `MethodImpl` row (ECMA-335 II.22.27); the call site lowers to `constrained. !!T  call <iface>::<method>`.
+Interfaces may also expose **static-virtual** members. Per the issue #865 revision of ADR-0089 these members live inside a `shared { … }` block on the interface — the same `shared { … }` block that hosts static members on classes and structs (ADR-0053). A body-less `func` inside that block is an abstract static-virtual slot ("static abstract"), terminated by `;`; a `func` with a body is a default static-virtual member ("static virtual") that implementers may override but don't have to. Implementers supply the static via their own `shared { … }` block, and generic methods constrained by the interface can dispatch through `T.M(...)`. The implementer's static method is paired to the interface slot via a CLR `MethodImpl` row (ECMA-335 II.22.27); the call site lowers to `constrained. !!T  call <iface>::<method>`.
 
 ```gsharp
 sealed interface IAdd {
     shared {
-        func Add(a int32, b int32) int32            // abstract
+        func Add(a int32, b int32) int32;           // abstract
         func Zero() int32 { return 0 }              // default
     }
 }

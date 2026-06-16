@@ -89,7 +89,7 @@ Console.WriteLine(unknown.Speak())
 // base class). Calls through an interface-typed receiver dispatch to the
 // runtime type's implementation.
 interface IShape {
-    func Area() int32
+    func Area() int32;
 }
 
 class Square(Side int32) : IShape {

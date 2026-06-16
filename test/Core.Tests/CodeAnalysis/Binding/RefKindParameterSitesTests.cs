@@ -66,7 +66,7 @@ class MathHelper {
     {
         var source = @"
 interface IParser {
-    func TryParse(text string, out result int32) bool
+    func TryParse(text string, out result int32) bool;
 }
 0
 ";
@@ -226,7 +226,7 @@ class Derived : Base {
     {
         var source = @"
 interface IParser {
-    func TryParse(text string, out result int32) bool
+    func TryParse(text string, out result int32) bool;
 }
 
 class MyParser : IParser {
@@ -245,7 +245,7 @@ class MyParser : IParser {
     {
         var source = @"
 interface IParser {
-    func TryParse(text string, out result int32) bool
+    func TryParse(text string, out result int32) bool;
 }
 
 class MyParser : IParser {

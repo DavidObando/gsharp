@@ -36,6 +36,7 @@ All notable changes to the GSharp VS Code extension will be documented in this f
 
 ### Changed
 
+- Language surface (issue #881): a bodyless `func` declaration now requires a terminating `;` — the universal no-body marker for funcs. This affects interface abstract methods (`func Area() float64;`) and interface `shared { }` abstract static slots (`func Add(a int32, b int32) int32;`), making them consistent with P/Invoke (`@DllImport func getpid() int32;`). A `func` that carries a `{ … }` body still takes no `;`. The TextMate grammar already tokenizes `;` as punctuation, so highlighting is unchanged; the `interface` snippet is unaffected.
 - TextMate grammar: `static` is no longer highlighted as a contextual keyword. Per issue #865 (ADR-0089 revision) `static` is no longer special on interface members — static-virtual members are declared inside a `shared { … }` block — so `static` reverts to a plain identifier. `shared` continues to highlight in all contexts, including interfaces.
 
 ### Fixed

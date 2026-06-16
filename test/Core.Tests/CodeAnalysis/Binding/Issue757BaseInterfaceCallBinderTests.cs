@@ -88,7 +88,7 @@ class C : IFoo {
     {
         var source = @"
 interface IFoo {
-    func M() int32
+    func M() int32;
 }
 
 class C : IFoo {

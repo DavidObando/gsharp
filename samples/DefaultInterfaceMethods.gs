@@ -14,7 +14,7 @@ interface IGreeter {
         return "hello (default)"
     }
 
-    func Required(name string) string
+    func Required(name string) string;
 }
 
 class Quiet : IGreeter {

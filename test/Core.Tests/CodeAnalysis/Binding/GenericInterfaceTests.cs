@@ -26,7 +26,7 @@ public class GenericInterfaceTests
     {
         var source = @"
 interface Iter[T any] {
-    func Next() T
+    func Next() T;
 }
 ";
         var result = Evaluate(source);
@@ -38,7 +38,7 @@ interface Iter[T any] {
     {
         var source = @"
 interface Iter[T any] {
-    func Next() T
+    func Next() T;
 }
 
 func consume(it Iter[int32]) int32 {
@@ -54,7 +54,7 @@ func consume(it Iter[int32]) int32 {
     {
         var source = @"
 interface Producer[out T] {
-    func Get() T
+    func Get() T;
 }
 ";
         var result = Evaluate(source);
@@ -66,7 +66,7 @@ interface Producer[out T] {
     {
         var source = @"
 interface Consumer[in T] {
-    func Put(v T)
+    func Put(v T);
 }
 ";
         var result = Evaluate(source);
@@ -78,7 +78,7 @@ interface Consumer[in T] {
     {
         var source = @"
 interface Bad[out T] {
-    func Take(v T)
+    func Take(v T);
 }
 ";
         var result = Evaluate(source);
@@ -90,7 +90,7 @@ interface Bad[out T] {
     {
         var source = @"
 interface Bad[in T] {
-    func Get() T
+    func Get() T;
 }
 ";
         var result = Evaluate(source);
@@ -102,7 +102,7 @@ interface Bad[in T] {
     {
         var source = @"
 interface Iter[T any] {
-    func Next() T
+    func Next() T;
 }
 
 func consume(it Iter[int32, string]) int32 { return 0 }
@@ -116,7 +116,7 @@ func consume(it Iter[int32, string]) int32 { return 0 }
     {
         var source = @"
 sealed interface Result[T any] {
-    func Get() T
+    func Get() T;
 }
 ";
         var result = Evaluate(source);

@@ -34,7 +34,7 @@ public class StaticVirtualInterfaceInterpreterTests
 
             sealed interface IAdd {
                 shared {
-                    func Add(a int32, b int32) int32
+                    func Add(a int32, b int32) int32;
                 }
             }
 
@@ -115,7 +115,7 @@ public class StaticVirtualInterfaceInterpreterTests
 
             sealed interface IAdd {
                 shared {
-                    func Add(a int32, b int32) int32
+                    func Add(a int32, b int32) int32;
                 }
             }
 
