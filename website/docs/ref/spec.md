@@ -438,7 +438,7 @@ OpenOrOverride   = "open" | "override" .
 ConstructorDecl  = "init" "(" Parameters? ")" ( ":" identifier "(" Arguments? ")" )? Block .
 SharedBlock      = "shared" "{" SharedMember* "}" .
 SharedMember     = Accessibility? ( MethodDecl | PropertyDecl | EventDecl | FieldDecl ) .
-FieldDecl        = Accessibility? identifier TypeClause ( "=" Expression )? .
+FieldDecl        = Accessibility? ( "var" | "let" ) identifier TypeClause ( "=" Expression )? .
 PropertyDecl     = "prop" identifier TypeClause PropertyBody? .
 PropertyAccessor = ( "get" | "set" ( "(" identifier ")" )? ) ( Block | ";" )? .
 EventDecl        = "event" identifier TypeClause EventBody? .
@@ -962,69 +962,92 @@ The compiler renders the merged documentation in hover for both G# declarations 
 ## Appendix: full parser grammar
 
 ```ebnf
+(* Several terminals below are CONTEXTUAL identifiers, not reserved keywords:
+   data, inline, ref, scoped, delegate, convenience, init, deinit, shared, prop,
+   event, get, set, add, remove, raise, make, typeof, nameof, unmanaged, with,
+   base, the variance markers in/out, and the parameter ref-kinds ref/out/in.
+   They are written as quoted terminals here for brevity. *)
+
 CompilationUnit   ::= PackageDecl? ImportDecl* Member* EOF
 PackageDecl       ::= 'package' identifier ('.' identifier)*
 ImportDecl        ::= 'import' (identifier '=')? identifier ('.' identifier)*
-Member            ::= Annotation* Accessibility? (Async? FunctionDecl | TypeDecl | VariableDecl | GlobalStatement)
+Member            ::= Annotation* Accessibility?
+                      ( Async? FunctionDecl
+                      | AggregateDecl
+                      | TypeAliasDecl
+                      | DelegateDecl
+                      | VariableDecl                 (* requires Accessibility *)
+                      | GlobalStatement )
 Accessibility     ::= 'public' | 'internal' | 'private'
+Async             ::= 'async'
 Annotation        ::= '@' (AnnotationTarget ':')? identifier ('.' identifier)* ('(' Arguments? ')')?
 AnnotationTarget  ::= 'field' | 'param' | 'return' | 'type' | 'method' | 'property' | 'event' | 'module' | 'assembly' | 'genericparam'
 
-FunctionDecl      ::= 'func' ReceiverClause? (identifier | OperatorName) TypeParamList? '(' Parameters? ')' TypeClause? Block
-AsyncFunctionDecl ::= 'async' FunctionDecl
+FunctionDecl      ::= 'func' ReceiverClause? (identifier | OperatorName) TypeParamList? '(' Parameters? ')' 'ref'? TypeClause? (Block | ';')
+                      (* ';' is the no-body marker: P/Invoke (ADR-0086) and abstract members (issue #881) *)
 ReceiverClause    ::= '(' Parameter ')'
 OperatorName      ::= 'operator' OperatorToken
 TypeParamList     ::= '[' TypeParameter (',' TypeParameter)* ']'
-TypeParameter     ::= ('in' | 'out')? identifier ConstraintName?
-ConstraintName    ::= identifier
+TypeParameter     ::= ('in' | 'out')? identifier ConstraintRef? ConstraintFlag*
+ConstraintRef     ::= identifier TypeArgList?           (* legacy slot: any | comparable | sealed-interface name; generic-instantiated e.g. [T IAdd[T]] (ADR-0089) *)
+ConstraintFlag    ::= 'class' | 'struct' | 'new' '(' ')'  (* repeatable flag constraints, ADR-0097 *)
 Parameters        ::= Parameter (',' Parameter)*
-Parameter         ::= Annotation* identifier '...'? TypeClause
+Parameter         ::= Annotation* 'scoped'? ('ref' | 'out' | 'in')? identifier '...'? TypeClause ('=' Expression)?
 
-TypeDecl          ::= 'type' identifier TypeParamList? (TypeAliasTail | StructDeclTail | ClassDeclTail | EnumDeclTail | InterfaceDeclTail)
-TypeAliasTail     ::= '=' identifier
-StructDeclTail    ::= Data? Inline? Open? 'struct' PrimaryCtor? StructBody
-ClassDeclTail     ::= Open? 'class' PrimaryCtor? BaseClause? StructBody
-RecordDeclTail    ::= ('record' | Data? 'record') StructBody
-EnumDeclTail      ::= 'enum' '{' EnumMemberList? '}'
-InterfaceDeclTail ::= Sealed? 'interface' InterfaceBody
-Data              ::= contextual 'data'
-Inline            ::= contextual 'inline'
-Open              ::= 'open'
-Sealed            ::= 'sealed'
+TypeAliasDecl     ::= 'type' identifier TypeParamList? '=' identifier
+DelegateDecl      ::= 'type' identifier TypeParamList? '=' 'delegate' 'func' '(' Parameters? ')' TypeClause?   (* named CLR delegate, ADR-0059 *)
+AggregateDecl     ::= ClassDecl | StructDecl | EnumDecl | InterfaceDecl    (* leading modifiers may appear in any order; per-kind validity is enforced by the binder *)
+ClassDecl         ::= ('open' | 'sealed')? 'data'? 'class' identifier TypeParamList? PrimaryCtor? BaseClause? StructBody?
+StructDecl        ::= 'data'? 'inline'? 'ref'? 'struct' identifier TypeParamList? PrimaryCtor? BaseClause? StructBody?
+EnumDecl          ::= 'sealed'? 'enum' identifier '{' EnumMemberList? '}'
+InterfaceDecl     ::= 'sealed'? 'interface' identifier TypeParamList? InterfaceBody
 PrimaryCtor       ::= '(' Parameters? ')'
-BaseClause        ::= ':' QualifiedTypeName ('(' Arguments? ')')? (',' QualifiedTypeName)*
-EnumMemberList    ::= Annotation* identifier (',' Annotation* identifier)* ','?
+BaseClause        ::= ':' TypeClause ('(' Arguments? ')')? (',' TypeClause)*
+EnumMemberList    ::= EnumMember ((',' | ';') EnumMember)* (',' | ';')?
+EnumMember        ::= Annotation* identifier ('(' Parameters? ')')?       (* payload => discriminated-union case (ADR-0078) *)
 
 StructBody        ::= '{' StructMember* '}'
-StructMember      ::= Annotation* Accessibility? (OpenOrOverride* (MethodDecl | PropertyDecl | EventDecl | ConstructorDecl) | SharedBlock | FieldDecl)
+StructMember      ::= Annotation*
+                      ( Accessibility? OpenOrOverride* (MethodDecl | PropertyDecl | EventDecl)
+                      | Accessibility? ConstructorDecl
+                      | DeinitDecl
+                      | SharedBlock
+                      | FieldDecl )
 OpenOrOverride    ::= 'open' | 'override'
-ConstructorDecl   ::= contextual 'init' '(' Parameters? ')' (':' identifier '(' Arguments? ')')? Block
-SharedBlock       ::= contextual 'shared' '{' SharedMember* '}'
-SharedMember      ::= Accessibility? (MethodDecl | PropertyDecl | EventDecl | FieldDecl)
+ConstructorDecl   ::= 'convenience'? 'func'? 'init' '(' Parameters? ')' (':' identifier '(' Arguments? ')')? Block
+DeinitDecl        ::= 'deinit' Block                     (* class-only; no parameters or return type *)
+SharedBlock       ::= 'shared' '{' SharedMember* '}'
+SharedMember      ::= Annotation* Accessibility? (Async? MethodDecl | PropertyDecl | EventDecl | FieldDecl)
 MethodDecl        ::= FunctionDecl
-FieldDecl         ::= Accessibility? identifier TypeClause ('=' Expression)?
-PropertyDecl      ::= contextual 'prop' identifier TypeClause (PropertyBody)?
+FieldDecl         ::= Accessibility? ('var' | 'let') identifier TypeClause ('=' Expression)?
+PropertyDecl      ::= 'prop' identifier TypeClause PropertyBody?
 PropertyBody      ::= '{' PropertyAccessor* '}'
 PropertyAccessor  ::= ('get' | 'set' ('(' identifier ')')?) (Block | ';')?
-EventDecl         ::= contextual 'event' identifier TypeClause (EventBody)?
+EventDecl         ::= 'event' identifier TypeClause EventBody?
 EventBody         ::= '{' EventAccessor* '}'
 EventAccessor     ::= ('add' | 'remove' | 'raise') (Block | ';')?
-InterfaceBody     ::= '{' (InterfaceMethodDecl | PropertyDecl | EventDecl)* '}'
-InterfaceMethodDecl ::= FunctionSignature Block?
-FunctionSignature ::= 'func' identifier '(' Parameters? ')' TypeClause? Block?
+InterfaceBody     ::= '{' InterfaceMember* '}'
+InterfaceMember   ::= Annotation* (InterfaceMethodDecl | PropertyDecl | EventDecl | InterfaceSharedBlock)
+InterfaceMethodDecl ::= 'private'? 'func' identifier TypeParamList? '(' Parameters? ')' TypeClause? (Block | ';')
+                      (* Block => default-interface method (ADR-0085); ';' => abstract no-body marker (issue #881) *)
+InterfaceSharedBlock ::= 'shared' '{' InterfaceSharedMember* '}'           (* static-virtual interface members, ADR-0089 *)
+InterfaceSharedMember ::= 'private'? 'func' identifier TypeParamList? '(' Parameters? ')' TypeClause? (Block | ';')
 
-TypeClause        ::= identifier TypeArgList? '?'?
-                    | '[' Number? ']' identifier '?'?
-                    | '(' TypeClause (',' TypeClause)+ ')' '?'?
-                    | '(' TypeClauseList? ')' '->' TypeClause '?'?
-                    | 'async' '(' TypeClauseList? ')' '->' TypeClause '?'?
-                    | 'map' '[' TypeClause ']' TypeClause '?'?
+TypeClause        ::= identifier ('.' identifier)* TypeArgList? '?'?
+                    | '[' Number? ']' identifier ('.' identifier)* '?'?
+                    | '(' TypeClause (',' TypeClause)+ ')' '?'?                          (* tuple type *)
+                    | '(' FnTypeParamList? ')' '->' TypeClause '?'?                       (* arrow function type, ADR-0075 *)
+                    | 'async' '(' FnTypeParamList? ')' '->' TypeClause '?'?
+                    | 'map' '[' TypeClause ',' TypeClause ']' '?'?                        (* canonical, ADR-0104 *)
+                    | 'map' '[' TypeClause ']' TypeClause '?'?                            (* legacy; GS0366 *)
                     | 'chan' TypeClause '?'?
                     | 'sequence' '[' TypeClause ']' '?'?
                     | 'async' 'sequence' '[' TypeClause ']' '?'?
-                    | 'func' '(' TypeClauseList? ')' TypeClause? '?'?            (* deprecated; GS0303 *)
-                    | 'async' 'func' '(' TypeClauseList? ')' TypeClause? '?'?    (* deprecated; GS0303 *)
-                    | '*' TypeClause '?'?
+                    | 'func' '(' FnTypeParamList? ')' TypeClause? '?'?                    (* deprecated; GS0303 *)
+                    | 'async' 'func' '(' FnTypeParamList? ')' TypeClause? '?'?            (* deprecated; GS0303 *)
+                    | '*' TypeClause '?'?                                                  (* pointer type, ADR-0039 *)
+                    | 'unmanaged' ('[' identifier ']')? '(' TypeClauseList? ')' '->' TypeClause   (* function pointer, ADR-0095 *)
+FnTypeParamList   ::= '...'? TypeClause (',' '...'? TypeClause)*                          (* per-slot variadic, ADR-0102 *)
 TypeArgList       ::= '[' TypeClause (',' TypeClause)* ']'
 TypeClauseList    ::= TypeClause (',' TypeClause)*
 
@@ -1032,34 +1055,38 @@ Block             ::= '{' Statement* '}'
 Statement         ::= Block
                     | Annotation* VariableDecl
                     | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt
-                    | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt
+                    | SwitchStmt | FallthroughStmt | TryStmt | ThrowStmt | UsingStmt | AwaitUsingStmt | DeferStmt | GoStmt | ScopeStmt
                     | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt
                     | IncDecStmt | ChannelSendStmt | ExpressionStmt
-VariableDecl      ::= ('const' | 'let' | 'var') identifier TypeClause? '=' Expression
-                    | 'var' identifier TypeClause
-                    | 'let' '(' identifier (',' identifier)* ')' '=' Expression
-                    | 'let' '{' identifier '=' identifier (',' identifier '=' identifier)* '}' '=' Expression
-MultiAssignment   ::= identifier (',' identifier)+ '=' Expression (',' Expression)*
+VariableDecl      ::= ('const' | 'let' | 'var') 'scoped'? 'ref'? identifier TypeClause? '=' Expression
+                    | 'var' 'scoped'? identifier TypeClause                                  (* no initializer; binds the type's zero value *)
+                    | 'let' '(' identifier (',' identifier)* ')' '=' Expression               (* tuple deconstruction *)
+                    | 'let' '{' identifier '=' identifier (',' identifier '=' identifier)* '}' '=' Expression   (* named deconstruction *)
+MultiAssignmentStmt ::= identifier (',' identifier)+ '=' Expression (',' Expression)*
 IncDecStmt        ::= identifier ('++' | '--')
+FallthroughStmt   ::= 'fallthrough'                       (* recognised then reported as unsupported, ADR-0013 *)
 
 IfStmt            ::= 'if' (SimpleStmt ';')? Expression Statement ('else' Statement)?
 IfLetStmt         ::= 'if' LetBindingList Statement ('else' Statement)?
-GuardLetStmt      ::= 'guard' LetBindingList 'else' Block
+GuardLetStmt      ::= 'guard' LetBindingList 'else' Statement
 LetBindingList    ::= LetBindingClause (',' LetBindingClause)*
 LetBindingClause  ::= 'let' identifier TypeClause? '=' Expression
-ForStmt           ::= 'for' Statement
-                    | 'for' Expression Statement
-                    | 'for' SimpleStmt? ';' Expression? ';' SimpleStmt? Statement
-                    | 'for' identifier (',' identifier)? contextual 'in' Expression Statement
-                    | 'for' identifier contextual 'in' Expression '...' Expression Statement
+ForStmt           ::= 'for' Block
+                    | 'for' Expression Block
+                    | 'for' SimpleStmt? ';' Expression? ';' SimpleStmt? Block
+                    | 'for' identifier (',' identifier)? 'in' Expression Block
+                    | 'for' identifier 'in' Expression '...' Expression Block
 WhileStmt         ::= 'while' Expression Statement
-DoWhileStmt       ::= 'do' Block 'while' Expression
-LabeledLoopStmt   ::= identifier ':' (ForStmt | WhileStmt | DoWhileStmt)
-SimpleStmt        ::= VariableDecl | IncDecStmt | Assignment | ExpressionStmt
-BreakStmt         ::= 'break' identifier?
+DoWhileStmt       ::= 'do' Statement 'while' Expression
+LabeledLoopStmt   ::= identifier ':' Statement            (* the binder requires the inner statement to be a loop, GS0294 *)
+SimpleStmt        ::= ('var' | 'let') 'scoped'? 'ref'? identifier TypeClause? '=' Expression
+                    | 'var' 'scoped'? identifier TypeClause
+                    | IncDecStmt
+                    | ExpressionStmt                       (* includes Assignment, compound assignment, and '??=' *)
+BreakStmt         ::= 'break' identifier?                  (* an optional label must be on the same source line *)
 ContinueStmt      ::= 'continue' identifier?
-ReturnStmt        ::= 'return' Expression? (',' Expression)*
-YieldStmt         ::= contextual 'yield' Expression
+ReturnStmt        ::= 'return' ('ref' Expression | Expression (',' Expression)*)?   (* 'ref' return, ADR-0060 *)
+YieldStmt         ::= 'yield' Expression
 
 SwitchStmt        ::= 'switch' Expression '{' SwitchCase* '}'
 SwitchCase        ::= 'case' Pattern Block | 'default' Block
@@ -1069,7 +1096,7 @@ SwitchArm         ::= 'case' Pattern (':' | '->') Expression | 'default' (':' | 
 Pattern           ::= '[' Pattern (',' Pattern)* ']'
                     | '{' identifier ':' Pattern (',' identifier ':' Pattern)* '}'
                     | identifier 'is' TypeClause
-                    | '_'
+                    | '_'                                  (* discard: identifier '_' not followed by '(' or '.' *)
                     | ('<' | '<=' | '>' | '>=' | '==' | '!=') Expression
                     | Expression
 
@@ -1078,10 +1105,11 @@ CatchClause       ::= 'catch' '(' identifier TypeClause? ')' Block
 FinallyClause     ::= 'finally' Block
 ThrowStmt         ::= 'throw' Expression
 UsingStmt         ::= 'using' VariableDecl
+AwaitUsingStmt    ::= 'await' 'using' VariableDecl
 DeferStmt         ::= 'defer' Expression
 GoStmt            ::= 'go' Expression
 ScopeStmt         ::= 'scope' Block
-AwaitForRangeStmt ::= 'await' 'for' identifier contextual 'in' Expression Block
+AwaitForRangeStmt ::= 'await' 'for' identifier 'in' Expression Block
 SelectStmt        ::= 'select' '{' SelectCase* '}'
 SelectCase        ::= 'default' Block
                     | 'case' '<-' Expression Block
@@ -1089,34 +1117,70 @@ SelectCase        ::= 'default' Block
                     | 'case' Expression '<-' Expression Block
 ChannelSendStmt   ::= Expression '<-' Expression
 
-Expression        ::= AssignmentExpression
+Expression        ::= Assignment
 Assignment        ::= identifier '=' Assignment
                     | identifier CompoundAssign Assignment
                     | identifier '[' Expression ']' '=' Assignment
                     | identifier '.' identifier '=' Assignment
-                    | AccessorExpression ('+=' | '-=') Assignment
-                    | BinaryExpression
-BinaryExpression  ::= PrefixExpression (BinaryOperator PrefixExpression)*
+                    | PostfixExpression '[' Expression ']' ('=' | CompoundAssign) Assignment
+                    | PostfixExpression '.' identifier '=' Assignment
+                    | '*' PrefixExpression '=' Assignment                (* indirect (pointer) assignment, ADR-0060 *)
+                    | (identifier | PostfixExpression) ('+=' | '-=') Assignment   (* event subscribe / unsubscribe *)
+                    | ConditionalExpression
+ConditionalExpression ::= WithExpression ('?' Assignment ':' Assignment)?   (* ternary, ADR-0062 *)
+WithExpression    ::= BinaryExpression ('with' '{' FieldEqualsList? '}')*    (* non-destructive record update *)
+CompoundAssign    ::= '+=' | '-=' | '*=' | '/=' | '%=' | '^=' | '&=' | '|=' | '&^=' | '<<=' | '>>=' | '??='
+BinaryExpression  ::= PrefixExpression BinaryTail*
+BinaryTail        ::= BinaryOperator PrefixExpression
+                    | ('is' | 'as' | '!' 'is') TypeClause                (* type test / cast, ADR-0069 *)
+BinaryOperator    ::= '*' | '/' | '%' | '<<' | '>>' | '&' | '&^'
+                    | '+' | '-' | '|' | '^'
+                    | '==' | '!=' | '<' | '<=' | '>' | '>='
+                    | '&&'
+                    | '||' | '?:'                                        (* '?:' is null-coalescing, ADR-0001 *)
 PrefixExpression  ::= ('+' | '-' | '!' | '^' | '*' | '&' | '<-' | 'await') PrefixExpression | PostfixExpression
-PostfixExpression ::= PrimaryExpression '!!'* (('.' | '?.') NameOrCall | ('[' | '?[') Expression ']')* ('with' '{' FieldEqualsList? '}')?
-PrimaryExpression ::= Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | SwitchExpr | '(' Expression ')' | TupleLiteral | MakeChannel | TypeOf | NameOf
+PostfixExpression ::= PrimaryExpression PostfixOp*
+PostfixOp         ::= '!!' | ('.' | '?.') NameOrCall | ('[' | '?[') Expression ']'
+NameOrCall        ::= identifier | Call | GenericCall
+PrimaryExpression ::= Literal | identifier
+                    | Call | GenericCall | NullableTypeCall | ObjectCreation
+                    | StructLiteral | GenericStructLiteral | ArrayLiteral | MapLiteral
+                    | FunctionLiteral | LambdaExpression
+                    | SwitchExpr | IfExpression
+                    | '(' Expression ')' | TupleLiteral
+                    | MakeChannel | TypeOf | NameOf | DefaultExpression | BaseInterfaceCall
 Literal           ::= Number | String | InterpolatedString | 'true' | 'false' | 'nil' | char
 InterpolatedString ::= '"' ( InterpolationText | '$$' | '$' identifier | InterpolationHole )* '"'
-InterpolationHole ::= '${' Expression ( ',' Expression )? ( ':' FormatText )? '}'
+InterpolationHole ::= '${' Expression ( ',' SignedInteger )? ( ':' FormatText )? '}'
 Call              ::= identifier '(' Arguments? ')' TrailingLambda?
-GenericCall       ::= identifier TypeArgList ('(' Arguments? ')' TrailingLambda? | StructLiteralBody)
+GenericCall       ::= identifier TypeArgList '(' Arguments? ')' TrailingLambda?
+NullableTypeCall  ::= identifier '?' '(' Arguments? ')' TrailingLambda?   (* nullable-type construction, issue #663 *)
+ObjectCreation    ::= (Call | GenericCall) '{' ObjectInitList? '}'        (* Foo() { F = v, ... }, issue #522 *)
+ObjectInitList    ::= identifier '=' Expression (',' identifier '=' Expression)* ','?
 StructLiteral     ::= identifier '{' FieldInitList? '}'
+GenericStructLiteral ::= identifier TypeArgList '{' FieldInitList? '}'
 FieldInitList     ::= identifier ':' Expression (',' identifier ':' Expression)* ','?
 FieldEqualsList   ::= identifier '=' Expression (',' identifier '=' Expression)* ','?
 ArrayLiteral      ::= '[' Number? ']' identifier '{' ExpressionList? '}'
-MapLiteral        ::= 'map' '[' TypeClause ']' TypeClause '{' MapEntryList? '}'
+MapLiteral        ::= 'map' '[' TypeClause ',' TypeClause ']' '{' MapEntryList? '}'
+                    | 'map' '[' TypeClause ']' TypeClause '{' MapEntryList? '}'    (* legacy; GS0366 *)
 MapEntry          ::= Expression ':' Expression
-FunctionLiteral   ::= 'func' '(' Parameters? ')' TypeClause? Block | 'async' 'func' '(' Parameters? ')' TypeClause? Block
-LambdaExpression  ::= '(' Parameters? ')' '->' ( Expression | Block )
+FunctionLiteral   ::= 'async'? 'func' '(' Parameters? ')' TypeClause? Block
+LambdaExpression  ::= 'async'? '(' LambdaParameters? ')' '->' ( Expression | Block )
+LambdaParameters  ::= LambdaParameter (',' LambdaParameter)*
+LambdaParameter   ::= Annotation* 'scoped'? ('ref' | 'out' | 'in')? identifier '...'? TypeClause? ('=' Expression)?
 TrailingLambda    ::= FunctionLiteral
 MakeChannel       ::= 'make' '(' 'chan' TypeClause (',' Expression)? ')'
 TypeOf            ::= 'typeof' '(' TypeClause ')'
 NameOf            ::= 'nameof' '(' Expression ')'
+DefaultExpression ::= 'default' ('(' TypeClause ')')?                     (* ADR-0100 *)
+BaseInterfaceCall ::= 'base' '[' TypeClause ']' '.' identifier TypeArgList? '(' Arguments? ')'   (* explicit-base interface call, ADR-0091 *)
+IfExpression      ::= 'if' Expression Block ('else' (IfExpression | Block))?   (* if-as-expression, issue #669 *)
 TupleLiteral      ::= '(' Expression ',' Expression (',' Expression)* ')'
-Arguments         ::= (Expression | identifier '=' Expression) (',' (Expression | identifier '=' Expression))*
+Arguments         ::= Argument (',' Argument)*
+Argument          ::= identifier (':' | '=') (RefArgument | Expression)   (* named argument; '=' separator is deprecated, GS0315 *)
+                    | RefArgument
+                    | Expression
+RefArgument       ::= ('ref' | 'in') (identifier | '(' Expression ')')
+                    | 'out' (('var' | 'let') identifier TypeClause? | '_' TypeClause? | identifier | '(' Expression ')')
 ```
