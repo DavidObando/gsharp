@@ -41,6 +41,23 @@ public class TestDiscoveryComputerTests
     }
 
     [Fact]
+    public void ComputeTests_QualifiesClassLabelWithNamespace()
+    {
+        const string source = "package Foo.Bar\n\nclass MyTests {\n  @Fact\n  func PassesA() {\n  }\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var tests = TestDiscoveryComputer.ComputeTests("file:///t.gs", content);
+
+        var group = Assert.Single(tests);
+        Assert.Equal("Foo.Bar.MyTests", group.Label);
+
+        // The run filter token remains the unqualified Class.Method (dotnet test's
+        // FullyQualifiedName~ is a substring match, so it still resolves correctly).
+        var method = Assert.Single(group.Children);
+        Assert.Equal("MyTests.PassesA", method.Filter);
+    }
+
+    [Fact]
     public void ComputeTests_IgnoresFunctionsWithoutTestAttribute()
     {
         const string source = "func plainHelper() {\n}\n";

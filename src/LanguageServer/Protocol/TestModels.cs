@@ -25,6 +25,14 @@ public sealed class TestDiscoveryItem
     public int Line { get; set; }
 
     /// <summary>
+    /// For a project grouping node, the absolute path to the owning <c>.gsproj</c>
+    /// so the client can run <c>dotnet test</c> against the correct project. Null on
+    /// the test/class items nested beneath the group (they inherit it from the group).
+    /// </summary>
+    [JsonPropertyName("projectFile")]
+    public string ProjectFile { get; set; }
+
+    /// <summary>
     /// A <c>dotnet test --filter "FullyQualifiedName~&lt;value&gt;"</c> token uniquely
     /// (or near-uniquely) identifying this test, e.g. <c>MyTestClass.MyTest</c> for a
     /// method or <c>MyTest</c> for a top-level test function. Null for grouping nodes.

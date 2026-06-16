@@ -396,20 +396,62 @@ public sealed class LspServer
 
     [JsonRpcMethod("gsharp/discoverTests")]
     public Task<TestDiscoveryItem[]> DiscoverTestsAsync(CancellationToken cancellationToken = default)
-        => this.ReadWorkspaceAsync(
-            (docs, ct) =>
-            {
-                var results = new List<TestDiscoveryItem>();
-                foreach (var pair in docs)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    results.AddRange(TestDiscoveryComputer.ComputeTests(pair.Key, pair.Value));
-                }
-
-                return results.ToArray();
-            },
+        => this.ReadTestSnapshotAsync(
+            (sources, ct) => GroupDiscoveredTests(sources, ct),
             Array.Empty<TestDiscoveryItem>(),
             cancellationToken);
+
+    // Builds the Test Explorer tree: a top-level grouping node per project, labelled
+    // "<project-name> (<tfm>)" (matching the C# Dev Kit presentation), whose children are
+    // the class/function items discovered in that project's sources. Loose files that
+    // belong to no project are emitted at the top level, ungrouped, preserving prior
+    // behavior for single-file scenarios.
+    private static TestDiscoveryItem[] GroupDiscoveredTests(IReadOnlyList<TestSource> sources, CancellationToken ct)
+    {
+        var results = new List<TestDiscoveryItem>();
+        var grouped = new Dictionary<string, (string Label, string ProjectFile, List<TestDiscoveryItem> Children)>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var source in sources)
+        {
+            ct.ThrowIfCancellationRequested();
+            var items = TestDiscoveryComputer.ComputeTests(source.Uri, source.Tree);
+            if (items.Count == 0)
+            {
+                continue;
+            }
+
+            if (string.IsNullOrEmpty(source.ProjectFile))
+            {
+                // Loose / project-less file: keep its items at the top level.
+                results.AddRange(items);
+                continue;
+            }
+
+            if (!grouped.TryGetValue(source.ProjectFile, out var bucket))
+            {
+                bucket = (source.ProjectLabel, source.ProjectFile, new List<TestDiscoveryItem>());
+                grouped[source.ProjectFile] = bucket;
+            }
+
+            bucket.Children.AddRange(items);
+        }
+
+        foreach (var bucket in grouped.Values.OrderBy(b => b.Label, StringComparer.Ordinal))
+        {
+            results.Add(new TestDiscoveryItem
+            {
+                Id = "project:" + bucket.ProjectFile,
+                Label = bucket.Label,
+                Uri = DocumentUri.FromFileSystemPath(bucket.ProjectFile).ToString(),
+                Line = 0,
+                Filter = null,
+                ProjectFile = bucket.ProjectFile,
+                Children = bucket.Children.ToArray(),
+            });
+        }
+
+        return results.ToArray();
+    }
 
     [JsonRpcMethod("textDocument/inlayHint", UseSingleObjectParameterDeserialization = true)]
     public Task<InlayHint[]> InlayHintAsync(InlayHintParams request, CancellationToken cancellationToken = default)
@@ -656,6 +698,167 @@ public sealed class LspServer
                 }
             },
             cancellationToken).ConfigureAwait(false);
+    }
+
+    // Non-mutating read over the whole workspace's test-bearing source files (the
+    // gsharp/discoverTests request). Unlike ReadWorkspaceAsync — which only sees
+    // currently-open editor buffers — this snapshots every parsed source tree across
+    // all discovered projects, then overlays open buffers so unsaved edits win. This
+    // is what makes the Test Explorer reflect every test in the workspace (even in
+    // files that have never been opened) after a build. The snapshot is captured under
+    // the gate; the (immutable) syntax trees are walked off the gate on the thread pool.
+    private async Task<T> ReadTestSnapshotAsync<T>(
+        Func<IReadOnlyList<TestSource>, CancellationToken, T> compute,
+        T missing,
+        CancellationToken cancellationToken,
+        [System.Runtime.CompilerServices.CallerMemberName] string caller = null)
+    {
+        IReadOnlyList<TestSource> sources;
+        try
+        {
+            await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                sources = this.SnapshotTestSources_NoLock();
+            }
+            finally
+            {
+                this.gate.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            LogHandlerException(caller, ex);
+            return missing;
+        }
+
+        return await Task.Run(
+            () =>
+            {
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return compute(sources, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    LogHandlerException(caller, ex);
+                    return missing;
+                }
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    // Builds the de-duplicated set of test sources used by discovery: every project
+    // source tree keyed by absolute path (carrying its owning project's identity), with
+    // open editor buffers overlaid on top so in-flight edits are reflected and loose
+    // (project-less) open files are included.
+    private IReadOnlyList<TestSource> SnapshotTestSources_NoLock()
+    {
+        var byPath = new Dictionary<string, TestSource>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var project in this.workspaceState.Projects)
+        {
+            var projectFile = project.ProjectFilePath;
+            var projectLabel = ProjectLabel(project);
+            foreach (var file in project.SourceFiles)
+            {
+                if (project.TryGetSyntaxTree(file, out var tree) && tree != null)
+                {
+                    var path = PathKeyFor(tree, file);
+                    byPath[path] = new TestSource(DocumentUri.FromFileSystemPath(file).ToString(), tree, projectFile, projectLabel);
+                }
+            }
+        }
+
+        foreach (var pair in this.documentContentService.AllDocuments)
+        {
+            var tree = pair.Value?.SyntaxTree;
+            if (tree == null)
+            {
+                continue;
+            }
+
+            // Open buffers win over the on-disk project tree so the explorer reflects
+            // unsaved edits; preserve the client's own URI string so run-at-cursor
+            // matching stays byte-for-byte identical to the editor's document URI.
+            var path = PathKeyFor(tree, pair.Key);
+
+            // Reuse the project association captured above when the file is a known project
+            // source; otherwise resolve it (e.g. a freshly created, not-yet-globbed file).
+            string projectFile = null;
+            string projectLabel = null;
+            if (byPath.TryGetValue(path, out var existing))
+            {
+                projectFile = existing.ProjectFile;
+                projectLabel = existing.ProjectLabel;
+            }
+            else
+            {
+                var owning = this.workspaceState.GetProjectForFile(path);
+                if (owning != null)
+                {
+                    projectFile = owning.ProjectFilePath;
+                    projectLabel = ProjectLabel(owning);
+                }
+            }
+
+            byPath[path] = new TestSource(pair.Key, tree, projectFile, projectLabel);
+        }
+
+        return byPath.Values
+            .OrderBy(s => s.Uri, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static string ProjectLabel(ProjectState project)
+    {
+        var name = Path.GetFileNameWithoutExtension(project.ProjectFilePath);
+        var tfm = project.TargetFramework;
+        return string.IsNullOrEmpty(tfm) ? name : $"{name} ({tfm})";
+    }
+
+    private static string PathKeyFor(SyntaxTree tree, string fallback)
+    {
+        var fileName = tree?.Text?.FileName;
+        var candidate = !string.IsNullOrEmpty(fileName) ? fileName : fallback;
+        try
+        {
+            return Path.GetFullPath(candidate);
+        }
+        catch (Exception)
+        {
+            return candidate ?? string.Empty;
+        }
+    }
+
+    // A single test-bearing source: its emitted URI, parsed (immutable) tree, and the
+    // identity of the owning project (null for loose files) used to build the grouping node.
+    private readonly struct TestSource
+    {
+        public TestSource(string uri, SyntaxTree tree, string projectFile, string projectLabel)
+        {
+            Uri = uri;
+            Tree = tree;
+            ProjectFile = projectFile;
+            ProjectLabel = projectLabel;
+        }
+
+        public string Uri { get; }
+
+        public SyntaxTree Tree { get; }
+
+        public string ProjectFile { get; }
+
+        public string ProjectLabel { get; }
     }
 
     private static SemanticTokens EmptySemanticTokens()

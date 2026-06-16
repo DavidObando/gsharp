@@ -59,6 +59,7 @@ public static class ProjectDiscovery
         var projectReferences = DiscoverProjectReferences(projectFilePath, projectDir);
         var (references, referenceSourcePath) = DiscoverReferences(projectFilePath, projectDir);
         var assemblyName = ResolveAssemblyName(projectFilePath);
+        var targetFramework = ResolveTargetFramework(projectFilePath);
 
         return new DiscoveredProject(
             Path.GetFullPath(projectFilePath),
@@ -66,7 +67,8 @@ public static class ProjectDiscovery
             projectReferences,
             references,
             referenceSourcePath,
-            assemblyName);
+            assemblyName,
+            targetFramework);
     }
 
     /// <summary>

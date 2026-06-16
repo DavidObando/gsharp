@@ -20,13 +20,15 @@ public sealed class DiscoveredProject
     /// <param name="references">Absolute paths to assembly references (from the MSBuild-emitted response file).</param>
     /// <param name="referenceSourcePath">Absolute path to the <c>.rsp</c> the references were parsed from, or <c>null</c> when none was found.</param>
     /// <param name="assemblyName">The project's effective <c>AssemblyName</c> (i.e. the basename of the output DLL). Used by cross-project navigation to map an imported symbol's declaring assembly back to the owning project.</param>
+    /// <param name="targetFramework">The project's target framework moniker (e.g. <c>net10.0</c>), parsed from the <c>.gsproj</c>; may be <c>null</c> when undeclared or unparseable.</param>
     public DiscoveredProject(
         string projectFilePath,
         IReadOnlyList<string> sourceFiles,
         IReadOnlyList<string> projectReferences,
         IReadOnlyList<string> references = null,
         string referenceSourcePath = null,
-        string assemblyName = null)
+        string assemblyName = null,
+        string targetFramework = null)
     {
         ProjectFilePath = projectFilePath;
         SourceFiles = sourceFiles;
@@ -34,6 +36,7 @@ public sealed class DiscoveredProject
         References = references ?? System.Array.Empty<string>();
         ReferenceSourcePath = referenceSourcePath;
         AssemblyName = assemblyName;
+        TargetFramework = targetFramework;
     }
 
     /// <summary>
@@ -77,4 +80,13 @@ public sealed class DiscoveredProject
     /// file's basename.
     /// </summary>
     public string AssemblyName { get; }
+
+    /// <summary>
+    /// Gets the project's target framework moniker (e.g. <c>net10.0</c>), parsed
+    /// from the <c>.gsproj</c>'s <c>&lt;TargetFramework&gt;</c> (or raw
+    /// <c>&lt;TargetFrameworks&gt;</c>) element. May be <c>null</c> or empty when
+    /// neither is declared or the file could not be parsed. Surfaced to the VS Code
+    /// Test Explorer so test groups can be labelled <c>&lt;project&gt; (&lt;tfm&gt;)</c>.
+    /// </summary>
+    public string TargetFramework { get; }
 }
