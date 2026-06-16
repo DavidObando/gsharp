@@ -168,6 +168,43 @@ public static class ProjectDiscovery
     }
 
     /// <summary>
+    /// Resolves the project's target framework moniker (e.g. <c>net8.0</c>) from
+    /// the <c>.gsproj</c>. Returns the single <c>&lt;TargetFramework&gt;</c> when
+    /// present, otherwise the raw <c>&lt;TargetFrameworks&gt;</c> value (so a
+    /// multi-targeting change still flips the cold-start cache fingerprint), or an
+    /// empty string when neither is declared or the file cannot be parsed. Used by
+    /// ADR-0107 as one component of the cold-start cache fingerprint.
+    /// </summary>
+    /// <param name="projectFilePath">Absolute path to the <c>.gsproj</c>.</param>
+    /// <returns>The target framework moniker; never <c>null</c>.</returns>
+    internal static string ResolveTargetFramework(string projectFilePath)
+    {
+        try
+        {
+            var doc = XDocument.Load(projectFilePath);
+            var single = doc.Descendants()
+                .FirstOrDefault(e => e.Name.LocalName == "TargetFramework")?.Value;
+            if (!string.IsNullOrWhiteSpace(single))
+            {
+                return single.Trim();
+            }
+
+            var multi = doc.Descendants()
+                .FirstOrDefault(e => e.Name.LocalName == "TargetFrameworks")?.Value;
+            if (!string.IsNullOrWhiteSpace(multi))
+            {
+                return multi.Trim();
+            }
+        }
+        catch (Exception)
+        {
+            // Fall through to the empty default below.
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>
     /// Discovers all <c>.gs</c> source files for a project directory using the
     /// SDK default glob pattern (<c>**/*.gs</c>), excluding common output directories.
     /// </summary>
