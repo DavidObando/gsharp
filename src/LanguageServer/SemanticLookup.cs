@@ -27,6 +27,40 @@ public static class SemanticLookup
     // becomes unreachable so the ConditionalWeakTable frees it.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, SemanticModel> ModelCache = new();
 
+    // ADR-0106 — incremental SemanticModel build. The per-edit cost of building
+    // the model was dominated by two whole-project walks: collecting syntax
+    // nodes from every tree (SemanticModel constructor) and matching bound
+    // locals to syntax identifiers for every body (MapLocalVariables, a
+    // reflection-based FindBoundNodes walk). Both are pure functions of an
+    // instance-stable input — a SyntaxTree for the former, a lowered
+    // BoundBlockStatement for the latter — so memoize them by that instance.
+    //
+    // On a single-file edit, ProjectState.UpdateFile replaces only the edited
+    // file's SyntaxTree (every other tree keeps its instance), and ADR-0105's
+    // BoundBodyCache serves every unchanged file's body as the same instance.
+    // Keying on instance identity therefore yields automatic cache hits for all
+    // 53 unchanged files and a miss (recompute) only for the edited file, with
+    // no need to thread the previous model: a changed file gets fresh instances
+    // and so naturally recomputes. ConditionalWeakTable frees entries once the
+    // old trees/bodies become unreachable after the edit.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SyntaxTree, NodeBuckets> NodeBucketCache = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<BoundBlockStatement, IReadOnlyList<(SyntaxToken Identifier, Symbol Variable)>> FunctionLocalsCache = new();
+
+    // Diagnostics counters (used by tests to assert the incremental path reuses
+    // unchanged files rather than re-walking them).
+    private static long nodeBucketCacheHits;
+    private static long nodeBucketCacheMisses;
+    private static long functionLocalsCacheHits;
+    private static long functionLocalsCacheMisses;
+
+    /// <summary>Gets the node-bucket memo (hit, miss) counts. Test hook for ADR-0106.</summary>
+    internal static (long Hits, long Misses) NodeBucketCacheStats =>
+        (System.Threading.Interlocked.Read(ref nodeBucketCacheHits), System.Threading.Interlocked.Read(ref nodeBucketCacheMisses));
+
+    /// <summary>Gets the per-body local memo (hit, miss) counts. Test hook for ADR-0106.</summary>
+    internal static (long Hits, long Misses) FunctionLocalsCacheStats =>
+        (System.Threading.Interlocked.Read(ref functionLocalsCacheHits), System.Threading.Interlocked.Read(ref functionLocalsCacheMisses));
+
     public static SyntaxToken FindTokenAt(SyntaxTree tree, int position)
     {
         SyntaxToken best = null;
@@ -281,6 +315,29 @@ public static class SemanticLookup
             new GSharp.LanguageServer.Protocol.Position(endLine, span.End - text.Lines[endLine].Start));
     }
 
+    /// <summary>
+    /// ADR-0106 test hook: builds a <see cref="SemanticModel"/> for
+    /// <paramref name="compilation"/>, optionally bypassing the incremental memo
+    /// caches so the result is a from-scratch oracle. Used by the equivalence
+    /// tests to compare the incremental build against a full rebuild.
+    /// </summary>
+    /// <param name="compilation">The compilation to build a model for.</param>
+    /// <param name="useIncrementalCaches">Whether the instance-keyed memo caches are used.</param>
+    /// <returns>The semantic model.</returns>
+    internal static SemanticModel BuildModelForTest(Compilation compilation, bool useIncrementalCaches)
+    {
+        return BuildModelUncached(compilation, useIncrementalCaches);
+    }
+
+    /// <summary>Resets the ADR-0106 incremental-build memo counters. Test hook.</summary>
+    internal static void ResetIncrementalCacheCounters()
+    {
+        System.Threading.Interlocked.Exchange(ref nodeBucketCacheHits, 0);
+        System.Threading.Interlocked.Exchange(ref nodeBucketCacheMisses, 0);
+        System.Threading.Interlocked.Exchange(ref functionLocalsCacheHits, 0);
+        System.Threading.Interlocked.Exchange(ref functionLocalsCacheMisses, 0);
+    }
+
     private static FunctionSymbol FindFunctionSymbol(Compilation compilation, FunctionDeclarationSyntax declaration)
     {
         foreach (var function in compilation.GlobalScope.Functions)
@@ -355,11 +412,33 @@ public static class SemanticLookup
 
     private static SemanticModel BuildModel(Compilation compilation)
     {
-        return ModelCache.GetValue(compilation, BuildModelUncached);
+        return ModelCache.GetValue(compilation, c => BuildModelUncached(c, useIncrementalCaches: true));
     }
 
-    private static SemanticModel BuildModelUncached(Compilation compilation)
+    /// <summary>
+    /// ADR-0106: builds the per-compilation <see cref="SemanticModel"/>. When
+    /// <paramref name="useIncrementalCaches"/> is <see langword="true"/> the
+    /// expensive per-file work (syntax-node collection and per-body local
+    /// matching) is memoized by syntax-tree / bound-body <em>instance</em>, so a
+    /// single-file edit only recomputes the changed file's buckets while every
+    /// unchanged file is served from the memo. When <see langword="false"/> every
+    /// file is recomputed from scratch; that path is the correctness oracle the
+    /// equivalence tests compare against. Both paths are identical by
+    /// construction because the memoized helpers are pure functions of their
+    /// instance-stable inputs.
+    /// </summary>
+    /// <param name="compilation">The compilation to build a model for.</param>
+    /// <param name="useIncrementalCaches">Whether to read/write the instance-keyed memo caches.</param>
+    /// <returns>The semantic model.</returns>
+    private static SemanticModel BuildModelUncached(Compilation compilation, bool useIncrementalCaches)
     {
+        var trees = compilation.SyntaxTrees;
+        var bucketsByTree = new Dictionary<SyntaxTree, NodeBuckets>(trees.Length);
+        foreach (var tree in trees)
+        {
+            bucketsByTree[tree] = GetNodeBuckets(tree, useIncrementalCaches);
+        }
+
         var declarations = new Dictionary<SyntaxToken, Symbol>();
         var globals = new Dictionary<string, Symbol>(StringComparer.Ordinal);
         var localDeclarations = new Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>>();
@@ -386,7 +465,7 @@ public static class SemanticLookup
 
         foreach (var variable in compilation.GlobalScope.Variables)
         {
-            foreach (var declaration in FindNodes<VariableDeclarationSyntax>(compilation.SyntaxTrees.Select(t => t.Root)).Where(v => v.Identifier.Text == variable.Name))
+            foreach (var declaration in bucketsByTree.Values.SelectMany(b => b.VariableDeclarations).Where(v => v.Identifier.Text == variable.Name))
             {
                 declarations[declaration.Identifier] = variable;
             }
@@ -518,7 +597,7 @@ public static class SemanticLookup
         }
 
         // Register type alias declaration identifiers so code lenses can resolve them.
-        foreach (var typeAliasSyntax in FindNodes<TypeAliasDeclarationSyntax>(compilation.SyntaxTrees.Select(t => t.Root)))
+        foreach (var typeAliasSyntax in bucketsByTree.Values.SelectMany(b => b.TypeAliasDeclarations))
         {
             var aliasId = typeAliasSyntax.Identifier;
             if (aliasId != null && aliasId.Text != null
@@ -528,8 +607,8 @@ public static class SemanticLookup
             }
         }
 
-        MapLocalVariables(compilation, declarations, localDeclarations);
-        return new SemanticModel(compilation, declarations, globals, localDeclarations);
+        MapLocalVariables(compilation, declarations, localDeclarations, bucketsByTree, useIncrementalCaches);
+        return new SemanticModel(compilation, declarations, globals, localDeclarations, bucketsByTree);
     }
 
     private static void MapMembersByName(
@@ -574,7 +653,9 @@ public static class SemanticLookup
     private static void MapLocalVariables(
         Compilation compilation,
         Dictionary<SyntaxToken, Symbol> declarations,
-        Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> localDeclarations)
+        Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> localDeclarations,
+        Dictionary<SyntaxTree, NodeBuckets> bucketsByTree,
+        bool useIncrementalCaches)
     {
         BoundProgram program;
         try
@@ -594,24 +675,74 @@ public static class SemanticLookup
                 continue;
             }
 
-            var syntaxLocalIdentifiers = FindNodes<VariableDeclarationSyntax>(new[] { declaration.Body })
-                .Select(v => v.Identifier)
-                .Concat(FindNodes<ForRangeStatementSyntax>(new[] { declaration.Body }).SelectMany(f => EnumerateForRangeIdentifiers(f)))
-                .Concat(FindNodes<AwaitForRangeStatementSyntax>(new[] { declaration.Body }).Select(f => f.Identifier));
-
-            MapSyntaxLocals(pair.Value, syntaxLocalIdentifiers, declarations, localDeclarations, declaration);
+            // ADR-0106: matching bound locals to syntax identifiers walks the
+            // lowered body (FindBoundNodes, reflection-based) and the body
+            // syntax — the dominant per-edit cost across a whole project. The
+            // result is a pure function of the lowered body instance (and its
+            // backing syntax), which the BoundBodyCache reuses by reference for
+            // unchanged files, so memoize it by that instance.
+            var entries = GetFunctionLocals(declaration, pair.Value, useIncrementalCaches);
+            foreach (var (identifier, variable) in entries)
+            {
+                declarations[identifier] = variable;
+                GetLocals(localDeclarations, declaration)[variable.Name] = variable;
+            }
         }
 
         if (program.Statement != null)
         {
             // Top-level statements have no containing function entry in localDeclarations.
             // We still need loop-variable declaration mappings for for-range hover/reference
-            // support in scripts.
+            // support in scripts. There is a single synthesized top-level body per
+            // compilation; recompute it directly (the for-range syntax comes from the
+            // cached per-tree buckets, so this stays cheap on large workspaces).
             var topLevelLoopIdentifiers =
-                FindNodes<ForRangeStatementSyntax>(compilation.SyntaxTrees.Select(t => t.Root)).SelectMany(f => EnumerateForRangeIdentifiers(f))
-                .Concat(FindNodes<AwaitForRangeStatementSyntax>(compilation.SyntaxTrees.Select(t => t.Root)).Select(f => f.Identifier));
-            MapSyntaxLocals(program.Statement, topLevelLoopIdentifiers, declarations, localDeclarations, declaration: null);
+                bucketsByTree.Values.SelectMany(b => b.ForRanges).SelectMany(f => EnumerateForRangeIdentifiers(f))
+                .Concat(bucketsByTree.Values.SelectMany(b => b.AwaitForRanges).Select(f => f.Identifier));
+            foreach (var (identifier, variable) in MatchBoundLocals(program.Statement, topLevelLoopIdentifiers))
+            {
+                declarations[identifier] = variable;
+            }
         }
+    }
+
+    /// <summary>
+    /// ADR-0106: returns the (syntax identifier → local variable symbol) pairs
+    /// for a single member body, memoized by the lowered-body instance when
+    /// <paramref name="useIncrementalCaches"/> is set. Unchanged files reuse the
+    /// same lowered body (served from the <c>BoundBodyCache</c>), so this is a
+    /// memo hit; the edited file's body is a fresh instance, so it recomputes.
+    /// </summary>
+    private static IReadOnlyList<(SyntaxToken Identifier, Symbol Variable)> GetFunctionLocals(
+        FunctionDeclarationSyntax declaration,
+        BoundBlockStatement body,
+        bool useIncrementalCaches)
+    {
+        if (!useIncrementalCaches)
+        {
+            return ComputeFunctionLocals(declaration, body);
+        }
+
+        if (FunctionLocalsCache.TryGetValue(body, out var cached))
+        {
+            System.Threading.Interlocked.Increment(ref functionLocalsCacheHits);
+            return cached;
+        }
+
+        System.Threading.Interlocked.Increment(ref functionLocalsCacheMisses);
+        return FunctionLocalsCache.GetValue(body, _ => ComputeFunctionLocals(declaration, body));
+    }
+
+    private static IReadOnlyList<(SyntaxToken Identifier, Symbol Variable)> ComputeFunctionLocals(
+        FunctionDeclarationSyntax declaration,
+        BoundBlockStatement body)
+    {
+        var syntaxLocalIdentifiers = FindNodes<VariableDeclarationSyntax>(new[] { declaration.Body })
+            .Select(v => v.Identifier)
+            .Concat(FindNodes<ForRangeStatementSyntax>(new[] { declaration.Body }).SelectMany(f => EnumerateForRangeIdentifiers(f)))
+            .Concat(FindNodes<AwaitForRangeStatementSyntax>(new[] { declaration.Body }).Select(f => f.Identifier));
+
+        return MatchBoundLocals(body, syntaxLocalIdentifiers);
     }
 
     private static IEnumerable<SyntaxToken> EnumerateForRangeIdentifiers(ForRangeStatementSyntax syntax)
@@ -627,16 +758,14 @@ public static class SemanticLookup
         }
     }
 
-    private static void MapSyntaxLocals(
+    private static IReadOnlyList<(SyntaxToken Identifier, Symbol Variable)> MatchBoundLocals(
         BoundNode boundRoot,
-        IEnumerable<SyntaxToken> syntaxLocalIdentifiers,
-        Dictionary<SyntaxToken, Symbol> declarations,
-        Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> localDeclarations,
-        FunctionDeclarationSyntax declaration)
+        IEnumerable<SyntaxToken> syntaxLocalIdentifiers)
     {
         var boundDeclarations = FindBoundNodes<BoundVariableDeclaration>(boundRoot)
             .Where(d => !d.Variable.Name.StartsWith("<", StringComparison.Ordinal))
             .ToList();
+        var result = new List<(SyntaxToken Identifier, Symbol Variable)>();
         var used = new HashSet<int>();
         foreach (var syntaxIdentifier in syntaxLocalIdentifiers
                      .Where(id => id != null)
@@ -650,15 +779,12 @@ public static class SemanticLookup
                 }
 
                 used.Add(i);
-                declarations[syntaxIdentifier] = boundDeclarations[i].Variable;
-                if (declaration != null)
-                {
-                    GetLocals(localDeclarations, declaration)[boundDeclarations[i].Variable.Name] = boundDeclarations[i].Variable;
-                }
-
+                result.Add((syntaxIdentifier, boundDeclarations[i].Variable));
                 break;
             }
         }
+
+        return result;
     }
 
     private static Dictionary<string, Symbol> GetLocals(
@@ -672,6 +798,77 @@ public static class SemanticLookup
         }
 
         return functionLocals;
+    }
+
+    /// <summary>
+    /// ADR-0106: returns the collected syntax-node buckets for
+    /// <paramref name="tree"/>, memoized by the tree <em>instance</em> when
+    /// <paramref name="useCache"/> is set. Because <c>ProjectState.UpdateFile</c>
+    /// only replaces the edited file's tree, every unchanged file keeps its
+    /// instance and so hits this memo, turning the whole-project syntax walk
+    /// into a single-file walk on a typical edit.
+    /// </summary>
+    /// <param name="tree">The syntax tree to collect nodes for.</param>
+    /// <param name="useCache">Whether to read/write the per-tree memo.</param>
+    /// <returns>The collected node buckets.</returns>
+    private static NodeBuckets GetNodeBuckets(SyntaxTree tree, bool useCache)
+    {
+        if (!useCache)
+        {
+            return CollectNodes(tree.Root);
+        }
+
+        if (NodeBucketCache.TryGetValue(tree, out var cached))
+        {
+            System.Threading.Interlocked.Increment(ref nodeBucketCacheHits);
+            return cached;
+        }
+
+        System.Threading.Interlocked.Increment(ref nodeBucketCacheMisses);
+        return NodeBucketCache.GetValue(tree, t => CollectNodes(t.Root));
+    }
+
+    private static NodeBuckets CollectNodes(SyntaxNode root)
+    {
+        var buckets = new NodeBuckets();
+        CollectNodes(root, buckets);
+        return buckets;
+    }
+
+    private static void CollectNodes(SyntaxNode node, NodeBuckets buckets)
+    {
+        switch (node)
+        {
+            case FunctionDeclarationSyntax f:
+                buckets.Functions.Add(f);
+                break;
+            case StructDeclarationSyntax s:
+                buckets.Structs.Add(s);
+                break;
+            case AccessorExpressionSyntax a:
+                buckets.Accessors.Add(a);
+                break;
+            case FieldAssignmentExpressionSyntax fa:
+                buckets.FieldAssignments.Add(fa);
+                break;
+            case ForRangeStatementSyntax fr:
+                buckets.ForRanges.Add(fr);
+                break;
+            case AwaitForRangeStatementSyntax afr:
+                buckets.AwaitForRanges.Add(afr);
+                break;
+            case VariableDeclarationSyntax vd:
+                buckets.VariableDeclarations.Add(vd);
+                break;
+            case TypeAliasDeclarationSyntax ta:
+                buckets.TypeAliasDeclarations.Add(ta);
+                break;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectNodes(child, buckets);
+        }
     }
 
     private static IEnumerable<SyntaxToken> EnumerateTokens(SyntaxNode node)
@@ -781,7 +978,31 @@ public static class SemanticLookup
         return c == '_' || char.IsLetterOrDigit(c);
     }
 
-    private sealed class SemanticModel
+    /// <summary>
+    /// ADR-0106: per-tree collected syntax nodes that the model build and
+    /// reference index need. Memoized by <see cref="SyntaxTree"/> instance so an
+    /// edit only recollects the changed file's nodes (see <c>GetNodeBuckets</c>).
+    /// </summary>
+    internal sealed class NodeBuckets
+    {
+        public List<FunctionDeclarationSyntax> Functions { get; } = new();
+
+        public List<StructDeclarationSyntax> Structs { get; } = new();
+
+        public List<AccessorExpressionSyntax> Accessors { get; } = new();
+
+        public List<FieldAssignmentExpressionSyntax> FieldAssignments { get; } = new();
+
+        public List<ForRangeStatementSyntax> ForRanges { get; } = new();
+
+        public List<AwaitForRangeStatementSyntax> AwaitForRanges { get; } = new();
+
+        public List<VariableDeclarationSyntax> VariableDeclarations { get; } = new();
+
+        public List<TypeAliasDeclarationSyntax> TypeAliasDeclarations { get; } = new();
+    }
+
+    internal sealed class SemanticModel
     {
         private readonly Compilation compilation;
         private readonly Dictionary<SyntaxToken, Symbol> declarations;
@@ -820,11 +1041,12 @@ public static class SemanticLookup
         private HashSet<(string, int, int)> memberAccessTokenSpans;
         private HashSet<(string, int, int)> fieldAssignmentTokenSpans;
 
-        public SemanticModel(
+        internal SemanticModel(
             Compilation compilation,
             Dictionary<SyntaxToken, Symbol> declarations,
             Dictionary<string, Symbol> globals,
-            Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> localDeclarations)
+            Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> localDeclarations,
+            IReadOnlyDictionary<SyntaxTree, NodeBuckets> bucketsByTree)
         {
             this.compilation = compilation;
             this.declarations = declarations;
@@ -847,13 +1069,17 @@ public static class SemanticLookup
                 }
             }
 
-            // Precompute per-compilation node lists. Resolve's fallback chain and the reference
-            // index need function/struct/accessor/field-assignment/for-range nodes; collecting all
-            // of them in a single parallel pass over each tree (instead of six separate FindNodes
-            // walks) keeps the per-edit SemanticModel rebuild cheap on large workspaces.
+            // Per-tree node lists. Resolve's fallback chain and the reference index need
+            // function/struct/accessor/field-assignment/for-range nodes. ADR-0106: these are
+            // computed once per SyntaxTree instance and memoized (see GetNodeBuckets), so an
+            // edit only re-walks the changed file's tree; here we just project the supplied
+            // (already-cached) per-tree buckets into the lookup tables.
             var treeArray = this.compilation.SyntaxTrees.ToArray();
             var buckets = new NodeBuckets[treeArray.Length];
-            System.Threading.Tasks.Parallel.For(0, treeArray.Length, i => buckets[i] = CollectNodes(treeArray[i].Root));
+            for (var i = 0; i < treeArray.Length; i++)
+            {
+                buckets[i] = bucketsByTree.TryGetValue(treeArray[i], out var b) ? b : GetNodeBuckets(treeArray[i], useCache: false);
+            }
 
             this.cachedAccessorsByTree = new Dictionary<SyntaxTree, AccessorExpressionSyntax[]>(treeArray.Length);
             this.cachedFieldAssignmentsByTree = new Dictionary<SyntaxTree, FieldAssignmentExpressionSyntax[]>(treeArray.Length);
@@ -921,6 +1147,9 @@ public static class SemanticLookup
             this.cachedFunctionsByFile = functionsByFile.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToArray());
             this.cachedStructsByFile = structsByFile.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToArray());
         }
+
+        /// <summary>Gets a snapshot of the global name → symbol map. ADR-0106 test hook.</summary>
+        internal IReadOnlyDictionary<string, Symbol> GlobalsSnapshot => this.globals;
 
         public Symbol Resolve(SyntaxToken token)
         {
@@ -1533,58 +1762,6 @@ public static class SemanticLookup
                 "void" => TypeSymbol.Void,
                 _ => null,
             };
-        }
-
-        private static NodeBuckets CollectNodes(SyntaxNode root)
-        {
-            var buckets = new NodeBuckets();
-            CollectNodes(root, buckets);
-            return buckets;
-        }
-
-        private static void CollectNodes(SyntaxNode node, NodeBuckets buckets)
-        {
-            switch (node)
-            {
-                case FunctionDeclarationSyntax f:
-                    buckets.Functions.Add(f);
-                    break;
-                case StructDeclarationSyntax s:
-                    buckets.Structs.Add(s);
-                    break;
-                case AccessorExpressionSyntax a:
-                    buckets.Accessors.Add(a);
-                    break;
-                case FieldAssignmentExpressionSyntax fa:
-                    buckets.FieldAssignments.Add(fa);
-                    break;
-                case ForRangeStatementSyntax fr:
-                    buckets.ForRanges.Add(fr);
-                    break;
-                case AwaitForRangeStatementSyntax afr:
-                    buckets.AwaitForRanges.Add(afr);
-                    break;
-            }
-
-            foreach (var child in node.GetChildren())
-            {
-                CollectNodes(child, buckets);
-            }
-        }
-
-        private sealed class NodeBuckets
-        {
-            public List<FunctionDeclarationSyntax> Functions { get; } = new();
-
-            public List<StructDeclarationSyntax> Structs { get; } = new();
-
-            public List<AccessorExpressionSyntax> Accessors { get; } = new();
-
-            public List<FieldAssignmentExpressionSyntax> FieldAssignments { get; } = new();
-
-            public List<ForRangeStatementSyntax> ForRanges { get; } = new();
-
-            public List<AwaitForRangeStatementSyntax> AwaitForRanges { get; } = new();
         }
     }
 }
