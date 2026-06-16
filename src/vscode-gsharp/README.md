@@ -21,7 +21,7 @@ Rich language support for the [G# programming language](https://github.com/David
 
 ## Requirements
 
-- [.NET Runtime](https://dotnet.microsoft.com/download) (acquired automatically via the .NET Install Tool extension)
+- [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) or newer (the language server targets `net10.0`; acquired automatically via the .NET Install Tool extension when not already on the machine). If a compatible runtime is missing, the extension shows an actionable prompt instead of failing silently.
 - [C# extension](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csharp) (for debugging support)
 
 ## Extension Settings

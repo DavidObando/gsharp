@@ -37,3 +37,5 @@ All notable changes to the GSharp VS Code extension will be documented in this f
 ### Fixed
 
 - TextMate string grammar now recognizes backslash escape sequences (`\"`, `\\`, `\n`, `\t`, `\0`, `\a`, `\b`, `\f`, `\r`, `\v`, `\xNN`, `\uNNNN`, `\UNNNNNNNN`) so an escaped quote like `"text \""` no longer terminates the string early and bleeds string coloring into the rest of the file; unrecognized escapes are flagged as invalid
+- Language server activation now degrades gracefully when a compatible .NET runtime is missing (#871): the extension verifies a `Microsoft.NETCore.App` runtime matching the server's target major version is available before launching, and when it is absent it shows a single actionable error (with "Install .NET" / "Show Output" actions) instead of a stream of crash toasts and an endless restart loop. The extension also owns the restart policy and suppresses the underlying LanguageClient's default crash notifications.
+

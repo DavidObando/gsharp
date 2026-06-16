@@ -4,4 +4,7 @@ module.exports = {
   testEnvironment: 'node',
   testMatch: ['**/test/**/*.test.ts'],
   moduleFileExtensions: ['ts', 'js', 'json'],
+  moduleNameMapper: {
+    '^vscode$': '<rootDir>/test-mocks/vscode.js',
+  },
 };
