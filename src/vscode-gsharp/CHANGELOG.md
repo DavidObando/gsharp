@@ -34,6 +34,10 @@ All notable changes to the GSharp VS Code extension will be documented in this f
 - Language status bar item (Starting → Ready → Error)
 - Project context status bar item
 
+### Changed
+
+- TextMate grammar: `static` is no longer highlighted as a contextual keyword. Per issue #865 (ADR-0089 revision) `static` is no longer special on interface members — static-virtual members are declared inside a `shared { … }` block — so `static` reverts to a plain identifier. `shared` continues to highlight in all contexts, including interfaces.
+
 ### Fixed
 
 - TextMate string grammar now recognizes backslash escape sequences (`\"`, `\\`, `\n`, `\t`, `\0`, `\a`, `\b`, `\f`, `\r`, `\v`, `\xNN`, `\uNNNN`, `\UNNNNNNNN`) so an escaped quote like `"text \""` no longer terminates the string early and bleeds string coloring into the rest of the file; unrecognized escapes are flagged as invalid

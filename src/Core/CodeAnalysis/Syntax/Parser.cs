@@ -890,11 +890,18 @@ public class Parser
         var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
         var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+        var seenSharedBlock = false;
         while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
         {
             var startToken = Current;
 
-            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "shared" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
+            {
+                // Issue #865 revision: static-virtual members live in a
+                // `shared { … }` block (ADR-0089), consistent with classes/structs.
+                ParseInterfaceSharedBlock(methods, ref seenSharedBlock, identifier.Text);
+            }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
                 properties.Add(ParsePropertyDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
             }
@@ -2033,6 +2040,7 @@ public class Parser
         var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
         var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+        var seenSharedBlock = false;
         while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
         {
             var startToken = Current;
@@ -2040,8 +2048,14 @@ public class Parser
             // Per ADR-0018, interface members are method signatures only.
             // ADR-0051 extends this to also allow property declarations.
             // ADR-0052 extends this to also allow event declarations.
-            // No accessibility / open / override modifiers are accepted.
-            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
+            // Issue #865 revision: static-virtual members (ADR-0089) live in a
+            // `shared { … }` block. No accessibility / open / override
+            // modifiers are accepted on plain method signatures.
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "shared" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
+            {
+                ParseInterfaceSharedBlock(methods, ref seenSharedBlock, identifier.Text);
+            }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
                 properties.Add(ParsePropertyDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
             }
@@ -2083,13 +2097,15 @@ public class Parser
 
     /// <summary>
     /// ADR-0090 / issue #756: returns true if the current token starts an
-    /// interface method signature. The recognised starts are:
+    /// interface (instance) method signature. The recognised starts are:
     /// <list type="bullet">
     ///   <item><c>func</c></item>
-    ///   <item><c>static func</c> (ADR-0089)</item>
-    ///   <item><c>private func</c> (this ADR)</item>
-    ///   <item><c>private static func</c> / <c>static private func</c></item>
+    ///   <item><c>private func</c> (private instance helper)</item>
     /// </list>
+    /// Static-virtual members (ADR-0089) and static private helpers (ADR-0090)
+    /// are declared inside a <c>shared { … }</c> block on the interface
+    /// (issue #865 revision); the <c>static</c> contextual keyword is no
+    /// longer recognised on interface members.
     /// </summary>
     private bool IsInterfaceMethodSignatureStart()
     {
@@ -2098,32 +2114,9 @@ public class Parser
             return true;
         }
 
-        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "static")
+        if (Current.Kind == SyntaxKind.PrivateKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
         {
-            if (Peek(1).Kind == SyntaxKind.FuncKeyword)
-            {
-                return true;
-            }
-
-            if (Peek(1).Kind == SyntaxKind.PrivateKeyword && Peek(2).Kind == SyntaxKind.FuncKeyword)
-            {
-                return true;
-            }
-
-            return false;
-        }
-
-        if (Current.Kind == SyntaxKind.PrivateKeyword)
-        {
-            if (Peek(1).Kind == SyntaxKind.FuncKeyword)
-            {
-                return true;
-            }
-
-            if (Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "static" && Peek(2).Kind == SyntaxKind.FuncKeyword)
-            {
-                return true;
-            }
+            return true;
         }
 
         return false;
@@ -2132,45 +2125,38 @@ public class Parser
     private FunctionDeclarationSyntax ParseInterfaceMethodSignature()
     {
         // ADR-0090 / issue #756: an optional `private` accessibility modifier
-        // may precede the (optional) `static` / `func` tokens. The binder
-        // wires private interface members into
-        // <c>InterfaceSymbol.PrivateMethods</c> (or
-        // <c>StaticPrivateMethods</c>) and emits
-        // <c>MethodAttributes.Private | HideBySig</c> (plus <c>Static</c> when
-        // combined with ADR-0089). `private` and `static` may appear in
-        // either order, mirroring the class-member parser shape.
+        // may precede the `func` token, marking the method a private instance
+        // helper. The binder wires private interface members into
+        // <c>InterfaceSymbol.PrivateMethods</c> and emits
+        // <c>MethodAttributes.Private | HideBySig</c>.
         //
-        // ADR-0089 / issue #755: `static` contextual keyword preceding `func`
-        // marks the method as a static-virtual interface member. The binder
-        // wires the resulting FunctionSymbol into InterfaceSymbol.StaticMethods
-        // and emits CLR `MethodAttributes.Static | Virtual | Abstract` (or
-        // `Static | Virtual` with a body for the default form).
+        // Issue #865 revision: static-virtual interface members (ADR-0089) are
+        // now declared inside a `shared { … }` block (see
+        // <see cref="ParseInterfaceSharedBlock"/>); the `static` contextual
+        // keyword is no longer parsed here.
         SyntaxToken accessibilityModifier = null;
-        SyntaxToken staticModifier = null;
-        while (true)
+        if (Current.Kind == SyntaxKind.PrivateKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
         {
-            if (accessibilityModifier == null
-                && Current.Kind == SyntaxKind.PrivateKeyword
-                && (Peek(1).Kind == SyntaxKind.FuncKeyword
-                    || (Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "static" && Peek(2).Kind == SyntaxKind.FuncKeyword)))
-            {
-                accessibilityModifier = NextToken();
-                continue;
-            }
-
-            if (staticModifier == null
-                && Current.Kind == SyntaxKind.IdentifierToken
-                && Current.Text == "static"
-                && (Peek(1).Kind == SyntaxKind.FuncKeyword
-                    || (Peek(1).Kind == SyntaxKind.PrivateKeyword && Peek(2).Kind == SyntaxKind.FuncKeyword)))
-            {
-                staticModifier = NextToken();
-                continue;
-            }
-
-            break;
+            accessibilityModifier = NextToken();
         }
 
+        return ParseInterfaceMethodSignatureCore(accessibilityModifier, staticModifier: null);
+    }
+
+    /// <summary>
+    /// Parses the shared body of an interface method signature (the part from
+    /// <c>func</c> onward), shared by the instance path
+    /// (<see cref="ParseInterfaceMethodSignature"/>) and the static-virtual
+    /// path inside an interface <c>shared { … }</c> block
+    /// (<see cref="ParseInterfaceSharedBlock"/>). When
+    /// <paramref name="staticModifier"/> is non-null the resulting function is
+    /// marked as a static-virtual interface member (ADR-0089); the binder reads
+    /// <see cref="FunctionDeclarationSyntax.HasStaticModifier"/>.
+    /// </summary>
+    private FunctionDeclarationSyntax ParseInterfaceMethodSignatureCore(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken staticModifier)
+    {
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
@@ -2205,6 +2191,75 @@ public class Parser
             body);
         decl.StaticModifier = staticModifier;
         return decl;
+    }
+
+    /// <summary>
+    /// Issue #865 revision (ADR-0089): parses a <c>shared { … }</c> block on an
+    /// interface. Each member is a <c>func</c> (optionally <c>private</c>) and
+    /// becomes a static-virtual interface member — abstract when the body is
+    /// omitted, default when present (body-vs-no-body discriminator, mirroring
+    /// the instance DIM path). The parsed functions are appended to
+    /// <paramref name="methods"/> with <see cref="FunctionDeclarationSyntax.StaticModifier"/>
+    /// set to the <c>shared</c> keyword token, so the binder routes them into
+    /// <c>InterfaceSymbol.StaticMethods</c> /
+    /// <c>InterfaceSymbol.StaticPrivateMethods</c> via the existing
+    /// <see cref="FunctionDeclarationSyntax.HasStaticModifier"/> check.
+    /// Non-<c>func</c> members are rejected with GS0330 (interface static state
+    /// is not supported).
+    /// </summary>
+    private void ParseInterfaceSharedBlock(
+        ImmutableArray<FunctionDeclarationSyntax>.Builder methods,
+        ref bool seenSharedBlock,
+        string interfaceName)
+    {
+        var sharedKeyword = NextToken(); // consume the contextual "shared" identifier
+        if (seenSharedBlock)
+        {
+            Diagnostics.ReportDuplicateSharedBlock(sharedKeyword.Location);
+        }
+
+        seenSharedBlock = true;
+
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var startToken = Current;
+
+            SyntaxToken accessibilityModifier = null;
+            if (Current.Kind == SyntaxKind.PrivateKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
+            {
+                accessibilityModifier = NextToken();
+            }
+
+            if (Current.Kind == SyntaxKind.FuncKeyword)
+            {
+                methods.Add(ParseInterfaceMethodSignatureCore(accessibilityModifier, sharedKeyword));
+            }
+            else
+            {
+                // Only `func` (static-virtual) members are allowed inside an
+                // interface shared block. `var` / `let` / `const` / `prop` /
+                // `event` (interface static state) are deferred — GS0330.
+                // Report once at the member start, then skip the remainder of
+                // the offending declaration so the diagnostic isn't repeated
+                // per token.
+                Diagnostics.ReportInterfaceSharedMemberMustBeFunc(Current.Location, interfaceName);
+                while (Current.Kind != SyntaxKind.CloseBraceToken
+                    && Current.Kind != SyntaxKind.EndOfFileToken
+                    && Current.Kind != SyntaxKind.FuncKeyword
+                    && !(Current.Kind == SyntaxKind.PrivateKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword))
+                {
+                    NextToken();
+                }
+            }
+
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        MatchToken(SyntaxKind.CloseBraceToken);
     }
 
     private PropertyDeclarationSyntax ParsePropertyDeclaration(

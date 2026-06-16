@@ -1,11 +1,13 @@
 // file: StaticVirtualInterfaces.gs
 //
-// ADR-0089 / issue #755: static-virtual interface members (SVIM). An
-// interface may declare `static func` members — both abstract (no body)
-// and default (with body). Implementers supply the static via the
-// existing `shared { ... }` block. A generic method constrained by the
-// interface can dispatch through `T.M(...)` and the call resolves to
-// the implementer's static method (CLR-level
+// ADR-0089 / issue #755 (issue #865 revision): static-virtual interface
+// members (SVIM). An interface declares its static members inside a
+// `shared { ... }` block — the same grouping classes and structs use
+// (ADR-0053). A member is abstract when its body is omitted and a
+// default when a body is present. Implementers supply the static via
+// their own `shared { ... }` block. A generic method constrained by the
+// interface can dispatch through `T.M(...)` and the call resolves to the
+// implementer's static method (CLR-level
 // `constrained. !!T  call <iface>::<method>`).
 
 package GSharp.Samples.StaticVirtualInterfaces
@@ -16,10 +18,12 @@ import System
 // supply Add. A default body would make the slot "static virtual" —
 // implementers may override but don't have to.
 sealed interface IAdd {
-    static func Add(a int32, b int32) int32
+    shared {
+        func Add(a int32, b int32) int32
 
-    static func Zero() int32 {
-        return 0
+        func Zero() int32 {
+            return 0
+        }
     }
 }
 

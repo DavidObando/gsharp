@@ -64,6 +64,22 @@ removed and a fresh `0.2` snapshot is cut from the live docs.
     deprecated this release —
     [ADR-0075](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0075-function-type-clause-arrow-syntax.md), `GS0303`.
   - Go-flavored `map[K]V` type clause (use `map[K,V]`) — ADR-0104, `GS0366`.
+  - `static func` modifier on interface methods removed (issue #865 revision of
+    [ADR-0089](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0089-static-virtual-interface-members.md)).
+    Static-virtual interface members are now declared inside a `shared { … }`
+    block on the interface — the same `shared { … }` block that hosts static
+    members on classes and structs (ADR-0053). A body-less `func` inside that
+    block is an abstract static-virtual slot; a `func` with a body is the
+    default. Static private helpers (ADR-0090) move alongside, written as
+    `private func` inside the interface's `shared { … }` block. Instance
+    `private func` helpers stay directly in the interface body, unchanged.
+    The `static` keyword is no longer recognised on the interface surface;
+    the old `static func …` shape now produces a generic parser error
+    (GS0005) and there is no dedicated migration diagnostic. GS0330 is
+    repurposed: it now fires when a non-`func` member appears inside an
+    interface `shared { … }` block. The CLR emit shape, interpreter
+    dispatch, and binder semantics are unchanged — this is a front-end
+    surface change only.
 - **Native interop end-to-end.** P/Invoke via `@DllImport`
   ([ADR-0086](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0086-pinvoke-dllimport.md)),
   source-generator-shaped `@LibraryImport`

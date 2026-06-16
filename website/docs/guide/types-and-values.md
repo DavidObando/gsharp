@@ -76,12 +76,14 @@ class Loud : IGreeter {
 
 ### Static-virtual interface members
 
-Interfaces may also expose **static-virtual** members: a `static func` declared inside an interface body. Implementers supply the static via the existing `shared { ... }` block, and generic methods constrained by the interface can dispatch through `T.M(...)`. The implementer's static method is paired to the interface slot via a CLR `MethodImpl` row (ECMA-335 II.22.27); the call site lowers to `constrained. !!T  call <iface>::<method>`. The abstract form is body-less ("static abstract"); the default form ("static virtual") carries a body that implementers may override but don't have to.
+Interfaces may also expose **static-virtual** members. Per the issue #865 revision of ADR-0089 these members live inside a `shared { … }` block on the interface — the same `shared { … }` block that hosts static members on classes and structs (ADR-0053). A body-less `func` inside that block is an abstract static-virtual slot ("static abstract"); a `func` with a body is a default static-virtual member ("static virtual") that implementers may override but don't have to. Implementers supply the static via their own `shared { … }` block, and generic methods constrained by the interface can dispatch through `T.M(...)`. The implementer's static method is paired to the interface slot via a CLR `MethodImpl` row (ECMA-335 II.22.27); the call site lowers to `constrained. !!T  call <iface>::<method>`.
 
 ```gsharp
 sealed interface IAdd {
-    static func Add(a int32, b int32) int32         // abstract
-    static func Zero() int32 { return 0 }           // default
+    shared {
+        func Add(a int32, b int32) int32            // abstract
+        func Zero() int32 { return 0 }              // default
+    }
 }
 
 class Plus : IAdd {
@@ -97,11 +99,11 @@ func Apply[T IAdd](w T, a int32, b int32) int32 {
 Console.WriteLine(Apply(Plus{}, 3, 4))              // 7
 ```
 
-The witness-T parameter `w T` lets the type-argument-inference pipeline pick `T` from the call site; explicit type arguments (`Apply[Plus](3, 4)`) work too. Static-virtual members map directly onto the .NET runtime's "static abstract / static virtual" support (e.g. `INumber<T>`, `IParsable<T>`, `IAdditionOperators<TL, TR, TR>`), so G# generic-math code interoperates with C# 11+ assemblies on either side. Diagnostics `GS0330`–`GS0333` flag the common failure modes (unsupported `static let`, missing implementation, instance method for a static slot, dispatch on the wrong type) — see the [diagnostics reference](../ref/diagnostics.md#static-virtual-interface-member-diagnostics-gs0330gs0333).
+The witness-T parameter `w T` lets the type-argument-inference pipeline pick `T` from the call site; explicit type arguments (`Apply[Plus](3, 4)`) work too. Static-virtual members map directly onto the .NET runtime's "static abstract / static virtual" support (e.g. `INumber<T>`, `IParsable<T>`, `IAdditionOperators<TL, TR, TR>`), so G# generic-math code interoperates with C# 11+ assemblies on either side. Diagnostics `GS0330`–`GS0333` flag the common failure modes (a non-`func` member inside the interface's `shared { }` block, missing implementation, instance method for a static slot, dispatch on the wrong type) — see the [diagnostics reference](../ref/diagnostics.md#static-virtual-interface-member-diagnostics-gs0330gs0333).
 
 ### Private interface helper methods
 
-Interfaces may also declare `private` helper methods — instance or `private static` — that participate in the interface's own implementation but are NOT part of its public contract. A sibling default method on the same interface may call the helper (via implicit `this` or implicit static-self); implementers cannot see it and cannot override it. The helper carries an IL body on the interface TypeDef with `MethodAttributes.Private | HideBySig` (plus `Static` when combined with the static form) — it is non-virtual and never participates in the v-table.
+Interfaces may also declare `private` helper methods that participate in the interface's own implementation but are NOT part of its public contract. **Instance** helpers are written as `private func` directly inside the interface body; **static** helpers are written as `private func` inside the interface's `shared { … }` block (per the issue #865 revision of ADR-0089/0090). A sibling default method on the same interface may call the helper (via implicit `this` or implicit static-self); implementers cannot see it and cannot override it. The helper carries an IL body on the interface TypeDef with `MethodAttributes.Private | HideBySig` (plus `Static` when declared inside the `shared { … }` block) — it is non-virtual and never participates in the v-table.
 
 ```gsharp
 interface ICalculator {
@@ -120,7 +122,7 @@ Console.WriteLine(c.Double(5))    // 10
 Console.WriteLine(c.Triple(5))    // 15
 ```
 
-A `private` interface method MUST carry a body (`GS0335` otherwise — abstract private helpers do not make sense because no implementer can supply them). External code calling the helper through an interface receiver triggers `GS0334`. An implementer attempting to declare a same-signature method clashing with the helper triggers `GS0336`. Both modifier orderings parse: `private static func` and `static private func`. See the [diagnostics reference](../ref/diagnostics.md#private-interface-helper-diagnostics-gs0334gs0337) for the full GS0334–GS0337 family.
+A `private` interface method MUST carry a body (`GS0335` otherwise — abstract private helpers do not make sense because no implementer can supply them). External code calling the helper through an interface receiver triggers `GS0334`. An implementer attempting to declare a same-signature method clashing with the helper triggers `GS0336`. Static private helpers are written as `private func` inside the interface's `shared { … }` block (the same block that hosts static-virtual members per ADR-0089). See the [diagnostics reference](../ref/diagnostics.md#private-interface-helper-diagnostics-gs0334gs0337) for the full GS0334–GS0337 family.
 
 ### Explicit-base interface calls
 

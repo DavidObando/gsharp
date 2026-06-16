@@ -38,7 +38,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Inline structs | Supported | Supported | Exactly one field; participates in structural equality. |
 | Classes and primary constructors | Supported | Partially supported | Evaluator supports G# classes; CLR base initializer modeling is limited. |
 | Explicit class `init` constructors | Supported | Supported | G# class constructors are parsed, bound, and evaluated. |
-| Interfaces | Supported | Supported for checking/upcasts | Default-interface methods (ADR-0085), static-virtual interface members (ADR-0089), `private` interface helper methods (ADR-0090 / issue #756), and the explicit-base interface call syntax `base[IFoo].M(...)` for DIM diamond disambiguation (ADR-0091 / issue #757) are supported. |
+| Interfaces | Supported | Supported for checking/upcasts | Default-interface methods (ADR-0085), static-virtual interface members declared inside the interface's `shared { … }` block (ADR-0089, revised by issue #865), `private` interface helper methods (ADR-0090 / issue #756) — instance helpers in the interface body, static helpers as `private func` inside the interface's `shared { … }` block — and the explicit-base interface call syntax `base[IFoo].M(...)` for DIM diamond disambiguation (ADR-0091 / issue #757) are supported. |
 | Properties | Supported | Supported | Auto/computed and static/shared forms are represented. |
 | Events | Supported | Supported | G# and CLR event subscription paths exist. |
 | Static/shared members | Supported | Supported | Declared in a `shared { ... }` block. |

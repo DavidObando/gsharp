@@ -35,7 +35,9 @@ public class StaticVirtualInterfaceMembersEmitTests
             import System
 
             sealed interface IAdd {
-                static func Add(a int32, b int32) int32
+                shared {
+                    func Add(a int32, b int32) int32
+                }
             }
             """;
 
@@ -88,7 +90,9 @@ public class StaticVirtualInterfaceMembersEmitTests
             import System
 
             sealed interface IZero {
-                static func Zero() int32 { return 0 }
+                shared {
+                    func Zero() int32 { return 0 }
+                }
             }
             """;
 
@@ -140,7 +144,9 @@ public class StaticVirtualInterfaceMembersEmitTests
             import System
 
             sealed interface IAdd {
-                static func Add(a int32, b int32) int32
+                shared {
+                    func Add(a int32, b int32) int32
+                }
             }
 
             class Adder : IAdd {
@@ -220,7 +226,9 @@ public class StaticVirtualInterfaceMembersEmitTests
             import System
 
             sealed interface IAdd {
-                static func Add(a int32, b int32) int32
+                shared {
+                    func Add(a int32, b int32) int32
+                }
             }
 
             class Adder : IAdd {
@@ -254,7 +262,9 @@ public class StaticVirtualInterfaceMembersEmitTests
             import System
 
             sealed interface IGreet {
-                static func Hello() string { return "default-hello" }
+                shared {
+                    func Hello() string { return "default-hello" }
+                }
             }
 
             class Quiet : IGreet {
@@ -285,7 +295,9 @@ public class StaticVirtualInterfaceMembersEmitTests
             import System
 
             public sealed interface IAdd {
-                static func Add(a int32, b int32) int32
+                shared {
+                    func Add(a int32, b int32) int32
+                }
             }
 
             public class Adder : IAdd {

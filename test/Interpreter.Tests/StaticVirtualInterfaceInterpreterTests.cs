@@ -33,7 +33,9 @@ public class StaticVirtualInterfaceInterpreterTests
             import System
 
             sealed interface IAdd {
-                static func Add(a int32, b int32) int32
+                shared {
+                    func Add(a int32, b int32) int32
+                }
             }
 
             class Adder : IAdd {
@@ -59,7 +61,9 @@ public class StaticVirtualInterfaceInterpreterTests
             import System
 
             sealed interface IGreet {
-                static func Hello() string { return "default-hello" }
+                shared {
+                    func Hello() string { return "default-hello" }
+                }
             }
 
             class Quiet : IGreet {
@@ -82,7 +86,9 @@ public class StaticVirtualInterfaceInterpreterTests
             import System
 
             sealed interface IGreet {
-                static func Hello() string { return "default-hello" }
+                shared {
+                    func Hello() string { return "default-hello" }
+                }
             }
 
             class Loud : IGreet {
@@ -108,7 +114,9 @@ public class StaticVirtualInterfaceInterpreterTests
             import System
 
             sealed interface IAdd {
-                static func Add(a int32, b int32) int32
+                shared {
+                    func Add(a int32, b int32) int32
+                }
             }
 
             class Plus : IAdd {
