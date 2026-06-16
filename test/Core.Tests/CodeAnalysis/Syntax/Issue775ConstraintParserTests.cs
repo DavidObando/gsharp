@@ -79,7 +79,7 @@ public class Issue775ConstraintParserTests
     {
         const string source = """
             package P
-            sealed interface IFoo { func M() }
+            sealed interface IFoo { func M(); }
             func F[T IFoo class](x T) T { return x }
             """;
         var tree = SyntaxTree.Parse(source);

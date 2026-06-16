@@ -18,6 +18,8 @@ Issue #727 (under parent #706) requires that G# emit real CLR P/Invoke metadata 
 
 A P/Invoke declaration is **an ordinary `func` declaration** annotated with `@DllImport(...)` whose **body marker is `;`** (semicolon) instead of `{ ... }`. The semicolon **is** the "no body" marker — there is no new `extern` keyword.
 
+> **Note (issue #881):** the `;` no-body marker is no longer P/Invoke-specific. Issue #881 makes `;` the **universal** no-body marker for every body-less `func`, including interface abstract methods and interface `shared { … }` abstract static slots (see ADR-0085's "Revision (issue #881)"). P/Invoke's surface is unchanged; it is now the norm rather than the exception.
+
 ```gs
 package P
 import System.Runtime.InteropServices

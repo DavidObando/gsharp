@@ -259,7 +259,7 @@ public class ReifiedGenericsReflectionTests
             package P
             import System
             interface IBox[T any] {
-                func Get() T
+                func Get() T;
             }
             class IntBox(value int32) : IBox[int32] {
                 func Get() int32 { return value }
@@ -416,7 +416,7 @@ public class ReifiedGenericsReflectionTests
             package P
             import System
             interface IBox[T any] {
-                func Get() T
+                func Get() T;
             }
             class IntBox(value int32) : IBox[int32] {
                 func Get() int32 { return value }

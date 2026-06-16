@@ -21,7 +21,7 @@ public class StaticVirtualInterfaceParserTests
     [Fact]
     public void Abstract_SharedFunc_Parses()
     {
-        const string source = "package P\ninterface IFoo {\n  shared {\n    func F() int32\n  }\n}\n";
+        const string source = "package P\ninterface IFoo {\n  shared {\n    func F() int32;\n  }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
@@ -37,7 +37,7 @@ public class StaticVirtualInterfaceParserTests
     [Fact]
     public void Abstract_SharedFunc_CarriesStaticModifierInSyntax()
     {
-        const string source = "package P\ninterface IFoo {\n  shared {\n    func F() int32\n  }\n}\n";
+        const string source = "package P\ninterface IFoo {\n  shared {\n    func F() int32;\n  }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
@@ -69,9 +69,9 @@ public class StaticVirtualInterfaceParserTests
             package P
             interface IBoth {
                 shared {
-                    func S() int32
+                    func S() int32;
                 }
-                func I() int32
+                func I() int32;
             }
             """;
         var tree = SyntaxTree.Parse(source);

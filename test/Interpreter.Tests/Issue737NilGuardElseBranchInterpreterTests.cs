@@ -133,7 +133,7 @@ public class Issue737NilGuardElseBranchInterpreterTests
         // surface differs from the emitter's.
         var source = """
             interface IGreeter {
-                func Greet() string
+                func Greet() string;
             }
 
             class Hello : IGreeter {

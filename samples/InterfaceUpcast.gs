@@ -9,7 +9,7 @@ package GSharp.Samples.InterfaceUpcast
 import System
 
 interface IGreeter {
-    func Greet() string
+    func Greet() string;
 }
 
 class English(Name string) : IGreeter {

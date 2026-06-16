@@ -19,7 +19,7 @@ import System
 // implementers may override but don't have to.
 sealed interface IAdd {
     shared {
-        func Add(a int32, b int32) int32
+        func Add(a int32, b int32) int32;
 
         func Zero() int32 {
             return 0

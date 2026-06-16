@@ -154,7 +154,7 @@ Eq([]int32{1}, []int32{2})
     {
         var source = @"
 sealed interface IShape {
-    func Area() int32
+    func Area() int32;
 }
 
 class Square : IShape {
@@ -174,7 +174,7 @@ AreaOf(Square{})
     {
         var source = @"
 sealed interface IShape {
-    func Area() int32
+    func Area() int32;
 }
 
 class NotAShape {}
@@ -191,7 +191,7 @@ AreaOf[NotAShape](NotAShape{})
     {
         var source = @"
 interface IShape {
-    func Area() int32
+    func Area() int32;
 }
 
 func AreaOf[T IShape](x T) int32 { return x.Area() }

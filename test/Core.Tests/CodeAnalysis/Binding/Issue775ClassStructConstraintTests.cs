@@ -132,7 +132,7 @@ func Bad[T struct new()](x T) T { return x }
     {
         var source = @"
 sealed interface IShape {
-    func Area() int32
+    func Area() int32;
 }
 
 class Square : IShape {
@@ -176,7 +176,7 @@ Eq(3, 3)
     {
         var source = @"
 sealed interface IShape {
-    func Area() int32
+    func Area() int32;
 }
 
 class Square : IShape {

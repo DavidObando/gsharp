@@ -79,7 +79,7 @@ public class Issue671UserTypeAsClrGenericArgTests
             import System.Collections.Generic
 
             interface IMyType {
-                func GetName() string
+                func GetName() string;
             }
 
             class Container {
@@ -402,7 +402,7 @@ public class Issue671UserTypeAsClrGenericArgTests
             import System.Collections.Generic
 
             interface IMyType {
-                func GetName() string
+                func GetName() string;
             }
 
             func main() {

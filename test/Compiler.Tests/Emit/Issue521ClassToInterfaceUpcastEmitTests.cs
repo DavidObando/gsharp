@@ -37,7 +37,7 @@ public class Issue521ClassToInterfaceUpcastEmitTests
             import System
 
             interface IGreeter {
-                func Greet(name string) string
+                func Greet(name string) string;
             }
 
             class HelloGreeter : IGreeter {
@@ -63,7 +63,7 @@ public class Issue521ClassToInterfaceUpcastEmitTests
             import System
 
             interface IGreeter {
-                func Greet(name string) string
+                func Greet(name string) string;
             }
 
             class HelloGreeter : IGreeter {
@@ -92,7 +92,7 @@ public class Issue521ClassToInterfaceUpcastEmitTests
             import System
 
             interface IGreeter {
-                func Greet(name string) string
+                func Greet(name string) string;
             }
 
             class HelloGreeter : IGreeter {
@@ -122,7 +122,7 @@ public class Issue521ClassToInterfaceUpcastEmitTests
             import System
 
             interface IGreeter {
-                func Greet(name string) string
+                func Greet(name string) string;
             }
 
             class HelloGreeter : IGreeter {

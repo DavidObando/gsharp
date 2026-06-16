@@ -49,7 +49,7 @@ public class Issue671ConstructionCallEmitTests
             import System.Collections.Generic
 
             interface IMyGs {
-                func GetName() string
+                func GetName() string;
             }
 
             let xs = List[IMyGs]()

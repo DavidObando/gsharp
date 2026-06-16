@@ -504,7 +504,7 @@ class Dog(Pet string) : Animal(Pet, Pet) {}
         // Issue #306: GS0213 when base-ctor args are given but there is no base class.
         var source = @"
 interface IShape {
-    func Area() int32
+    func Area() int32;
 }
 class Square(Side int32) : IShape(Side) {
     func Area() int32 { return Side * Side }

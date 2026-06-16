@@ -80,6 +80,7 @@ removed and a fresh `0.2` snapshot is cut from the live docs.
     interface `shared { … }` block. The CLR emit shape, interpreter
     dispatch, and binder semantics are unchanged — this is a front-end
     surface change only.
+- **Body-less `func` now requires `;` (breaking).** A `func` declaration without a `{ … }` block is terminated by a required `;` — the universal no-body marker (issue #881, revision of [ADR-0085](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0085-default-interface-methods-implementation.md)). This already held for P/Invoke (`func getpid() int32;`); it now also applies to abstract interface methods and abstract static-virtual slots inside an interface `shared { … }` block. The old terminator-less form (`func Area() float64`) is removed: a body-less interface `func` missing its `;` reports `GS0368`. A `func` carrying a body still takes no `;`. The binder, emitter, and interpreter are unchanged — this is a front-end surface change only.
 - **Native interop end-to-end.** P/Invoke via `@DllImport`
   ([ADR-0086](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0086-pinvoke-dllimport.md)),
   source-generator-shaped `@LibraryImport`

@@ -139,8 +139,8 @@ class Calc {
     {
         var source = @"
 interface IOps {
-    func op(x int32) int32
-    func op(x int32, y int32) int32
+    func op(x int32) int32;
+    func op(x int32, y int32) int32;
 }
 ";
         var result = Evaluate(source);

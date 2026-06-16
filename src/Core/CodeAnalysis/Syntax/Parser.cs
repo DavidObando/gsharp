@@ -2164,17 +2164,27 @@ public class Parser
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
         var type = ParseOptionalTypeClause();
 
-        // ADR-0085: interface methods MAY carry a body (default-interface
-        // method). When the body is absent, the method is abstract — the
-        // current shape from ADR-0018 Phase 3. When present, the body is
-        // bound through the normal class-method body pipeline and the
-        // emitter produces a CLR DIM (virtual, non-abstract). ADR-0089
-        // extends the same body-vs-no-body discriminator to static-virtual
-        // members.
+        // ADR-0085 (issue #881 revision): interface methods MAY carry a body
+        // (default-interface method). When the body is absent, the method is
+        // abstract — but it MUST be terminated with a ';' no-body marker, the
+        // universal bodyless-func form (matching P/Invoke, ADR-0086). When a
+        // body is present, it is bound through the normal class-method body
+        // pipeline and the emitter produces a CLR DIM (virtual, non-abstract);
+        // a bodied method takes no ';'. ADR-0089 extends the same
+        // body-vs-no-body discriminator to static-virtual (shared) members.
         BlockStatementSyntax body = null;
+        SyntaxToken semicolonBody = null;
         if (Current.Kind == SyntaxKind.OpenBraceToken)
         {
             body = ParseBlockStatement();
+        }
+        else if (Current.Kind == SyntaxKind.SemicolonToken)
+        {
+            semicolonBody = NextToken();
+        }
+        else
+        {
+            Diagnostics.ReportInterfaceMethodMissingSemicolon(identifier.Location, identifier.Text);
         }
 
         var decl = new FunctionDeclarationSyntax(
@@ -2190,6 +2200,7 @@ public class Parser
             type,
             body);
         decl.StaticModifier = staticModifier;
+        decl.SemicolonBodyToken = semicolonBody;
         return decl;
     }
 

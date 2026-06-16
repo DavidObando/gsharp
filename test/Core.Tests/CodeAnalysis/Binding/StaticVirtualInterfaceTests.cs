@@ -28,7 +28,7 @@ public class StaticVirtualInterfaceTests
         var source = @"
 sealed interface IZero {
     shared {
-        func Zero() int32
+        func Zero() int32;
     }
 }
 ";
@@ -58,7 +58,7 @@ sealed interface IZero {
         var source = @"
 sealed interface IAdd {
     shared {
-        func Add(a int32, b int32) int32
+        func Add(a int32, b int32) int32;
     }
 }
 
@@ -78,7 +78,7 @@ class Adder : IAdd {
         var source = @"
 sealed interface IAdd {
     shared {
-        func Add(a int32, b int32) int32
+        func Add(a int32, b int32) int32;
     }
 }
 
@@ -95,7 +95,7 @@ class BrokenAdder : IAdd {
         var source = @"
 sealed interface IAdd {
     shared {
-        func Add(a int32, b int32) int32
+        func Add(a int32, b int32) int32;
     }
 }
 
@@ -154,7 +154,7 @@ func Use[T IFactory]() int32 { return T.Make() }
         var source = @"
 sealed interface IAdd {
     shared {
-        func Add(a int32, b int32) int32
+        func Add(a int32, b int32) int32;
     }
 }
 
@@ -181,7 +181,7 @@ Sum(Adder{}, 3, 4)
         var source = @"
 sealed interface IAdd {
     shared {
-        func Add(a int32, b int32) int32
+        func Add(a int32, b int32) int32;
     }
 }
 

@@ -132,7 +132,7 @@ func (p Point) Sum() int32 { return 2 }
     {
         var source = @"
 interface I {
-    func F() int32
+    func F() int32;
 }
 
 func (i I) G() int32 { return 1 }

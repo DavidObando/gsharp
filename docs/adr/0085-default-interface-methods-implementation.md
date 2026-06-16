@@ -6,6 +6,19 @@
 - **Supersedes**: ADR-0018 (interface defaults — deferred). The deferral decision in ADR-0018 is reversed by this ADR; the deferral rationale (diamond complexity, data/behavior separation) is acknowledged but the implementation cost is now justified by concrete pull (issue #726 / parent #706: ADT-style sealed-hierarchy default behavior and binary-compatible interface evolution).
 - **Related**: ADR-0017 (method virtuality), ADR-0019 (extension functions), ADR-0051 (interface properties), ADR-0078 (declaration-head grammar).
 
+## Revision (issue #881)
+
+This ADR originally let an abstract (body-less) interface method end at the newline with no terminator (`func Area() int32`), while a P/Invoke function (ADR-0086) required a trailing `;` as its no-body marker (`func getpid() int32;`). Issue #881 removes that inconsistency: **a `func` declaration without a `{ … }` body is now terminated by a required `;`** — the universal no-body marker for every `func`. A `func` that carries a `{ … }` body still takes no `;`.
+
+The change is a **breaking change** and is purely front-end (parser surface): the binder, CLR emit, and interpreter are unaffected (they read the body-present flag, not the terminator).
+
+- Abstract instance method: `func Area() int32` → `func Area() int32;`.
+- Default instance method (has a body): unchanged — `func Describe() string { … }` (no `;`).
+- Abstract static slot inside an interface `shared { … }` block (ADR-0089): `func Add(a int32, b int32) int32` → `func Add(a int32, b int32) int32;`. A default static slot with a body is unchanged.
+- A body-less interface method missing its `;` now reports **GS0368** (parse error).
+
+The examples in this ADR below have been updated to the `;`-terminated surface.
+
 ## Context
 
 ADR-0018 deferred default interface methods (DIM) to "Phase 6 or later" and required a concrete user request to reopen the question. Issue #706 (and the Oats sweep that produced ADRs 0070–0084) surfaced two such requests:
@@ -23,7 +36,7 @@ GSharp interface declarations may carry **instance-virtual default method bodies
 
 ```gs
 interface IShape {
-    func Area() int32                     // abstract — implementor must provide
+    func Area() int32;                    // abstract — implementor must provide
     func Describe() string {              // default — implementor inherits unless overridden
         return "shape with area $(Area())"
     }
@@ -40,7 +53,7 @@ class LabeledSquare(Side int32, Label string) : IShape {
 }
 ```
 
-A method declared inside `interface { … }` is **abstract when the body is omitted** and a **default when the body is present**. The `default` keyword is **not** introduced — body-vs-no-body is the discriminator. This matches the parser's existing shape (a `FunctionDeclarationSyntax` with a non-null `Body`) and avoids a new contextual keyword.
+A method declared inside `interface { … }` is **abstract when the body is omitted** and a **default when the body is present**. The `default` keyword is **not** introduced — body-vs-no-body is the discriminator. An abstract (body-less) method is terminated by a required `;` (issue #881 — the universal no-body marker for funcs); a default method ends with its `{ … }` block and takes no `;`. This matches the parser's existing shape (a `FunctionDeclarationSyntax` with a non-null `Body`) and avoids a new contextual keyword.
 
 ### Conflict resolution (diamonds)
 

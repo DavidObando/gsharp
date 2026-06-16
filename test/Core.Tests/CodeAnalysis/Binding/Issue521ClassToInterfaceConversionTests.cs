@@ -46,7 +46,7 @@ public class Issue521ClassToInterfaceConversionTests
     {
         var source = @"
 interface IGreeter {
-    func Greet(name string) string
+    func Greet(name string) string;
 }
 
 class HelloGreeter : IGreeter {
@@ -66,7 +66,7 @@ g.Greet(""world"")
     {
         var source = @"
 interface IGreeter {
-    func Greet(name string) string
+    func Greet(name string) string;
 }
 
 class HelloGreeter : IGreeter {
@@ -89,7 +89,7 @@ Run(HelloGreeter{}, ""ada"")
     {
         var source = @"
 interface IGreeter {
-    func Greet(name string) string
+    func Greet(name string) string;
 }
 
 class HelloGreeter : IGreeter {
@@ -112,7 +112,7 @@ Make().Greet(""bob"")
     {
         var source = @"
 interface IGreeter {
-    func Greet(name string) string
+    func Greet(name string) string;
 }
 
 class HelloGreeter : IGreeter {

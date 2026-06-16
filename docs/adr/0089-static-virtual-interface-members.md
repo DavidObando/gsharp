@@ -18,6 +18,8 @@ The change is a **breaking change** and is purely front-end (parser surface): th
 
 The body of this ADR below has been updated to reflect the `shared`-block surface. Sections describing CLR metadata, dispatch, the interpreter, and the bound tree are unaffected by the revision.
 
+**Further revision (issue #881):** an abstract (body-less) static slot inside the interface `shared { … }` block now requires a terminating `;` — the universal no-body marker for funcs (`func Add(a T, b T) T;`). A default slot with a `{ … }` body is unchanged. See ADR-0085's "Revision (issue #881)" section.
+
 
 ## Context
 
@@ -38,7 +40,7 @@ package GSharp.Samples.StaticVirtualInterfaces
 
 sealed interface IAdd[T] {
     shared {
-        func Add(a T, b T) T
+        func Add(a T, b T) T;
         func Zero() T {
             return Add(default(T), default(T))
         }

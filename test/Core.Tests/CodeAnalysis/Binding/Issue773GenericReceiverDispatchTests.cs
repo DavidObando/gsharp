@@ -211,7 +211,7 @@ package P
 import System
 
 sealed interface ITagged {
-    func Tag() string
+    func Tag() string;
 }
 
 func (self T) Branded[T ITagged]() string {
@@ -233,7 +233,7 @@ package P
 import System
 
 sealed interface ITagged {
-    func Tag() string
+    func Tag() string;
 }
 
 class Card : ITagged {
