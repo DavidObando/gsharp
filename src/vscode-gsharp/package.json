@@ -353,7 +353,7 @@
     "@types/vscode": "^1.85.0",
     "@types/semver": "^7.5.0",
     "@vscode/test-electron": "^2.3.8",
-    "@vscode/vsce": "^2.22.0",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
     "eslint": "^8.56.0",
     "@typescript-eslint/eslint-plugin": "^8.60.0",
