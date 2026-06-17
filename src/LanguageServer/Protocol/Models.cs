@@ -41,7 +41,19 @@ public sealed class DocumentUri : IEquatable<DocumentUri>
         {
             try
             {
-                return new Uri(this.uri).LocalPath;
+                var local = new Uri(this.uri).LocalPath;
+
+                // On Windows, VS Code may percent-encode the drive-letter colon
+                // (e.g. "file:///c%3A/Users/..."). System.Uri decodes %3A back to
+                // ':' but keeps a leading '/' that is only valid on Unix, producing
+                // "/c:/Users/..." instead of "c:\Users\...". Strip it so the path
+                // is a valid Windows drive-rooted path.
+                if (local.Length >= 3 && local[0] == '/' && char.IsLetter(local[1]) && local[2] == ':')
+                {
+                    local = local.Substring(1);
+                }
+
+                return local;
             }
             catch (UriFormatException)
             {
