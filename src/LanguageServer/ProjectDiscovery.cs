@@ -107,6 +107,13 @@ public static class ProjectDiscovery
                 continue;
             }
 
+            // MSBuild on Windows may quote entire switch lines when values contain
+            // spaces (e.g. "/r:C:\Program Files\..."). Strip outer quotes first.
+            if (trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[trimmed.Length - 1] == '"')
+            {
+                trimmed = trimmed.Substring(1, trimmed.Length - 2);
+            }
+
             if (!(trimmed[0] == '/' || trimmed[0] == '-'))
             {
                 continue;

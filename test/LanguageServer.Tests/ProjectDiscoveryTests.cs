@@ -277,6 +277,35 @@ public class ProjectDiscoveryTests
         }
     }
 
+    [Fact]
+    public void ParseReferencesFromResponseFile_HandlesOuterQuotedLines()
+    {
+        // On Windows, MSBuild wraps the entire switch in quotes when the path
+        // contains spaces (e.g. "C:\Program Files\...").
+        var tempPath = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllLines(tempPath, new[]
+            {
+                "/out:foo.dll",
+                "\"/r:/path with spaces/A.dll\"",
+                "\"-reference:/path with spaces/B.dll\"",
+                "/r:C/plain/path/C.dll",
+            });
+
+            var refs = ProjectDiscovery.ParseReferencesFromResponseFile(tempPath);
+
+            Assert.Equal(3, refs.Count);
+            Assert.Equal("/path with spaces/A.dll", refs[0]);
+            Assert.Equal("/path with spaces/B.dll", refs[1]);
+            Assert.Equal("C/plain/path/C.dll", refs[2]);
+        }
+        finally
+        {
+            File.Delete(tempPath);
+        }
+    }
+
     private static string FindSamplesDir()
     {
         var dir = Directory.GetCurrentDirectory();
