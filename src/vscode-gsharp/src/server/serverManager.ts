@@ -40,6 +40,7 @@ import {
   getServerPath,
   DotnetRuntimeMissingError,
   DOTNET_DOWNLOAD_URL,
+  ResolvedDotnetRuntime,
 } from '../utils/dotnetResolver';
 import { getServerOptions } from './serverOptions';
 import { Logger } from '../utils/logger';
@@ -122,9 +123,9 @@ export class ServerManager {
     try {
       this.setStatus('starting');
 
-      let dotnetPath: string;
+      let dotnetRuntime: ResolvedDotnetRuntime;
       try {
-        dotnetPath = await resolveDotnetRuntime(this.context);
+        dotnetRuntime = await resolveDotnetRuntime(this.context, this.logger);
       } catch (err) {
         if (err instanceof DotnetRuntimeMissingError) {
           this.reportMissingRuntime(err);
@@ -132,6 +133,7 @@ export class ServerManager {
         }
         throw err;
       }
+      const dotnetPath = dotnetRuntime.dotnetPath;
 
       const serverPath = getServerPath(this.context);
       const options = getServerOptions();
@@ -155,6 +157,8 @@ export class ServerManager {
 
       const env: NodeJS.ProcessEnv = {
         ...process.env,
+        // Pin the host to the resolved/acquired runtime (DOTNET_ROOT, DOTNET_MULTILEVEL_LOOKUP).
+        ...dotnetRuntime.env,
         DOTNET_EnableDiagnostics: '0',
         DOTNET_CLI_UI_LANGUAGE: 'en',
         DOTNET_NOLOGO: '1',
@@ -306,7 +310,8 @@ export class ServerManager {
     this.logger.error(err.message);
 
     const message =
-      `${err.message} Install the .NET ${err.requiredVersion} runtime, then run ` +
+      `${err.message} Automatic acquisition via the .NET Install Tool did not succeed ` +
+      `(you may be offline). Install the .NET ${err.requiredVersion} runtime manually, then run ` +
       `"GSharp: Restart Language Server".`;
     void vscode.window
       .showErrorMessage(message, 'Install .NET', 'Show Output')

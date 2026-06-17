@@ -23,6 +23,7 @@ All notable changes to the GSharp VS Code extension will be documented in this f
 - CodeLens (reference counts, including on members of structs, interfaces, and enums; 0-refs and stale-tree fixes)
 - Workspace symbol search
 - Code snippets covering the current grammar: `pkg`, `fn`, `afn`, `extfn`, `lambda`, `main`, `if`, `ife`, `for`, `forin`, `while`, `class`, `classp`, `struct`, `datastruct`, `inlinestruct`, `record`, `enum`, `interface`, `delegate`, `prop`, `autoprop`, `event`, `shared`, `match`, `matchexpr`, `ternary`, `try`, `defer`, `go`, `scope`, `select`, `chan`, `using`, `refparam`, `outparam`, `letref`, `doc`, `ann`
+- Automatic .NET runtime acquisition: when no compatible `net10.0` runtime is found on PATH or via the .NET Install Tool, the extension now downloads one on demand through the Install Tool's `dotnet.acquire` API (mirroring the C# extension) and pins the server to it via `DOTNET_ROOT`/`DOTNET_MULTILEVEL_LOOKUP`, so the language server works out of the box on machines that only have an older runtime. The actionable "Install .NET" prompt is now a last resort, shown only when automatic acquisition cannot complete (e.g. offline with nothing cached).
 - Debug configuration provider (gsharp → coreclr)
 - Auto-generate launch.json and tasks.json
 - Test explorer integration
