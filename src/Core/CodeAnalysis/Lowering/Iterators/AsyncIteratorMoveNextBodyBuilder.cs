@@ -367,6 +367,50 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 return node;
             }
 
+            // Issue #887: an index assignment (`arr[i] = v`, `m[k] = v`) whose
+            // target temp is hoisted into a state-machine field can't reference
+            // the field through its VariableSymbol target. Switch to the
+            // expression target form reading the hoisted field (same fix as
+            // closure boxing, issue #618).
+            protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
+            {
+                if (node.Target != null && ctx.fieldMap.TryGetValue(node.Target, out var targetField))
+                {
+                    return BoundIndexAssignmentExpression.WithExpressionTarget(
+                        null,
+                        ctx.ReadField(targetField),
+                        RewriteExpression(node.Index),
+                        RewriteExpression(node.Value),
+                        node.Type);
+                }
+
+                return base.RewriteIndexAssignmentExpression(node);
+            }
+
+            // Issue #887: same fix for CLR-indexer writes (e.g. `dict["k"] = v`
+            // or `psi.Environment["k"] = v`) whose target temp is hoisted.
+            protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
+            {
+                if (node.Target != null && ctx.fieldMap.TryGetValue(node.Target, out var targetField))
+                {
+                    var args = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                    foreach (var argument in node.Arguments)
+                    {
+                        args.Add(RewriteExpression(argument));
+                    }
+
+                    return BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                        null,
+                        ctx.ReadField(targetField),
+                        node.Indexer,
+                        args.MoveToImmutable(),
+                        RewriteExpression(node.Value),
+                        node.Type);
+                }
+
+                return base.RewriteClrIndexAssignmentExpression(node);
+            }
+
             protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
             {
                 yieldIndex++;

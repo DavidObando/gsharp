@@ -348,6 +348,64 @@ public static class IteratorMoveNextBodyBuilder
 
             return base.RewriteVariableDeclaration(node);
         }
+
+        // Issue #887: an index assignment (`arr[i] = v`, `m[k] = v`) whose
+        // target temp is hoisted into a state-machine field can't reference the
+        // field through its VariableSymbol target. Switch to the expression
+        // target form reading the hoisted field (same fix as closure boxing,
+        // issue #618).
+        protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
+        {
+            if (node.Target != null && this.fieldMap.TryGetValue(node.Target, out var targetField))
+            {
+                return BoundIndexAssignmentExpression.WithExpressionTarget(
+                    null,
+                    this.ReadHoistedField(targetField),
+                    this.RewriteExpression(node.Index),
+                    this.RewriteExpression(node.Value),
+                    node.Type);
+            }
+
+            return base.RewriteIndexAssignmentExpression(node);
+        }
+
+        // Issue #887: same fix for CLR-indexer writes (e.g. `dict["k"] = v` or
+        // `psi.Environment["k"] = v`) whose target temp is hoisted into a field.
+        protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
+        {
+            if (node.Target != null && this.fieldMap.TryGetValue(node.Target, out var targetField))
+            {
+                return BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                    null,
+                    this.ReadHoistedField(targetField),
+                    node.Indexer,
+                    this.RewriteArguments(node.Arguments),
+                    this.RewriteExpression(node.Value),
+                    node.Type);
+            }
+
+            return base.RewriteClrIndexAssignmentExpression(node);
+        }
+
+        private ImmutableArray<BoundExpression> RewriteArguments(ImmutableArray<BoundExpression> arguments)
+        {
+            var builder = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+            foreach (var argument in arguments)
+            {
+                builder.Add(this.RewriteExpression(argument));
+            }
+
+            return builder.MoveToImmutable();
+        }
+
+        private BoundExpression ReadHoistedField(FieldSymbol field)
+        {
+            return new BoundFieldAccessExpression(
+                null,
+                new BoundVariableExpression(null, this.thisParameter),
+                this.smClass,
+                field);
+        }
     }
 
     public static IteratorMoveNextBody Build(
@@ -542,6 +600,50 @@ public static class IteratorMoveNextBodyBuilder
             }
 
             return base.RewriteVariableDeclaration(node);
+        }
+
+        // Issue #887: an index assignment (`arr[i] = v`, `m[k] = v`) whose
+        // target temp is hoisted into a state-machine field can't reference the
+        // field through its VariableSymbol target. Switch to the expression
+        // target form reading the hoisted field (same fix as closure boxing,
+        // issue #618).
+        protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
+        {
+            if (node.Target != null && this.fieldMap.TryGetValue(node.Target, out var targetField))
+            {
+                return BoundIndexAssignmentExpression.WithExpressionTarget(
+                    null,
+                    this.FieldRead(targetField),
+                    this.RewriteExpression(node.Index),
+                    this.RewriteExpression(node.Value),
+                    node.Type);
+            }
+
+            return base.RewriteIndexAssignmentExpression(node);
+        }
+
+        // Issue #887: same fix for CLR-indexer writes (e.g. `dict["k"] = v` or
+        // `psi.Environment["k"] = v`) whose target temp is hoisted into a field.
+        protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
+        {
+            if (node.Target != null && this.fieldMap.TryGetValue(node.Target, out var targetField))
+            {
+                var args = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                foreach (var argument in node.Arguments)
+                {
+                    args.Add(this.RewriteExpression(argument));
+                }
+
+                return BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                    null,
+                    this.FieldRead(targetField),
+                    node.Indexer,
+                    args.MoveToImmutable(),
+                    this.RewriteExpression(node.Value),
+                    node.Type);
+            }
+
+            return base.RewriteClrIndexAssignmentExpression(node);
         }
 
         protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)

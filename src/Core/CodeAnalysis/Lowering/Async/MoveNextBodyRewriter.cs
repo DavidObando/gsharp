@@ -497,6 +497,75 @@ public static class MoveNextBodyRewriter
                 return node;
             }
 
+            protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
+            {
+                ImmutableArray<BoundExpression>.Builder argBuilder = null;
+                for (var i = 0; i < node.Arguments.Length; i++)
+                {
+                    var oldArg = node.Arguments[i];
+                    var newArg = RewriteExpression(oldArg);
+                    if (newArg != oldArg && argBuilder == null)
+                    {
+                        argBuilder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                        for (var j = 0; j < i; j++)
+                        {
+                            argBuilder.Add(node.Arguments[j]);
+                        }
+                    }
+
+                    if (argBuilder != null)
+                    {
+                        argBuilder.Add(newArg);
+                    }
+                }
+
+                var rewrittenArgs = argBuilder?.ToImmutable() ?? node.Arguments;
+                var rewrittenValue = RewriteExpression(node.Value);
+
+                // If the target (e.g. a Dictionary) is hoisted into a
+                // state-machine field, the BoundClrIndexAssignmentExpression
+                // shape can't reference the field directly (Target is a
+                // VariableSymbol the base rewriter never visits). Mirror the
+                // closure-boxing fix (issue #618): switch to the expression
+                // target form reading the hoisted field. The target is a
+                // reference type, so writing the indexer through the field's
+                // value mutates the same underlying object.
+                if (node.Target != null && TryGetHoistedField(node.Target, out var targetField))
+                {
+                    return BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                        null,
+                        ctx.ReadField(targetField),
+                        node.Indexer,
+                        rewrittenArgs,
+                        rewrittenValue,
+                        node.Type);
+                }
+
+                if (node.TargetExpression != null)
+                {
+                    var rewrittenTarget = RewriteExpression(node.TargetExpression);
+                    if (rewrittenTarget != node.TargetExpression || argBuilder != null || rewrittenValue != node.Value)
+                    {
+                        return BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                            null,
+                            rewrittenTarget,
+                            node.Indexer,
+                            rewrittenArgs,
+                            rewrittenValue,
+                            node.Type);
+                    }
+
+                    return node;
+                }
+
+                if (argBuilder != null || rewrittenValue != node.Value)
+                {
+                    return new BoundClrIndexAssignmentExpression(null, node.Target, node.Indexer, rewrittenArgs, rewrittenValue, node.Type);
+                }
+
+                return node;
+            }
+
             protected override BoundStatement RewriteTryStatement(BoundTryStatement node)
             {
                 // The emitter stores the caught exception into a LOCAL slot via
