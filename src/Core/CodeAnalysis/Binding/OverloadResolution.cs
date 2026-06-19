@@ -100,6 +100,19 @@ internal static class OverloadResolution
         /// matching C#.
         /// </summary>
         InterpolatedStringToFormattable = 8,
+
+        /// <summary>
+        /// Issue #889: a value-returning <c>func</c>/arrow literal (whose
+        /// natural CLR type is a <c>Func&lt;...&gt;</c>) converting to a
+        /// void-returning delegate parameter (<c>System.Action</c> /
+        /// <c>Action&lt;...&gt;</c> or a named void delegate) by discarding the
+        /// trailing value. Ranked last (worst) so that, when both a matching
+        /// <c>Func&lt;...&gt;</c> overload and an <c>Action</c> overload are
+        /// applicable, the value-preserving <c>Func</c> overload still wins —
+        /// matching C#'s preference. Only the binder's void-izing rebind
+        /// materializes this conversion.
+        /// </summary>
+        LambdaToVoidDelegate = 9,
     }
 
     /// <summary>
@@ -308,6 +321,18 @@ internal static class OverloadResolution
             && InterpolatedStringHandlerInfo.IsHandlerType(target))
         {
             return ImplicitConversionKind.InterpolatedStringHandler;
+        }
+
+        // Issue #889: a value-returning func/arrow literal (whose natural CLR
+        // type is a Func<...>) is applicable to a void-returning delegate
+        // parameter (System.Action / Action<...> / a named void delegate) by
+        // discarding the trailing value. Ranked lowest so a value-preserving
+        // Func<...> overload always wins when both are applicable. The binder's
+        // void-izing rebind (RebindFunctionLiteralDelegateArguments) materializes
+        // the actual discard for the selected literal argument.
+        if (IsValueReturningDelegateToVoidDelegate(target, source))
+        {
+            return ImplicitConversionKind.LambdaToVoidDelegate;
         }
 
         return ImplicitConversionKind.None;
@@ -765,6 +790,71 @@ internal static class OverloadResolution
     /// <returns>Whether the exception represents a tolerable load failure.</returns>
     private static bool IsMetadataLoadFailure(Exception ex) =>
         ClrTypeUtilities.IsMetadataLoadFailure(ex);
+
+    /// <summary>
+    /// Issue #889: determines whether <paramref name="source"/> is a delegate
+    /// type that returns a value (e.g. <c>Func&lt;...&gt;</c>) whose parameter
+    /// list matches a void-returning delegate <paramref name="target"/> (e.g.
+    /// <c>System.Action</c> / <c>Action&lt;...&gt;</c>). Parameter and return
+    /// types are compared by name to remain safe across reflection contexts
+    /// (the target may be loaded through a <c>MetadataLoadContext</c> while the
+    /// literal's natural <c>Func&lt;...&gt;</c> is a live-runtime type).
+    /// </summary>
+    /// <param name="target">The candidate void-returning delegate parameter type.</param>
+    /// <param name="source">The argument's natural delegate type.</param>
+    /// <returns><see langword="true"/> when the discard conversion applies.</returns>
+    private static bool IsValueReturningDelegateToVoidDelegate(Type target, Type source)
+    {
+        if (!ClrTypeUtilities.IsDelegateType(target) || !ClrTypeUtilities.IsDelegateType(source))
+        {
+            return false;
+        }
+
+        MethodInfo targetInvoke;
+        MethodInfo sourceInvoke;
+        try
+        {
+            targetInvoke = target.GetMethod("Invoke");
+            sourceInvoke = source.GetMethod("Invoke");
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        if (targetInvoke is null || sourceInvoke is null)
+        {
+            return false;
+        }
+
+        // Target must return void; source must return a value.
+        if (!string.Equals(targetInvoke.ReturnType.FullName, "System.Void", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (string.Equals(sourceInvoke.ReturnType.FullName, "System.Void", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var targetParams = targetInvoke.GetParameters();
+        var sourceParams = sourceInvoke.GetParameters();
+        if (targetParams.Length != sourceParams.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < targetParams.Length; i++)
+        {
+            if (!ClrTypeUtilities.AreSame(targetParams[i].ParameterType, sourceParams[i].ParameterType))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Evaluates a single candidate for applicability against the supplied

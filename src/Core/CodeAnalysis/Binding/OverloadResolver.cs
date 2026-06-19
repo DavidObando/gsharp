@@ -397,6 +397,43 @@ internal sealed class OverloadResolver
     }
 
     /// <summary>
+    /// Issue #889: when a <c>func</c>/arrow literal argument has a value-typed
+    /// natural return (e.g. <c>() -> called = called + 1</c> inferred as
+    /// <c>() -> int32</c>) but the target parameter is a void-returning
+    /// delegate (<c>System.Action</c>, a named void delegate, or a
+    /// <c>(...) -> void</c> function type), void-ize the literal so its trailing
+    /// value is discarded — matching the existing <c>func() { ... }</c>
+    /// statement-body behaviour. Returns the converted argument through
+    /// <paramref name="result"/> on success. Has no effect for non-literal
+    /// arguments or non-void delegate targets, so genuine type-mismatch
+    /// diagnostics still fire on the regular path.
+    /// </summary>
+    private bool TryConvertLiteralArgumentToVoidDelegate(BoundExpression argument, TypeSymbol expectedType, TextLocation location, out BoundExpression result)
+    {
+        result = null;
+        if (expectedType == null
+            || !tryGetFunctionLiteral(argument, out var literal)
+            || literal.FunctionType is not FunctionTypeSymbol literalFnType
+            || literalFnType.ReturnType == TypeSymbol.Void
+            || literalFnType.ReturnType == TypeSymbol.Error
+            || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(expectedType, out var targetFnType)
+            || targetFnType.ReturnType != TypeSymbol.Void
+            || targetFnType.Arity != literalFnType.Arity)
+        {
+            return false;
+        }
+
+        var converted = conversions.BindConversion(location, literal, expectedType);
+        if (converted is BoundErrorExpression)
+        {
+            return false;
+        }
+
+        result = converted;
+        return true;
+    }
+
+    /// <summary>
     /// ADR-0063: thin wrapper around <see cref="SelectBestInstanceOverload"/>
     /// that reports the standard ambiguity / no-applicable-overload diagnostics
     /// when more than one candidate is supplied. When a single candidate is
@@ -1552,6 +1589,13 @@ internal sealed class OverloadResolver
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
+                // Issue #889: arrow/func literal → void-returning delegate.
+                if (TryConvertLiteralArgumentToVoidDelegate(argument, parameter.Type, parameterSyntax[i].Location, out var voidDelegateArg))
+                {
+                    boundArguments[i] = voidDelegateArg;
+                    continue;
+                }
+
                 if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, parameter.Type, out var convertedArg))
                 {
                     boundArguments[i] = convertedArg;
@@ -1888,6 +1932,13 @@ internal sealed class OverloadResolver
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
+                // Issue #889: arrow/func literal → void-returning delegate.
+                if (TryConvertLiteralArgumentToVoidDelegate(argument, parameter.Type, argLocation, out var voidDelegateArg))
+                {
+                    convertedArguments.Add(voidDelegateArg);
+                    continue;
+                }
+
                 if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, parameter.Type, out var convertedArg))
                 {
                     convertedArguments.Add(convertedArg);
@@ -2145,6 +2196,13 @@ internal sealed class OverloadResolver
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
+                // Issue #889: arrow/func literal → void-returning delegate.
+                if (TryConvertLiteralArgumentToVoidDelegate(argument, parameter.Type, argLocation, out var voidDelegateArg))
+                {
+                    convertedArgs.Add(voidDelegateArg);
+                    continue;
+                }
+
                 if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, parameter.Type, out var convertedArg))
                 {
                     convertedArgs.Add(convertedArg);
@@ -3032,6 +3090,14 @@ internal sealed class OverloadResolver
                 && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
                 && !Conversion.Classify(argument.Type, expectedType).IsImplicit)
             {
+                // Issue #889: arrow/func literal → void-returning delegate.
+                var voidDelegateLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
+                if (TryConvertLiteralArgumentToVoidDelegate(argument, expectedType, voidDelegateLoc, out var voidDelegateArg))
+                {
+                    boundArguments[i] = voidDelegateArg;
+                    continue;
+                }
+
                 if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, expectedType, out var convertedArg))
                 {
                     boundArguments[i] = convertedArg;
