@@ -308,6 +308,30 @@ internal sealed class ConversionClassifier
             return createErasedFunctionLiteralAdapter(literal, targetFunctionType);
         }
 
+        // Issue #889: a `func`/arrow literal whose natural return type carries a
+        // value (e.g. `() -> called = called + 1`, inferred as `() -> int32`)
+        // converts to a void-returning delegate target (System.Action, a named
+        // void delegate, or a `(...) -> void` function type) by discarding the
+        // trailing value — mirroring the `func() { ... }` statement-body form
+        // that already yields void. Void-ize the literal through the erased
+        // adapter (which now drops the return value), then continue the
+        // conversion against the real delegate target.
+        if (expression is BoundFunctionLiteralExpression voidCandidateLiteral
+            && voidCandidateLiteral.FunctionType is FunctionTypeSymbol voidCandidateFnType
+            && voidCandidateFnType.ReturnType != TypeSymbol.Void
+            && voidCandidateFnType.ReturnType != TypeSymbol.Error
+            && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(type, out var voidTargetFnType)
+            && voidTargetFnType.ReturnType == TypeSymbol.Void
+            && voidTargetFnType.Arity == voidCandidateFnType.Arity
+            && !ReferenceEquals(type, voidCandidateFnType))
+        {
+            var voidized = createErasedFunctionLiteralAdapter(voidCandidateLiteral, voidTargetFnType);
+            if (!ReferenceEquals(voidized, voidCandidateLiteral))
+            {
+                return BindConversion(diagnosticLocation, voidized, type, allowExplicit);
+            }
+        }
+
         var conversion = Conversion.Classify(expression.Type, type);
 
         if (!conversion.Exists)

@@ -866,6 +866,35 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Issue #889: resolves the <see cref="FunctionTypeSymbol"/> shape of any
+    /// delegate-like target type — a native G# function type, a user-declared
+    /// named delegate (<see cref="DelegateTypeSymbol"/>), or an imported CLR
+    /// delegate (<c>System.Action</c>/<c>System.Func</c>/named delegates).
+    /// Used to target-type lambda/func literals against delegate parameters
+    /// and variable slots.
+    /// </summary>
+    /// <param name="type">The candidate delegate-like target type.</param>
+    /// <param name="functionType">The matching function-type symbol, on success.</param>
+    /// <returns><see langword="true"/> when the type is delegate-like.</returns>
+    public static bool TryGetDelegateFunctionTypeFromSymbol(TypeSymbol type, out FunctionTypeSymbol functionType)
+    {
+        functionType = null;
+        switch (type)
+        {
+            case null:
+                return false;
+            case FunctionTypeSymbol fn:
+                functionType = fn;
+                return true;
+            case DelegateTypeSymbol del:
+                functionType = del.EquivalentFunctionType;
+                return functionType != null;
+            default:
+                return type.ClrType != null && TryGetDelegateFunctionType(type.ClrType, out functionType);
+        }
+    }
+
+    /// <summary>
     /// Probes <paramref name="delegateType"/> for the canonical delegate
     /// shape (<see cref="System.MulticastDelegate"/>-derived, or
     /// <c>System.Func`N</c>/<c>System.Action`N</c>) and exposes the

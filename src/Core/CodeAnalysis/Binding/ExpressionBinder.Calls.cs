@@ -1034,10 +1034,15 @@ internal sealed partial class ExpressionBinder
                 var staticRebound = RebindFormattableInterpolationArguments(staticExpandedArgs, ce.Arguments, staticParameters, staticDownstreamMapping);
                 var staticHandlerArgs = ApplyInterpolatedStringHandlers(staticParameters, staticRebound, receiver: null, ce.Location, staticDownstreamMapping, out var staticHandlerPrelude, out _);
 
+                // Issue #889: void-ize value-returning func/arrow literals passed
+                // to void-returning delegate parameters (System.Action / Action<...>)
+                // before CLR parameter conversion, mirroring the instance path.
+                var staticDelegateArgs = RebindFunctionLiteralDelegateArguments(staticHandlerArgs, staticParameters, staticDownstreamMapping);
+
                 // Issue #506 follow-up: ensure value-type → object boxing fires
                 // for fixed-arity CLR static calls (e.g. `String.Format("{0}", 42)`
                 // selecting the fixed `(string, object)` overload).
-                var staticConvertedArgs = conversions.BindClrParameterConversions(staticHandlerArgs, staticParameters, ce, staticDownstreamMapping);
+                var staticConvertedArgs = conversions.BindClrParameterConversions(staticDelegateArgs, staticParameters, ce, staticDownstreamMapping);
                 var staticArguments = OverloadResolver.BuildOrderedCallArguments(staticConvertedArgs, staticDownstreamMapping, staticParameters);
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
                 overloads.ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);

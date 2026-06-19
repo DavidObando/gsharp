@@ -888,6 +888,19 @@ internal sealed class LambdaBinder
                 targetReturn = UnwrapTaskReturnType(targetReturn);
             }
 
+            // Issue #889: when the target delegate returns void (e.g.
+            // System.Action), an arrow lambda whose body is an expression
+            // (assignment, call, increment, ...) discards that value — exactly
+            // like the equivalent `func() { ... }` literal whose statement body
+            // yields void. Pin the return type to void so the synthesized
+            // method's signature matches the Action/void-delegate target and
+            // the trailing expression is emitted as a value-discarding
+            // statement (see EmitTrailingExpression).
+            if (targetReturn == TypeSymbol.Void)
+            {
+                return TypeSymbol.Void;
+            }
+
             if (targetReturn != null && candidates.All(c => c == TypeSymbol.Error || Conversion.Classify(c, targetReturn).IsImplicit))
             {
                 return targetReturn;
@@ -1161,9 +1174,23 @@ internal sealed class LambdaBinder
         protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)
         {
             var rewritten = (BoundReturnStatement)base.RewriteReturnStatement(node);
-            if (this.adapterReturnType == TypeSymbol.Void || rewritten.Expression == null)
+            if (rewritten.Expression == null)
             {
                 return rewritten;
+            }
+
+            // Issue #889: when the adapter erases a value-returning literal to a
+            // void-returning delegate (e.g. a `func`/arrow literal flowing into
+            // System.Action), the inner `return <value>;` must drop its value:
+            // evaluate the expression for its side effects, then `return;`. A
+            // bare `return <value>;` against a void method is invalid IL.
+            if (this.adapterReturnType == TypeSymbol.Void)
+            {
+                return new BoundBlockStatement(
+                    rewritten.Syntax,
+                    ImmutableArray.Create<BoundStatement>(
+                        new BoundExpressionStatement(rewritten.Syntax, rewritten.Expression),
+                        new BoundReturnStatement(rewritten.Syntax, expression: null)));
             }
 
             if (rewritten.Expression.Type == this.adapterReturnType)
