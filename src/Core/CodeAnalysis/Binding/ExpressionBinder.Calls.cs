@@ -1161,6 +1161,35 @@ internal sealed partial class ExpressionBinder
         }
 
         var deferred = new HashSet<int>(deferredIndices);
+
+        // Issue #903: when the receiver carries a same-compilation user element
+        // type (e.g. `List[Check]` where `Check` is a struct/class still being
+        // compiled), that element type is erased to `object` at the CLR layer.
+        // The reflection-driven inference paths below would therefore bind the
+        // lambda parameter as `object` and fail member access in the body
+        // (`c.Id` → GS0158). Try a symbol-based inference first that recovers
+        // the real element type from the receiver's symbolic `TypeArguments`,
+        // builds a `FunctionTypeSymbol` target carrying that type, and binds the
+        // lambda against it. This path only succeeds (and pre-empts the CLR
+        // paths) when it actually recovers a same-compilation user type, so the
+        // referenced-element-type and primitive cases are untouched.
+        foreach (var (methods, offset) in probes)
+        {
+            if (TryMapDeferredLambdaTargetsSymbolic(methods, offset, receiver, ce, deferredIndices, boundArgs, deferred, out var symbolicTargets))
+            {
+                foreach (var idx in deferredIndices)
+                {
+                    var inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx]);
+                    if (inner is LambdaExpressionSyntax lambdaSyntax && symbolicTargets.TryGetValue(idx, out var target))
+                    {
+                        boundArgs[idx] = lambdas.BindLambdaExpression(lambdaSyntax, target, inferReturnTypeFromBody: true);
+                    }
+                }
+
+                return;
+            }
+        }
+
         foreach (var (methods, offset) in probes)
         {
             var argTypes = new System.Type[boundArgs.Length + offset];
@@ -1415,6 +1444,327 @@ internal sealed partial class ExpressionBinder
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #903: symbol-based deferred arrow-lambda target inference. The
+    /// CLR-driven <see cref="ResolveDeferredArrowLambdaArguments"/> paths infer
+    /// the lambda's parameter type from the receiver's <em>CLR</em> type, which
+    /// for a same-compilation generic element type (e.g. <c>List[Check]</c>
+    /// where <c>Check</c> is being compiled) is erased to <c>List&lt;object&gt;</c>
+    /// — so the lambda parameter would bind as <c>object</c> and member access
+    /// in the body fails. This routine instead recovers the element type
+    /// symbolically: it unifies the receiver/argument <see cref="TypeSymbol"/>s
+    /// against each candidate generic method's open parameters (reusing
+    /// <see cref="MemberLookup.InferSymbolicMethodTypeArguments"/>), then maps
+    /// each deferred lambda's delegate <em>parameter</em> types through those
+    /// inferred symbolic arguments (reusing
+    /// <see cref="MemberLookup.MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol}, MethodInfo, ImmutableArray{TypeSymbol})"/>).
+    /// A per-slot <see cref="FunctionTypeSymbol"/> carrying those parameter
+    /// types is produced (its return type is a placeholder — callers bind with
+    /// <c>inferReturnTypeFromBody</c>). Candidates must agree on the recovered
+    /// parameter types. The method succeeds <em>only</em> when at least one
+    /// recovered parameter type is a same-compilation user type, so the
+    /// referenced-element and primitive cases continue through the existing
+    /// CLR paths unchanged.
+    /// </summary>
+    private bool TryMapDeferredLambdaTargetsSymbolic(
+        IReadOnlyList<MethodInfo> methods,
+        int offset,
+        BoundExpression receiver,
+        CallExpressionSyntax ce,
+        List<int> deferredIndices,
+        BoundExpression[] boundArgs,
+        HashSet<int> deferred,
+        out Dictionary<int, FunctionTypeSymbol> targets)
+    {
+        targets = null;
+
+        // Symbolic recovery is anchored on the receiver's symbolic
+        // TypeArguments. Without a receiver type symbol there is nothing to
+        // recover (the CLR paths handle static/accessor calls).
+        if (receiver?.Type == null)
+        {
+            return false;
+        }
+
+        // Build the symbolic argument vector as the candidate method sees it:
+        // for an extension probe (offset == 1) the receiver is slot 0 ("this"),
+        // followed by the user arguments. Deferred lambda slots are left null so
+        // unification skips them.
+        var symbolicArgs = new TypeSymbol[boundArgs.Length + offset];
+        if (offset == 1)
+        {
+            symbolicArgs[0] = receiver.Type;
+        }
+
+        for (var i = 0; i < boundArgs.Length; i++)
+        {
+            symbolicArgs[i + offset] = deferred.Contains(i) ? null : boundArgs[i]?.Type;
+        }
+
+        var symbolicArgVector = ImmutableArray.Create(symbolicArgs);
+
+        // Record the expected delegate arity for each deferred lambda slot.
+        var arityByIndex = new Dictionary<int, int>();
+        foreach (var idx in deferredIndices)
+        {
+            var inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx]);
+            if (inner is not LambdaExpressionSyntax lambda)
+            {
+                return false;
+            }
+
+            arityByIndex[idx] = lambda.Parameters.Count;
+        }
+
+        Dictionary<int, ImmutableArray<TypeSymbol>> agreed = null;
+        var anySameCompilationType = false;
+
+        foreach (var method in methods)
+        {
+            if (method == null || (!method.IsGenericMethodDefinition && !method.IsGenericMethod))
+            {
+                continue;
+            }
+
+            MethodInfo openMethod;
+            ParameterInfo[] openParameters;
+            try
+            {
+                openMethod = method.IsGenericMethodDefinition ? method : method.GetGenericMethodDefinition();
+                if (!openMethod.IsGenericMethodDefinition)
+                {
+                    continue;
+                }
+
+                openParameters = openMethod.GetParameters();
+            }
+            catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+            {
+                continue;
+            }
+
+            if (openParameters.Length < symbolicArgs.Length)
+            {
+                continue;
+            }
+
+            var inferred = MemberLookup.InferSymbolicMethodTypeArguments(openMethod, symbolicArgVector);
+            var methodTypeArgs = ImmutableArray.Create(inferred);
+
+            var slotTargets = new Dictionary<int, ImmutableArray<TypeSymbol>>();
+            var candidateUsable = true;
+            var candidateHasSameCompilationType = false;
+
+            foreach (var idx in deferredIndices)
+            {
+                var paramIndex = idx + offset;
+                if (paramIndex >= openParameters.Length)
+                {
+                    candidateUsable = false;
+                    break;
+                }
+
+                MethodInfo invoke;
+                ParameterInfo[] invokeParameters;
+                try
+                {
+                    var delegateType = openParameters[paramIndex].ParameterType;
+                    invoke = delegateType?.GetMethod("Invoke");
+                    invokeParameters = invoke?.GetParameters();
+                }
+                catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+                {
+                    candidateUsable = false;
+                    break;
+                }
+
+                if (invoke == null || invokeParameters == null || invokeParameters.Length != arityByIndex[idx])
+                {
+                    candidateUsable = false;
+                    break;
+                }
+
+                // Issue #903: only trust this candidate's delegate parameter
+                // shape when every method type parameter reachable from it was
+                // actually resolved by unifying the receiver/arguments. When a
+                // candidate's "this" parameter does not match the receiver
+                // shape (e.g. a `Single` overload over `IQueryable<T>` against a
+                // `List` receiver), the relevant slot stays unresolved and
+                // MapOpenClrTypeToSymbolic would otherwise surface a bogus open
+                // parameter (an ImportedTypeSymbol named "T") that neither
+                // ContainsTypeParameter nor ContainsSameCompilationUserType
+                // flags — which would then disagree with the correct candidate
+                // and abort the whole inference. Skip such candidates instead.
+                var unresolvedSlot = false;
+                foreach (var invokeParameter in invokeParameters)
+                {
+                    if (!AllMethodTypeParametersResolved(invokeParameter.ParameterType, openMethod, inferred))
+                    {
+                        unresolvedSlot = true;
+                        break;
+                    }
+                }
+
+                if (unresolvedSlot)
+                {
+                    candidateUsable = false;
+                    break;
+                }
+
+                var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(invokeParameters.Length);
+                var slotUsable = true;
+                foreach (var invokeParameter in invokeParameters)
+                {
+                    var mapped = MemberLookup.MapOpenClrTypeToSymbolic(invokeParameter.ParameterType, openDefinition: null, typeArguments: default, openMethodDefinition: openMethod, methodTypeArguments: methodTypeArgs);
+                    if (mapped == null || mapped == TypeSymbol.Error || TypeSymbol.ContainsTypeParameter(mapped))
+                    {
+                        slotUsable = false;
+                        break;
+                    }
+
+                    parameterTypes.Add(mapped);
+                    if (TypeSymbol.ContainsSameCompilationUserType(mapped))
+                    {
+                        candidateHasSameCompilationType = true;
+                    }
+                }
+
+                if (!slotUsable)
+                {
+                    candidateUsable = false;
+                    break;
+                }
+
+                slotTargets[idx] = parameterTypes.ToImmutable();
+            }
+
+            var dbgMapped = slotTargets.TryGetValue(deferredIndices[0], out var dbgSt) && dbgSt.Length > 0 ? dbgSt[0]?.ToString() : "-";
+
+            if (!candidateUsable || slotTargets.Count != deferredIndices.Count)
+            {
+                continue;
+            }
+
+            if (agreed == null)
+            {
+                agreed = slotTargets;
+            }
+            else if (!SymbolicLambdaParameterTypesAgree(agreed, slotTargets))
+            {
+                return false;
+            }
+
+            anySameCompilationType |= candidateHasSameCompilationType;
+        }
+
+        if (agreed == null || !anySameCompilationType)
+        {
+            return false;
+        }
+
+        var built = new Dictionary<int, FunctionTypeSymbol>();
+        foreach (var kv in agreed)
+        {
+            // The return slot is a placeholder; callers bind with
+            // inferReturnTypeFromBody so the lambda infers its own return type.
+            built[kv.Key] = FunctionTypeSymbol.Get(kv.Value, TypeSymbol.Object);
+        }
+
+        targets = built;
+        return true;
+    }
+
+    private static bool SymbolicLambdaParameterTypesAgree(Dictionary<int, ImmutableArray<TypeSymbol>> a, Dictionary<int, ImmutableArray<TypeSymbol>> b)
+    {
+        if (a.Count != b.Count)
+        {
+            return false;
+        }
+
+        foreach (var kv in a)
+        {
+            if (!b.TryGetValue(kv.Key, out var other) || other.Length != kv.Value.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < kv.Value.Length; i++)
+            {
+                if (!Equals(kv.Value[i], other[i]))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #903: returns <see langword="true"/> when every <em>method</em>
+    /// generic parameter (declared on <paramref name="openMethod"/>) reachable
+    /// from <paramref name="openType"/> has a non-<see langword="null"/> entry in
+    /// <paramref name="inferred"/> — i.e. it was actually resolved by unifying
+    /// the receiver/arguments. Used to discard candidate methods whose delegate
+    /// parameter shape contains a method type parameter that the call did not
+    /// determine (e.g. a <c>Single</c> overload whose <c>this</c> parameter does
+    /// not match the receiver), which would otherwise surface a bogus open
+    /// parameter symbol via
+    /// <see cref="MemberLookup.MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol}, MethodInfo, ImmutableArray{TypeSymbol})"/>.
+    /// </summary>
+    private static bool AllMethodTypeParametersResolved(Type openType, MethodInfo openMethod, TypeSymbol[] inferred)
+    {
+        if (openType == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (openType.IsGenericParameter)
+            {
+                // A type-level parameter (declared on the receiver type) is
+                // resolved through the receiver's TypeArguments, not the method
+                // type-arg vector, so it does not gate this candidate.
+                if (openType.DeclaringMethod == null)
+                {
+                    return true;
+                }
+
+                if (!ReferenceEquals(openType.DeclaringMethod, openMethod)
+                    && openType.DeclaringMethod.MetadataToken != openMethod.MetadataToken)
+                {
+                    return true;
+                }
+
+                var pos = openType.GenericParameterPosition;
+                return (uint)pos < (uint)inferred.Length && inferred[pos] != null;
+            }
+
+            if (openType.IsByRef || openType.IsArray)
+            {
+                return AllMethodTypeParametersResolved(openType.GetElementType(), openMethod, inferred);
+            }
+
+            if (openType.IsGenericType)
+            {
+                foreach (var arg in openType.GetGenericArguments())
+                {
+                    if (!AllMethodTypeParametersResolved(arg, openMethod, inferred))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
     }
 
     private BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)

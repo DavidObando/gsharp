@@ -163,6 +163,22 @@ internal sealed partial class MethodBodyEmitter
             case BoundImportedCallExpression impCall:
                 this.EmitImportedCallArguments(impCall.Arguments, impCall.ArgumentRefKinds);
                 this.il.Call(this.outer.GetMethodEntityHandle(impCall.Function.Method, impCall.TypeArgumentSymbols));
+
+                // Issue #903: when this generic imported (extension) call was
+                // closed over a same-compilation user element type, the emitted
+                // MethodSpec returns the reprojected type directly on the stack
+                // (a raw value for a struct element, a reference for a class) —
+                // NOT the type-erased `object` the placeholder-closed
+                // `Method.ReturnType` reports. Feeding that erased placeholder
+                // into the widening would emit a fatal `unbox.any Check` over a
+                // struct value (ilverify StackObjRef + runtime crash) or a
+                // redundant `castclass` over a class reference. Skip the
+                // widening, mirroring the symbolic instance-method path below.
+                if (this.outer.TryGetSymbolicSubstitutedImportedCallReturn(impCall.Function.Method, impCall.TypeArgumentSymbols, out _))
+                {
+                    break;
+                }
+
                 this.EmitErasedObjectReturnWidening(
                     TypeSymbol.FromClrType(impCall.Function.Method.ReturnType),
                     impCall.Type);
