@@ -1111,6 +1111,19 @@ public static class DefinitionComputer
 
 public static class DocumentSymbolComputer
 {
+    // Fallback names used when a declaration's identifier token is missing
+    // (Text == null) or empty. Incomplete or error declarations produce such
+    // synthesized tokens; the LSP `textDocument/documentSymbol` response must
+    // never contain a symbol with a null/empty name, otherwise the
+    // vscode-languageclient converter throws "name must not be falsy" and the
+    // Outline view / breadcrumbs break (issue #890).
+    private const string AnonymousFunctionName = "<function>";
+    private const string AnonymousVariableName = "<variable>";
+    private const string AnonymousStructName = "<struct>";
+    private const string AnonymousEnumName = "<enum>";
+    private const string AnonymousFieldName = "<field>";
+    private const string AnonymousEnumMemberName = "<member>";
+
     public static IReadOnlyList<SymbolInformationOrDocumentSymbol> ComputeDocumentSymbols(DocumentContent content)
     {
         var result = new List<SymbolInformationOrDocumentSymbol>();
@@ -1123,7 +1136,7 @@ public static class DocumentSymbolComputer
                 case FunctionDeclarationSyntax func:
                     result.Add(new SymbolInformationOrDocumentSymbol(new DocumentSymbol
                     {
-                        Name = func.Identifier.Text,
+                        Name = SymbolName(func.Identifier, AnonymousFunctionName),
                         Kind = LspSymbolKind.Function,
                         Range = SemanticLookup.ToRange(text, func.Span),
                         SelectionRange = SemanticLookup.ToRange(func.Identifier),
@@ -1132,7 +1145,7 @@ public static class DocumentSymbolComputer
                 case GlobalStatementSyntax { Statement: VariableDeclarationSyntax variable }:
                     result.Add(new SymbolInformationOrDocumentSymbol(new DocumentSymbol
                     {
-                        Name = variable.Identifier.Text,
+                        Name = SymbolName(variable.Identifier, AnonymousVariableName),
                         Kind = LspSymbolKind.Variable,
                         Range = SemanticLookup.ToRange(text, variable.Span),
                         SelectionRange = SemanticLookup.ToRange(variable.Identifier),
@@ -1144,7 +1157,7 @@ public static class DocumentSymbolComputer
                     {
                         children.Add(new DocumentSymbol
                         {
-                            Name = field.Identifier.Text,
+                            Name = SymbolName(field.Identifier, AnonymousFieldName),
                             Kind = LspSymbolKind.Field,
                             Range = SemanticLookup.ToRange(text, field.Span),
                             SelectionRange = SemanticLookup.ToRange(field.Identifier),
@@ -1153,7 +1166,7 @@ public static class DocumentSymbolComputer
 
                     result.Add(new SymbolInformationOrDocumentSymbol(new DocumentSymbol
                     {
-                        Name = structDecl.Identifier.Text,
+                        Name = SymbolName(structDecl.Identifier, AnonymousStructName),
                         Kind = LspSymbolKind.Struct,
                         Range = SemanticLookup.ToRange(text, structDecl.Span),
                         SelectionRange = SemanticLookup.ToRange(structDecl.Identifier),
@@ -1166,7 +1179,7 @@ public static class DocumentSymbolComputer
                     {
                         enumChildren.Add(new DocumentSymbol
                         {
-                            Name = enumMember.Identifier.Text,
+                            Name = SymbolName(enumMember.Identifier, AnonymousEnumMemberName),
                             Kind = LspSymbolKind.EnumMember,
                             Range = SemanticLookup.ToRange(text, enumMember.Span),
                             SelectionRange = SemanticLookup.ToRange(enumMember.Identifier),
@@ -1175,7 +1188,7 @@ public static class DocumentSymbolComputer
 
                     result.Add(new SymbolInformationOrDocumentSymbol(new DocumentSymbol
                     {
-                        Name = enumDecl.Identifier.Text,
+                        Name = SymbolName(enumDecl.Identifier, AnonymousEnumName),
                         Kind = LspSymbolKind.Enum,
                         Range = SemanticLookup.ToRange(text, enumDecl.Span),
                         SelectionRange = SemanticLookup.ToRange(enumDecl.Identifier),
@@ -1186,6 +1199,16 @@ public static class DocumentSymbolComputer
         }
 
         return result;
+    }
+
+    // Resolves a symbol name from an identifier token, substituting a non-empty
+    // fallback when the token is missing/synthesized (Text == null) or empty or
+    // whitespace. Guarantees the returned name is never null or empty so the
+    // emitted DocumentSymbol always satisfies the LSP protocol contract.
+    private static string SymbolName(SyntaxToken identifier, string fallback)
+    {
+        var name = identifier?.Text;
+        return string.IsNullOrWhiteSpace(name) ? fallback : name;
     }
 }
 
