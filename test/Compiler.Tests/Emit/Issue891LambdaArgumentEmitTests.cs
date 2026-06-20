@@ -25,7 +25,9 @@ namespace GSharp.Compiler.Tests.Emit;
 /// Problem B: an un-typed arrow lambda passed to a generic LINQ extension method
 /// (<c>Single&lt;TSource&gt;(this IEnumerable&lt;TSource&gt;, Func&lt;TSource,bool&gt;)</c>)
 /// must infer its parameter type from the delegate parameter so the extension
-/// method resolves and the predicate body type-checks to <c>bool</c>.
+/// method resolves and the predicate body type-checks to <c>bool</c>. A follow-up
+/// extends this to selectors whose result type is only inferable from the body
+/// (<c>Select&lt;TSource,TResult&gt;(IEnumerable&lt;TSource&gt;, Func&lt;TSource,TResult&gt;)</c>).
 /// </para>
 /// </summary>
 public class Issue891LambdaArgumentEmitTests
@@ -169,6 +171,60 @@ public class Issue891LambdaArgumentEmitTests
 
         var output = CompileAndRun(source);
         Assert.Equal("network\n", output);
+    }
+
+    [Fact]
+    public void ProblemB_ArrowLambda_AsGenericLinqSelector_BodyInferredResult_Runs()
+    {
+        // Follow-up to issue #891: an un-typed arrow lambda passed to
+        // Select<TSource,TResult>(IEnumerable<TSource>, Func<TSource,TResult>)
+        // must infer its parameter type from the receiver (TSource) even though
+        // TResult is only inferable from the lambda body. Previously this
+        // reported "Cannot find function Select" / GS0304 and only worked with a
+        // typed parameter (`(x int32) -> ...`).
+        var source = """
+            package P
+            import System
+            import System.Linq
+            import System.Collections.Generic
+
+            let nums = List[int32]()
+            nums.Add(1)
+            nums.Add(2)
+            nums.Add(3)
+            let doubled = nums.Select((x) -> x * 2).ToList()
+            Console.WriteLine(doubled.Count)
+            Console.WriteLine(doubled[2])
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("3\n6\n", output);
+    }
+
+    [Fact]
+    public void ProblemB_ArrowLambda_AsGenericLinqSelector_ProjectsToDifferentType_Runs()
+    {
+        // The selector's result type (TResult) is inferred from the body: a
+        // string-valued body must yield a HashSet[string], not HashSet[object].
+        // Mirrors the issue's `report.Checks.Select((c) -> c.Id).ToHashSet()`
+        // shape where the projection accesses a member of the inferred element.
+        var source = """
+            package P
+            import System
+            import System.Linq
+            import System.Collections.Generic
+
+            let words = List[string]()
+            words.Add("audible-api")
+            words.Add("net")
+            words.Add("audible-api")
+            let ids = words.Select((w) -> w.ToUpper()).ToHashSet()
+            Console.WriteLine(ids.Count)
+            Console.WriteLine(ids.Contains("NET"))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("2\nTrue\n", output);
     }
 
     /// <summary>
