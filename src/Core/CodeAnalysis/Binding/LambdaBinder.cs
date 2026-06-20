@@ -864,6 +864,20 @@ internal sealed class LambdaBinder
         var trailingIsVoidPlaceholder = boundBody is BoundBlockExpression { Expression: BoundLiteralExpression { Type: var trailingLit } }
             && trailingLit == TypeSymbol.Void;
 
+        // Issue #891: a block-body arrow lambda whose body never completes
+        // normally — every path throws (or otherwise terminates) without a
+        // value-producing `return` — has no natural return value. C# treats
+        // such a lambda as convertible to ANY delegate return type (e.g.
+        // `() -> { throw ... }` converts to both `Action` and `Func<string>`).
+        // When a target delegate return type is supplied we therefore adopt it
+        // directly, exactly as the equivalent `func() T { throw ... }` literal
+        // (whose explicit return type a throwing body satisfies) already does.
+        var bodyNeverCompletesNormally = !hasExplicitReturn
+            && trailingIsVoidPlaceholder
+            && boundBody is BoundBlockExpression neverBlock
+            && neverBlock.Statements.Length > 0
+            && ControlFlowGraph.AllPathsReturn(new BoundBlockStatement(syntax.Body, neverBlock.Statements));
+
         // ADR-0076 §3: the candidate set.
         var candidates = new List<TypeSymbol>();
         if (!(hasExplicitReturn && trailingIsVoidPlaceholder))
@@ -886,6 +900,14 @@ internal sealed class LambdaBinder
                 // Strip the Task / Task<T> wrap so we compare against the
                 // awaited type the lambda body actually produces.
                 targetReturn = UnwrapTaskReturnType(targetReturn);
+            }
+
+            // Issue #891: a throwing/never-returning body adopts the target's
+            // return type directly — there is no value to reconcile, so the
+            // synthesized method's signature simply matches the delegate.
+            if (bodyNeverCompletesNormally && targetReturn != null && targetReturn != TypeSymbol.Error)
+            {
+                return targetReturn;
             }
 
             // Issue #889: when the target delegate returns void (e.g.

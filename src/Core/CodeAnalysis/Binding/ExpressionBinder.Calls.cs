@@ -561,17 +561,28 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
+        // Issue #891: a constructor's delegate-typed parameter (e.g.
+        // `Func<HttpClient> httpClientFactory`) target-types an arrow/func
+        // literal argument before it is bound. Without this, an arrow lambda
+        // whose body only throws (`() -> { throw ... }`) infers `() -> void`
+        // and fails to match the `Func<...>` parameter; the call then misroutes
+        // to the single-arg conversion path and reports the misleading GS0162
+        // "named arguments are only supported for data-struct .copy(...)".
+        var ctors = ClrTypeUtilities.SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance);
+        var ctorParameterLists = ctors.Select(c => c.GetParameters()).ToList();
+
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
         for (var i = 0; i < syntax.Arguments.Count; i++)
         {
-            boundArguments.Add(BindExpression(OverloadResolver.UnwrapNamedArgumentValue(syntax.Arguments[i])));
+            var argName = argumentNames.IsDefault ? null : argumentNames[i];
+            boundArguments.Add(BindCallArgumentWithDelegateTargetTyping(
+                syntax.Arguments[i], ctorParameterLists, sourceArgIndex: i, argName: argName, paramOffset: 0));
         }
 
         // Phase A (overload resolution): pick a constructor via the shared
         // "better function member" resolver. Ambiguity surfaces a hard
         // binder diagnostic and the call falls back to the surrounding
         // pipeline (which will diagnose a missing match).
-        var ctors = ClrTypeUtilities.SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance);
         var argTypes = new System.Type[boundArguments.Count];
         var argsAllTyped = true;
         var hasUserClassArg = false;
@@ -726,6 +737,106 @@ internal sealed partial class ExpressionBinder
             ctorRefKinds);
         result = WrapWithHandlerPrelude(ctorCall, ctorHandlerPrelude, syntax);
         return true;
+    }
+
+    /// <summary>
+    /// Issue #891: binds a single call argument, target-typing arrow/func
+    /// literals against the matching delegate-typed parameter discovered from
+    /// the candidate (constructor or method) parameter lists. This lets an
+    /// arrow lambda — including a statement body that only throws — be bound
+    /// directly as the corresponding delegate (Func/Action) instead of
+    /// inferring a standalone (often void) function type that fails overload
+    /// resolution and misroutes the call.
+    /// </summary>
+    private BoundExpression BindCallArgumentWithDelegateTargetTyping(
+        ExpressionSyntax argumentSyntax,
+        IReadOnlyList<ParameterInfo[]> candidateParameterLists,
+        int sourceArgIndex,
+        string argName,
+        int paramOffset)
+    {
+        var inner = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax);
+        if (inner is LambdaExpressionSyntax lambdaSyntax
+            && TryResolveDelegateTargetFromCandidates(candidateParameterLists, paramOffset, sourceArgIndex, argName, out var target))
+        {
+            return lambdas.BindLambdaExpression(lambdaSyntax, target);
+        }
+
+        return BindExpression(inner);
+    }
+
+    /// <summary>
+    /// Issue #891: discovers the (non-generic) delegate function type that a
+    /// given argument position maps to across all candidate parameter lists.
+    /// Named arguments are matched by parameter name; positional arguments by
+    /// index (after <paramref name="paramOffset"/>, e.g. an extension method's
+    /// receiver). Returns false when no candidate exposes a closed delegate
+    /// parameter there, or when candidates disagree on the delegate shape.
+    /// </summary>
+    private static bool TryResolveDelegateTargetFromCandidates(
+        IReadOnlyList<ParameterInfo[]> candidateParameterLists,
+        int paramOffset,
+        int sourceArgIndex,
+        string argName,
+        out FunctionTypeSymbol target)
+    {
+        target = null;
+        foreach (var parameters in candidateParameterLists)
+        {
+            int paramIndex;
+            if (!string.IsNullOrEmpty(argName))
+            {
+                paramIndex = -1;
+                for (var p = 0; p < parameters.Length; p++)
+                {
+                    if (string.Equals(parameters[p].Name, argName, StringComparison.Ordinal))
+                    {
+                        paramIndex = p;
+                        break;
+                    }
+                }
+
+                if (paramIndex < 0)
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                paramIndex = sourceArgIndex + paramOffset;
+                if (paramIndex < 0 || paramIndex >= parameters.Length)
+                {
+                    continue;
+                }
+            }
+
+            var parameterType = parameters[paramIndex].ParameterType;
+            if (parameterType == null || parameterType.ContainsGenericParameters)
+            {
+                // Open generic delegate parameters are resolved later, once the
+                // generic method's type arguments have been inferred.
+                continue;
+            }
+
+            if (!MemberLookup.TryGetDelegateFunctionType(parameterType, out var candidate) || candidate == null)
+            {
+                continue;
+            }
+
+            if (target == null)
+            {
+                target = candidate;
+            }
+            else if (!ReferenceEquals(target, candidate) && !target.Equals(candidate))
+            {
+                // Candidates disagree on the delegate shape — leave the lambda
+                // to be bound without a target (overload resolution decides).
+                target = null;
+                return false;
+            }
+        }
+
+        return target != null;
     }
 
     /// <summary>
@@ -974,6 +1085,166 @@ internal sealed partial class ExpressionBinder
         return null;
     }
 
+    /// <summary>
+    /// Issue #891: determines whether the supplied expression is an arrow
+    /// lambda with at least one parameter whose type is omitted, so its
+    /// parameter type(s) must be inferred from a target delegate.
+    /// </summary>
+    private static bool IsUntypedArrowLambda(ExpressionSyntax inner)
+    {
+        if (inner is not LambdaExpressionSyntax lambda)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < lambda.Parameters.Count; i++)
+        {
+            if (lambda.Parameters[i].Type == null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #891: infers the target delegate type for each deferred un-typed
+    /// arrow lambda argument of a member-style call by probing the applicable
+    /// candidate methods — instance methods on the receiver, imported
+    /// extension methods (LINQ et al.), or static methods of the accessed
+    /// class — with the lambda slots treated as unconstrained. Once the
+    /// (possibly generic) overload is resolved and its type arguments inferred,
+    /// the corresponding closed delegate parameter type target-types the lambda,
+    /// which is then bound in place inside <paramref name="boundArgs"/>.
+    /// </summary>
+    private void ResolveDeferredArrowLambdaArguments(
+        BoundExpression receiver,
+        ImportedClassSymbol classSymbol,
+        string methodName,
+        CallExpressionSyntax ce,
+        System.Type[] explicitTypeArgs,
+        List<int> deferredIndices,
+        BoundExpression[] boundArgs)
+    {
+        var probes = new List<(IReadOnlyList<MethodInfo> Methods, int Offset)>();
+        if (classSymbol != null)
+        {
+            var statics = ClrTypeUtilities.SafeGetMethods(classSymbol.ClassType, BindingFlags.Static | BindingFlags.Public)
+                .Where(m => m.Name == methodName)
+                .ToList();
+            if (statics.Count > 0)
+            {
+                probes.Add((statics, 0));
+            }
+        }
+        else if (receiver?.Type?.ClrType is System.Type receiverClrType)
+        {
+            var instance = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(receiverClrType, BindingFlags.Instance | BindingFlags.Public)
+                .Where(m => m.Name == methodName)
+                .ToList();
+            if (instance.Count > 0)
+            {
+                probes.Add((instance, 0));
+            }
+
+            var extensions = this.memberLookup.CollectImportedExtensionMethods(methodName);
+            if (extensions.Count > 0)
+            {
+                probes.Add((extensions, 1));
+            }
+        }
+
+        if (probes.Count == 0)
+        {
+            return;
+        }
+
+        var deferred = new HashSet<int>(deferredIndices);
+        foreach (var (methods, offset) in probes)
+        {
+            var argTypes = new System.Type[boundArgs.Length + offset];
+            if (offset == 1)
+            {
+                argTypes[0] = receiver.Type.ClrType;
+            }
+
+            var usable = true;
+            for (var i = 0; i < boundArgs.Length; i++)
+            {
+                if (deferred.Contains(i))
+                {
+                    // An unconstrained lambda slot: null is skipped by generic
+                    // inference and treated as reference-convertible to the
+                    // delegate parameter, so the candidate still applies.
+                    argTypes[i + offset] = null;
+                    continue;
+                }
+
+                var t = GetEffectiveArgumentClrTypeForOverloadResolution(boundArgs[i].Type);
+                if (t == null && boundArgs[i].Type != TypeSymbol.Null)
+                {
+                    usable = false;
+                    break;
+                }
+
+                argTypes[i + offset] = t;
+            }
+
+            if (!usable)
+            {
+                continue;
+            }
+
+            var resolution = OverloadResolution.Resolve(methods, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences);
+            if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
+            {
+                continue;
+            }
+
+            var parameters = resolution.Best.GetParameters();
+            var targets = new Dictionary<int, FunctionTypeSymbol>();
+            var allMapped = true;
+            foreach (var idx in deferredIndices)
+            {
+                var paramIndex = idx + offset;
+                if (paramIndex >= parameters.Length)
+                {
+                    allMapped = false;
+                    break;
+                }
+
+                var parameterType = parameters[paramIndex].ParameterType;
+                if (parameterType == null
+                    || parameterType.ContainsGenericParameters
+                    || !MemberLookup.TryGetDelegateFunctionType(parameterType, out var fn)
+                    || fn == null)
+                {
+                    allMapped = false;
+                    break;
+                }
+
+                targets[idx] = fn;
+            }
+
+            if (!allMapped)
+            {
+                continue;
+            }
+
+            foreach (var idx in deferredIndices)
+            {
+                var inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx]);
+                if (inner is LambdaExpressionSyntax lambdaSyntax)
+                {
+                    boundArgs[idx] = lambdas.BindLambdaExpression(lambdaSyntax, targets[idx]);
+                }
+            }
+
+            return;
+        }
+    }
+
     private BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)
     {
         var methodName = ce.Identifier.Text;
@@ -997,22 +1268,6 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
-        foreach (var argument in ce.Arguments)
-        {
-            var inner = OverloadResolver.UnwrapNamedArgumentValue(argument);
-            if (inner is RefArgumentExpressionSyntax refArg)
-            {
-                boundArguments.Add(BindRefArgumentExpression(refArg, parameter: null));
-            }
-            else
-            {
-                boundArguments.Add(BindExpression(inner));
-            }
-        }
-
-        var arguments = boundArguments.ToImmutable();
-
         // Issue #311: resolve an explicit `[T1, T2]` type-argument list (e.g.
         // `Array.Empty[string]()`) into mapped CLR types up front so every
         // generic-method dispatch path below can close the candidate.
@@ -1021,6 +1276,59 @@ internal sealed partial class ExpressionBinder
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             return new BoundErrorExpression(null);
         }
+
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
+        var deferredArrowLambdaIndices = new List<int>();
+        var argSlot = 0;
+        foreach (var argument in ce.Arguments)
+        {
+            var inner = OverloadResolver.UnwrapNamedArgumentValue(argument);
+            if (inner is RefArgumentExpressionSyntax refArg)
+            {
+                boundArguments.Add(BindRefArgumentExpression(refArg, parameter: null));
+            }
+            else if (argumentNames.IsDefault && IsUntypedArrowLambda(inner))
+            {
+                // Issue #891: defer binding of an un-typed arrow lambda until
+                // the target delegate type is known. Binding it now would emit
+                // GS0304 (cannot infer parameter type) and produce an error-typed
+                // argument that aborts overload resolution — which is exactly why
+                // `list.Single((c) -> c.Id == "x")` reported "Cannot find function
+                // Single" while the explicit `func(c DoctorCheck) bool { ... }`
+                // form worked. The placeholder keeps argument positions aligned;
+                // the real binding happens once the (possibly generic) overload —
+                // including LINQ extension methods — has been resolved below.
+                deferredArrowLambdaIndices.Add(argSlot);
+                boundArguments.Add(new BoundErrorExpression(inner));
+            }
+            else
+            {
+                boundArguments.Add(BindExpression(inner));
+            }
+
+            argSlot++;
+        }
+
+        if (deferredArrowLambdaIndices.Count > 0)
+        {
+            var mutableArgs = boundArguments.ToArray();
+            ResolveDeferredArrowLambdaArguments(receiver, classSymbol, methodName, ce, explicitTypeArgs, deferredArrowLambdaIndices, mutableArgs);
+
+            // Any lambda whose target could not be inferred is now bound without
+            // a target so the established GS0304 diagnostic still surfaces.
+            foreach (var idx in deferredArrowLambdaIndices)
+            {
+                if (mutableArgs[idx] is BoundErrorExpression placeholder && placeholder.Syntax is LambdaExpressionSyntax pendingLambda)
+                {
+                    mutableArgs[idx] = lambdas.BindLambdaExpression(pendingLambda);
+                }
+            }
+
+            boundArguments.Clear();
+            boundArguments.AddRange(mutableArgs);
+        }
+
+        var arguments = boundArguments.ToImmutable();
 
         if (classSymbol != null)
         {

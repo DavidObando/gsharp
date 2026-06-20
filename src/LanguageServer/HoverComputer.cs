@@ -164,6 +164,24 @@ public static class HoverComputer
             return null;
         }
 
+        // Issue #891: when the token is the identifier of an invoked call (e.g.
+        // the `Single` in `report.Checks.Single(...)`), resolve the actual
+        // method the call bound to BEFORE attempting type-name resolution.
+        // Otherwise `ResolveImportedClrType("Single")` matches the unrelated
+        // type `System.Single` (float32) and hover shows the wrong content.
+        // This also handles generic extension methods, which plain reflection
+        // on the receiver type would miss.
+        var invokedCall = FindNodes<CallExpressionSyntax>(tree.Root)
+            .FirstOrDefault(call => MatchesToken(call.Identifier, token));
+        if (invokedCall != null
+            && SemanticLookup.TryResolveInvokedImportedMethod(compilation, token.Text, invokedCall.Arguments.Count, out var invokedMethod, out var invokedOverloadCount))
+        {
+            return new HoverModel(
+                SymbolDisplay.ToDisplayString(invokedMethod, SymbolDisplayFormat.Hover),
+                HoverDocumentationRenderer.Render(GSharp.Core.CodeAnalysis.Documentation.AssemblyDocumentationProvider.Resolve(invokedMethod)),
+                invokedOverloadCount);
+        }
+
         var clrType = SemanticLookup.ResolveImportedClrType(
             tree,
             compilation,
