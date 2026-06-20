@@ -303,6 +303,60 @@ public class HoverHandlerTests
         Assert.Contains("string", hover.Contents.ToString(), System.StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ComputeHover_ExtensionMethodInvocation_ResolvesToMethod_NotSameNamedType()
+    {
+        // Issue #891 (Problem C): hovering the `Single` LINQ extension method must
+        // resolve to that method, not to the type `System.Single` (float32) which
+        // merely shares the name. Regression: previously hover showed
+        // "struct float32 / Represents a single-precision floating-point number.".
+        const string source =
+            "package P\n" +
+            "import System\n" +
+            "import System.Linq\n" +
+            "import System.Collections.Generic\n" +
+            "func main() {\n" +
+            "    let nums = List[int32]()\n" +
+            "    nums.Add(1)\n" +
+            "    let found = nums.Single((x) -> x == 1)\n" +
+            "    Console.WriteLine(found)\n" +
+            "}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Single"));
+
+        Assert.NotNull(hover);
+        var value = hover.Contents.ToString();
+        Assert.Contains("Single", value, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("float32", value, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("single-precision", value, System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ComputeHover_ExtensionMethodInvocation_WithFuncLiteral_ResolvesToMethod()
+    {
+        // The hover bug was independent of the argument form: the explicit
+        // `func(...) bool { ... }` predicate spelling must also hover to the
+        // method, not the float32 type.
+        const string source =
+            "package P\n" +
+            "import System\n" +
+            "import System.Linq\n" +
+            "import System.Collections.Generic\n" +
+            "func main() {\n" +
+            "    let nums = List[int32]()\n" +
+            "    nums.Add(1)\n" +
+            "    let found = nums.Single(func(x int32) bool { return x == 1 })\n" +
+            "    Console.WriteLine(found)\n" +
+            "}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Single"));
+
+        Assert.NotNull(hover);
+        var value = hover.Contents.ToString();
+        Assert.Contains("Single", value, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("single-precision", value, System.StringComparison.OrdinalIgnoreCase);
+    }
+
     private static ReferenceResolver CreateReferencePackResolver()
     {
         var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location);

@@ -111,6 +111,86 @@ public static class SemanticLookup
     }
 
     /// <summary>
+    /// Issue #891: resolves the imported CLR method that an invoked call
+    /// expression bound to. The lowered call nodes do not retain their
+    /// originating syntax, so the match is by method name and arity (the
+    /// extension-method form carries one extra leading parameter for the
+    /// receiver). This returns the exact overload chosen by overload
+    /// resolution — including generic extension methods such as LINQ
+    /// <c>Single&lt;TSource&gt;</c> — so hover can show the invoked method rather
+    /// than an unrelated type that merely shares its name (e.g.
+    /// <c>System.Single</c>).
+    /// </summary>
+    /// <param name="compilation">The compilation whose bound program is searched.</param>
+    /// <param name="methodName">The invoked method's simple name.</param>
+    /// <param name="argumentCount">The number of arguments at the call site.</param>
+    /// <param name="method">On success, the resolved CLR method.</param>
+    /// <param name="overloadCount">On success, the number of same-named overloads on the declaring type.</param>
+    /// <returns><see langword="true"/> when an invoked imported method was found.</returns>
+    public static bool TryResolveInvokedImportedMethod(
+        Compilation compilation,
+        string methodName,
+        int argumentCount,
+        out System.Reflection.MethodInfo method,
+        out int overloadCount)
+    {
+        method = null;
+        overloadCount = 0;
+        if (compilation == null || string.IsNullOrEmpty(methodName))
+        {
+            return false;
+        }
+
+        BoundProgram program;
+        try
+        {
+            program = compilation.BoundProgram;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+
+        foreach (var root in EnumerateBoundRoots(program))
+        {
+            if (root == null)
+            {
+                continue;
+            }
+
+            foreach (var node in FindBoundNodes<BoundNode>(root))
+            {
+                var candidate = node switch
+                {
+                    BoundImportedInstanceCallExpression instanceCall => instanceCall.Method,
+                    BoundImportedCallExpression staticCall => staticCall.Function?.Method,
+                    _ => null,
+                };
+
+                if (candidate == null || !string.Equals(candidate.Name, methodName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                // An instance/static call has one parameter per argument; an
+                // imported extension method dispatched with receiver syntax has
+                // one extra leading parameter (the receiver).
+                var parameterCount = candidate.GetParameters().Length;
+                if (parameterCount != argumentCount && parameterCount != argumentCount + 1)
+                {
+                    continue;
+                }
+
+                method = candidate;
+                overloadCount = CountSameNamedMethods(candidate);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Pre-builds the per-compilation <c>SemanticModel</c> and its references
     /// index. Intended for the workspace warm-up path so that the first
     /// user-facing CodeLens / hover / definition request returns from cache
@@ -971,6 +1051,42 @@ public static class SemanticLookup
     private static bool IsIdentifierStart(char c)
     {
         return c == '_' || char.IsLetter(c);
+    }
+
+    private static IEnumerable<BoundNode> EnumerateBoundRoots(BoundProgram program)
+    {
+        if (program == null)
+        {
+            yield break;
+        }
+
+        if (program.Statement != null)
+        {
+            yield return program.Statement;
+        }
+
+        foreach (var body in program.Functions.Values)
+        {
+            if (body != null)
+            {
+                yield return body;
+            }
+        }
+    }
+
+    private static int CountSameNamedMethods(System.Reflection.MethodInfo method)
+    {
+        var declaringType = method.DeclaringType;
+        if (declaringType == null)
+        {
+            return 1;
+        }
+
+        var count = ClrTypeUtilities.SafeGetMethods(
+                declaringType,
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance)
+            .Count(m => string.Equals(m.Name, method.Name, StringComparison.Ordinal) && !m.IsSpecialName);
+        return count > 0 ? count : 1;
     }
 
     private static bool IsIdentifierPart(char c)
