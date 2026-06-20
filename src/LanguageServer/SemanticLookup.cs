@@ -521,7 +521,7 @@ public static class SemanticLookup
 
         var declarations = new Dictionary<SyntaxToken, Symbol>();
         var globals = new Dictionary<string, Symbol>(StringComparer.Ordinal);
-        var localDeclarations = new Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>>();
+        var localDeclarations = new Dictionary<SyntaxNode, Dictionary<string, Symbol>>();
 
         foreach (var variable in compilation.GlobalScope.Variables)
         {
@@ -610,6 +610,23 @@ public static class SemanticLookup
                         if (method.ThisParameter != null)
                         {
                             GetLocals(localDeclarations, method.Declaration)[method.ThisParameter.Name] = method.ThisParameter;
+                        }
+                    }
+                }
+
+                // Issue #894: register parameters and implicit 'this' for
+                // user-defined `init(...)` constructors so that hover,
+                // go-to-definition, etc. work inside constructor bodies exactly
+                // as they do inside method bodies. The constructor body locals
+                // themselves are matched in MapLocalVariables.
+                foreach (var constructor in aggregate.ExplicitConstructors)
+                {
+                    if (constructor.Declaration != null)
+                    {
+                        MapParameters(constructor.Declaration, constructor.Parameters, declarations, localDeclarations);
+                        if (constructor.Function.ThisParameter != null)
+                        {
+                            GetLocals(localDeclarations, constructor.Declaration)[constructor.Function.ThisParameter.Name] = constructor.Function.ThisParameter;
                         }
                     }
                 }
@@ -718,22 +735,40 @@ public static class SemanticLookup
         FunctionDeclarationSyntax declaration,
         ImmutableArray<ParameterSymbol> parameters,
         Dictionary<SyntaxToken, Symbol> declarations,
-        Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> localDeclarations)
+        Dictionary<SyntaxNode, Dictionary<string, Symbol>> localDeclarations)
     {
-        var syntaxParameters = declaration.Parameters.ToArray();
+        MapParametersCore(declaration, declaration.Parameters.ToArray(), parameters, declarations, localDeclarations);
+    }
+
+    private static void MapParameters(
+        ConstructorDeclarationSyntax declaration,
+        ImmutableArray<ParameterSymbol> parameters,
+        Dictionary<SyntaxToken, Symbol> declarations,
+        Dictionary<SyntaxNode, Dictionary<string, Symbol>> localDeclarations)
+    {
+        MapParametersCore(declaration, declaration.Parameters.ToArray(), parameters, declarations, localDeclarations);
+    }
+
+    private static void MapParametersCore(
+        SyntaxNode scope,
+        ParameterSyntax[] syntaxParameters,
+        ImmutableArray<ParameterSymbol> parameters,
+        Dictionary<SyntaxToken, Symbol> declarations,
+        Dictionary<SyntaxNode, Dictionary<string, Symbol>> localDeclarations)
+    {
         var symbolIndex = parameters.Length - syntaxParameters.Length;
         for (var i = 0; i < syntaxParameters.Length && symbolIndex + i < parameters.Length; i++)
         {
             var symbol = parameters[symbolIndex + i];
             declarations[syntaxParameters[i].Identifier] = symbol;
-            GetLocals(localDeclarations, declaration)[symbol.Name] = symbol;
+            GetLocals(localDeclarations, scope)[symbol.Name] = symbol;
         }
     }
 
     private static void MapLocalVariables(
         Compilation compilation,
         Dictionary<SyntaxToken, Symbol> declarations,
-        Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> localDeclarations,
+        Dictionary<SyntaxNode, Dictionary<string, Symbol>> localDeclarations,
         Dictionary<SyntaxTree, NodeBuckets> bucketsByTree,
         bool useIncrementalCaches)
     {
@@ -747,10 +782,35 @@ public static class SemanticLookup
             return;
         }
 
+        // Issue #894: constructor (`init`) bodies are keyed in
+        // BoundProgram.Functions by a synthesized instance-method-shaped
+        // FunctionSymbol whose Declaration is null (the declaring syntax is a
+        // ConstructorDeclarationSyntax). Build a reverse map so we can resolve
+        // constructor body locals against the constructor's body syntax exactly
+        // like a method body.
+        var constructorByFunction = new Dictionary<FunctionSymbol, ConstructorDeclarationSyntax>();
+        foreach (var aggregate in compilation.GlobalScope.Structs)
+        {
+            foreach (var constructor in aggregate.ExplicitConstructors)
+            {
+                if (constructor.Declaration != null && constructor.Function != null)
+                {
+                    constructorByFunction[constructor.Function] = constructor.Declaration;
+                }
+            }
+        }
+
         foreach (var pair in program.Functions)
         {
-            var declaration = pair.Key.Declaration;
-            if (declaration == null)
+            SyntaxNode scope = pair.Key.Declaration;
+            var bodySyntax = pair.Key.Declaration?.Body;
+            if (scope == null && constructorByFunction.TryGetValue(pair.Key, out var constructorDeclaration))
+            {
+                scope = constructorDeclaration;
+                bodySyntax = constructorDeclaration.Body;
+            }
+
+            if (scope == null || bodySyntax == null)
             {
                 continue;
             }
@@ -761,11 +821,11 @@ public static class SemanticLookup
             // result is a pure function of the lowered body instance (and its
             // backing syntax), which the BoundBodyCache reuses by reference for
             // unchanged files, so memoize it by that instance.
-            var entries = GetFunctionLocals(declaration, pair.Value, useIncrementalCaches);
+            var entries = GetFunctionLocals(bodySyntax, pair.Value, useIncrementalCaches);
             foreach (var (identifier, variable) in entries)
             {
                 declarations[identifier] = variable;
-                GetLocals(localDeclarations, declaration)[variable.Name] = variable;
+                GetLocals(localDeclarations, scope)[variable.Name] = variable;
             }
         }
 
@@ -794,13 +854,13 @@ public static class SemanticLookup
     /// memo hit; the edited file's body is a fresh instance, so it recomputes.
     /// </summary>
     private static IReadOnlyList<(SyntaxToken Identifier, Symbol Variable)> GetFunctionLocals(
-        FunctionDeclarationSyntax declaration,
+        BlockStatementSyntax bodySyntax,
         BoundBlockStatement body,
         bool useIncrementalCaches)
     {
         if (!useIncrementalCaches)
         {
-            return ComputeFunctionLocals(declaration, body);
+            return ComputeFunctionLocals(bodySyntax, body);
         }
 
         if (FunctionLocalsCache.TryGetValue(body, out var cached))
@@ -810,17 +870,17 @@ public static class SemanticLookup
         }
 
         System.Threading.Interlocked.Increment(ref functionLocalsCacheMisses);
-        return FunctionLocalsCache.GetValue(body, _ => ComputeFunctionLocals(declaration, body));
+        return FunctionLocalsCache.GetValue(body, _ => ComputeFunctionLocals(bodySyntax, body));
     }
 
     private static IReadOnlyList<(SyntaxToken Identifier, Symbol Variable)> ComputeFunctionLocals(
-        FunctionDeclarationSyntax declaration,
+        BlockStatementSyntax bodySyntax,
         BoundBlockStatement body)
     {
-        var syntaxLocalIdentifiers = FindNodes<VariableDeclarationSyntax>(new[] { declaration.Body })
+        var syntaxLocalIdentifiers = FindNodes<VariableDeclarationSyntax>(new[] { bodySyntax })
             .Select(v => v.Identifier)
-            .Concat(FindNodes<ForRangeStatementSyntax>(new[] { declaration.Body }).SelectMany(f => EnumerateForRangeIdentifiers(f)))
-            .Concat(FindNodes<AwaitForRangeStatementSyntax>(new[] { declaration.Body }).Select(f => f.Identifier));
+            .Concat(FindNodes<ForRangeStatementSyntax>(new[] { bodySyntax }).SelectMany(f => EnumerateForRangeIdentifiers(f)))
+            .Concat(FindNodes<AwaitForRangeStatementSyntax>(new[] { bodySyntax }).Select(f => f.Identifier));
 
         return MatchBoundLocals(body, syntaxLocalIdentifiers);
     }
@@ -868,8 +928,8 @@ public static class SemanticLookup
     }
 
     private static Dictionary<string, Symbol> GetLocals(
-        Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> locals,
-        FunctionDeclarationSyntax declaration)
+        Dictionary<SyntaxNode, Dictionary<string, Symbol>> locals,
+        SyntaxNode declaration)
     {
         if (!locals.TryGetValue(declaration, out var functionLocals))
         {
@@ -921,6 +981,9 @@ public static class SemanticLookup
         {
             case FunctionDeclarationSyntax f:
                 buckets.Functions.Add(f);
+                break;
+            case ConstructorDeclarationSyntax c:
+                buckets.Constructors.Add(c);
                 break;
             case StructDeclarationSyntax s:
                 buckets.Structs.Add(s);
@@ -1103,6 +1166,8 @@ public static class SemanticLookup
     {
         public List<FunctionDeclarationSyntax> Functions { get; } = new();
 
+        public List<ConstructorDeclarationSyntax> Constructors { get; } = new();
+
         public List<StructDeclarationSyntax> Structs { get; } = new();
 
         public List<AccessorExpressionSyntax> Accessors { get; } = new();
@@ -1124,7 +1189,7 @@ public static class SemanticLookup
         private readonly Dictionary<SyntaxToken, Symbol> declarations;
         private readonly Dictionary<(string FileName, int SpanStart, int SpanEnd), Symbol> declarationsBySpan;
         private readonly Dictionary<string, Symbol> globals;
-        private readonly Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> localDeclarations;
+        private readonly Dictionary<SyntaxNode, Dictionary<string, Symbol>> localDeclarations;
         private readonly object referencesLock = new object();
         private Dictionary<Symbol, List<SyntaxToken>> referencesIndex;
 
@@ -1143,6 +1208,7 @@ public static class SemanticLookup
         // name (not tree instance) so interpolation-hole tokens — whose re-parsed sub-tree shares
         // the file name and uses absolute spans — land in the right bucket.
         private Dictionary<string, FunctionDeclarationSyntax[]> cachedFunctionsByFile;
+        private Dictionary<string, ConstructorDeclarationSyntax[]> cachedConstructorsByFile;
         private Dictionary<string, StructDeclarationSyntax[]> cachedStructsByFile;
         private Dictionary<SyntaxTree, AccessorExpressionSyntax[]> cachedAccessorsByTree;
         private Dictionary<SyntaxTree, FieldAssignmentExpressionSyntax[]> cachedFieldAssignmentsByTree;
@@ -1161,7 +1227,7 @@ public static class SemanticLookup
             Compilation compilation,
             Dictionary<SyntaxToken, Symbol> declarations,
             Dictionary<string, Symbol> globals,
-            Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> localDeclarations,
+            Dictionary<SyntaxNode, Dictionary<string, Symbol>> localDeclarations,
             IReadOnlyDictionary<SyntaxTree, NodeBuckets> bucketsByTree)
         {
             this.compilation = compilation;
@@ -1202,6 +1268,7 @@ public static class SemanticLookup
             this.cachedForRangesByTree = new Dictionary<SyntaxTree, ForRangeStatementSyntax[]>(treeArray.Length);
             this.cachedAwaitForRangesByTree = new Dictionary<SyntaxTree, AwaitForRangeStatementSyntax[]>(treeArray.Length);
             var functionsByFile = new Dictionary<string, List<FunctionDeclarationSyntax>>();
+            var constructorsByFile = new Dictionary<string, List<ConstructorDeclarationSyntax>>();
             var structsByFile = new Dictionary<string, List<StructDeclarationSyntax>>();
             this.memberAccessTokenSpans = new HashSet<(string, int, int)>();
             this.fieldAssignmentTokenSpans = new HashSet<(string, int, int)>();
@@ -1225,6 +1292,17 @@ public static class SemanticLookup
                     }
 
                     fns.AddRange(bucket.Functions);
+                }
+
+                if (bucket.Constructors.Count > 0)
+                {
+                    if (!constructorsByFile.TryGetValue(fileName, out var ctors))
+                    {
+                        ctors = new List<ConstructorDeclarationSyntax>();
+                        constructorsByFile[fileName] = ctors;
+                    }
+
+                    ctors.AddRange(bucket.Constructors);
                 }
 
                 if (bucket.Structs.Count > 0)
@@ -1261,6 +1339,7 @@ public static class SemanticLookup
             }
 
             this.cachedFunctionsByFile = functionsByFile.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToArray());
+            this.cachedConstructorsByFile = constructorsByFile.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToArray());
             this.cachedStructsByFile = structsByFile.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToArray());
         }
 
@@ -1307,6 +1386,15 @@ public static class SemanticLookup
             if (function != null && this.localDeclarations.TryGetValue(function, out var locals) && locals.TryGetValue(token.Text, out var local))
             {
                 return local;
+            }
+
+            // Issue #894: a token inside an `init(...)` constructor body resolves
+            // its parameters and body locals against the constructor's local
+            // scope, mirroring the method-body path above.
+            var constructor = this.FindContainingConstructor(token);
+            if (constructor != null && this.localDeclarations.TryGetValue(constructor, out var ctorLocals) && ctorLocals.TryGetValue(token.Text, out var ctorLocal))
+            {
+                return ctorLocal;
             }
 
             var loopLocal = this.ResolveForRangeLoopLocal(token);
@@ -1525,6 +1613,26 @@ public static class SemanticLookup
                     {
                         enclosing = decl;
                         enclosingBodyLength = method.Body.Span.Length;
+                    }
+                }
+
+                // Issue #894: `init(...)` constructor bodies also have an implicit
+                // `this` receiver, so a bare member reference (e.g. `Area = ...`)
+                // inside a constructor must resolve to the class member just like
+                // it does inside a method body.
+                foreach (var constructor in decl.Constructors)
+                {
+                    if (constructor.Body == null)
+                    {
+                        continue;
+                    }
+
+                    if (constructor.Body.Span.Start <= token.Span.Start
+                        && token.Span.End <= constructor.Body.Span.End
+                        && constructor.Body.Span.Length < enclosingBodyLength)
+                    {
+                        enclosing = decl;
+                        enclosingBodyLength = constructor.Body.Span.Length;
                     }
                 }
             }
@@ -1784,6 +1892,28 @@ public static class SemanticLookup
                 {
                     best = f;
                     bestLength = f.Span.Length;
+                }
+            }
+
+            return best;
+        }
+
+        private ConstructorDeclarationSyntax FindContainingConstructor(SyntaxToken token)
+        {
+            ConstructorDeclarationSyntax best = null;
+            var bestLength = int.MaxValue;
+            var fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty;
+            if (!this.cachedConstructorsByFile.TryGetValue(fileName, out var constructors))
+            {
+                return null;
+            }
+
+            foreach (var c in constructors)
+            {
+                if (c.Span.Start <= token.Span.Start && token.Span.End <= c.Span.End && c.Span.Length < bestLength)
+                {
+                    best = c;
+                    bestLength = c.Span.Length;
                 }
             }
 
