@@ -289,7 +289,7 @@ public static class HoverComputer
         member = null;
         overloadCount = 0;
 
-        foreach (var context in FindAccessorMemberContexts(tree, token))
+        foreach (var context in FindAccessorMemberContexts(tree, token).Concat(FindObjectInitializerMemberContexts(tree, token)))
         {
             if (!TryResolveClrReceiver(tree, compilation, context.ReceiverExpression, out var receiver))
             {
@@ -351,8 +351,10 @@ public static class HoverComputer
             return null;
         }
 
-        // Case 1: member access expression (e.g. var x = person.Name)
-        foreach (var context in FindAccessorMemberContexts(tree, token))
+        // Case 1: member access expression (e.g. var x = person.Name), or an
+        // object-initializer property name (e.g. Point() { X = 1 }) whose receiver
+        // is the constructed G# struct/class type.
+        foreach (var context in FindAccessorMemberContexts(tree, token).Concat(FindObjectInitializerMemberContexts(tree, token)))
         {
             var structSymbol = ResolveReceiverStructSymbol(tree, compilation, context.ReceiverExpression);
             if (structSymbol != null)
@@ -548,6 +550,33 @@ public static class HoverComputer
         }
     }
 
+    /// <summary>
+    /// Issue #522 / #897: yields the member-resolution context for a token that is the
+    /// <see cref="PropertyInitializerSyntax.PropertyIdentifier"/> of a C#-style object
+    /// initializer (<c>T(args) { Prop = v }</c>). The "receiver" is the constructor call
+    /// (<see cref="ObjectCreationExpressionSyntax.Target"/>) whose constructed type the
+    /// property/field is looked up on — mirroring the accessor member contexts so the
+    /// same CLR and G# resolution paths apply to initializer property names.
+    /// </summary>
+    private static IEnumerable<(ExpressionSyntax ReceiverExpression, string MemberName)> FindObjectInitializerMemberContexts(SyntaxTree tree, SyntaxToken token)
+    {
+        if (token == null || token.Kind != SyntaxKind.IdentifierToken)
+        {
+            yield break;
+        }
+
+        foreach (var creation in FindNodes<ObjectCreationExpressionSyntax>(tree.Root))
+        {
+            foreach (var initializer in creation.Initializers)
+            {
+                if (MatchesToken(initializer.PropertyIdentifier, token))
+                {
+                    yield return (creation.Target, initializer.PropertyIdentifier.Text);
+                }
+            }
+        }
+    }
+
     private static bool TryResolveAccessorMemberContext(
         SyntaxTree tree,
         ExpressionSyntax expression,
@@ -626,6 +655,19 @@ public static class HoverComputer
             case CallExpressionSyntax call when TryResolveClrTypeFromSymbol(SemanticLookup.ResolveSymbol(compilation, call.Identifier), out var callType):
                 receiver = new ClrReceiver(callType, StaticMembers: false);
                 return true;
+            case CallExpressionSyntax constructorCall:
+                // A constructor call on an imported CLR type (e.g. `ProcessStartInfo("x")`)
+                // whose identifier does not resolve to a symbol: fall back to resolving the
+                // type by name so instance members of the constructed object are available
+                // (object-initializer property names, etc.).
+                var constructedType = SemanticLookup.ResolveImportedClrType(tree, compilation, constructorCall.Identifier.Text);
+                if (constructedType != null)
+                {
+                    receiver = new ClrReceiver(constructedType, StaticMembers: false);
+                    return true;
+                }
+
+                break;
             case AccessorExpressionSyntax accessor when TryResolveClrMemberExpression(tree, compilation, accessor, out var memberType):
                 receiver = new ClrReceiver(memberType, StaticMembers: false);
                 return true;
@@ -1324,6 +1366,15 @@ public static class CompletionComputer
             return memberItems;
         }
 
+        // Issue #522 / #897: inside a C#-style object-initializer block
+        // (`T(args) { <caret> }`), offer the writable instance members of the
+        // constructed type instead of the global keyword/symbol list.
+        var initializerItems = TryComputeObjectInitializerCompletions(content, compilation, offset);
+        if (initializerItems != null)
+        {
+            return initializerItems;
+        }
+
         var items = new List<CompletionItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
@@ -1430,6 +1481,203 @@ public static class CompletionComputer
         }
 
         return items;
+    }
+
+    /// <summary>
+    /// Issue #522 / #897: when the caret sits inside a C#-style object-initializer
+    /// block (<c>T(args) { Prop = v, &lt;caret&gt; }</c>) in a property-name position,
+    /// returns the writable instance members (settable properties / writable fields)
+    /// of the constructed type. Returns <see langword="null"/> when the caret is not
+    /// in such a position so the caller falls back to the global completion list.
+    /// </summary>
+    private static IReadOnlyList<CompletionItem> TryComputeObjectInitializerCompletions(DocumentContent content, Compilation compilation, int offset)
+    {
+        var root = content.SyntaxTree.Root;
+
+        // Well-formed initializer: the brace block parses as an ObjectCreationExpression.
+        var creation = EnumerateNodes(root).OfType<ObjectCreationExpressionSyntax>()
+            .Where(c => IsInInitializerNamePosition(c, offset))
+            .OrderBy(c => c.Span.Length)
+            .FirstOrDefault();
+        var receiver = creation?.Target;
+
+        // Mid-typing recovery: `T(args) { Partial }` with no `=` parses the brace
+        // block as a standalone BlockStatement abutting the constructor call. Recover
+        // the constructor call as the receiver so the first property name still completes.
+        receiver ??= TryFindOrphanInitializerReceiver(root, offset);
+        if (receiver == null)
+        {
+            return null;
+        }
+
+        var (function, locals) = SemanticLookup.GetExpressionBindingContext(compilation, content.SyntaxTree, offset);
+        var receiverType = GSharp.Core.CodeAnalysis.Binding.Binder.TryInferExpressionType(
+            compilation.GlobalScope,
+            compilation.References,
+            function,
+            locals,
+            receiver);
+        if (receiverType == null)
+        {
+            // Caret is in an initializer position but the target type can't be inferred —
+            // suppress the global list rather than offering irrelevant keywords/symbols.
+            return new List<CompletionItem>();
+        }
+
+        var items = new List<CompletionItem>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        AddObjectInitializerMembers(receiverType, items, seen);
+        return items;
+    }
+
+    /// <summary>
+    /// Determines whether <paramref name="offset"/> sits inside the braces of
+    /// <paramref name="creation"/> in a property-name position — i.e. not within the
+    /// value expression of an existing initializer (where the global list belongs).
+    /// </summary>
+    private static bool IsInInitializerNamePosition(ObjectCreationExpressionSyntax creation, int offset)
+    {
+        var open = creation.OpenBraceToken;
+        if (open == null || open.IsMissing)
+        {
+            return false;
+        }
+
+        var start = open.Span.End;
+        var end = creation.CloseBraceToken != null && !creation.CloseBraceToken.IsMissing
+            ? creation.CloseBraceToken.Span.Start
+            : creation.Span.End;
+        if (offset < start || offset > end)
+        {
+            return false;
+        }
+
+        foreach (var initializer in creation.Initializers)
+        {
+            var equals = initializer.EqualsToken;
+            if (equals != null && !equals.IsMissing && offset >= equals.Span.Start && offset <= initializer.Span.End)
+            {
+                // Caret is on the value side of `Prop = value` — defer to the global list.
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Recovers the constructor call that an object-initializer block belongs to when
+    /// the block failed to parse as an <see cref="ObjectCreationExpressionSyntax"/>
+    /// (e.g. the first property name typed without a trailing <c>=</c>). The block then
+    /// parses as a standalone <see cref="BlockStatementSyntax"/> abutting the call.
+    /// </summary>
+    private static ExpressionSyntax TryFindOrphanInitializerReceiver(SyntaxNode root, int offset)
+    {
+        var block = EnumerateNodes(root).OfType<BlockStatementSyntax>()
+            .Where(b => b.OpenBraceToken != null
+                && !b.OpenBraceToken.IsMissing
+                && offset >= b.OpenBraceToken.Span.End
+                && offset <= (b.CloseBraceToken != null && !b.CloseBraceToken.IsMissing ? b.CloseBraceToken.Span.Start : b.Span.End))
+            .OrderBy(b => b.Span.Length)
+            .FirstOrDefault();
+        if (block == null)
+        {
+            return null;
+        }
+
+        var braceStart = block.OpenBraceToken.Span.Start;
+
+        // The receiver is a constructor call (or object creation) whose end immediately
+        // precedes the block's open brace, separated only by whitespace.
+        ExpressionSyntax best = null;
+        foreach (var node in EnumerateNodes(root))
+        {
+            if (node is not ExpressionSyntax candidate)
+            {
+                continue;
+            }
+
+            if (node is not (CallExpressionSyntax or ObjectCreationExpressionSyntax))
+            {
+                continue;
+            }
+
+            if (candidate.Span.End <= braceStart
+                && IsWhitespaceBetween(root.SyntaxTree, candidate.Span.End, braceStart)
+                && (best == null || candidate.Span.End > best.Span.End))
+            {
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    private static bool IsWhitespaceBetween(SyntaxTree tree, int start, int end)
+    {
+        if (end <= start)
+        {
+            return true;
+        }
+
+        var text = tree.Text.ToString(start, end - start);
+        foreach (var ch in text)
+        {
+            if (!char.IsWhiteSpace(ch))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Adds the writable instance members (settable properties / writable fields) of
+    /// <paramref name="receiverType"/> as object-initializer completions.
+    /// </summary>
+    private static void AddObjectInitializerMembers(TypeSymbol receiverType, List<CompletionItem> items, HashSet<string> seen)
+    {
+        if (receiverType is StructSymbol structSymbol)
+        {
+            for (var current = structSymbol; current != null; current = current.BaseClass)
+            {
+                foreach (var field in current.Fields)
+                {
+                    AddItem(items, seen, field.Name, CompletionItemKind.Field, HoverComputer.FormatSymbol(field));
+                }
+
+                foreach (var property in current.Properties)
+                {
+                    AddItem(items, seen, property.Name, CompletionItemKind.Property, $"{property.Name}: {property.Type?.Name}");
+                }
+            }
+
+            return;
+        }
+
+        var clrType = receiverType?.ClrType;
+        if (clrType == null)
+        {
+            return;
+        }
+
+        var flags = BindingFlags.Public | BindingFlags.Instance;
+        foreach (var property in ClrTypeUtilities.SafeGetProperties(clrType, flags))
+        {
+            if (property.CanWrite && property.GetIndexParameters().Length == 0)
+            {
+                AddItem(items, seen, property.Name, CompletionItemKind.Property, $"{property.Name}: {property.PropertyType.Name}");
+            }
+        }
+
+        foreach (var field in ClrTypeUtilities.SafeGetFields(clrType, flags))
+        {
+            if (!field.IsInitOnly && !field.IsLiteral)
+            {
+                AddItem(items, seen, field.Name, CompletionItemKind.Field, $"{field.Name}: {field.FieldType.Name}");
+            }
+        }
     }
 
     private static FunctionDeclarationSyntax FindContainingFunction(SyntaxTree tree, int offset)

@@ -12,16 +12,17 @@ namespace GSharp.LanguageServer.Tests;
 public class SemanticTokensHandlerTests
 {
     [Fact]
-    public void Tokenize_ClassifiesKeywords()
+    public void Tokenize_DoesNotClassifyKeywords()
     {
         const string source = "var x = 42\n";
         var content = LanguageServerTestHelpers.Content(source);
         var tokens = GetTokens(content);
 
-        // "var" should be classified as keyword (index 12)
+        // Keywords are intentionally left to the TextMate grammar so their color
+        // stays stable across the LSP handshake. "var" must NOT be emitted as a
+        // semantic token.
         var varToken = FindToken(tokens, 0, 0, 3);
-        Assert.NotNull(varToken);
-        Assert.Equal(TokenTypeIndex("Keyword"), varToken.Value.TokenType);
+        Assert.Null(varToken);
     }
 
     [Fact]
@@ -57,10 +58,9 @@ public class SemanticTokensHandlerTests
         var content = LanguageServerTestHelpers.Content(source);
         var tokens = GetTokens(content);
 
-        // "func" keyword
+        // "func" keyword is left to the TextMate grammar — no semantic token.
         var funcKeyword = FindToken(tokens, 0, 0, 4);
-        Assert.NotNull(funcKeyword);
-        Assert.Equal(TokenTypeIndex("Keyword"), funcKeyword.Value.TokenType);
+        Assert.Null(funcKeyword);
 
         // "add" identifier should be Function with Declaration modifier
         var addToken = FindToken(tokens, 0, 5, 3);
@@ -109,11 +109,10 @@ public class SemanticTokensHandlerTests
         var content = LanguageServerTestHelpers.Content(source);
         var tokens = GetTokens(content);
 
-        // ADR-0078: the `struct` keyword IS the declaration head; it sits at
-        // column 0 with length 6.
+        // ADR-0078: the `struct` keyword IS the declaration head, but keywords
+        // are left to the TextMate grammar, so it emits no semantic token.
         var structKeyword = FindToken(tokens, 0, 0, 6);
-        Assert.NotNull(structKeyword);
-        Assert.Equal(TokenTypeIndex("Keyword"), structKeyword.Value.TokenType);
+        Assert.Null(structKeyword);
 
         // "Point" should be Struct with Declaration (position 7, length 5).
         var pointToken = FindToken(tokens, 0, 7, 5);

@@ -384,6 +384,8 @@ public static class SymbolDisplay
 
     private static void AppendProperty(PartBuilder builder, SymbolDisplayFormat format, PropertySymbol property)
     {
+        builder.Keyword("prop");
+        builder.Space();
         builder.Add(SymbolDisplayPartKind.PropertyName, property.Name);
         builder.Space();
         builder.Type(FormatType(property.Type));
@@ -522,6 +524,18 @@ public static class SymbolDisplay
 
     private static void AppendClrMethod(PartBuilder builder, SymbolDisplayFormat format, MethodInfo method)
     {
+        // ADR-0023 parity: a CLR method compiled from `async`/`await` exposes a
+        // `Task[R]` (or `ValueTask[R]`) return in metadata, but G# renders async
+        // functions as `async func ... R` with the awaited result type. Mirror
+        // that here so an imported `async Task<R> M(...)` hovers as
+        // `async func (T) M(...) R` rather than the leaked `func ... Task[R]`.
+        var isAsync = format.IncludeModifiers && IsClrAsyncMethod(method);
+        if (isAsync)
+        {
+            builder.Keyword("async");
+            builder.Space();
+        }
+
         builder.Keyword("func");
         builder.Space();
 
@@ -551,11 +565,66 @@ public static class SymbolDisplay
 
         builder.Punctuation(")");
 
-        if (!method.ReturnType.IsSameAs(typeof(void)))
+        var returnType = isAsync ? UnwrapTaskReturnType(method.ReturnType) : method.ReturnType;
+        if (!returnType.IsSameAs(typeof(void)))
         {
             builder.Space();
-            builder.Type(FormatClrTypeName(method.ReturnType, format.QualifyNames));
+            builder.Type(FormatClrTypeName(returnType, format.QualifyNames));
         }
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when a reflected CLR method was compiled from an
+    /// <c>async</c> method (carries <c>AsyncStateMachineAttribute</c>). Uses
+    /// <see cref="MemberInfo.GetCustomAttributesData"/> rather than the generic
+    /// <c>GetCustomAttribute&lt;T&gt;()</c> so it works for methods loaded
+    /// through a <c>MetadataLoadContext</c> (the production <c>gsc</c> reference
+    /// path), where reflection-only types cannot be matched by runtime identity.
+    /// </summary>
+    private static bool IsClrAsyncMethod(MethodInfo method)
+    {
+        foreach (var attribute in method.GetCustomAttributesData())
+        {
+            if (attribute.AttributeType?.FullName == "System.Runtime.CompilerServices.AsyncStateMachineAttribute")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Unwraps the awaited result type of an async return: <c>Task[R]</c> /
+    /// <c>ValueTask[R]</c> resolve to <c>R</c>, the non-generic <c>Task</c> /
+    /// <c>ValueTask</c> resolve to <c>void</c>, and any other shape (e.g. an
+    /// async <c>IAsyncEnumerable[T]</c> iterator, or <c>async void</c>) is
+    /// returned unchanged. FullName matching keeps this correct under a
+    /// <c>MetadataLoadContext</c>.
+    /// </summary>
+    private static Type UnwrapTaskReturnType(Type returnType)
+    {
+        if (returnType == null)
+        {
+            return null;
+        }
+
+        if (returnType.IsGenericType && !returnType.IsGenericTypeDefinition)
+        {
+            var definitionName = returnType.GetGenericTypeDefinition()?.FullName;
+            if (definitionName == "System.Threading.Tasks.Task`1"
+                || definitionName == "System.Threading.Tasks.ValueTask`1")
+            {
+                return returnType.GetGenericArguments()[0];
+            }
+
+            return returnType;
+        }
+
+        return returnType.FullName == "System.Threading.Tasks.Task"
+            || returnType.FullName == "System.Threading.Tasks.ValueTask"
+            ? typeof(void)
+            : returnType;
     }
 
     private static string QualifiedName(SymbolDisplayFormat format, string packageName, string name)
@@ -569,7 +638,78 @@ public static class SymbolDisplay
 
     private static string FormatType(TypeSymbol type)
     {
-        return type == null || IsVoid(type) ? "void" : type.Name;
+        if (type == null || IsVoid(type))
+        {
+            return "void";
+        }
+
+        // Reconstruct the display name from the type's structure rather than
+        // returning the raw TypeSymbol.Name. For constructed generics backed by
+        // a CLR type (e.g. Task[string]) that raw name is the assembly-qualified
+        // Type.FullName (`System.Threading.Tasks.Task`1[[System.String, ...]]`),
+        // which leaks into hover. Recursing also keeps wrapper syntax in G# form
+        // (`[]T`, `T?`, `sequence[T]`, ...) while rendering imported element
+        // types nicely.
+        switch (type)
+        {
+            case NullableTypeSymbol nullable:
+                return $"{FormatType(nullable.UnderlyingType)}?";
+            case SliceTypeSymbol slice:
+                return $"[]{FormatType(slice.ElementType)}";
+            case AsyncSequenceTypeSymbol asyncSequence:
+                return $"sequence[{FormatType(asyncSequence.ElementType)}]";
+            case SequenceTypeSymbol sequence:
+                return $"sequence[{FormatType(sequence.ElementType)}]";
+            case MapTypeSymbol map:
+                return $"map[{FormatType(map.KeyType)},{FormatType(map.ValueType)}]";
+            case TupleTypeSymbol tuple:
+                return $"({string.Join(", ", tuple.ElementTypes.Select(FormatType))})";
+            case ImportedTypeSymbol imported:
+                return FormatImportedType(imported);
+            default:
+                return type.Name;
+        }
+    }
+
+    /// <summary>
+    /// Renders an <see cref="ImportedTypeSymbol"/> with a friendly, G#-flavored
+    /// name. A plain imported type is formatted from its CLR <see cref="Type"/>
+    /// (so constructed generics become <c>Outer[Arg]</c> and primitives map to
+    /// their G# spellings). A #313 symbolic construction — whose CLR form is
+    /// type-erased to <c>object</c> — is rebuilt from its open definition plus
+    /// the symbolic <see cref="ImportedTypeSymbol.TypeArguments"/>.
+    /// </summary>
+    private static string FormatImportedType(ImportedTypeSymbol imported)
+    {
+        if (!imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            var definition = imported.OpenDefinition;
+            var baseName = StripGenericArity(definition?.FullName ?? definition?.Name) ?? imported.Name;
+            var args = string.Join(", ", imported.TypeArguments.Select(a => a == null ? "?" : FormatType(a)));
+            return $"{baseName}[{args}]";
+        }
+
+        return FormatClrTypeName(imported.ClrType, qualifyNames: true);
+    }
+
+    /// <summary>
+    /// Strips the CLR generic-arity suffix (<c>`1</c>) and normalizes nested
+    /// type separators (<c>+</c> to <c>.</c>) from a reflected type name.
+    /// </summary>
+    private static string StripGenericArity(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return name;
+        }
+
+        var tickIndex = name.IndexOf('`');
+        if (tickIndex >= 0)
+        {
+            name = name.Substring(0, tickIndex);
+        }
+
+        return name.Replace('+', '.');
     }
 
     private static string FormatClrMemberName(Type declaringType, string name, SymbolDisplayFormat format)

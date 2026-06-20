@@ -91,7 +91,7 @@ public static class SemanticTokensComputer
             }
 
             // Interpolated string literals are decomposed: literal text is classified as String,
-            // while the hole expressions are tokenized as real code (identifiers, keywords, numbers).
+            // while the hole expressions are tokenized as real code (identifiers, numbers).
             if (token.Kind == SyntaxKind.InterpolatedStringToken)
             {
                 EmitInterpolatedStringTokens(builder, tree, text, token.Span, compilation, declarationPositions);
@@ -136,8 +136,8 @@ public static class SemanticTokensComputer
 
         // Collect classified hole tokens plus the hole-expression spans. String filler is emitted
         // only for the literal/delimiter text OUTSIDE the holes; inside a hole, classified tokens
-        // (identifiers, keywords, numbers) are overlaid and the remaining code (operators,
-        // punctuation, member names the model can't resolve) is left for the TextMate grammar so it
+        // (identifiers, numbers) are overlaid and the remaining code (operators, punctuation,
+        // keywords, member names the model can't resolve) is left for the TextMate grammar so it
         // is colored as code rather than as part of the surrounding string.
         var holeTokens = new List<(GSharp.Core.CodeAnalysis.Text.TextSpan Span, SemanticTokenType Type, SemanticTokenModifier[] Modifiers)>();
         var holeSpans = new List<GSharp.Core.CodeAnalysis.Text.TextSpan>();
@@ -371,11 +371,14 @@ public static class SemanticTokensComputer
             return (SemanticTokenType.Number, System.Array.Empty<SemanticTokenModifier>());
         }
 
-        // Keywords
-        if (IsKeyword(token.Kind))
-        {
-            return (SemanticTokenType.Keyword, System.Array.Empty<SemanticTokenModifier>());
-        }
+        // Keywords are intentionally NOT classified as semantic tokens. The
+        // TextMate grammar already colors them via fine-grained scopes
+        // (keyword.control, keyword.declaration, keyword.modifier, ...). Emitting
+        // a single flat semantic `keyword` type would override those scopes once
+        // the language server initializes, causing a visible color shift (e.g.
+        // control keywords recoloring from their `keyword.control` color to the
+        // generic `keyword` color). Leaving keywords to TextMate keeps their
+        // color stable across the LSP handshake under every theme.
 
         // Operators and punctuation — not classified as semantic tokens
         if (IsOperatorOrPunctuation(token.Kind))
@@ -468,11 +471,6 @@ public static class SemanticTokensComputer
         }
 
         return modifiers.ToArray();
-    }
-
-    private static bool IsKeyword(SyntaxKind kind)
-    {
-        return kind >= SyntaxKind.AsyncKeyword && kind <= SyntaxKind.FinallyKeyword;
     }
 
     private static bool IsOperatorOrPunctuation(SyntaxKind kind)
