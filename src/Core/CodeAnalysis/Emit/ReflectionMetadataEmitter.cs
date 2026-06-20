@@ -6860,6 +6860,80 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #903: when a generic imported (extension) call — e.g. a LINQ
+    /// <c>Single</c>/<c>First</c>/<c>Last</c> whose open return type is a bare
+    /// method type parameter <c>TSource</c> — is closed over a
+    /// same-compilation user element type (<c>List[Check].Single(…)</c> where
+    /// <c>Check</c> is a <see cref="StructSymbol"/> struct/class still being
+    /// compiled), <see cref="GetMethodEntityHandle(MethodInfo, ImmutableArray{TypeSymbol})"/>
+    /// encodes a MethodSpec whose type argument is the symbolic <c>Check</c>
+    /// (via <see cref="ArgIsSymbolicUserDefined"/>). The emitted call therefore
+    /// returns the reprojected element type directly on the stack — a raw
+    /// <c>Check</c> value for a struct, a <c>Check</c> reference for a class —
+    /// NOT the type-erased <c>object</c> that the placeholder-closed
+    /// <see cref="MethodInfo.ReturnType"/> reports.
+    /// <para>
+    /// Without this guard the body emitter would feed that erased
+    /// <c>object</c> placeholder into <c>EmitErasedObjectReturnWidening</c>,
+    /// which for a value-type element emits a spurious <c>unbox.any Check</c>
+    /// against a stack slot that already holds a <c>Check</c> value (ilverify
+    /// <c>StackUnexpected</c>/<c>StackObjRef</c> and a runtime crash), and for
+    /// a reference-type element emits a redundant <c>castclass</c>. Returning
+    /// the substituted symbolic return lets the caller short-circuit the
+    /// widening, exactly as the instance-method and property variants above do
+    /// for symbolic open-generic containers.
+    /// </para>
+    /// </summary>
+    /// <param name="method">The placeholder-closed generic method selected by overload resolution.</param>
+    /// <param name="typeArgSymbols">The per-MVar symbolic type arguments carried by the bound call (issue #903 surfaces same-compilation user types here).</param>
+    /// <param name="substitutedReturn">The reprojected symbolic return type, on success.</param>
+    /// <returns><see langword="true"/> when the call's symbolic type arguments
+    /// reproject the open return type to a same-compilation user type, so the
+    /// erasure-widening must be skipped.</returns>
+    internal bool TryGetSymbolicSubstitutedImportedCallReturn(
+        MethodInfo method,
+        ImmutableArray<TypeSymbol> typeArgSymbols,
+        out TypeSymbol substitutedReturn)
+    {
+        substitutedReturn = null;
+        if (method == null
+            || !method.IsGenericMethod
+            || typeArgSymbols.IsDefaultOrEmpty
+            || !typeArgSymbols.Any(ArgIsSymbolicUserDefined))
+        {
+            return false;
+        }
+
+        var openMethod = method.IsGenericMethodDefinition ? method : method.GetGenericMethodDefinition();
+        var openReturn = openMethod.ReturnType;
+        if (openReturn == null || openReturn.IsSameAs(typeof(void)))
+        {
+            return false;
+        }
+
+        // Map the open return signature through the symbolic method type
+        // arguments only (no receiver/type-level substitution): a bare
+        // `TSource` return resolves to the symbolic element type, while a
+        // constructed `IEnumerable<TResult>` return resolves to a symbolic
+        // instantiation. Either way, only a projection that actually surfaces
+        // a same-compilation user type means the MethodSpec deviates from the
+        // erased `object` placeholder and the widening must be suppressed.
+        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openReturn, null, default, openMethod, typeArgSymbols);
+        if (mapped == null || mapped == TypeSymbol.Error)
+        {
+            return false;
+        }
+
+        if (!TypeSymbol.ContainsSameCompilationUserType(mapped))
+        {
+            return false;
+        }
+
+        substitutedReturn = mapped;
+        return true;
+    }
+
+    /// <summary>
     /// Phase 4 emit parity: get a MemberRef for a CLR instance constructor.
     /// Handles both non-generic types (<c>StringBuilder()</c>) and constructed
     /// generic types (<c>List&lt;int&gt;()</c>, <c>Dictionary&lt;string, int&gt;()</c>).

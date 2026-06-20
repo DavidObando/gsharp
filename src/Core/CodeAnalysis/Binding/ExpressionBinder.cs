@@ -857,7 +857,84 @@ internal sealed partial class ExpressionBinder
             return typeof(int?);
         }
 
+        // Issue #903: a delegate-typed argument (an untyped/typed arrow lambda,
+        // a func literal, or a named delegate value) whose parameter or return
+        // type is a same-compilation user type has no CLR backing —
+        // FunctionTypeSymbol.ClrType is null because the user type is still
+        // being compiled, so GetEffectiveArgumentClrType returned null above.
+        // Without an effective CLR type the whole call (e.g.
+        // `List[Check].Single((c Check) -> c.Id == "x")`) fails overload
+        // resolution and reports GS0159. Erase the inner same-compilation types
+        // to their CLR ride-through (struct/class/interface/delegate → object,
+        // enum → int, type parameter → object) and rebuild a closed
+        // System.Func<>/System.Action<> shape so overload resolution can match
+        // a generic delegate parameter such as Func<TSource,bool>. The real
+        // element type is recovered downstream via the symbolic return-type and
+        // deferred-lambda machinery (MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs).
+        if (typeSymbol is FunctionTypeSymbol functionType
+            && TryBuildErasedDelegateClrType(functionType, out var erasedDelegate))
+        {
+            return erasedDelegate;
+        }
+
         return null;
+    }
+
+    /// <summary>
+    /// Issue #903: builds a closed <c>System.Func&lt;…&gt;</c>/<c>System.Action&lt;…&gt;</c>
+    /// CLR type for a <see cref="FunctionTypeSymbol"/> whose own
+    /// <see cref="TypeSymbol.ClrType"/> is null because one of its parameter or
+    /// return types is a same-compilation user type (still being compiled).
+    /// Each inner type is erased through
+    /// <see cref="GetEffectiveArgumentClrTypeForOverloadResolution"/> (so a
+    /// same-compilation struct/class becomes <c>object</c>, an enum becomes
+    /// <c>int</c>, etc.) and the closed delegate shape is reconstructed via
+    /// <see cref="FunctionTypeSymbol.Get(System.Collections.Immutable.ImmutableArray{TypeSymbol}, TypeSymbol)"/>,
+    /// reusing its existing CLR delegate construction. Returns
+    /// <see langword="false"/> when any inner type cannot be erased or the
+    /// arity has no shipped delegate shape (&gt;16 args).
+    /// </summary>
+    private bool TryBuildErasedDelegateClrType(FunctionTypeSymbol functionType, out Type erased)
+    {
+        erased = null;
+
+        // A variadic function type has no straightforward closed delegate
+        // erasure; leave it to the existing fallbacks.
+        if (functionType.HasVariadic)
+        {
+            return false;
+        }
+
+        var erasedParameters = ImmutableArray.CreateBuilder<TypeSymbol>(functionType.ParameterTypes.Length);
+        foreach (var parameterType in functionType.ParameterTypes)
+        {
+            var parameterClr = GetEffectiveArgumentClrTypeForOverloadResolution(parameterType);
+            if (parameterClr == null)
+            {
+                return false;
+            }
+
+            erasedParameters.Add(TypeSymbol.FromClrType(parameterClr));
+        }
+
+        TypeSymbol erasedReturn;
+        if (functionType.ReturnType == null || functionType.ReturnType == TypeSymbol.Void)
+        {
+            erasedReturn = TypeSymbol.Void;
+        }
+        else
+        {
+            var returnClr = GetEffectiveArgumentClrTypeForOverloadResolution(functionType.ReturnType);
+            if (returnClr == null)
+            {
+                return false;
+            }
+
+            erasedReturn = TypeSymbol.FromClrType(returnClr);
+        }
+
+        erased = FunctionTypeSymbol.Get(erasedParameters.ToImmutable(), erasedReturn).ClrType;
+        return erased != null;
     }
 
     private bool TryBindClrMethodGroup(BoundExpression receiver, Type declaringType, bool wantStatic, string name, out BoundExpression methodGroup)

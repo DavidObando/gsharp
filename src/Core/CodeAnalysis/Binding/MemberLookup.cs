@@ -556,7 +556,17 @@ internal sealed class MemberLookup
             {
                 var mapped = MapOpenClrTypeToSymbolic(a, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
                 symbolic.Add(mapped);
-                if (TypeSymbol.ContainsTypeParameter(mapped))
+
+                // Issue #833 surfaced this projection for in-scope type
+                // parameters. Issue #903 extends it to same-compilation user
+                // types: a constructed return like `IEnumerable<TSource>` over
+                // a `List[Check]` must surface `IEnumerable[Check]` so a
+                // chained call (`Where(…).ToList()`) and the consuming
+                // receiver keep the `Check` element identity instead of
+                // collapsing to the type-erased `IEnumerable<object>` (which
+                // for a value-type element is not even a legal up-cast).
+                if (TypeSymbol.ContainsTypeParameter(mapped)
+                    || TypeSymbol.ContainsSameCompilationUserType(mapped))
                 {
                     anyParam = true;
                 }
@@ -684,7 +694,17 @@ internal sealed class MemberLookup
         }
 
         var mapped = MapOpenClrTypeToSymbolic(openReturn, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs);
-        return TypeSymbol.ContainsTypeParameter(mapped) ? mapped : null;
+
+        // Issue #833 surfaces the override when the projection still contains an
+        // in-scope type parameter. Issue #903 extends this to same-compilation
+        // user element types: when the receiver is e.g. `List[Check]` and
+        // `Check` is a struct/class still being compiled, the closed CLR method
+        // erased `TSource` to `object`, so a generic return like `Single() →
+        // TSource` would otherwise surface as `object` and lose the `Check`
+        // identity (breaking `net.Id`). The symbolic projection recovers it.
+        return TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped)
+            ? mapped
+            : null;
     }
 
     /// <summary>
@@ -737,7 +757,13 @@ internal sealed class MemberLookup
         var anySymbolic = false;
         for (int i = 0; i < inferred.Length; i++)
         {
-            if (inferred[i] != null && TypeSymbol.ContainsTypeParameter(inferred[i]))
+            // Issue #833: an in-scope type parameter requires the symbolic
+            // vector. Issue #903: a same-compilation user type (e.g. `Check`
+            // recovered from a `List[Check]` receiver) does too — the closed
+            // CLR method erased it to `object`, so without the symbolic vector
+            // the call's return type / lambda parameter type would be `object`.
+            if (inferred[i] != null
+                && (TypeSymbol.ContainsTypeParameter(inferred[i]) || TypeSymbol.ContainsSameCompilationUserType(inferred[i])))
             {
                 anySymbolic = true;
                 break;

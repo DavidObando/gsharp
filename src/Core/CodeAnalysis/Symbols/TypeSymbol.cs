@@ -288,4 +288,89 @@ public class TypeSymbol : Symbol
                 return false;
         }
     }
+
+    /// <summary>
+    /// Issue #903: returns <c>true</c> when <paramref name="type"/> is, or
+    /// structurally contains, a user-defined type declared in the
+    /// <em>current compilation</em> that has no CLR backing yet (its
+    /// <see cref="ClrType"/> is <see langword="null"/> because the type is
+    /// still being compiled) — a <see cref="StructSymbol"/> (struct or class),
+    /// <see cref="EnumSymbol"/>, <see cref="InterfaceSymbol"/>, or
+    /// <see cref="DelegateTypeSymbol"/>.
+    /// <para>
+    /// Such a type is erased to <c>System.Object</c> (or its CLR ride-through)
+    /// during reflection-based overload resolution, which loses its symbolic
+    /// identity. This predicate is the same-compilation sibling of
+    /// <see cref="ContainsTypeParameter"/>: it lets the binder recognise when a
+    /// symbolic projection (recovered from a receiver's
+    /// <see cref="ImportedTypeSymbol.TypeArguments"/>) carries information the
+    /// type-erased closed CLR shape cannot represent, so the projection must be
+    /// surfaced instead of the erased reflection result. This is what makes
+    /// <c>List[Check].Single((c) -&gt; c.Id == "x")</c> and
+    /// <c>List[Check].Select((c) -&gt; c.Id)</c> recover the real
+    /// <c>Check</c> element type for both the lambda parameter and the call's
+    /// return type.
+    /// </para>
+    /// <para>
+    /// In-scope generic <see cref="TypeParameterSymbol"/>s (already covered by
+    /// <see cref="ContainsTypeParameter"/>) are intentionally excluded here.
+    /// </para>
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> if the type references a same-compilation user type without CLR backing.</returns>
+    public static bool ContainsSameCompilationUserType(TypeSymbol type)
+    {
+        switch (type)
+        {
+            case null:
+                return false;
+            case TypeParameterSymbol:
+                return false;
+            case NullableTypeSymbol n:
+                return ContainsSameCompilationUserType(n.UnderlyingType);
+            case SliceTypeSymbol s:
+                return ContainsSameCompilationUserType(s.ElementType);
+            case ArrayTypeSymbol a:
+                return ContainsSameCompilationUserType(a.ElementType);
+            case MapTypeSymbol m:
+                return ContainsSameCompilationUserType(m.KeyType) || ContainsSameCompilationUserType(m.ValueType);
+            case FunctionTypeSymbol fn:
+                foreach (var param in fn.ParameterTypes)
+                {
+                    if (ContainsSameCompilationUserType(param))
+                    {
+                        return true;
+                    }
+                }
+
+                return ContainsSameCompilationUserType(fn.ReturnType);
+            case TupleTypeSymbol tup:
+                foreach (var elem in tup.ElementTypes)
+                {
+                    if (ContainsSameCompilationUserType(elem))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in it.TypeArguments)
+                {
+                    if (ContainsSameCompilationUserType(arg))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            case StructSymbol:
+            case EnumSymbol:
+            case InterfaceSymbol:
+            case DelegateTypeSymbol:
+                return type.ClrType == null;
+            default:
+                return false;
+        }
+    }
 }
