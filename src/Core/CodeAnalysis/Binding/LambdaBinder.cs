@@ -309,6 +309,18 @@ internal sealed class LambdaBinder
         Scope = outerScope;
         setCurrentFunction(outerFunction);
 
+        // Issue #893: a value-returning function literal `func(p T) R { ... <expr> }`
+        // whose block body ends in a bare trailing expression treats that expression
+        // as the implicit return value (mirroring arrow-lambda semantics). Without
+        // this rewrite the trailing expression binds to a BoundExpressionStatement
+        // that the emitter pops and discards, leaving a non-void method body with no
+        // `ret` — invalid IL that the CLR rejects with InvalidProgramException at
+        // runtime. Rewrite the trailing expression-statement into a converted
+        // `return` so the literal actually returns its value. Void literals keep the
+        // existing statement-body handling (no implicit return) so the #889
+        // Action-style void-delegate path is preserved.
+        body = SynthesizeFunctionLiteralTrailingReturn((BoundBlockStatement)body, syntax, returnType);
+
         var captured = CollectCapturedVariables(body, synthetic.Parameters);
 
         // Issue #367: a by-ref-like (`ref struct`) local cannot be captured by a
@@ -712,6 +724,52 @@ internal sealed class LambdaBinder
         }
 
         return element;
+    }
+
+    // Issue #893: rewrite a value-returning function-literal block body so a bare
+    // trailing expression statement becomes the implicit `return` value. This is
+    // the multi-statement-block analogue of the arrow-lambda EmitTrailingExpression
+    // path: `func(c T) R { ...; <expr> }` returns `<expr>` converted to `R`.
+    //
+    // Only applies when the declared return type is a real value type (not void and
+    // not the error placeholder) and the last statement is a non-void expression
+    // statement that is not already a return. Void function literals are left as-is
+    // so the issue #889 statement-body / Action-delegate path keeps emitting a body
+    // with no value return.
+    private BoundBlockStatement SynthesizeFunctionLiteralTrailingReturn(
+        BoundBlockStatement body,
+        FunctionLiteralExpressionSyntax syntax,
+        TypeSymbol returnType)
+    {
+        if (returnType == TypeSymbol.Void || returnType == TypeSymbol.Error)
+        {
+            return body;
+        }
+
+        var statements = body.Statements;
+        if (statements.Length == 0)
+        {
+            return body;
+        }
+
+        if (statements[^1] is not BoundExpressionStatement trailingStatement)
+        {
+            return body;
+        }
+
+        var trailing = trailingStatement.Expression;
+        if (trailing.Type == TypeSymbol.Void || trailing.Type == TypeSymbol.Error)
+        {
+            return body;
+        }
+
+        var trailingConverted = trailing.Type == returnType
+            ? trailing
+            : conversions.BindConversion(trailingStatement.Syntax.Location, trailing, returnType);
+
+        var rewritten = statements.ToBuilder();
+        rewritten[^1] = new BoundReturnStatement(trailingStatement.Syntax, trailingConverted);
+        return new BoundBlockStatement(body.Syntax, rewritten.ToImmutable());
     }
 
     // ADR-0076 / issue #716: synthesise the trailing return / expression-
