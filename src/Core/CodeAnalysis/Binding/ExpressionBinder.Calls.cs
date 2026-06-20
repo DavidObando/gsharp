@@ -1243,6 +1243,178 @@ internal sealed partial class ExpressionBinder
 
             return;
         }
+
+        // Follow-up to issue #891: the full-inference path above could not
+        // map every deferred lambda — typically because the matching generic
+        // method's lambda RETURN type is a method type parameter that is only
+        // inferable from the lambda body (e.g.
+        // Select<TSource,TResult>(IEnumerable<TSource>, Func<TSource,TResult>)).
+        // Fall back to partial inference: infer the type parameters reachable
+        // from the non-lambda arguments (so the lambda's *parameter* types close)
+        // and bind each lambda against a target carrying only those parameter
+        // types, leaving its return type to be inferred from the body.
+        foreach (var (methods, offset) in probes)
+        {
+            if (TryMapDeferredLambdaParameterTargets(methods, offset, receiver, ce, deferredIndices, boundArgs, out var partialTargets))
+            {
+                foreach (var idx in deferredIndices)
+                {
+                    var inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx]);
+                    if (inner is LambdaExpressionSyntax lambdaSyntax && partialTargets.TryGetValue(idx, out var target))
+                    {
+                        boundArgs[idx] = lambdas.BindLambdaExpression(lambdaSyntax, target, inferReturnTypeFromBody: true);
+                    }
+                }
+
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Follow-up to issue #891: partial-inference fallback for <see cref="ResolveDeferredArrowLambdaArguments"/>.
+    /// For each candidate generic method, infers the type parameters reachable
+    /// from the non-lambda argument CLR types and resolves the closed parameter
+    /// types of every deferred lambda's delegate (arity-matched to the lambda),
+    /// even when the delegate's return type remains an un-inferred method type
+    /// parameter. Builds a per-slot <see cref="FunctionTypeSymbol"/> target that
+    /// carries only the closed parameter types. Candidates must agree on the
+    /// resulting parameter types; otherwise the fallback declines (preserving the
+    /// existing GS0304 behaviour) to avoid binding against an ambiguous shape.
+    /// </summary>
+    private bool TryMapDeferredLambdaParameterTargets(
+        IReadOnlyList<MethodInfo> methods,
+        int offset,
+        BoundExpression receiver,
+        CallExpressionSyntax ce,
+        List<int> deferredIndices,
+        BoundExpression[] boundArgs,
+        out Dictionary<int, FunctionTypeSymbol> targets)
+    {
+        targets = null;
+
+        var deferred = new HashSet<int>(deferredIndices);
+        var argTypes = new System.Type[boundArgs.Length + offset];
+        if (offset == 1)
+        {
+            if (receiver?.Type?.ClrType is not System.Type receiverClrType)
+            {
+                return false;
+            }
+
+            argTypes[0] = receiverClrType;
+        }
+
+        for (var i = 0; i < boundArgs.Length; i++)
+        {
+            if (deferred.Contains(i))
+            {
+                argTypes[i + offset] = null;
+                continue;
+            }
+
+            var t = GetEffectiveArgumentClrTypeForOverloadResolution(boundArgs[i].Type);
+            if (t == null && boundArgs[i].Type != TypeSymbol.Null)
+            {
+                return false;
+            }
+
+            argTypes[i + offset] = t;
+        }
+
+        var lambdaParamIndices = new List<int>();
+        var arities = new List<int>();
+        var argIndexByParamIndex = new Dictionary<int, int>();
+        foreach (var idx in deferredIndices)
+        {
+            var inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx]);
+            if (inner is not LambdaExpressionSyntax lambda)
+            {
+                return false;
+            }
+
+            var paramIndex = idx + offset;
+            lambdaParamIndices.Add(paramIndex);
+            arities.Add(lambda.Parameters.Count);
+            argIndexByParamIndex[paramIndex] = idx;
+        }
+
+        Dictionary<int, System.Type[]> agreed = null;
+        foreach (var method in methods)
+        {
+            if (method == null || (!method.IsGenericMethodDefinition && !method.IsGenericMethod))
+            {
+                continue;
+            }
+
+            if (!OverloadResolution.TryInferDeferredLambdaParameterTypes(method, argTypes, lambdaParamIndices, arities, out var closed))
+            {
+                continue;
+            }
+
+            if (agreed == null)
+            {
+                agreed = closed;
+            }
+            else if (!DeferredLambdaParameterTypesAgree(agreed, closed))
+            {
+                return false;
+            }
+        }
+
+        if (agreed == null)
+        {
+            return false;
+        }
+
+        var built = new Dictionary<int, FunctionTypeSymbol>();
+        foreach (var kv in agreed)
+        {
+            var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(kv.Value.Length);
+            foreach (var clr in kv.Value)
+            {
+                var symbol = TypeSymbol.FromClrType(clr);
+                if (symbol == null || symbol == TypeSymbol.Error)
+                {
+                    return false;
+                }
+
+                parameterTypes.Add(symbol);
+            }
+
+            // The return slot is a placeholder; binding passes
+            // inferReturnTypeFromBody so the lambda infers its own return type.
+            built[argIndexByParamIndex[kv.Key]] = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), default, TypeSymbol.Object);
+        }
+
+        targets = built;
+        return true;
+    }
+
+    private static bool DeferredLambdaParameterTypesAgree(Dictionary<int, System.Type[]> a, Dictionary<int, System.Type[]> b)
+    {
+        if (a.Count != b.Count)
+        {
+            return false;
+        }
+
+        foreach (var kv in a)
+        {
+            if (!b.TryGetValue(kv.Key, out var other) || other.Length != kv.Value.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < kv.Value.Length; i++)
+            {
+                if (!ClrTypeUtilities.AreSame(kv.Value[i], other[i]))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     private BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)

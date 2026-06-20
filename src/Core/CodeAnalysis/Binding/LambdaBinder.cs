@@ -385,8 +385,15 @@ internal sealed class LambdaBinder
     /// when the parameter types should be inferred from a target. When
     /// non-null and arity matches, omitted parameter type clauses are
     /// filled in from this target.</param>
+    /// <param name="inferReturnTypeFromBody">Follow-up to issue #891: when <see langword="true"/>,
+    /// the target's return slot is ignored for return-type inference — the
+    /// lambda's return type is computed purely from its body. Used by the
+    /// deferred-lambda partial-inference path, where the target carries only
+    /// closed parameter types (the delegate's return type is an un-inferred
+    /// method type parameter and a placeholder occupies the target's return
+    /// slot).</param>
     /// <returns>The bound lambda as a <see cref="BoundFunctionLiteralExpression"/>.</returns>
-    public BoundExpression BindLambdaExpression(LambdaExpressionSyntax syntax, FunctionTypeSymbol targetFunctionType = null)
+    public BoundExpression BindLambdaExpression(LambdaExpressionSyntax syntax, FunctionTypeSymbol targetFunctionType = null, bool inferReturnTypeFromBody = false)
     {
         if (bindLambdaBodyExpression == null)
         {
@@ -501,7 +508,7 @@ internal sealed class LambdaBinder
         // body lambda with explicit `return` statements, the void trailing
         // produced by the body-binding pipeline is replaced by the common
         // type of all return-statement expressions.
-        var returnType = InferLambdaReturnType(boundBody, syntax, targetFunctionType, isAsync);
+        var returnType = InferLambdaReturnType(boundBody, syntax, inferReturnTypeFromBody ? null : targetFunctionType, isAsync);
 
         // ADR-0058: a managed-pointer (*T) cannot be used as a lambda return
         // type because CLR Func<> delegates cannot carry by-ref type arguments.

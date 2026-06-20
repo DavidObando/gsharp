@@ -780,6 +780,223 @@ internal static class OverloadResolution
     }
 
     /// <summary>
+    /// Partial method type inference for deferred arrow-lambda arguments
+    /// (follow-up to issue #891). When a generic method's lambda
+    /// parameter return type is a method type parameter that can only be
+    /// inferred from the lambda body (e.g.
+    /// <c>Select&lt;TSource,TResult&gt;(this IEnumerable&lt;TSource&gt;, Func&lt;TSource,TResult&gt;)</c>),
+    /// full inference via <see cref="TryInferTypeArguments"/> fails because
+    /// <c>TResult</c> has no bound. This routine instead infers only the type
+    /// parameters reachable from the supplied (non-lambda) argument types, then
+    /// resolves each requested delegate parameter's <em>parameter</em> CLR types
+    /// through those bounds. It succeeds for a slot only when every delegate
+    /// parameter type is fully closed — the delegate's return type may remain an
+    /// un-inferred method type parameter (it is later inferred from the lambda
+    /// body, which now has typed parameters to bind against).
+    /// </summary>
+    /// <param name="method">The candidate method (open generic definition or a
+    /// constructed generic method whose definition is used for inference).</param>
+    /// <param name="argTypes">CLR types of the supplied arguments in parameter
+    /// order; deferred lambda slots are passed as <see langword="null"/>.</param>
+    /// <param name="lambdaParameterIndices">Parameter indices (aligned to
+    /// <paramref name="argTypes"/>) that correspond to deferred lambdas.</param>
+    /// <param name="expectedArities">The expected delegate arity (lambda
+    /// parameter count) for each entry of <paramref name="lambdaParameterIndices"/>.</param>
+    /// <param name="closedLambdaParameterTypes">On success, maps each requested
+    /// parameter index to the closed CLR parameter types of its delegate.</param>
+    /// <returns>Whether closed parameter types were determined for every
+    /// requested lambda slot.</returns>
+    public static bool TryInferDeferredLambdaParameterTypes(
+        MethodInfo method,
+        IReadOnlyList<Type> argTypes,
+        IReadOnlyList<int> lambdaParameterIndices,
+        IReadOnlyList<int> expectedArities,
+        out Dictionary<int, Type[]> closedLambdaParameterTypes)
+    {
+        closedLambdaParameterTypes = null;
+        if (method is null || argTypes is null || lambdaParameterIndices is null || expectedArities is null)
+        {
+            return false;
+        }
+
+        MethodInfo openMethod;
+        ParameterInfo[] parameters;
+        try
+        {
+            openMethod = method.IsGenericMethodDefinition
+                ? method
+                : (method.IsGenericMethod ? method.GetGenericMethodDefinition() : method);
+            if (!openMethod.IsGenericMethodDefinition)
+            {
+                return false;
+            }
+
+            parameters = openMethod.GetParameters();
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+
+        if (parameters.Length < argTypes.Count)
+        {
+            return false;
+        }
+
+        var bounds = new Dictionary<string, Type>(StringComparer.Ordinal);
+        for (var i = 0; i < argTypes.Count; i++)
+        {
+            var arg = argTypes[i];
+            if (arg is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (!UnifyForInference(parameters[i].ParameterType, arg, bounds))
+                {
+                    return false;
+                }
+            }
+            catch (Exception ex) when (IsMetadataLoadFailure(ex))
+            {
+                return false;
+            }
+        }
+
+        var result = new Dictionary<int, Type[]>();
+        for (var k = 0; k < lambdaParameterIndices.Count; k++)
+        {
+            var paramIndex = lambdaParameterIndices[k];
+            if (paramIndex < 0 || paramIndex >= parameters.Length)
+            {
+                return false;
+            }
+
+            MethodInfo invoke;
+            ParameterInfo[] invokeParams;
+            try
+            {
+                var delegateType = parameters[paramIndex].ParameterType;
+                if (delegateType is null)
+                {
+                    return false;
+                }
+
+                invoke = delegateType.GetMethod("Invoke");
+                if (invoke is null)
+                {
+                    return false;
+                }
+
+                invokeParams = invoke.GetParameters();
+            }
+            catch (Exception ex) when (IsMetadataLoadFailure(ex))
+            {
+                return false;
+            }
+
+            if (invokeParams.Length != expectedArities[k])
+            {
+                return false;
+            }
+
+            var closedParams = new Type[invokeParams.Length];
+            for (var p = 0; p < invokeParams.Length; p++)
+            {
+                if (!TryCloseInferredType(invokeParams[p].ParameterType, bounds, out closedParams[p]))
+                {
+                    return false;
+                }
+            }
+
+            result[paramIndex] = closedParams;
+        }
+
+        closedLambdaParameterTypes = result;
+        return true;
+    }
+
+    /// <summary>
+    /// Substitutes inferred method-type-parameter <paramref name="bounds"/> into
+    /// <paramref name="type"/>, succeeding only when the result is fully closed
+    /// (contains no remaining generic parameters). Used by
+    /// <see cref="TryInferDeferredLambdaParameterTypes"/> to close a delegate's
+    /// parameter types while leaving an un-inferred return type unresolved.
+    /// </summary>
+    private static bool TryCloseInferredType(Type type, IReadOnlyDictionary<string, Type> bounds, out Type closed)
+    {
+        closed = null;
+        if (type is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (type.IsGenericParameter)
+            {
+                if (!bounds.TryGetValue(type.Name, out var bound)
+                    || bound is null
+                    || bound.IsGenericParameter
+                    || bound.ContainsGenericParameters)
+                {
+                    return false;
+                }
+
+                closed = bound;
+                return true;
+            }
+
+            if (!type.ContainsGenericParameters)
+            {
+                closed = type;
+                return true;
+            }
+
+            if (type.IsByRef)
+            {
+                return TryCloseInferredType(type.GetElementType(), bounds, out closed);
+            }
+
+            if (type.IsArray)
+            {
+                if (!TryCloseInferredType(type.GetElementType(), bounds, out var elem))
+                {
+                    return false;
+                }
+
+                closed = elem.MakeArrayType();
+                return true;
+            }
+
+            if (type.IsGenericType)
+            {
+                var def = type.GetGenericTypeDefinition();
+                var args = type.GetGenericArguments();
+                var closedArgs = new Type[args.Length];
+                for (var i = 0; i < args.Length; i++)
+                {
+                    if (!TryCloseInferredType(args[i], bounds, out closedArgs[i]))
+                    {
+                        return false;
+                    }
+                }
+
+                closed = def.MakeGenericType(closedArgs);
+                return true;
+            }
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex) || ex is ArgumentException || ex is InvalidOperationException)
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Determines whether an exception thrown while reflecting over a candidate's
     /// signature is a metadata/assembly load failure (issue #321, generalized in
     /// issue #338). Delegates to the single shared predicate in
