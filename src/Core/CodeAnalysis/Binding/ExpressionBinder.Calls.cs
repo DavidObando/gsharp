@@ -2073,7 +2073,7 @@ internal sealed partial class ExpressionBinder
             // if receiver is a user struct symbol.
             if (receiver != null && receiver.Type is StructSymbol userClass)
             {
-                var userOverloads = userClass.GetMethodsIncludingInherited(methodName);
+                var userOverloads = TypeMemberModel.GetMethods(userClass, methodName, MemberQuery.Instance(MemberKinds.Method));
                 if (userOverloads.Length > 0)
                 {
                     var userMethod = overloads.SelectInstanceOverloadOrReport(userOverloads, arguments, ce, methodName, argumentNames);
@@ -2146,7 +2146,7 @@ internal sealed partial class ExpressionBinder
         // fallback for imported CLR types.)
         if (receiver.Type is StructSymbol userClassPriority)
         {
-            var priorityOverloads = userClassPriority.GetMethodsIncludingInherited(methodName);
+            var priorityOverloads = TypeMemberModel.GetMethods(userClassPriority, methodName, MemberQuery.Instance(MemberKinds.Method));
             if (priorityOverloads.Length > 0)
             {
                 var userMethodPriority = overloads.SelectInstanceOverloadOrReport(priorityOverloads, arguments, ce, methodName, argumentNames);

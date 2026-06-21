@@ -220,7 +220,7 @@ internal sealed partial class ExpressionBinder
             && function?.ThisParameter != null
             && function.ReceiverType is StructSymbol implicitThisStruct)
         {
-            var methods = implicitThisStruct.GetMethodsIncludingInherited(bareName.IdentifierToken.Text);
+            var methods = TypeMemberModel.GetMethods(implicitThisStruct, bareName.IdentifierToken.Text, MemberQuery.Instance(MemberKinds.Method));
             if (!methods.IsDefaultOrEmpty)
             {
                 var receiver = new BoundVariableExpression(null, function.ThisParameter);
@@ -248,7 +248,7 @@ internal sealed partial class ExpressionBinder
 
             if (boundReceiver.Type is StructSymbol receiverStruct)
             {
-                var methods = receiverStruct.GetMethodsIncludingInherited(memberName.IdentifierToken.Text);
+                var methods = TypeMemberModel.GetMethods(receiverStruct, memberName.IdentifierToken.Text, MemberQuery.Instance(MemberKinds.Method));
                 if (!methods.IsDefaultOrEmpty)
                 {
                     var group = BuildInstanceMethodGroup(boundReceiver, methods);
