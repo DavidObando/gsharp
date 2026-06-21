@@ -1109,6 +1109,59 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #908: collects the parameter lists of the CLR methods a member-style
+    /// call could resolve to — static methods of the accessed class, or instance
+    /// methods on the receiver plus imported extension methods — so an arrow
+    /// lambda argument can be target-typed from its matching delegate parameter
+    /// before binding. Extension-method parameter lists have their leading
+    /// <c>this</c> receiver parameter stripped so every returned list aligns at a
+    /// zero parameter offset, matching the positional argument indices.
+    /// </summary>
+    private List<ParameterInfo[]> CollectDelegateTargetCandidateParameterLists(
+        BoundExpression receiver,
+        ImportedClassSymbol classSymbol,
+        string methodName)
+    {
+        var result = new List<ParameterInfo[]>();
+        if (classSymbol != null)
+        {
+            foreach (var m in ClrTypeUtilities.SafeGetMethods(classSymbol.ClassType, BindingFlags.Static | BindingFlags.Public)
+                .Where(m => m.Name == methodName))
+            {
+                result.Add(m.GetParameters());
+            }
+
+            return result;
+        }
+
+        if (receiver?.Type?.ClrType is System.Type receiverClrType)
+        {
+            foreach (var m in ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(receiverClrType, BindingFlags.Instance | BindingFlags.Public)
+                .Where(m => m.Name == methodName))
+            {
+                result.Add(m.GetParameters());
+            }
+        }
+
+        foreach (var ext in this.memberLookup.CollectImportedExtensionMethods(methodName))
+        {
+            var extParams = ext.GetParameters();
+            if (extParams.Length == 0)
+            {
+                continue;
+            }
+
+            // Strip the leading `this` receiver parameter so positional indices
+            // line up with the call's explicit arguments (offset 0).
+            var stripped = new ParameterInfo[extParams.Length - 1];
+            System.Array.Copy(extParams, 1, stripped, 0, stripped.Length);
+            result.Add(stripped);
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// Issue #891: infers the target delegate type for each deferred un-typed
     /// arrow lambda argument of a member-style call by probing the applicable
     /// candidate methods — instance methods on the receiver, imported
@@ -1801,6 +1854,8 @@ internal sealed partial class ExpressionBinder
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
         var deferredArrowLambdaIndices = new List<int>();
+        List<ParameterInfo[]> delegateTargetCandidateParams = null;
+        var delegateTargetCandidatesComputed = false;
         var argSlot = 0;
         foreach (var argument in ce.Arguments)
         {
@@ -1822,6 +1877,29 @@ internal sealed partial class ExpressionBinder
                 // including LINQ extension methods — has been resolved below.
                 deferredArrowLambdaIndices.Add(argSlot);
                 boundArguments.Add(new BoundErrorExpression(inner));
+            }
+            else if (inner is LambdaExpressionSyntax)
+            {
+                // Issue #908: target-type an arrow lambda argument from the
+                // matching delegate-typed parameter of the applicable CLR
+                // static/instance/extension methods before binding it, mirroring
+                // the constructor path (BindCallArgumentWithDelegateTargetTyping).
+                // Without this, `Factory.CreateStatic(() -> MemoryStream())`
+                // binds the lambda with its body-derived return type
+                // (`() -> MemoryStream`) before overload resolution and fails to
+                // match a `Func<Stream>` parameter (GS0159). Pinning the return
+                // type from the delegate target yields `() -> Stream` directly so
+                // the call resolves and the produced delegate is created over a
+                // method whose return already matches the parameter.
+                if (!delegateTargetCandidatesComputed)
+                {
+                    delegateTargetCandidatesComputed = true;
+                    delegateTargetCandidateParams = CollectDelegateTargetCandidateParameterLists(receiver, classSymbol, methodName);
+                }
+
+                var argName = argumentNames.IsDefault ? null : argumentNames[argSlot];
+                boundArguments.Add(BindCallArgumentWithDelegateTargetTyping(
+                    argument, delegateTargetCandidateParams, sourceArgIndex: argSlot, argName: argName, paramOffset: 0));
             }
             else
             {

@@ -113,6 +113,22 @@ internal static class OverloadResolution
         /// materializes this conversion.
         /// </summary>
         LambdaToVoidDelegate = 9,
+
+        /// <summary>
+        /// Issue #908: a delegate value whose return type is a derived /
+        /// implementing reference type converting to a delegate parameter with
+        /// the same parameter signature but a base / interface return type
+        /// (e.g. <c>Func&lt;MemoryStream&gt;</c> → <c>Func&lt;Stream&gt;</c>, or
+        /// <c>() -&gt; NullLoggerFactory</c> → <c>Func&lt;ILoggerFactory&gt;</c>).
+        /// This mirrors C#/CLR reference-preserving delegate return-type
+        /// covariance. Ranked last (worst) so an exact (identity) delegate match
+        /// always wins when both are applicable. The binder's void-izing /
+        /// erasing rebind (<c>RebindFunctionLiteralDelegateArguments</c>)
+        /// materializes the return conversion for a <c>func</c>/arrow literal
+        /// argument so the produced delegate is created over a method whose
+        /// return type already matches the target.
+        /// </summary>
+        DelegateReturnCovariance = 10,
     }
 
     /// <summary>
@@ -241,6 +257,21 @@ internal static class OverloadResolution
             && ClrTypeUtilities.IsDelegateType(source))
         {
             return ImplicitConversionKind.Reference;
+        }
+
+        // Issue #908: delegate return-type covariance. A delegate value whose
+        // return type is a derived / implementing reference type is applicable
+        // to a delegate parameter with the same parameter signature but a
+        // base / interface return type (e.g. Func<MemoryStream> → Func<Stream>,
+        // () -> NullLoggerFactory → Func<ILoggerFactory>), mirroring C#/CLR
+        // reference-preserving delegate covariance. Checked here — before the
+        // assignability / base-type-walk blocks below — because a func/arrow
+        // literal's natural delegate type is a host-runtime Func<> closed over
+        // MetadataLoadContext type arguments, on which those reflection probes
+        // throw. Ranked last so an exact (identity) delegate match always wins.
+        if (IsDelegateReturnCovariant(target, source))
+        {
+            return ImplicitConversionKind.DelegateReturnCovariance;
         }
 
         if (ReferenceEquals(target.Assembly, source.Assembly) || target.GetType() == source.GetType())
@@ -1071,6 +1102,207 @@ internal static class OverloadResolution
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #908: determines whether <paramref name="source"/> is a delegate
+    /// type whose parameter signature is identical to delegate
+    /// <paramref name="target"/> but whose return type is a derived /
+    /// implementing reference type of the target's return type — i.e. a
+    /// reference-preserving delegate return-type covariance
+    /// (<c>Func&lt;MemoryStream&gt;</c> → <c>Func&lt;Stream&gt;</c>,
+    /// <c>() -&gt; NullLoggerFactory</c> → <c>Func&lt;ILoggerFactory&gt;</c>).
+    /// Parameter and return types are compared by name to remain safe across
+    /// reflection contexts (the target parameter is typically loaded through a
+    /// <c>MetadataLoadContext</c> while the literal's natural <c>Func&lt;...&gt;</c>
+    /// may be a host-runtime constructed type). Only reference conversions are
+    /// accepted (no value-type / boxing / numeric conversions), matching C#'s
+    /// variance rules.
+    /// </summary>
+    /// <param name="target">The candidate delegate parameter type.</param>
+    /// <param name="source">The argument's natural delegate type.</param>
+    /// <returns><see langword="true"/> when the covariant conversion applies.</returns>
+    private static bool IsDelegateReturnCovariant(Type target, Type source)
+    {
+        if (!ClrTypeUtilities.IsDelegateType(target) || !ClrTypeUtilities.IsDelegateType(source))
+        {
+            return false;
+        }
+
+        if (!TryGetDelegateSignature(target, out var targetParams, out var targetReturn)
+            || !TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn))
+        {
+            return false;
+        }
+
+        if (targetReturn is null || sourceReturn is null)
+        {
+            return false;
+        }
+
+        // Identity return types are handled by the normal delegate identity /
+        // assignability paths; covariance only applies when they differ.
+        if (ClrTypeUtilities.AreSame(targetReturn, sourceReturn))
+        {
+            return false;
+        }
+
+        // Reference-preserving only: both return types must be reference types
+        // (no value-type covariance, no boxing).
+        if (targetReturn.IsValueType || sourceReturn.IsValueType
+            || string.Equals(targetReturn.FullName, "System.Void", StringComparison.Ordinal)
+            || string.Equals(sourceReturn.FullName, "System.Void", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!IsReferencePreservingUpcast(targetReturn, sourceReturn))
+        {
+            return false;
+        }
+
+        // Parameter signatures must match exactly (by name, cross-context safe).
+        if (targetParams.Length != sourceParams.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < targetParams.Length; i++)
+        {
+            if (!ClrTypeUtilities.AreSame(targetParams[i], sourceParams[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #908: extracts a delegate type's parameter types and return type.
+    /// Prefers the <c>Invoke</c> method, but falls back to decomposing the
+    /// generic arguments of a closed <c>System.Func`N</c> / <c>System.Action`N</c>
+    /// shape. The fallback is required because a <c>func</c>/arrow literal's
+    /// natural delegate type is built by <c>FunctionTypeSymbol.BuildClrType</c>
+    /// as a host-runtime <c>Func&lt;&gt;</c> closed over
+    /// <see cref="System.Reflection.MetadataLoadContext"/> type arguments, on
+    /// which <see cref="Type.GetMethod(string)"/> throws.
+    /// </summary>
+    private static bool TryGetDelegateSignature(Type delegateType, out Type[] parameterTypes, out Type returnType)
+    {
+        parameterTypes = Array.Empty<Type>();
+        returnType = null;
+
+        try
+        {
+            var invoke = delegateType.GetMethod("Invoke");
+            if (invoke != null)
+            {
+                var ps = invoke.GetParameters();
+                var result = new Type[ps.Length];
+                for (var i = 0; i < ps.Length; i++)
+                {
+                    result[i] = ps[i].ParameterType;
+                }
+
+                parameterTypes = result;
+                returnType = invoke.ReturnType;
+                return true;
+            }
+        }
+        catch (Exception)
+        {
+            // Cross-context constructed Func<>/Action<> — fall back to the
+            // generic-argument decomposition below.
+        }
+
+        var fullName = delegateType.FullName;
+        if (fullName == null || !delegateType.IsGenericType)
+        {
+            return false;
+        }
+
+        Type[] genericArgs;
+        try
+        {
+            genericArgs = delegateType.GetGenericArguments();
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        if (fullName.StartsWith("System.Func`", StringComparison.Ordinal) && genericArgs.Length >= 1)
+        {
+            // Func<T1,...,Tn,TResult>: trailing argument is the return type.
+            var ps = new Type[genericArgs.Length - 1];
+            Array.Copy(genericArgs, ps, ps.Length);
+            parameterTypes = ps;
+            returnType = genericArgs[genericArgs.Length - 1];
+            return true;
+        }
+
+        if (fullName.StartsWith("System.Action`", StringComparison.Ordinal))
+        {
+            // Action<T1,...,Tn>: void return, all generic arguments are parameters.
+            parameterTypes = genericArgs;
+            returnType = typeof(void);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #908: determines whether <paramref name="source"/> is
+    /// reference-convertible (an upcast) to <paramref name="target"/> — i.e.
+    /// <paramref name="target"/> is the same type, an interface implemented by
+    /// <paramref name="source"/>, or a base class of <paramref name="source"/>.
+    /// Compared by name so it is robust across reflection contexts.
+    /// </summary>
+    private static bool IsReferencePreservingUpcast(Type target, Type source)
+    {
+        if (ClrTypeUtilities.AreSame(target, source))
+        {
+            return true;
+        }
+
+        if (string.Equals(target.FullName, "System.Object", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (target.IsInterface && ClrTypeUtilities.ImplementsInterfaceByName(source, target))
+        {
+            return true;
+        }
+
+        for (var baseType = SafeBaseType(source); baseType != null; baseType = SafeBaseType(baseType))
+        {
+            if (ClrTypeUtilities.AreSame(baseType, target))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #908: returns <see cref="Type.BaseType"/>, swallowing the reflection
+    /// load failures that cross-context constructed generics can throw during a
+    /// base-type walk.
+    /// </summary>
+    private static Type SafeBaseType(Type type)
+    {
+        try
+        {
+            return type.BaseType;
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return null;
+        }
     }
 
     /// <summary>

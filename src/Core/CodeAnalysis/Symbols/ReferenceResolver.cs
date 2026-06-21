@@ -166,6 +166,13 @@ public sealed class ReferenceResolver : IDisposable
         // cache organically; the only cost is a cold cache on the next
         // compilation that reuses the same process.
         ImportedTypeSymbol.ClearCache();
+
+        // FunctionTypeSymbol eagerly closes a host-runtime Func/Action over
+        // MetadataLoadContext-projected type arguments, so its process-wide
+        // cache can likewise pin (and later resurface) types from this disposed
+        // context across compilations in the same process (issue #908). Clear
+        // it for the same reason.
+        FunctionTypeSymbol.ClearCache();
     }
 
     /// <summary>
