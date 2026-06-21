@@ -1103,7 +1103,7 @@ internal sealed class DeclarationBinder
                 PropertySymbol overriddenProperty = null;
                 if (isOverride)
                 {
-                    if (structSymbol.BaseClass == null || !MemberLookup.TryGetPropertyIncludingInherited(structSymbol.BaseClass, propName, out var baseProp))
+                    if (structSymbol.BaseClass == null || !TypeMemberModel.TryGetProperty(structSymbol.BaseClass, propName, out var baseProp))
                     {
                         Diagnostics.ReportNoBaseMethodToOverride(propSyntax.Identifier.Location, propName);
                     }
