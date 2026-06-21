@@ -71,6 +71,59 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// ADR-0112 §"method-group semantics": builds a <see cref="BoundMethodGroupExpression"/>
+    /// for a user-defined type's method(s). A <paramref name="receiver"/> of
+    /// <see langword="null"/> yields a static (null-target) group; a non-null
+    /// receiver yields an instance group captured against it. Candidates that
+    /// cannot participate in a method-group→delegate conversion (generic or
+    /// variadic) are filtered out; the group is only produced when at least one
+    /// usable candidate remains.
+    /// </summary>
+    private static bool TryBuildUserMethodGroup(BoundExpression receiver, ImmutableArray<FunctionSymbol> methods, out BoundExpression methodGroup)
+    {
+        methodGroup = null;
+
+        if (methods.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        var usable = ImmutableArray.CreateBuilder<FunctionSymbol>(methods.Length);
+        foreach (var m in methods)
+        {
+            if (m.IsGeneric)
+            {
+                continue;
+            }
+
+            var hasVariadic = false;
+            foreach (var parameter in m.Parameters)
+            {
+                if (parameter.IsVariadic)
+                {
+                    hasVariadic = true;
+                    break;
+                }
+            }
+
+            if (hasVariadic)
+            {
+                continue;
+            }
+
+            usable.Add(m);
+        }
+
+        if (usable.Count == 0)
+        {
+            return false;
+        }
+
+        methodGroup = BuildInstanceMethodGroup(receiver, usable.ToImmutable());
+        return true;
+    }
+
+    /// <summary>
     /// Binds a fully-qualified imported-type constructor written in expression
     /// position, e.g. <c>System.Text.StringBuilder()</c> or
     /// <c>System.Collections.Generic.List[int]()</c>. Such an expression parses
@@ -1013,6 +1066,16 @@ internal sealed partial class ExpressionBinder
             return new BoundPropertyAccessExpression(null, receiver: null, structSym, prop);
         }
 
+        // ADR-0112: a static (shared) method named here in non-call position is a
+        // method group with a null receiver. Overload selection (when more than
+        // one shared overload shares the name) is deferred to the conversion
+        // classifier, driven by the target delegate signature.
+        var staticMethods = TypeMemberModel.GetMethods(structSym, memberName, MemberQuery.Static(MemberKinds.Method));
+        if (TryBuildUserMethodGroup(receiver: null, staticMethods, out var staticGroup))
+        {
+            return staticGroup;
+        }
+
         Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
         return new BoundErrorExpression(null);
     }
@@ -1426,6 +1489,17 @@ internal sealed partial class ExpressionBinder
                         {
                             return new BoundClrPropertyAccessExpression(null, receiver, clrFld, TypeSymbol.FromClrType(clrFld.FieldType));
                         }
+                    }
+
+                    // ADR-0112: an instance method named here in non-call position
+                    // is a method group captured against the bound receiver. The
+                    // conversion classifier selects the overload (if any) from the
+                    // target delegate signature; the emitter binds the delegate's
+                    // Target to this receiver (boxing value-type receivers).
+                    var instanceMethods = TypeMemberModel.GetMethods(structSym, ne.IdentifierToken.Text, MemberQuery.Instance(MemberKinds.Method));
+                    if (TryBuildUserMethodGroup(receiver, instanceMethods, out var instanceUserGroup))
+                    {
+                        return instanceUserGroup;
                     }
 
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
