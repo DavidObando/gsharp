@@ -149,6 +149,33 @@ public class Issue910NestedTypeBinderTests
         Assert.Same(outer, inner.ContainingType);
     }
 
+    [Fact]
+    public void NestedClassInClass_WithInitConstructor_BindsExplicitConstructor()
+    {
+        // Issue #920: a nested class that declares an `init()` constructor must
+        // bind that constructor onto the nested StructSymbol just like a
+        // top-level class, so the emitter can record its ctor handle.
+        var scope = BindSource("""
+            class Outer920 {
+                class Inner920 {
+                    prop X int32
+                    init() {
+                        X = 5
+                    }
+                }
+            }
+            """);
+
+        Assert.Empty(GetBinderDiagnostics(scope));
+
+        var inner = (StructSymbol)scope.TypeAliases["Inner920"];
+        var outer = (StructSymbol)scope.TypeAliases["Outer920"];
+        Assert.Same(outer, inner.ContainingType);
+        Assert.True(inner.IsClass);
+        Assert.NotNull(inner.ExplicitConstructor);
+        Assert.Single(inner.ExplicitConstructors);
+    }
+
     private static BoundGlobalScope BindSource(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

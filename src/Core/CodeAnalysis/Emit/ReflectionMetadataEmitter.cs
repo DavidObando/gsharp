@@ -1707,38 +1707,67 @@ internal sealed class ReflectionMetadataEmitter
             this.cache.ClassCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(classCtorRows[c]);
         }
 
-        // Issue #503: pre-register synthesized closure class ctor handles too.
-        // Closure classes live at the END of nonSmClasses (they are appended
-        // after user aggregates so user TypeDefs come first), but a user
-        // class's `init` body or instance method may construct a capturing
-        // lambda whose closure class hasn't had its ctor emitted yet —
-        // EmitFunctionLiteral would then throw "Closure class … has no
-        // emitted constructor". The closure ctor's MethodDef row is already
-        // reserved by the planner at line ~733, so claim that handle up-front
-        // (same trick used for SM classes above). The actual ctor body is
-        // still emitted in the planned row order during the main nonSmClasses
-        // loop below.
-        //
-        // Issue #523: the same hazard applies to capture-box classes. A box
-        // class has no explicit ctor and no primary ctor, so its
-        // EmitClassDefaultConstructor row is the one reserved at classCtorRows
-        // — pre-register that handle so any earlier-emitted method body
-        // can `newobj` the box before its body is materialized.
+        // Issue #503 / #523 / #920: pre-register EVERY non-SM user class's
+        // constructor handle(s) from the planned ctor rows BEFORE any method
+        // body is emitted. A class method (or `init` body) may `newobj` another
+        // class — including a sibling class declared later, a capturing-lambda
+        // closure class, a capture box, or a NESTED class — whose ctor body is
+        // emitted later in the pass. Without an up-front handle the construction
+        // site cannot resolve the ctor token and EmitConstructorCall throws
+        // "Type '…' has no emitted primary ctor." (issue #920: this always bites
+        // nested classes, because the enclosing class's method bodies are
+        // emitted in the top-level pass strictly before the unified nested-type
+        // pass that records nested ctors). The closure ctor's MethodDef row is
+        // already reserved by the planner at line ~733, and PlanClassMethods has
+        // reserved classCtorRows/classPrimaryCtorRows for every other class
+        // (top-level and nested), so claim those handles now (same trick used
+        // for SM classes above). The actual ctor bodies are still emitted in the
+        // planned row order during the class-method-body pass below; this loop
+        // mirrors EmitClassMethodBodies' exact per-overload / primary /
+        // base-forwarding row assignment so the pre-registered handles equal the
+        // handles produced during emission.
         foreach (var c in nonSmClasses)
         {
-            var isSynthesizedClosure = this.closures.SynthesizedClosureClasses.Contains(c);
-            var hasDefaultOnlyCtor = c.ExplicitConstructor == null
-                && c.BaseConstructorInitializer == null
-                && !c.HasPrimaryConstructor;
-
-            if (!isSynthesizedClosure && !hasDefaultOnlyCtor)
+            if (!classCtorRows.TryGetValue(c, out var firstCtorRow))
             {
                 continue;
             }
 
-            if (classCtorRows.TryGetValue(c, out var classCtorRow))
+            if (c.ExplicitConstructor != null)
             {
-                this.cache.ClassCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(classCtorRow);
+                // ADR-0063 §9 / ADR-0065 §5: each declared `init(...)` overload
+                // (and the synthesized-from-primary designated init) occupies a
+                // contiguous MethodDef row starting at firstCtorRow. The first
+                // overload also doubles as the legacy class/primary ctor handle.
+                var firstHandle = MetadataTokens.MethodDefinitionHandle(firstCtorRow);
+                for (int i = 0; i < c.ExplicitConstructors.Length; i++)
+                {
+                    this.cache.ExplicitCtorHandles[c.ExplicitConstructors[i]] =
+                        MetadataTokens.MethodDefinitionHandle(firstCtorRow + i);
+                }
+
+                this.cache.ClassCtorHandles[c] = firstHandle;
+                this.cache.ClassPrimaryCtorHandles[c] = firstHandle;
+            }
+            else if (c.BaseConstructorInitializer != null)
+            {
+                // Issue #306: a single forwarding ctor occupies firstCtorRow and
+                // serves as both the class ctor and the primary ctor handle.
+                var forwardingHandle = MetadataTokens.MethodDefinitionHandle(firstCtorRow);
+                this.cache.ClassCtorHandles[c] = forwardingHandle;
+                this.cache.ClassPrimaryCtorHandles[c] = forwardingHandle;
+            }
+            else
+            {
+                // Default-only ctor (covers user classes with no ctor, capture
+                // boxes, and synthesized closure classes) plus an optional
+                // separate primary ctor row.
+                this.cache.ClassCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(firstCtorRow);
+
+                if (c.HasPrimaryConstructor && classPrimaryCtorRows.TryGetValue(c, out var primaryRow))
+                {
+                    this.cache.ClassPrimaryCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(primaryRow);
+                }
             }
         }
 
