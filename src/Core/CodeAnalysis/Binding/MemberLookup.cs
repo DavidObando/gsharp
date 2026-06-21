@@ -1155,23 +1155,6 @@ internal sealed class MemberLookup
         return null;
     }
 
-    /// <summary>
-    /// Walks <paramref name="type"/> and its base-class chain looking for a
-    /// user-declared property with the given <paramref name="name"/>.
-    /// </summary>
-    /// <param name="type">The starting user struct symbol.</param>
-    /// <param name="name">The property name to find.</param>
-    /// <param name="property">The matching property symbol, on success.</param>
-    /// <returns><see langword="true"/> when a property is found.</returns>
-    public static bool TryGetPropertyIncludingInherited(StructSymbol type, string name, out PropertySymbol property)
-    {
-        // ADR-0112 P0: the base-chain instance-property walk is now owned by the
-        // canonical member-resolution layer. This method delegates so the single
-        // implementation lives in TypeMemberModel.TryGetProperty (same base-chain
-        // order, same first-match semantics).
-        return TypeMemberModel.TryGetProperty(type, name, out property);
-    }
-
     // ----- Indexer / Nullable<> / extension-method probes (instance helpers) -----
 
     /// <summary>

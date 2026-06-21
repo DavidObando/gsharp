@@ -1511,7 +1511,7 @@ internal sealed partial class ExpressionBinder
                     }
 
                     // ADR-0051: check properties before reporting "unable to find member".
-                    if (MemberLookup.TryGetPropertyIncludingInherited(structSym, ne.IdentifierToken.Text, out var prop))
+                    if (TypeMemberModel.TryGetProperty(structSym, ne.IdentifierToken.Text, out var prop))
                     {
                         if (!prop.HasGetter)
                         {

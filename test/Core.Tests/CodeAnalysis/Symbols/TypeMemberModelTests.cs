@@ -253,16 +253,18 @@ enum Color {
     }
 
     [Fact]
-    public void TryGetProperty_MatchesMemberLookupIncludingInherited_AcrossInheritance()
+    public void TryGetProperty_ResolvesAcrossInheritance()
     {
         var animal = GetStruct("Animal");
-        foreach (var name in new[] { "Name", "BaseProp", "Missing" })
-        {
-            var modelFound = TypeMemberModel.TryGetProperty(animal, name, out var modelProp);
-            var lookupFound = GSharp.Core.CodeAnalysis.Binding.MemberLookup.TryGetPropertyIncludingInherited(animal, name, out var lookupProp);
-            Assert.Equal(modelFound, lookupFound);
-            Assert.Same(modelProp, lookupProp);
-        }
+
+        Assert.True(TypeMemberModel.TryGetProperty(animal, "Name", out var nameProp));
+        Assert.NotNull(nameProp);
+
+        Assert.True(TypeMemberModel.TryGetProperty(animal, "BaseProp", out var baseProp));
+        Assert.NotNull(baseProp);
+
+        Assert.False(TypeMemberModel.TryGetProperty(animal, "Missing", out var missingProp));
+        Assert.Null(missingProp);
     }
 
     [Fact]

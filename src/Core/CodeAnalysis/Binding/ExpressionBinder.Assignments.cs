@@ -183,7 +183,7 @@ internal sealed partial class ExpressionBinder
                 return new BoundFieldAssignmentExpression(initSyntax, receiverLocal, structSymbol, field, converted);
             }
 
-            if (MemberLookup.TryGetPropertyIncludingInherited(structSymbol, propertyName, out var prop))
+            if (TypeMemberModel.TryGetProperty(structSymbol, propertyName, out var prop))
             {
                 if (!prop.HasSetter)
                 {
@@ -365,7 +365,7 @@ internal sealed partial class ExpressionBinder
         if (!structSymbol.TryGetFieldIncludingInherited(syntax.FieldIdentifier.Text, out var field, out _))
         {
             // ADR-0051: check if it's a property.
-            if (MemberLookup.TryGetPropertyIncludingInherited(structSymbol, syntax.FieldIdentifier.Text, out var prop))
+            if (TypeMemberModel.TryGetProperty(structSymbol, syntax.FieldIdentifier.Text, out var prop))
             {
                 if (!prop.HasSetter)
                 {
@@ -674,7 +674,7 @@ internal sealed partial class ExpressionBinder
         }
 
         // ADR-0051: check properties.
-        if (MemberLookup.TryGetPropertyIncludingInherited(structSym, memberName, out var prop))
+        if (TypeMemberModel.TryGetProperty(structSym, memberName, out var prop))
         {
             if (!prop.HasGetter || !prop.HasSetter)
             {
@@ -1027,7 +1027,7 @@ internal sealed partial class ExpressionBinder
             }
 
             // ADR-0051: check properties before reporting "unable to find member".
-            if (MemberLookup.TryGetPropertyIncludingInherited(structSym, fieldName, out var prop))
+            if (TypeMemberModel.TryGetProperty(structSym, fieldName, out var prop))
             {
                 if (!prop.HasSetter)
                 {
