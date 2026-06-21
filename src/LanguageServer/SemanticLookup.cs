@@ -1652,34 +1652,8 @@ public static class SemanticLookup
 
         private static Symbol LookupMember(StructSymbol structSymbol, string memberName)
         {
-            for (var current = structSymbol; current != null; current = current.BaseClass)
-            {
-                var property = current.Properties.Concat(current.StaticProperties).FirstOrDefault(p => p.Name == memberName);
-                if (property != null)
-                {
-                    return property;
-                }
-
-                var field = current.Fields.Concat(current.StaticFields).FirstOrDefault(f => f.Name == memberName);
-                if (field != null)
-                {
-                    return field;
-                }
-
-                var evt = current.Events.Concat(current.StaticEvents).FirstOrDefault(e => e.Name == memberName);
-                if (evt != null)
-                {
-                    return evt;
-                }
-
-                var method = current.Methods.Concat(current.StaticMethods).FirstOrDefault(m => m.Name == memberName);
-                if (method != null)
-                {
-                    return method;
-                }
-            }
-
-            return null;
+            // ADR-0112: shared canonical member lookup (see TypeMemberModel).
+            return TypeMemberModel.LookupMember(structSymbol, memberName, MemberQuery.All);
         }
 
         private Symbol ResolveImplicitThisMember(SyntaxToken token)

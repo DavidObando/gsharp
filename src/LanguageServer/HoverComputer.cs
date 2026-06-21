@@ -500,43 +500,11 @@ public static class HoverComputer
     /// </summary>
     private static Symbol LookupMemberOnStruct(StructSymbol structSymbol, string memberName)
     {
-        // Walk the type hierarchy (including base classes).
-        for (var current = structSymbol; current != null; current = current.BaseClass)
-        {
-            // Properties (instance + static)
-            var property = current.Properties.Concat(current.StaticProperties)
-                .FirstOrDefault(p => p.Name == memberName);
-            if (property != null)
-            {
-                return property;
-            }
-
-            // Fields (instance + static)
-            var field = current.Fields.Concat(current.StaticFields)
-                .FirstOrDefault(f => f.Name == memberName);
-            if (field != null)
-            {
-                return field;
-            }
-
-            // Events (instance + static)
-            var @event = current.Events.Concat(current.StaticEvents)
-                .FirstOrDefault(e => e.Name == memberName);
-            if (@event != null)
-            {
-                return @event;
-            }
-
-            // Methods (instance + static)
-            var method = current.Methods.Concat(current.StaticMethods)
-                .FirstOrDefault(m => m.Name == memberName);
-            if (method != null)
-            {
-                return method;
-            }
-        }
-
-        return null;
+        // ADR-0112: route through the canonical member-resolution layer so hover
+        // shares the binder's single member lookup. MemberQuery.All preserves the
+        // historic order (property → field → event → method, instance then static,
+        // walking the base chain).
+        return TypeMemberModel.LookupMember(structSymbol, memberName, MemberQuery.All);
     }
 
     private static IEnumerable<(ExpressionSyntax ReceiverExpression, string MemberName)> FindAccessorMemberContexts(SyntaxTree tree, SyntaxToken token)
@@ -800,14 +768,22 @@ public static class HoverComputer
 
     private static int CountOverloads(Compilation compilation, FunctionSymbol function)
     {
+        // ADR-0112: count via the canonical layer (non-inherited, matching the
+        // historic single-declaring-type count).
         if (function.StaticOwnerType is StructSymbol staticOwner)
         {
-            return staticOwner.StaticMethods.Count(m => m.Name == function.Name);
+            return TypeMemberModel.GetMethods(
+                staticOwner,
+                function.Name,
+                new MemberQuery(includeInstance: false, includeStatic: true, includeInherited: false, MemberKinds.Method)).Length;
         }
 
         if (function.ReceiverType is StructSymbol owner)
         {
-            return owner.Methods.Count(m => m.Name == function.Name);
+            return TypeMemberModel.GetMethods(
+                owner,
+                function.Name,
+                new MemberQuery(includeInstance: true, includeStatic: false, includeInherited: false, MemberKinds.Method)).Length;
         }
 
         return compilation.GlobalScope.Functions.Count(f => f.Name == function.Name);
@@ -2123,40 +2099,35 @@ public static class CompletionComputer
 
     private static void AddStructInstanceMembers(List<CompletionItem> items, HashSet<string> seen, StructSymbol structType)
     {
-        for (var current = structType; current != null; current = current.BaseClass)
-        {
-            foreach (var field in current.Fields)
-            {
-                AddItem(items, seen, field.Name, CompletionItemKind.Field, HoverComputer.FormatSymbol(field));
-            }
-
-            foreach (var property in current.Properties)
-            {
-                AddItem(items, seen, property.Name, CompletionItemKind.Property, $"{property.Name}: {property.Type?.Name}");
-            }
-
-            foreach (var method in current.Methods)
-            {
-                AddItem(items, seen, method.Name, CompletionItemKind.Method, HoverComputer.FormatSymbol(method));
-            }
-        }
+        // ADR-0112: enumerate instance members through the canonical layer.
+        // Events are intentionally excluded to preserve the historic completion
+        // set (fields, properties, methods only), walking the base chain.
+        AddStructMembersFromModel(items, seen, structType, MemberQuery.Instance(MemberKinds.Field | MemberKinds.Property | MemberKinds.Method));
     }
 
     private static void AddStructStaticMembers(List<CompletionItem> items, HashSet<string> seen, StructSymbol structType)
     {
-        foreach (var field in structType.StaticFields)
-        {
-            AddItem(items, seen, field.Name, CompletionItemKind.Field, HoverComputer.FormatSymbol(field));
-        }
+        // ADR-0112: static members through the canonical layer (no base-chain
+        // walk, fields/properties/methods only — matching historic behavior).
+        AddStructMembersFromModel(items, seen, structType, MemberQuery.Static(MemberKinds.Field | MemberKinds.Property | MemberKinds.Method));
+    }
 
-        foreach (var property in structType.StaticProperties)
+    private static void AddStructMembersFromModel(List<CompletionItem> items, HashSet<string> seen, StructSymbol structType, MemberQuery query)
+    {
+        foreach (var member in TypeMemberModel.EnumerateMembers(structType, query))
         {
-            AddItem(items, seen, property.Name, CompletionItemKind.Property, $"{property.Name}: {property.Type?.Name}");
-        }
-
-        foreach (var method in structType.StaticMethods)
-        {
-            AddItem(items, seen, method.Name, CompletionItemKind.Method, HoverComputer.FormatSymbol(method));
+            switch (member)
+            {
+                case FieldSymbol field:
+                    AddItem(items, seen, field.Name, CompletionItemKind.Field, HoverComputer.FormatSymbol(field));
+                    break;
+                case PropertySymbol property:
+                    AddItem(items, seen, property.Name, CompletionItemKind.Property, $"{property.Name}: {property.Type?.Name}");
+                    break;
+                case FunctionSymbol method:
+                    AddItem(items, seen, method.Name, CompletionItemKind.Method, HoverComputer.FormatSymbol(method));
+                    break;
+            }
         }
     }
 

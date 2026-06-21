@@ -277,7 +277,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var variable = BindVariableReference(name, syntax.IdentifierToken.Location, suppressNotAVariable: true);
+        var variable = BindVariableReference(name, syntax.IdentifierToken.Location, suppressNotAVariable: true, suppressUndefinedVariable: true);
         if (variable == null)
         {
             // Issue #324: a bare identifier naming a free (package-level)
@@ -291,9 +291,12 @@ internal sealed partial class ExpressionBinder
                 return methodGroup;
             }
 
-            // Not a method group: surface the suppressed GS0126 (or the
-            // undefined-variable diagnostic already reported).
-            if (scope.TryLookupSymbol(name) is not null and not VariableSymbol)
+            // Not a method group: surface the suppressed diagnostics.
+            if (scope.TryLookupSymbol(name) is null)
+            {
+                Diagnostics.ReportUndefinedVariable(syntax.IdentifierToken.Location, name);
+            }
+            else if (scope.TryLookupSymbol(name) is not VariableSymbol)
             {
                 Diagnostics.ReportNotAVariable(syntax.IdentifierToken.Location, name);
             }
@@ -667,6 +670,11 @@ internal sealed partial class ExpressionBinder
 
     internal VariableSymbol BindVariableReference(string name, TextLocation location, bool suppressNotAVariable)
     {
+        return BindVariableReference(name, location, suppressNotAVariable, suppressUndefinedVariable: false);
+    }
+
+    internal VariableSymbol BindVariableReference(string name, TextLocation location, bool suppressNotAVariable, bool suppressUndefinedVariable)
+    {
         switch (scope.TryLookupSymbol(name))
         {
             case VariableSymbol variable:
@@ -674,7 +682,11 @@ internal sealed partial class ExpressionBinder
                 return variable;
 
             case null:
-                Diagnostics.ReportUndefinedVariable(location, name);
+                if (!suppressUndefinedVariable)
+                {
+                    Diagnostics.ReportUndefinedVariable(location, name);
+                }
+
                 return null;
 
             default:
@@ -719,6 +731,35 @@ internal sealed partial class ExpressionBinder
             {
                 methodGroup = new BoundMethodGroupExpression(null, usable.ToImmutable());
                 return true;
+            }
+        }
+
+        // ADR-0112: a bare name inside a user type's method body may name a
+        // sibling member of the enclosing type. An instance method is captured
+        // against the implicit `this`; a shared (static) method forms a
+        // null-receiver group. This mirrors how the event-subscription path
+        // already resolves bare `this`-instance handlers, generalized to any
+        // value (delegate-conversion) context.
+        var enclosing = this.function;
+        if (enclosing != null)
+        {
+            if (enclosing.ThisParameter != null && enclosing.ReceiverType is StructSymbol thisStruct)
+            {
+                var instanceMethods = TypeMemberModel.GetMethods(thisStruct, name, MemberQuery.Instance(MemberKinds.Method));
+                if (TryBuildUserMethodGroup(new BoundVariableExpression(null, enclosing.ThisParameter), instanceMethods, out methodGroup))
+                {
+                    return true;
+                }
+            }
+
+            var enclosingType = (enclosing.ReceiverType as StructSymbol) ?? (enclosing.StaticOwnerType as StructSymbol);
+            if (enclosingType != null)
+            {
+                var sharedMethods = TypeMemberModel.GetMethods(enclosingType, name, MemberQuery.Static(MemberKinds.Method));
+                if (TryBuildUserMethodGroup(receiver: null, sharedMethods, out methodGroup))
+                {
+                    return true;
+                }
             }
         }
 

@@ -884,6 +884,19 @@ internal sealed class SlotPlanner
             base.VisitClrMethodGroupExpression(node);
         }
 
+        protected override void VisitMethodGroupExpression(BoundMethodGroupExpression node)
+        {
+            // ADR-0112: a user instance method group captures an rvalue receiver
+            // (e.g. a struct produced by a call). Spill it so the emitter can take
+            // its address / box it for the delegate target.
+            if (node.Receiver != null)
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
+            base.VisitMethodGroupExpression(node);
+        }
+
         private void AddIfNeeded(BoundExpression receiver)
         {
             if (this.needsRvalueReceiverSpill(receiver, this.function, this.locals))

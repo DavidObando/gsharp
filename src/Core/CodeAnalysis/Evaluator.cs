@@ -1157,8 +1157,18 @@ public sealed class Evaluator
         // Issue #324: a named-function method group behaves like a no-capture
         // closure over the function's own body, so indirect invocation reuses
         // the ClosureValue path.
+        //
+        // ADR-0112: a user-type instance method group also captures the bound
+        // receiver as the implicit `this`, so invoking the delegate dispatches
+        // against that instance. Static (shared) groups have no receiver.
         var body = program.Functions[node.Function];
-        return new ClosureValue(node.Function, body, node.FunctionType, new Dictionary<VariableSymbol, object>());
+        var captured = new Dictionary<VariableSymbol, object>();
+        if (node.Receiver != null && node.Function.ThisParameter != null)
+        {
+            captured[node.Function.ThisParameter] = EvaluateExpression(node.Receiver);
+        }
+
+        return new ClosureValue(node.Function, body, node.FunctionType, captured);
     }
 
     private object EvaluateClrMethodGroupExpression(BoundClrMethodGroupExpression node)

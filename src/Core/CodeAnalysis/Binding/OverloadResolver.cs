@@ -3086,6 +3086,27 @@ internal sealed class OverloadResolver
                 continue;
             }
 
+            // ADR-0112 / ADR-0063 §9: an unresolved method group argument
+            // (multiple user overloads, or a CLR method group) carries no fixed
+            // type until the target delegate signature drives overload
+            // selection. Route it through BindConversion — which performs the
+            // signature-directed pick — instead of the type-equality / implicit
+            // conversion checks below (which would reject the Error-typed group).
+            if ((argument is BoundMethodGroupExpression { FunctionType: null }
+                    || argument is BoundClrMethodGroupExpression { ResolvedMethod: null })
+                && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type)))
+            {
+                var groupLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
+                var resolvedGroupArg = conversions.BindConversion(groupLoc, argument, expectedType);
+                boundArguments[i] = resolvedGroupArg;
+                if (resolvedGroupArg is BoundErrorExpression)
+                {
+                    hasErrors = true;
+                }
+
+                continue;
+            }
+
             if (argument.Type != expectedType
                 && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
                 && !Conversion.Classify(argument.Type, expectedType).IsImplicit)
