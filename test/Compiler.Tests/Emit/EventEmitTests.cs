@@ -883,6 +883,162 @@ public class EventEmitTests
         }
     }
 
+    [Fact]
+    public void Adr0112A5_InheritedInstanceEvent_SubscribesThroughDerivedReceiver()
+    {
+        // ADR-0112 A5: instance event subscription on an explicit receiver now
+        // routes through TypeMemberModel.TryGetEvent, which walks the base
+        // chain. An instance event declared on an `open class` base must
+        // resolve when subscribed through a derived receiver. Before A5 the
+        // single-level `userStruct.Events` lookup fell through to an error.
+        var source = """
+            package MyLib
+            import System
+
+            class A5InhCounter {
+                var Value int32
+                init() { Value = 0 }
+                func Bump() { Value = Value + 1 }
+            }
+
+            open class A5InhBase {
+                public event A5InhChanged EventHandler
+                init() { }
+            }
+
+            class A5InhDerived : A5InhBase {
+                init() { }
+            }
+
+            class A5InhProbe {
+                var Counter A5InhCounter
+                var D A5InhDerived
+                init() {
+                    Counter = A5InhCounter()
+                    D = A5InhDerived()
+                    var c = Counter
+                    D.A5InhChanged += func(s object, e EventArgs) {
+                        c.Bump()
+                    }
+                }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var probeType = assembly.GetTypes().Single(t => t.Name == "A5InhProbe");
+        var baseType = assembly.GetTypes().Single(t => t.Name == "A5InhBase");
+        var counterType = assembly.GetTypes().Single(t => t.Name == "A5InhCounter");
+
+        var probe = Activator.CreateInstance(probeType)!;
+        var derived = probeType.GetField("D")!.GetValue(probe)!;
+        var counter = probeType.GetField("Counter")!.GetValue(probe)!;
+
+        // The backing field is declared on the base type.
+        var backingField = baseType.GetField("A5InhChanged", BindingFlags.NonPublic | BindingFlags.Instance);
+        var del = (Delegate)backingField!.GetValue(derived)!;
+        Assert.NotNull(del);
+
+        del.DynamicInvoke(derived, EventArgs.Empty);
+        del.DynamicInvoke(derived, EventArgs.Empty);
+
+        Assert.Equal(2, (int)counterType.GetField("Value")!.GetValue(counter)!);
+    }
+
+    [Fact]
+    public void Adr0112A5_ImmediateInstanceEvent_SubscribesUnchanged()
+    {
+        // ADR-0112 A5 parity: subscribing to an event declared directly on the
+        // receiver's own type must still bind and fire (no behavior change).
+        var source = """
+            package MyLib
+            import System
+
+            class A5ImmCounter {
+                var Value int32
+                init() { Value = 0 }
+                func Bump() { Value = Value + 1 }
+            }
+
+            class A5ImmSource {
+                public event A5ImmChanged EventHandler
+                init() { }
+            }
+
+            class A5ImmProbe {
+                var Counter A5ImmCounter
+                var Src A5ImmSource
+                init() {
+                    Counter = A5ImmCounter()
+                    Src = A5ImmSource()
+                    var c = Counter
+                    Src.A5ImmChanged += func(s object, e EventArgs) {
+                        c.Bump()
+                    }
+                }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var probeType = assembly.GetTypes().Single(t => t.Name == "A5ImmProbe");
+        var sourceType = assembly.GetTypes().Single(t => t.Name == "A5ImmSource");
+        var counterType = assembly.GetTypes().Single(t => t.Name == "A5ImmCounter");
+
+        var probe = Activator.CreateInstance(probeType)!;
+        var src = probeType.GetField("Src")!.GetValue(probe)!;
+        var counter = probeType.GetField("Counter")!.GetValue(probe)!;
+
+        var backingField = sourceType.GetField("A5ImmChanged", BindingFlags.NonPublic | BindingFlags.Instance);
+        var del = (Delegate)backingField!.GetValue(src)!;
+        del.DynamicInvoke(src, EventArgs.Empty);
+
+        Assert.Equal(1, (int)counterType.GetField("Value")!.GetValue(counter)!);
+    }
+
+    [Fact]
+    public void Adr0112A5_StaticEvent_SubscribesUnchanged()
+    {
+        // ADR-0112 A5 parity: static event subscription (Issue #263) now routes
+        // through TypeMemberModel.TryGetStaticEvent (single-level, first-by-name)
+        // and must bind and fire exactly as before.
+        var source = """
+            package MyLib
+            import System
+
+            class A5StatCounter {
+                var Value int32
+                init() { Value = 0 }
+                func Bump() { Value = Value + 1 }
+            }
+
+            class A5StatBus {
+                shared {
+                    public event A5StatPing EventHandler
+                }
+                var Counter A5StatCounter
+                init() {
+                    Counter = A5StatCounter()
+                    var c = Counter
+                    A5StatBus.A5StatPing += func(s object, e EventArgs) {
+                        c.Bump()
+                    }
+                }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var busType = assembly.GetTypes().Single(t => t.Name == "A5StatBus");
+        var counterType = assembly.GetTypes().Single(t => t.Name == "A5StatCounter");
+
+        var probe = Activator.CreateInstance(busType)!;
+        var counter = busType.GetField("Counter")!.GetValue(probe)!;
+
+        var backingField = busType.GetField("A5StatPing", BindingFlags.NonPublic | BindingFlags.Static);
+        var del = (Delegate)backingField!.GetValue(null)!;
+        del.DynamicInvoke(busType, EventArgs.Empty);
+
+        Assert.Equal(1, (int)counterType.GetField("Value")!.GetValue(counter)!);
+    }
+
     private static Assembly CompileToAssembly(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_event_emit_").FullName;
