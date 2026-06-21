@@ -926,25 +926,16 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        // ADR-0112: route through the canonical member-resolution layer.
         if (isCall)
         {
-            return structSym.TryGetStaticMethod(headName, out _);
+            return !TypeMemberModel.GetMethods(structSym, headName, MemberQuery.Static(MemberKinds.Method)).IsEmpty;
         }
 
-        if (structSym.TryGetStaticField(headName, out _))
-        {
-            return true;
-        }
-
-        foreach (var prop in structSym.StaticProperties)
-        {
-            if (prop.Name == headName)
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return TypeMemberModel.LookupMember(
+            structSym,
+            headName,
+            MemberQuery.Static(MemberKinds.Field | MemberKinds.Property)) != null;
     }
 
     private BoundExpression BindEnumAccessorStep(EnumSymbol enumSymbol, ExpressionSyntax rightPart)
@@ -1011,17 +1002,15 @@ internal sealed partial class ExpressionBinder
     {
         var memberName = ne.IdentifierToken.Text;
 
-        if (structSym.TryGetStaticField(memberName, out var field))
+        // ADR-0112: static field/property lookups go through the canonical layer.
+        if (TypeMemberModel.TryGetStaticField(structSym, memberName, out var field))
         {
             return new BoundFieldAccessExpression(null, receiver: null, structSym, field);
         }
 
-        foreach (var prop in structSym.StaticProperties)
+        if (TypeMemberModel.TryGetStaticProperty(structSym, memberName, out var prop))
         {
-            if (prop.Name == memberName)
-            {
-                return new BoundPropertyAccessExpression(null, receiver: null, structSym, prop);
-            }
+            return new BoundPropertyAccessExpression(null, receiver: null, structSym, prop);
         }
 
         Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
