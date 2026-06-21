@@ -157,6 +157,20 @@ public sealed class FunctionTypeSymbol : TypeSymbol
         return Cache.GetOrAdd(cacheKey, _ => new FunctionTypeSymbol(name, parameterTypes, normalizedFlags, returnType ?? TypeSymbol.Void));
     }
 
+    /// <summary>
+    /// Clears the process-wide function-type cache. Cached instances eagerly
+    /// build a host-runtime <c>System.Func</c>/<c>System.Action</c> CLR type
+    /// (see <see cref="BuildClrType"/>) that can close over types projected
+    /// from a <see cref="System.Reflection.MetadataLoadContext"/>. When that
+    /// context is disposed at the end of a compilation, reusing the cached
+    /// entry in a later compilation running in the same process throws
+    /// <see cref="System.ObjectDisposedException"/>. The
+    /// <see cref="ReferenceResolver"/> calls this on dispose alongside
+    /// <see cref="ImportedTypeSymbol.ClearCache"/> so each compilation rebuilds
+    /// function types against its own live reflection context.
+    /// </summary>
+    internal static void ClearCache() => Cache.Clear();
+
     private static void AppendIdentityKey(System.Text.StringBuilder builder, TypeSymbol type)
     {
         switch (type)

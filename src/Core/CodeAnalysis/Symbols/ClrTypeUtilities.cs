@@ -161,7 +161,21 @@ internal static class ClrTypeUtilities
         {
             try
             {
-                return target.IsAssignableFrom(source);
+                if (target.IsAssignableFrom(source))
+                {
+                    return true;
+                }
+
+                // Issue #908: do NOT treat a `false` here as authoritative. The
+                // `target.GetType() == source.GetType()` guard also fires when the
+                // two types are the same reflection-kind (e.g. both
+                // MetadataLoadContext RoTypes) but originate from *different*
+                // context instances — across two separate compilations sharing a
+                // process. There, IsAssignableFrom compares base types by
+                // reference and returns a spurious `false` even for a genuine
+                // upcast (e.g. MemoryStream → Stream). Fall through to the
+                // by-name walk, which is reference-context independent and only
+                // ever returns true for real inheritance / implementation.
             }
             catch (InvalidOperationException)
             {
