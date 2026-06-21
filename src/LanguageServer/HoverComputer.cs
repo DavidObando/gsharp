@@ -1840,19 +1840,11 @@ public static class CompletionComputer
     {
         if (receiverType is StructSymbol structSymbol)
         {
-            for (var current = structSymbol; current != null; current = current.BaseClass)
-            {
-                foreach (var field in current.Fields)
-                {
-                    AddItem(items, seen, field.Name, CompletionItemKind.Field, HoverComputer.FormatSymbol(field));
-                }
-
-                foreach (var property in current.Properties)
-                {
-                    AddItem(items, seen, property.Name, CompletionItemKind.Property, $"{property.Name}: {property.Type?.Name}");
-                }
-            }
-
+            // ADR-0112 A1: route object-initializer completion through the canonical
+            // member-resolution layer. Instance fields/properties, walking the base
+            // chain, preserves the historic enumeration (fields then properties per
+            // level) and the same writable-member set object initializers accept.
+            AddStructMembersFromModel(items, seen, structSymbol, MemberQuery.Instance(MemberKinds.Field | MemberKinds.Property));
             return;
         }
 

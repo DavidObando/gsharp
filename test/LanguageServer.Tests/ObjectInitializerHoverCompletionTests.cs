@@ -164,6 +164,41 @@ public class ObjectInitializerHoverCompletionTests
     }
 
     [Fact]
+    public void ComputeCompletions_InsideGSharpClassInitializerBlock_OffersInheritedAndOwnFieldsAndProperties()
+    {
+        // ADR-0112 A1 parity: object-initializer completion routes through the
+        // canonical TypeMemberModel. The offered set must include this-type and
+        // inherited instance fields and properties (settable members object
+        // initializers accept), walking the base chain.
+        const string source = "open class Base {\n"
+            + "    prop BaseProp int32\n"
+            + "    var baseField int32\n"
+            + "}\n"
+            + "class Derived : Base {\n"
+            + "    prop Width int32\n"
+            + "    var height int32\n"
+            + "    init() { }\n"
+            + "}\n"
+            + "func main() {\n"
+            + "    let d = Derived() {  }\n"
+            + "}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var bracePos = LanguageServerTestHelpers.PositionOf(source, "{  }");
+        var caret = new Position(bracePos.Line, bracePos.Character + 2);
+
+        var items = CompletionComputer.ComputeCompletions(content, caret);
+
+        // Own members.
+        Assert.Contains(items, i => i.Label == "Width" && i.Kind == CompletionItemKind.Property);
+        Assert.Contains(items, i => i.Label == "height" && i.Kind == CompletionItemKind.Field);
+
+        // Inherited members from the base class.
+        Assert.Contains(items, i => i.Label == "BaseProp" && i.Kind == CompletionItemKind.Property);
+        Assert.Contains(items, i => i.Label == "baseField" && i.Kind == CompletionItemKind.Field);
+    }
+
+    [Fact]
     public void ComputeCompletions_InValuePositionOfInitializer_FallsBackToGlobalList()
     {
         const string source = "import System.Diagnostics\n"
