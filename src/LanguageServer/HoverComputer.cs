@@ -845,9 +845,17 @@ public static class HoverComputer
 
         // The hovered call is the right part of an accessor (`receiver.M(...)`); a
         // bare call (`M(...)`) has no receiver and keeps the legacy name+arity match.
+        // A dotted chain such as `report.Checks.Single(...)` parses
+        // right-associatively, so the token's enclosing accessors yield several
+        // candidate receivers (`Checks`, then `report.Checks`). Pick the most
+        // complete one — the widest span — so the receiver reflects the full chain
+        // (`report.Checks`) rather than a bare trailing segment (`Checks`) that
+        // would not resolve on its own.
         var receiverExpression = FindAccessorMemberContexts(tree, token)
             .Select(context => context.ReceiverExpression)
-            .FirstOrDefault(expr => expr != null);
+            .Where(expr => expr != null)
+            .OrderByDescending(expr => expr.Span.Length)
+            .FirstOrDefault();
         if (receiverExpression == null)
         {
             return SemanticLookup.CallReceiverGate.None;
