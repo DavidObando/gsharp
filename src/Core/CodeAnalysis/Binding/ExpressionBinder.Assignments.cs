@@ -267,7 +267,7 @@ internal sealed partial class ExpressionBinder
         {
             var staticValue = BindExpression(syntax.Value);
             var fieldName = syntax.FieldIdentifier.Text;
-            if (userStruct.TryGetStaticField(fieldName, out var staticField))
+            if (TypeMemberModel.TryGetStaticField(userStruct, fieldName, out var staticField))
             {
                 if (staticField.IsReadOnly)
                 {
@@ -279,19 +279,16 @@ internal sealed partial class ExpressionBinder
             }
 
             // Issue #263: static property assignment.
-            foreach (var prop in userStruct.StaticProperties)
+            if (TypeMemberModel.TryGetStaticProperty(userStruct, fieldName, out var prop))
             {
-                if (prop.Name == fieldName)
+                if (!prop.HasSetter)
                 {
-                    if (!prop.HasSetter)
-                    {
-                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
-                        return new BoundErrorExpression(null);
-                    }
-
-                    var propConverted = conversions.BindConversion(syntax.Value.Location, staticValue, prop.Type);
-                    return new BoundPropertyAssignmentExpression(null, receiver: null, userStruct, prop, propConverted);
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                    return new BoundErrorExpression(null);
                 }
+
+                var propConverted = conversions.BindConversion(syntax.Value.Location, staticValue, prop.Type);
+                return new BoundPropertyAssignmentExpression(null, receiver: null, userStruct, prop, propConverted);
             }
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
@@ -578,7 +575,7 @@ internal sealed partial class ExpressionBinder
         var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
         var boundRhs = BindExpression(syntax.Value);
 
-        if (staticStruct.TryGetStaticField(memberName, out var staticField))
+        if (TypeMemberModel.TryGetStaticField(staticStruct, memberName, out var staticField))
         {
             var leftRead = new BoundFieldAccessExpression(null, receiver: null, staticStruct, staticField);
             var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, staticField.Type, boundRhs.Type);
@@ -600,13 +597,8 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        foreach (var prop in staticStruct.StaticProperties)
+        if (TypeMemberModel.TryGetStaticProperty(staticStruct, memberName, out var prop))
         {
-            if (prop.Name != memberName)
-            {
-                continue;
-            }
-
             if (!prop.HasGetter || !prop.HasSetter)
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
