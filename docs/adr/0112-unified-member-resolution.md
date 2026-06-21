@@ -124,3 +124,47 @@ slot.
 - Full consolidation of CLR/imported member reflection into the same layer is
   deferred; the layer exposes a unified entry point but CLR resolution remains
   a `MemberLookup` backend.
+
+## Addendum — P0 enabler additions
+
+The P0 enabler PR (`feat(symbols): TypeMemberModel P0`) extended the canonical
+layer with purely additive capabilities that the later consumer-migration PRs
+depend on. No existing behavior, ordering, or signatures changed; the parity
+characterization tests remain green.
+
+- **Declaring-type field lookup.** Added
+  `TypeMemberModel.TryGetFieldIncludingInherited(TypeSymbol, string, MemberQuery,
+  out FieldSymbol, out StructSymbol declaringType)`. It mirrors
+  `StructSymbol.TryGetFieldIncludingInherited` (this-first base-chain walk) but
+  lives behind the canonical layer and honors the `MemberQuery` axes
+  (instance-before-static at each level, inherited toggle, `Field` kind). The
+  binder needs the declaring `StructSymbol` to build
+  `BoundFieldAccessExpression`. The original `TryGetField` is unchanged.
+
+- **Interface and enum enumeration.** `EnumerateMembers` now handles
+  `InterfaceSymbol` and `EnumSymbol` in addition to `StructSymbol`. Interface
+  enumeration surfaces instance properties/events/methods plus static methods
+  per the query/kinds (mirroring `LookupMember`/`GetMethods`). Enum enumeration
+  surfaces enum members as static fields (mirroring the enum path in
+  `LookupMember`). The existing `StructSymbol` enumeration order/behavior is
+  preserved exactly (extracted unchanged into `EnumerateStructMembers`).
+
+- **Property-lookup consolidation.**
+  `MemberLookup.TryGetPropertyIncludingInherited` now delegates to
+  `TypeMemberModel.TryGetProperty`, removing the duplicated base-chain
+  instance-property walk. The two were verified behaviorally equivalent (same
+  base-chain order, same first-match); the public signature and callers are
+  unchanged in this PR.
+
+- **Interface static coverage / known gap.** Interface static *methods* are
+  covered by `LookupMember`, `GetMethods`, and now `EnumerateMembers`.
+  `InterfaceSymbol` does not currently model static *properties* or static
+  *events* (no `StaticProperties`/`StaticEvents` tables), so
+  `TryGetStaticProperty`/`TryGetStaticEvent` expose only what the symbol model
+  supports. Surfacing interface static properties/events would require deeper
+  `InterfaceSymbol` modeling and is deferred as future work for the A9
+  migration.
+
+- **Reserved `MemberKinds.NestedType`.** Added as a reserved flag value (not
+  included in `All`) for future nested-type routing. Nested-type enumeration is
+  not wired in P0; it remains future work to avoid scope creep.

@@ -26,6 +26,12 @@ public enum MemberKinds
     /// <summary>Instance / static methods.</summary>
     Method = 8,
 
+    /// <summary>
+    /// Reserved for future nested-type routing (ADR-0112 P0). Not included in
+    /// <see cref="All"/>; nested-type enumeration is not yet wired (future work).
+    /// </summary>
+    NestedType = 16,
+
     /// <summary>Every member kind.</summary>
     All = Field | Property | Event | Method,
 }

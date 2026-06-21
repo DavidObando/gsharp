@@ -132,90 +132,20 @@ public static class TypeMemberModel
     {
         if (type is StructSymbol structSymbol)
         {
-            for (var c = structSymbol; c != null; c = c.BaseClass)
-            {
-                if ((query.Kinds & MemberKinds.Field) != 0)
-                {
-                    if (query.IncludeInstance)
-                    {
-                        foreach (var f in c.Fields)
-                        {
-                            yield return f;
-                        }
-                    }
-
-                    if (query.IncludeStatic)
-                    {
-                        foreach (var f in c.StaticFields)
-                        {
-                            yield return f;
-                        }
-                    }
-                }
-
-                if ((query.Kinds & MemberKinds.Property) != 0)
-                {
-                    if (query.IncludeInstance)
-                    {
-                        foreach (var p in c.Properties)
-                        {
-                            yield return p;
-                        }
-                    }
-
-                    if (query.IncludeStatic)
-                    {
-                        foreach (var p in c.StaticProperties)
-                        {
-                            yield return p;
-                        }
-                    }
-                }
-
-                if ((query.Kinds & MemberKinds.Event) != 0)
-                {
-                    if (query.IncludeInstance)
-                    {
-                        foreach (var e in c.Events)
-                        {
-                            yield return e;
-                        }
-                    }
-
-                    if (query.IncludeStatic)
-                    {
-                        foreach (var e in c.StaticEvents)
-                        {
-                            yield return e;
-                        }
-                    }
-                }
-
-                if ((query.Kinds & MemberKinds.Method) != 0)
-                {
-                    if (query.IncludeInstance)
-                    {
-                        foreach (var m in c.Methods)
-                        {
-                            yield return m;
-                        }
-                    }
-
-                    if (query.IncludeStatic)
-                    {
-                        foreach (var m in c.StaticMethods)
-                        {
-                            yield return m;
-                        }
-                    }
-                }
-
-                if (!query.IncludeInherited)
-                {
-                    yield break;
-                }
-            }
+            return EnumerateStructMembers(structSymbol, query);
         }
+
+        if (type is InterfaceSymbol interfaceSymbol)
+        {
+            return EnumerateInterfaceMembers(interfaceSymbol, query);
+        }
+
+        if (type is EnumSymbol enumSymbol)
+        {
+            return EnumerateEnumMembers(enumSymbol, query);
+        }
+
+        return System.Linq.Enumerable.Empty<Symbol>();
     }
 
     /// <summary>Tries to find an instance field named <paramref name="name"/> on <paramref name="type"/>, walking the base chain.</summary>
@@ -237,6 +167,52 @@ public static class TypeMemberModel
         }
 
         field = null;
+        return false;
+    }
+
+    /// <summary>
+    /// ADR-0112 P0: tries to find a field named <paramref name="name"/> on
+    /// <paramref name="type"/> while also surfacing the <see cref="StructSymbol"/>
+    /// that actually declares it — the binder needs the declaring struct to build
+    /// a <c>BoundFieldAccessExpression</c>. This mirrors
+    /// <see cref="StructSymbol.TryGetFieldIncludingInherited"/> for the
+    /// declaring-type semantics but honors <paramref name="query"/> (instance
+    /// before static at each level, this-first base-chain walk, stopping when
+    /// <see cref="MemberQuery.IncludeInherited"/> is unset).
+    /// </summary>
+    /// <param name="type">The type to resolve against (user-defined struct/class only).</param>
+    /// <param name="name">The field name.</param>
+    /// <param name="query">The static/instance/inherited filter.</param>
+    /// <param name="field">The found field on success.</param>
+    /// <param name="declaringType">The struct that actually declares the field on success.</param>
+    /// <returns>True if found.</returns>
+    public static bool TryGetFieldIncludingInherited(TypeSymbol type, string name, MemberQuery query, out FieldSymbol field, out StructSymbol declaringType)
+    {
+        if ((query.Kinds & MemberKinds.Field) != 0 && type is StructSymbol structSymbol)
+        {
+            for (var c = structSymbol; c != null; c = c.BaseClass)
+            {
+                if (query.IncludeInstance && c.TryGetField(name, out field))
+                {
+                    declaringType = c;
+                    return true;
+                }
+
+                if (query.IncludeStatic && c.TryGetStaticField(name, out field))
+                {
+                    declaringType = c;
+                    return true;
+                }
+
+                if (!query.IncludeInherited)
+                {
+                    break;
+                }
+            }
+        }
+
+        field = null;
+        declaringType = null;
         return false;
     }
 
@@ -374,6 +350,154 @@ public static class TypeMemberModel
 
         @event = null;
         return false;
+    }
+
+    private static IEnumerable<Symbol> EnumerateStructMembers(StructSymbol structSymbol, MemberQuery query)
+    {
+        for (var c = structSymbol; c != null; c = c.BaseClass)
+        {
+            if ((query.Kinds & MemberKinds.Field) != 0)
+            {
+                if (query.IncludeInstance)
+                {
+                    foreach (var f in c.Fields)
+                    {
+                        yield return f;
+                    }
+                }
+
+                if (query.IncludeStatic)
+                {
+                    foreach (var f in c.StaticFields)
+                    {
+                        yield return f;
+                    }
+                }
+            }
+
+            if ((query.Kinds & MemberKinds.Property) != 0)
+            {
+                if (query.IncludeInstance)
+                {
+                    foreach (var p in c.Properties)
+                    {
+                        yield return p;
+                    }
+                }
+
+                if (query.IncludeStatic)
+                {
+                    foreach (var p in c.StaticProperties)
+                    {
+                        yield return p;
+                    }
+                }
+            }
+
+            if ((query.Kinds & MemberKinds.Event) != 0)
+            {
+                if (query.IncludeInstance)
+                {
+                    foreach (var e in c.Events)
+                    {
+                        yield return e;
+                    }
+                }
+
+                if (query.IncludeStatic)
+                {
+                    foreach (var e in c.StaticEvents)
+                    {
+                        yield return e;
+                    }
+                }
+            }
+
+            if ((query.Kinds & MemberKinds.Method) != 0)
+            {
+                if (query.IncludeInstance)
+                {
+                    foreach (var m in c.Methods)
+                    {
+                        yield return m;
+                    }
+                }
+
+                if (query.IncludeStatic)
+                {
+                    foreach (var m in c.StaticMethods)
+                    {
+                        yield return m;
+                    }
+                }
+            }
+
+            if (!query.IncludeInherited)
+            {
+                yield break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// ADR-0112 P0: enumerates an interface's members for completion. Interfaces
+    /// have no base-chain modeling here, so this surfaces the interface's own
+    /// instance properties/events/methods plus static methods, honoring the
+    /// query. (InterfaceSymbol does not currently model static
+    /// properties/events; see the ADR-0112 P0 addendum.)
+    /// </summary>
+    private static IEnumerable<Symbol> EnumerateInterfaceMembers(InterfaceSymbol interfaceSymbol, MemberQuery query)
+    {
+        if ((query.Kinds & MemberKinds.Property) != 0 && query.IncludeInstance)
+        {
+            foreach (var p in interfaceSymbol.Properties)
+            {
+                yield return p;
+            }
+        }
+
+        if ((query.Kinds & MemberKinds.Event) != 0 && query.IncludeInstance)
+        {
+            foreach (var e in interfaceSymbol.Events)
+            {
+                yield return e;
+            }
+        }
+
+        if ((query.Kinds & MemberKinds.Method) != 0)
+        {
+            if (query.IncludeInstance)
+            {
+                foreach (var m in interfaceSymbol.Methods)
+                {
+                    yield return m;
+                }
+            }
+
+            if (query.IncludeStatic)
+            {
+                foreach (var m in interfaceSymbol.StaticMethods)
+                {
+                    yield return m;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// ADR-0112 P0: enumerates an enum's members for completion. Enum members
+    /// are surfaced as static fields, mirroring the enum handling in
+    /// <see cref="LookupMember"/>.
+    /// </summary>
+    private static IEnumerable<Symbol> EnumerateEnumMembers(EnumSymbol enumSymbol, MemberQuery query)
+    {
+        if (query.IncludeStatic && (query.Kinds & MemberKinds.Field) != 0)
+        {
+            foreach (var member in enumSymbol.Members)
+            {
+                yield return member;
+            }
+        }
     }
 
     private static Symbol LookupStructMember(StructSymbol structSymbol, string name, MemberQuery query)

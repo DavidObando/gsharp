@@ -1165,23 +1165,11 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when a property is found.</returns>
     public static bool TryGetPropertyIncludingInherited(StructSymbol type, string name, out PropertySymbol property)
     {
-        var current = type;
-        while (current != null)
-        {
-            foreach (var p in current.Properties)
-            {
-                if (p.Name == name)
-                {
-                    property = p;
-                    return true;
-                }
-            }
-
-            current = current.BaseClass;
-        }
-
-        property = null;
-        return false;
+        // ADR-0112 P0: the base-chain instance-property walk is now owned by the
+        // canonical member-resolution layer. This method delegates so the single
+        // implementation lives in TypeMemberModel.TryGetProperty (same base-chain
+        // order, same first-match semantics).
+        return TypeMemberModel.TryGetProperty(type, name, out property);
     }
 
     // ----- Indexer / Nullable<> / extension-method probes (instance helpers) -----
