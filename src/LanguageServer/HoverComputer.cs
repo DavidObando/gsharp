@@ -173,13 +173,20 @@ public static class HoverComputer
         // on the receiver type would miss.
         var invokedCall = FindNodes<CallExpressionSyntax>(tree.Root)
             .FirstOrDefault(call => MatchesToken(call.Identifier, token));
-        if (invokedCall != null
-            && SemanticLookup.TryResolveInvokedImportedMethod(compilation, token.Text, invokedCall.Arguments.Count, out var invokedMethod, out var invokedOverloadCount))
+        if (invokedCall != null)
         {
-            return new HoverModel(
-                SymbolDisplay.ToDisplayString(invokedMethod, SymbolDisplayFormat.Hover),
-                HoverDocumentationRenderer.Render(GSharp.Core.CodeAnalysis.Documentation.AssemblyDocumentationProvider.Resolve(invokedMethod)),
-                invokedOverloadCount);
+            // Disambiguate the program-wide same-name scan by the hovered call's
+            // receiver syntax: a value receiver (`x.M(...)`) can only bind to an
+            // instance/extension method, a type-name receiver (`T.M(...)`) only to
+            // a plain static method (issue #906).
+            var gate = ClassifyCallReceiver(tree, compilation, token, out var receiverClrType);
+            if (SemanticLookup.TryResolveInvokedImportedMethod(compilation, token.Text, invokedCall.Arguments.Count, gate, receiverClrType, out var invokedMethod, out var invokedOverloadCount))
+            {
+                return new HoverModel(
+                    SymbolDisplay.ToDisplayString(invokedMethod, SymbolDisplayFormat.Hover),
+                    HoverDocumentationRenderer.Render(GSharp.Core.CodeAnalysis.Documentation.AssemblyDocumentationProvider.Resolve(invokedMethod)),
+                    invokedOverloadCount);
+            }
         }
 
         var clrType = SemanticLookup.ResolveImportedClrType(
@@ -817,6 +824,145 @@ public static class HoverComputer
     private static string FormatType(TypeSymbol type)
     {
         return type?.Name ?? "void";
+    }
+
+    /// <summary>
+    /// Issue #906: classifies the receiver syntax of the call whose identifier is
+    /// <paramref name="token"/>, so the program-wide imported-method scan can reject
+    /// candidates with an inconsistent dispatch shape. A value receiver (a local,
+    /// member access, call result, etc.) gates to instance / receiver-dispatched
+    /// extension methods; a type-name receiver (<c>string</c>, <c>Console</c>,
+    /// <c>System.Linq.Enumerable</c>, …) gates to plain static methods. When known,
+    /// the receiver's CLR type is returned as a tie-breaker for same-shaped collisions.
+    /// </summary>
+    private static SemanticLookup.CallReceiverGate ClassifyCallReceiver(
+        SyntaxTree tree,
+        Compilation compilation,
+        SyntaxToken token,
+        out Type receiverClrType)
+    {
+        receiverClrType = null;
+
+        // The hovered call is the right part of an accessor (`receiver.M(...)`); a
+        // bare call (`M(...)`) has no receiver and keeps the legacy name+arity match.
+        var receiverExpression = FindAccessorMemberContexts(tree, token)
+            .Select(context => context.ReceiverExpression)
+            .FirstOrDefault(expr => expr != null);
+        if (receiverExpression == null)
+        {
+            return SemanticLookup.CallReceiverGate.None;
+        }
+
+        switch (receiverExpression)
+        {
+            case NameExpressionSyntax name:
+                var symbol = SemanticLookup.ResolveSymbol(compilation, name.IdentifierToken);
+                if (IsValueSymbol(symbol))
+                {
+                    TryResolveClrTypeFromSymbol(symbol, out receiverClrType);
+                    return SemanticLookup.CallReceiverGate.Value;
+                }
+
+                // A bare-name receiver that is not a value is a type-name receiver: a
+                // declared/imported type, or a primitive keyword type (e.g.
+                // `string.Concat(...)`). Resolve its CLR type from the reference context
+                // (so it can be compared against candidate methods' declaring types),
+                // preferring the imported/primitive resolution over a builtin TypeSymbol
+                // whose ClrType may be unset.
+                var primitiveClrName = PrimitiveClrTypeName(name.IdentifierToken.Text);
+                if (primitiveClrName != null)
+                {
+                    receiverClrType = SemanticLookup.ResolveImportedClrType(tree, compilation, primitiveClrName);
+                    return SemanticLookup.CallReceiverGate.TypeName;
+                }
+
+                var importedType = SemanticLookup.ResolveImportedClrType(tree, compilation, name.IdentifierToken.Text);
+                if (importedType != null)
+                {
+                    receiverClrType = importedType;
+                    return SemanticLookup.CallReceiverGate.TypeName;
+                }
+
+                if (symbol is TypeSymbol)
+                {
+                    TryResolveClrTypeFromSymbol(symbol, out receiverClrType);
+                    return SemanticLookup.CallReceiverGate.TypeName;
+                }
+
+                return SemanticLookup.CallReceiverGate.None;
+
+            case AccessorExpressionSyntax accessor:
+                // A dotted name that resolves wholesale to a type is a static receiver
+                // (e.g. `System.Linq.Enumerable.Concat(...)`); otherwise it is a member
+                // access on a value (e.g. `report.Checks.Single(...)`).
+                if (TryFlattenDottedName(accessor, out var dotted))
+                {
+                    var dottedType = SemanticLookup.ResolveImportedClrType(tree, compilation, dotted);
+                    if (dottedType != null)
+                    {
+                        receiverClrType = dottedType;
+                        return SemanticLookup.CallReceiverGate.TypeName;
+                    }
+                }
+
+                if (TryResolveClrReceiver(tree, compilation, accessor, out var clrReceiver) && !clrReceiver.StaticMembers)
+                {
+                    receiverClrType = clrReceiver.Type;
+                }
+
+                return SemanticLookup.CallReceiverGate.Value;
+
+            default:
+                // Call results, indexers, parenthesised/literal receivers are all values.
+                if (TryResolveClrReceiver(tree, compilation, receiverExpression, out var valueReceiver) && !valueReceiver.StaticMembers)
+                {
+                    receiverClrType = valueReceiver.Type;
+                }
+
+                return SemanticLookup.CallReceiverGate.Value;
+        }
+    }
+
+    private static bool IsValueSymbol(Symbol symbol)
+    {
+        return symbol is VariableSymbol or PropertySymbol or FieldSymbol;
+    }
+
+    private static bool TryFlattenDottedName(ExpressionSyntax expression, out string dotted)
+    {
+        dotted = expression switch
+        {
+            NameExpressionSyntax name => name.IdentifierToken.Text,
+            AccessorExpressionSyntax accessor
+                when TryFlattenDottedName(accessor.LeftPart, out var left)
+                    && accessor.RightPart is NameExpressionSyntax right
+                => left + "." + right.IdentifierToken.Text,
+            _ => null,
+        };
+
+        return dotted != null;
+    }
+
+    private static string PrimitiveClrTypeName(string keyword)
+    {
+        return keyword switch
+        {
+            "bool" => "System.Boolean",
+            "char" => "System.Char",
+            "string" => "System.String",
+            "int8" or "sbyte" => "System.SByte",
+            "uint8" or "byte" => "System.Byte",
+            "int16" => "System.Int16",
+            "uint16" => "System.UInt16",
+            "int32" => "System.Int32",
+            "uint32" => "System.UInt32",
+            "int64" => "System.Int64",
+            "uint64" => "System.UInt64",
+            "float32" => "System.Single",
+            "float64" => "System.Double",
+            "object" => "System.Object",
+            _ => null,
+        };
     }
 
     private sealed record ClrReceiver(Type Type, bool StaticMembers);
