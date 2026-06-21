@@ -165,6 +165,27 @@ public class ClrInteropEmitTests
         Assert.Contains("RepeatIterator", output);
     }
 
+    [Fact]
+    public void LowercasePrimitiveAlias_StaticMemberAccess_EmitsAndRuns()
+    {
+        // Issue #919: `string.Empty` and `int32.MaxValue` (lowercase predefined
+        // aliases as static-member-access receivers) must compile and run with
+        // the same behavior as the capitalized `String.Empty` / `Int32.MaxValue`
+        // forms — and without requiring `import System`.
+        var source = """
+            package P
+            import System
+
+            let empty = string.Empty
+            Console.WriteLine(empty.Length)
+            Console.WriteLine(int32.MaxValue)
+            Console.WriteLine(int.MaxValue)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("0\n2147483647\n2147483647\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_clr_emit_").FullName;
