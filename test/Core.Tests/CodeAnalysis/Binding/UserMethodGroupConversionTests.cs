@@ -151,6 +151,33 @@ Use(a.Add)
         Assert.Equal(104, result.Value);
     }
 
+    [Fact]
+    public void SharedFactory_RegisteredAsDelegate_RunsThroughCollection()
+    {
+        // Faithful shape of the originally failing Oahu RootCommand pattern: a
+        // command type exposes a `shared` factory whose method group is handed to
+        // a registrar expecting a delegate, then invoked indirectly.
+        var result = Evaluate(@"
+package P
+
+class BuildCommand {
+    var name string
+    shared {
+        func Create() BuildCommand { return BuildCommand{ name: ""build"" } }
+    }
+}
+
+func Register(factory () -> BuildCommand) string {
+    var cmd = factory()
+    return cmd.name
+}
+
+Register(BuildCommand.Create)
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("build", result.Value);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

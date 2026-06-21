@@ -176,6 +176,46 @@ func Main() {
         Assert.Contains("Make", labels);
     }
 
+    [Fact]
+    public void HoverAndBinder_AgreeOnSharedMethodGroup()
+    {
+        // ADR-0112 unified resolution: the SAME shared method that hover resolves
+        // for documentation must also be accepted by the binder as a method-group
+        // delegate conversion. Previously hover succeeded while the binder
+        // reported GS0158/GS0125 because they used separate resolution code.
+        const string source = @"package P
+
+class Box {
+    var tag int32
+    shared {
+        func Make() Box { return Box{ tag: 7 } }
+    }
+}
+
+func Use(f () -> Box) int32 { return f().tag }
+
+func Main() {
+    var n = Use(Box.Make)
+}
+";
+        // Binder side: no diagnostics — the method group converts cleanly.
+        var (compilation, tree) = Compile(source);
+        var diagnostics = compilation.GlobalScope.Diagnostics;
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
+
+        // Hover side: hovering the `Make` reference resolves the member.
+        var content = LanguageServerTestHelpers.Content(source);
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Make", 1));
+        Assert.NotNull(hover);
+        Assert.Contains("Make", hover.Contents.ToString(), System.StringComparison.Ordinal);
+
+        // SemanticLookup side: the reference resolves to the shared FunctionSymbol.
+        var makeUse = IdentifierAt(tree, "Make", occurrence: 2);
+        var resolved = SemanticLookup.ResolveSymbol(compilation, makeUse);
+        var fn = Assert.IsType<FunctionSymbol>(resolved);
+        Assert.Equal("Make", fn.Name);
+    }
+
     private static (Compilation Compilation, SyntaxTree Tree) Compile(string source)
     {
         var tree = SyntaxTree.Parse(GSharp.Core.CodeAnalysis.Text.SourceText.From(source));
