@@ -34,6 +34,7 @@ All notable changes to the GSharp VS Code extension will be documented in this f
 - Server crash recovery with exponential backoff
 - Language status bar item (Starting → Ready → Error)
 - Project context status bar item
+- Completion-as-you-type (issue #917): completions now appear automatically while typing identifiers, keywords, and member names — not only after a `.` — matching the Pylance / C# Dev Kit experience. Enabled by default for `.gs` files via `configurationDefaults` (`editor.quickSuggestions` for code, with word-based suggestions disabled so the LSP list is not duplicated); fully overridable per user/workspace. The language server attaches an explicit replacement range to each candidate so the typed prefix is replaced cleanly. See ADR-0111.
 
 ### Changed
 
