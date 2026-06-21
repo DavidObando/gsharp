@@ -53,6 +53,25 @@ public static class SemanticLookup
     private static long functionLocalsCacheHits;
     private static long functionLocalsCacheMisses;
 
+    /// <summary>
+    /// Describes the hovered call's receiver syntax so the same-named imported
+    /// method scan can be disambiguated by dispatch shape (issue #906).
+    /// </summary>
+    public enum CallReceiverGate
+    {
+        /// <summary>No receiver / unknown — match by name and arity only (legacy behavior).</summary>
+        None,
+
+        /// <summary>The receiver is a value expression (e.g. <c>report.Checks.Single(...)</c>): the
+        /// call can only bind to an instance method or an extension method dispatched on the
+        /// receiver, never to a plain static method.</summary>
+        Value,
+
+        /// <summary>The receiver is a type name (e.g. <c>string.Concat(...)</c>): the call can only
+        /// bind to a plain static method on that type, never to an instance/extension-dispatched one.</summary>
+        TypeName,
+    }
+
     /// <summary>Gets the node-bucket memo (hit, miss) counts. Test hook for ADR-0106.</summary>
     internal static (long Hits, long Misses) NodeBucketCacheStats =>
         (System.Threading.Interlocked.Read(ref nodeBucketCacheHits), System.Threading.Interlocked.Read(ref nodeBucketCacheMisses));
@@ -111,7 +130,7 @@ public static class SemanticLookup
     }
 
     /// <summary>
-    /// Issue #891: resolves the imported CLR method that an invoked call
+    /// Issue #891 / #906: resolves the imported CLR method that an invoked call
     /// expression bound to. The lowered call nodes do not retain their
     /// originating syntax, so the match is by method name and arity (the
     /// extension-method form carries one extra leading parameter for the
@@ -120,10 +139,22 @@ public static class SemanticLookup
     /// <c>Single&lt;TSource&gt;</c> — so hover can show the invoked method rather
     /// than an unrelated type that merely shares its name (e.g.
     /// <c>System.Single</c>).
+    /// <para>
+    /// Because the scan is program-wide (the call nodes carry no syntax to match
+    /// on), two different calls that merely share a method name and argument
+    /// count would otherwise be indistinguishable — e.g. the LINQ extension
+    /// <c>report.Checks.Single(pred)</c> and an unrelated static
+    /// <c>Assert.Single(collection)</c> elsewhere. The <paramref name="gate"/>
+    /// (derived from the hovered call's receiver syntax) and optional
+    /// <paramref name="receiverClrType"/> restrict the match to candidates whose
+    /// dispatch shape and receiver type are consistent with the hovered call.
+    /// </para>
     /// </summary>
     /// <param name="compilation">The compilation whose bound program is searched.</param>
     /// <param name="methodName">The invoked method's simple name.</param>
     /// <param name="argumentCount">The number of arguments at the call site.</param>
+    /// <param name="gate">The hovered call's receiver dispatch shape.</param>
+    /// <param name="receiverClrType">The hovered receiver's CLR type when known; used as a tie-breaker.</param>
     /// <param name="method">On success, the resolved CLR method.</param>
     /// <param name="overloadCount">On success, the number of same-named overloads on the declaring type.</param>
     /// <returns><see langword="true"/> when an invoked imported method was found.</returns>
@@ -131,6 +162,8 @@ public static class SemanticLookup
         Compilation compilation,
         string methodName,
         int argumentCount,
+        CallReceiverGate gate,
+        Type receiverClrType,
         out System.Reflection.MethodInfo method,
         out int overloadCount)
     {
@@ -151,6 +184,7 @@ public static class SemanticLookup
             return false;
         }
 
+        System.Reflection.MethodInfo firstGated = null;
         foreach (var root in EnumerateBoundRoots(program))
         {
             if (root == null)
@@ -160,6 +194,7 @@ public static class SemanticLookup
 
             foreach (var node in FindBoundNodes<BoundNode>(root))
             {
+                var isInstance = node is BoundImportedInstanceCallExpression;
                 var candidate = node switch
                 {
                     BoundImportedInstanceCallExpression instanceCall => instanceCall.Method,
@@ -176,15 +211,48 @@ public static class SemanticLookup
                 // imported extension method dispatched with receiver syntax has
                 // one extra leading parameter (the receiver).
                 var parameterCount = candidate.GetParameters().Length;
-                if (parameterCount != argumentCount && parameterCount != argumentCount + 1)
+                var isExtensionDispatched = !isInstance && parameterCount == argumentCount + 1;
+                var isExactArity = parameterCount == argumentCount;
+                if (!isExactArity && !isExtensionDispatched)
                 {
                     continue;
                 }
 
-                method = candidate;
-                overloadCount = CountSameNamedMethods(candidate);
-                return true;
+                // Reject candidates whose dispatch shape is inconsistent with the
+                // hovered call's receiver syntax (issue #906).
+                switch (gate)
+                {
+                    case CallReceiverGate.Value when !(isInstance || isExtensionDispatched):
+                        // A value receiver (`x.M(...)`) cannot bind to a plain static method.
+                        continue;
+                    case CallReceiverGate.TypeName when isInstance || isExtensionDispatched:
+                        // A type-name receiver (`T.M(...)`) cannot bind to an instance or
+                        // receiver-dispatched extension method.
+                        continue;
+                    default:
+                        break;
+                }
+
+                firstGated ??= candidate;
+
+                // When the receiver's CLR type is known, prefer the candidate whose
+                // effective receiver type matches it. This disambiguates same-shaped
+                // collisions (e.g. `.Single(...)` over two different element types).
+                if (receiverClrType != null
+                    && IsReceiverTypeCompatible(candidate, isInstance, isExtensionDispatched, receiverClrType))
+                {
+                    method = candidate;
+                    overloadCount = CountSameNamedMethods(candidate);
+                    return true;
+                }
             }
+        }
+
+        if (firstGated != null)
+        {
+            method = firstGated;
+            overloadCount = CountSameNamedMethods(firstGated);
+            return true;
         }
 
         return false;
@@ -1135,6 +1203,41 @@ public static class SemanticLookup
                 yield return body;
             }
         }
+    }
+
+    private static bool IsReceiverTypeCompatible(
+        System.Reflection.MethodInfo candidate,
+        bool isInstance,
+        bool isExtensionDispatched,
+        Type receiverClrType)
+    {
+        Type effectiveReceiverType = isExtensionDispatched
+            ? candidate.GetParameters().FirstOrDefault()?.ParameterType
+            : candidate.DeclaringType;
+        if (effectiveReceiverType == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (effectiveReceiverType.IsAssignableFrom(receiverClrType)
+                || receiverClrType.IsAssignableFrom(effectiveReceiverType))
+            {
+                return true;
+            }
+        }
+        catch (NotSupportedException)
+        {
+            // MetadataLoadContext can throw for some open generic comparisons; fall back to name match.
+        }
+
+        // Generic/variance comparisons across a MetadataLoadContext are not always
+        // resolvable via IsAssignableFrom; fall back to comparing the open generic
+        // type identities so `IEnumerable<T>` matches `List<int>` etc.
+        var receiverDefinition = receiverClrType.IsGenericType ? receiverClrType.GetGenericTypeDefinition() : receiverClrType;
+        var candidateDefinition = effectiveReceiverType.IsGenericType ? effectiveReceiverType.GetGenericTypeDefinition() : effectiveReceiverType;
+        return string.Equals(receiverDefinition.FullName, candidateDefinition.FullName, StringComparison.Ordinal);
     }
 
     private static int CountSameNamedMethods(System.Reflection.MethodInfo method)

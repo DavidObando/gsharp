@@ -332,6 +332,84 @@ public class HoverHandlerTests
     }
 
     [Fact]
+    public void ComputeHover_ExtensionMethodInvocation_DoesNotResolveToSameNamedStaticMethod()
+    {
+        // Issue #906: hovering an extension method invoked on a value receiver
+        // (`a.Concat(b)` -> System.Linq.Enumerable.Concat) must not bind to an
+        // unrelated, same-named *static* method that happens to appear elsewhere
+        // in the program (`string.Concat(...)` -> System.String.Concat). The
+        // whole-program same-name scan previously returned whichever bound call
+        // it found first, ignoring which call the hovered token belonged to.
+        const string source =
+            "package P\n" +
+            "import System\n" +
+            "import System.Linq\n" +
+            "import System.Collections.Generic\n" +
+            "func main() {\n" +
+            "    let s = String.Concat(\"x\", \"y\")\n" +
+            "    let a = List[int32]()\n" +
+            "    let b = List[int32]()\n" +
+            "    let joined = a.Concat(b)\n" +
+            "    Console.WriteLine(s)\n" +
+            "}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        // Hover the `Concat` of the extension invocation `a.Concat(b)` (2nd occurrence):
+        // its value receiver means it must bind to the LINQ extension method, never to
+        // the unrelated same-named static `String.Concat`.
+        var extHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Concat", 1));
+        Assert.NotNull(extHover);
+        var extValue = extHover.Contents.ToString();
+        Assert.Contains("Concat", extValue, System.StringComparison.Ordinal);
+        Assert.Contains("Enumerable", extValue, System.StringComparison.Ordinal);
+
+        // Hover the `Concat` of the static invocation `String.Concat("x", "y")` (1st occurrence):
+        // its type-name receiver means it must bind to the static `String.Concat`, never
+        // to the same-named LINQ extension method.
+        var staticHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Concat", 0));
+        Assert.NotNull(staticHover);
+        var staticValue = staticHover.Contents.ToString();
+        Assert.Contains("Concat", staticValue, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("Enumerable", staticValue, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComputeHover_DottedChainExtensionInvocation_ResolvesToExtension_NotSameNamedStatic()
+    {
+        // Issue #906: the user's real failing shape is a *dotted-chain* value
+        // receiver — `report.Checks.Single(pred)`. Such a chain parses
+        // right-associatively, so the hovered call's enclosing accessors yield
+        // several candidate receivers (the bare trailing segment `Checks` and the
+        // full `report.Checks`). Classifying off the bare trailing segment misread
+        // the receiver as "no receiver" and let the call bind to an unrelated
+        // same-named *static* method (e.g. `Xunit.Assert.Single`). This mirrors the
+        // shape with BCL-only types: `d.Keys.Concat(other)` (a value-receiver LINQ
+        // extension whose receiver is a property access) must never resolve to the
+        // same-named static `String.Concat(...)` that appears elsewhere — even
+        // though both have the same parameter count relative to the call site.
+        const string source =
+            "package P\n" +
+            "import System\n" +
+            "import System.Linq\n" +
+            "import System.Collections.Generic\n" +
+            "func main() {\n" +
+            "    let d = Dictionary[string, int32]()\n" +
+            "    let other = List[string]()\n" +
+            "    let joined = d.Keys.Concat(other)\n" +
+            "    let s = String.Concat(\"x\", \"y\")\n" +
+            "    Console.WriteLine(s)\n" +
+            "}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Concat", 0));
+        Assert.NotNull(hover);
+        var value = hover.Contents.ToString();
+        Assert.Contains("Concat", value, System.StringComparison.Ordinal);
+        Assert.Contains("Enumerable", value, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("(System.String)", value, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ComputeHover_ExtensionMethodInvocation_WithFuncLiteral_ResolvesToMethod()
     {
         // The hover bug was independent of the argument form: the explicit
