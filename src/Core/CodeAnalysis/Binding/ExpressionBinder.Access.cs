@@ -1498,16 +1498,15 @@ internal sealed partial class ExpressionBinder
                 }
                 else if (receiver != null && receiver.Type is StructSymbol structSym)
                 {
-                    // Walk base chain to find the field.
-                    for (var c = structSym; c != null; c = c.BaseClass)
+                    // ADR-0112 A3: this-first base-chain instance field walk via
+                    // the canonical member-resolution layer, surfacing the
+                    // declaring struct so the emitted field token names the right owner.
+                    if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, ne.IdentifierToken.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
                     {
-                        if (c.TryGetField(ne.IdentifierToken.Text, out var field))
-                        {
-                            // Issue #186 / #175: dotted field read fires
-                            // GS0204 if the field carries `@Obsolete`.
-                            reportObsoleteUseIfApplicable(ne.IdentifierToken.Location, field, $"{c.Name}.{field.Name}");
-                            return new BoundFieldAccessExpression(null, receiver, c, field);
-                        }
+                        // Issue #186 / #175: dotted field read fires
+                        // GS0204 if the field carries `@Obsolete`.
+                        reportObsoleteUseIfApplicable(ne.IdentifierToken.Location, field, $"{declaringType.Name}.{field.Name}");
+                        return new BoundFieldAccessExpression(null, receiver, declaringType, field);
                     }
 
                     // ADR-0051: check properties before reporting "unable to find member".
