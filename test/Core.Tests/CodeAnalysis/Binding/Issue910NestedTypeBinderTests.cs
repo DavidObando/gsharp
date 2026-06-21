@@ -16,9 +16,9 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// Issue #910 / ADR-0110: binder coverage for nested type declarations. A
 /// nested type is registered as a member of the enclosing type (its
 /// <see cref="StructSymbol.ContainingType"/> / <see cref="EnumSymbol.ContainingType"/>
-/// is set), resolves by simple name from the enclosing type's members, and the
-/// two deferred kind/encloser combinations (nested interface; nested class in a
-/// struct) report the dedicated GS0369 diagnostic instead of a parse cascade.
+/// / <see cref="InterfaceSymbol.ContainingType"/> is set) and resolves by simple
+/// name from the enclosing type's members, for every nested kind (class, struct,
+/// interface, enum) in either encloser (class or struct).
 /// </summary>
 public class Issue910NestedTypeBinderTests
 {
@@ -110,7 +110,7 @@ public class Issue910NestedTypeBinderTests
     }
 
     [Fact]
-    public void NestedClassInStruct_ReportsGs0369()
+    public void NestedClassInStruct_BindsWithoutDiagnostics_AndSetsContainingType()
     {
         var scope = BindSource("""
             struct Outer {
@@ -122,11 +122,17 @@ public class Issue910NestedTypeBinderTests
             }
             """);
 
-        Assert.Contains(GetBinderDiagnostics(scope), d => d.Id == "GS0369");
+        Assert.Empty(GetBinderDiagnostics(scope));
+
+        var inner = (StructSymbol)scope.TypeAliases["Inner"];
+        var outer = (StructSymbol)scope.TypeAliases["Outer"];
+        Assert.Same(outer, inner.ContainingType);
+        Assert.True(inner.IsClass);
+        Assert.False(outer.IsClass);
     }
 
     [Fact]
-    public void NestedInterfaceInClass_ReportsGs0369()
+    public void NestedInterfaceInClass_BindsWithoutDiagnostics_AndSetsContainingType()
     {
         var scope = BindSource("""
             class Outer {
@@ -136,7 +142,11 @@ public class Issue910NestedTypeBinderTests
             }
             """);
 
-        Assert.Contains(GetBinderDiagnostics(scope), d => d.Id == "GS0369");
+        Assert.Empty(GetBinderDiagnostics(scope));
+
+        var inner = (InterfaceSymbol)scope.TypeAliases["IInner"];
+        var outer = (StructSymbol)scope.TypeAliases["Outer"];
+        Assert.Same(outer, inner.ContainingType);
     }
 
     private static BoundGlobalScope BindSource(string source)

@@ -3765,34 +3765,6 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Error);
     }
 
-    /// <summary>
-    /// Reports GS0369 — issue #910 / ADR-0110: a nested type declaration uses a
-    /// kind/encloser combination that cannot yet be emitted as a true CLR nested
-    /// type. The supported combinations are nested <c>class</c>/<c>struct</c>/
-    /// <c>enum</c> inside a <c>class</c>, and nested <c>struct</c>/<c>enum</c>
-    /// inside a <c>struct</c>. A nested <c>interface</c> (in any encloser) and a
-    /// nested <c>class</c> inside a <c>struct</c> are deferred because they would
-    /// violate ECMA-335 §II.22.32 (enclosing TypeDef row must precede the nested
-    /// row) under the current kind-partitioned emission order. This dedicated
-    /// diagnostic replaces the previous misleading parse-error cascade.
-    /// </summary>
-    /// <param name="location">The text location of the nested type identifier.</param>
-    /// <param name="nestedKind">The nested type's kind keyword (e.g. <c>interface</c>).</param>
-    /// <param name="nestedName">The nested type's name.</param>
-    /// <param name="enclosingKind">The enclosing type's kind keyword (<c>class</c>/<c>struct</c>).</param>
-    public void ReportUnsupportedNestedTypeCombination(
-        TextLocation location,
-        string nestedKind,
-        string nestedName,
-        string enclosingKind)
-    {
-        var message =
-            $"Nested {nestedKind} '{nestedName}' inside a {enclosingKind} is not yet supported (ADR-0110 / issue #910). "
-            + "Supported nested declarations are class/struct/enum inside a class, and struct/enum inside a struct. "
-            + $"Move '{nestedName}' to the top level.";
-        Report(location, "GS0369", message, DiagnosticSeverity.Error);
-    }
-
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

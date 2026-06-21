@@ -1865,14 +1865,12 @@ internal sealed class DeclarationBinder
     /// <c>SetContainingType</c>. Nested-in-nested declarations are handled
     /// recursively because the per-kind binders bind their own nested types.
     /// <para>
-    /// Two kind/encloser combinations are deferred (ADR-0110): a nested
-    /// <c>interface</c> (in any encloser) and a nested <c>class</c> inside a
-    /// <c>struct</c>. Emitting them as true CLR nested types would violate
-    /// ECMA-335 §II.22.32 (enclosing TypeDef row must precede the nested row)
-    /// under the current kind-partitioned emission order. For these we still
-    /// bind and register the type (so the body is checked and references do not
-    /// cascade) but report the dedicated GS0369 diagnostic instead of marking it
-    /// nested, which replaces the previous misleading parse-error cascade.
+    /// All four nested kinds (<c>class</c>/<c>struct</c>/<c>interface</c>/
+    /// <c>enum</c>) inside either encloser (<c>class</c> or <c>struct</c>) are
+    /// emitted as real CLR nested types. The emitter materialises every
+    /// enclosing TypeDef row before its nested rows (ECMA-335 §II.22.32) via a
+    /// unified pre-order emission pass (ADR-0110), so no kind/encloser
+    /// combination needs to be deferred.
     /// </para>
     /// </summary>
     private void BindNestedTypeDeclarations(StructDeclarationSyntax containerSyntax, TypeSymbol containerSymbol, PackageSymbol package)
@@ -1882,30 +1880,13 @@ internal sealed class DeclarationBinder
             return;
         }
 
-        var enclosingIsClass = containerSymbol is StructSymbol cs && cs.IsClass;
-        var enclosingKind = enclosingIsClass ? "class" : "struct";
-
         foreach (var nested in containerSyntax.NestedTypes)
         {
             switch (nested)
             {
                 case StructDeclarationSyntax nestedStruct:
                     var nestedStructSymbol = BindStructDeclaration(nestedStruct, package);
-
-                    // A nested class inside a struct is deferred (ECMA ordering).
-                    if (nestedStructSymbol != null && nestedStruct.IsClass && !enclosingIsClass)
-                    {
-                        Diagnostics.ReportUnsupportedNestedTypeCombination(
-                            nestedStruct.Identifier.Location,
-                            "class",
-                            nestedStructSymbol.Name,
-                            enclosingKind);
-                    }
-                    else
-                    {
-                        nestedStructSymbol?.SetContainingType(containerSymbol);
-                    }
-
+                    nestedStructSymbol?.SetContainingType(containerSymbol);
                     break;
 
                 case EnumDeclarationSyntax nestedEnum:
@@ -1918,14 +1899,7 @@ internal sealed class DeclarationBinder
                     if (nestedInterfaceSymbol != null)
                     {
                         BindInterfaceMembers(nestedInterface, nestedInterfaceSymbol, package);
-
-                        // A nested interface is deferred (ECMA ordering): report
-                        // GS0369 and do NOT mark it nested (emit as top-level).
-                        Diagnostics.ReportUnsupportedNestedTypeCombination(
-                            nestedInterface.Identifier.Location,
-                            "interface",
-                            nestedInterfaceSymbol.Name,
-                            enclosingKind);
+                        nestedInterfaceSymbol.SetContainingType(containerSymbol);
                     }
 
                     break;

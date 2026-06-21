@@ -100,12 +100,13 @@ public class Issue910NestedTypeEmitTests
     }
 
     [Fact]
-    public void NestedClassInStruct_ReportsDedicatedDiagnostic_NotCascade()
+    public void NestedClassInStruct_ConstructedFromEnclosingMethod_Runs()
     {
-        // ADR-0110: a nested class inside a struct is deferred (ECMA-335
-        // §II.22.32 ordering). The compiler must surface the single dedicated
-        // GS0369 diagnostic instead of the old misleading parse-error cascade.
-        var diagnostics = CompileExpectingFailure("""
+        // Issue #910 / ADR-0110: a class nested in a struct is now emitted as a
+        // real CLR nested type (the unified emission-order refactor guarantees
+        // the enclosing struct TypeDef row precedes the nested class row per
+        // ECMA-335 §II.22.32). Construct it from an enclosing method and run.
+        var output = CompileAndRun("""
             package P
 
             import System
@@ -118,13 +119,16 @@ public class Issue910NestedTypeEmitTests
                 }
             }
 
+            func (o Outer) Make() string {
+                let i = Inner()
+                return i.Hello()
+            }
+
             let o = Outer{}
-            Console.WriteLine("unused")
+            Console.WriteLine(o.Make())
             """);
 
-        Assert.Contains("GS0369", diagnostics);
-        Assert.DoesNotContain("GS0288", diagnostics);
-        Assert.DoesNotContain("GS0005", diagnostics);
+        Assert.Equal("from-nested-class\n", output);
     }
 
     [Fact]
@@ -190,12 +194,12 @@ public class Issue910NestedTypeEmitTests
     }
 
     [Fact]
-    public void NestedInterfaceInClass_ReportsDedicatedDiagnostic_NotCascade()
+    public void NestedInterfaceInClass_ImplementedAndCalledThrough_Runs()
     {
-        // ADR-0110: a nested interface is deferred (ECMA-335 §II.22.32
-        // ordering). A single dedicated GS0369 diagnostic replaces the old
-        // misleading parse-error cascade.
-        var diagnostics = CompileExpectingFailure("""
+        // Issue #910 / ADR-0110: a nested interface is now emitted as a real
+        // CLR nested type. A sibling nested class implements it; an enclosing
+        // method upcasts to the interface and dispatches through it.
+        var output = CompileAndRun("""
             package P
 
             import System
@@ -204,14 +208,58 @@ public class Issue910NestedTypeEmitTests
                 interface IInner {
                     func Hello() string;
                 }
+
+                class Impl : IInner {
+                    func Hello() string {
+                        return "from-nested-interface"
+                    }
+                }
+
+                func Make() string {
+                    var i IInner = Impl{}
+                    return i.Hello()
+                }
             }
 
-            Console.WriteLine("unused")
+            let o = Outer()
+            Console.WriteLine(o.Make())
             """);
 
-        Assert.Contains("GS0369", diagnostics);
-        Assert.DoesNotContain("GS0288", diagnostics);
-        Assert.DoesNotContain("GS0005", diagnostics);
+        Assert.Equal("from-nested-interface\n", output);
+    }
+
+    [Fact]
+    public void NestedInterfaceInStruct_ImplementedAndCalledThrough_Runs()
+    {
+        // Issue #910 / ADR-0110: a nested interface inside a struct is also a
+        // real CLR nested type. A sibling nested class implements it.
+        var output = CompileAndRun("""
+            package P
+
+            import System
+
+            struct Outer {
+                interface IInner {
+                    func Hello() string;
+                }
+
+                class Impl : IInner {
+                    func Hello() string {
+                        return "iface-in-struct"
+                    }
+                }
+            }
+
+            func (o Outer) Make() string {
+                var i IInner = Impl{}
+                return i.Hello()
+            }
+
+            let o = Outer{}
+            Console.WriteLine(o.Make())
+            """);
+
+        Assert.Equal("iface-in-struct\n", output);
     }
 
     [Fact]
@@ -342,50 +390,6 @@ public class Issue910NestedTypeEmitTests
             }
 
             return stdout.Replace("\r\n", "\n");
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
-        }
-    }
-
-    private static string CompileExpectingFailure(string source)
-    {
-        var tempDir = Directory.CreateTempSubdirectory("gs_issue910_emit_err_").FullName;
-        try
-        {
-            var srcPath = Path.Combine(tempDir, "test.gs");
-            var outPath = Path.Combine(tempDir, "test.dll");
-            File.WriteAllText(srcPath, source);
-
-            var args = new[]
-            {
-                "/out:" + outPath,
-                "/target:exe",
-                "/targetframework:net10.0",
-                "/nowarn:GS9100",
-                srcPath,
-            };
-
-            using var compileOut = new StringWriter();
-            using var compileErr = new StringWriter();
-            var prevOut = Console.Out;
-            var prevErr = Console.Error;
-            Console.SetOut(compileOut);
-            Console.SetError(compileErr);
-            int compileExit;
-            try
-            {
-                compileExit = Program.Main(args);
-            }
-            finally
-            {
-                Console.SetOut(prevOut);
-                Console.SetError(prevErr);
-            }
-
-            Assert.True(compileExit != 0, $"expected compile to fail but it succeeded:\nstdout:\n{compileOut}");
-            return compileOut.ToString() + compileErr.ToString();
         }
         finally
         {

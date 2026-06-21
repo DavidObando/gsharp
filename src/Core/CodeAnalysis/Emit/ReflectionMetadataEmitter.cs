@@ -774,6 +774,123 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var interfaces = this.emitCtx.Program.Interfaces;
+        var enumsAll = this.emitCtx.Program.Enums;
+
+        // Issue #910 / ADR-0110: split user-declared NESTED types (their
+        // ContainingType is set by BindNestedTypeDeclarations) from top-level
+        // ones. Top-level types keep their historical kind-partitioned emission
+        // order (so non-nested programs are byte-identical). Every nested type
+        // — regardless of kind/encloser combination — is emitted in a single
+        // unified pre-order block AFTER all top-level types so that each
+        // enclosing TypeDef row always precedes its nested rows, satisfying
+        // ECMA-335 §II.22.32 for every combination (including nested interfaces
+        // and class-in-struct, which no fixed kind partition can order).
+        // Closure/state-machine types never set ContainingType, so they stay in
+        // the top-level partitions and their nesting is handled separately.
+        static bool IsUserNested(TypeSymbol t) => t switch
+        {
+            StructSymbol ss => ss.ContainingType != null,
+            EnumSymbol es => es.ContainingType != null,
+            InterfaceSymbol ifs => ifs.ContainingType != null,
+            _ => false,
+        };
+
+        static TypeSymbol ContainingOf(TypeSymbol t) => t switch
+        {
+            StructSymbol ss => ss.ContainingType,
+            EnumSymbol es => es.ContainingType,
+            InterfaceSymbol ifs => ifs.ContainingType,
+            _ => null,
+        };
+
+        var topInterfaces = interfaces.Where(i => !IsUserNested(i)).ToList();
+        var topClasses = nonSmClasses.Where(c => !IsUserNested(c)).ToList();
+        var topStructs = nonSmStructs.Where(s => !IsUserNested(s)).ToList();
+        var topEnums = enumsAll.Where(e => !IsUserNested(e)).ToList();
+
+        // Build the unified nested-type pre-order: each enclosing type is
+        // followed by its nested children (recursively), with siblings ordered
+        // interface → class → struct → enum so an implementer is emitted after
+        // any sibling interface it implements (mirrors the global "interfaces
+        // first" convention used for top-level types).
+        var nestedChildrenByParent = new Dictionary<TypeSymbol, List<TypeSymbol>>();
+        void RegisterNestedChild(TypeSymbol child)
+        {
+            var parent = ContainingOf(child);
+            if (parent == null)
+            {
+                return;
+            }
+
+            if (!nestedChildrenByParent.TryGetValue(parent, out var list))
+            {
+                list = new List<TypeSymbol>();
+                nestedChildrenByParent[parent] = list;
+            }
+
+            list.Add(child);
+        }
+
+        foreach (var i in interfaces.Where(IsUserNested))
+        {
+            RegisterNestedChild(i);
+        }
+
+        foreach (var c in nonSmClasses.Where(IsUserNested))
+        {
+            RegisterNestedChild(c);
+        }
+
+        foreach (var s in nonSmStructs.Where(IsUserNested))
+        {
+            RegisterNestedChild(s);
+        }
+
+        foreach (var e in enumsAll.Where(IsUserNested))
+        {
+            RegisterNestedChild(e);
+        }
+
+        var nestedOrdered = new List<TypeSymbol>();
+        void VisitNested(TypeSymbol parent)
+        {
+            if (!nestedChildrenByParent.TryGetValue(parent, out var children))
+            {
+                return;
+            }
+
+            foreach (var child in children)
+            {
+                nestedOrdered.Add(child);
+                VisitNested(child);
+            }
+        }
+
+        foreach (var i in topInterfaces)
+        {
+            VisitNested(i);
+        }
+
+        foreach (var c in topClasses)
+        {
+            VisitNested(c);
+        }
+
+        foreach (var s in topStructs)
+        {
+            VisitNested(s);
+        }
+
+        foreach (var e in topEnums)
+        {
+            VisitNested(e);
+        }
+
+        // Per-nested-type FieldList/MethodList boundary pointers, assigned in
+        // nested pre-order so the monotone-non-decreasing TypeDef column
+        // invariant holds across the nested block.
+        var nestedFieldListRow = new Dictionary<TypeSymbol, int>();
+        var nestedMethodListRow = new Dictionary<TypeSymbol, int>();
 
         // Field-row planning: non-SM types first, then SM types. This ensures
         // fieldList pointers are non-decreasing when <Program> (which owns no
@@ -793,58 +910,15 @@ internal sealed class ReflectionMetadataEmitter
         int nextFieldRow = 1;
         var structFirstFieldRow = new Dictionary<StructSymbol, int>();
 
-        // Walk non-SM types for field assignment.
-        foreach (var s in nonSmClasses)
+        // Issue #910 / ADR-0110: field-row planning for one aggregate (class or
+        // struct). Shared by the top-level field pass and the nested-type pass
+        // so a nested aggregate's FieldDef range is assigned in the same order
+        // its TypeDef row is emitted, preserving the monotone fieldList column.
+        void PlanAggregateFields(StructSymbol s)
         {
             structFirstFieldRow[s] = nextFieldRow;
             nextFieldRow += s.Fields.Length;
-            // ADR-0051 Phase 6: backing fields for auto-properties.
-            foreach (var p in s.Properties)
-            {
-                if (p.IsAutoProperty && p.BackingField != null && !s.Fields.Contains(p.BackingField))
-                {
-                    nextFieldRow++;
-                }
-            }
 
-            // ADR-0052: backing fields for field-like events.
-            foreach (var ev in s.Events)
-            {
-                if (ev.IsFieldLike && ev.BackingField != null)
-                {
-                    nextFieldRow++;
-                }
-            }
-
-            // ADR-0053: static fields from shared block.
-            if (!s.StaticFields.IsDefaultOrEmpty)
-            {
-                nextFieldRow += s.StaticFields.Length;
-            }
-
-            // Issue #263: backing fields for static auto-properties.
-            foreach (var p in s.StaticProperties)
-            {
-                if (p.IsAutoProperty && p.BackingField != null)
-                {
-                    nextFieldRow++;
-                }
-            }
-
-            // Issue #263: backing fields for static field-like events.
-            foreach (var ev in s.StaticEvents)
-            {
-                if (ev.IsFieldLike && ev.BackingField != null)
-                {
-                    nextFieldRow++;
-                }
-            }
-        }
-
-        foreach (var s in nonSmStructs)
-        {
-            structFirstFieldRow[s] = nextFieldRow;
-            nextFieldRow += s.Fields.Length;
             // ADR-0051 Phase 6: backing fields for auto-properties.
             foreach (var p in s.Properties)
             {
@@ -889,16 +963,52 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         // Issue #193: each user-defined enum contributes 1 instance field
-        // (value__) plus one literal field per member. Enum field rows are
-        // planned right after non-SM struct fields so the enum TypeDef can
-        // be emitted between non-SM struct TypeDefs and <Program> without
-        // violating the monotone fieldList constraint.
-        var enums = this.emitCtx.Program.Enums;
+        // (value__) plus one literal field per member.
+        var enums = enumsAll;
         var enumFirstFieldRow = new Dictionary<EnumSymbol, int>();
-        foreach (var e in enums)
+        void PlanEnumFields(EnumSymbol e)
         {
             enumFirstFieldRow[e] = nextFieldRow;
             nextFieldRow += 1 + e.Members.Length;
+        }
+
+        // Walk top-level non-SM types for field assignment (classes, then
+        // structs, then enums) — historical kind-partitioned order.
+        foreach (var s in topClasses)
+        {
+            PlanAggregateFields(s);
+        }
+
+        foreach (var s in topStructs)
+        {
+            PlanAggregateFields(s);
+        }
+
+        // Enum field rows are planned right after non-SM struct fields so the
+        // enum TypeDef can be emitted between non-SM struct TypeDefs and the
+        // nested block without violating the monotone fieldList constraint.
+        foreach (var e in topEnums)
+        {
+            PlanEnumFields(e);
+        }
+
+        // Issue #910 / ADR-0110: nested-type field rows form a contiguous block
+        // after all top-level field rows and before <Program>/global fields.
+        foreach (var nested in nestedOrdered)
+        {
+            nestedFieldListRow[nested] = nextFieldRow;
+            switch (nested)
+            {
+                case StructSymbol ns:
+                    PlanAggregateFields(ns);
+                    break;
+                case EnumSymbol ne:
+                    PlanEnumFields(ne);
+                    break;
+
+                // Interfaces own no fields; the boundary pointer above is what
+                // their nested TypeDef row will reference.
+            }
         }
 
         // Issue #191: user-declared top-level var/let/const live as static
@@ -931,13 +1041,9 @@ internal sealed class ReflectionMetadataEmitter
 
         var moduleFirstFieldRow = 1;
 
-        // Phase 3.B.4: plan method rows for interface abstract methods FIRST.
-        // Interface TypeDefs sit between <Module> and the class TypeDefs in
-        // row order so their methodList pointer (= first abstract method) is
-        // strictly less than the first class ctor row.
         int methodRow = 1;
         var interfaceFirstMethodRow = new Dictionary<InterfaceSymbol, int>();
-        foreach (var i in interfaces)
+        void PlanInterfaceMethods(InterfaceSymbol i)
         {
             interfaceFirstMethodRow[i] = methodRow;
             foreach (var m in i.Methods)
@@ -1001,6 +1107,15 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        // Phase 3.B.4: plan method rows for interface abstract methods FIRST.
+        // Interface TypeDefs sit between <Module> and the class TypeDefs in
+        // row order so their methodList pointer (= first abstract method) is
+        // strictly less than the first class ctor row.
+        foreach (var i in topInterfaces)
+        {
+            PlanInterfaceMethods(i);
+        }
+
         // ADR-0059 / issue #255: plan method rows for each named delegate
         // (one ctor + one Invoke per delegate) AFTER interface methods and
         // BEFORE non-SM class ctors. The delegate TypeDef rows themselves are
@@ -1019,7 +1134,7 @@ internal sealed class ReflectionMetadataEmitter
         var classCtorRows = new Dictionary<StructSymbol, int>();
         var classPrimaryCtorRows = new Dictionary<StructSymbol, int>();
         var aggregateMethodHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
-        foreach (var c in nonSmClasses)
+        void PlanClassMethods(StructSymbol c)
         {
             classCtorRows[c] = methodRow++;
 
@@ -1135,13 +1250,18 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        foreach (var c in topClasses)
+        {
+            PlanClassMethods(c);
+        }
+
         // Plan method rows for non-SM structs.
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
-        foreach (var s in nonSmStructs)
+        void PlanStructMethods(StructSymbol s)
         {
             if (s.Methods.IsDefaultOrEmpty && !s.IsInline && !s.IsData && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
             {
-                continue;
+                return;
             }
 
             structFirstMethodRows[s] = methodRow;
@@ -1236,6 +1356,36 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        foreach (var s in topStructs)
+        {
+            PlanStructMethods(s);
+        }
+
+        // Issue #910 / ADR-0110: nested-type method rows form a contiguous
+        // block after all top-level method rows and before the per-package
+        // <Program> ctor/method rows. Each nested type records its methodList
+        // boundary so the monotone MethodList column holds across the block.
+        int firstNestedMethodRow = methodRow;
+        foreach (var nested in nestedOrdered)
+        {
+            nestedMethodListRow[nested] = methodRow;
+            switch (nested)
+            {
+                case InterfaceSymbol ni:
+                    PlanInterfaceMethods(ni);
+                    break;
+                case StructSymbol ns when ns.IsClass:
+                    PlanClassMethods(ns);
+                    break;
+                case StructSymbol ns:
+                    PlanStructMethods(ns);
+                    break;
+
+                // Enums own no methods; the boundary pointer above is the row
+                // their nested TypeDef will reference.
+            }
+        }
+
         int firstPackageCtorRow = methodRow;
 
         // 2. <Module> type (TypeDef row #1 must always be <Module> per ECMA-335).
@@ -1251,7 +1401,7 @@ internal sealed class ReflectionMetadataEmitter
         // rows. Interfaces have no fields and only abstract method bodies, so
         // they are the simplest TypeDefs to emit. Their methodList points at
         // the first of their reserved abstract method rows.
-        foreach (var i in interfaces)
+        foreach (var i in topInterfaces)
         {
             this.typeDefEmitter.EmitInterfaceTypeDef(i, interfaceFirstMethodRow[i], 1);
         }
@@ -1266,9 +1416,11 @@ internal sealed class ReflectionMetadataEmitter
             this.typeDefEmitter.EmitDelegateTypeDef(d, delegateCtorRows[d]);
         }
 
-        // 2b. Emit non-SM class TypeDefs (so methodLists stay non-decreasing),
-        // then non-SM struct TypeDefs. SM types are emitted AFTER <Program>.
-        foreach (var c in nonSmClasses)
+        // Issue #910 / ADR-0110: emit one class TypeDef row plus its
+        // InterfaceImpl rows. Shared by the top-level class pass and the nested
+        // block so nested classes are real CLR nested types with identical
+        // interface-implementation metadata.
+        void EmitClassTypeDefRow(StructSymbol c)
         {
             this.typeDefEmitter.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
 
@@ -1312,48 +1464,80 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
-        foreach (var s in nonSmStructs)
+        // Issue #242: the ECMA-335 methodList column must be monotonically
+        // non-decreasing across TypeDef rows. A struct without methods must use
+        // the NEXT available method row — the first method row of the next
+        // top-level struct that HAS methods, or the start of the nested-type
+        // method block (firstNestedMethodRow) when none follows.
+        int TopStructMethodListRow(StructSymbol s)
         {
-            // Issue #242: the ECMA-335 methodList column must be monotonically
-            // non-decreasing across TypeDef rows. Structs without methods must
-            // use the NEXT available method row (i.e., the first method row of
-            // the next struct that HAS methods, or firstPackageCtorRow). We
-            // compute this by scanning forward.
-            int methodListRow;
             if (structFirstMethodRows.TryGetValue(s, out var firstStructMethodRow))
             {
-                methodListRow = firstStructMethodRow;
+                return firstStructMethodRow;
             }
-            else
-            {
-                // Find the next struct (in emission order) that has methods.
-                methodListRow = firstPackageCtorRow;
-                bool foundSelf = false;
-                foreach (var s2 in nonSmStructs)
-                {
-                    if (ReferenceEquals(s2, s))
-                    {
-                        foundSelf = true;
-                        continue;
-                    }
 
-                    if (foundSelf && structFirstMethodRows.TryGetValue(s2, out var nextMethodRow))
-                    {
-                        methodListRow = nextMethodRow;
-                        break;
-                    }
+            var methodListRow = firstNestedMethodRow;
+            bool foundSelf = false;
+            foreach (var s2 in topStructs)
+            {
+                if (ReferenceEquals(s2, s))
+                {
+                    foundSelf = true;
+                    continue;
+                }
+
+                if (foundSelf && structFirstMethodRows.TryGetValue(s2, out var nextMethodRow))
+                {
+                    methodListRow = nextMethodRow;
+                    break;
                 }
             }
 
-            this.typeDefEmitter.EmitStructTypeDef(s, structFirstFieldRow[s], methodListRow);
+            return methodListRow;
         }
 
-        // Issue #193: emit enum TypeDefs between non-SM structs and <Program>.
-        // Each enum has no methods, so its methodList points at the same row
-        // <Program>'s package ctor will live (firstPackageCtorRow).
-        foreach (var e in enums)
+        // 2b. Emit non-SM class TypeDefs (so methodLists stay non-decreasing),
+        // then non-SM struct TypeDefs. SM types are emitted AFTER <Program>.
+        foreach (var c in topClasses)
         {
-            this.typeDefEmitter.EmitEnumTypeDef(e, enumFirstFieldRow[e], firstPackageCtorRow);
+            EmitClassTypeDefRow(c);
+        }
+
+        foreach (var s in topStructs)
+        {
+            this.typeDefEmitter.EmitStructTypeDef(s, structFirstFieldRow[s], TopStructMethodListRow(s));
+        }
+
+        // Issue #193: emit enum TypeDefs between non-SM structs and the nested
+        // block. Each enum has no methods, so its methodList points at the
+        // first nested-type method row (or firstPackageCtorRow when no nested
+        // types follow — the two are equal in that case).
+        foreach (var e in topEnums)
+        {
+            this.typeDefEmitter.EmitEnumTypeDef(e, enumFirstFieldRow[e], firstNestedMethodRow);
+        }
+
+        // Issue #910 / ADR-0110: emit the unified nested-type block. Every
+        // enclosing TypeDef row (top-level above, or an earlier nested row) is
+        // already emitted, so each nested row satisfies ECMA-335 §II.22.32. The
+        // NestedClass rows themselves are added in the post-pass below.
+        foreach (var nested in nestedOrdered)
+        {
+            switch (nested)
+            {
+                case InterfaceSymbol ni:
+                    this.typeDefEmitter.EmitInterfaceTypeDef(ni, interfaceFirstMethodRow[ni], nestedFieldListRow[ni]);
+                    break;
+                case StructSymbol ns when ns.IsClass:
+                    EmitClassTypeDefRow(ns);
+                    break;
+                case StructSymbol ns:
+                    this.typeDefEmitter.EmitStructTypeDef(ns, structFirstFieldRow[ns], nestedMethodListRow[ns]);
+                    break;
+                case EnumSymbol ne:
+                    this.typeDefEmitter.EmitEnumTypeDef(ne, enumFirstFieldRow[ne], nestedMethodListRow[ne]);
+                    break;
+            }
         }
 
         // 3. Group functions by their declaring package. One <Program> type
@@ -1684,7 +1868,7 @@ internal sealed class ReflectionMetadataEmitter
 
         // === PHASE B: Emit MethodDefs in row order ===
         // B1. Interface methods (abstract + default-interface methods).
-        foreach (var i in interfaces)
+        void EmitInterfaceMethodBodies(InterfaceSymbol i)
         {
             foreach (var m in i.Methods)
             {
@@ -1761,8 +1945,13 @@ internal sealed class ReflectionMetadataEmitter
             this.memberDefEmitter.EmitInterfaceEventAccessors(i);
         }
 
+        foreach (var i in topInterfaces)
+        {
+            EmitInterfaceMethodBodies(i);
+        }
+
         // B2. Non-SM class ctors + instance methods.
-        foreach (var c in nonSmClasses)
+        void EmitClassMethodBodies(StructSymbol c)
         {
             if (c.ExplicitConstructor != null)
             {
@@ -1900,8 +2089,13 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitStaticVirtualMethodImpls(c);
         }
 
+        foreach (var c in topClasses)
+        {
+            EmitClassMethodBodies(c);
+        }
+
         // 4b. Non-SM struct methods.
-        foreach (var s in nonSmStructs)
+        void EmitStructMethodBodies(StructSymbol s)
         {
             if (s.IsInline)
             {
@@ -1917,7 +2111,7 @@ internal sealed class ReflectionMetadataEmitter
 
             if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
             {
-                continue;
+                return;
             }
 
             foreach (var m in s.Methods)
@@ -1971,6 +2165,32 @@ internal sealed class ReflectionMetadataEmitter
             // row points the interface slot's MethodDef at the implementer's
             // static MethodDef on the struct's TypeDef.
             this.EmitStaticVirtualMethodImpls(s);
+        }
+
+        foreach (var s in topStructs)
+        {
+            EmitStructMethodBodies(s);
+        }
+
+        // B3.5 / Issue #910 / ADR-0110: emit method bodies for the unified
+        // nested-type block, in the same pre-order the rows were planned and
+        // the TypeDefs emitted, so MethodDef row order stays consistent.
+        foreach (var nested in nestedOrdered)
+        {
+            switch (nested)
+            {
+                case InterfaceSymbol ni:
+                    EmitInterfaceMethodBodies(ni);
+                    break;
+                case StructSymbol ns when ns.IsClass:
+                    EmitClassMethodBodies(ns);
+                    break;
+                case StructSymbol ns:
+                    EmitStructMethodBodies(ns);
+                    break;
+
+                // Enums own no method bodies.
+            }
         }
 
         // Phase 4 emit parity (F2, type-erased): now that every generic
@@ -2067,35 +2287,24 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
-        foreach (var c in nonSmClasses)
+        // Issue #910 / ADR-0110: emit NestedClass rows in the same pre-order
+        // the nested TypeDef rows were assigned. The NestedClass metadata table
+        // must be sorted by the nested-type RID; nestedOrdered yields nested
+        // handles in monotonically increasing RID order, so iterating it keeps
+        // the table sorted across all nested kinds (class/struct/enum/interface).
+        foreach (var nested in nestedOrdered)
         {
-            if (c.ContainingType != null && this.cache.StructTypeDefs.TryGetValue(c, out var nh))
+            switch (nested)
             {
-                AddUserNestedTypeRow(c, nh);
-            }
-        }
-
-        foreach (var s in nonSmStructs)
-        {
-            if (s.ContainingType != null && this.cache.StructTypeDefs.TryGetValue(s, out var nh))
-            {
-                AddUserNestedTypeRow(s, nh);
-            }
-        }
-
-        foreach (var e in enums)
-        {
-            if (e.ContainingType != null && this.cache.EnumTypeDefs.TryGetValue(e, out var nh))
-            {
-                AddUserNestedTypeRow(e, nh);
-            }
-        }
-
-        foreach (var i in interfaces)
-        {
-            if (i.ContainingType != null && this.cache.InterfaceTypeDefs.TryGetValue(i, out var nh))
-            {
-                AddUserNestedTypeRow(i, nh);
+                case StructSymbol ns when this.cache.StructTypeDefs.TryGetValue(ns, out var nsh):
+                    AddUserNestedTypeRow(ns, nsh);
+                    break;
+                case EnumSymbol ne when this.cache.EnumTypeDefs.TryGetValue(ne, out var neh):
+                    AddUserNestedTypeRow(ne, neh);
+                    break;
+                case InterfaceSymbol ni when this.cache.InterfaceTypeDefs.TryGetValue(ni, out var nih):
+                    AddUserNestedTypeRow(ni, nih);
+                    break;
             }
         }
 
