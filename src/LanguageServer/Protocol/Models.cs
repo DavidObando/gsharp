@@ -279,6 +279,10 @@ public sealed class CompletionItem
     [JsonPropertyName("filterText")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string FilterText { get; set; }
+
+    [JsonPropertyName("textEdit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TextEdit TextEdit { get; set; }
 }
 
 public sealed class CompletionList

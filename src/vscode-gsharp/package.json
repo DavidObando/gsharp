@@ -84,6 +84,18 @@
         "path": "./snippets/gsharp.json"
       }
     ],
+    "configurationDefaults": {
+      "[gsharp]": {
+        "editor.quickSuggestions": {
+          "other": "on",
+          "comments": "off",
+          "strings": "off"
+        },
+        "editor.suggestOnTriggerCharacters": true,
+        "editor.quickSuggestionsDelay": 10,
+        "editor.wordBasedSuggestions": "off"
+      }
+    },
     "themes": [
       {
         "label": "GSharp Ember Dark",

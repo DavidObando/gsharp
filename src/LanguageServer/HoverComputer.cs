@@ -1511,13 +1511,20 @@ public static class CompletionComputer
         var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
 
+        // Issue #917: completion-as-you-type. When the caret sits in (or immediately
+        // after) a partial identifier — e.g. `prin<caret>` or `x.To<caret>` — compute
+        // the prefix's span so each candidate carries an explicit replacement range.
+        // This lets the editor filter/replace the partial word correctly when the list
+        // is invoked implicitly mid-identifier rather than only after a trigger char.
+        var replacementRange = ComputeReplacementRange(content, offset);
+
         // Member-access context (`receiver.<caret>`): offer the receiver's members
         // instead of the global keyword/symbol list. Returns null only when the
         // caret is not positioned after a member-access dot.
         var memberItems = TryComputeMemberCompletions(content, compilation, offset);
         if (memberItems != null)
         {
-            return memberItems;
+            return ApplyReplacementRange(memberItems, replacementRange);
         }
 
         // Issue #522 / #897: inside a C#-style object-initializer block
@@ -1526,7 +1533,7 @@ public static class CompletionComputer
         var initializerItems = TryComputeObjectInitializerCompletions(content, compilation, offset);
         if (initializerItems != null)
         {
-            return initializerItems;
+            return ApplyReplacementRange(initializerItems, replacementRange);
         }
 
         var items = new List<CompletionItem>();
@@ -1632,6 +1639,69 @@ public static class CompletionComputer
                     Kind = CompletionItemKind.TypeParameter,
                 });
             }
+        }
+
+        return ApplyReplacementRange(items, replacementRange);
+    }
+
+    /// <summary>
+    /// Issue #917: computes the source span of the partial identifier immediately
+    /// preceding <paramref name="offset"/> (the run of identifier characters ending at
+    /// the caret). Returns <see langword="null"/> when the caret is not directly after
+    /// an identifier character (e.g. right after a <c>.</c> trigger, or at the start of
+    /// a fresh token) so the editor falls back to its own word-range heuristics.
+    /// </summary>
+    private static Range ComputeReplacementRange(DocumentContent content, int offset)
+    {
+        var text = content.SyntaxTree.Text;
+        if (offset <= 0 || offset > text.Length)
+        {
+            return null;
+        }
+
+        var start = offset;
+        while (start > 0 && IsIdentifierChar(text[start - 1]))
+        {
+            start--;
+        }
+
+        if (start == offset)
+        {
+            // No identifier prefix at the caret — nothing to anchor a replacement to.
+            return null;
+        }
+
+        return SemanticLookup.ToRange(text, new TextSpan(start, offset - start));
+    }
+
+    private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+    /// <summary>
+    /// Issue #917: attaches the partial-identifier replacement range (<paramref name="replacementRange"/>)
+    /// to every plain (non-snippet) candidate so the editor replaces the typed prefix
+    /// instead of inserting alongside it. Snippet items (which carry their own
+    /// <see cref="CompletionItem.InsertText"/>) are left untouched. A <see langword="null"/>
+    /// range leaves the list unchanged so the editor applies its default word range.
+    /// </summary>
+    private static IReadOnlyList<CompletionItem> ApplyReplacementRange(IReadOnlyList<CompletionItem> items, Range replacementRange)
+    {
+        if (replacementRange == null || items.Count == 0)
+        {
+            return items;
+        }
+
+        foreach (var item in items)
+        {
+            if (item.InsertText != null || item.TextEdit != null)
+            {
+                continue;
+            }
+
+            item.TextEdit = new TextEdit
+            {
+                Range = replacementRange,
+                NewText = item.Label,
+            };
         }
 
         return items;
