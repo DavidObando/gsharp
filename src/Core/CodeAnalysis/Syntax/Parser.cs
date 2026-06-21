@@ -465,7 +465,19 @@ public class Parser
     /// </summary>
     private bool TryDetectAggregateDeclarationHead()
     {
-        var offset = 0;
+        return TryDetectAggregateDeclarationHead(0);
+    }
+
+    /// <summary>
+    /// Issue #910: offset-aware variant of <see cref="TryDetectAggregateDeclarationHead()"/>
+    /// used by the class/struct body member loop to recognise a nested type
+    /// declaration head that may be preceded by an accessibility modifier
+    /// (already peeked at <paramref name="startOffset"/>). The scan does not
+    /// consume tokens.
+    /// </summary>
+    private bool TryDetectAggregateDeclarationHead(int startOffset)
+    {
+        var offset = startOffset;
         var saw = new HashSet<string>(System.StringComparer.Ordinal);
         while (true)
         {
@@ -1462,6 +1474,7 @@ public class Parser
         var constructors = ImmutableArray.CreateBuilder<ConstructorDeclarationSyntax>();
         DeinitDeclarationSyntax structDecl_deinit = null;
         SharedBlockSyntax structDecl_sharedBlock = null;
+        var nestedTypes = ImmutableArray.CreateBuilder<MemberSyntax>();
 
         // ADR-0078 / issue #718: the body block `{ ... }` is optional for any
         // aggregate that uses the new declaration head. The bodyless form is
@@ -1517,6 +1530,47 @@ public class Parser
             // the default target is `field`; for method members the existing
             // method-binder path picks them up via MemberSyntax.Annotations.
             var memberAnnotations = ParseAnnotations();
+
+            // Issue #910 / ADR-0110: nested type declarations (class / struct /
+            // interface / enum) inside a class or struct body. The declaration
+            // head may be preceded by an optional accessibility modifier. Reuse
+            // the shared top-level aggregate parser so nested types accept the
+            // full declaration grammar (modifiers, type parameters, base
+            // clauses, bodies, and recursive nesting).
+            {
+                var nestedHeadOffset = (Current.Kind == SyntaxKind.PublicKeyword
+                    || Current.Kind == SyntaxKind.InternalKeyword
+                    || Current.Kind == SyntaxKind.PrivateKeyword) ? 1 : 0;
+
+                if (TryDetectAggregateDeclarationHead(nestedHeadOffset))
+                {
+                    SyntaxToken nestedAccessibility = null;
+                    if (nestedHeadOffset == 1)
+                    {
+                        nestedAccessibility = NextToken();
+                    }
+
+                    var nestedType = ParseAggregateDeclaration(nestedAccessibility);
+                    nestedType.WithAnnotations(memberAnnotations);
+                    nestedTypes.Add(nestedType);
+
+                    // A nested discriminated-union enum desugars into a sealed
+                    // base plus one class per case (queued on
+                    // pendingSyntheticMembers). Drain them as siblings of the
+                    // nested type so they remain nested within this body.
+                    while (pendingSyntheticMembers.Count > 0)
+                    {
+                        nestedTypes.Add(pendingSyntheticMembers.Dequeue());
+                    }
+
+                    if (Current == startToken)
+                    {
+                        NextToken();
+                    }
+
+                    continue;
+                }
+            }
 
             // Phase 3.B.3 sub-step 2b: method declarations inside the body.
             // Use the existing `func Name(args) Ret { body }` parser; the
@@ -1814,6 +1868,7 @@ public class Parser
         structDecl.BaseConstructorCloseParenthesisToken = baseCtorCloseParen;
         structDecl.Constructors = constructors.ToImmutable();
         structDecl.Deinitializer = structDecl_deinit;
+        structDecl.NestedTypes = nestedTypes.ToImmutable();
         return structDecl;
     }
 

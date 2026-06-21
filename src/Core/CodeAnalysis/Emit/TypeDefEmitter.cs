@@ -339,6 +339,21 @@ internal sealed class TypeDefEmitter
             firstField = MetadataTokens.FieldDefinitionHandle(firstFieldRow);
         }
 
+        // Issue #910: a user type declared inside a class/struct body
+        // (structSym.ContainingType != null) is emitted as a CLR nested
+        // TypeDef. Nested types carry NestedPublic/NestedAssembly/NestedPrivate
+        // visibility (never the top-level Public/NotPublic flags) and an empty
+        // namespace; the enclosing TypeDef qualifies the name. A NestedClass
+        // metadata row linking this TypeDef to its encloser is emitted later in
+        // ReflectionMetadataEmitter once both handles exist.
+        var isNestedType = structSym.ContainingType != null;
+        var typeAccessibility = isNestedType
+            ? AccessibilityMap.MapNestedTypeAccessibility(structSym.Accessibility)
+            : AccessibilityMap.MapTypeAccessibility(structSym.Accessibility);
+        var structNamespace = isNestedType
+            ? default(StringHandle)
+            : this.emitCtx.Metadata.GetOrAddString(structSym.PackageName ?? string.Empty);
+
         TypeAttributes typeAttrs;
         EntityHandle baseType;
         if (structSym.IsClass)
@@ -354,7 +369,7 @@ internal sealed class TypeDefEmitter
             var classAttrs = TypeAttributes.Class
                 | ResolveClassLayoutFlag(structSym) | TypeAttributes.AnsiClass
                 | TypeAttributes.BeforeFieldInit
-                | AccessibilityMap.MapTypeAccessibility(structSym.Accessibility);
+                | typeAccessibility;
             if (!structSym.IsOpen && !structSym.IsSealedHierarchy)
             {
                 classAttrs |= TypeAttributes.Sealed;
@@ -387,7 +402,7 @@ internal sealed class TypeDefEmitter
         {
             typeAttrs = ResolveStructLayoutFlag(structSym) | TypeAttributes.Sealed
                 | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
-                | AccessibilityMap.MapTypeAccessibility(structSym.Accessibility);
+                | typeAccessibility;
             baseType = this.wellKnown.ValueTypeRef;
         }
 
@@ -399,7 +414,7 @@ internal sealed class TypeDefEmitter
         var typeDefName = MangleGenericName(structSym.Name, structSym.TypeParameters);
         var handle2 = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
-            @namespace: this.emitCtx.Metadata.GetOrAddString(structSym.PackageName ?? string.Empty),
+            @namespace: structNamespace,
             name: this.emitCtx.Metadata.GetOrAddString(typeDefName),
             baseType: baseType,
             fieldList: firstField,
@@ -563,13 +578,21 @@ internal sealed class TypeDefEmitter
         // assert below that the first AddFieldDefinition call matches.
         var firstFieldHandle = MetadataTokens.FieldDefinitionHandle(this.emitCtx.Metadata.GetRowCount(TableIndex.Field) + 1);
 
+        // Issue #910: a nested enum (declared inside a class/struct body) is
+        // emitted with nested visibility and an empty namespace.
+        var enumNested = enumSym.ContainingType != null;
+        var enumNamespace = enumNested
+            ? default(StringHandle)
+            : this.emitCtx.Metadata.GetOrAddString(enumSym.PackageName ?? string.Empty);
         var typeAttrs = TypeAttributes.Class | TypeAttributes.Sealed
             | TypeAttributes.AnsiClass | TypeAttributes.AutoLayout
-            | AccessibilityMap.MapTypeAccessibility(enumSym.Accessibility);
+            | (enumNested
+                ? AccessibilityMap.MapNestedTypeAccessibility(enumSym.Accessibility)
+                : AccessibilityMap.MapTypeAccessibility(enumSym.Accessibility));
 
         var enumTypeDef = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
-            @namespace: this.emitCtx.Metadata.GetOrAddString(enumSym.PackageName ?? string.Empty),
+            @namespace: enumNamespace,
             name: this.emitCtx.Metadata.GetOrAddString(enumSym.Name),
             baseType: enumTypeRef,
             fieldList: firstFieldHandle,
@@ -632,13 +655,19 @@ internal sealed class TypeDefEmitter
     /// <param name="firstFieldRow">The first field row for the next aggregate (interfaces own no fields, so this is forwarded as their fieldList).</param>
     public void EmitInterfaceTypeDef(InterfaceSymbol ifaceSym, int firstMethodRow, int firstFieldRow)
     {
+        var ifaceNested = ifaceSym.ContainingType != null;
+        var ifaceNamespace = ifaceNested
+            ? default(StringHandle)
+            : this.emitCtx.Metadata.GetOrAddString(ifaceSym.PackageName ?? string.Empty);
         var typeAttrs = TypeAttributes.Interface | TypeAttributes.Abstract
             | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
-            | AccessibilityMap.MapTypeAccessibility(ifaceSym.Accessibility);
+            | (ifaceNested
+                ? AccessibilityMap.MapNestedTypeAccessibility(ifaceSym.Accessibility)
+                : AccessibilityMap.MapTypeAccessibility(ifaceSym.Accessibility));
         var typeDefName = MangleGenericName(ifaceSym.Name, ifaceSym.TypeParameters);
         var handle = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
-            @namespace: this.emitCtx.Metadata.GetOrAddString(ifaceSym.PackageName ?? string.Empty),
+            @namespace: ifaceNamespace,
             name: this.emitCtx.Metadata.GetOrAddString(typeDefName),
             baseType: default(EntityHandle),
             fieldList: MetadataTokens.FieldDefinitionHandle(firstFieldRow),

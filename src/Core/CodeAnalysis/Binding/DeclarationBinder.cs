@@ -263,14 +263,14 @@ internal sealed class DeclarationBinder
         }
     }
 
-    internal void BindEnumDeclaration(EnumDeclarationSyntax syntax, PackageSymbol package)
+    internal EnumSymbol BindEnumDeclaration(EnumDeclarationSyntax syntax, PackageSymbol package)
     {
         var name = syntax.Identifier.Text;
 
         if (isPrimitiveTypeName(name))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
-            return;
+            return null;
         }
 
         var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
@@ -326,16 +326,18 @@ internal sealed class DeclarationBinder
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
         }
+
+        return enumSymbol;
     }
 
-    internal void BindStructDeclaration(StructDeclarationSyntax syntax, PackageSymbol package)
+    internal StructSymbol BindStructDeclaration(StructDeclarationSyntax syntax, PackageSymbol package)
     {
         var name = syntax.Identifier.Text;
 
         if (isPrimitiveTypeName(name))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
-            return;
+            return null;
         }
 
         var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
@@ -356,7 +358,7 @@ internal sealed class DeclarationBinder
                 }
             }
 
-            BindStructDeclarationBody(syntax, package, accessibility, name, typeParameters);
+            return BindStructDeclarationBody(syntax, package, accessibility, name, typeParameters);
         }
         finally
         {
@@ -364,7 +366,7 @@ internal sealed class DeclarationBinder
         }
     }
 
-    private void BindStructDeclarationBody(
+    private StructSymbol BindStructDeclarationBody(
         StructDeclarationSyntax syntax,
         PackageSymbol package,
         Accessibility accessibility,
@@ -1847,6 +1849,62 @@ internal sealed class DeclarationBinder
 
         // ADR-0068 / issue #698: bind the optional class destructor (`deinit { … }`).
         BindDeinitDeclaration(syntax, structSymbol, package);
+
+        // Issue #910 / ADR-0110: bind nested type declarations (class / struct /
+        // interface / enum) declared inside this aggregate's body, recording the
+        // enclosing type so the emitter materialises real CLR nested types.
+        BindNestedTypeDeclarations(syntax, structSymbol, package);
+
+        return structSymbol;
+    }
+
+    /// <summary>
+    /// Issue #910 / ADR-0110: binds the nested type declarations declared in a
+    /// class or struct body. Each nested declaration is bound through the same
+    /// driver used for top-level types and tagged with its enclosing type via
+    /// <c>SetContainingType</c>. Nested-in-nested declarations are handled
+    /// recursively because the per-kind binders bind their own nested types.
+    /// <para>
+    /// All four nested kinds (<c>class</c>/<c>struct</c>/<c>interface</c>/
+    /// <c>enum</c>) inside either encloser (<c>class</c> or <c>struct</c>) are
+    /// emitted as real CLR nested types. The emitter materialises every
+    /// enclosing TypeDef row before its nested rows (ECMA-335 §II.22.32) via a
+    /// unified pre-order emission pass (ADR-0110), so no kind/encloser
+    /// combination needs to be deferred.
+    /// </para>
+    /// </summary>
+    private void BindNestedTypeDeclarations(StructDeclarationSyntax containerSyntax, TypeSymbol containerSymbol, PackageSymbol package)
+    {
+        if (containerSyntax.NestedTypes.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var nested in containerSyntax.NestedTypes)
+        {
+            switch (nested)
+            {
+                case StructDeclarationSyntax nestedStruct:
+                    var nestedStructSymbol = BindStructDeclaration(nestedStruct, package);
+                    nestedStructSymbol?.SetContainingType(containerSymbol);
+                    break;
+
+                case EnumDeclarationSyntax nestedEnum:
+                    var nestedEnumSymbol = BindEnumDeclaration(nestedEnum, package);
+                    nestedEnumSymbol?.SetContainingType(containerSymbol);
+                    break;
+
+                case InterfaceDeclarationSyntax nestedInterface:
+                    var nestedInterfaceSymbol = DeclareInterfaceSymbol(nestedInterface, package);
+                    if (nestedInterfaceSymbol != null)
+                    {
+                        BindInterfaceMembers(nestedInterface, nestedInterfaceSymbol, package);
+                        nestedInterfaceSymbol.SetContainingType(containerSymbol);
+                    }
+
+                    break;
+            }
+        }
     }
 
     internal void VerifyInterfaceImplementations()
