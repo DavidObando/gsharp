@@ -647,6 +647,16 @@ internal sealed partial class ExpressionBinder
                 // the constraint interface's static-virtual table.
                 return BindTypeParameterStaticAccessorStep(tpSym, leftName, rightPart);
             }
+            else if (TryResolvePredefinedTypeReceiver(name, leftName, out var predefinedClass))
+            {
+                // Issue #919: a lowercase predefined primitive type alias used as
+                // the receiver of a static member access (e.g. `string.Empty`,
+                // `int32.MaxValue`). The earlier import/alias lookups only match
+                // the capitalized CLR name (`String`, `Int32`); the keyword form
+                // is resolved here to the same underlying CLR type so static
+                // member access binds identically to the capitalized form.
+                classSymbol = predefinedClass;
+            }
             else
             {
                 Diagnostics.ReportUnableToFindType(leftName.Location, name);
@@ -669,6 +679,46 @@ internal sealed partial class ExpressionBinder
         }
 
         return BindAccessorStep(receiver, classSymbol, rightPart);
+    }
+
+    /// <summary>
+    /// Issue #919: resolves a lowercase predefined primitive type alias used as
+    /// the receiver of a static member access (e.g. <c>string.Empty</c>,
+    /// <c>int32.MaxValue</c>, <c>object.ReferenceEquals(...)</c>) to an
+    /// <see cref="ImportedClassSymbol"/> over its underlying CLR type.
+    /// </summary>
+    /// <remarks>
+    /// This runs only after the import/alias/imported-class lookups have failed,
+    /// so it never shadows a user alias or an imported type. The keyword aliases
+    /// (<c>string</c>, <c>int32</c>, <c>bool</c>, ...) are reserved names that
+    /// cannot be redeclared, so resolving them here is unambiguous and mirrors
+    /// the capitalized CLR-name form (<c>String</c>, <c>Int32</c>) that already
+    /// binds through <see cref="BoundScope.TryLookupImportedClass"/>.
+    /// </remarks>
+    /// <param name="name">The identifier text written as the accessor receiver.</param>
+    /// <param name="declaration">The receiver name syntax (for symbol provenance).</param>
+    /// <param name="classSymbol">The resolved CLR class symbol on success.</param>
+    /// <returns><see langword="true"/> when <paramref name="name"/> is a predefined primitive alias with a backing CLR type.</returns>
+    private bool TryResolvePredefinedTypeReceiver(string name, ExpressionSyntax declaration, out ImportedClassSymbol classSymbol)
+    {
+        classSymbol = null;
+
+        var typeSymbol = lookupType(name);
+
+        // Only genuine predefined primitive aliases carry a non-null ClrType and
+        // are not already handled by an earlier branch. User struct/enum aliases
+        // (resolved by TryLookupTypeAlias) have a null ClrType and are excluded.
+        // `void` has a CLR type but is meaningless as a static-access receiver, so
+        // exclude it and let the normal "cannot find type" diagnostic apply.
+        if (typeSymbol == null
+            || typeSymbol.ClrType == null
+            || ReferenceEquals(typeSymbol, TypeSymbol.Void))
+        {
+            return false;
+        }
+
+        classSymbol = new ImportedClassSymbol(typeSymbol.ClrType, declaration);
+        return true;
     }
 
     private BoundExpression BindNullConditionalAccessExpression(AccessorExpressionSyntax syntax)

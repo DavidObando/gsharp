@@ -131,6 +131,59 @@ var e = String.Empty
     }
 
     [Fact]
+    public void StringEmpty_LowercaseAlias_Binds()
+    {
+        // Issue #919: the lowercase `string` predefined alias must resolve as a
+        // static-member-access receiver identically to the capitalized `String`
+        // form — and without requiring `import System`, since `string` is a
+        // built-in keyword alias for System.String.
+        var source = @"
+var e = string.Empty
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(string.Empty, result.Value);
+    }
+
+    [Fact]
+    public void Int32MaxValue_LowercaseAlias_Binds()
+    {
+        // Issue #919: the same fix applies to the other lowercase primitive
+        // aliases. `int32.MaxValue` must bind like `Int32.MaxValue`.
+        var source = @"
+var m = int32.MaxValue
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(int.MaxValue, result.Value);
+    }
+
+    [Fact]
+    public void IntFriendlyAliasMaxValue_Binds()
+    {
+        // Issue #919 / ADR-0098: friendly numeric aliases (`int`) route to the
+        // same canonical CLR type, so static member access binds too.
+        var source = @"
+var m = int.MaxValue
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(int.MaxValue, result.Value);
+    }
+
+    [Fact]
+    public void StringEmpty_LowercaseAlias_UnknownMember_Diagnoses()
+    {
+        // The lowercase alias receiver still reports unknown members rather than
+        // silently binding.
+        var source = @"
+var e = string.NotAReal
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
     public void StaticProperty_UnknownMember_Diagnoses()
     {
         var source = @"
