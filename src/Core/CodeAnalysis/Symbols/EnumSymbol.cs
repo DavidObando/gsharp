@@ -44,8 +44,21 @@ public sealed class EnumSymbol : TypeSymbol
     /// <summary>Gets the enum members in declaration order.</summary>
     public ImmutableArray<EnumMemberSymbol> Members { get; private set; }
 
+    /// <summary>
+    /// Gets the enclosing user-defined type when this enum is a nested type
+    /// declaration (ADR-0110 / issue #910), or <c>null</c> when top-level.
+    /// </summary>
+    public TypeSymbol ContainingType { get; private set; }
+
     /// <summary>Gets the CLR underlying enum for values.</summary>
     public TypeSymbol UnderlyingType => TypeSymbol.Int32;
+
+    /// <summary>Sets <see cref="ContainingType"/> (ADR-0110 / issue #910).</summary>
+    /// <param name="containingType">The enclosing user-defined type.</param>
+    public void SetContainingType(TypeSymbol containingType)
+    {
+        ContainingType = containingType;
+    }
 
     /// <summary>Sets the enum members after the owning enum symbol has been created.</summary>
     /// <param name="members">The enum members in declaration order.</param>

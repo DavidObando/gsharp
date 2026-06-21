@@ -469,4 +469,8 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets or sets the optional user-defined <c>deinit</c> declaration (ADR-0068 / issue #698). Non-null only when the class body declares exactly one <c>deinit</c>; assigned by the parser. The parser reports GS0290 on any subsequent duplicate and stores only the first.</summary>
     public DeinitDeclarationSyntax Deinitializer { get; set; }
+
+    /// <summary>Gets or sets the nested type declarations (<c>class</c> / <c>struct</c> / <c>interface</c> / <c>enum</c>) declared inside this aggregate's body (ADR-0110 / issue #910). Empty for types that declare none. Each element is a <see cref="StructDeclarationSyntax"/>, <see cref="InterfaceDeclarationSyntax"/>, or <see cref="EnumDeclarationSyntax"/>. Assigned by the parser.</summary>
+    public ImmutableArray<MemberSyntax> NestedTypes { get; set; }
+        = ImmutableArray<MemberSyntax>.Empty;
 }

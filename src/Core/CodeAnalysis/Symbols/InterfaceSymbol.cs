@@ -146,6 +146,12 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <summary>Gets the event signatures declared on this interface (ADR-0052). Populated by the binder via <see cref="SetEvents"/>.</summary>
     public ImmutableArray<EventSymbol> Events { get; private set; } = ImmutableArray<EventSymbol>.Empty;
 
+    /// <summary>
+    /// Gets the enclosing user-defined type when this interface is a nested
+    /// type declaration (ADR-0110 / issue #910), or <c>null</c> when top-level.
+    /// </summary>
+    public TypeSymbol ContainingType { get; private set; }
+
     /// <summary>Gets the type parameters when this is a generic definition (Phase 4.3c / ADR-0020).</summary>
     public ImmutableArray<TypeParameterSymbol> TypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
 
@@ -157,6 +163,13 @@ public sealed class InterfaceSymbol : TypeSymbol
 
     /// <summary>Gets the original generic definition when this is a constructed instance; otherwise <c>this</c>.</summary>
     public InterfaceSymbol Definition { get; }
+
+    /// <summary>Sets <see cref="ContainingType"/> (ADR-0110 / issue #910).</summary>
+    /// <param name="containingType">The enclosing user-defined type.</param>
+    public void SetContainingType(TypeSymbol containingType)
+    {
+        ContainingType = containingType;
+    }
 
     /// <summary>Sets <see cref="Methods"/>. Intended to be called once by the binder.</summary>
     /// <param name="methods">The bound method signatures.</param>

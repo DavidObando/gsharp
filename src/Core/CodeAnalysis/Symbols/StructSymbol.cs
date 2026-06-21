@@ -319,6 +319,22 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     public DeinitSymbol Deinitializer { get; private set; }
 
+    /// <summary>
+    /// Gets the enclosing user-defined type when this type is a nested type
+    /// declaration (ADR-0110 / issue #910), or <c>null</c> when this is a
+    /// top-level type. Populated by the binder; consumed by the emitter to
+    /// emit a CLR nested <c>TypeDef</c> with the corresponding
+    /// <c>NestedClass</c> row and nested accessibility.
+    /// </summary>
+    public TypeSymbol ContainingType { get; private set; }
+
+    /// <summary>Sets <see cref="ContainingType"/> (ADR-0110 / issue #910). Intended to be called exactly once by the binder for a nested type declaration.</summary>
+    /// <param name="containingType">The enclosing user-defined type.</param>
+    public void SetContainingType(TypeSymbol containingType)
+    {
+        ContainingType = containingType;
+    }
+
     /// <summary>Sets <see cref="ImportedBaseType"/> after binding (issue #296). Intended to be called exactly once by the binder for a class inheriting an imported CLR base.</summary>
     /// <param name="importedBaseType">The imported CLR base type symbol.</param>
     public void SetImportedBaseType(TypeSymbol importedBaseType)

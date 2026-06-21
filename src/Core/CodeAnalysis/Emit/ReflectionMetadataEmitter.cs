@@ -2044,6 +2044,61 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        // Issue #910 / ADR-0110: NestedClass rows for user-declared nested
+        // types (class/struct/enum/interface declared inside a class/struct
+        // body). The enclosing TypeDef row was emitted before the nested row
+        // (ECMA-335 §II.22.32) because of the kind-partitioned emission order;
+        // see BindNestedTypeDeclarations and the emission-order notes above.
+        // The enclosing handle is always a StructSymbol (class or struct).
+        void AddUserNestedTypeRow(TypeSymbol nested, TypeDefinitionHandle nestedHandle)
+        {
+            TypeSymbol containing = nested switch
+            {
+                StructSymbol ss => ss.ContainingType,
+                EnumSymbol es => es.ContainingType,
+                InterfaceSymbol ifs => ifs.ContainingType,
+                _ => null,
+            };
+
+            if (containing is StructSymbol enclosingStruct
+                && this.cache.StructTypeDefs.TryGetValue(enclosingStruct, out var enclosingHandle))
+            {
+                this.emitCtx.Metadata.AddNestedType(nestedHandle, enclosingHandle);
+            }
+        }
+
+        foreach (var c in nonSmClasses)
+        {
+            if (c.ContainingType != null && this.cache.StructTypeDefs.TryGetValue(c, out var nh))
+            {
+                AddUserNestedTypeRow(c, nh);
+            }
+        }
+
+        foreach (var s in nonSmStructs)
+        {
+            if (s.ContainingType != null && this.cache.StructTypeDefs.TryGetValue(s, out var nh))
+            {
+                AddUserNestedTypeRow(s, nh);
+            }
+        }
+
+        foreach (var e in enums)
+        {
+            if (e.ContainingType != null && this.cache.EnumTypeDefs.TryGetValue(e, out var nh))
+            {
+                AddUserNestedTypeRow(e, nh);
+            }
+        }
+
+        foreach (var i in interfaces)
+        {
+            if (i.ContainingType != null && this.cache.InterfaceTypeDefs.TryGetValue(i, out var nh))
+            {
+                AddUserNestedTypeRow(i, nh);
+            }
+        }
+
         // NestedType entries. Each SM is nested inside its declaring type:
         // capture-bearing async lambda SMs inside their closure class,
         // an instance-method kickoff's SM inside the receiver type (so the
