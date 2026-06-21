@@ -43,6 +43,20 @@ open class Animal : Base {
         func Make(name string) Animal { return Animal{} }
     }
 }
+
+interface IShape {
+    prop Area int32 { get }
+    func Describe() string;
+    shared {
+        func Create() string;
+    }
+}
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
 ";
 
     [Fact]
@@ -154,6 +168,104 @@ open class Animal : Base {
     }
 
     [Fact]
+    public void TryGetFieldIncludingInherited_OwnField_ReturnsDeclaringType()
+    {
+        var animal = GetStruct("Animal");
+        Assert.True(TypeMemberModel.TryGetFieldIncludingInherited(animal, "legs", MemberQuery.Instance(), out var field, out var declaring));
+        Assert.Equal("legs", field.Name);
+        Assert.Equal("Animal", declaring.Name);
+    }
+
+    [Fact]
+    public void TryGetFieldIncludingInherited_InheritedField_ReturnsBaseDeclaringType()
+    {
+        var animal = GetStruct("Animal");
+        Assert.True(TypeMemberModel.TryGetFieldIncludingInherited(animal, "baseField", MemberQuery.Instance(), out var field, out var declaring));
+        Assert.Equal("baseField", field.Name);
+        Assert.Equal("Base", declaring.Name);
+    }
+
+    [Fact]
+    public void TryGetFieldIncludingInherited_StaticField_Found()
+    {
+        var animal = GetStruct("Animal");
+        Assert.True(TypeMemberModel.TryGetFieldIncludingInherited(animal, "Count", MemberQuery.Static(), out var field, out var declaring));
+        Assert.Equal("Count", field.Name);
+        Assert.Equal("Animal", declaring.Name);
+    }
+
+    [Fact]
+    public void TryGetFieldIncludingInherited_InstanceQuery_DoesNotFindStatic()
+    {
+        var animal = GetStruct("Animal");
+        Assert.False(TypeMemberModel.TryGetFieldIncludingInherited(animal, "Count", MemberQuery.Instance(), out _, out _));
+    }
+
+    [Fact]
+    public void TryGetFieldIncludingInherited_NotInheritedQuery_DoesNotWalkBaseChain()
+    {
+        var animal = GetStruct("Animal");
+        var query = new MemberQuery(includeInstance: true, includeStatic: false, includeInherited: false, MemberKinds.Field);
+        Assert.False(TypeMemberModel.TryGetFieldIncludingInherited(animal, "baseField", query, out _, out _));
+    }
+
+    [Fact]
+    public void EnumerateMembers_Interface_SurfacesInstanceAndStaticMembers()
+    {
+        var shape = GetInterface("IShape");
+        var names = TypeMemberModel.EnumerateMembers(shape, MemberQuery.All)
+            .Select(m => m.Name)
+            .ToHashSet();
+        Assert.Contains("Area", names);
+        Assert.Contains("Describe", names);
+        Assert.Contains("Create", names);
+    }
+
+    [Fact]
+    public void EnumerateMembers_Interface_StaticOnly_ExcludesInstance()
+    {
+        var shape = GetInterface("IShape");
+        var names = TypeMemberModel.EnumerateMembers(shape, MemberQuery.Static())
+            .Select(m => m.Name)
+            .ToHashSet();
+        Assert.Contains("Create", names);
+        Assert.DoesNotContain("Describe", names);
+        Assert.DoesNotContain("Area", names);
+    }
+
+    [Fact]
+    public void EnumerateMembers_Enum_SurfacesMembers()
+    {
+        var color = GetEnum("Color");
+        var names = TypeMemberModel.EnumerateMembers(color, MemberQuery.All)
+            .Select(m => m.Name)
+            .ToHashSet();
+        Assert.Contains("Red", names);
+        Assert.Contains("Green", names);
+        Assert.Contains("Blue", names);
+    }
+
+    [Fact]
+    public void EnumerateMembers_Enum_InstanceOnly_IsEmpty()
+    {
+        var color = GetEnum("Color");
+        Assert.Empty(TypeMemberModel.EnumerateMembers(color, MemberQuery.Instance()));
+    }
+
+    [Fact]
+    public void TryGetProperty_MatchesMemberLookupIncludingInherited_AcrossInheritance()
+    {
+        var animal = GetStruct("Animal");
+        foreach (var name in new[] { "Name", "BaseProp", "Missing" })
+        {
+            var modelFound = TypeMemberModel.TryGetProperty(animal, name, out var modelProp);
+            var lookupFound = GSharp.Core.CodeAnalysis.Binding.MemberLookup.TryGetPropertyIncludingInherited(animal, name, out var lookupProp);
+            Assert.Equal(modelFound, lookupFound);
+            Assert.Same(modelProp, lookupProp);
+        }
+    }
+
+    [Fact]
     public void EnumerateMembers_Instance_IncludesInheritedFieldsPropertiesMethods()
     {
         var animal = GetStruct("Animal");
@@ -188,5 +300,23 @@ open class Animal : Base {
         var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
         Assert.Empty(result.Diagnostics);
         return (StructSymbol)compilation.GlobalScope.Structs.Single(s => s.Name == name);
+    }
+
+    private static InterfaceSymbol GetInterface(string name)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(Source));
+        var compilation = new Compilation(tree);
+        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        Assert.Empty(result.Diagnostics);
+        return compilation.GlobalScope.Interfaces.Single(s => s.Name == name);
+    }
+
+    private static EnumSymbol GetEnum(string name)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(Source));
+        var compilation = new Compilation(tree);
+        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        Assert.Empty(result.Diagnostics);
+        return compilation.GlobalScope.Enums.Single(s => s.Name == name);
     }
 }
