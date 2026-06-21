@@ -3927,7 +3927,7 @@ internal sealed class ReflectionMetadataEmitter
         // The synthesized entry point must remain Public so the runtime can find it.
         var visibility = isEntryPoint && function.Declaration is null
             ? MethodAttributes.Public
-            : AccessibilityMap.ToMethodVisibility(function.Accessibility);
+            : AccessibilityMap.ToMethodVisibility(function.Accessibility, AccessibilityMap.IsTopLevelProgramMember(function));
 
         // Instance methods omit MethodAttributes.Static. Phase 3.B.3 sub-step 3
         // models open/override per ADR-0017 for classes:
@@ -4376,7 +4376,7 @@ internal sealed class ReflectionMetadataEmitter
         // mirrors the ImplMap; we set MethodImplAttributes.PreserveSig when
         // the metadata says so (default true) so the CLR does not synthesise
         // an HRESULT-to-exception translation.
-        var visibility = AccessibilityMap.ToMethodVisibility(function.Accessibility);
+        var visibility = AccessibilityMap.ToMethodVisibility(function.Accessibility, AccessibilityMap.IsTopLevelProgramMember(function));
         var methodAttrs = visibility | MethodAttributes.HideBySig | MethodAttributes.Static | MethodAttributes.PinvokeImpl;
         var implAttrs = MethodImplAttributes.IL | MethodImplAttributes.Managed;
         if (pInvoke.PreserveSig)
@@ -4590,7 +4590,7 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 });
 
-        var outerVisibility = AccessibilityMap.ToMethodVisibility(function.Accessibility);
+        var outerVisibility = AccessibilityMap.ToMethodVisibility(function.Accessibility, AccessibilityMap.IsTopLevelProgramMember(function));
         var outerMethodAttrs = outerVisibility | MethodAttributes.HideBySig | MethodAttributes.Static;
         var outerImplAttrs = MethodImplAttributes.IL | MethodImplAttributes.Managed;
 
