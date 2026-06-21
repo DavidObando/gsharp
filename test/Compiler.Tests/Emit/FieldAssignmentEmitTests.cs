@@ -129,6 +129,82 @@ public class FieldAssignmentEmitTests
         Assert.Equal(15, RunAndGetIntResult(source));
     }
 
+    [Fact]
+    public void InheritedField_Read_ThroughDerivedReceiver()
+    {
+        // ADR-0112 A3: reading an inherited field through a derived receiver.
+        // The emitted ldfld token must name the DECLARING (base) struct, so the
+        // declaring-type path in TypeMemberModel.TryGetFieldIncludingInherited
+        // is exercised. ilverify (in CompileToAssembly) pins token correctness.
+        var source = """
+            package P
+            import System
+
+            open class Base {
+                var BaseVal int32 = 7
+            }
+
+            class Derived : Base {
+                var DerivedVal int32 = 2
+            }
+
+            var d = Derived()
+            public var result = d.BaseVal
+            """;
+
+        Assert.Equal(7, RunAndGetIntResult(source));
+    }
+
+    [Fact]
+    public void InheritedField_Write_ThroughDerivedReceiver()
+    {
+        // ADR-0112 A3: writing an inherited field through a derived receiver.
+        // The emitted stfld token must name the DECLARING (base) struct.
+        var source = """
+            package P
+            import System
+
+            open class Base {
+                var BaseVal int32 = 7
+            }
+
+            class Derived : Base {
+                var DerivedVal int32 = 2
+            }
+
+            var d = Derived()
+            d.BaseVal = 55
+            public var result = d.BaseVal
+            """;
+
+        Assert.Equal(55, RunAndGetIntResult(source));
+    }
+
+    [Fact]
+    public void InheritedField_CompoundAssignment_ThroughDerivedReceiver()
+    {
+        // ADR-0112 A3: compound (+=) assignment on an inherited field exercises
+        // the chained-compound declaring-type path for both read and write.
+        var source = """
+            package P
+            import System
+
+            open class Base {
+                var BaseVal int32 = 7
+            }
+
+            class Derived : Base {
+                var DerivedVal int32 = 2
+            }
+
+            var d = Derived()
+            d.BaseVal += 3
+            public var result = d.BaseVal
+            """;
+
+        Assert.Equal(10, RunAndGetIntResult(source));
+    }
+
     private static int RunAndGetIntResult(string source)
     {
         var assembly = CompileToAssembly(source, target: "exe");

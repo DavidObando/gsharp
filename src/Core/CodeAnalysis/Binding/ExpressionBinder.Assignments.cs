@@ -176,7 +176,7 @@ internal sealed partial class ExpressionBinder
 
         if (receiverType is StructSymbol structSymbol)
         {
-            if (structSymbol.TryGetFieldIncludingInherited(propertyName, out var field, out _))
+            if (TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, propertyName, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
             {
                 var value = BindExpression(initSyntax.Value);
                 var converted = conversions.BindConversion(initSyntax.Value.Location, value, field.Type);
@@ -362,7 +362,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        if (!structSymbol.TryGetFieldIncludingInherited(syntax.FieldIdentifier.Text, out var field, out _))
+        if (!TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, syntax.FieldIdentifier.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
         {
             // ADR-0051: check if it's a property.
             if (TypeMemberModel.TryGetProperty(structSymbol, syntax.FieldIdentifier.Text, out var prop))
@@ -649,28 +649,26 @@ internal sealed partial class ExpressionBinder
         var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
         var boundRhs = BindExpression(syntax.Value);
 
-        // Walk base chain to find the field.
-        for (var c = structSym; c != null; c = c.BaseClass)
+        // ADR-0112 A3: this-first base-chain instance field walk, using the
+        // declaring struct as the owner for both the read access and assignment.
+        if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
         {
-            if (c.TryGetField(memberName, out var field))
+            if (field.IsReadOnly)
             {
-                if (field.IsReadOnly)
-                {
-                    Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
-                }
-
-                var leftRead = new BoundFieldAccessExpression(null, boundReceiver, c, field);
-                var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, field.Type, boundRhs.Type);
-                if (op == null)
-                {
-                    Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, field.Type, boundRhs.Type);
-                    return new BoundErrorExpression(null);
-                }
-
-                var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
-                var converted = conversions.BindConversion(syntax.Value.Location, binary, field.Type);
-                return BoundFieldAssignmentExpression.WithExpressionReceiver(null, boundReceiver, c, field, converted);
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             }
+
+            var leftRead = new BoundFieldAccessExpression(null, boundReceiver, declaringType, field);
+            var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, field.Type, boundRhs.Type);
+            if (op == null)
+            {
+                Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, field.Type, boundRhs.Type);
+                return new BoundErrorExpression(null);
+            }
+
+            var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
+            var converted = conversions.BindConversion(syntax.Value.Location, binary, field.Type);
+            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, boundReceiver, declaringType, field, converted);
         }
 
         // ADR-0051: check properties.
@@ -1006,24 +1004,22 @@ internal sealed partial class ExpressionBinder
         // User-defined struct/class receiver → field or property write.
         if (receiverType is StructSymbol structSym)
         {
-            // Walk base chain to find the field.
-            for (var c = structSym; c != null; c = c.BaseClass)
+            // ADR-0112 A3: this-first base-chain instance field walk, using the
+            // declaring struct as the owner for the emitted assignment.
+            if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
             {
-                if (c.TryGetField(fieldName, out var field))
+                if (field.IsReadOnly)
                 {
-                    if (field.IsReadOnly)
-                    {
-                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
-                    }
-
-                    reportObsoleteUseIfApplicable(
-                        syntax.FieldIdentifier.Location,
-                        field,
-                        $"{c.Name}.{field.Name}");
-
-                    var converted = conversions.BindConversion(syntax.Value.Location, value, field.Type);
-                    return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiver, c, field, converted);
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 }
+
+                reportObsoleteUseIfApplicable(
+                    syntax.FieldIdentifier.Location,
+                    field,
+                    $"{declaringType.Name}.{field.Name}");
+
+                var converted = conversions.BindConversion(syntax.Value.Location, value, field.Type);
+                return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiver, declaringType, field, converted);
             }
 
             // ADR-0051: check properties before reporting "unable to find member".
