@@ -98,6 +98,9 @@ public static class SpillSequenceSpiller
                 case BoundIfStatement ifStmt:
                     return RewriteIfStatement(ifStmt, builder);
 
+                case BoundTryStatement tryStmt:
+                    return RewriteTryStatement(tryStmt, builder);
+
                 case BoundBlockStatement nested:
                     var rewritten = RewriteBlock(nested);
                     builder.Add(rewritten);
@@ -111,7 +114,6 @@ public static class SpillSequenceSpiller
                 case BoundGotoStatement:
                 case BoundConditionalGotoStatement:
                 case BoundThrowStatement:
-                case BoundTryStatement:
                 case BoundScopeStatement:
                 case BoundChannelSendStatement:
                 case BoundGoStatement:
@@ -236,6 +238,78 @@ public static class SpillSequenceSpiller
 
             builder.Add(new BoundIfStatement(null, condition, thenStmt, elseStmt));
             return true;
+        }
+
+        /// <summary>
+        /// Spills sub-expression awaits nested inside a <see cref="BoundTryStatement"/>'s
+        /// protected block (and, defensively, its handler/finally blocks). Awaits in the
+        /// try body are legal suspension points that <see cref="MoveNextBodyRewriter"/>
+        /// handles once they sit at statement top-level, but they only reach that form
+        /// if the spiller descends into the try region. Treating the try as an opaque
+        /// await-free leaf (the prior behaviour) left a sub-expression await such as
+        /// <c>F(await G())</c> unspilled, leaking a <see cref="BoundAwaitExpression"/>
+        /// into the emitted MoveNext body.
+        /// </summary>
+        private bool RewriteTryStatement(BoundTryStatement tryStmt, ImmutableArray<BoundStatement>.Builder builder)
+        {
+            var tryBlock = RewriteNestedBody(tryStmt.TryBlock, out var tryChanged);
+
+            var catchesChanged = false;
+            var catchBuilder = ImmutableArray.CreateBuilder<BoundCatchClause>(tryStmt.CatchClauses.Length);
+            foreach (var clause in tryStmt.CatchClauses)
+            {
+                var body = RewriteNestedBody(clause.Body, out var clauseChanged);
+                catchesChanged |= clauseChanged;
+                catchBuilder.Add(clauseChanged
+                    ? new BoundCatchClause(clause.ExceptionType, clause.Variable, body)
+                    : clause);
+            }
+
+            var finallyBlock = RewriteNestedBody(tryStmt.FinallyBlock, out var finallyChanged);
+
+            if (!tryChanged && !catchesChanged && !finallyChanged)
+            {
+                builder.Add(tryStmt);
+                return false;
+            }
+
+            builder.Add(new BoundTryStatement(
+                tryStmt.Syntax,
+                tryBlock,
+                catchesChanged ? catchBuilder.ToImmutable() : tryStmt.CatchClauses,
+                finallyBlock));
+            return true;
+        }
+
+        /// <summary>
+        /// Spills a try/catch/finally sub-block. Returns the rewritten body and
+        /// reports whether anything changed.
+        /// </summary>
+        private BoundStatement RewriteNestedBody(BoundStatement body, out bool changed)
+        {
+            if (body == null)
+            {
+                changed = false;
+                return null;
+            }
+
+            if (body is BoundBlockStatement block)
+            {
+                var rewritten = RewriteBlock(block);
+                changed = !ReferenceEquals(rewritten, block);
+                return rewritten;
+            }
+
+            var nestedBuilder = ImmutableArray.CreateBuilder<BoundStatement>();
+            changed = RewriteStatementToList(body, nestedBuilder);
+            if (!changed)
+            {
+                return body;
+            }
+
+            return nestedBuilder.Count == 1
+                ? nestedBuilder[0]
+                : new BoundBlockStatement(body.Syntax, nestedBuilder.ToImmutable());
         }
 
         /// <summary>

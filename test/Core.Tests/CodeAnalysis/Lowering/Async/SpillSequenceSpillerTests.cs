@@ -397,6 +397,55 @@ public class SpillSequenceSpillerTests
         Assert.True(spillCount >= 2, $"Expected at least 2 spill temps but got {spillCount}.");
     }
 
+    [Fact]
+    public void Spilled_Await_Inside_Try_Block_Is_Spilled()
+    {
+        // Arrange: try { f(sideEffect(), await task) }
+        // The spiller must descend into the protected block and lift the
+        // sub-expression await to statement top-level. Previously the try was
+        // treated as an await-free leaf, leaving the raw await for the emitter.
+        var arg0 = MakeCall("sideEffect", TypeSymbol.Int32);
+        var arg1 = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var call = new BoundCallExpression(
+            null,
+            MakeFunction("f", TypeSymbol.Int32, TypeSymbol.Int32, TypeSymbol.Int32),
+            ImmutableArray.Create<BoundExpression>(arg0, arg1));
+        var tryBlock = new BoundBlockStatement(
+            null,
+            ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(null, call)));
+        var tryStmt = new BoundTryStatement(
+            null,
+            tryBlock,
+            ImmutableArray<BoundCatchClause>.Empty,
+            null);
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(tryStmt));
+
+        // Act
+        var result = SpillSequenceSpiller.Rewrite(body);
+
+        // Assert: the try block body is rewritten with spill temps; no
+        // sub-expression await survives below statement level.
+        Assert.NotSame(body, result);
+        var rewrittenTry = Assert.IsType<BoundTryStatement>(result.Statements[0]);
+        var rewrittenBlock = Assert.IsType<BoundBlockStatement>(rewrittenTry.TryBlock);
+        Assert.True(
+            rewrittenBlock.Statements.Length >= 2,
+            "Expected spill statements inside the try block.");
+
+        var hasSpillTemp = false;
+        foreach (var s in rewrittenBlock.Statements)
+        {
+            if (s is BoundVariableDeclaration d
+                && d.Variable.Name.StartsWith(GeneratedNames.SpillTempPrefix))
+            {
+                hasSpillTemp = true;
+                break;
+            }
+        }
+
+        Assert.True(hasSpillTemp, "Expected a spill temp declaration inside the try block.");
+    }
+
     private static BoundCallExpression MakeCall(string name, TypeSymbol returnType)
     {
         var func = new FunctionSymbol(
