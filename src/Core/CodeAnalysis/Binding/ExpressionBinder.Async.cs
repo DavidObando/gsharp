@@ -79,13 +79,7 @@ internal sealed partial class ExpressionBinder
             // Try matching an event first; if no match, fall through to
             // ADR-0053 static field/property compound assignment instead of
             // reporting an immediate "unable to find member".
-            EventSymbol ev = null;
-            if (!staticStruct.StaticEvents.IsDefaultOrEmpty)
-            {
-                ev = staticStruct.StaticEvents.FirstOrDefault(e => e.Name == eventName);
-            }
-
-            if (ev != null)
+            if (TypeMemberModel.TryGetStaticEvent(staticStruct, eventName, out var ev))
             {
                 var userHandler = BindEventSubscriptionHandler(syntax.Value, ev.Type);
                 return new BoundEventSubscriptionExpression(null, receiver: null, staticStruct, ev, userHandler, isAdd);
@@ -111,14 +105,14 @@ internal sealed partial class ExpressionBinder
             }
 
             // Check for user-defined event on a StructSymbol before falling through to CLR reflection.
-            if (boundReceiver.Type is StructSymbol userStruct && !userStruct.Events.IsDefaultOrEmpty)
+            // ADR-0112 A5: TryGetEvent walks the base chain, so inherited instance
+            // events on `open class` bases now resolve (parity with the bare-`this`
+            // path in BindBareEventOrCompoundAssignment). The owner symbol remains
+            // `userStruct` (the receiver's static type) to preserve the bound-node shape.
+            if (boundReceiver.Type is StructSymbol userStruct && TypeMemberModel.TryGetEvent(userStruct, eventName, out var ev))
             {
-                var ev = userStruct.Events.FirstOrDefault(e => e.Name == eventName);
-                if (ev != null)
-                {
-                    var userHandler = BindEventSubscriptionHandler(syntax.Value, ev.Type);
-                    return new BoundEventSubscriptionExpression(null, boundReceiver, userStruct, ev, userHandler, isAdd);
-                }
+                var userHandler = BindEventSubscriptionHandler(syntax.Value, ev.Type);
+                return new BoundEventSubscriptionExpression(null, boundReceiver, userStruct, ev, userHandler, isAdd);
             }
 
             receiverClrType = boundReceiver.Type?.ClrType;

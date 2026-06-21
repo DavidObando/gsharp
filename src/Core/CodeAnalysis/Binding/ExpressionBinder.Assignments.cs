@@ -448,6 +448,11 @@ internal sealed partial class ExpressionBinder
         var isAdd = syntax.OperatorToken.Kind == SyntaxKind.PlusEqualsToken;
 
         // Try implicit `this` event: walk the receiver type's events (including inherited).
+        // ADR-0112 A5: intentionally NOT routed through TypeMemberModel.TryGetEvent —
+        // that helper returns only the event, not the declaring base level, whereas
+        // this bound node must carry the *declaring* type `t` as its owner. Collapsing
+        // into TryGetEvent(receiverStruct, …) would change the owner from the declaring
+        // base to the derived type, breaking bound-node parity. Left as a manual walk.
         if (function?.ThisParameter != null && function.ReceiverType is StructSymbol receiverStruct)
         {
             for (var t = receiverStruct; t != null; t = t.BaseClass)
