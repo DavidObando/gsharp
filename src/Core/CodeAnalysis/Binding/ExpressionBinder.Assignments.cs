@@ -37,7 +37,8 @@ internal sealed partial class ExpressionBinder
 
         if (variable is ImplicitFieldVariableSymbol implicitField)
         {
-            if (implicitField.Field.IsReadOnly)
+            if (implicitField.Field.IsReadOnly
+                && !IsReadOnlyFieldAssignmentAllowed(implicitField.Field, implicitField.StructType, receiverIsThis: true))
             {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name);
             }
@@ -171,6 +172,101 @@ internal sealed partial class ExpressionBinder
         }
 
         Diagnostics.ReportInitOnlyPropertyAssignment(location, prop.Name);
+    }
+
+    /// <summary>
+    /// Issue #947: determines whether an assignment to a read-only (<c>let</c>)
+    /// field is permitted in the current binding context. Mirrors C#
+    /// <c>readonly</c> field semantics: a read-only <em>instance</em> field may
+    /// be assigned (any number of times) inside the declaring type's instance
+    /// constructor (<c>init(...)</c>, bound as <c>.ctor</c>) when the target is
+    /// the instance being constructed (<c>this</c>), in addition to its
+    /// declaration initializer. Anywhere else — other methods, after
+    /// construction, on another instance, or from a derived type's constructor
+    /// against a base-declared field — the assignment remains a <c>GS0127</c>
+    /// error. Static read-only fields keep their existing behavior (assignable
+    /// only via their initializer, since G# exposes no user-writable static
+    /// constructor body).
+    /// </summary>
+    /// <param name="field">The field being assigned.</param>
+    /// <param name="declaringType">
+    /// The type that declares <paramref name="field"/>, when known, used to
+    /// reject writes to an inherited read-only field from a derived
+    /// constructor; <see langword="null"/> when the caller cannot determine it.
+    /// </param>
+    /// <param name="receiverIsThis">
+    /// <see langword="true"/> when the assignment targets a field of the
+    /// instance currently under construction (<c>this</c>).
+    /// </param>
+    /// <returns><see langword="true"/> when the read-only field assignment is allowed here.</returns>
+    private bool IsReadOnlyFieldAssignmentAllowed(FieldSymbol field, TypeSymbol declaringType, bool receiverIsThis)
+    {
+        if (field == null || !field.IsReadOnly)
+        {
+            return true;
+        }
+
+        // Static read-only fields are only writable from their initializer (the
+        // emitter materializes those into the synthesized static constructor).
+        // G# has no user-authored static constructor body, so keep the existing
+        // GS0127 behavior for any explicit write.
+        if (field.IsStatic)
+        {
+            return false;
+        }
+
+        var fn = this.function;
+        if (fn == null || fn.Name != ".ctor" || fn.ThisParameter == null)
+        {
+            return false;
+        }
+
+        if (!receiverIsThis)
+        {
+            return false;
+        }
+
+        // C# forbids a derived constructor from assigning a base type's
+        // read-only field; only the declaring type's constructor may do so.
+        if (declaringType != null && fn.ReceiverType != null
+            && !ReferenceEquals(declaringType, fn.ReceiverType))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #947: returns <see langword="true"/> when <paramref name="variable"/>
+    /// is the enclosing function's <c>this</c> parameter (the instance under
+    /// construction or the method's receiver).
+    /// </summary>
+    /// <param name="variable">The receiver variable symbol.</param>
+    /// <returns><see langword="true"/> when the receiver is <c>this</c>.</returns>
+    private bool ReceiverVariableIsThis(VariableSymbol variable)
+    {
+        var fn = this.function;
+        return fn?.ThisParameter != null && ReferenceEquals(variable, fn.ThisParameter);
+    }
+
+    /// <summary>
+    /// Issue #947: returns <see langword="true"/> when the bound
+    /// <paramref name="receiver"/> denotes the enclosing function's <c>this</c>
+    /// (a <see langword="null"/> receiver is an implicit <c>this</c>).
+    /// </summary>
+    /// <param name="receiver">The bound receiver expression, or <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when the receiver is <c>this</c>.</returns>
+    private bool ReceiverExpressionIsThis(BoundExpression receiver)
+    {
+        var fn = this.function;
+        if (fn?.ThisParameter == null)
+        {
+            return false;
+        }
+
+        return receiver == null
+            || (receiver is BoundVariableExpression bve && ReferenceEquals(bve.Variable, fn.ThisParameter));
     }
 
     private BoundExpression BindObjectInitializerAssignment(LocalVariableSymbol receiverLocal, TypeSymbol receiverType, PropertyInitializerSyntax initSyntax)
@@ -396,7 +492,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        if (!TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, syntax.FieldIdentifier.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
+        if (!TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, syntax.FieldIdentifier.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
         {
             // ADR-0051: check if it's a property.
             if (TypeMemberModel.TryGetProperty(structSymbol, syntax.FieldIdentifier.Text, out var prop))
@@ -447,12 +543,18 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        if (variable.IsReadOnly)
+        var receiverIsThisField = ReceiverVariableIsThis(variable);
+
+        // Issue #947: a read-only field of `this` may be assigned inside the
+        // declaring type's constructor; in that case the receiver being `this`
+        // (which is itself read-only) must not block the field write.
+        if (variable.IsReadOnly && !receiverIsThisField)
         {
             Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, receiverName);
         }
 
-        if (field.IsReadOnly)
+        if (field.IsReadOnly
+            && !IsReadOnlyFieldAssignmentAllowed(field, fieldDeclaringType, receiverIsThisField))
         {
             Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
         }
@@ -536,7 +638,8 @@ internal sealed partial class ExpressionBinder
         // Route through the correct assignment path depending on variable kind.
         if (variable is ImplicitFieldVariableSymbol implicitField)
         {
-            if (implicitField.Field.IsReadOnly)
+            if (implicitField.Field.IsReadOnly
+                && !IsReadOnlyFieldAssignmentAllowed(implicitField.Field, implicitField.StructType, receiverIsThis: true))
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
             }
@@ -690,7 +793,8 @@ internal sealed partial class ExpressionBinder
         // declaring struct as the owner for both the read access and assignment.
         if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
         {
-            if (field.IsReadOnly)
+            if (field.IsReadOnly
+                && !IsReadOnlyFieldAssignmentAllowed(field, declaringType, ReceiverExpressionIsThis(boundReceiver)))
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             }
@@ -1046,7 +1150,8 @@ internal sealed partial class ExpressionBinder
             // declaring struct as the owner for the emitted assignment.
             if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
             {
-                if (field.IsReadOnly)
+                if (field.IsReadOnly
+                    && !IsReadOnlyFieldAssignmentAllowed(field, declaringType, ReceiverExpressionIsThis(receiver)))
                 {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 }

@@ -498,6 +498,32 @@ the `System.Runtime.CompilerServices.IsExternalInit` required-custom-modifier
 with C# and other CLR consumers. An auto-property `init;` emits a writable
 backing field plus the init-only setter.
 
+#### Read-only (`let`) fields (issue #947)
+
+A field declared with `let` is **read-only**, mirroring a C# `readonly` field. A
+`let` field is assignable only **during construction**:
+
+* by its declaration initializer (`let x int32 = 5`), and/or
+* inside the declaring type's constructor(s) (`init(...)`), targeting the
+  instance being constructed (the bare `x = …` form, or the qualified
+  `this.x = …` form). As in C#, the constructor may write the field any number
+  of times; a `let` field with no initializer may instead be assigned once in
+  the constructor.
+
+Assigning a `let` field anywhere else — from a non-constructor method, after
+construction completes, on another instance (`other.x = …`), or from a derived
+type's constructor against a base-declared `let` field — is a compile error,
+`GS0127`. Reading a `let` field is always allowed. A `let` field that is never
+assigned keeps its type's zero/default value, exactly like an unassigned C#
+`readonly` field. A `var` field has no such restriction and remains mutable.
+
+A `let` field is emitted with the CLR `initonly` field flag — the metadata
+encoding of a C# `readonly` field — so the read-only guarantee holds at the
+metadata level and constructor writes remain verifiable IL. Static `let` fields
+keep their existing behavior: they are assignable only through their declaration
+initializer (materialized into the synthesized static constructor), since G#
+exposes no user-authored static constructor body.
+
 ## Expressions
 
 ### Precedence

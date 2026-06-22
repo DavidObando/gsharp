@@ -3751,10 +3751,26 @@ internal sealed class StatementBinder
 
             case BoundFieldAccessExpression fieldAccess:
             {
+                // Issue #947: a read-only (`let`) instance field may be written
+                // by a compound assignment inside the declaring type's
+                // constructor when the receiver is `this`; everywhere else the
+                // read-only field write remains a GS0127 error.
                 if (fieldAccess.Field.IsReadOnly)
                 {
-                    Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, fieldAccess.Field.Name);
-                    return (null, null);
+                    var fn = this.function;
+                    var inCtor = fn != null && fn.Name == ".ctor" && fn.ThisParameter != null && !fieldAccess.Field.IsStatic;
+                    var receiverIsThis = fieldAccess.Receiver == null
+                        || (fieldAccess.Receiver is BoundVariableExpression rbve
+                            && fn?.ThisParameter != null
+                            && ReferenceEquals(rbve.Variable, fn.ThisParameter));
+                    var declaredByThisType = fieldAccess.StructType == null
+                        || fn?.ReceiverType == null
+                        || ReferenceEquals(fieldAccess.StructType, fn.ReceiverType);
+                    if (!inCtor || !receiverIsThis || !declaredByThisType)
+                    {
+                        Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, fieldAccess.Field.Name);
+                        return (null, null);
+                    }
                 }
 
                 var receiver = CaptureReceiver(syntax, fieldAccess.Receiver, preStatements);

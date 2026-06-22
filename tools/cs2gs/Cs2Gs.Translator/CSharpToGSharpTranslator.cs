@@ -527,9 +527,13 @@ public sealed class CSharpToGSharpTranslator
             }
 
             // T2 (ADR-0115 §B.3): canonicalize immutable-field initialization.
-            // A `let` field is read-only everywhere in G# (including inside `init`),
-            // so a `readonly` field assigned in the constructor must instead be a
-            // field initializer or a primary-constructor parameter.
+            // A `let` field is read-only after construction but — like a C#
+            // `readonly` field (issue #947) — is assignable inside the declaring
+            // type's `init(...)` constructor. The lift below still prefers the
+            // idiomatic primary-constructor / field-initializer form when the
+            // constructor is a simple parameter-to-member copy; non-liftable
+            // constructors keep their explicit `init` and assign the `let`
+            // fields directly, which is now valid G#.
             ConstructorLift lift = this.AnalyzeConstructorLift(node, symbol, kind.Value);
 
             var instanceMembers = new List<GMember>();

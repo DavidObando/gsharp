@@ -287,6 +287,36 @@ namespace Demo
         Assert.Contains("Dictionary[string, int32](StringComparer.OrdinalIgnoreCase){ [\"Key\"] = 5 }", printed);
     }
 
+    /// <summary>
+    /// Issue #947: a C# <c>readonly</c> field assigned inside a constructor whose
+    /// body is not a simple parameter-to-member copy (so the primary-constructor
+    /// lift does not apply) now translates to a G# <c>let</c> field that the
+    /// emitted <c>init(...)</c> constructor assigns directly — which is valid G#
+    /// now that <c>let</c> fields carry C# <c>readonly</c>-field semantics.
+    /// </summary>
+    [Fact]
+    public void ReadonlyField_AssignedInNonLiftableConstructor_TranslatesToLetWithInit()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class StampX
+    {
+        private readonly int doubled;
+        public StampX(int n)
+        {
+            this.doubled = n * 2;
+        }
+        public int Doubled => this.doubled;
+    }
+}");
+
+        Assert.Contains("let doubled int32", printed);
+        Assert.Contains("init(n int32)", printed);
+        Assert.Contains("doubled = n * 2", printed);
+        Assert.DoesNotContain("var doubled", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
