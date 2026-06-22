@@ -246,6 +246,13 @@ public static class TypeMemberModel
             {
                 foreach (var p in c.Properties)
                 {
+                    // ADR-0118 / issue #944: an indexer ('Item') is not reachable
+                    // by member name — only through `obj[i]` index access.
+                    if (p.IsIndexer)
+                    {
+                        continue;
+                    }
+
                     if (p.Name == name)
                     {
                         property = p;

@@ -38,6 +38,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
         : base(syntaxTree)
     {
         Annotations = ImmutableArray<AnnotationSyntax>.Empty;
+        Parameters = new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty);
         AccessibilityModifier = accessibilityModifier;
         OpenModifier = openModifier;
         OverrideModifier = overrideModifier;
@@ -70,8 +71,26 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <summary>Gets the identifier token whose text is <c>prop</c>.</summary>
     public SyntaxToken PropKeyword { get; }
 
-    /// <summary>Gets the property name identifier.</summary>
+    /// <summary>Gets the property name identifier. For an indexer (ADR-0118) this is the <c>this</c> contextual keyword token.</summary>
     public SyntaxToken Identifier { get; }
+
+    /// <summary>
+    /// Gets the <c>this</c> contextual keyword token when this declaration is an
+    /// indexer member (ADR-0118), or <see langword="null"/> for an ordinary property.
+    /// </summary>
+    public SyntaxToken ThisKeyword { get; private set; }
+
+    /// <summary>Gets the optional opening bracket token of an indexer parameter list (ADR-0118).</summary>
+    public SyntaxToken OpenBracketToken { get; private set; }
+
+    /// <summary>Gets the indexer parameter list (ADR-0118). Empty for an ordinary property.</summary>
+    public SeparatedSyntaxList<ParameterSyntax> Parameters { get; private set; }
+
+    /// <summary>Gets the optional closing bracket token of an indexer parameter list (ADR-0118).</summary>
+    public SyntaxToken CloseBracketToken { get; private set; }
+
+    /// <summary>Gets a value indicating whether this declaration is an indexer member (ADR-0118).</summary>
+    public bool IsIndexer => ThisKeyword != null;
 
     /// <summary>Gets the property type.</summary>
     public TypeClauseSyntax Type { get; }
@@ -91,6 +110,29 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     internal PropertyDeclarationSyntax WithAnnotations(ImmutableArray<AnnotationSyntax> annotations)
     {
         Annotations = annotations.IsDefault ? ImmutableArray<AnnotationSyntax>.Empty : annotations;
+        return this;
+    }
+
+    /// <summary>
+    /// ADR-0118: marks this declaration as an indexer member by attaching the
+    /// <c>this</c> keyword token, the bracket tokens, and the index parameter
+    /// list. Returns this same instance for fluent parser use.
+    /// </summary>
+    /// <param name="thisKeyword">The <c>this</c> contextual keyword token.</param>
+    /// <param name="openBracketToken">The opening bracket token.</param>
+    /// <param name="parameters">The index parameter list.</param>
+    /// <param name="closeBracketToken">The closing bracket token.</param>
+    /// <returns>This same <see cref="PropertyDeclarationSyntax"/>, marked as an indexer.</returns>
+    internal PropertyDeclarationSyntax WithIndexer(
+        SyntaxToken thisKeyword,
+        SyntaxToken openBracketToken,
+        SeparatedSyntaxList<ParameterSyntax> parameters,
+        SyntaxToken closeBracketToken)
+    {
+        ThisKeyword = thisKeyword;
+        OpenBracketToken = openBracketToken;
+        Parameters = parameters ?? new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        CloseBracketToken = closeBracketToken;
         return this;
     }
 }

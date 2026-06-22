@@ -1955,6 +1955,34 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // ADR-0118 / issue #944: index access on a user-defined type that
+        // declares an indexer member (`prop this[i T] U`). Binds `obj[i]` to a
+        // call of the indexer getter (`obj.get_Item(i)`).
+        if (target.Type is StructSymbol userIndexTarget
+            && TryGetUserIndexer(userIndexTarget, out var readIndexer, out var readSubstitution)
+            && readIndexer.Parameters.Length == 1)
+        {
+            if (readIndexer.GetterSymbol == null)
+            {
+                Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
+                return new BoundErrorExpression(null);
+            }
+
+            var paramType = readSubstitution != null
+                ? Binder.SubstituteType(readIndexer.Parameters[0].Type, readSubstitution)
+                : readIndexer.Parameters[0].Type;
+            var indexArg = conversions.BindConversion(indexSyntax, paramType);
+            var elementType = readSubstitution != null
+                ? Binder.SubstituteType(readIndexer.Type, readSubstitution)
+                : readIndexer.Type;
+            return new BoundUserInstanceCallExpression(
+                null,
+                target,
+                readIndexer.GetterSymbol,
+                ImmutableArray.Create(indexArg),
+                elementType);
+        }
+
         if (target.Type != TypeSymbol.Error)
         {
             Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
@@ -2263,6 +2291,35 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // ADR-0118 / issue #944: index assignment on a user-defined type that
+        // declares an indexer member. Binds `obj[i] = v` to a call of the
+        // indexer setter (`obj.set_Item(i, v)`).
+        if (variable.Type is StructSymbol userIndexTarget
+            && TryGetUserIndexer(userIndexTarget, out var writeIndexer, out var writeSubstitution)
+            && writeIndexer.Parameters.Length == 1)
+        {
+            if (writeIndexer.SetterSymbol == null)
+            {
+                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
+                return new BoundErrorExpression(null);
+            }
+
+            var paramType = writeSubstitution != null
+                ? Binder.SubstituteType(writeIndexer.Parameters[0].Type, writeSubstitution)
+                : writeIndexer.Parameters[0].Type;
+            var elementType = writeSubstitution != null
+                ? Binder.SubstituteType(writeIndexer.Type, writeSubstitution)
+                : writeIndexer.Type;
+
+            var indexArg = conversions.BindConversion(indexSyntax, paramType);
+            var value = BindValue(elementType);
+            return new BoundUserInstanceCallExpression(
+                null,
+                new BoundVariableExpression(null, variable),
+                writeIndexer.SetterSymbol,
+                ImmutableArray.Create(indexArg, value));
+        }
+
         if (variable.Type != TypeSymbol.Error)
         {
             Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
@@ -2340,6 +2397,62 @@ internal sealed partial class ExpressionBinder
         }
 
         return TypeSymbol.FromClrType(clrType);
+    }
+
+    // ADR-0118 / issue #944: locate a user-declared indexer member on a (possibly
+    // constructed-generic) user type and, for a constructed type, build the
+    // type-parameter substitution from the receiver's type arguments. The
+    // returned PropertySymbol is the OPEN indexer on the type definition so its
+    // get_Item/set_Item accessors resolve to the emitted MethodDef handles.
+    private static bool TryGetUserIndexer(
+        StructSymbol target,
+        out PropertySymbol indexer,
+        out Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        indexer = null;
+        substitution = null;
+
+        var definition = target.Definition ?? target;
+        for (var c = definition; c != null; c = c.BaseClass)
+        {
+            foreach (var p in c.Properties)
+            {
+                if (p.IsIndexer)
+                {
+                    indexer = p;
+                    break;
+                }
+            }
+
+            if (indexer != null)
+            {
+                break;
+            }
+        }
+
+        if (indexer == null)
+        {
+            return false;
+        }
+
+        // Build the type-parameter substitution for a constructed generic
+        // receiver (e.g. `Repo[int32]` over `class Repo[T]`).
+        if (!target.TypeArguments.IsDefaultOrEmpty
+            && target.Definition != null
+            && !ReferenceEquals(target.Definition, target))
+        {
+            var defTps = target.Definition.TypeParameters;
+            if (!defTps.IsDefaultOrEmpty && defTps.Length == target.TypeArguments.Length)
+            {
+                substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>(defTps.Length);
+                for (var i = 0; i < defTps.Length; i++)
+                {
+                    substitution[defTps[i]] = target.TypeArguments[i];
+                }
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

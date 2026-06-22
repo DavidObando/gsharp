@@ -3785,6 +3785,37 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Error);
     }
 
+    /// <summary>
+    /// Reports GS0370 — ADR-0118 / issue #944: an indexer member
+    /// (<c>prop this[…] T { … }</c>) was declared with no index parameters.
+    /// An indexer must declare at least one parameter.
+    /// </summary>
+    /// <param name="location">The source location of the indexer declaration.</param>
+    public void ReportIndexerRequiresParameter(TextLocation location)
+    {
+        Report(
+            location,
+            "GS0370",
+            "An indexer member must declare at least one parameter, e.g. 'prop this[i int32] T { … }' (issue #944).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Reports GS0371 — ADR-0118 / issue #944: an indexer member
+    /// (<c>prop this[…] T</c>) was declared without an accessor body. An
+    /// indexer must declare a <c>get</c> and/or <c>set</c> accessor with a
+    /// body; there is no auto-indexer form.
+    /// </summary>
+    /// <param name="location">The source location of the indexer declaration.</param>
+    public void ReportIndexerRequiresAccessorBody(TextLocation location)
+    {
+        Report(
+            location,
+            "GS0371",
+            "An indexer member must declare a 'get' and/or 'set' accessor with a body; there is no auto-indexer form (issue #944).",
+            DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

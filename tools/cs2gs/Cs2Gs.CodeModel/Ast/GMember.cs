@@ -110,6 +110,7 @@ public sealed class PropertyDeclaration : GMember
     /// <param name="isOpen">Whether the property is <c>open</c> (virtual).</param>
     /// <param name="isOverride">Whether the property is an <c>override</c>.</param>
     /// <param name="attributes">The property attributes.</param>
+    /// <param name="indexerParameters">The index parameters for an indexer member (ADR-0118); empty for an ordinary property.</param>
     public PropertyDeclaration(
         string name,
         GTypeReference type,
@@ -117,7 +118,8 @@ public sealed class PropertyDeclaration : GMember
         Visibility visibility = Visibility.Default,
         bool isOpen = false,
         bool isOverride = false,
-        IReadOnlyList<AttributeUse> attributes = null)
+        IReadOnlyList<AttributeUse> attributes = null,
+        IReadOnlyList<Parameter> indexerParameters = null)
     {
         Name = name;
         Type = type;
@@ -126,6 +128,7 @@ public sealed class PropertyDeclaration : GMember
         IsOpen = isOpen;
         IsOverride = isOverride;
         Attributes = attributes ?? new List<AttributeUse>();
+        IndexerParameters = indexerParameters ?? new List<Parameter>();
     }
 
     /// <summary>Gets the property name.</summary>
@@ -148,6 +151,12 @@ public sealed class PropertyDeclaration : GMember
 
     /// <summary>Gets the property attributes.</summary>
     public IReadOnlyList<AttributeUse> Attributes { get; }
+
+    /// <summary>Gets the index parameters for an indexer member (ADR-0118); empty for an ordinary property.</summary>
+    public IReadOnlyList<Parameter> IndexerParameters { get; }
+
+    /// <summary>Gets a value indicating whether this property is an indexer member (<c>prop this[...]</c>).</summary>
+    public bool IsIndexer => IndexerParameters.Count > 0;
 }
 
 /// <summary>

@@ -954,7 +954,15 @@ public static class GSharpPrinter
             sb.Append("override ");
         }
 
-        sb.Append($"prop {property.Name} {RenderType(property.Type)}");
+        if (property.IsIndexer)
+        {
+            // ADR-0118: render the canonical indexer header `prop this[...] T`.
+            sb.Append($"prop this[{RenderParameterList(property.IndexerParameters)}] {RenderType(property.Type)}");
+        }
+        else
+        {
+            sb.Append($"prop {property.Name} {RenderType(property.Type)}");
+        }
 
         if (property.Accessors.Count == 0)
         {

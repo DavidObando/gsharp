@@ -1057,7 +1057,37 @@ internal sealed class DeclarationBinder
             var propertiesBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
             foreach (var propSyntax in syntax.Properties)
             {
-                var propName = propSyntax.Identifier.Text;
+                // ADR-0118 / issue #944: an indexer member (`prop this[…] T`)
+                // is modelled as a property whose CLR name is `Item` carrying
+                // an index-parameter list.
+                var isIndexer = propSyntax.IsIndexer;
+                var indexerParameters = ImmutableArray<ParameterSymbol>.Empty;
+                if (isIndexer)
+                {
+                    if (propSyntax.Parameters.Count == 0)
+                    {
+                        Diagnostics.ReportIndexerRequiresParameter(propSyntax.ThisKeyword.Location);
+                        continue;
+                    }
+
+                    var indexerParamBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>();
+                    var seenIndexParamNames = new HashSet<string>();
+                    foreach (var indexParamSyntax in propSyntax.Parameters)
+                    {
+                        var indexParamName = indexParamSyntax.Identifier.Text;
+                        var indexParamType = bindTypeClause(indexParamSyntax.Type) ?? TypeSymbol.Error;
+                        if (!seenIndexParamNames.Add(indexParamName))
+                        {
+                            Diagnostics.ReportParameterAlreadyDeclared(indexParamSyntax.Location, indexParamName);
+                        }
+
+                        indexerParamBuilder.Add(new ParameterSymbol(indexParamName, indexParamType, declaringSyntax: indexParamSyntax.Identifier));
+                    }
+
+                    indexerParameters = indexerParamBuilder.ToImmutable();
+                }
+
+                var propName = isIndexer ? "Item" : propSyntax.Identifier.Text;
 
                 // Check for duplicate names (fields + methods + other properties)
                 if (!existingNames.Add(propName))
@@ -1105,6 +1135,14 @@ internal sealed class DeclarationBinder
                                   && propSyntax.Accessors.All(a => a.Body == null);
                 }
 
+                // ADR-0118 / issue #944: there is no auto-indexer form — an
+                // indexer must declare a get and/or set accessor with a body.
+                if (isIndexer && isAutoProperty)
+                {
+                    Diagnostics.ReportIndexerRequiresAccessorBody(propSyntax.ThisKeyword.Location);
+                    continue;
+                }
+
                 // Validate: auto-property not allowed on data struct
                 if (isAutoProperty && syntax.IsData)
                 {
@@ -1148,7 +1186,11 @@ internal sealed class DeclarationBinder
                     isVirtual,
                     isOverride,
                     setterParamName,
-                    declaration: propSyntax);
+                    declaration: propSyntax)
+                {
+                    IsIndexer = isIndexer,
+                    Parameters = indexerParameters,
+                };
                 Binder.AttachDocumentation(propertySymbol, propSyntax);
 
                 // Create backing field for auto-properties
@@ -1172,7 +1214,7 @@ internal sealed class DeclarationBinder
                     {
                         var getterSymbol = new FunctionSymbol(
                             $"get_{propName}",
-                            ImmutableArray<ParameterSymbol>.Empty,
+                            isIndexer ? indexerParameters : ImmutableArray<ParameterSymbol>.Empty,
                             propType,
                             declaration: null,
                             package,
@@ -1180,6 +1222,10 @@ internal sealed class DeclarationBinder
                             receiverType: structSymbol,
                             isOpen: isVirtual,
                             isOverride: isOverride);
+
+                        // ADR-0118: indexer accessors are emitted as SpecialName
+                        // CLR default-member accessors (get_Item).
+                        getterSymbol.IsSpecialName = isIndexer;
                         propertySymbol.GetterSymbol = getterSymbol;
                         propertySymbol.GetterBodySyntax = getAccessor.Body;
                     }
@@ -1187,9 +1233,12 @@ internal sealed class DeclarationBinder
                     if (hasSetter && setAccessor?.Body != null)
                     {
                         var setterParam = new ParameterSymbol(setterParamName, propType);
+                        var setterParameters = isIndexer
+                            ? indexerParameters.Add(setterParam)
+                            : ImmutableArray.Create(setterParam);
                         var setterSymbol = new FunctionSymbol(
                             $"set_{propName}",
-                            ImmutableArray.Create(setterParam),
+                            setterParameters,
                             TypeSymbol.Void,
                             declaration: null,
                             package,
@@ -1197,6 +1246,7 @@ internal sealed class DeclarationBinder
                             receiverType: structSymbol,
                             isOpen: isVirtual,
                             isOverride: isOverride);
+                        setterSymbol.IsSpecialName = isIndexer;
                         propertySymbol.SetterSymbol = setterSymbol;
                         propertySymbol.SetterBodySyntax = setAccessor.Body;
                     }
@@ -1577,6 +1627,14 @@ internal sealed class DeclarationBinder
             var staticPropertiesBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
             foreach (var propSyntax in syntax.SharedBlock.Properties)
             {
+                // ADR-0118 / issue #944: a `shared` (static) indexer has no CLR
+                // representation — report a clean diagnostic rather than crashing.
+                if (propSyntax.IsIndexer)
+                {
+                    Diagnostics.ReportIndexerRequiresAccessorBody(propSyntax.ThisKeyword.Location);
+                    continue;
+                }
+
                 var propName = propSyntax.Identifier.Text;
                 if (!existingNames.Add(propName))
                 {
@@ -2744,6 +2802,15 @@ internal sealed class DeclarationBinder
             var propertiesBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
             foreach (var propSyntax in syntax.Properties)
             {
+                // ADR-0118 / issue #944: interface indexer members are out of
+                // scope for now — report a clean diagnostic rather than binding
+                // an ill-formed property named `this`.
+                if (propSyntax.IsIndexer)
+                {
+                    Diagnostics.ReportIndexerRequiresAccessorBody(propSyntax.ThisKeyword.Location);
+                    continue;
+                }
+
                 var propName = propSyntax.Identifier.Text;
                 if (!seenNames.Add(propName))
                 {

@@ -831,6 +831,10 @@ public sealed class CSharpToGSharpTranslator
                     yield return this.TranslateProperty(property);
                     break;
 
+                case IndexerDeclarationSyntax indexer:
+                    yield return this.TranslateIndexer(indexer);
+                    break;
+
                 case ConstructorDeclarationSyntax ctor:
                     // T2: a fully-lifted constructor is dropped entirely; its field
                     // initialization moved to field initializers / primary-ctor
@@ -1039,15 +1043,61 @@ public sealed class CSharpToGSharpTranslator
 
         private List<PropertyAccessor> MapAccessors(PropertyDeclarationSyntax node)
         {
+            return this.MapAccessors(node, $"property '{node.Identifier.Text}'");
+        }
+
+        private (GMember Member, bool IsStatic) TranslateIndexer(IndexerDeclarationSyntax node)
+        {
+            // ADR-0118 / issue #944: a C# indexer (`public T this[int i] => ...`)
+            // maps to the canonical G# indexer member (`prop this[i int32] T`).
+            var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
+            bool isStatic = symbol != null && symbol.IsStatic;
+
+            GTypeReference type = symbol != null
+                ? this.typeMapper.Map(symbol.Type, this.context, node.GetLocation())
+                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+
+            List<Parameter> indexParameters = symbol != null
+                ? symbol.Parameters.Select(this.MapParameter).ToList()
+                : this.MapParameterList(node.ParameterList);
+
+            List<PropertyAccessor> accessors = this.MapAccessors(node, "indexer 'this[]'");
+
+            bool isOverride = symbol != null && symbol.IsOverride;
+            bool inInterface = symbol?.ContainingType?.TypeKind == TypeKind.Interface;
+            bool isOpen = symbol != null && (symbol.IsVirtual || symbol.IsAbstract) && !symbol.IsOverride && !inInterface;
+
+            var property = new PropertyDeclaration(
+                "this",
+                type,
+                accessors: accessors,
+                visibility: MapVisibility(symbol, this.context, node),
+                isOpen: isOpen,
+                isOverride: isOverride,
+                attributes: this.MapAttributes(node.AttributeLists),
+                indexerParameters: indexParameters);
+
+            return (property, isStatic);
+        }
+
+        private List<PropertyAccessor> MapAccessors(BasePropertyDeclarationSyntax node, string displayName)
+        {
             // An expression-bodied property (=> expr) is a get-only computed
             // property; its body is deferred to step 7 (ADR-0115 §B.11).
-            if (node.ExpressionBody != null)
+            ArrowExpressionClauseSyntax expressionBody = node switch
+            {
+                PropertyDeclarationSyntax p => p.ExpressionBody,
+                IndexerDeclarationSyntax i => i.ExpressionBody,
+                _ => null,
+            };
+
+            if (expressionBody != null)
             {
                 return new List<PropertyAccessor>
                 {
                     new PropertyAccessor(
                         AccessorKind.Get,
-                        this.TranslateBody(node, $"property '{node.Identifier.Text}' getter")),
+                        this.TranslateBody(node, $"{displayName} getter")),
                 };
             }
 
@@ -1083,7 +1133,7 @@ public sealed class CSharpToGSharpTranslator
                     // get/set); map to 'set' and record the discovered gap.
                     this.context.Report(new TranslationDiagnostic(
                         nameof(SyntaxKind.InitAccessorDeclaration),
-                        $"property '{node.Identifier.Text}' uses an 'init' accessor; G# has no 'init' accessor, mapped to 'set' (discovered gap, ADR-0115 §B.11).",
+                        $"{displayName} uses an 'init' accessor; G# has no 'init' accessor, mapped to 'set' (discovered gap, ADR-0115 §B.11).",
                         accessor.GetLocation(),
                         TranslationSeverity.Info));
                     kind = AccessorKind.Set;
@@ -1097,7 +1147,7 @@ public sealed class CSharpToGSharpTranslator
                 BlockStatement body = bodied
                     ? this.TranslateBody(
                         accessor,
-                        $"property '{node.Identifier.Text}' {kind.ToString().ToLowerInvariant()}ter")
+                        $"{displayName} {kind.ToString().ToLowerInvariant()}ter")
                     : null;
                 accessors.Add(new PropertyAccessor(kind, body));
             }

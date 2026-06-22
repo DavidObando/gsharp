@@ -247,12 +247,28 @@ namespace Demo
     }
 
     /// <summary>
-    /// ADR-0115 §B.11 gap: a C# indexer has no canonical G# member form (and a
-    /// declaration crashes gsc, GS9998), so it surfaces as a clean
-    /// <see cref="TranslationSeverity.Unsupported"/> diagnostic.
+    /// ADR-0118 / issue #944 (resolves the ADR-0115 §B.11 gap): a C# indexer
+    /// now maps to the canonical G# indexer member (<c>prop this[i int32] T</c>),
+    /// so it no longer surfaces as an unsupported diagnostic.
     /// </summary>
     [Fact]
-    public void Indexer_SurfacesAsUnsupported()
+    public void Indexer_TranslatesToCanonicalIndexerMember()
+    {
+        string translated = TranslateUnit(@"
+namespace Demo
+{
+    public sealed class IndexHost
+    {
+        private readonly int[] data = new int[4];
+        public int this[int i] => this.data[i];
+    }
+}");
+
+        Assert.Contains("prop this[i int32] int32", translated);
+    }
+
+    [Fact]
+    public void Indexer_DoesNotSurfaceAsUnsupported()
     {
         TranslationContext context = TranslateForDiagnostics(@"
 namespace Demo
@@ -264,7 +280,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains(
+        Assert.DoesNotContain(
             context.Diagnostics,
             d => d.IsUnsupported && d.ConstructKind == "IndexerDeclaration");
     }

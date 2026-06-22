@@ -93,6 +93,20 @@ public sealed class PropertySymbol : Symbol
     /// <summary>Gets or sets the synthesized setter function symbol.</summary>
     public FunctionSymbol SetterSymbol { get; set; }
 
+    /// <summary>
+    /// Gets a value indicating whether this property is an indexer member
+    /// (ADR-0118 / issue #944). Indexers are emitted as the CLR default
+    /// member named <c>Item</c> with index parameters.
+    /// </summary>
+    public bool IsIndexer { get; init; }
+
+    /// <summary>
+    /// Gets the index parameters of an indexer member (ADR-0118). Empty for an
+    /// ordinary property.
+    /// </summary>
+    public System.Collections.Immutable.ImmutableArray<ParameterSymbol> Parameters { get; init; }
+        = System.Collections.Immutable.ImmutableArray<ParameterSymbol>.Empty;
+
     /// <summary>Gets or sets the getter accessor body syntax (for computed properties). Null for auto-properties.</summary>
     public Syntax.BlockStatementSyntax GetterBodySyntax { get; set; }
 
