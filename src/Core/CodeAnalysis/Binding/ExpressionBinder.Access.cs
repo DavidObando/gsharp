@@ -2462,10 +2462,9 @@ internal sealed partial class ExpressionBinder
                 {
                     var methodName = callSyntax.Identifier.Text;
                     FunctionSymbol slot = null;
-                    foreach (var candidate in tpSym.InterfaceConstraint.StaticMethods)
+                    foreach (var candidate in TypeMemberModel.GetMethods(tpSym.InterfaceConstraint, methodName, MemberQuery.Static(MemberKinds.Method)))
                     {
-                        if (candidate.Name == methodName
-                            && candidate.Parameters.Length == callSyntax.Arguments.Count)
+                        if (candidate.Parameters.Length == callSyntax.Arguments.Count)
                         {
                             slot = candidate;
                             break;

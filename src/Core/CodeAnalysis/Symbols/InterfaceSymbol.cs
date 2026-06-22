@@ -411,6 +411,23 @@ public sealed class InterfaceSymbol : TypeSymbol
         Declaration = declaration;
     }
 
+    /// <summary>
+    /// Ensures the lazy member tables (<see cref="Methods"/>, <see cref="StaticMethods"/>,
+    /// <see cref="PrivateMethods"/>, <see cref="StaticPrivateMethods"/>) of a constructed
+    /// generic interface instance have been substituted/populated. Idempotent. Exposed as
+    /// <c>internal</c> (ADR-0112 A9) so <see cref="TypeMemberModel"/> can guarantee the same
+    /// resolution the per-accessor getters perform before enumerating member tables directly.
+    /// </summary>
+    internal void EnsureMembersResolved()
+    {
+        if (membersResolved)
+        {
+            return;
+        }
+
+        TryResolveMembers();
+    }
+
     private static string BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments)
     {
         var parts = new string[typeArguments.Length];
@@ -559,16 +576,6 @@ public sealed class InterfaceSymbol : TypeSymbol
         }
 
         membersResolved = true;
-    }
-
-    private void EnsureMembersResolved()
-    {
-        if (membersResolved)
-        {
-            return;
-        }
-
-        TryResolveMembers();
     }
 
     private static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> subst)
