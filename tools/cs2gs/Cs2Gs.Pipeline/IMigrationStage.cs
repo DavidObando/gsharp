@@ -77,6 +77,13 @@ public sealed class StageExecutionContext
 
     /// <summary>Gets the G# files emitted by the Translate stage for downstream stages.</summary>
     public List<EmittedGsFile> EmittedFiles { get; } = new List<EmittedGsFile>();
+
+    /// <summary>
+    /// Gets or sets the absolute path of the assembly emitted by the Compile
+    /// stage, published for the IL-verify stage to read (ADR-0115 §C). It is
+    /// <see langword="null"/> until a green stage-2 compile has run.
+    /// </summary>
+    public string EmittedAssemblyPath { get; set; }
 }
 
 /// <summary>

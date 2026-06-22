@@ -46,14 +46,16 @@ public sealed class MigrationPipeline
     public IReadOnlyList<IMigrationStage> Stages { get; }
 
     /// <summary>
-    /// Gets the default ordered stage list (stages 1–2). Steps that add IL-verify
-    /// and test-parity append their stages after these.
+    /// Gets the default ordered stage list (stages 1–3:
+    /// <see cref="TranslateStage"/> → <see cref="CompileStage"/> →
+    /// <see cref="IlVerifyStage"/>). The test-parity stage appends after these.
     /// </summary>
     /// <returns>The default ordered stages.</returns>
     public static IReadOnlyList<IMigrationStage> DefaultStages() => new IMigrationStage[]
     {
         new TranslateStage(),
         new CompileStage(),
+        new IlVerifyStage(),
     };
 
     /// <summary>
@@ -301,6 +303,12 @@ public sealed class MigrationPipeline
             return triage.CompileError(
                 new GscDiagnostic("GS9999", "stage crashed: " + ex.Message, "error", null, 1, 1),
                 null);
+        }
+
+        if (stage == MigrationStageKind.IlVerify)
+        {
+            return triage.IlVerifyFailure(
+                new IlVerifyError("IlVerifyError", null, "ilverify stage crashed: " + ex.Message));
         }
 
         var diagnostic = new Translator.TranslationDiagnostic(

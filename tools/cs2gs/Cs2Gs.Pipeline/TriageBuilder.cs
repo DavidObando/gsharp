@@ -193,6 +193,58 @@ public sealed class TriageBuilder
         return artifact;
     }
 
+    /// <summary>
+    /// Builds a stage-3 <c>ilverify-failure</c> artifact from a single parsed
+    /// <c>ilverify</c> error (ADR-0115 §C/§D). The diagnostic id is the ilverify
+    /// error code; the offending construct kind is the failing IL method
+    /// skeleton (the best available signal, since the translator keeps no
+    /// per-line C#↔G# map yet — a documented fallback when the method is
+    /// absent). The C#/G# source positions are <see langword="null"/> for the
+    /// same reason. Labels are <c>Oats</c> + <c>cil-emit</c> (§D).
+    /// </summary>
+    /// <param name="error">The parsed ilverify error.</param>
+    /// <param name="gsFile">The emitted G# file (relative path), or null.</param>
+    /// <returns>The populated triage artifact.</returns>
+    public TriageArtifact IlVerifyFailure(IlVerifyError error, string gsFile = null)
+    {
+        if (error is null)
+        {
+            throw new ArgumentNullException(nameof(error));
+        }
+
+        string kind = string.IsNullOrWhiteSpace(error.Method) ? "IlMethod" : error.Method;
+
+        var artifact = this.NewArtifact(MigrationStageKind.IlVerify, TriageCategory.IlVerifyFailure);
+        artifact.Diagnostic = new TriageDiagnostic
+        {
+            Id = string.IsNullOrWhiteSpace(error.Code) ? "IlVerifyError" : error.Code,
+            Message = error.RawLine,
+            Severity = "error",
+        };
+        artifact.SourceLocation = new TriageSourceLocation
+        {
+            GsFile = gsFile,
+            GsLine = null,
+            GsColumn = null,
+            CsFile = null,
+            CsLine = null,
+            CsColumn = null,
+        };
+        artifact.OffendingCSharpConstruct = new TriageOffendingConstruct
+        {
+            Kind = kind,
+            Snippet = Truncate(error.Method ?? error.RawLine),
+        };
+        artifact.Fingerprint = Fingerprint.Compute(
+            artifact.Category,
+            artifact.Stage,
+            artifact.Diagnostic.Id,
+            artifact.OffendingCSharpConstruct.Kind,
+            artifact.OffendingCSharpConstruct.Snippet);
+        artifact.SuggestedIssue = this.IlVerifyIssue(artifact);
+        return artifact;
+    }
+
     private static (string File, int? Line, int? Column, string Snippet) ResolveCSharpLocation(Location location)
     {
         if (location is null || !location.IsInSource)
@@ -334,6 +386,37 @@ public sealed class TriageBuilder
         };
         issue.Labels.Add("Oats");
         issue.Labels.Add("bug");
+        return issue;
+    }
+
+    private TriageSuggestedIssue IlVerifyIssue(TriageArtifact artifact)
+    {
+        string title = $"[cs2gs] ilverify {artifact.Diagnostic.Id} in translated {this.CorpusAppId} " +
+            $"({artifact.OffendingCSharpConstruct.Kind})";
+        string repro = "**Reproduction:** `cs2gs migrate` translates the corpus app, compiles it with `gsc`, " +
+            "then runs `dotnet tool run ilverify <assembly> -s System.Private.CoreLib -r <refs>` which surfaces this error.";
+        string[] lines =
+        {
+            $"The assembly emitted for **{this.CorpusAppId}** fails IL verification with " +
+                $"`dotnet-ilverify` (gsc {this.GscVersion}).",
+            string.Empty,
+            $"- Error code: `{artifact.Diagnostic.Id}`",
+            $"- Method: `{artifact.OffendingCSharpConstruct.Kind}`",
+            $"- ilverify: `{artifact.Diagnostic.Message}`",
+            string.Empty,
+            "This is a CIL-emission gap: `gsc` accepted the program but produced IL the verifier rejects " +
+                "(and the error is not one of the two documented ilverify false-positive bundles).",
+            repro,
+            $"**Fingerprint:** `{artifact.Fingerprint}`",
+        };
+
+        var issue = new TriageSuggestedIssue
+        {
+            Title = title,
+            Body = string.Join("\n", lines),
+        };
+        issue.Labels.Add("Oats");
+        issue.Labels.Add("cil-emit");
         return issue;
     }
 }

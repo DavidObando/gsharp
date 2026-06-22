@@ -140,7 +140,12 @@ public class MigrationPipelineTests
         string corpus = ResolveCorpusDir();
         string outRoot = NewOutputRoot("l1-green");
         var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
-        var pipeline = new MigrationPipeline(options);
+
+        // Pin to stages 1–2 so this test stays focused on the compile gate
+        // regardless of the default stage list (which now also runs ilverify).
+        var pipeline = new MigrationPipeline(
+            options,
+            new IMigrationStage[] { new TranslateStage(), new CompileStage() });
 
         CorpusApp l1 = CorpusDiscovery.FindById(corpus, "corpus/L1-Console");
         Assert.NotNull(l1);

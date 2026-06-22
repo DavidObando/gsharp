@@ -53,6 +53,8 @@ public sealed class CompileStage : IMigrationStage
 
         if (result.Succeeded)
         {
+            // Publish the emitted assembly path for the downstream IL-verify stage.
+            context.EmittedAssemblyPath = outputPath;
             return Task.FromResult(StageOutcome.Passed());
         }
 
