@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="00000000-0000-0000-0000-000000000001" name="sample" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult testId="11111111-1111-1111-1111-111111111111" testName="Sample.Tests.CalculatorTests.Add_Cases(a: 1, b: 2, expected: 3)" outcome="Passed" duration="00:00:00.0010000" />
+    <UnitTestResult testId="22222222-2222-2222-2222-222222222222" testName="Sample.Tests.CalculatorTests.Add_Cases(a: 2, b: 2, expected: 4)" outcome="Passed" duration="00:00:00.0010000" />
+    <UnitTestResult testId="33333333-3333-3333-3333-333333333333" testName="Sample.Tests.CalculatorTests.Add_Returns_Sum" outcome="Passed" duration="00:00:00.0010000" />
+    <UnitTestResult testId="44444444-4444-4444-4444-444444444444" testName="Sample.Tests.CalculatorTests.Subtract_Returns_Difference" outcome="Passed" duration="00:00:00.0010000" />
+  </Results>
+  <ResultSummary outcome="Completed">
+    <Counters total="4" executed="4" passed="4" failed="0" />
+  </ResultSummary>
+</TestRun>

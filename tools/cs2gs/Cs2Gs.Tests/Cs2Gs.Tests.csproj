@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>Cs2Gs.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="@(CoverletCollectorPackageReference)" />
+    <PackageReference Include="@(MicrosoftNetTestSdkPackageReference)" />
+    <PackageReference Include="@(XunitPackageReference)" />
+    <PackageReference Include="@(XunitRunnerVisualStudioPackageReference)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cs2Gs.CodeModel\Cs2Gs.CodeModel.csproj" />
+    <ProjectReference Include="..\Cs2Gs.Translator\Cs2Gs.Translator.csproj" />
+    <ProjectReference Include="..\Cs2Gs.Pipeline\Cs2Gs.Pipeline.csproj" />
+    <ProjectReference Include="..\Cs2Gs.Report\Cs2Gs.Report.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

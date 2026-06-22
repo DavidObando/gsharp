@@ -1,0 +1,35 @@
+<Project>
+
+  <!--
+    Isolation boundary for the cs2gs C# corpus.
+
+    This file deliberately does NOT import the repository-root
+    Directory.Build.props (../../../Directory.Build.props). MSBuild walks the
+    directory tree upward and stops at the FIRST Directory.Build.props it finds,
+    so its mere presence here severs the corpus from the repo's shared build:
+
+      * no StyleCop.Analyzers,
+      * no TreatWarningsAsErrors=true,
+      * no AssemblyName => GSharp.<Project> rewrite,
+      * no Nerdbank.GitVersioning / packaging / OutputPath redirection.
+
+    The corpus is ORDINARY, idiomatic C# - the *input* the migration tool
+    translates to G#. It must build and behave like a normal app a user wrote,
+    not like product code. Keeping it isolated guarantees that.
+
+    Shared, intentionally vanilla defaults for every corpus project:
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <!-- Keep build artifacts local to each project; do not redirect into the
+         repo's out/ tree the way build/gsharp.build.props does. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

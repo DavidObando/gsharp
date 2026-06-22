@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "1.0",
+  "app": "L2-Library.Tests",
+  "framework": "xunit",
+  "total": 14,
+  "passed": 14,
+  "failed": 0,
+  "skipped": 0,
+  "tests": [
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.Circle_Area_And_Perimeter",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.Dimensions_Init_Properties",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.Geometry_Round_Default_Digits(value: 1.2344999999999999, expected: 1.23)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.Geometry_Round_Default_Digits(value: 1.2355, expected: 1.24)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.Geometry_Round_Default_Digits(value: 2.5, expected: 2.5)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.Geometry_ToCents_Rounds_Half_Up(dollars: 1.234, expectedCents: 123)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.Geometry_ToCents_Rounds_Half_Up(dollars: 9.9900000000000002, expectedCents: 999)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.Geometry_TotalArea_Overloads",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.Point_DistanceTo_Is_Euclidean",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.RecordStruct_Has_Structural_Equality",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.Record_Has_Structural_Equality_And_With",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.Rectangle_Area_From_Dimensions(width: 0, height: 9, expectedArea: 0)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.Rectangle_Area_From_Dimensions(width: 2.5, height: 2, expectedArea: 5)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L2.Tests.ShapesTests.Rectangle_Area_From_Dimensions(width: 3, height: 4, expectedArea: 12)",
+      "outcome": "Passed"
+    }
+  ]
+}

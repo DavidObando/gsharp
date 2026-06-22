@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>Cs2Gs.Cli</RootNamespace>
+    <AssemblyName>cs2gs</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cs2Gs.Pipeline\Cs2Gs.Pipeline.csproj" />
+    <ProjectReference Include="..\Cs2Gs.Report\Cs2Gs.Report.csproj" />
+  </ItemGroup>
+
+</Project>

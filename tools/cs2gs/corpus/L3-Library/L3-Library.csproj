@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Corpus.L3</RootNamespace>
+    <AssemblyName>L3-Library</AssemblyName>
+  </PropertyGroup>
+
+</Project>
