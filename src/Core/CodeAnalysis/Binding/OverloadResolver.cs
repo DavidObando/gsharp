@@ -2455,7 +2455,7 @@ internal sealed class OverloadResolver
             if (getCurrentFunction()?.ThisParameter != null
                 && getCurrentFunction().ReceiverType is StructSymbol implicitReceiverStruct)
             {
-                var implicitOverloads = implicitReceiverStruct.GetMethodsIncludingInherited(syntax.Identifier.Text);
+                var implicitOverloads = TypeMemberModel.GetMethods(implicitReceiverStruct, syntax.Identifier.Text, MemberQuery.Instance(MemberKinds.Method));
                 if (implicitOverloads.Length > 0)
                 {
                     var implicitMethod = SelectInstanceOverloadOrReport(implicitOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.Text, argumentNames);

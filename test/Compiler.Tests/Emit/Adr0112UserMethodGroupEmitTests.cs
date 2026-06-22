@@ -135,6 +135,63 @@ public class Adr0112UserMethodGroupEmitTests
         Assert.Equal("21\n", CompileAndRun(source));
     }
 
+    [Fact]
+    public void InheritedInstanceMethodGroup_ViaReceiver_EmitsAndRuns()
+    {
+        // ADR-0112 A6: the method group resolves an instance method inherited
+        // from a base class through TypeMemberModel.GetMethods' this-first base
+        // walk (formerly StructSymbol.GetMethodsIncludingInherited). Unique type
+        // names avoid FunctionTypeSymbol.Cache aliasing across in-process runs.
+        var source = """
+            package P
+            import System
+
+            open class A6InhGroupBase {
+                var seed int32
+                func Seed() int32 { return seed }
+            }
+
+            class A6InhGroupDerived : A6InhGroupBase {
+            }
+
+            func A6UseSeed(f () -> int32) int32 { return f() }
+
+            var d = A6InhGroupDerived{ seed: 33 }
+            Console.WriteLine(A6UseSeed(d.Seed))
+            """;
+
+        Assert.Equal("33\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void InheritedBareInstanceMethodGroup_InsideDerivedMethod_EmitsAndRuns()
+    {
+        // ADR-0112 A6: the bare implicit-`this` method group inside a derived
+        // class method resolves a base-class instance method via the inherited
+        // base walk in TypeMemberModel.GetMethods.
+        var source = """
+            package P
+            import System
+
+            open class A6BareInhBase {
+                var amount int32
+                func Amount() int32 { return amount }
+            }
+
+            class A6BareInhDerived : A6BareInhBase {
+                func AsDelegate() int32 {
+                    var f () -> int32 = Amount
+                    return f()
+                }
+            }
+
+            var x = A6BareInhDerived{ amount: 17 }
+            Console.WriteLine(x.AsDelegate())
+            """;
+
+        Assert.Equal("17\n", CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_adr0112_emit_").FullName;
