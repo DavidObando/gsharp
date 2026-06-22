@@ -1149,8 +1149,25 @@ internal sealed partial class ExpressionBinder
 
         var arguments = boundArguments.ToImmutable();
 
-        if (structSym.TryGetStaticMethod(methodName, out var method))
+        // Issue #940: resolve static (shared) method overloads against the FULL
+        // method group by arity, parameter types, and ref-kinds — identical to
+        // the instance-method path — instead of taking the first by-name match
+        // and arity-checking it (which rejected every overload but the first,
+        // surfacing GS0144). The group is obtained through the ADR-0112
+        // canonical member-resolution layer; OverloadResolver selects the best
+        // candidate (and reports ambiguity / no-applicable-overload exactly as
+        // for instance methods). A single-candidate group is returned unchanged
+        // so the legacy per-position arity/optional/variadic diagnostics below
+        // still apply (e.g. genuine arity mismatch on a non-overloaded method).
+        var staticMethodGroup = TypeMemberModel.GetMethods(structSym, methodName, MemberQuery.Static(MemberKinds.Method));
+        if (!staticMethodGroup.IsDefaultOrEmpty)
         {
+            var method = overloads.SelectInstanceOverloadOrReport(staticMethodGroup, arguments, ce, methodName, argumentNames: default);
+            if (method == null)
+            {
+                return new BoundErrorExpression(null);
+            }
+
             // ADR-0101 follow-up / issue #812: a user-declared static method
             // may declare a trailing variadic parameter. Allow flexible
             // arity, infer the element type from trailing args (if generic),
