@@ -313,6 +313,95 @@ public class XunitAssertOverloadResolutionTests
             """);
     }
 
+    // --- Issue #932: lambda / func-literal predicate overloads (Predicate<T>) ---
+
+    [Fact]
+    public void AssertDoesNotContain_ArrowLambdaPredicate_ResolvesAndEmits()
+    {
+        // Issue #932: Assert.DoesNotContain<T>(IEnumerable<T>, Predicate<T>) was
+        // rejected with GS0159 because overload-resolution applicability had no
+        // rule for a lambda's natural Func<T,bool> converting to a *distinct*
+        // named delegate (Predicate<T>) with the same Invoke signature. The
+        // element type (System.Version) is a referenced type, so this compiles
+        // and emits end-to-end — the realistic xUnit test scenario.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import System
+            import System.Collections.Generic
+            import Xunit
+
+            class P {
+                @Fact
+                func DoesNotContainArrow() {
+                    var items = List[Version]()
+                    Assert.DoesNotContain(items, (v) -> v.Major == 3)
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void AssertContains_ArrowLambdaPredicate_ResolvesAndEmits()
+    {
+        // Issue #932: the analogous Assert.Contains<T>(IEnumerable<T>, Predicate<T>)
+        // overload must resolve from an arrow lambda the same way.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import System
+            import System.Collections.Generic
+            import Xunit
+
+            class P {
+                @Fact
+                func ContainsArrow() {
+                    var items = List[Version]()
+                    Assert.Contains(items, (v) -> v.Major == 3)
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void AssertDoesNotContain_FuncLiteralPredicate_ResolvesAndEmits()
+    {
+        // Issue #932: the explicit func-literal form must bind to Predicate<T>
+        // identically to the arrow form.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import System
+            import System.Collections.Generic
+            import Xunit
+
+            class P {
+                @Fact
+                func DoesNotContainFunc() {
+                    var items = List[Version]()
+                    Assert.DoesNotContain(items, func (v Version) bool { return v.Major == 3 })
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void AssertContains_FuncLiteralPredicate_ResolvesAndEmits()
+    {
+        // Issue #932: func-literal form of the Assert.Contains predicate overload.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import System
+            import System.Collections.Generic
+            import Xunit
+
+            class P {
+                @Fact
+                func ContainsFunc() {
+                    var items = List[Version]()
+                    Assert.Contains(items, func (v Version) bool { return v.Major == 3 })
+                }
+            }
+            """);
+    }
+
     private static void AssertGsCompilesCleanly(string source)
         => CompileGsAgainstReferences(source, ReferenceModeTpa);
 

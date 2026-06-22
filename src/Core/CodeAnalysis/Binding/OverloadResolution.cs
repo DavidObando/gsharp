@@ -129,6 +129,23 @@ internal static class OverloadResolution
         /// return type already matches the target.
         /// </summary>
         DelegateReturnCovariance = 10,
+
+        /// <summary>
+        /// Issue #932: a <c>func</c>/arrow literal (whose natural CLR type is a
+        /// <c>System.Func&lt;…&gt;</c>/<c>System.Action&lt;…&gt;</c>) converting
+        /// to a parameter typed as a *distinct* delegate with the same
+        /// <c>Invoke</c> signature — e.g. <c>Func&lt;T,bool&gt;</c> →
+        /// <c>Predicate&lt;T&gt;</c>, <c>Func&lt;T,U&gt;</c> →
+        /// <c>Converter&lt;T,U&gt;</c>, or any named CLR delegate. Mirrors C#'s
+        /// rule that an anonymous function converts to any delegate type whose
+        /// signature it matches, not just <c>Func</c>/<c>Action</c>. Ranked last
+        /// (worst) so an exact (identity) delegate match always wins when both a
+        /// <c>Func</c>/<c>Action</c> overload and a named-delegate overload are
+        /// applicable. The binder's func→delegate materialization
+        /// (<c>Conversion.Classify</c> / <c>IsFunctionToDelegateConvertible</c>)
+        /// constructs the target delegate for the selected literal argument.
+        /// </summary>
+        DelegateSignatureMatch = 11,
     }
 
     /// <summary>
@@ -272,6 +289,20 @@ internal static class OverloadResolution
         if (IsDelegateReturnCovariant(target, source))
         {
             return ImplicitConversionKind.DelegateReturnCovariance;
+        }
+
+        // Issue #932: a func/arrow literal (natural type System.Func<…>/Action<…>)
+        // is applicable to a *distinct* delegate parameter that shares its Invoke
+        // signature — e.g. Func<T,bool> → Predicate<T>, Action → a named void
+        // delegate — mirroring C#'s "anonymous function converts to any
+        // signature-compatible delegate type" rule. Checked here, before the
+        // assignability / base-type-walk blocks below, because the literal's
+        // natural Func<> may be closed over MetadataLoadContext type arguments on
+        // which those reflection probes throw. Ranked last so an exact (identity)
+        // delegate match always wins when both overloads are applicable.
+        if (IsDelegateSignatureMatch(target, source))
+        {
+            return ImplicitConversionKind.DelegateSignatureMatch;
         }
 
         if (ReferenceEquals(target.Assembly, source.Assembly) || target.GetType() == source.GetType())
@@ -1162,6 +1193,76 @@ internal static class OverloadResolution
         }
 
         // Parameter signatures must match exactly (by name, cross-context safe).
+        if (targetParams.Length != sourceParams.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < targetParams.Length; i++)
+        {
+            if (!ClrTypeUtilities.AreSame(targetParams[i], sourceParams[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #932: determines whether <paramref name="source"/> is a delegate
+    /// type whose <c>Invoke</c> signature is identical to delegate
+    /// <paramref name="target"/> but whose delegate type differs — i.e. a
+    /// func/arrow literal (natural type <c>System.Func&lt;…&gt;</c> /
+    /// <c>System.Action&lt;…&gt;</c>) being passed to a *named* delegate
+    /// parameter with the same parameter types and return type
+    /// (<c>Func&lt;T,bool&gt;</c> → <c>Predicate&lt;T&gt;</c>,
+    /// <c>Func&lt;T,U&gt;</c> → <c>Converter&lt;T,U&gt;</c>, <c>Action</c> →
+    /// a named void delegate). Identity (same delegate type) is handled by the
+    /// caller's identity check; return-type covariance is handled by
+    /// <see cref="IsDelegateReturnCovariant"/>. This rule covers the remaining
+    /// "same signature, different delegate family" case. Parameter and return
+    /// types are compared by name so it is safe across reflection contexts (the
+    /// target delegate is typically loaded through a
+    /// <see cref="System.Reflection.MetadataLoadContext"/> while the literal's
+    /// natural <c>Func&lt;…&gt;</c> is a host-runtime constructed type).
+    /// </summary>
+    /// <param name="target">The candidate delegate parameter type.</param>
+    /// <param name="source">The argument's natural delegate type.</param>
+    /// <returns><see langword="true"/> when the signature-compatible conversion applies.</returns>
+    private static bool IsDelegateSignatureMatch(Type target, Type source)
+    {
+        if (!ClrTypeUtilities.IsDelegateType(target) || !ClrTypeUtilities.IsDelegateType(source))
+        {
+            return false;
+        }
+
+        // Identity (same delegate type) is handled by the caller's identity
+        // check; this rule only covers distinct delegate families.
+        if (ClrTypeUtilities.AreSame(target, source))
+        {
+            return false;
+        }
+
+        if (!TryGetDelegateSignature(target, out var targetParams, out var targetReturn)
+            || !TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn))
+        {
+            return false;
+        }
+
+        if (targetReturn is null || sourceReturn is null)
+        {
+            return false;
+        }
+
+        // Return types must match exactly. Differing (covariant) return types are
+        // handled by IsDelegateReturnCovariant, so they are deliberately excluded
+        // here to keep the two rules mutually exclusive.
+        if (!ClrTypeUtilities.AreSame(targetReturn, sourceReturn))
+        {
+            return false;
+        }
+
         if (targetParams.Length != sourceParams.Length)
         {
             return false;
