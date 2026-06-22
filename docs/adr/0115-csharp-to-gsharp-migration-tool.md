@@ -82,6 +82,8 @@ The immutability decision is driven by Roslyn's definite-assignment/data-flow an
 
 When **every** constructor parameter is consumed by exactly one direct `_f = param` assignment, the explicit constructor is **dropped entirely** (its remaining `_f = expr` statements have all become field initializers). If any statement does not fit the pattern (a non-assignment statement, a parameter used in an expression, a duplicate/unconsumed parameter, multiple constructors, a record) the constructor is left untouched and translated as-is — and, since issue #947, the resulting `let` field assigned inside the explicit `init(...)` is now **valid, compiling G#** rather than a `GS0127` error. Chosen over option (b) (a privacy-preserving `var` field) because for L1 the primary-constructor form yields clean, idiomatic G# when liftable; the public-visibility change is recorded for the human to review.
 
+Since issue #948, the inline field initializers the translator emits here — `private let _f T = expr` from a lifted constructor assignment, a `var`/`let` field carrying a C# field initializer, and `const _f T = expr` from a C# `const` field — are **directly compiling G#**: the G# compiler honors inline `const`/`let`/`var` field initializers in a type body, running instance initializers before each constructor body and folding `const` initializers to compile-time literal fields. No constructor-assignment workaround is needed for these forms.
+
 #### B.4 `class` vs `struct` vs `data class` vs `data struct` — ADR-0029, ADR-0025, ADR-0078, spec §Structs…
 
 | C# | G# |

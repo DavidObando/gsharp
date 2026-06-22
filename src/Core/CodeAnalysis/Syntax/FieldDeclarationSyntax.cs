@@ -68,9 +68,20 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
 
     /// <summary>
     /// Gets a value indicating whether this field was declared with the
-    /// <c>let</c> keyword and is therefore read-only (ADR-0067).
+    /// <c>let</c> keyword and is therefore read-only (ADR-0067). A
+    /// <c>const</c> field (Issue #948) is also read-only; see
+    /// <see cref="IsConst"/>.
     /// </summary>
-    public bool IsReadOnly => VarOrLetKeyword != null && VarOrLetKeyword.Kind == SyntaxKind.LetKeyword;
+    public bool IsReadOnly => VarOrLetKeyword != null
+        && (VarOrLetKeyword.Kind == SyntaxKind.LetKeyword || VarOrLetKeyword.Kind == SyntaxKind.ConstKeyword);
+
+    /// <summary>
+    /// Gets a value indicating whether this field was declared with the
+    /// <c>const</c> keyword (Issue #948) and is therefore a compile-time
+    /// constant: implicitly static, read-only, and emitted as a literal
+    /// field whose initializer must be a constant expression.
+    /// </summary>
+    public bool IsConst => VarOrLetKeyword != null && VarOrLetKeyword.Kind == SyntaxKind.ConstKeyword;
 
     /// <summary>Gets the field identifier.</summary>
     public SyntaxToken Identifier { get; }

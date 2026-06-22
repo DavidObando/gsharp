@@ -435,6 +435,25 @@ public sealed class Lowerer : BoundTreeRewriter
     }
 
     /// <inheritdoc/>
+    /// <summary>
+    /// Issue #948: a <c>const</c> field read has no runtime storage — inline it
+    /// as the compile-time constant literal so all downstream paths (value
+    /// loads, value-type method-call receivers needing an address, etc.) treat
+    /// it uniformly. Matches C# const-read semantics.
+    /// </summary>
+    /// <param name="node">The field-access node.</param>
+    /// <returns>A literal for const fields; otherwise the base rewrite.</returns>
+    protected override BoundExpression RewriteFieldAccessExpression(BoundFieldAccessExpression node)
+    {
+        if (node.Field.IsConst)
+        {
+            return new BoundLiteralExpression(null, node.Field.ConstantValue, node.Field.Type);
+        }
+
+        return base.RewriteFieldAccessExpression(node);
+    }
+
+    /// <inheritdoc/>
     protected override BoundExpression RewritePropertyAccessExpression(BoundPropertyAccessExpression node)
     {
         // ADR-0051: auto-properties lower to backing field access, but ONLY when

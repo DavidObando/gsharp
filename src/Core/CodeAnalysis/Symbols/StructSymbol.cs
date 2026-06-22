@@ -222,6 +222,16 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the static fields declared inside a <c>shared</c> block (ADR-0053). Populated by the binder; defaults to empty.</summary>
     public ImmutableArray<FieldSymbol> StaticFields { get; private set; } = ImmutableArray<FieldSymbol>.Empty;
 
+    /// <summary>
+    /// Gets the compile-time constant fields declared with <c>const</c>
+    /// (Issue #948). Const fields are implicitly static and read-only; they are
+    /// emitted as CLR <c>literal</c> fields with a <c>Constant</c> row and their
+    /// reads are inlined. Held separately from <see cref="StaticFields"/> so the
+    /// emitter never produces a runtime static field or a <c>.cctor</c>
+    /// assignment for them. Populated by the binder; defaults to empty.
+    /// </summary>
+    public ImmutableArray<FieldSymbol> ConstFields { get; private set; } = ImmutableArray<FieldSymbol>.Empty;
+
     /// <summary>Gets the static methods declared inside a <c>shared</c> block (ADR-0053). Populated by the binder; defaults to empty.</summary>
     public ImmutableArray<FunctionSymbol> StaticMethods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
 
@@ -426,6 +436,13 @@ public sealed class StructSymbol : TypeSymbol
         StaticFields = fields;
     }
 
+    /// <summary>Sets <see cref="ConstFields"/> after binding <c>const</c> field declarations (Issue #948).</summary>
+    /// <param name="fields">The bound const field symbols owned by this type.</param>
+    public void SetConstFields(ImmutableArray<FieldSymbol> fields)
+    {
+        ConstFields = fields;
+    }
+
     /// <summary>Sets <see cref="StaticMethods"/> after binding shared-block method declarations (ADR-0053).</summary>
     /// <param name="methods">The bound static method symbols owned by this type.</param>
     public void SetStaticMethods(ImmutableArray<FunctionSymbol> methods)
@@ -470,6 +487,20 @@ public sealed class StructSymbol : TypeSymbol
         if (!StaticFields.IsDefaultOrEmpty)
         {
             foreach (var f in StaticFields)
+            {
+                if (f.Name == name)
+                {
+                    field = f;
+                    return true;
+                }
+            }
+        }
+
+        // Issue #948: const fields are static for lookup purposes (accessed as
+        // `Type.Name`), even though they are emitted as literal fields.
+        if (!ConstFields.IsDefaultOrEmpty)
+        {
+            foreach (var f in ConstFields)
             {
                 if (f.Name == name)
                 {

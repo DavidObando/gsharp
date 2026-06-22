@@ -524,6 +524,45 @@ keep their existing behavior: they are assignable only through their declaration
 initializer (materialized into the synthesized static constructor), since G#
 exposes no user-authored static constructor body.
 
+#### Inline field initializers (issue #948)
+
+Any `const`, `let`, or `var` field in a type body may carry an inline
+initializer with the `= expr` suffix:
+
+```gsharp
+class Foo {
+  const one string = "value"
+  let two string = "something"
+  var three string = "this should work"
+}
+```
+
+The semantics match C#:
+
+* An **instance** field initializer (`let`/`var x T = expr`) runs as part of
+  **every** instance constructor, **before** the constructor body, in textual
+  declaration order. This holds for a primary constructor, each explicit
+  `init(...)` constructor, and the synthesized default constructor when no
+  constructor is declared. Because the initializer runs before the constructor
+  body, it may not reference `this`, another instance member of the same object,
+  or a constructor parameter; doing so reports `GS0377` (assign such fields in an
+  `init(...)` body instead). A `var` field initialized inline may still be
+  overwritten by a later `init(...)` body.
+* A `let` field initializer counts as a construction-time write, so it composes
+  with the `initonly` emission described above (the field remains read-only).
+* A **static** field initializer (a `let`/`var` inside a `shared { ... }` block)
+  runs in the static constructor (`.cctor`) in declaration order.
+* A **`const`** field is a **compile-time constant**: it is implicitly static and
+  read-only, its initializer must fold to a constant expression, and it is
+  emitted as a CLR literal field (a `Constant` metadata row) usable in constant
+  contexts and from other assemblies. A `const` field with no initializer reports
+  `GS0375`; a `const` field whose initializer is not a constant expression reports
+  `GS0376`.
+* For **value types** (`struct` / `data struct`), which have no class-style
+  constructor that could run inline initializers, a composite struct literal
+  (`Pt{ ... }`) zero-initializes the storage and then applies each declared field
+  initializer for any field the literal omitted, in declaration order.
+
 ## Expressions
 
 ### Precedence

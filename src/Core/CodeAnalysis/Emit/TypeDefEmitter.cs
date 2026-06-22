@@ -288,6 +288,33 @@ internal sealed class TypeDefEmitter
             }
         }
 
+        // Issue #948: emit const fields as CLR literal fields (Static | Literal
+        // | HasDefault) carrying a Constant row. Their reads are inlined by the
+        // method-body emitter, so no .cctor assignment is generated.
+        if (!structSym.ConstFields.IsDefaultOrEmpty)
+        {
+            foreach (var constField in structSym.ConstFields)
+            {
+                var sigBlob = new BlobBuilder();
+                this.encodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), constField.Type);
+                var attrs = AccessibilityMap.MapFieldAccessibility(constField.Accessibility)
+                    | FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.HasDefault;
+
+                var handle = this.emitCtx.Metadata.AddFieldDefinition(
+                    attributes: attrs,
+                    name: this.emitCtx.Metadata.GetOrAddString(constField.Name),
+                    signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+                if (firstField.IsNil)
+                {
+                    firstField = handle;
+                }
+
+                this.emitCtx.Metadata.AddConstant(handle, constField.ConstantValue);
+                this.cache.StructFieldDefs[constField] = handle;
+                this.emitUserAttributes(handle, constField, AttributeTargetKind.Field);
+            }
+        }
+
         // Issue #263: emit backing FieldDefs for static auto-properties.
         foreach (var prop in structSym.StaticProperties)
         {

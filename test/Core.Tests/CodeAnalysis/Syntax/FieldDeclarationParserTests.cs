@@ -134,4 +134,41 @@ public class FieldDeclarationParserTests
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
+
+    [Fact]
+    public void ParsesConstField_WithInitializer()
+    {
+        // Issue #948: `const` fields are accepted in a type body and carry an
+        // initializer; they are implicitly read-only.
+        const string source = "package P\nclass Counter {\n  const Max int32 = 10\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var field = Assert.Single(structDecl.Fields);
+        Assert.Equal("Max", field.Identifier.Text);
+        Assert.True(field.IsConst);
+        Assert.True(field.IsReadOnly);
+        Assert.NotNull(field.Initializer);
+        Assert.Equal(SyntaxKind.ConstKeyword, field.VarOrLetKeyword.Kind);
+    }
+
+    [Fact]
+    public void ParsesConstField_InSharedBlock()
+    {
+        const string source = "package P\nclass Counter {\n  shared {\n    const Max int32 = 10\n  }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+    }
+
+    [Fact]
+    public void BareField_GS0288_MentionsConst()
+    {
+        // Issue #948: the GS0288 guidance now also mentions `const`.
+        const string source = "package P\nclass Counter {\n  Value int32\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        var diagnostic = Assert.Single(tree.Diagnostics);
+        Assert.Equal("GS0288", diagnostic.Id);
+        Assert.Contains("const", diagnostic.Message);
+    }
 }
