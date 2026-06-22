@@ -861,6 +861,21 @@ internal sealed class MemberLookup
                 return false;
             case NullableTypeSymbol nullable when nullable.UnderlyingType != null:
                 return TryProjectErasedClrType(nullable.UnderlyingType, out erased);
+            case FunctionTypeSymbol fn:
+                // Issue #932: a func/arrow literal whose natural delegate type
+                // closes over a same-compilation user class (whose ClrType is
+                // still null during binding) has a null FunctionType.ClrType, so
+                // overload resolution would otherwise reject every candidate
+                // (GS0159) before even classifying the delegate parameter — e.g.
+                // `Assert.DoesNotContain(items, func(i LibraryItem) bool { ... })`
+                // where `items : List[LibraryItem]`. Erase the literal's natural
+                // Func<...>/Action<...> shape, mapping each symbolic component the
+                // same way the generic-argument erasure does (user class → its
+                // imported base or `object`, enum → int32), so the produced
+                // delegate's parameter/return types line up with the inferred
+                // (erased) element type and the structural delegate conversion
+                // applies.
+                return TryProjectErasedDelegateClrType(fn, out erased);
             default:
                 return false;
         }
@@ -1592,5 +1607,125 @@ internal sealed class MemberLookup
             yield return baseType;
             baseType = baseType.BaseType;
         }
+    }
+
+    /// <summary>
+    /// Issue #932: builds an erased CLR <c>System.Func&lt;...&gt;</c> /
+    /// <c>System.Action&lt;...&gt;</c> delegate type for a
+    /// <see cref="FunctionTypeSymbol"/> whose natural <c>ClrType</c> is null
+    /// because one of its parameter / return types is symbolic (a
+    /// same-compilation user class, enum, or open type parameter). Each
+    /// component is erased through <see cref="TryEraseDelegateComponentClrType"/>
+    /// so the result matches the erasure the surrounding generic call applies to
+    /// its other arguments.
+    /// </summary>
+    /// <param name="functionType">The literal's bound function type.</param>
+    /// <param name="erased">On success, the erased delegate CLR type.</param>
+    /// <returns><see langword="true"/> when an erased delegate type was built.</returns>
+    private static bool TryProjectErasedDelegateClrType(FunctionTypeSymbol functionType, out Type erased)
+    {
+        erased = null;
+        if (functionType == null)
+        {
+            return false;
+        }
+
+        var paramClr = new Type[functionType.ParameterTypes.Length];
+        for (var i = 0; i < paramClr.Length; i++)
+        {
+            if (!TryEraseDelegateComponentClrType(functionType.ParameterTypes[i], out paramClr[i]))
+            {
+                return false;
+            }
+        }
+
+        var isVoid = functionType.ReturnType == null || functionType.ReturnType == TypeSymbol.Void;
+        Type returnClr = null;
+        if (!isVoid && !TryEraseDelegateComponentClrType(functionType.ReturnType, out returnClr))
+        {
+            return false;
+        }
+
+        erased = isVoid
+            ? BuildActionClrType(paramClr)
+            : BuildFuncClrType(paramClr, returnClr);
+        return erased != null;
+    }
+
+    /// <summary>
+    /// Issue #932: erases a single delegate parameter / return
+    /// <see cref="TypeSymbol"/> to a CLR <see cref="System.Type"/>, mapping
+    /// symbolic shapes the same way <see cref="ImportedClassSymbol"/>'s
+    /// argument-type erasure does (user class → its imported base or
+    /// <c>object</c>, enum → <c>int32</c>); non-symbolic and other erasable
+    /// shapes fall back to <see cref="TryProjectErasedClrType"/>.
+    /// </summary>
+    /// <param name="t">The component type to erase.</param>
+    /// <param name="clr">On success, the erased CLR type.</param>
+    /// <returns><see langword="true"/> when an erasure exists.</returns>
+    private static bool TryEraseDelegateComponentClrType(TypeSymbol t, out Type clr)
+    {
+        clr = null;
+        if (t == null)
+        {
+            return false;
+        }
+
+        if (t.ClrType != null)
+        {
+            clr = t.ClrType;
+            return true;
+        }
+
+        switch (t)
+        {
+            case StructSymbol { IsClass: true } userClass:
+                clr = userClass.ImportedBaseType?.ClrType ?? typeof(object);
+                return true;
+            case EnumSymbol:
+                clr = typeof(int);
+                return true;
+            default:
+                return TryProjectErasedClrType(t, out clr);
+        }
+    }
+
+    private static Type BuildActionClrType(Type[] paramClr) => paramClr.Length switch
+    {
+        0 => typeof(Action),
+        1 => typeof(Action<>).MakeGenericType(paramClr),
+        2 => typeof(Action<,>).MakeGenericType(paramClr),
+        3 => typeof(Action<,,>).MakeGenericType(paramClr),
+        4 => typeof(Action<,,,>).MakeGenericType(paramClr),
+        5 => typeof(Action<,,,,>).MakeGenericType(paramClr),
+        6 => typeof(Action<,,,,,>).MakeGenericType(paramClr),
+        7 => typeof(Action<,,,,,,>).MakeGenericType(paramClr),
+        8 => typeof(Action<,,,,,,,>).MakeGenericType(paramClr),
+        _ => null,
+    };
+
+    private static Type BuildFuncClrType(Type[] paramClr, Type returnClr)
+    {
+        if (returnClr == null)
+        {
+            return null;
+        }
+
+        var args = new Type[paramClr.Length + 1];
+        Array.Copy(paramClr, args, paramClr.Length);
+        args[paramClr.Length] = returnClr;
+        return paramClr.Length switch
+        {
+            0 => typeof(Func<>).MakeGenericType(args),
+            1 => typeof(Func<,>).MakeGenericType(args),
+            2 => typeof(Func<,,>).MakeGenericType(args),
+            3 => typeof(Func<,,,>).MakeGenericType(args),
+            4 => typeof(Func<,,,,>).MakeGenericType(args),
+            5 => typeof(Func<,,,,,>).MakeGenericType(args),
+            6 => typeof(Func<,,,,,,>).MakeGenericType(args),
+            7 => typeof(Func<,,,,,,,>).MakeGenericType(args),
+            8 => typeof(Func<,,,,,,,,>).MakeGenericType(args),
+            _ => null,
+        };
     }
 }

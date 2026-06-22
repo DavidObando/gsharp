@@ -129,6 +129,26 @@ internal static class OverloadResolution
         /// return type already matches the target.
         /// </summary>
         DelegateReturnCovariance = 10,
+
+        /// <summary>
+        /// Issue #932: a <c>func</c>/arrow literal (whose natural CLR type is a
+        /// <c>System.Func&lt;...&gt;</c> / <c>System.Action&lt;...&gt;</c>)
+        /// converting to a structurally identical but differently-named
+        /// delegate parameter — same parameter types and same return type, but
+        /// a distinct delegate definition (e.g. a
+        /// <c>func(T) bool</c> literal targeting <c>System.Predicate&lt;T&gt;</c>,
+        /// as in <c>Assert.DoesNotContain(items, func(i Item) bool { ... })</c>).
+        /// C# allows a lambda to target any compatible delegate type; G#'s
+        /// natural delegate type for a literal is always <c>Func</c>/<c>Action</c>,
+        /// so without this the literal would never match parameters typed as
+        /// <c>Predicate&lt;T&gt;</c>, <c>Comparison&lt;T&gt;</c>, etc. Ranked
+        /// last (worst) so an exact (identity) delegate match always wins when
+        /// both are applicable. The binder's erasing rebind
+        /// (<c>RebindFunctionLiteralDelegateArguments</c>) and the emitter's
+        /// delegate-to-delegate adaptation materialize the conversion to the
+        /// chosen delegate type.
+        /// </summary>
+        DelegateStructuralMatch = 11,
     }
 
     /// <summary>
@@ -364,6 +384,20 @@ internal static class OverloadResolution
         if (IsValueReturningDelegateToVoidDelegate(target, source))
         {
             return ImplicitConversionKind.LambdaToVoidDelegate;
+        }
+
+        // Issue #932: a func/arrow literal whose natural delegate type is a
+        // Func<...>/Action<...> is applicable to a structurally identical but
+        // differently-named delegate parameter (same parameter types and same
+        // return type), e.g. `func(i Item) bool { ... }` → System.Predicate<Item>
+        // for `Assert.DoesNotContain(items, predicate)`. Ranked lowest so an
+        // exact (identity) delegate match always wins when both apply. Checked
+        // last because the covariance / void-discard cases above already cover
+        // the differing-return-type shapes; this only handles the exact-shape
+        // delegate-kind mismatch.
+        if (IsStructurallyCompatibleDelegate(target, source))
+        {
+            return ImplicitConversionKind.DelegateStructuralMatch;
         }
 
         return ImplicitConversionKind.None;
@@ -1179,6 +1213,70 @@ internal static class OverloadResolution
     }
 
     /// <summary>
+    /// Issue #932: determines whether <paramref name="source"/> and
+    /// <paramref name="target"/> are two distinct delegate types with an
+    /// identical <c>Invoke</c> shape — the same parameter types and the same
+    /// return type. A <c>func</c>/arrow literal's natural delegate type is a
+    /// <c>System.Func&lt;...&gt;</c> / <c>System.Action&lt;...&gt;</c>, but a
+    /// CLR API may type the parameter as a structurally identical, differently
+    /// named delegate (e.g. <c>System.Predicate&lt;T&gt;</c>,
+    /// <c>System.Comparison&lt;T&gt;</c>). C# lets a lambda target any
+    /// compatible delegate type, so G# must treat the literal as applicable to
+    /// such a parameter. Parameter and return types are compared by name to
+    /// remain safe across reflection contexts (the target parameter is
+    /// typically loaded through a <c>MetadataLoadContext</c> while the literal's
+    /// natural <c>Func&lt;...&gt;</c> is a live-runtime constructed type). The
+    /// exact-return-type requirement keeps this distinct from
+    /// <see cref="IsDelegateReturnCovariant"/> (differing returns) and
+    /// <see cref="IsValueReturningDelegateToVoidDelegate"/> (void discard),
+    /// which handle the non-identity return shapes.
+    /// </summary>
+    /// <param name="target">The candidate delegate parameter type.</param>
+    /// <param name="source">The argument's natural delegate type.</param>
+    /// <returns><see langword="true"/> when the structural delegate conversion applies.</returns>
+    private static bool IsStructurallyCompatibleDelegate(Type target, Type source)
+    {
+        if (!ClrTypeUtilities.IsDelegateType(target) || !ClrTypeUtilities.IsDelegateType(source))
+        {
+            return false;
+        }
+
+        // Same delegate definition is already handled by the identity /
+        // assignability paths; this conversion only bridges distinct kinds.
+        if (ClrTypeUtilities.AreSame(target, source))
+        {
+            return false;
+        }
+
+        if (!TryGetDelegateSignature(target, out var targetParams, out var targetReturn)
+            || !TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn))
+        {
+            return false;
+        }
+
+        if (targetReturn is null || sourceReturn is null
+            || !ClrTypeUtilities.AreSame(targetReturn, sourceReturn))
+        {
+            return false;
+        }
+
+        if (targetParams.Length != sourceParams.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < targetParams.Length; i++)
+        {
+            if (!ClrTypeUtilities.AreSame(targetParams[i], sourceParams[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Issue #908: extracts a delegate type's parameter types and return type.
     /// Prefers the <c>Invoke</c> method, but falls back to decomposing the
     /// generic arguments of a closed <c>System.Func`N</c> / <c>System.Action`N</c>
@@ -1250,7 +1348,63 @@ internal static class OverloadResolution
             return true;
         }
 
-        return false;
+        // Issue #932: any other closed generic delegate (e.g.
+        // System.Predicate<T>, System.Comparison<T>, System.Converter<TIn,TOut>)
+        // whose constructed Invoke is unreachable across reflection contexts.
+        // Read the Invoke signature off the open generic definition — which is
+        // always in metadata — then substitute the closed type arguments into
+        // each generic-parameter slot. This generalises the Func/Action special
+        // cases above to the whole delegate surface a func/arrow literal may
+        // target.
+        try
+        {
+            var definition = delegateType.GetGenericTypeDefinition();
+            var defInvoke = definition.GetMethod("Invoke");
+            if (defInvoke == null)
+            {
+                return false;
+            }
+
+            var defParams = defInvoke.GetParameters();
+            var resolvedParams = new Type[defParams.Length];
+            for (var i = 0; i < defParams.Length; i++)
+            {
+                resolvedParams[i] = SubstituteGenericParameter(defParams[i].ParameterType, genericArgs);
+            }
+
+            parameterTypes = resolvedParams;
+            returnType = SubstituteGenericParameter(defInvoke.ReturnType, genericArgs);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #932: maps a (possibly generic-parameter) type drawn from a
+    /// delegate's open-definition <c>Invoke</c> signature to the corresponding
+    /// closed type argument. A bare generic parameter <c>T</c> is replaced by
+    /// <paramref name="genericArgs"/> at its <see cref="Type.GenericParameterPosition"/>;
+    /// every other type is returned unchanged. Only the direct-parameter case
+    /// is needed for the BCL delegates a func/arrow literal targets
+    /// (<c>Predicate&lt;T&gt;</c>, <c>Comparison&lt;T&gt;</c>,
+    /// <c>Converter&lt;TIn,TOut&gt;</c>).
+    /// </summary>
+    /// <param name="type">A type from the open definition's Invoke signature.</param>
+    /// <param name="genericArgs">The closed delegate's type arguments.</param>
+    /// <returns>The substituted type.</returns>
+    private static Type SubstituteGenericParameter(Type type, Type[] genericArgs)
+    {
+        if (type != null && type.IsGenericParameter
+            && type.GenericParameterPosition >= 0
+            && type.GenericParameterPosition < genericArgs.Length)
+        {
+            return genericArgs[type.GenericParameterPosition];
+        }
+
+        return type;
     }
 
     /// <summary>

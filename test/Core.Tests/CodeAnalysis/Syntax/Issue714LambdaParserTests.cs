@@ -101,20 +101,26 @@ public class Issue714LambdaParserTests
     }
 
     [Fact]
-    public void Parses_LambdaExpression_DoesNotConsumeBareIdentifierArrow()
+    public void Parses_BareIdentifierArrow_AsSingleParameterLambda()
     {
-        // No single-param shorthand (per ADR-0074): bare `x -> e` must NOT be
-        // taken as a lambda. It is a parse error / unrelated form. The token
-        // sequence `x -> e` at expression position should at minimum not be
-        // parsed as a LambdaExpression.
+        // Issue #932: the single-identifier arrow shorthand `x -> e` is now
+        // accepted as exact sugar for `(x) -> e` (one untyped parameter). This
+        // revises the original ADR-0074 decision (which rejected the
+        // shorthand); see ADR-0074 alternative C. `->` is never an
+        // expression-level binary operator, so committing `IDENT ->` to a
+        // lambda is unambiguous.
         const string source = """
             package P
-            let f = x -> x + 1
+            func apply(f Func[int32, int32]) int32 { return f(3) }
+            let v = apply(x -> x + 1)
             """;
         var tree = SyntaxTree.Parse(source);
-        // We don't care which exact diagnostic appears; only that the parser
-        // did not silently accept a shorthand-lambda form.
-        Assert.False(Walk(tree.Root).OfType<LambdaExpressionSyntax>().Any());
+        Assert.Empty(tree.Diagnostics);
+
+        var lambda = FindFirst<LambdaExpressionSyntax>(tree);
+        Assert.Single(lambda.Parameters);
+        Assert.Null(lambda.OpenParenToken);
+        Assert.Null(lambda.CloseParenToken);
     }
 
     [Fact]

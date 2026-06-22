@@ -95,12 +95,17 @@ xs.Where((x int32) -> { val parity = x % 2; parity == 0 })
 
 Concrete decisions:
 
-- **Parameter list is always parenthesized.** The single-parameter
-  shorthand `x -> body` is **not** supported. The parenthesized form
-  reads identically for zero, one, and many parameters; it preserves
-  trivial disambiguation against `x -> y` reading as a comparison-style
-  chain in an unrelated context; and it leaves the syntactic door open
-  for future shorthand without commitment.
+- **Parameter list is parenthesized, with a single-parameter shorthand.**
+  The parenthesized form `(x) -> body` reads identically for zero, one,
+  and many parameters. In addition, **issue
+  [#932](https://github.com/DavidObando/gsharp/issues/932) added the
+  single-parameter shorthand `x -> body`** as exact sugar for `(x) -> body`
+  (one untyped parameter whose type is inferred from the target delegate
+  via the #716 machinery). This is unambiguous: `->` is not an
+  expression-level binary operator in G#, so `IDENT ->` at expression
+  position cannot begin any other construct (function-type clauses
+  `(T) -> R` are parsed in type context and the deprecated switch-arm
+  `case v -> r` in pattern context). See revised alternative C below.
 - **Parameter types are mandatory.** Lambda-parameter type inference
   ("target-typed lambdas") is explicitly the scope of [#716](https://github.com/DavidObando/gsharp/issues/716)
   and is left to that PR. Until #716 lands, every lambda parameter
@@ -264,14 +269,18 @@ us from picking between `=>` and `->` later.
 
 ### C. Single-parameter shorthand `x -> body`
 
-Considered and rejected for v0. The shorthand is convenient in pipelines
-but introduces real ambiguity with `name -> expr` reading as a binary
-expression (the lexer treats `->` as its own token, but the parser would
-have to decide between "binary operator at expression level" and "lambda
-introducer" without a parenthesised parameter list). Deferring the
-shorthand keeps every lambda's surface shape consistent and leaves the
-door open to add `x int32 -> body` (typed shorthand) once type-inferred
-parameters land in #716.
+Considered and rejected for v0, then **adopted in issue
+[#932](https://github.com/DavidObando/gsharp/issues/932)**. The original
+v0 concern was a feared ambiguity with `name -> expr` reading as a binary
+expression. In practice that ambiguity does not exist: `->` is never an
+expression-level binary operator in G#, so a bare `IDENT ->` at
+expression position is otherwise always a parse error. With target-typed
+lambda parameters delivered by #716, the shorthand became pure sugar for
+the parenthesised single-parameter form `(x) -> body` — one untyped
+parameter inferred from the target delegate — and is now accepted at
+primary-expression position. The parser commits to a lambda the moment it
+sees `IDENT ->`; the parenthesised form remains the canonical spelling
+for zero- and multi-parameter lambdas.
 
 ### D. Arrow-lambda body forced to `{ … }` block
 
