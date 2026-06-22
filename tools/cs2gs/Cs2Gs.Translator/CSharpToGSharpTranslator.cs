@@ -95,6 +95,10 @@ public sealed class CSharpToGSharpTranslator
             {
                 members.Add(translated);
             }
+
+            // Owned-struct receiver methods (issue #938) are emitted as siblings
+            // immediately after their owning type so they read together.
+            members.AddRange(visitor.DrainPendingTopLevel());
         }
 
         // Top-level statements are appended after every declaration so the program
@@ -243,10 +247,29 @@ public sealed class CSharpToGSharpTranslator
         private readonly CSharpTypeMapper typeMapper;
         private readonly HashSet<INamedTypeSymbol> subclassedBases;
 
+        // The C# program entry type (the static class containing `Main`). Its
+        // members are flattened to top-level G# funcs (never a `shared { }`
+        // block), so a sibling static call inside it must stay bare rather than
+        // be qualified through a non-existent type (ADR-0115 §B.1/§B.18).
+        private readonly INamedTypeSymbol entryType;
+
+        // Owned struct / data-struct instance methods cannot live in the type
+        // body (the parser rejects an in-body `func`); they are lifted to
+        // top-level receiver-clause `func`s emitted as siblings of the type
+        // (issue #938, ADR-0115 §B.5). Collected here per aggregate and drained
+        // by the document translator.
+        private readonly List<GMember> pendingTopLevelDeclarations = new List<GMember>();
+
         // The syntax node whose body is currently being translated. It bounds the
         // data-flow scan that decides whether a local is mutable (var) or
         // immutable (let) per ADR-0115 §B.3.
         private SyntaxNode currentBodyScope;
+
+        // When translating the body of a lifted owned-value-aggregate receiver
+        // method (issue #938), the implicit `this.` of a bare instance-member
+        // reference must be made explicit through the receiver name (`self.`),
+        // because a top-level receiver-clause `func` has no implicit receiver.
+        private string currentReceiverName;
 
         public DeclarationVisitor(
             TranslationContext context,
@@ -256,6 +279,7 @@ public sealed class CSharpToGSharpTranslator
             this.context = context;
             this.typeMapper = typeMapper;
             this.subclassedBases = subclassedBases;
+            this.entryType = context.Compilation.GetEntryPoint(default)?.ContainingType;
         }
 
         public override GMember VisitClassDeclaration(ClassDeclarationSyntax node) => this.VisitAggregate(node);
@@ -265,6 +289,24 @@ public sealed class CSharpToGSharpTranslator
         public override GMember VisitRecordDeclaration(RecordDeclarationSyntax node) => this.VisitAggregate(node);
 
         public override GMember VisitInterfaceDeclaration(InterfaceDeclarationSyntax node) => this.VisitAggregate(node);
+
+        /// <summary>
+        /// Removes and returns the top-level declarations (lifted owned-struct
+        /// receiver methods, issue #938) collected while translating the most
+        /// recent aggregate, so the document translator can emit them as siblings.
+        /// </summary>
+        /// <returns>The collected top-level declarations (possibly empty).</returns>
+        public IReadOnlyList<GMember> DrainPendingTopLevel()
+        {
+            if (this.pendingTopLevelDeclarations.Count == 0)
+            {
+                return System.Array.Empty<GMember>();
+            }
+
+            var drained = new List<GMember>(this.pendingTopLevelDeclarations);
+            this.pendingTopLevelDeclarations.Clear();
+            return drained;
+        }
 
         public override GMember VisitEnumDeclaration(EnumDeclarationSyntax node)
         {
@@ -458,6 +500,17 @@ public sealed class CSharpToGSharpTranslator
             {
                 foreach ((GMember translated, bool isStatic) in this.TranslateMember(member, kind.Value, lift))
                 {
+                    // A lifted owned-value-aggregate instance method (it carries a
+                    // receiver clause) cannot live in the struct body; collect it
+                    // as a top-level sibling declaration (issue #938).
+                    if (IsValueAggregate(kind.Value) &&
+                        !isStatic &&
+                        translated is MethodDeclaration { Receiver: not null })
+                    {
+                        this.pendingTopLevelDeclarations.Add(translated);
+                        continue;
+                    }
+
                     if (isStatic || isStaticClass)
                     {
                         sharedMembers.Add(translated);
@@ -475,7 +528,7 @@ public sealed class CSharpToGSharpTranslator
                 members.Add(new SharedBlock(sharedMembers));
             }
 
-            (GTypeReference baseType, List<GTypeReference> interfaces) = this.MapBaseClause(symbol, node);
+            (GTypeReference baseType, List<GTypeReference> interfaces) = this.MapBaseClause(symbol, node, kind.Value);
             List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
             IReadOnlyList<Parameter> primaryCtor = lift.DropConstructor
                 ? lift.PrimaryParameters
@@ -516,7 +569,7 @@ public sealed class CSharpToGSharpTranslator
             INamedTypeSymbol symbol,
             TypeDeclarationKind kind)
         {
-            if (symbol == null || kind != TypeDeclarationKind.Class)
+            if (symbol == null || (kind != TypeDeclarationKind.Class && kind != TypeDeclarationKind.Struct))
             {
                 return ConstructorLift.None;
             }
@@ -545,9 +598,8 @@ public sealed class CSharpToGSharpTranslator
                 return ConstructorLift.None;
             }
 
-            var paramToField = new Dictionary<IParameterSymbol, IFieldSymbol>(SymbolEqualityComparer.Default);
+            var paramToTarget = new Dictionary<IParameterSymbol, (string Name, ITypeSymbol Type, bool IsProperty)>(SymbolEqualityComparer.Default);
             var fieldInitializers = new Dictionary<string, GExpression>();
-            var fieldTypes = new Dictionary<string, ITypeSymbol>();
 
             SyntaxNode previousScope = this.currentBodyScope;
             this.currentBodyScope = ctor;
@@ -562,26 +614,45 @@ public sealed class CSharpToGSharpTranslator
                         return ConstructorLift.None;
                     }
 
-                    if (this.context.GetSymbolInfo(assignment.Left).Symbol is not IFieldSymbol fieldSymbol
-                        || fieldSymbol.IsStatic
-                        || !SymbolEqualityComparer.Default.Equals(fieldSymbol.ContainingType, symbol))
+                    // The assignment target is either a backing field or an
+                    // auto-property (`Width = width`); both lift to a primary
+                    // constructor parameter named after the member.
+                    string targetName;
+                    ITypeSymbol targetType;
+                    bool targetIsProperty;
+                    ISymbol leftSymbol = this.context.GetSymbolInfo(assignment.Left).Symbol;
+                    if (leftSymbol is IFieldSymbol fieldSymbol &&
+                        !fieldSymbol.IsStatic &&
+                        SymbolEqualityComparer.Default.Equals(fieldSymbol.ContainingType, symbol))
+                    {
+                        targetName = fieldSymbol.Name;
+                        targetType = fieldSymbol.Type;
+                        targetIsProperty = false;
+                    }
+                    else if (leftSymbol is IPropertySymbol propertySymbol &&
+                        !propertySymbol.IsStatic &&
+                        SymbolEqualityComparer.Default.Equals(propertySymbol.ContainingType, symbol))
+                    {
+                        targetName = propertySymbol.Name;
+                        targetType = propertySymbol.Type;
+                        targetIsProperty = true;
+                    }
+                    else
                     {
                         return ConstructorLift.None;
                     }
 
-                    fieldTypes[fieldSymbol.Name] = fieldSymbol.Type;
-
-                    // `_field = ctorParam` → lift to a primary-constructor parameter.
+                    // `target = ctorParam` → lift to a primary-constructor parameter.
                     if (assignment.Right is IdentifierNameSyntax rightId
                         && this.context.GetSymbolInfo(rightId).Symbol is IParameterSymbol paramSymbol
                         && SymbolEqualityComparer.Default.Equals(paramSymbol.ContainingSymbol, ctorSymbol))
                     {
-                        if (paramToField.ContainsKey(paramSymbol))
+                        if (paramToTarget.ContainsKey(paramSymbol))
                         {
                             return ConstructorLift.None;
                         }
 
-                        paramToField[paramSymbol] = fieldSymbol;
+                        paramToTarget[paramSymbol] = (targetName, targetType, targetIsProperty);
                         continue;
                     }
 
@@ -592,7 +663,7 @@ public sealed class CSharpToGSharpTranslator
                         return ConstructorLift.None;
                     }
 
-                    fieldInitializers[fieldSymbol.Name] = this.TranslateExpression(assignment.Right);
+                    fieldInitializers[targetName] = this.TranslateExpression(assignment.Right);
                 }
             }
             finally
@@ -601,27 +672,36 @@ public sealed class CSharpToGSharpTranslator
             }
 
             // Every constructor parameter must be consumed by exactly one direct
-            // field assignment for the constructor to drop cleanly.
-            if (ctorSymbol.Parameters.Any(p => !paramToField.ContainsKey(p)))
+            // member assignment for the constructor to drop cleanly.
+            if (ctorSymbol.Parameters.Any(p => !paramToTarget.ContainsKey(p)))
             {
                 return ConstructorLift.None;
             }
 
             var primaryParameters = new List<Parameter>();
             var fieldsAsParams = new HashSet<string>();
+            var propertiesAsParams = new HashSet<string>();
             foreach (IParameterSymbol param in ctorSymbol.Parameters)
             {
-                IFieldSymbol field = paramToField[param];
-                GTypeReference type = this.typeMapper.Map(field.Type, this.context, param.Locations.FirstOrDefault());
-                primaryParameters.Add(new Parameter(field.Name, type));
-                fieldsAsParams.Add(field.Name);
+                (string Name, ITypeSymbol Type, bool IsProperty) target = paramToTarget[param];
+                GTypeReference type = this.typeMapper.Map(target.Type, this.context, param.Locations.FirstOrDefault());
+                primaryParameters.Add(new Parameter(target.Name, type));
+                if (target.IsProperty)
+                {
+                    propertiesAsParams.Add(target.Name);
+                }
+                else
+                {
+                    fieldsAsParams.Add(target.Name);
+                }
             }
 
-            if (fieldsAsParams.Count > 0)
+            var allParamNames = fieldsAsParams.Concat(propertiesAsParams).OrderBy(n => n).ToList();
+            if (allParamNames.Count > 0)
             {
                 this.context.Report(new TranslationDiagnostic(
                     nameof(SyntaxKind.ConstructorDeclaration),
-                    $"constructor on '{node.Identifier.Text}' is canonicalized to a primary constructor: parameter-sourced field(s) {string.Join(", ", fieldsAsParams.OrderBy(n => n))} become primary-constructor parameter fields (now public) and the explicit 'init' is dropped (ADR-0115 §B.3 / T2).",
+                    $"constructor on '{node.Identifier.Text}' is canonicalized to a primary constructor: parameter-sourced member(s) {string.Join(", ", allParamNames)} become primary-constructor parameter fields (now public) and the explicit 'init' is dropped (ADR-0115 §B.3 / T2).",
                     ctor.GetLocation(),
                     TranslationSeverity.Info));
             }
@@ -632,6 +712,7 @@ public sealed class CSharpToGSharpTranslator
                 DropConstructor = true,
                 PrimaryParameters = primaryParameters,
                 FieldsAsPrimaryParameters = fieldsAsParams,
+                PropertiesAsPrimaryParameters = propertiesAsParams,
                 FieldInitializers = fieldInitializers,
             };
         }
@@ -670,6 +751,11 @@ public sealed class CSharpToGSharpTranslator
                     break;
 
                 case PropertyDeclarationSyntax property:
+                    if (lift.PropertiesAsPrimaryParameters.Contains(property.Identifier.Text))
+                    {
+                        break;
+                    }
+
                     yield return this.TranslateProperty(property);
                     break;
 
@@ -767,6 +853,7 @@ public sealed class CSharpToGSharpTranslator
 
             Receiver receiver = null;
             bool skipFirstParameter = false;
+            bool selfQualifyBody = false;
 
             if (symbol != null && symbol.IsExtensionMethod)
             {
@@ -792,6 +879,7 @@ public sealed class CSharpToGSharpTranslator
                 receiver = new Receiver(
                     "self",
                     new NamedTypeReference(symbol?.ContainingType?.Name ?? node.Identifier.Text));
+                selfQualifyBody = true;
                 this.context.Report(new TranslationDiagnostic(
                     nameof(SyntaxKind.MethodDeclaration),
                     $"instance method '{node.Identifier.Text}' on owned struct/data-struct emits the receiver-clause form (the only form that parses); the binder will flag GS0314 — expected, known compiler gap (issue #938, ADR-0115 §B.5).",
@@ -804,12 +892,32 @@ public sealed class CSharpToGSharpTranslator
             List<TypeParameter> typeParameters = this.MapMethodTypeParameters(symbol);
 
             bool hasBody = node.Body != null || node.ExpressionBody != null;
-            BlockStatement body = hasBody
-                ? this.TranslateBody(node, $"method '{node.Identifier.Text}'")
-                : null;
+            string previousReceiver = this.currentReceiverName;
+            if (selfQualifyBody)
+            {
+                this.currentReceiverName = receiver.Name;
+            }
+
+            BlockStatement body;
+            try
+            {
+                body = hasBody
+                    ? this.TranslateBody(node, $"method '{node.Identifier.Text}'")
+                    : null;
+            }
+            finally
+            {
+                this.currentReceiverName = previousReceiver;
+            }
 
             bool isOverride = symbol != null && symbol.IsOverride;
-            bool isOpen = symbol != null && (symbol.IsVirtual || symbol.IsAbstract) && !symbol.IsOverride;
+
+            // Interface members are implicitly abstract in C#; in canonical G# the
+            // members of an `interface` carry no modifier (the `open` keyword is for
+            // virtual/abstract members of a class). Suppress `open` for them so the
+            // emitted G# round-trips (ADR-0115 §B.6).
+            bool inInterface = symbol?.ContainingType?.TypeKind == TypeKind.Interface;
+            bool isOpen = symbol != null && (symbol.IsVirtual || symbol.IsAbstract) && !symbol.IsOverride && !inInterface;
 
             var method = new MethodDeclaration(
                 node.Identifier.Text,
@@ -839,7 +947,11 @@ public sealed class CSharpToGSharpTranslator
             List<PropertyAccessor> accessors = this.MapAccessors(node);
 
             bool isOverride = symbol != null && symbol.IsOverride;
-            bool isOpen = symbol != null && (symbol.IsVirtual || symbol.IsAbstract) && !symbol.IsOverride;
+
+            // Interface members are implicitly abstract; canonical G# interface
+            // members carry no `open` modifier (ADR-0115 §B.6).
+            bool inInterface = symbol?.ContainingType?.TypeKind == TypeKind.Interface;
+            bool isOpen = symbol != null && (symbol.IsVirtual || symbol.IsAbstract) && !symbol.IsOverride && !inInterface;
 
             var property = new PropertyDeclaration(
                 node.Identifier.Text,
@@ -955,7 +1067,8 @@ public sealed class CSharpToGSharpTranslator
 
         private (GTypeReference BaseType, List<GTypeReference> Interfaces) MapBaseClause(
             INamedTypeSymbol symbol,
-            SyntaxNode node)
+            SyntaxNode node,
+            TypeDeclarationKind kind)
         {
             var interfaces = new List<GTypeReference>();
             GTypeReference baseType = null;
@@ -976,12 +1089,32 @@ public sealed class CSharpToGSharpTranslator
                 baseType = this.typeMapper.Map(csBase, this.context, location);
             }
 
+            // A `data class` / `data struct` (C# record / record struct) synthesizes
+            // structural equality in G#, exactly as the C# record auto-implements
+            // `IEquatable<Self>`. Emitting the synthesized `IEquatable[Self]` base
+            // clause is both redundant and rejected by the parser on a positional
+            // declaration, so it is dropped here (ADR-0115 §B.4).
+            bool isData = kind == TypeDeclarationKind.DataClass || kind == TypeDeclarationKind.DataStruct;
             foreach (INamedTypeSymbol iface in symbol.Interfaces)
             {
+                if (isData && IsIEquatableOf(iface, symbol))
+                {
+                    continue;
+                }
+
                 interfaces.Add(this.typeMapper.Map(iface, this.context, location));
             }
 
             return (baseType, interfaces);
+        }
+
+        private static bool IsIEquatableOf(INamedTypeSymbol iface, INamedTypeSymbol self)
+        {
+            return iface.IsGenericType &&
+                iface.Name == "IEquatable" &&
+                iface.ContainingNamespace?.ToDisplayString() == "System" &&
+                iface.TypeArguments.Length == 1 &&
+                SymbolEqualityComparer.Default.Equals(iface.TypeArguments[0], self);
         }
 
         private List<TypeParameter> MapTypeParameters(INamedTypeSymbol symbol)
@@ -1544,7 +1677,7 @@ public sealed class CSharpToGSharpTranslator
                     return this.TranslateLiteral(literal);
 
                 case IdentifierNameSyntax identifier:
-                    return new IdentifierExpression(identifier.Identifier.Text);
+                    return this.TranslateIdentifierName(identifier);
 
                 case GenericNameSyntax generic:
                     return new IdentifierExpression(generic.Identifier.Text);
@@ -1560,6 +1693,12 @@ public sealed class CSharpToGSharpTranslator
 
                 case ObjectCreationExpressionSyntax creation:
                     return this.TranslateObjectCreation(creation);
+
+                case CastExpressionSyntax cast:
+                    return this.TranslateCast(cast);
+
+                case WithExpressionSyntax with:
+                    return this.TranslateWith(with);
 
                 case BinaryExpressionSyntax binary:
                     return new BinaryExpression(
@@ -1598,18 +1737,41 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
+        private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)
+        {
+            // Inside a lifted owned-struct receiver method (issue #938) a bare
+            // reference to an instance member carries an implicit C# `this`; a
+            // top-level receiver-clause `func` has no implicit receiver, so the
+            // reference must be made explicit through the receiver (`self.X`).
+            if (this.currentReceiverName != null)
+            {
+                ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
+                if (symbol is { IsStatic: false } &&
+                    symbol.Kind is SymbolKind.Field or SymbolKind.Property or SymbolKind.Method)
+                {
+                    return new MemberAccessExpression(
+                        new IdentifierExpression(this.currentReceiverName),
+                        identifier.Identifier.Text);
+                }
+            }
+
+            return new IdentifierExpression(identifier.Identifier.Text);
+        }
+
         private GExpression TranslateLiteral(LiteralExpressionSyntax literal)
         {
             switch (literal.Kind())
             {
                 case SyntaxKind.NumericLiteralExpression:
+                    // Preserve the original literal spelling (ADR-0115 §B.12): G#
+                    // has no implicit numeric promotion, so a C# `2.0` must stay
+                    // `2.0` (not collapse to `2`, which would be int32 and fail
+                    // `int32 * float64`); hex such as `0xFF0000` is likewise kept
+                    // verbatim. The bound type still classifies the literal kind.
                     object value = literal.Token.Value;
-                    if (value is float or double or decimal)
-                    {
-                        return LiteralExpression.Float(literal.Token.ValueText);
-                    }
-
-                    return LiteralExpression.Int(literal.Token.ValueText);
+                    return value is float or double or decimal
+                        ? LiteralExpression.Float(literal.Token.Text)
+                        : LiteralExpression.Int(literal.Token.Text);
 
                 case SyntaxKind.StringLiteralExpression:
                     return LiteralExpression.String(literal.Token.ValueText);
@@ -1674,6 +1836,20 @@ public sealed class CSharpToGSharpTranslator
                     memberGeneric.Identifier.Text);
                 typeArguments = this.MapTypeArguments(memberGeneric);
             }
+            else if (invocation.Expression is IdentifierNameSyntax bareName &&
+                this.context.GetSymbolInfo(bareName).Symbol is IMethodSymbol { IsStatic: true } staticMethod &&
+                staticMethod.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
+                !owner.IsImplicitlyDeclared &&
+                !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition))
+            {
+                // A C# bare sibling static call (`Round(value, 2)`) carries an
+                // implicit type qualifier. A G# `shared` method body has no
+                // implicit type scope, so the call must be qualified through the
+                // owning type (`Geometry.Round(value, 2)`); see ADR-0115 §B.18.
+                target = new MemberAccessExpression(
+                    new IdentifierExpression(owner.Name),
+                    staticMethod.Name);
+            }
             else
             {
                 target = this.TranslateExpression(invocation.Expression);
@@ -1693,11 +1869,62 @@ public sealed class CSharpToGSharpTranslator
                 ? this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
                 : new NamedTypeReference(creation.Type.ToString());
 
+            // An object initializer `new T { Field = value, ... }` (no/empty
+            // constructor argument list) maps to the canonical G# struct literal
+            // `T{Field: value, ...}` (spec §Struct literals; ADR-0115 §B.11).
+            bool hasCtorArgs = creation.ArgumentList != null && creation.ArgumentList.Arguments.Count > 0;
+            if (creation.Initializer != null &&
+                creation.Initializer.IsKind(SyntaxKind.ObjectInitializerExpression) &&
+                !hasCtorArgs)
+            {
+                var fieldInitializers = new List<FieldInitializer>();
+                foreach (ExpressionSyntax element in creation.Initializer.Expressions)
+                {
+                    if (element is AssignmentExpressionSyntax assignment &&
+                        assignment.Left is IdentifierNameSyntax name)
+                    {
+                        fieldInitializers.Add(new FieldInitializer(
+                            name.Identifier.Text,
+                            this.TranslateExpression(assignment.Right)));
+                    }
+                    else
+                    {
+                        this.context.ReportUnsupported(
+                            element,
+                            "object-initializer element is not a simple `Field = value` assignment; no canonical G# struct-literal form yet (ADR-0115 §B.11).");
+                    }
+                }
+
+                return new CompositeLiteralExpression(type, fieldInitializers);
+            }
+
             var arguments = creation.ArgumentList == null
                 ? new List<GExpression>()
                 : creation.ArgumentList.Arguments
                     .Select(a => this.TranslateExpression(a.Expression))
                     .ToList();
+
+            // A value aggregate (`struct` / `data struct`) has no callable
+            // constructor surface in G#: it is constructed with a struct literal
+            // `T{Field: value, ...}` (spec §Struct literals). Map the positional C#
+            // `new T(a, b)` to that literal by zipping the arguments with the
+            // type's settable instance members in declaration order (ADR-0115 §B.4).
+            if (typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Struct, SpecialType: SpecialType.None } valueType &&
+                !valueType.IsTupleType &&
+                arguments.Count > 0)
+            {
+                List<string> targetNames = OrderedValueMemberNames(valueType);
+                if (targetNames.Count == arguments.Count)
+                {
+                    var fieldInitializers = new List<FieldInitializer>();
+                    for (int i = 0; i < arguments.Count; i++)
+                    {
+                        fieldInitializers.Add(new FieldInitializer(targetNames[i], arguments[i]));
+                    }
+
+                    return new CompositeLiteralExpression(type, fieldInitializers);
+                }
+            }
 
             // A G# construction is a call on the type name; generic types carry
             // their type arguments in brackets: `List[int32](...)` (ADR-0115 §B.7).
@@ -1713,6 +1940,71 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return new InvocationExpression(new IdentifierExpression(creation.Type.ToString()), arguments);
+        }
+
+        private static List<string> OrderedValueMemberNames(INamedTypeSymbol valueType)
+        {
+            // Settable instance members in declaration order: positional `data
+            // struct` parameters surface as auto-properties, a hand-written
+            // `struct` exposes auto-properties or fields; either maps to the
+            // struct-literal field list.
+            var props = valueType.GetMembers()
+                .OfType<IPropertySymbol>()
+                .Where(p => !p.IsStatic && !p.IsIndexer && p.GetMethod != null)
+                .Select(p => p.Name)
+                .ToList();
+            if (props.Count > 0)
+            {
+                return props;
+            }
+
+            return valueType.GetMembers()
+                .OfType<IFieldSymbol>()
+                .Where(f => !f.IsStatic && !f.IsImplicitlyDeclared)
+                .Select(f => f.Name)
+                .ToList();
+        }
+
+        private GExpression TranslateCast(CastExpressionSyntax cast)
+        {
+            // C# explicit cast `(T)expr` maps to the canonical G# width-bearing
+            // conversion-call form `T(expr)` (spec §Types and values; ADR-0115
+            // §B.12). For floating→integral conversions the CLR truncates toward
+            // zero, matching the C# `(int)` truncation semantics, so e.g.
+            // `(int)Math.Floor(d + 0.5)` is behavior-faithful.
+            ITypeSymbol targetSymbol = this.context.GetTypeInfo(cast.Type).Type;
+            GTypeReference targetType = targetSymbol != null
+                ? this.typeMapper.Map(targetSymbol, this.context, cast.Type.GetLocation())
+                : new NamedTypeReference(cast.Type.ToString());
+
+            return new ConversionExpression(targetType, this.TranslateExpression(cast.Expression));
+        }
+
+        private GExpression TranslateWith(WithExpressionSyntax with)
+        {
+            // C# `expr with { Field = value, ... }` maps to the canonical G#
+            // copy/update form `expr with { Field = value, ... }` for data
+            // structs / data classes (spec §Struct literals; ADR-0115 §B.4). The
+            // update fields keep `=` (distinct from the `:` of a struct literal).
+            var updates = new List<FieldInitializer>();
+            foreach (ExpressionSyntax element in with.Initializer.Expressions)
+            {
+                if (element is AssignmentExpressionSyntax assignment &&
+                    assignment.Left is IdentifierNameSyntax name)
+                {
+                    updates.Add(new FieldInitializer(
+                        name.Identifier.Text,
+                        this.TranslateExpression(assignment.Right)));
+                }
+                else
+                {
+                    this.context.ReportUnsupported(
+                        element,
+                        "with-expression element is not a simple `Field = value` assignment; no canonical G# copy/update form yet (ADR-0115 §B.4).");
+                }
+            }
+
+            return new WithExpression(this.TranslateExpression(with.Expression), updates);
         }
 
         private IReadOnlyList<GTypeReference> MapTypeArguments(GenericNameSyntax generic)
@@ -1771,6 +2063,8 @@ public sealed class CSharpToGSharpTranslator
             public IReadOnlyList<Parameter> PrimaryParameters { get; init; } = new List<Parameter>();
 
             public HashSet<string> FieldsAsPrimaryParameters { get; init; } = new HashSet<string>();
+
+            public HashSet<string> PropertiesAsPrimaryParameters { get; init; } = new HashSet<string>();
 
             public Dictionary<string, GExpression> FieldInitializers { get; init; } =
                 new Dictionary<string, GExpression>();

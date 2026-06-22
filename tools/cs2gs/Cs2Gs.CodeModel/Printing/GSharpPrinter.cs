@@ -339,6 +339,18 @@ public static class GSharpPrinter
                 var inits = string.Join(", ", composite.FieldInitializers.Select(f => $"{f.Name}: {RenderExpression(f.Value, indent)}"));
                 return $"{RenderType(composite.Type)}{{{inits}}}";
 
+            case ConversionExpression conversion:
+                return $"{RenderType(conversion.TargetType)}({RenderExpression(conversion.Operand, indent)})";
+
+            case WithExpression with:
+                if (with.Updates.Count == 0)
+                {
+                    return $"{RenderExpression(with.Target, indent)} with {{ }}";
+                }
+
+                var updates = string.Join(", ", with.Updates.Select(f => $"{f.Name} = {RenderExpression(f.Value, indent)}"));
+                return $"{RenderExpression(with.Target, indent)} with {{ {updates} }}";
+
             case ArrayLiteralExpression arrayLiteral:
                 var elements = string.Join(", ", arrayLiteral.Elements.Select(e => RenderExpression(e, indent)));
                 return $"[]{RenderType(arrayLiteral.ElementType)}{{{elements}}}";

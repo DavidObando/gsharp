@@ -183,7 +183,30 @@ Defaults: top-level declarations default to `public` (ADR-0014); top-level `priv
 - **Fields** require `var`/`let` (ADR-0067, §B.3).
 - **Properties** → `prop Name T` for auto-properties, with `{ get { … } set(v) { … } }` bodies for computed/custom accessors (ADR-0051, `samples/PropertyRef/Lib/Lib.gs`). `open prop`/`override prop` mirror method virtuality.
 - **Constructors** → `init(params) { … }`, chaining via `: Base(args)` (ADR-0065). C# primary constructors / positional records map to the G# primary-constructor `Name(params)` head.
-- **Static members** → a `shared { … }` block (ADR-0053); except the program entry's static class, which is hoisted to top level (T3, above).
+- **Static members** → a `shared { … }` block (ADR-0053); except the program entry's static class, which is hoisted to top level (T3, above). Sibling static calls inside a non-entry `shared { }` block are emitted **qualified** (`Geometry.Round(...)`), since an unqualified sibling static call does not resolve there (`GS0130`).
+
+> **Static (`shared`) method overload resolution by arity — discovered compiler gap.**
+> A user type whose `shared { }` block declares **overloaded** static methods
+> (same name, different arity/params) cannot be called on any overload but the
+> first-declared one: the binder resolves a single by-name match and arity-checks
+> it (`GS0144`), never forming an overload set. Instance-method overloads on the
+> same type resolve correctly. Minimal repro:
+> ```gs
+> class Geometry {
+>     shared {
+>         func Round(value float64) float64 { return Geometry.Round(value, 2) }
+>         func Round(value float64, digits int32) float64 { return Math.Round(value, digits) }
+>     }
+> }
+> Console.WriteLine(Geometry.Round(1.234))   // GS0144: 'Round' requires 1 arguments but was given 2
+> ```
+> Root cause: `ExpressionBinder.Access.cs` `BindUserTypeStaticCall` uses
+> `StructSymbol.TryGetStaticMethod(name, out method)` (single by-name) rather than
+> building a static method group + running `OverloadResolver` (as the instance
+> path does). Filed as **#940**; it is the sole blocker preventing the L2 corpus
+> app (overloaded `Geometry.TotalArea`/`Round`) from migrating green — every other
+> L2 construct translates and compiles cleanly. No translation workaround exists
+> without distorting the public API, since the spec permits static overloads.
 - **Enums** → `enum Name { A, B, C }` (`samples/Enum.gs`); payload-bearing C# unions (sealed hierarchy idioms) map to discriminated-union enums (ADR-0078 §5) only when the source is unambiguously that shape, else triaged.
 - **Attributes** → `@Name(args)`, one per line, order preserved (ADR-0047): C# `[Obsolete("x")]` → `@Obsolete("x")`. Explicit attribute targets (`[return: …]`, `[field: …]`, `[assembly: …]`) map to the `@target:Name(...)` form.
 - **`foreach`** → `for x in coll` (ADR-0031); LINQ/extension calls keep instance-call syntax (`xs.Where((x int32) -> x % 2 == 0)`, `samples/LinqExtensions.gs`).
@@ -200,7 +223,31 @@ The mapping is recorded as an Info diagnostic. Only the type that *contains the 
 
 #### B.12 Numeric type names and identifiers — ADR-0049, ADR-0098
 
-Canonical output uses **width-bearing** primitive names (ADR-0049): C# `int`→`int32`, `uint`→`uint32`, `long`→`int64`, `ulong`→`uint64`, `short`→`int16`, `ushort`→`uint16`, `byte`→`uint8`, `sbyte`→`int8`, `float`→`float32`, `double`→`float64`, `bool`→`bool`, `string`→`string`, `char`→`char`, `object`→`object`. The friendly aliases (ADR-0098) parse, but the printer emits the canonical width-bearing form so output is uniform. **Identifier names are preserved verbatim** from C# (PascalCase types/members, camelCase locals) — the tool does not rename to a different casing convention.
+Canonical output uses **width-bearing** primitive names (ADR-0049): C# `int`→`int32`, `uint`→`uint32`, `long`→`int64`, `ulong`→`uint64`, `short`→`int16`, `ushort`→`uint16`, `byte`→`uint8`, `sbyte`→`int8`, `float`→`float32`, `double`→`float64`, `bool`→`bool`, `string`→`string`, `char`→`char`, `object`→`object`. The friendly aliases (ADR-0098) parse, but the printer emits the canonical width-bearing form so output is uniform. **Identifier names are preserved verbatim** from C# (PascalCase types/members, camelCase locals) — the tool does not rename to a different casing convention. **Numeric literal spellings are likewise preserved verbatim** (the original token text, not the bound value): a C# `2.0` stays `2.0` and hex such as `0xFF0000` stays `0xFF0000`. This is load-bearing — G# has no implicit numeric promotion, so collapsing `2.0` to `2` would type it as `int32` and make `int32 * float64` a hard `GS0129` error.
+
+#### B.13 Data-type structural equality and `IEquatable<Self>` — ADR-0078, ADR-0025
+
+A `data class`/`data struct` auto-synthesizes value (structural) equality, `GetHashCode`, and the `with` updater. A C# record therefore drops its compiler-synthesized `IEquatable<Self>` from the base clause when emitted as a `data` type — re-stating `: IEquatable[Self]` is both redundant and a parse error (the synthesized interface is not user-written). The structural `==`/`!=` and `with` come for free from the `data` modifier.
+
+#### B.14 Owned value-aggregate methods → lifted receiver-clause funcs — issue #938, ADR-0079
+
+A `struct`/`data struct` instance method cannot live in the type body (the parser rejects an in-body `func` on a value aggregate, and a plain `struct` admits neither in-body methods nor an explicit `init`). Such a method is **lifted to a top-level receiver-clause `func (self T) Name(...)`** emitted as a sibling immediately after the type (§B.5). A top-level receiver-clause `func` has no implicit `this`, so inside the lifted body every bare instance-member reference is made explicit through the receiver (`self.X`). This compiles and runs correctly but emits the soft `GS0314` warning (ADR-0079, owned-type receiver clause); the warning is the tracked surface of #938 until owned value-aggregate methods gain an in-body spelling.
+
+#### B.15 `with`-expressions — spec §Records and `with`
+
+A C# `with`-expression maps to the canonical G# form `expr with { Field = value, … }` (the update list uses `=`, not the struct-literal `:`). An empty update list renders `expr with { }`. The target may be any `data` value; the result is a structurally-distinct copy.
+
+#### B.16 Object initializers and value-type construction → composite literals — spec §Composite literals
+
+C# `new T { Field = v, … }` (an object initializer) maps to the G# **composite literal** `T{Field: v, …}` (the literal body uses `:`). Construction form depends on the target's kind: a **reference type** (`class`, `data class`) uses the call form `T(args)`, but a **value type** (`struct`, `data struct`) uses the composite literal `T{Field: value}` even for positional construction — the call form on a value type is `GS0130` ("Function doesn't exist"). Positional arguments are zipped against the type's ordered settable instance members (e.g. a `record struct Point(double X, double Y)` constructed as `Point{X: …, Y: …}`).
+
+#### B.17 Explicit casts → width-bearing conversion calls — ADR-0049
+
+A C# explicit cast `(T)expr` maps to the G# **width-bearing conversion call** `T(expr)` (e.g. `(int)x` → `int32(x)`, `(byte)n` → `uint8(n)`). This is behaviour-faithful for numeric narrowing: the CLR truncates a `float64`→`int32` conversion toward zero exactly as C# `(int)` does, so a half-up rounding such as `(int)Math.Floor(d*100.0 + 0.5)` reproduces the C# result bit-for-bit (`ToCents(1.234) == 123`).
+
+#### B.18 Sibling static-call qualification in non-entry static classes — ADR-0053
+
+Inside a G# `shared { }` block a bare sibling static call does **not** resolve (`GS0130`); the call must be qualified through the owning type (`Geometry.Round(value, 2)`). The translator therefore qualifies a C# bare static call (`Round(value, 2)`) with its declaring type whenever that type maps to a `shared { }` block. The **entry static class is the explicit exception** (§B.11, T3): its members flatten to top-level `func`s that *do* call each other unqualified, so a bare sibling call inside the entry type stays bare (qualifying it through the dropped type would be `GS0157`).
 
 ### C. Pipeline stage contract
 

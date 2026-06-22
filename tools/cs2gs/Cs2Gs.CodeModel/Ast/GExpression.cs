@@ -234,6 +234,58 @@ public sealed class ArrayLiteralExpression : GExpression
 }
 
 /// <summary>
+/// A width-bearing numeric/value conversion written in the canonical G#
+/// conversion-call form <c>Type(expr)</c> (spec §Types and values; e.g.
+/// <c>uint8(5)</c>, <c>int32(expr)</c>). The C# explicit cast <c>(int)expr</c>
+/// maps here (ADR-0115 §B.12); the CLR truncates toward zero for
+/// floating→integral conversions, matching C# cast semantics.
+/// </summary>
+public sealed class ConversionExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ConversionExpression"/> class.
+    /// </summary>
+    /// <param name="targetType">The conversion target type.</param>
+    /// <param name="operand">The value being converted.</param>
+    public ConversionExpression(GTypeReference targetType, GExpression operand)
+    {
+        TargetType = targetType;
+        Operand = operand;
+    }
+
+    /// <summary>Gets the conversion target type.</summary>
+    public GTypeReference TargetType { get; }
+
+    /// <summary>Gets the value being converted.</summary>
+    public GExpression Operand { get; }
+}
+
+/// <summary>
+/// A copy/update expression <c>expr with { Field = value, ... }</c> for data
+/// structs / data classes (spec §Struct literals; ADR-0115 §B.4). Note the
+/// update fields use <c>=</c> (not the <c>:</c> of a composite literal).
+/// </summary>
+public sealed class WithExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="WithExpression"/> class.
+    /// </summary>
+    /// <param name="target">The source value being copied.</param>
+    /// <param name="updates">The field updates (may be empty for <c>with { }</c>).</param>
+    public WithExpression(GExpression target, IReadOnlyList<FieldInitializer> updates = null)
+    {
+        Target = target;
+        Updates = updates ?? new List<FieldInitializer>();
+    }
+
+    /// <summary>Gets the source value being copied.</summary>
+    public GExpression Target { get; }
+
+    /// <summary>Gets the field updates.</summary>
+    public IReadOnlyList<FieldInitializer> Updates { get; }
+}
+
+/// <summary>
 /// A tuple literal <c>(a, b, c)</c> (spec §Primary expressions, <c>TupleLiteral</c>).
 /// A tuple literal always has at least two elements.
 /// </summary>

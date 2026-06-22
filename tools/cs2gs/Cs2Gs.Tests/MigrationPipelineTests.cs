@@ -160,14 +160,17 @@ public class MigrationPipelineTests
     }
 
     /// <summary>
-    /// Pointing the pipeline at <c>corpus/L2-Library</c> (whose advanced
-    /// constructs are not all mapped) captures a stage-1
-    /// <c>translation-unsupported</c> artifact on disk with a non-empty
+    /// Pointing the pipeline at <c>corpus/L2-Library</c> now translates cleanly
+    /// (interfaces, casts, owned-struct methods, composite literals, etc. are all
+    /// mapped) and reaches the compile stage, where it captures a
+    /// <c>compile-error</c> triage artifact for the residual <c>GS0144</c>
+    /// static-overload-resolution compiler gap (a sibling <c>shared</c> overload
+    /// is bound by name only, ignoring arity). The artifact carries a non-empty
     /// diagnostic id and a stable <c>sha256:</c> fingerprint. Gated on compiler
     /// presence (the pipeline resolves <c>gsc</c> up front).
     /// </summary>
     [Fact]
-    public async Task L2_StageOneFailure_WritesTriageArtifact()
+    public async Task L2_CompileStageFailure_WritesTriageArtifact()
     {
         string compiler = FindCompiler();
         if (compiler is null)
@@ -185,7 +188,7 @@ public class MigrationPipelineTests
         AppResult app = Assert.Single(result.Apps);
 
         Assert.False(app.Succeeded);
-        Assert.Equal("translation-unsupported", app.FailureCategory);
+        Assert.Equal("compile-error", app.FailureCategory);
         Assert.NotEmpty(app.Artifacts);
 
         string artifactPath = Path.Combine(outRoot, result.RunId, app.Artifacts[0]);
@@ -193,7 +196,7 @@ public class MigrationPipelineTests
 
         TriageArtifact artifact = JsonSerializer.Deserialize<TriageArtifact>(
             File.ReadAllText(artifactPath), TriageSerialization.Options);
-        Assert.Equal("translation-unsupported", artifact.Category);
+        Assert.Equal("compile-error", artifact.Category);
         Assert.False(string.IsNullOrEmpty(artifact.Diagnostic.Id));
         Assert.StartsWith("sha256:", artifact.Fingerprint, StringComparison.Ordinal);
     }
