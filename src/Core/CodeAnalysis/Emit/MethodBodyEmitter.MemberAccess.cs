@@ -386,6 +386,15 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitFieldAccess(BoundFieldAccessExpression fa)
     {
+        // Issue #948: a const field has no runtime storage — its read is
+        // inlined as the compile-time constant value (matching C# semantics
+        // and the literal field's lack of an ldsfld-able location).
+        if (fa.Field.IsConst)
+        {
+            this.EmitLiteral(new BoundLiteralExpression(null, fa.Field.ConstantValue, fa.Field.Type));
+            return;
+        }
+
         // ADR-0087 §3 R3+R4: when the receiver is a constructed
         // generic user type, the ldfld must reference the field via
         // a MemberRef parented at the TypeSpec. With the field

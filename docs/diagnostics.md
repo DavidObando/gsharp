@@ -476,7 +476,7 @@ See [ADR-0067](adr/0067-fields-require-var-keyword.md). Field declarations insid
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
-| GS0288 | Error | Field declarations require a `var` (mutable) or `let` (read-only) keyword. | `struct Point { X int32 }` — must be written as `var X int32` (mutable) or `let X int32` (read-only). |
+| GS0288 | Error | Field declarations require a `var` (mutable), `let` (read-only), or `const` (compile-time constant) keyword. | `struct Point { X int32 }` — must be written as `var X int32` (mutable), `let X int32` (read-only), or `const X int32 = …` (constant). |
 
 ## Class destructor diagnostics (GS0289–GS0292)
 
@@ -669,6 +669,18 @@ the ECMA-335 II.23.4 FieldMarshal blob encoding for each accepted form,
 and the interaction with ADR-0086 (`@DllImport`), ADR-0092
 (`@LibraryImport`), ADR-0093 (struct marshalling), ADR-0094 (ref/out/in),
 and ADR-0095 (function pointers).
+
+## Inline field initializer diagnostics (GS0375–GS0377)
+
+Issue #948 added inline `const`/`let`/`var` field initializers (`= expr` on a
+field declaration in a type body). The following diagnostics enforce their
+constraints.
+
+| ID | Severity | Summary |
+| --- | --- | --- |
+| GS0375 | Error | A `const` field requires an initializer (e.g. `const X int32 = 10`). |
+| GS0376 | Error | A `const` field initializer must be a compile-time constant expression. |
+| GS0377 | Error | A field initializer cannot reference the instance member or constructor parameter `{name}` (initializers run before the constructor body, so `this` is not available — assign it in an `init(...)` constructor instead). |
 
 ## Internal compiler error diagnostics (GS9998–GS9999)
 

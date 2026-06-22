@@ -403,6 +403,25 @@ public sealed class Binder
                     }
                 }
 
+                // Issue #948: const fields are static for bare-name resolution
+                // inside the declaring type's members. Their reads are inlined
+                // as the compile-time constant value by the emitter/interpreter.
+                if (!ownerStruct.ConstFields.IsDefaultOrEmpty)
+                {
+                    foreach (var fld in ownerStruct.ConstFields)
+                    {
+                        if (paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name))
+                        {
+                            continue;
+                        }
+
+                        if (seenMembers.Add(fld.Name))
+                        {
+                            scope.TryDeclareVariable(new ImplicitStaticFieldVariableSymbol(ownerStruct, fld));
+                        }
+                    }
+                }
+
                 if (!ownerStruct.StaticProperties.IsDefaultOrEmpty)
                 {
                     foreach (var prop in ownerStruct.StaticProperties)

@@ -461,6 +461,12 @@ internal sealed class DeclarationBinder
         // symbol exists) and emit them into every constructor body.
         var pendingInstanceInitializers = new List<(FieldSymbol Field, ExpressionSyntax InitSyntax, TypeSymbol FieldType)>();
 
+        // Issue #948: const fields declared in the type body are implicitly
+        // static literal fields. They are diverted out of the instance field
+        // list and bound (folded to a constant) after the struct symbol exists.
+        var constFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
+        var pendingConstInitializers = new List<(FieldSymbol Field, FieldDeclarationSyntax Syntax, TypeSymbol FieldType)>();
+
         foreach (var fieldSyntax in syntax.Fields)
         {
             var fieldName = fieldSyntax.Identifier.Text;
@@ -495,6 +501,37 @@ internal sealed class DeclarationBinder
             }
 
             var fieldAccessibility = resolveAccessibility(fieldSyntax.AccessibilityModifier);
+
+            // Issue #948: a `const` field is a compile-time constant — it is
+            // implicitly static and read-only and emitted as a literal field.
+            if (fieldSyntax.IsConst)
+            {
+                var constFieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: true, isStatic: true, isConst: true);
+                Binder.AttachDocumentation(constFieldSymbol, fieldSyntax);
+
+                if (!fieldSyntax.Annotations.IsDefaultOrEmpty)
+                {
+                    constFieldSymbol.SetAttributes(BindAttributes(
+                        fieldSyntax.Annotations,
+                        AttributeTargetKind.Field,
+                        Binder.FieldDeclarationAllowedTargets,
+                        "a field declaration",
+                        System.AttributeTargets.Field));
+                }
+
+                if (fieldSyntax.Initializer == null)
+                {
+                    Diagnostics.ReportConstFieldRequiresInitializer(fieldSyntax.Identifier.Location, fieldName);
+                }
+                else
+                {
+                    pendingConstInitializers.Add((constFieldSymbol, fieldSyntax, fieldType));
+                }
+
+                constFieldsBuilder.Add(constFieldSymbol);
+                continue;
+            }
+
             var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: syntax.IsInline || fieldSyntax.IsReadOnly);
             Binder.AttachDocumentation(fieldSymbol, fieldSyntax);
 
@@ -763,15 +800,57 @@ internal sealed class DeclarationBinder
         // instance-field initializer expressions and install them on the symbol.
         if (pendingInstanceInitializers.Count > 0)
         {
+            // Issue #948: an instance field initializer runs before the
+            // constructor body, so it cannot reference `this`, other instance
+            // members, or constructor parameters (matching C#). Collect the
+            // forbidden names so we can report a precise diagnostic.
+            var instanceMemberNames = new HashSet<string>(System.StringComparer.Ordinal) { "this" };
+            foreach (var f in fields)
+            {
+                instanceMemberNames.Add(f.Name);
+            }
+
+            foreach (var p in primaryCtorParameters)
+            {
+                instanceMemberNames.Add(p.Name);
+            }
+
             var instanceInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
             foreach (var (fieldSym, initSyntax, fieldType) in pendingInstanceInitializers)
             {
+                if (TryFindInstanceMemberReference(initSyntax, instanceMemberNames, out var offendingName, out var offendingLocation))
+                {
+                    Diagnostics.ReportFieldInitializerCannotReferenceInstanceMember(offendingLocation, offendingName);
+                    continue;
+                }
+
                 var boundInit = bindExpression(initSyntax);
                 var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
                 instanceInitBuilder[fieldSym] = convertedInit;
             }
 
             structSymbol.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable());
+        }
+
+        // Issue #948: bind and fold the deferred const-field initializers to a
+        // compile-time constant, then install the const fields on the symbol.
+        if (constFieldsBuilder.Count > 0)
+        {
+            foreach (var (constField, fieldSyntaxNode, fieldType) in pendingConstInitializers)
+            {
+                var boundInit = bindExpression(fieldSyntaxNode.Initializer);
+                var convertedInit = conversions.BindConversion(fieldSyntaxNode.Initializer.Location, boundInit, fieldType);
+                if (TryFoldConstantFieldValue(convertedInit, fieldType, out var constantValue))
+                {
+                    constField.SetConstantValue(constantValue);
+                }
+                else if (boundInit is not BoundErrorExpression && convertedInit is not BoundErrorExpression)
+                {
+                    Diagnostics.ReportConstFieldInitializerNotConstant(fieldSyntaxNode.Initializer.Location, constField.Name);
+                }
+            }
+
+            structSymbol.SetConstFields(constFieldsBuilder.ToImmutable());
         }
 
         if (!scope.TryDeclareTypeAlias(name, structSymbol))
@@ -1433,6 +1512,7 @@ internal sealed class DeclarationBinder
         {
             // Static fields
             var staticFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
+            var sharedConstFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
             var initializersBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
             foreach (var fieldSyntax in syntax.SharedBlock.Fields)
             {
@@ -1465,6 +1545,47 @@ internal sealed class DeclarationBinder
                 }
 
                 var fieldAccessibility = resolveAccessibility(fieldSyntax.AccessibilityModifier);
+
+                // Issue #948: a `const` declared inside a `shared` block is also
+                // a compile-time constant literal field (const is implicitly
+                // static, so `shared` is redundant but accepted).
+                if (fieldSyntax.IsConst)
+                {
+                    var sharedConstField = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: true, isStatic: true, isConst: true);
+                    Binder.AttachDocumentation(sharedConstField, fieldSyntax);
+
+                    if (!fieldSyntax.Annotations.IsDefaultOrEmpty)
+                    {
+                        sharedConstField.SetAttributes(BindAttributes(
+                            fieldSyntax.Annotations,
+                            AttributeTargetKind.Field,
+                            Binder.FieldDeclarationAllowedTargets,
+                            "a field declaration",
+                            System.AttributeTargets.Field));
+                    }
+
+                    if (fieldSyntax.Initializer == null)
+                    {
+                        Diagnostics.ReportConstFieldRequiresInitializer(fieldSyntax.Identifier.Location, fieldName);
+                    }
+                    else
+                    {
+                        var boundConst = bindExpression(fieldSyntax.Initializer);
+                        var convertedConst = conversions.BindConversion(fieldSyntax.Initializer.Location, boundConst, fieldType);
+                        if (TryFoldConstantFieldValue(convertedConst, fieldType, out var sharedConstValue))
+                        {
+                            sharedConstField.SetConstantValue(sharedConstValue);
+                        }
+                        else if (boundConst is not BoundErrorExpression && convertedConst is not BoundErrorExpression)
+                        {
+                            Diagnostics.ReportConstFieldInitializerNotConstant(fieldSyntax.Initializer.Location, fieldName);
+                        }
+                    }
+
+                    sharedConstFieldsBuilder.Add(sharedConstField);
+                    continue;
+                }
+
                 var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: fieldSyntax.IsReadOnly, isStatic: true);
 
                 if (!fieldSyntax.Annotations.IsDefaultOrEmpty)
@@ -1494,6 +1615,13 @@ internal sealed class DeclarationBinder
             if (initializersBuilder.Count > 0)
             {
                 structSymbol.SetStaticFieldInitializers(initializersBuilder.ToImmutable());
+            }
+
+            // Issue #948: merge any const fields declared inside the shared block
+            // with the body-level const fields already installed on the symbol.
+            if (sharedConstFieldsBuilder.Count > 0)
+            {
+                structSymbol.SetConstFields(structSymbol.ConstFields.AddRange(sharedConstFieldsBuilder.ToImmutable()));
             }
 
             // Static methods
@@ -2549,6 +2677,251 @@ internal sealed class DeclarationBinder
         }
 
         return $"{method.Name}({string.Join(", ", names)})";
+    }
+
+    /// <summary>
+    /// Issue #948: scans an instance field initializer expression for a
+    /// reference to <c>this</c>, another instance member, or a constructor
+    /// parameter. Such references are illegal because instance field
+    /// initializers run before the constructor body (matching C#).
+    /// </summary>
+    /// <param name="node">The initializer expression syntax to scan.</param>
+    /// <param name="forbiddenNames">Instance member and constructor parameter names.</param>
+    /// <param name="offendingName">The first offending name found.</param>
+    /// <param name="offendingLocation">The location of the first offending reference.</param>
+    /// <returns>True when an illegal reference was found.</returns>
+    private static bool TryFindInstanceMemberReference(
+        SyntaxNode node,
+        HashSet<string> forbiddenNames,
+        out string offendingName,
+        out TextLocation offendingLocation)
+    {
+        if (node is NameExpressionSyntax nameExpr &&
+            forbiddenNames.Contains(nameExpr.IdentifierToken.Text))
+        {
+            offendingName = nameExpr.IdentifierToken.Text;
+            offendingLocation = nameExpr.IdentifierToken.Location;
+            return true;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            if (TryFindInstanceMemberReference(child, forbiddenNames, out offendingName, out offendingLocation))
+            {
+                return true;
+            }
+        }
+
+        offendingName = null;
+        offendingLocation = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #948: attempts to fold a bound const-field initializer to a
+    /// compile-time constant value coerced to the field's CLR primitive type.
+    /// Handles literal expressions (optionally wrapped in numeric/identity
+    /// conversions) and unary negation of a numeric literal. Returns
+    /// <c>false</c> for non-constant expressions so the caller can report a
+    /// diagnostic.
+    /// </summary>
+    /// <param name="bound">The bound (already type-converted) initializer expression.</param>
+    /// <param name="fieldType">The declared const field type.</param>
+    /// <param name="value">The folded constant value on success.</param>
+    /// <returns>True when a compile-time constant was produced.</returns>
+    private static bool TryFoldConstantFieldValue(BoundExpression bound, TypeSymbol fieldType, out object value)
+    {
+        value = null;
+        if (!TryEvaluateConstant(bound, out var raw))
+        {
+            return false;
+        }
+
+        if (raw == null)
+        {
+            // A null literal is only valid for reference-typed const fields
+            // (e.g. `const s string = nil`); the Constant row stores a null.
+            value = null;
+            return !fieldType.ClrType?.IsValueType ?? true;
+        }
+
+        var targetClr = fieldType.ClrType;
+        if (targetClr == null)
+        {
+            return false;
+        }
+
+        if (targetClr.IsEnum)
+        {
+            targetClr = System.Enum.GetUnderlyingType(targetClr);
+        }
+
+        try
+        {
+            value = targetClr == raw.GetType()
+                ? raw
+                : System.Convert.ChangeType(raw, targetClr, System.Globalization.CultureInfo.InvariantCulture);
+            return true;
+        }
+        catch (System.Exception ex) when (ex is System.InvalidCastException or System.FormatException or System.OverflowException or System.ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #948: evaluates a bound expression to a compile-time constant
+    /// (a literal, a conversion over a constant, or a unary +/- over a numeric
+    /// constant). Returns <c>false</c> for any non-constant shape.
+    /// </summary>
+    /// <param name="bound">The bound expression.</param>
+    /// <param name="value">The constant value on success.</param>
+    /// <returns>True when the expression is a compile-time constant.</returns>
+    private static bool TryEvaluateConstant(BoundExpression bound, out object value)
+    {
+        switch (bound)
+        {
+            case BoundLiteralExpression lit:
+                value = lit.Value;
+                return true;
+
+            case BoundConversionExpression conv:
+                return TryEvaluateConstant(conv.Expression, out value);
+
+            case BoundUnaryExpression unary
+                when unary.Op.Kind is BoundUnaryOperatorKind.Negation or BoundUnaryOperatorKind.Identity
+                && TryEvaluateConstant(unary.Operand, out var operand)
+                && operand != null:
+                value = NegateIfNeeded(operand, unary.Op.Kind == BoundUnaryOperatorKind.Negation);
+                return value != null;
+
+            case BoundBinaryExpression binary
+                when TryEvaluateConstant(binary.Left, out var left)
+                && TryEvaluateConstant(binary.Right, out var right)
+                && left != null
+                && right != null:
+                value = FoldBinary(binary.Op.Kind, left, right);
+                return value != null;
+
+            default:
+                value = null;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #948: folds a binary operation over two constant operands. Supports
+    /// the constant-expression forms allowed in C# const initializers that the
+    /// const-field feature commonly needs: numeric arithmetic and string
+    /// concatenation. Returns <c>null</c> for unsupported shapes.
+    /// </summary>
+    private static object FoldBinary(BoundBinaryOperatorKind kind, object left, object right)
+    {
+        if (left is string || right is string)
+        {
+            return kind == BoundBinaryOperatorKind.Sum ? string.Concat(left, right) : null;
+        }
+
+        if (left is decimal || right is decimal)
+        {
+            if (!TryToDecimal(left, out var ld) || !TryToDecimal(right, out var rd))
+            {
+                return null;
+            }
+
+            return kind switch
+            {
+                BoundBinaryOperatorKind.Sum => ld + rd,
+                BoundBinaryOperatorKind.Difference => ld - rd,
+                BoundBinaryOperatorKind.Product => ld * rd,
+                BoundBinaryOperatorKind.Quotient when rd != 0 => ld / rd,
+                _ => (object)null,
+            };
+        }
+
+        if (left is double || left is float || right is double || right is float)
+        {
+            var ld = System.Convert.ToDouble(left, System.Globalization.CultureInfo.InvariantCulture);
+            var rd = System.Convert.ToDouble(right, System.Globalization.CultureInfo.InvariantCulture);
+            return kind switch
+            {
+                BoundBinaryOperatorKind.Sum => ld + rd,
+                BoundBinaryOperatorKind.Difference => ld - rd,
+                BoundBinaryOperatorKind.Product => ld * rd,
+                BoundBinaryOperatorKind.Quotient when rd != 0 => ld / rd,
+                _ => (object)null,
+            };
+        }
+
+        if (!TryToInt64(left, out var li) || !TryToInt64(right, out var ri))
+        {
+            return null;
+        }
+
+        return kind switch
+        {
+            BoundBinaryOperatorKind.Sum => li + ri,
+            BoundBinaryOperatorKind.Difference => li - ri,
+            BoundBinaryOperatorKind.Product => li * ri,
+            BoundBinaryOperatorKind.Quotient when ri != 0 => li / ri,
+            BoundBinaryOperatorKind.Remainder when ri != 0 => li % ri,
+            BoundBinaryOperatorKind.ShiftLeft => li << (int)ri,
+            BoundBinaryOperatorKind.ShiftRight => li >> (int)ri,
+            BoundBinaryOperatorKind.BitwiseAnd => li & ri,
+            BoundBinaryOperatorKind.BitwiseOr => li | ri,
+            BoundBinaryOperatorKind.BitwiseXor => li ^ ri,
+            _ => (object)null,
+        };
+    }
+
+    private static bool TryToInt64(object value, out long result)
+    {
+        switch (value)
+        {
+            case int or long or short or sbyte or byte or ushort or uint:
+                result = System.Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+                return true;
+            case char c:
+                result = c;
+                return true;
+            default:
+                result = 0;
+                return false;
+        }
+    }
+
+    private static bool TryToDecimal(object value, out decimal result)
+    {
+        try
+        {
+            result = System.Convert.ToDecimal(value, System.Globalization.CultureInfo.InvariantCulture);
+            return true;
+        }
+        catch (System.Exception ex) when (ex is System.InvalidCastException or System.FormatException or System.OverflowException)
+        {
+            result = 0;
+            return false;
+        }
+    }
+
+    private static object NegateIfNeeded(object operand, bool negate)
+    {
+        if (!negate)
+        {
+            return operand;
+        }
+
+        return operand switch
+        {
+            int i => -i,
+            long l => -l,
+            short s => -s,
+            sbyte sb => -sb,
+            float f => -f,
+            double d => -d,
+            decimal m => -m,
+            _ => null,
+        };
     }
 
     private static string GetBaseClauseTypeDisplayName(TypeClauseSyntax typeClause)

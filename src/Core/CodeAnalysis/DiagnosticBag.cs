@@ -961,8 +961,45 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="location">The location of the offending token.</param>
     public void ReportFieldDeclarationRequiresVarOrLet(TextLocation location)
     {
-        var message = "Field declarations require a 'var' (mutable) or 'let' (read-only) keyword.";
+        var message = "Field declarations require a 'var' (mutable), 'let' (read-only), or 'const' (compile-time constant) keyword.";
         Report(location, "GS0288", message);
+    }
+
+    /// <summary>
+    /// Issue #948: a <c>const</c> field must be given an initializer (a
+    /// compile-time constant value). Reported when a <c>const</c> field
+    /// declaration omits the <c>= expr</c> initializer.
+    /// </summary>
+    /// <param name="location">The location of the const field identifier.</param>
+    /// <param name="name">The const field name.</param>
+    public void ReportConstFieldRequiresInitializer(TextLocation location, string name)
+    {
+        Report(location, "GS0375", $"Const field '{name}' must have a compile-time constant initializer (e.g. 'const {name} T = value').");
+    }
+
+    /// <summary>
+    /// Issue #948: a <c>const</c> field initializer must be a compile-time
+    /// constant expression. Reported when the bound initializer cannot be
+    /// folded to a literal value.
+    /// </summary>
+    /// <param name="location">The location of the offending initializer.</param>
+    /// <param name="name">The const field name.</param>
+    public void ReportConstFieldInitializerNotConstant(TextLocation location, string name)
+    {
+        Report(location, "GS0376", $"The initializer for const field '{name}' must be a compile-time constant expression.");
+    }
+
+    /// <summary>
+    /// Issue #948: an instance field initializer (the <c>= expr</c> on a
+    /// <c>let</c>/<c>var</c> field) runs before the constructor body and
+    /// therefore cannot reference <c>this</c>, other instance members, or
+    /// constructor parameters — matching C# field-initializer rules.
+    /// </summary>
+    /// <param name="location">The location of the offending reference.</param>
+    /// <param name="memberName">The referenced instance member / parameter name.</param>
+    public void ReportFieldInitializerCannotReferenceInstanceMember(TextLocation location, string memberName)
+    {
+        Report(location, "GS0377", $"A field initializer cannot reference the instance member or constructor parameter '{memberName}' (field initializers run before the constructor body, so 'this' is not available). Assign it in an 'init(...)' constructor instead.");
     }
 
     /// <summary>

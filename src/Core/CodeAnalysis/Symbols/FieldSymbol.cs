@@ -17,13 +17,15 @@ public sealed class FieldSymbol : Symbol
     /// <param name="accessibility">The field accessibility.</param>
     /// <param name="isReadOnly">True when the field is init-only after construction.</param>
     /// <param name="isStatic">True when the field is declared inside a <c>shared</c> block (ADR-0053).</param>
-    public FieldSymbol(string name, TypeSymbol type, Accessibility accessibility, bool isReadOnly = false, bool isStatic = false)
+    /// <param name="isConst">True when the field is a compile-time constant declared with <c>const</c> (Issue #948). Const fields are implicitly static and read-only and emitted as literal fields.</param>
+    public FieldSymbol(string name, TypeSymbol type, Accessibility accessibility, bool isReadOnly = false, bool isStatic = false, bool isConst = false)
         : base(name)
     {
         Type = type;
         Accessibility = accessibility;
         IsReadOnly = isReadOnly;
         IsStatic = isStatic;
+        IsConst = isConst;
     }
 
     /// <inheritdoc/>
@@ -42,6 +44,23 @@ public sealed class FieldSymbol : Symbol
     public bool IsStatic { get; }
 
     /// <summary>
+    /// Gets a value indicating whether this field is a compile-time constant
+    /// declared with <c>const</c> (Issue #948). A const field is implicitly
+    /// static and read-only, is emitted as a CLR <c>literal</c> field carrying
+    /// a <c>Constant</c> row, and its reads are inlined as the literal
+    /// <see cref="ConstantValue"/> rather than a field load.
+    /// </summary>
+    public bool IsConst { get; }
+
+    /// <summary>
+    /// Gets the compile-time constant value for a <see cref="IsConst"/> field
+    /// (Issue #948), or <c>null</c> for non-const fields. The binder folds the
+    /// field initializer to a literal and writes it here; the emitter uses it
+    /// to add the <c>Constant</c> metadata row and to inline const-field reads.
+    /// </summary>
+    public object ConstantValue { get; private set; }
+
+    /// <summary>
     /// Gets the explicit byte offset declared via <c>@FieldOffset(N)</c>
     /// (ADR-0093 / issue #759), or <c>null</c> when the field uses the
     /// default sequential layout. Only valid on fields of types declared
@@ -51,6 +70,16 @@ public sealed class FieldSymbol : Symbol
     /// <c>FieldLayout</c> row.
     /// </summary>
     public int? ExplicitOffset { get; private set; }
+
+    /// <summary>
+    /// Sets the <see cref="ConstantValue"/> for a const field. Intended to be
+    /// called once by the binder after folding the initializer to a literal.
+    /// </summary>
+    /// <param name="value">The compile-time constant value.</param>
+    public void SetConstantValue(object value)
+    {
+        ConstantValue = value;
+    }
 
     /// <summary>
     /// Sets the resolved <see cref="ExplicitOffset"/>. Intended to be

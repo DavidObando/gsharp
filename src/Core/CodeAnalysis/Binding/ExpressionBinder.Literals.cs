@@ -557,6 +557,30 @@ internal sealed partial class ExpressionBinder
             inits.Add(new BoundFieldInitializer(field, valueExpr));
         }
 
+        // Issue #948: a value-type (struct / data struct) composite literal
+        // zero-initializes the storage and then assigns the listed fields. For
+        // a value type there is no constructor that could run inline field
+        // initializers, so apply each declared `= expr` initializer here for any
+        // field the literal omitted. (For class/data-class literals the
+        // synthesized default constructor — invoked by `newobj` — already runs
+        // the instance field initializers, so this only applies to value types.)
+        if (!structSymbol.IsClass && !structSymbol.InstanceFieldInitializers.IsEmpty)
+        {
+            foreach (var field in structSymbol.Fields)
+            {
+                if (seenFieldNames.Contains(field.Name))
+                {
+                    continue;
+                }
+
+                if (structSymbol.InstanceFieldInitializers.TryGetValue(field, out var initExpr))
+                {
+                    inits.Add(new BoundFieldInitializer(field, initExpr));
+                    seenFieldNames.Add(field.Name);
+                }
+            }
+        }
+
         return new BoundStructLiteralExpression(null, structSymbol, inits.ToImmutable());
     }
 

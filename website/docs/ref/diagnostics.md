@@ -474,9 +474,23 @@ members.
 
 | Code | Severity | Message |
 |------|----------|---------|
-| GS0288 | Error | Field declarations require a `var` (mutable) or `let` (read-only) keyword. |
+| GS0288 | Error | Field declarations require a `var` (mutable), `let` (read-only), or `const` (compile-time constant) keyword. |
 
-Cause/fix — `struct Point { x int32; y int32 }` → `struct Point { var x int32; var y int32 }` (or `let` for read-only). The parser recovers by treating the field as `var`, but the error still fires.
+Cause/fix — `struct Point { x int32; y int32 }` → `struct Point { var x int32; var y int32 }` (or `let` for read-only, `const` for a compile-time constant). The parser recovers by treating the field as `var`, but the error still fires.
+
+## Inline field initializer diagnostics (GS0375–GS0377)
+
+Issue #948 — `const`/`let`/`var` fields in a type body may carry an inline
+`= expr` initializer. Instance initializers run before each constructor body in
+declaration order; `const` fields fold to compile-time literal fields; static
+(`shared`) initializers run in the static constructor.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0375 | Error | A `const` field requires an initializer. |
+| GS0376 | Error | A `const` field initializer must be a compile-time constant expression. |
+| GS0377 | Error | A field initializer cannot reference the instance member or constructor parameter `{name}` (field initializers run before the constructor body, so `this` is not available). Assign it in an `init(...)` constructor instead. |
+
 
 ## `deinit` (finalizer) diagnostics (GS0289–GS0292)
 

@@ -2600,12 +2600,16 @@ public class Parser
         }
 
         // ADR-0067: field declarations must be introduced with `var` (mutable)
-        // or `let` (read-only). The keyword is captured on the syntax node so
-        // the binder can set FieldSymbol.IsReadOnly accordingly. If the user
-        // omits the keyword, surface a precise diagnostic and try to recover
-        // by treating the next identifier as the field name.
+        // or `let` (read-only). Issue #948 adds `const` for compile-time
+        // constant fields (implicitly static and read-only). The keyword is
+        // captured on the syntax node so the binder can set
+        // FieldSymbol.IsReadOnly / IsConst accordingly. If the user omits the
+        // keyword, surface a precise diagnostic and try to recover by treating
+        // the next identifier as the field name.
         SyntaxToken varOrLetKeyword = null;
-        if (Current.Kind == SyntaxKind.VarKeyword || Current.Kind == SyntaxKind.LetKeyword)
+        if (Current.Kind == SyntaxKind.VarKeyword
+            || Current.Kind == SyntaxKind.LetKeyword
+            || Current.Kind == SyntaxKind.ConstKeyword)
         {
             varOrLetKeyword = NextToken();
         }
