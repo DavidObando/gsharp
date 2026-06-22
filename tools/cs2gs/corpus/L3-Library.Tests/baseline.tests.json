@@ -1,0 +1,95 @@
+{
+  "schemaVersion": "1.0",
+  "app": "L3-Library.Tests",
+  "framework": "xunit",
+  "total": 21,
+  "passed": 21,
+  "failed": 0,
+  "skipped": 0,
+  "tests": [
+    {
+      "name": "Corpus.L3.Tests.AsyncTests.ProductAsync_Awaits",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.AsyncTests.SumAsync_Awaits",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.ExtensionTests.Repeat_Extension(value: \"ab\", times: 3, expected: \"ababab\")",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.ExtensionTests.Repeat_Extension(value: \"x\", times: 0, expected: \"\")",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.ExtensionTests.WordCount_Extension",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.GenericsTests.Algorithms_Ends_Infers_Type",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.GenericsTests.Algorithms_Max(values: [-2, -7, -1], expected: -1)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.GenericsTests.Algorithms_Max(values: [3, 1, 4, 1, 5], expected: 5)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.GenericsTests.Algorithms_Max_Empty_Throws",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.GenericsTests.Algorithms_OrDefault_Handles_Null",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.GenericsTests.Repository_Add_Index_Count_Contains",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.PatternTests.Shapes_Area_SwitchExpression(shape: Circle { Radius = 2 }, expected: 12.566370614359172)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.PatternTests.Shapes_Area_SwitchExpression(shape: Rectangle { Width = 3, Height = 4 }, expected: 12)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.PatternTests.Shapes_Area_SwitchExpression(shape: Square { Side = 5 }, expected: 25)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.PatternTests.Shapes_Describe_RelationalPatterns(side: 1, expected: \"small\")",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.PatternTests.Shapes_Describe_RelationalPatterns(side: 20, expected: \"large\")",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.PatternTests.Shapes_Describe_RelationalPatterns(side: 5, expected: \"medium\")",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.StatisticsTests.Compose_Delegates",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.StatisticsTests.ForEachIndexed_Invokes_Action",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.StatisticsTests.SortedDistinct_LinqQuerySyntax",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Corpus.L3.Tests.StatisticsTests.SumOfSquaresOfEvens_LinqMethodSyntax",
+      "outcome": "Passed"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Corpus.L2</RootNamespace>
+    <AssemblyName>L2-Library</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="L2-Library.Tests" />
+  </ItemGroup>
+
+</Project>

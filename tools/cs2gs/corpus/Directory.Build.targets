@@ -1,0 +1,12 @@
+<Project>
+
+  <!--
+    Isolation boundary for the cs2gs C# corpus (targets side).
+
+    Like the sibling Directory.Build.props, this file deliberately does NOT
+    import the repository-root Directory.Build.targets. Its presence stops
+    MSBuild's upward search so none of the repo-shared targets/analyzers apply
+    to corpus C#. Intentionally empty beyond this note.
+  -->
+
+</Project>

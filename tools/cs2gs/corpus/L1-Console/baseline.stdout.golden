@@ -1,0 +1,29 @@
+Receipt for Ada
+----------------------
+1. Notebook x3 @ 5 = 15
+2. Pen x4 @ 2 = 8
+3. Marker x2 @ 3 = 6
+----------------------
+Subtotal: 29
+Tax (8%): 2
+Total: 31
+
+1 -> 1
+2 -> 2
+3 -> Fizz
+4 -> 4
+5 -> Buzz
+6 -> Fizz
+7 -> 7
+8 -> 8
+9 -> Fizz
+10 -> Buzz
+11 -> 11
+12 -> Fizz
+13 -> 13
+14 -> 14
+15 -> FizzBuzz
+Evens from 1..15: 7
+
+Items in cart: 3
+Greeting uses a literal dollar sign: $5 each
