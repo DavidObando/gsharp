@@ -86,7 +86,27 @@ The immutability decision is driven by Roslyn's definite-assignment/data-flow an
 
 #### B.5 Methods: in-body vs receiver-clause — ADR-0079, ADR-0024, spec §Functions and methods
 
-Instance methods on a type the package **owns** (every type the translator emits) are declared **in-body** as `func M(...) R { ... }`, for **both `class` and `struct`** receivers. The receiver-clause form `func (r T) M(...) R` is **reserved for non-owned receiver types** — CLR/BCL types, primitives, and types from other packages — i.e. C# *extension methods* (`this T` first parameter). ADR-0079 (issue #719) made this the rule and emits the soft `GS0314` warning when a receiver clause names an owned type; `samples/MethodsWithReceivers.gs` is the canonical example (in-body method on an owned type) and `samples/ExtensionFunctions.gs` is the canonical receiver-clause example (on `int32`). Operator overloads keep the receiver-clause form and are exempt from `GS0314` (spec §Functions and methods).
+Instance methods on a **`class`** (or `data class`) the package **owns** are declared **in-body** as `func M(...) R { ... }`. The receiver-clause form `func (r T) M(...) R` is **reserved for non-owned receiver types** — CLR/BCL types, primitives, and types from other packages — i.e. C# *extension methods* (`this T` first parameter). ADR-0079 (issue #719) made this the rule and emits the soft `GS0314` warning when a receiver clause names an owned type; `samples/MethodsWithReceivers.gs` is the canonical example (in-body method on an owned class) and `samples/ExtensionFunctions.gs` is the canonical receiver-clause example (on `int32`). Operator overloads keep the receiver-clause form and are exempt from `GS0314` (spec §Functions and methods).
+
+> **Owned-`struct` methods — discovered compiler gap.** ADR-0079 frames the
+> in-body canonical form as applying to owned `class` **and** `struct` receivers.
+> The current parser does **not** honour that for value types: a `func` member
+> inside a `struct`/`data struct` body is rejected with `GS0005`
+> (`Parser.cs` ~L1809 only accepts method/constructor members when the aggregate
+> keyword is `ClassKeyword`). The only spelling the parser accepts for an
+> instance method on an owned `struct` is therefore the receiver-clause form
+> `func (r T) M(...) R` — which the binder then flags with `GS0314`
+> (`DeclarationBinder.cs`:3129 fires for owned `struct` and `class` alike).
+> Consequently **no warning-free way to declare an instance method on an owned
+> `struct` exists today.** The translator emits the receiver-clause form for
+> owned-`struct` methods (the only form that compiles), records the resulting
+> `GS0314` as an *expected, known* diagnostic (not a parity failure), and the
+> pipeline surfaces this as a discovered compiler gap (a triage record /
+> filed issue) per objective (2) of issue #914 (tracked as issue #938). If the compiler later allows
+> in-body `struct` methods (or exempts owned `struct` receivers from `GS0314`),
+> the canonical form switches to whichever becomes warning-free; the round-trip
+> validator and the `B5_StructInBodyMethodDoesNotRoundTrip` pin test will catch
+> the change.
 
 C# **extension methods** (`static R M(this T self, …)`) translate to the receiver-clause form `func (self T) M(…) R` (ADR-0019), since `T` is non-owned by definition.
 

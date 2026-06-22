@@ -5,4 +5,8 @@
     <RootNamespace>Cs2Gs.CodeModel</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Core\Core.csproj" />
+  </ItemGroup>
+
 </Project>
