@@ -66,6 +66,29 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         !TypeArguments.IsDefaultOrEmpty && TypeArguments.Any(TypeSymbol.ContainsTypeParameter);
 
     /// <summary>
+    /// Gets a value indicating whether this symbol's symbolic type arguments
+    /// should be substituted back through its <see cref="OpenDefinition"/> when
+    /// projecting member / element types (issue #939).
+    /// This is broader than <see cref="HasTypeParameterArgument"/>: it also
+    /// holds when an argument is a <em>same-compilation</em> user
+    /// <c>class</c>/<c>data struct</c> (whose <see cref="TypeSymbol.ClrType"/>
+    /// is <see langword="null"/> because its CLR type is still being built and
+    /// the closed shape is erased to <c>object</c>), or a nested constructed
+    /// generic with symbolic arguments (e.g. <c>List[List[MyGs]]</c>). The
+    /// indexer path (<c>MapErasedIndexerElementType</c>) and the for-in
+    /// enumerable path both rely on this so iterating <c>List[Item]</c>
+    /// recovers the member-bearing user <c>Item</c> symbol rather than the
+    /// type-erased <c>object</c>.
+    /// </summary>
+    public bool HasSubstitutableTypeArgument =>
+        !TypeArguments.IsDefaultOrEmpty
+        && (HasTypeParameterArgument
+            || TypeArguments.Any(static a => a.ClrType == null
+                || (a is ImportedTypeSymbol nested
+                    && nested.OpenDefinition != null
+                    && !nested.TypeArguments.IsDefaultOrEmpty)));
+
+    /// <summary>
     /// Gets or creates the imported type symbol for the given CLR type.
     /// </summary>
     /// <param name="type">The CLR type.</param>

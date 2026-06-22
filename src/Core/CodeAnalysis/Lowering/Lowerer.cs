@@ -757,7 +757,7 @@ public sealed class Lowerer : BoundTreeRewriter
             TypeSymbol keyAccessType = TypeSymbol.FromClrType(keyProp.PropertyType);
             TypeSymbol valueAccessType = TypeSymbol.FromClrType(valueProp.PropertyType);
             if (kvpType is ImportedTypeSymbol kvpImp
-                && kvpImp.HasTypeParameterArgument
+                && kvpImp.HasSubstitutableTypeArgument
                 && kvpImp.TypeArguments.Length == 2)
             {
                 keyAccessType = kvpImp.TypeArguments[0];
@@ -1006,7 +1006,7 @@ public sealed class Lowerer : BoundTreeRewriter
                 openDef = typeof(System.Collections.Generic.IEnumerable<>);
                 typeArguments = ImmutableArray.Create<TypeSymbol>(seq.ElementType);
                 break;
-            case ImportedTypeSymbol imp when imp.HasTypeParameterArgument && imp.OpenDefinition != null:
+            case ImportedTypeSymbol imp when imp.HasSubstitutableTypeArgument && imp.OpenDefinition != null:
                 openDef = imp.OpenDefinition;
                 typeArguments = imp.TypeArguments;
                 break;
@@ -1172,7 +1172,7 @@ public sealed class Lowerer : BoundTreeRewriter
                 // BoundClrPropertyAccessExpression carries the user's `T`.
                 TypeSymbol currentType = null;
                 if (enumeratorType is ImportedTypeSymbol enumImp
-                    && enumImp.HasTypeParameterArgument
+                    && enumImp.HasSubstitutableTypeArgument
                     && !enumImp.TypeArguments.IsDefaultOrEmpty)
                 {
                     currentType = enumImp.TypeArguments[0];

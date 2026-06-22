@@ -2828,7 +2828,16 @@ internal sealed class StatementBinder
             // OpenDefinition for the enumerable / dictionary shape and map
             // each open CLR type argument back to the symbolic argument so
             // the loop variable's type is the user's `T` (not `object`).
-            case ImportedTypeSymbol openImp when openImp.HasTypeParameterArgument && openImp.OpenDefinition != null:
+            //
+            // Issue #939: this path must also fire when the symbolic type
+            // argument is a *same-compilation* user `class`/`data struct`
+            // (e.g. `List[Item]`). Such arguments are not type parameters, so
+            // `HasTypeParameterArgument` is false, yet their CLR type is still
+            // erased to `<object>` on the closed `ClrType`. Mirror the indexer
+            // path's `MapErasedIndexerElementType` substitutability test so the
+            // loop variable recovers the member-bearing user `Item` symbol
+            // rather than the erased `object`.
+            case ImportedTypeSymbol openImp when openImp.OpenDefinition != null && openImp.HasSubstitutableTypeArgument:
                 if (MemberLookup.TryGetClrDictionaryTypes(openImp.OpenDefinition, out var openDKey, out var openDVal))
                 {
                     iterationKind = ForRangeKind.Dictionary;
