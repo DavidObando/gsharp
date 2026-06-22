@@ -66,7 +66,7 @@ internal sealed partial class ExpressionBinder
             {
                 FunctionSymbol userOp = null;
                 bool isStructReceiver = false;
-                if (boundOperand.Type is StructSymbol operandStruct && operandStruct.TryGetMethodIncludingInherited(userOpName, out var structOp))
+                if (boundOperand.Type is StructSymbol operandStruct && TypeMemberModel.TryGetMethodIncludingInherited(operandStruct, userOpName, out var structOp))
                 {
                     userOp = structOp;
                     isStructReceiver = true;
@@ -716,12 +716,12 @@ internal sealed partial class ExpressionBinder
                 FunctionSymbol userOp = null;
                 bool leftIsStructReceiver = false;
                 bool rightIsStructReceiver = false;
-                if (boundLeft.Type is StructSymbol leftStruct && leftStruct.TryGetMethodIncludingInherited(userOpName, out var leftOp))
+                if (boundLeft.Type is StructSymbol leftStruct && TypeMemberModel.TryGetMethodIncludingInherited(leftStruct, userOpName, out var leftOp))
                 {
                     userOp = leftOp;
                     leftIsStructReceiver = true;
                 }
-                else if (boundRight.Type is StructSymbol rightStruct && rightStruct.TryGetMethodIncludingInherited(userOpName, out var rightOp))
+                else if (boundRight.Type is StructSymbol rightStruct && TypeMemberModel.TryGetMethodIncludingInherited(rightStruct, userOpName, out var rightOp))
                 {
                     userOp = rightOp;
                     rightIsStructReceiver = true;
