@@ -129,7 +129,7 @@ public static class NullableLifting
         // level (encoded as `GENERICINST System.Nullable`1<MVAR>`). All
         // emit-side decisions that distinguish value-type Nullable from
         // reference-type Nullable (slot-based default-init, newobj lift,
-        // HasValue branching in `?:`) must treat the open struct case
+        // HasValue branching in `??`) must treat the open struct case
         // the same as a closed value type.
         if (nullable?.UnderlyingType is TypeParameterSymbol tp && tp.HasValueTypeConstraint)
         {

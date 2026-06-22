@@ -36,7 +36,7 @@ The public specification page is [Language specification](/docs/ref/spec). It is
 G# uses width-bearing fixed-size integer names such as `int8`, `uint16`, `int32`, and `uint64` so the type's size is visible in source and consistent with names like `float32` and `float64`.  replaced the earlier C#-style integer names while the language was still pre-stable; `nint` and `nuint` remain the native-width integer spellings.  /  layers ten friendly aliases (`int`, `uint`, `long`, `ulong`, `short`, `ushort`, `byte`, `sbyte`, `float`, `double`) on top of the canonical names: they resolve at the binder, are interchangeable with the width-bearing spellings everywhere, and diagnostics, `typeof`, hover, and IL always print the canonical name. The canonical width-bearing spellings remain preferred in documentation and public library APIs. 
 ## Does G# have `null`?
 
-G# uses `nil`, not `null`, and nullability is part of the type. A non-nullable `T` cannot receive `nil`; a nullable `T?` can. The language includes safe access `?.`, null coalescing `?:`, and null assertion `!!`. This is the language nullability model.
+G# uses `nil`, not `null`, and nullability is part of the type. A non-nullable `T` cannot receive `nil`; a nullable `T?` can. The language includes safe access `?.`, null coalescing `??`, and null assertion `!!`. This is the language nullability model.
 
 ## How is concurrency modeled?
 

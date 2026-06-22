@@ -15,7 +15,7 @@ Nullability is part of the type. Reference types are non-null by default; nullab
 ```gs
 let s : string  = "hello"   // non-null
 let m : string? = nil       // nullable
-let n = m?.length ?: 0      // safe call + Elvis
+let n = m?.length ?? 0      // safe call + null-coalescing
 let k = m!!.length          // null-assert (throws if nil)
 if m != nil {
   Console.WriteLine(m.length)   // smart cast: m is `string` here

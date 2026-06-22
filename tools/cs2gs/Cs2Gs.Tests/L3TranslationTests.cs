@@ -270,24 +270,22 @@ namespace Demo
     }
 
     /// <summary>
-    /// ADR-0115 §B gap: the C# null-coalescing operator <c>??</c> has no G# form
-    /// (GS0005), so it surfaces as a clean unsupported diagnostic.
+    /// Issue #941: the C# null-coalescing operator <c>??</c> now maps directly
+    /// to G#'s <c>??</c> operator (the former <c>?:</c> gap is resolved).
     /// </summary>
     [Fact]
-    public void NullCoalescing_SurfacesAsUnsupported()
+    public void NullCoalescing_TranslatesToQuestionQuestion()
     {
-        TranslationContext context = TranslateForDiagnostics(@"
+        string translated = TranslateUnit(@"
 namespace Demo
 {
     public static class CoalesceHost
     {
-        public static string OrEmpty(string value) => value ?? string.Empty;
+        public static string OrElse(string value, string fallback) => value ?? fallback;
     }
 }");
 
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.IsUnsupported && d.ConstructKind == "CoalesceExpression");
+        Assert.Contains("value ?? fallback", translated);
     }
 
     /// <summary>

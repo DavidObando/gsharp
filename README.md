@@ -96,13 +96,13 @@ import Gsharp.Extensions.Optional
 let name string? = "ada"
 
 let upper = name.Map((s string) -> s.ToUpper())
-Console.WriteLine(upper ?: "<absent>")           // ADA
+Console.WriteLine(upper ?? "<absent>")           // ADA
 
 let absent string? = nil
 Console.WriteLine(absent.OrElse("default"))      // default
 
 let short = name.Filter((s string) -> s.Length <= 2)
-Console.WriteLine(short ?: "<filtered out>")     // <filtered out>
+Console.WriteLine(short ?? "<filtered out>")     // <filtered out>
 ```
 
 ### `scope` + `async` / `await`

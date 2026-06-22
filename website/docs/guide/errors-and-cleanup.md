@@ -42,10 +42,10 @@ Catch clauses name a local and may specify a type. Prefer specific exception typ
 
 ## Nullable absence is not an exception
 
-Use nullable types and `nil` for expected absence. Use exceptions for failure paths that interrupt normal control flow. `?:` is the null-coalescing operator, `?.` is null-conditional access, and `!!` asserts non-null.
+Use nullable types and `nil` for expected absence. Use exceptions for failure paths that interrupt normal control flow. `??` is the null-coalescing operator, `?.` is null-conditional access, and `!!` asserts non-null.
 
 ```gsharp
-let display = user?.Name ?: "anonymous"
+let display = user?.Name ?? "anonymous"
 ```
 
 ## Defer

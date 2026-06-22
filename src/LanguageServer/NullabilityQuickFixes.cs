@@ -29,7 +29,7 @@ namespace GSharp.LanguageServer;
 ///     of type <c>T?</c>).</description>
 ///   </item>
 ///   <item>
-///     <description><c>expr</c> → <c>(expr ?: default)</c> for supplying
+///     <description><c>expr</c> → <c>(expr ?? default)</c> for supplying
 ///     a default when a nullable is used in a non-nullable position
 ///     (GS0154 / GS0155 / GS0156).</description>
 ///   </item>
@@ -51,9 +51,9 @@ internal static class NullabilityQuickFixes
     public const string NullConditionalAccessTitle = "Use null-conditional access '?.'";
 
     /// <summary>
-    /// Title shown for the Elvis / null-coalescing default quick fix.
+    /// Title shown for the null-coalescing default quick fix.
     /// </summary>
-    public const string ElvisDefaultTitle = "Provide default with '?:'";
+    public const string ElvisDefaultTitle = "Provide default with '??'";
 
     /// <summary>
     /// Title shown for the postfix <c>!!</c> null-assertion quick fix.
@@ -114,7 +114,7 @@ internal static class NullabilityQuickFixes
     }
 
     /// <summary>
-    /// Builds the Elvis-default (<c>?:</c>) and null-assertion (<c>!!</c>)
+    /// Builds the null-coalescing-default (<c>??</c>) and null-assertion (<c>!!</c>)
     /// rewrites for a diagnostic that indicates a nullable value flowing
     /// into a non-nullable position. The detector inspects the diagnostic
     /// message for the canonical <c>'T?'</c> → <c>'T'</c> pair surfaced
@@ -147,7 +147,7 @@ internal static class NullabilityQuickFixes
 
         var original = sourceText.Substring(span.Start, span.Length);
 
-        // GS0274 fires on the literal `nil`, where `nil ?: X` and `nil!!`
+        // GS0274 fires on the literal `nil`, where `nil ?? X` and `nil!!`
         // are both degenerate (the user wants to provide a real value or
         // make the parameter nullable). Skip the rewrites — the original
         // diagnostic already carries the canonical suggestion in its
@@ -163,8 +163,8 @@ internal static class NullabilityQuickFixes
         yield return BuildReplacement(
             uri,
             range,
-            $"Provide default with '?: {elvisDefault}'",
-            $"({original} ?: {elvisDefault})");
+            $"Provide default with '?? {elvisDefault}'",
+            $"({original} ?? {elvisDefault})");
 
         yield return BuildReplacement(
             uri,
@@ -408,7 +408,7 @@ internal static class NullabilityQuickFixes
 
     /// <summary>
     /// Picks a sensible literal for the right-hand side of the synthesised
-    /// <c>?:</c> rewrite. The user is expected to replace it with a real
+    /// <c>??</c> rewrite. The user is expected to replace it with a real
     /// default; the goal here is to produce a snippet that parses and
     /// type-checks for the common built-ins.
     /// </summary>

@@ -1066,7 +1066,7 @@ internal sealed class SlotPlanner
     }
 
     // Issue #519: walks the bound tree collecting every `BoundBinaryExpression`
-    // whose operator is `NullCoalesce` (`?:`) and whose LHS needs an emit-time
+    // whose operator is `NullCoalesce` (`??`) and whose LHS needs an emit-time
     // spill slot. Two shapes qualify:
     //
     //   * Value-type `Nullable<T>` LHS — the emitter spills the LHS once and
@@ -1082,7 +1082,7 @@ internal sealed class SlotPlanner
     //     `ReflectionMetadataEmitter.GetElementTypeToken`), and the emitter
     //     probes its non-nullness via `box !!T; brfalse fallback`.
     //
-    // Reference-type `?:` over a concrete reference type (string?, Func<T>?,
+    // Reference-type `??` over a concrete reference type (string?, Func<T>?,
     // sequence[T], etc.) uses the existing `dup; brtrue; pop; rhs` pattern
     // and needs no slot.
     private sealed class NullableValueTypeCoalesceCollector : BoundTreeWalker

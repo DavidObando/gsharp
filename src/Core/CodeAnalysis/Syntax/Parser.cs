@@ -5448,7 +5448,7 @@ public class Parser
             return new AssignmentExpressionSyntax(syntaxTree, identifierToken2, equalsToken, binary);
         }
 
-        var expression = ParseBinaryExpression();
+        var expression = ParseNullCoalescingExpression();
 
         // Issue #507: indexer assignment whose target is an arbitrary expression
         // (e.g. `obj.Member[k] = v`, `a.b.c[k] = v`, `(GetThing())[i] = v`). The
@@ -5535,6 +5535,27 @@ public class Parser
         }
 
         return expression;
+    }
+
+    // Issue #941: `a ?? b` binary null-coalescing operator. Parsed as its own
+    // layer between the binary-operator loop and the assignment/ternary tail so
+    // that it (a) binds at a precedence strictly below `||` (the lowest binary
+    // operator), and (b) is right-associative, so `a ?? b ?? c` parses as
+    // `a ?? (b ?? c)` — matching C#'s `??`. The produced node is an ordinary
+    // BinaryExpressionSyntax with a QuestionQuestionToken operator, so the
+    // binder/emitter reuse the existing NullCoalesce machinery.
+    private ExpressionSyntax ParseNullCoalescingExpression()
+    {
+        var left = ParseBinaryExpression();
+
+        if (Current.Kind == SyntaxKind.QuestionQuestionToken)
+        {
+            var operatorToken = NextToken();
+            var right = ParseNullCoalescingExpression();
+            return new BinaryExpressionSyntax(syntaxTree, left, operatorToken, right);
+        }
+
+        return left;
     }
 
     private ExpressionSyntax ParseBinaryExpression(int parentPrecedence = 0)

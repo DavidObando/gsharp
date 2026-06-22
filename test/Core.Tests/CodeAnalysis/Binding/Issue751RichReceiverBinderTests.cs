@@ -30,7 +30,7 @@ public class Issue751RichReceiverBinderTests
     {
         var source = @"
 func (self string?) OrElse(fb string) string {
-    return self ?: fb
+    return self ?? fb
 }
 
 var x string? = ""hi""

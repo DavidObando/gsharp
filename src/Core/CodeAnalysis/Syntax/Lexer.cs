@@ -315,11 +315,6 @@ public sealed class Lexer
                     kind = SyntaxKind.QuestionDotToken;
                     position++;
                 }
-                else if (Current == ':')
-                {
-                    kind = SyntaxKind.QuestionColonToken;
-                    position++;
-                }
                 else if (Current == '[')
                 {
                     // ADR-0073 / issue #710: `?[` null-conditional indexing
@@ -333,11 +328,19 @@ public sealed class Lexer
                 else if (Current == '?' && Peek(1) == '=')
                 {
                     // ADR-0072 / issue #709: `??=` null-coalescing compound
-                    // assignment. We do NOT tokenize bare `??` — G# uses
-                    // `?:` for null-coalescing. The doubled-`?` sequence is
-                    // recognised here only as the prefix of `??=`.
+                    // assignment. The doubled-`?` followed by `=` is the
+                    // compound-assignment form.
                     kind = SyntaxKind.QuestionQuestionEqualsToken;
                     position += 2;
+                }
+                else if (Current == '?')
+                {
+                    // Issue #941: `??` binary null-coalescing operator. The
+                    // bare doubled-`?` (not followed by `=`) yields the
+                    // null-coalescing read `a ?? b`. (The former `?:` Elvis
+                    // spelling was removed in favor of `??`.)
+                    kind = SyntaxKind.QuestionQuestionToken;
+                    position++;
                 }
                 else
                 {

@@ -160,8 +160,8 @@ the flag is emitted exactly on the methods listed above.
 
 ### Why no `Option<T>`?
 
-G# already has structural nullable types (`T?`), the Elvis operator
-(`?:`), null-safe member access (`?.`), the bang operator (`!!`),
+G# already has structural nullable types (`T?`), the null-coalescing operator
+(`??`, originally `?:` — see ADR-0116), null-safe member access (`?.`), the bang operator (`!!`),
 smart casts (`if x is T y { ... }`), and the `nil` literal.
 Introducing a wrapper `Option<T>` would compete with the existing
 surface for no semantic gain and would force every user of the
@@ -266,17 +266,17 @@ hatch under `src/Sdk/Gsharp.Extensions/*.cs` works today.
   explicit `[T struct]` overload (HasValue-aware lowering), at
   which point each path is statically chosen and the emit fix
   becomes mechanical.
-- **L3. Native `?:` over nullable value types.**
+- **L3. Native `??` over nullable value types.**
   ([issue #752](https://github.com/DavidObando/gsharp/issues/752))
   **Closed.** Issue #519 introduced the HasValue-based lowering
-  for value-type `Nullable<T>` LHS in the `?:` emit path; issue
+  for value-type `Nullable<T>` LHS in the `??` emit path; issue
   #752 finished the job by switching the non-null branch's unwrap
   from `Nullable<T>::get_Value()` to the cheaper
   `GetValueOrDefault()` (no boxing, no callvirt, no redundant
   throw path) and by giving the coalesce its own scratch slot
-  separate from the receiver-spill slot so `(v ?: 0).ToString()`
+  separate from the receiver-spill slot so `(v ?? 0).ToString()`
   emits verifiable IL. The `Optional` and `Sequences` samples
-  now use `?:` directly on `int32?` receivers; the `OrElse` /
+  now use `??` directly on `int32?` receivers; the `OrElse` /
   `OrCompute` helpers remain available for deferred / computed
   fallbacks but are no longer the only safe surface.
 

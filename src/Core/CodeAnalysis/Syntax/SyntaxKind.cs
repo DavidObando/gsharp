@@ -62,7 +62,7 @@ public enum SyntaxKind
     BangBangToken,
     QuestionToken,
     QuestionDotToken,
-    QuestionColonToken,
+    QuestionQuestionToken,
     QuestionQuestionEqualsToken,
 
     // ADR-0073 / issue #710: prefix token for `a?[i]` null-conditional indexing.

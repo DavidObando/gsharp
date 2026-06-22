@@ -12,7 +12,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 /// Issue #710 / ADR-0073: lexer-level coverage for the new <c>?[</c>
 /// null-conditional indexing prefix. The token is recognised only when
 /// <c>[</c> immediately follows <c>?</c> with no intervening trivia — so
-/// the existing <c>?.</c>, <c>?:</c>, <c>??=</c>, and bare-<c>?</c>
+/// the existing <c>?.</c>, <c>??</c>, <c>??=</c>, and bare-<c>?</c>
 /// (type-annotation) tokens keep their meanings, and a true ternary
 /// <c>cond ? [arr] : [arr]</c> (with whitespace separating <c>?</c> and
 /// <c>[</c>) keeps lexing as two tokens.
@@ -63,10 +63,11 @@ public class Issue710NullConditionalIndexingLexerTests
     }
 
     [Fact]
-    public void Lexes_QuestionColon_StillAsNullCoalescingRead()
+    public void Lexes_QuestionQuestion_AsNullCoalescingRead()
     {
-        var tokens = SyntaxTree.ParseTokens("?:").ToList();
-        Assert.Equal(SyntaxKind.QuestionColonToken, tokens[0].Kind);
+        // Issue #941: `??` is the null-coalescing read operator (formerly `?:`).
+        var tokens = SyntaxTree.ParseTokens("??").ToList();
+        Assert.Equal(SyntaxKind.QuestionQuestionToken, tokens[0].Kind);
     }
 
     [Fact]

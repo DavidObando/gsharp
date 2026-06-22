@@ -31,7 +31,7 @@ public class Issue571LocationRegressionTests
 
             var x int32? = 42
             var y int32? = nil
-            var v int32 = x ?: 0
+            var v int32 = x ?? 0
             Console.WriteLine(v)
             Console.WriteLine(y)
             """;

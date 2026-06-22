@@ -72,7 +72,7 @@ public class Issue750ConstraintOverloadInterpreterTests
             let names = Sequences.Of("alpha", "beta")
             let nums = Sequences.Of(11, 22, 33)
 
-            Console.WriteLine(names.FirstOrNil() ?: "<none>")
+            Console.WriteLine(names.FirstOrNil() ?? "<none>")
             Console.WriteLine(nums.FirstOrNil().OrElse(-1).ToString())
             """;
 
@@ -91,7 +91,7 @@ public class Issue750ConstraintOverloadInterpreterTests
             let nums = Sequences.Of(11, 22, 33)
             let solo = Sequences.Of(42)
 
-            Console.WriteLine(names.LastOrNil() ?: "<none>")
+            Console.WriteLine(names.LastOrNil() ?? "<none>")
             Console.WriteLine(nums.LastOrNil().OrElse(-1).ToString())
             Console.WriteLine(solo.SingleOrNil().OrElse(-1).ToString())
             """;

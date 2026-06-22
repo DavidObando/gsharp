@@ -177,10 +177,10 @@ PropertyInitializer
 PropertyPattern
 PropertyPatternField
 PublicKeyword
-QuestionColonToken
 QuestionDotToken
 QuestionOpenBracketToken
 QuestionQuestionEqualsToken
+QuestionQuestionToken
 QuestionToken
 RangeKeyword
 RefArgumentExpression

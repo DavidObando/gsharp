@@ -535,7 +535,7 @@ internal sealed class MethodBodyPlanner
             receiverSpillSlots[unwrap] = slot;
         }
 
-        // Issue #519 / #752 / ADR-0084 L3: `?:` whose LHS is a value-type
+        // Issue #519 / #752 / ADR-0084 L3: `??` whose LHS is a value-type
         // `Nullable<T>` lowers at emit time to a HasValue/GetValueOrDefault
         // sequence that needs a `Nullable<T>`-typed temp slot (it cannot
         // use `dup; brtrue`, which is invalid IL for value-type stack
@@ -545,7 +545,7 @@ internal sealed class MethodBodyPlanner
         //
         // The slot lives in its OWN dictionary (separate from
         // `receiverSpillSlots`) because the same binary node may also be
-        // the receiver of an instance call — `(v ?: 0).ToString()` — in
+        // the receiver of an instance call — `(v ?? 0).ToString()` — in
         // which case the receiver-spill collector independently
         // allocates an underlying-`T`-typed slot to take `ldloca` of the
         // call receiver. Conflating the two slots in one dictionary
@@ -1148,7 +1148,7 @@ internal sealed class MethodBodyPlanner
         return sink;
     }
 
-    // Issue #519: each `?:` whose LHS is a value-type `Nullable<T>` lowers at
+    // Issue #519: each `??` whose LHS is a value-type `Nullable<T>` lowers at
     // emit time to a HasValue branch that needs a `Nullable<T>`-typed temp
     // slot. The slot is keyed by the binary expression node and typed as the
     // LHS's NullableTypeSymbol so `EncodeTypeSymbol` emits the proper

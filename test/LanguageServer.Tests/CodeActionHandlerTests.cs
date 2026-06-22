@@ -92,14 +92,14 @@ public class CodeActionHandlerTests
 
         var actions = CodeActionComputer.ComputeCodeActions(uri, content, range).ToList();
 
-        var elvis = Assert.Single(actions, a => a.CodeAction.Title.StartsWith("Provide default with '?:", System.StringComparison.Ordinal));
+        var elvis = Assert.Single(actions, a => a.CodeAction.Title.StartsWith("Provide default with '??", System.StringComparison.Ordinal));
         var bang = Assert.Single(actions, a => a.CodeAction.Title == NullabilityQuickFixes.NullAssertionTitle);
 
         Assert.Equal(CodeActionKind.QuickFix, elvis.CodeAction.Kind);
         Assert.Equal(CodeActionKind.QuickFix, bang.CodeAction.Kind);
 
         var elvisEdit = elvis.CodeAction.Edit.Changes[uri].Single();
-        Assert.Equal("(x ?: \"\")", elvisEdit.NewText);
+        Assert.Equal("(x ?? \"\")", elvisEdit.NewText);
 
         var bangEdit = bang.CodeAction.Edit.Changes[uri].Single();
         Assert.Equal("(x!!)", bangEdit.NewText);
@@ -132,11 +132,11 @@ func main() {
 
         var actions = CodeActionComputer.ComputeCodeActions(uri, content, range).ToList();
 
-        var elvis = Assert.Single(actions, a => a.CodeAction.Title.StartsWith("Provide default with '?:", System.StringComparison.Ordinal));
+        var elvis = Assert.Single(actions, a => a.CodeAction.Title.StartsWith("Provide default with '??", System.StringComparison.Ordinal));
         var bang = Assert.Single(actions, a => a.CodeAction.Title == NullabilityQuickFixes.NullAssertionTitle);
 
         var elvisEdit = elvis.CodeAction.Edit.Changes[uri].Single();
-        Assert.Equal("(x ?: \"\")", elvisEdit.NewText);
+        Assert.Equal("(x ?? \"\")", elvisEdit.NewText);
 
         var bangEdit = bang.CodeAction.Edit.Changes[uri].Single();
         Assert.Equal("(x!!)", bangEdit.NewText);
@@ -151,7 +151,7 @@ func main() {
     public void NullableValueFixes_NotOfferedForLiteralNil()
     {
         // GS0274 fires on a literal `nil` flowing into a non-nullable parameter. Wrapping `nil`
-        // in `?:` or `!!` is degenerate — the user has to make the parameter nullable instead
+        // in `??` or `!!` is degenerate — the user has to make the parameter nullable instead
         // (see the diagnostic's own suggestion).
         const string source = @"func f(s string) {}
 func main() {
@@ -166,7 +166,7 @@ func main() {
         var actions = CodeActionComputer.ComputeCodeActions(uri, content, range).ToList();
 
         Assert.DoesNotContain(actions, a => a.CodeAction.Title == NullabilityQuickFixes.NullAssertionTitle);
-        Assert.DoesNotContain(actions, a => a.CodeAction.Title.StartsWith("Provide default with '?:", System.StringComparison.Ordinal));
+        Assert.DoesNotContain(actions, a => a.CodeAction.Title.StartsWith("Provide default with '??", System.StringComparison.Ordinal));
     }
 
     [Fact]
@@ -186,7 +186,7 @@ func main() {
 
         Assert.DoesNotContain(actions, a => a.CodeAction.Title == NullabilityQuickFixes.NullAssertionTitle);
         Assert.DoesNotContain(actions, a => a.CodeAction.Title == NullabilityQuickFixes.NullConditionalAccessTitle);
-        Assert.DoesNotContain(actions, a => a.CodeAction.Title.StartsWith("Provide default with '?:", System.StringComparison.Ordinal));
+        Assert.DoesNotContain(actions, a => a.CodeAction.Title.StartsWith("Provide default with '??", System.StringComparison.Ordinal));
     }
 
     [Fact]
@@ -205,7 +205,7 @@ func main() {
         var actions = CodeActionComputer.ComputeCodeActions(uri, content, range).ToList();
 
         Assert.DoesNotContain(actions, a => a.CodeAction.Title == NullabilityQuickFixes.NullAssertionTitle);
-        Assert.DoesNotContain(actions, a => a.CodeAction.Title.StartsWith("Provide default with '?:", System.StringComparison.Ordinal));
+        Assert.DoesNotContain(actions, a => a.CodeAction.Title.StartsWith("Provide default with '??", System.StringComparison.Ordinal));
     }
 
     private static string ApplyEdit(string source, TextEdit edit)

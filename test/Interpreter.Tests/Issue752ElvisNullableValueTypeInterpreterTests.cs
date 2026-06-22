@@ -9,7 +9,7 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #752 / ADR-0084 L3: interpreter parity for the Elvis (<c>?:</c>)
+/// Issue #752 / ADR-0084 L3: interpreter parity for the null-coalescing (<c>??</c>)
 /// operator over value-type <c>Nullable&lt;T&gt;</c> receivers. The
 /// interpreter stores nullables as their underlying boxed payload (or
 /// <c>null</c> when absent), so the existing <c>left ?? right</c> path
@@ -26,7 +26,7 @@ public class Issue752ElvisNullableValueTypeInterpreterTests
     {
         var source = """
             let v int32? = nil
-            let n = v ?: 0
+            let n = v ?? 0
             Console.WriteLine(n)
             """;
 
@@ -38,7 +38,7 @@ public class Issue752ElvisNullableValueTypeInterpreterTests
     {
         var source = """
             let v int32? = 42
-            let n = v ?: 0
+            let n = v ?? 0
             Console.WriteLine(n)
             """;
 
@@ -51,7 +51,7 @@ public class Issue752ElvisNullableValueTypeInterpreterTests
         var source = """
             let a int32? = nil
             let b int32? = 7
-            let n = (a ?: b) ?: 0
+            let n = (a ?? b) ?? 0
             Console.WriteLine(n)
             """;
 
@@ -64,7 +64,7 @@ public class Issue752ElvisNullableValueTypeInterpreterTests
         var source = """
             let a int32? = nil
             let b int32? = nil
-            let n = (a ?: b) ?: 0
+            let n = (a ?? b) ?? 0
             Console.WriteLine(n)
             """;
 
@@ -77,7 +77,7 @@ public class Issue752ElvisNullableValueTypeInterpreterTests
         var source = """
             let a int32? = nil
             let b int32? = 99
-            let r int32? = a ?: b
+            let r int32? = a ?? b
             Console.WriteLine(r!!)
             """;
 
@@ -89,11 +89,11 @@ public class Issue752ElvisNullableValueTypeInterpreterTests
     {
         var source = """
             let s string? = nil
-            let r string = s ?: "missing"
+            let r string = s ?? "missing"
             Console.WriteLine(r)
 
             let t string? = "hello"
-            let u string = t ?: "missing"
+            let u string = t ?? "missing"
             Console.WriteLine(u)
             """;
 
@@ -105,10 +105,10 @@ public class Issue752ElvisNullableValueTypeInterpreterTests
     {
         var source = """
             let v int32? = 42
-            Console.WriteLine((v ?: -1).ToString())
+            Console.WriteLine((v ?? -1).ToString())
 
             let w int32? = nil
-            Console.WriteLine((w ?: -1).ToString())
+            Console.WriteLine((w ?? -1).ToString())
             """;
 
         Assert.Equal("42\n-1\n", RunSubmission(source));

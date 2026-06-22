@@ -109,7 +109,7 @@ func (self sequence[T]) FirstOrNil[T struct]() T? {
 }
 
 let strs = []string{ ""alpha"", ""beta"" }
-let head = strs.FirstOrNil() ?: ""<none>""
+let head = strs.FirstOrNil() ?? ""<none>""
 head
 ";
         var result = Evaluate(source);
@@ -136,7 +136,7 @@ func (self sequence[T]) FirstOrNil[T struct]() T? {
 }
 
 let nums = []int32{ 11, 22, 33 }
-let head = nums.FirstOrNil() ?: -1
+let head = nums.FirstOrNil() ?? -1
 head
 ";
         var result = Evaluate(source);

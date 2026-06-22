@@ -100,13 +100,13 @@ public class Issue709NullCoalescingAssignmentParserTests
     public void Parses_RhsAsExpression()
     {
         // RHS may be any expression — ensure precedence works out so that
-        // `a ??= b ?: c` parses as `a ??= (b ?: c)` (the `?:` is a
-        // higher-precedence binary expression bound left-to-right).
+        // `a ??= b ?? c` parses as `a ??= (b ?? c)` (the `??` read binds
+        // right-associatively and lower than `||`).
         const string source = """
             package P
             var x string? = nil
             var y string? = nil
-            x ??= y ?: "fallback"
+            x ??= y ?? "fallback"
             """;
         var stmt = GetSingleAssignmentInBlock(source);
         Assert.NotNull(stmt.Value);
@@ -114,17 +114,16 @@ public class Issue709NullCoalescingAssignmentParserTests
     }
 
     [Fact]
-    public void Reports_Diagnostic_OnBareQuestionQuestion_WithoutEquals()
+    public void Parses_BareQuestionQuestion_AsNullCoalescingExpression()
     {
-        // G# does not introduce a bare `??` token; the lexer emits two
-        // `?` tokens. Parsing `a ?? b` as a statement must surface at
-        // least one parser diagnostic instead of silently accepting it.
+        // Issue #941: bare `a ?? b` is now THE null-coalescing read operator
+        // and parses cleanly (the former `?:` spelling was removed).
         const string source = """
             package P
             var x string? = nil
-            x ?? "v"
+            var y string = x ?? "v"
             """;
         var tree = SyntaxTree.Parse(source);
-        Assert.NotEmpty(tree.Diagnostics);
+        Assert.Empty(tree.Diagnostics);
     }
 }

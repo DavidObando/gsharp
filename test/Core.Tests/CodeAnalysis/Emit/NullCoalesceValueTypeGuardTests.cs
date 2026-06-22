@@ -15,7 +15,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 /// <summary>
-/// Issue #420 / P3-5: the null-coalesce (<c>??</c> / <c>?:</c>) emit path uses
+/// Issue #420 / P3-5: the null-coalesce (<c>??</c>) emit path uses
 /// <c>dup; brtrue</c> which is only legal for object references and primitive
 /// integers — it is invalid IL for struct stack values (including
 /// <c>Nullable&lt;T&gt;</c> over a value type).
@@ -41,7 +41,7 @@ public class NullCoalesceValueTypeGuardTests
         const string Source = @"package NullCoalesceRefNonNil
 import System
 var s string? = ""hello""
-var r string = s ?: ""fallback""
+var r string = s ?? ""fallback""
 Console.WriteLine(r)
 ";
         var stdout = CompileLoadInvokeCaptureStdout(Source, nameof(NullCoalesce_ReferenceType_LeftNonNil_ReturnsLeft));
@@ -54,7 +54,7 @@ Console.WriteLine(r)
         const string Source = @"package NullCoalesceRefNil
 import System
 var s string? = nil
-var r string = s ?: ""fallback""
+var r string = s ?? ""fallback""
 Console.WriteLine(r)
 ";
         var stdout = CompileLoadInvokeCaptureStdout(Source, nameof(NullCoalesce_ReferenceType_LeftNil_ReturnsRight));
@@ -64,7 +64,7 @@ Console.WriteLine(r)
     [Fact]
     public void NullCoalesce_ValueType_LeftNullableInt_LeftNil_ReturnsRight()
     {
-        // Issue #519: `int? ?: 0` previously aborted emit because `dup;
+        // Issue #519: `int? ?? 0` previously aborted emit because `dup;
         // brtrue` is invalid IL for the `Nullable<int>` struct on the
         // stack. The emitter now spills the LHS into a pre-allocated
         // `Nullable<int>` slot and branches on `Nullable<T>::get_HasValue`,
@@ -73,7 +73,7 @@ Console.WriteLine(r)
         const string Source = @"package NullCoalesceValueTypeNil
 import System
 var n int32? = nil
-var r int32 = n ?: 99
+var r int32 = n ?? 99
 Console.WriteLine(r)
 ";
         var stdout = CompileLoadInvokeCaptureStdout(Source, nameof(NullCoalesce_ValueType_LeftNullableInt_LeftNil_ReturnsRight));
@@ -89,7 +89,7 @@ Console.WriteLine(r)
         const string Source = @"package NullCoalesceValueTypePresent
 import System
 var n int32? = 7
-var r int32 = n ?: 99
+var r int32 = n ?? 99
 Console.WriteLine(r)
 ";
         var stdout = CompileLoadInvokeCaptureStdout(Source, nameof(NullCoalesce_ValueType_LeftNullableInt_LeftPresent_ReturnsUnderlying));

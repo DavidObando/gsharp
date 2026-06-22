@@ -89,10 +89,10 @@ var book = Book(
     Contact("Carol", "carol@example.com"))
 
 var hit = book.Find("Bob")
-Console.WriteLine(hit?.Display() ?: "no match")
+Console.WriteLine(hit?.Display() ?? "no match")
 
 var miss = book.Find("Zoe")
-Console.WriteLine(miss?.Display() ?: "no match")
+Console.WriteLine(miss?.Display() ?? "no match")
 
 // `!!` asserts non-null and lets us reach members on the result directly.
 var forced = book.Find("Alice")!!
@@ -107,7 +107,7 @@ no match
 Alice <alice@example.com>
 ```
 
-`Contact?` means the function can return `nil`. Use `?.` to call only when non-nil, `?[i]` to index only when non-nil, `?:` to provide a fallback, and `!!` when you want a runtime assertion that the value is present.
+`Contact?` means the function can return `nil`. Use `?.` to call only when non-nil, `?[i]` to index only when non-nil, `??` to provide a fallback, and `!!` when you want a runtime assertion that the value is present.
 
 ## 3. Use data structs for structural values
 

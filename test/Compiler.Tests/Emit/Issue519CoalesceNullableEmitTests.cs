@@ -14,7 +14,7 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #519: applying the null-coalescing operator <c>?:</c> to a CLR
+/// Issue #519: applying the null-coalescing operator <c>??</c> to a CLR
 /// <c>Nullable&lt;T&gt;</c> value previously crashed the emit phase silently
 /// (<c>MSB4181</c> with no <c>GS####</c> diagnostic). The cause was the value-
 /// type guard at the binary emit site rejecting any nullable value-type LHS
@@ -23,11 +23,11 @@ namespace GSharp.Compiler.Tests.Emit;
 ///
 /// These tests pin down the new behaviour:
 /// <list type="bullet">
-///   <item><c>Nullable&lt;T&gt; ?: T</c> for <c>bool?</c> and <c>int32?</c>, both
+///   <item><c>Nullable&lt;T&gt; ?? T</c> for <c>bool?</c> and <c>int32?</c>, both
 ///   the present and absent branches, against locals and CLR properties.</item>
-///   <item><c>Nullable&lt;T&gt; ?: Nullable&lt;T&gt;</c> preserves the wrapper
+///   <item><c>Nullable&lt;T&gt; ?? Nullable&lt;T&gt;</c> preserves the wrapper
 ///   shape and threads <c>nil</c> through both sides.</item>
-///   <item>Chained <c>a ?: b ?: c</c> over nullable operands routes through the
+///   <item>Chained <c>a ?? b ?? c</c> over nullable operands routes through the
 ///   right operand correctly when the LHSs are <c>nil</c>.</item>
 ///   <item>Reference-typed nullables (<c>string?</c>) continue to use the
 ///   existing <c>dup; brtrue</c> path and are not regressed.</item>
@@ -48,11 +48,11 @@ public class Issue519CoalesceNullableEmitTests
             import System
 
             var a bool? = true
-            var v bool = a ?: false
+            var v bool = a ?? false
             Console.WriteLine(v)
 
             var b bool? = false
-            var w bool = b ?: true
+            var w bool = b ?? true
             Console.WriteLine(w)
             """;
 
@@ -69,11 +69,11 @@ public class Issue519CoalesceNullableEmitTests
             import System
 
             var a bool? = nil
-            var v bool = a ?: true
+            var v bool = a ?? true
             Console.WriteLine(v)
 
             var b bool? = nil
-            var w bool = b ?: false
+            var w bool = b ?? false
             Console.WriteLine(w)
             """;
 
@@ -90,7 +90,7 @@ public class Issue519CoalesceNullableEmitTests
             import System
 
             var a int32? = 7
-            var v int32 = a ?: 99
+            var v int32 = a ?? 99
             Console.WriteLine(v)
             """;
 
@@ -107,7 +107,7 @@ public class Issue519CoalesceNullableEmitTests
             import System
 
             var a int32? = nil
-            var v int32 = a ?: 99
+            var v int32 = a ?? 99
             Console.WriteLine(v)
             """;
 
@@ -129,7 +129,7 @@ public class Issue519CoalesceNullableEmitTests
 
             var a int32? = 7
             var b int32? = 99
-            var r int32? = a ?: b
+            var r int32? = a ?? b
             Console.WriteLine(r!!)
             """;
 
@@ -147,7 +147,7 @@ public class Issue519CoalesceNullableEmitTests
 
             var a int32? = nil
             var b int32? = 42
-            var r int32? = a ?: b
+            var r int32? = a ?? b
             Console.WriteLine(r!!)
             """;
 
@@ -168,7 +168,7 @@ public class Issue519CoalesceNullableEmitTests
 
             var a int32? = nil
             var b int32? = nil
-            var r int32? = a ?: b
+            var r int32? = a ?? b
             var o object = r
             Console.Write("[")
             Console.Write(o)
@@ -182,7 +182,7 @@ public class Issue519CoalesceNullableEmitTests
     [Fact]
     public void CoalesceNullableInt_Chained_AllNil_ReturnsLastLiteral()
     {
-        // `a ?: b ?: c` parses right-associatively as `a ?: (b ?: c)`.
+        // `a ?? b ?? c` parses right-associatively as `a ?? (b ?? c)`.
         // Both `a` and `b` are value-type Nullable<int>, so the emitter
         // pre-allocates two separate scratch slots (one per BoundBinary
         // expression). When all left operands are nil the final literal
@@ -195,7 +195,7 @@ public class Issue519CoalesceNullableEmitTests
             var a int32? = nil
             var b int32? = nil
             var c int32 = 99
-            var r int32 = a ?: b ?: c
+            var r int32 = a ?? b ?? c
             Console.WriteLine(r)
             """;
 
@@ -214,7 +214,7 @@ public class Issue519CoalesceNullableEmitTests
             var a int32? = nil
             var b int32? = 7
             var c int32 = 99
-            var r int32 = a ?: b ?: c
+            var r int32 = a ?? b ?? c
             Console.WriteLine(r)
             """;
 
@@ -233,7 +233,7 @@ public class Issue519CoalesceNullableEmitTests
             var a int32? = 1
             var b int32? = 7
             var c int32 = 99
-            var r int32 = a ?: b ?: c
+            var r int32 = a ?? b ?? c
             Console.WriteLine(r)
             """;
 
@@ -256,11 +256,11 @@ public class Issue519CoalesceNullableEmitTests
 
             var s = Settings()
             s.Flag = true
-            var v bool = s.Flag ?: false
+            var v bool = s.Flag ?? false
             Console.WriteLine(v)
 
             s.Flag = false
-            var w bool = s.Flag ?: true
+            var w bool = s.Flag ?? true
             Console.WriteLine(w)
             """;
 
@@ -279,11 +279,11 @@ public class Issue519CoalesceNullableEmitTests
 
             var s = Settings()
             s.Flag = nil
-            var v bool = s.Flag ?: true
+            var v bool = s.Flag ?? true
             Console.WriteLine(v)
 
             s.Flag = nil
-            var w bool = s.Flag ?: false
+            var w bool = s.Flag ?? false
             Console.WriteLine(w)
             """;
 
@@ -302,11 +302,11 @@ public class Issue519CoalesceNullableEmitTests
 
             var s = Settings()
             s.Count = 7
-            var v int32 = s.Count ?: 99
+            var v int32 = s.Count ?? 99
             Console.WriteLine(v)
 
             s.Count = nil
-            var w int32 = s.Count ?: 99
+            var w int32 = s.Count ?? 99
             Console.WriteLine(w)
             """;
 
@@ -327,11 +327,11 @@ public class Issue519CoalesceNullableEmitTests
             import System
 
             var s string? = "hello"
-            var r string = s ?: "fallback"
+            var r string = s ?? "fallback"
             Console.WriteLine(r)
 
             var t string? = nil
-            var u string = t ?: "fallback"
+            var u string = t ?? "fallback"
             Console.WriteLine(u)
             """;
 

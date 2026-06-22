@@ -84,12 +84,12 @@ The current quick-fix set targets the nil-related diagnostics introduced by ADR-
 | Diagnostic | Trigger | Offered rewrites |
 | --- | --- | --- |
 | `GS0158` (`Cannot find member X.`) | A `.` member access whose left-part is statically nullable (chained `?.`, literal `nil`, or a local/parameter/field whose declared type-clause text ends with `?`). | `Use null-conditional access '?.'` — rewrites the dot token to `?.`. |
-| `GS0154` (`Parameter 'p' requires a value of type 'T' but was given a value of type 'T?'.`) | Any argument of type `T?` passed to a parameter typed `T`. | `Provide default with '?: <literal>'` and `Assert non-nil with '!!'`. |
+| `GS0154` (`Parameter 'p' requires a value of type 'T' but was given a value of type 'T?'.`) | Any argument of type `T?` passed to a parameter typed `T`. | `Provide default with '?? <literal>'` and `Assert non-nil with '!!'`. |
 | `GS0155` (`Cannot convert type 'T?' to 'T'.`) | Any expression of type `T?` used where `T` is required (assignment, return, conditional arm, …). | Same as GS0154. |
 | `GS0156` (`Cannot convert type 'T?' to 'T'. An explicit conversion exists ...`) | Same shape as GS0155 with an explicit conversion available. | Same as GS0154. |
 | `GS0274` (`'nil' cannot be assigned to parameter 'p' of non-nullable type 'T'; …`) | Literal `nil` flowing to a non-nullable parameter. | No quick fix — the diagnostic message already carries the canonical suggestion (make the parameter nullable). |
 
-The Elvis rewrite picks a sensible default literal per primitive target type (`""` for `string`, `0` for the numeric primitives, `false` for `bool`, `default` otherwise) so the inserted snippet parses and type-checks immediately; the user is expected to replace it with a real default. Both the Elvis and the null-assertion rewrite wrap the original expression in parentheses, so the replacement is syntactically self-contained regardless of the surrounding operator precedence.
+The null-coalescing rewrite picks a sensible default literal per primitive target type (`""` for `string`, `0` for the numeric primitives, `false` for `bool`, `default` otherwise) so the inserted snippet parses and type-checks immediately; the user is expected to replace it with a real default. Both the null-coalescing and the null-assertion rewrite wrap the original expression in parentheses, so the replacement is syntactically self-contained regardless of the surrounding operator precedence.
 
 ## Connecting an editor
 
