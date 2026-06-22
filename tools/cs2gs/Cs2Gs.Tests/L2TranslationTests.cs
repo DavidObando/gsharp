@@ -196,6 +196,75 @@ namespace Demo
         Assert.Contains("2.0 * radius", printed);
     }
 
+    /// <summary>
+    /// ADR-0117 (issue #479): a C# list collection initializer
+    /// <c>new List&lt;int&gt;{1, 2, 3}</c> maps to the canonical G# collection
+    /// initializer <c>List[int32]{ 1, 2, 3 }</c> (bare elements → <c>Add</c>),
+    /// rather than dropping the elements as the pre-ADR-0117 translator did.
+    /// </summary>
+    [Fact]
+    public void ListCollectionInitializer_TranslatesToCollectionInitializer()
+    {
+        string printed = TranslateUnit(@"
+using System.Collections.Generic;
+namespace Demo
+{
+    public static class ListHost
+    {
+        public static List<int> Make() => new List<int> { 1, 2, 3 };
+    }
+}");
+
+        Assert.Contains("List[int32]{ 1, 2, 3 }", printed);
+    }
+
+    /// <summary>
+    /// ADR-0117 (issue #479): a C# dictionary collection initializer using the
+    /// complex element form <c>{ {"a", 1} }</c> maps to the canonical G#
+    /// <c>key: value</c> pair form <c>Dictionary[string, int32]{ "a": 1, ... }</c>.
+    /// </summary>
+    [Fact]
+    public void DictionaryComplexInitializer_TranslatesToKeyedPairs()
+    {
+        string printed = TranslateUnit(@"
+using System.Collections.Generic;
+namespace Demo
+{
+    public static class DictHost
+    {
+        public static Dictionary<string, int> Make() =>
+            new Dictionary<string, int> { { ""a"", 1 }, { ""b"", 2 } };
+    }
+}");
+
+        Assert.Contains("Dictionary[string, int32]{ \"a\": 1, \"b\": 2 }", printed);
+    }
+
+    /// <summary>
+    /// ADR-0117 (issue #479): a C# dictionary indexer initializer
+    /// <c>{ ["a"] = 1 }</c> maps to the canonical G# indexed element form
+    /// <c>Dictionary[string, int32]{ ["a"] = 1 }</c>, and constructor arguments
+    /// (a comparer) are preserved on the construction target — the analogue of
+    /// the C# <c>new(StringComparer.OrdinalIgnoreCase){ ... }</c> case.
+    /// </summary>
+    [Fact]
+    public void DictionaryIndexedInitializer_WithComparer_TranslatesToIndexedElements()
+    {
+        string printed = TranslateUnit(@"
+using System;
+using System.Collections.Generic;
+namespace Demo
+{
+    public static class HeaderHost
+    {
+        public static Dictionary<string, int> Make() =>
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { [""Key""] = 5 };
+    }
+}");
+
+        Assert.Contains("Dictionary[string, int32](StringComparer.OrdinalIgnoreCase){ [\"Key\"] = 5 }", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

@@ -506,6 +506,21 @@ Member access and indexing chain after primaries. `a.b`, `a?.b`, `a[i]`, `a?[i]`
 
 Struct literals use `TypeName{Field: value}`. Data structs also support copy/update with `expr with { Field = value }`. Array and slice literals use `[N]T{...}` or `[]T{...}`. Map literals use `map[K,V]{key: value}`.
 
+### Collection initializers (ADR-0117, issue #479)
+
+A collection construction target followed by a brace-enclosed element list builds and populates a CLR collection in one expression — the analogue of C#'s `new List<int>{1, 2, 3}` / `new Dictionary<K,V>{ ["a"] = 1 }`. The collection type is named at the site (consistent with G#'s `[]T{…}`, `map[K,V]{…}`, and struct-literal traditions); the no-parentheses form `List[T]{…}` is sugar for `List[T](){…}`.
+
+```gsharp
+let xs = List[int32]{ 1, 2, 3 }                              // bare elements
+let hs = HashSet[int32]{ 1, 2, 2, 3 }                        // set (deduplicated)
+let d1 = Dictionary[string, int32]{ "a": 1, "b": 2 }         // key: value pairs
+let d2 = Dictionary[string, int32]{ ["a"] = 1, ["b"] = 2 }   // [key] = value entries
+let ci = Dictionary[string, int32](StringComparer.OrdinalIgnoreCase){ "Key": 5 }  // ctor args
+```
+
+Each element lowers against a fresh local seeded by the constructor call: a **bare** element `e` becomes `add.Add(e)`, a **keyed** pair `k: v` becomes `add.Add(k, v)`, and an **indexed** entry `[k] = v` becomes the indexer set `add[k] = v` (overwrite semantics; later duplicate keys win). Element, key, and value expressions are converted through ordinary overload resolution. Identifier-keyed `{ x: y }` entries are reserved for struct-literal field initialization, so an identifier/expression dictionary key must use the `["x"] = y` form. A target type with no accessible `Add` (and no settable indexer for the keyed/bare forms) reports `GS0369` rather than failing internally. Spread elements and target-typed, type-name-free literals are deferred (see ADR-0117).
+
+
 ### Switch expressions and patterns
 
 Switch expressions use `:` between the pattern and the arm value (per ADR-0074 / issue #714). The legacy `->` arm separator is still accepted as a one-release migration aid but emits warning `GS0302`. Switch expressions require coverage or a default arm as enforced by diagnostics.
@@ -1152,6 +1167,7 @@ PostfixOp         ::= '!!' | ('.' | '?.') NameOrCall | ('[' | '?[') Expression '
 NameOrCall        ::= identifier | Call | GenericCall
 PrimaryExpression ::= Literal | identifier
                     | Call | GenericCall | NullableTypeCall | ObjectCreation
+                    | CollectionInitializer
                     | StructLiteral | GenericStructLiteral | ArrayLiteral | MapLiteral
                     | FunctionLiteral | LambdaExpression
                     | SwitchExpr | IfExpression
@@ -1165,6 +1181,13 @@ GenericCall       ::= identifier TypeArgList '(' Arguments? ')' TrailingLambda?
 NullableTypeCall  ::= identifier '?' '(' Arguments? ')' TrailingLambda?   (* nullable-type construction, issue #663 *)
 ObjectCreation    ::= (Call | GenericCall) '{' ObjectInitList? '}'        (* Foo() { F = v, ... }, issue #522 *)
 ObjectInitList    ::= identifier '=' Expression (',' identifier '=' Expression)* ','?
+CollectionInitializer ::= CollectionTarget '{' CollectionElementList? '}'  (* List[T]{ ... }, ADR-0117, issue #479 *)
+CollectionTarget  ::= GenericCall | Call                                  (* List[T], Dictionary[K,V](cmp), ... *)
+                    | identifier TypeArgList                              (* List[T]  — synthesizes a zero-arg ctor *)
+CollectionElementList ::= CollectionElement (',' CollectionElement)* ','?
+CollectionElement ::= Expression                                          (* bare:    1            → Add(1)        *)
+                    | Expression ':' Expression                          (* keyed:   "a": 1       → Add("a", 1)   *)
+                    | '[' Expression ']' '=' Expression                  (* indexed: ["a"] = 1    → this["a"] = 1 *)
 StructLiteral     ::= identifier '{' FieldInitList? '}'
 GenericStructLiteral ::= identifier TypeArgList '{' FieldInitList? '}'
 FieldInitList     ::= identifier ':' Expression (',' identifier ':' Expression)* ','?

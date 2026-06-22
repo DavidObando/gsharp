@@ -6756,8 +6756,19 @@ public class Parser
 
         // Phase 4.3 / ADR-0020: a `[…]` type-argument list followed by `{` is a
         // generic struct/class composite literal (`Result[int, string]{...}`).
+        // Issue #479 / ADR-0117: the same `Type[args]{…}` shape is a collection
+        // initializer (`List[int32]{1, 2, 3}`, `Dictionary[K, V]{"a": 1}`,
+        // `Dictionary[K, V]{ ["a"] = 1 }`) when the brace contents are NOT a
+        // `Field: value` struct-literal field list. The parser synthesizes an
+        // empty-argument constructor call as the initializer's target.
         if (Current.Kind == SyntaxKind.OpenBraceToken)
         {
+            if (BraceLooksLikeGenericCollectionInitializer())
+            {
+                var ctorCall = SynthesizeEmptyArgConstructorCall(identifier, typeArguments);
+                return ParseCollectionInitializerExpression(ctorCall);
+            }
+
             var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
             var initializers = ParseStructLiteralInitializers();
             var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
@@ -6771,6 +6782,184 @@ public class Parser
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         arguments = MaybeAppendTrailingLambda(arguments);
         return new CallExpressionSyntax(syntaxTree, identifier, typeArguments, openParen, arguments, closeParen);
+    }
+
+    // Issue #479 / ADR-0117: builds the synthetic zero-argument constructor
+    // call that backs the no-parentheses collection-initializer spelling
+    // (`List[int32]{…}`). The synthetic parentheses are positioned at the end
+    // of the type-argument list so the node's span stays monotonic.
+    private CallExpressionSyntax SynthesizeEmptyArgConstructorCall(SyntaxToken identifier, TypeArgumentListSyntax typeArguments)
+    {
+        var position = typeArguments.CloseBracketToken.Span.End;
+        var openParen = new SyntaxToken(syntaxTree, SyntaxKind.OpenParenthesisToken, position, "(", null);
+        var closeParen = new SyntaxToken(syntaxTree, SyntaxKind.CloseParenthesisToken, position, ")", null);
+        var emptyArguments = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        return new CallExpressionSyntax(syntaxTree, identifier, typeArguments, openParen, emptyArguments, closeParen);
+    }
+
+    // Issue #479 / ADR-0117: in the `Type[args]{…}` generic-composite position
+    // the `{` introduces a struct-literal field list when it is empty (all
+    // defaults) or its first entry is `Identifier :`. Every other shape — a
+    // bare element (`1`), a non-identifier-keyed entry (`"a": 1`), or an
+    // indexed entry (`["a"] = 1`) — is a collection initializer.
+    private bool BraceLooksLikeGenericCollectionInitializer()
+    {
+        var k1 = Peek(1).Kind;
+        if (k1 == SyntaxKind.CloseBraceToken)
+        {
+            return false;
+        }
+
+        if (k1 == SyntaxKind.OpenSquareBracketToken)
+        {
+            return true;
+        }
+
+        if (k1 == SyntaxKind.IdentifierToken && Peek(2).Kind == SyntaxKind.ColonToken)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    // Issue #479 / ADR-0117: recognises a collection-initializer `{` after a
+    // constructor call (`List[int32](){…}`, `Dictionary[K, V](cmp){…}`). To
+    // avoid colliding with a statement body (`foo() { stmt }`) we require an
+    // unambiguous collection marker: an indexed-entry `[`, a single literal
+    // element, or a top-level `,`/`:` separator inside the braces.
+    private bool LooksLikeCollectionInitializerBrace()
+    {
+        var k1 = Peek(1).Kind;
+        if (k1 == SyntaxKind.CloseBraceToken)
+        {
+            return false;
+        }
+
+        if (k1 == SyntaxKind.OpenSquareBracketToken)
+        {
+            return true;
+        }
+
+        if (IsLiteralStartToken(k1) && Peek(2).Kind == SyntaxKind.CloseBraceToken)
+        {
+            return true;
+        }
+
+        var depth = 0;
+        for (var i = 1; ; i++)
+        {
+            var kind = Peek(i).Kind;
+            if (kind == SyntaxKind.EndOfFileToken)
+            {
+                return false;
+            }
+
+            if (kind == SyntaxKind.OpenBraceToken
+                || kind == SyntaxKind.OpenParenthesisToken
+                || kind == SyntaxKind.OpenSquareBracketToken)
+            {
+                depth++;
+            }
+            else if (kind == SyntaxKind.CloseParenthesisToken
+                || kind == SyntaxKind.CloseSquareBracketToken)
+            {
+                depth--;
+            }
+            else if (kind == SyntaxKind.CloseBraceToken)
+            {
+                if (depth == 0)
+                {
+                    return false;
+                }
+
+                depth--;
+            }
+            else if (depth == 0 && (kind == SyntaxKind.CommaToken || kind == SyntaxKind.ColonToken))
+            {
+                return true;
+            }
+        }
+    }
+
+    private static bool IsLiteralStartToken(SyntaxKind kind)
+    {
+        return kind == SyntaxKind.NumberToken
+            || kind == SyntaxKind.StringToken
+            || kind == SyntaxKind.InterpolatedStringToken
+            || kind == SyntaxKind.TrueKeyword
+            || kind == SyntaxKind.FalseKeyword
+            || kind == SyntaxKind.NilKeyword;
+    }
+
+    // Issue #479 / ADR-0117: parses the `{ elements }` collection initializer
+    // applied to an already-parsed constructor-call target.
+    private ExpressionSyntax ParseCollectionInitializerExpression(ExpressionSyntax target)
+    {
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        var elements = ParseCollectionElements();
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new CollectionInitializerExpressionSyntax(syntaxTree, target, openBrace, elements, closeBrace);
+    }
+
+    private SeparatedSyntaxList<CollectionElementSyntax> ParseCollectionElements()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
+        while (parseNext
+               && Current.Kind != SyntaxKind.CloseBraceToken
+               && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseCollectionElement());
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        return new SeparatedSyntaxList<CollectionElementSyntax>(nodesAndSeparators.ToImmutable());
+    }
+
+    private CollectionElementSyntax ParseCollectionElement()
+    {
+        // Element values live inside the braces — a fresh expression context
+        // where trailing object/collection initializers are again allowed.
+        var savedSuppress = suppressTrailingObjectInitializer;
+        suppressTrailingObjectInitializer = 0;
+        try
+        {
+            // Indexed entry `[key] = value`.
+            if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+            {
+                var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+                var key = ParseExpression();
+                var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+                var equals = MatchToken(SyntaxKind.EqualsToken);
+                var value = ParseExpression();
+                return new IndexedCollectionElementSyntax(syntaxTree, openBracket, key, closeBracket, equals, value);
+            }
+
+            var first = ParseExpression();
+
+            // Key/value entry `key: value`.
+            if (Current.Kind == SyntaxKind.ColonToken)
+            {
+                var colon = MatchToken(SyntaxKind.ColonToken);
+                var value = ParseExpression();
+                return new KeyedCollectionElementSyntax(syntaxTree, first, colon, value);
+            }
+
+            // Bare sequence/set element.
+            return new ExpressionCollectionElementSyntax(syntaxTree, first);
+        }
+        finally
+        {
+            suppressTrailingObjectInitializer = savedSuppress;
+        }
     }
 
     /// <summary>
@@ -6890,6 +7079,13 @@ public class Parser
 
         if (!LooksLikeObjectInitializerBrace())
         {
+            // Issue #479 / ADR-0117: a collection initializer applied to a
+            // constructor call (`List[int32](){…}`, `Dictionary[K, V](cmp){…}`).
+            if (LooksLikeCollectionInitializerBrace())
+            {
+                return ParseCollectionInitializerExpression(target);
+            }
+
             return target;
         }
 

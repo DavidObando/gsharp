@@ -2046,10 +2046,30 @@ public sealed class CSharpToGSharpTranslator
                 ? this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
                 : new NamedTypeReference(creation.Type.ToString());
 
+            bool hasCtorArgs = creation.ArgumentList != null && creation.ArgumentList.Arguments.Count > 0;
+
+            var arguments = creation.ArgumentList == null
+                ? new List<GExpression>()
+                : creation.ArgumentList.Arguments
+                    .Select(a => this.TranslateExpression(a.Expression))
+                    .ToList();
+
+            // A C# collection initializer maps to the canonical G# collection
+            // initializer `Target{ ... }` (ADR-0117, issue #479). This covers
+            // `new List<int>{1, 2, 3}` (bare elements), `new Dictionary<K,V>{ {k, v} }`
+            // (complex element initializers → `k: v` pairs), and
+            // `new Dictionary<K,V>{ ["k"] = v }` (indexer entries). The construction
+            // target carries any constructor arguments, matching
+            // `new(StringComparer.OrdinalIgnoreCase){ ... }`.
+            if (creation.Initializer != null &&
+                this.TryTranslateCollectionInitializer(creation, type, arguments, out GExpression collectionInitializer))
+            {
+                return collectionInitializer;
+            }
+
             // An object initializer `new T { Field = value, ... }` (no/empty
             // constructor argument list) maps to the canonical G# struct literal
             // `T{Field: value, ...}` (spec §Struct literals; ADR-0115 §B.11).
-            bool hasCtorArgs = creation.ArgumentList != null && creation.ArgumentList.Arguments.Count > 0;
             if (creation.Initializer != null &&
                 creation.Initializer.IsKind(SyntaxKind.ObjectInitializerExpression) &&
                 !hasCtorArgs)
@@ -2075,12 +2095,6 @@ public sealed class CSharpToGSharpTranslator
                 return new CompositeLiteralExpression(type, fieldInitializers);
             }
 
-            var arguments = creation.ArgumentList == null
-                ? new List<GExpression>()
-                : creation.ArgumentList.Arguments
-                    .Select(a => this.TranslateExpression(a.Expression))
-                    .ToList();
-
             // A value aggregate (`struct` / `data struct`) has no callable
             // constructor surface in G#: it is constructed with a struct literal
             // `T{Field: value, ...}` (spec §Struct literals). Map the positional C#
@@ -2103,8 +2117,16 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            // A G# construction is a call on the type name; generic types carry
-            // their type arguments in brackets: `List[int32](...)` (ADR-0115 §B.7).
+            return BuildConstruction(type, arguments, creation);
+        }
+
+        /// <summary>
+        /// Builds the canonical G# construction expression for a C# <c>new</c>:
+        /// a call on the type name carrying any bracket type arguments
+        /// (<c>List[int32](...)</c>, ADR-0115 §B.7).
+        /// </summary>
+        private static GExpression BuildConstruction(GTypeReference type, IReadOnlyList<GExpression> arguments, ObjectCreationExpressionSyntax creation)
+        {
             if (type is NamedTypeReference named)
             {
                 IReadOnlyList<GTypeReference> typeArguments = named.TypeArguments.Count > 0
@@ -2117,6 +2139,80 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return new InvocationExpression(new IdentifierExpression(creation.Type.ToString()), arguments);
+        }
+
+        /// <summary>
+        /// Attempts to translate a C# collection initializer into a canonical G#
+        /// collection initializer (ADR-0117). Returns <see langword="false"/> when
+        /// the initializer is not a collection initializer (e.g. a plain object
+        /// initializer), leaving the caller's other mappings to apply.
+        /// </summary>
+        private bool TryTranslateCollectionInitializer(
+            ObjectCreationExpressionSyntax creation,
+            GTypeReference type,
+            IReadOnlyList<GExpression> arguments,
+            out GExpression result)
+        {
+            result = null;
+            InitializerExpressionSyntax initializer = creation.Initializer;
+
+            bool isCollectionInitializer = initializer.IsKind(SyntaxKind.CollectionInitializerExpression);
+            bool isIndexedObjectInitializer = initializer.IsKind(SyntaxKind.ObjectInitializerExpression) &&
+                initializer.Expressions.Count > 0 &&
+                initializer.Expressions.All(e =>
+                    e is AssignmentExpressionSyntax { Left: ImplicitElementAccessSyntax });
+
+            if (!isCollectionInitializer && !isIndexedObjectInitializer)
+            {
+                return false;
+            }
+
+            var elements = new List<CollectionInitializerElement>();
+            foreach (ExpressionSyntax element in initializer.Expressions)
+            {
+                if (element is AssignmentExpressionSyntax { Left: ImplicitElementAccessSyntax indexAccess } indexedAssignment)
+                {
+                    // `["k"] = v` → indexed element.
+                    if (indexAccess.ArgumentList.Arguments.Count != 1)
+                    {
+                        this.context.ReportUnsupported(
+                            element,
+                            "multi-argument indexer initializer has no canonical G# collection-initializer form (ADR-0117).");
+                        return false;
+                    }
+
+                    elements.Add(new CollectionInitializerElement(
+                        this.TranslateExpression(indexAccess.ArgumentList.Arguments[0].Expression),
+                        this.TranslateExpression(indexedAssignment.Right),
+                        indexed: true));
+                }
+                else if (element is InitializerExpressionSyntax { } complex &&
+                    element.IsKind(SyntaxKind.ComplexElementInitializerExpression))
+                {
+                    // `{k, v}` → keyed element `k: v` (dictionary Add(k, v)).
+                    if (complex.Expressions.Count != 2)
+                    {
+                        this.context.ReportUnsupported(
+                            element,
+                            "collection initializer element with other than two values has no canonical G# form (ADR-0117).");
+                        return false;
+                    }
+
+                    elements.Add(new CollectionInitializerElement(
+                        this.TranslateExpression(complex.Expressions[0]),
+                        this.TranslateExpression(complex.Expressions[1]),
+                        indexed: false));
+                }
+                else
+                {
+                    // Bare element `e` → `Add(e)`.
+                    elements.Add(new CollectionInitializerElement(this.TranslateExpression(element)));
+                }
+            }
+
+            GExpression construction = BuildConstruction(type, arguments, creation);
+            result = new CollectionInitializerExpression(construction, elements);
+            return true;
         }
 
         private static List<string> OrderedValueMemberNames(INamedTypeSymbol valueType)

@@ -3765,6 +3765,26 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Error);
     }
 
+    /// <summary>
+    /// Reports GS0369 — issue #479 / ADR-0117: a collection initializer
+    /// (<c>Type[…]{ elements }</c>) was applied to a target type that is not a
+    /// collection — it exposes no accessible instance <c>Add</c> method (for a
+    /// bare element or <c>key: value</c> entry) nor a settable indexer (for an
+    /// <c>[key] = value</c> entry). Use an object initializer
+    /// (<c>Type(){ Prop = value }</c>) for property/field initialization, or
+    /// construct a list/set/dictionary type that supports <c>Add</c>.
+    /// </summary>
+    /// <param name="location">The source location of the initializer.</param>
+    /// <param name="type">The non-collection target type.</param>
+    public void ReportTypeNotCollectionInitializable(TextLocation location, TypeSymbol type)
+    {
+        Report(
+            location,
+            "GS0369",
+            $"Type '{type}' cannot be initialized with a collection initializer because it has no accessible 'Add' method or settable indexer (issue #479).",
+            DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
