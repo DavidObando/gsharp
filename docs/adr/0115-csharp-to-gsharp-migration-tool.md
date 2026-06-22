@@ -269,9 +269,16 @@ Fields:
 - `suggestedIssue` — pre-rendered title/body/labels the external agent can file as-is or refine.
 - `retryHistory` — prior `{runId, gscVersion, result}` records for this fingerprint.
 
+**Stages 1–2 implementation notes (what the pipeline emits today).** `Cs2Gs.Pipeline` writes one artifact file per distinct fingerprint per app at `<runsRoot>/<runId>/<appId-sanitized>/<stage>-<fingerprintShort>.json`, plus a whole-run `run.json` summary (section F) the report step aggregates. Two fidelity points worth recording:
+
+- **`diagnostic.id` for stage 1.** A `translation-unsupported` failure has no G# diagnostic (no `.gs` is produced for the construct), so the pipeline emits a stable synthetic id: `CS2GS-UNSUPPORTED` for an unmapped construct, or `CS2GS-ROUNDTRIP` for an emitted `.gs` that fails to re-parse. Stage 2 uses the real `GSxxxx`.
+- **`sourceLocation` null rules.** The translator does not yet carry a per-line C#↔G# position map, so the two ends of `sourceLocation` are filled by *whichever* side the failure is anchored to and the other sub-fields are left `null` (the schema permits this): a stage-1 `translation-unsupported` fills `cs*` from the Roslyn node location and leaves `gs*` null; a stage-2 `compile-error` fills `gs*` from the `gsc` diagnostic and leaves `cs*` null. Correspondingly, `offendingCSharpConstruct` for a stage-1 failure is the C# construct (kind = Roslyn syntax-kind, snippet = the C# line), while for a stage-2 failure it is the *emitted G# construct* `gsc` flagged (kind classified from the G# line, snippet = the G# line). Wiring a real source map so stage-2 artifacts also point back to the originating C# is deferred to a later step.
+
 #### D.2 Dedup fingerprint
 
 `fingerprint = sha256( category + "|" + stage + "|" + diagnostic.id + "|" + offendingCSharpConstruct.kind + "|" + normalizedConstructShape )` where `normalizedConstructShape` strips identifiers/literals/line numbers down to the syntactic skeleton. The fingerprint **deliberately excludes** `runId`, `corpusAppId`, `gscVersion`, and concrete source positions, so the *same gap* hitting multiple corpus apps or recurring across runs collapses to **one** issue. The external agent keys on `fingerprint`: an artifact whose fingerprint already maps to an open issue updates that issue's occurrence list instead of filing a duplicate, and a fingerprint whose issue is closed but reappears reopens it.
+
+The `normalizedConstructShape` normalizer (`Cs2Gs.Pipeline.Fingerprint.NormalizeShape`) applies, in order: string/char/interpolated literals → `lit`; numeric literals → `lit`; every remaining identifier or keyword → `id`; runs of whitespace collapsed to a single space and trimmed. Punctuation, operators, and brackets are preserved as the structural skeleton — e.g. both `foo.Bar("hi", 42, baz)` and `qux.Zap('x', 7, other)` normalize to `id.id(lit, lit, id)`, so the same construct shape dedups across apps and runs regardless of names, numbers, or positions. `gscVersion` is sourced from the compiler assembly's informational/product version (e.g. `0.2.106+e2206d0c48`), falling back to its file version.
 
 ### E. Corpus and parity oracle
 
