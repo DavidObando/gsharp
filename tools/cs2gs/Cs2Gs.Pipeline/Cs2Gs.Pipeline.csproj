@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>Cs2Gs.Pipeline</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cs2Gs.Translator\Cs2Gs.Translator.csproj" />
+    <ProjectReference Include="..\Cs2Gs.CodeModel\Cs2Gs.CodeModel.csproj" />
+  </ItemGroup>
+
+</Project>
