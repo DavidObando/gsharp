@@ -968,7 +968,7 @@ internal sealed class StatementBinder
                 continue;
             }
 
-            if (!structType.TryGetFieldIncludingInherited(fieldName, out var field, out var declaringType))
+            if (!TypeMemberModel.TryGetFieldIncludingInherited(structType, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
             {
                 Diagnostics.ReportUnableToFindMember(fieldSyntax.FieldIdentifier.Location, fieldName);
                 continue;

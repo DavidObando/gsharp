@@ -58,7 +58,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            if (!structType.TryGetFieldIncludingInherited(fieldName, out var field, out var declaringType))
+            if (!TypeMemberModel.TryGetFieldIncludingInherited(structType, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
             {
                 Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName);
                 continue;
