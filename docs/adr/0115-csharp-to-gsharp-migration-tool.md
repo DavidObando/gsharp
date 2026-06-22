@@ -93,6 +93,8 @@ When **every** constructor parameter is consumed by exactly one direct `_f = par
 
 `data class`/`data struct` synthesize equality and copy/update ergonomics (ADR-0029, ADR-0032). The `record` *keyword* is **not** emitted (removed by ADR-0078); the canonical spelling is `data class`/`data struct`. C# positional records map to the G# primary-constructor form (`data struct Point(X int32, Y int32)`), fields-only records to the body form. A C# `struct` with exactly one field that C# treats as a newtype is *not* auto-promoted to `inline struct` (ADR-0033) — that is a semantic judgment the tool will not make; it emits a plain `struct` and leaves `inline struct` adoption to the human.
 
+**T4 — fieldless record → plain (`open`) `class`/`struct`.** A G# `data` type requires **at least one field** (`GS0104`, "a data type requires at least one field"). A C# **fieldless record** — typically the `abstract record Shape;` base of a closed `record` hierarchy — therefore maps to a plain `class` (or `struct`), **not** a `data class`; it is marked `open` when any case derives from it (§B.6). Two further losses are made faithfully: G# has **no `abstract` class modifier** (the keyword is not recognized by the parser; `abstract class` → `GS0125`), so C# `abstract` is **dropped** (the `open class` is subclassable but not non-instantiable); and the record-synthesized `IEquatable<Self>` interface is **dropped from the base list** because a class cannot name itself in its own base clause (`open class Shape : IEquatable[Shape]` → `GS0113`, "Type 'Shape' doesn't exist"). Each loss is recorded as an Info diagnostic. The case records (`sealed record Circle(double Radius) : Shape`) keep the `data class Circle(Radius float64) : Shape` mapping.
+
 **T1 — C# tuples → native G# positional tuples.** A C# value/named tuple (`(string Name, int Price, int Quantity)`) maps to the **native G# positional tuple type** `(string, int32, int32)` (spec §Type syntax), *not* to a synthesized `data struct`. G# tuples are **positional only** — the named-element spelling `(Name string, …)` does not parse — so C# element **names are dropped** at the type, and a named-element **access** `item.Price` lowers to the positional field `item.Item2` (resolved via Roslyn's `IFieldSymbol.CorrespondingTupleField`); positional `item.Item1` passes through. Tuple **construction** `(a, b, c)` maps to the G# tuple literal `(a, b, c)`. The mapping is recorded as an Info diagnostic. This was chosen over synthesizing a `data struct` per tuple shape because a `data struct` element type triggers a real compiler gap (below) and because native tuples are the genuinely canonical, round-trippable G# form.
 
 > **`for … in List[ownedType]` element-type erasure — discovered compiler gap.**
@@ -152,6 +154,21 @@ C# **extension methods** (`static R M(this T self, …)`) translate to the recei
 
 - Bracket form for both declaration and instantiation: `func Identity[T any](value T) T`, `List[int32]()` (ADR-0020). **No angle brackets** ever appear in output.
 - Constraints render in the bracket: the legacy slot (`any`, `comparable`, sealed-interface bound) plus repeatable flag constraints `class`, `struct`, `new()` (ADR-0097). C# `where T : class` → `[T class]`, `where T : struct` → `[T struct]`, `where T : new()` → `[T new()]`, `where T : IFoo` → `[T IFoo]`. Variance `in`/`out` is carried on type parameters of interfaces/delegates (ADR-0021).
+- **`where T : notnull`** has no precise G# constraint keyword; the translator **drops** it (records an Info diagnostic). `comparable`/`any` would change the semantics, so the faithful choice is no constraint.
+
+> **Generic-interface constraint `where T : IComparable<T>` — discovered compiler gap.**
+> A constructed generic-interface constraint has no canonical G# spelling: the
+> bracketed constraint slot does not accept a nested generic argument
+> (`func Max[T IComparable[T]]` → `GS0005`, `Unexpected token <DotToken>`/nested
+> bracket parse error), and dropping the argument (`[T IComparable]`) names a
+> non-existent constraint type (`GS0113`, `Type 'IComparable' doesn't exist`).
+> Minimal repro:
+> ```gsharp
+> func Max[T IComparable[T]](values IReadOnlyList[T]) T { return values[0] }   // GS0005
+> ```
+> The translator surfaces this as a clean `translation-unsupported` record
+> (`TypeParameterConstraintClause`) and **drops** the constraint rather than
+> emitting unparseable G#. Filed as **#943**.
 
 #### B.8 Delegate types — arrow form, ADR-0075
 
@@ -249,7 +266,61 @@ A C# explicit cast `(T)expr` maps to the G# **width-bearing conversion call** `T
 
 Inside a G# `shared { }` block a bare sibling static call does **not** resolve (`GS0130`); the call must be qualified through the owning type (`Geometry.Round(value, 2)`). The translator therefore qualifies a C# bare static call (`Round(value, 2)`) with its declaring type whenever that type maps to a `shared { }` block. The **entry static class is the explicit exception** (§B.11, T3): its members flatten to top-level `func`s that *do* call each other unqualified, so a bare sibling call inside the entry type stays bare (qualifying it through the dropped type would be `GS0157`).
 
-### C. Pipeline stage contract
+#### B.19 Extension methods → top-level receiver-clause funcs; emptied static class dropped — ADR-0079
+
+A C# extension method (`static R M(this T self, …)` on a `static class`) translates to a **top-level** receiver-clause `func (self T) M(…) R` (§B.5), because a receiver-clause `func` only binds its receiver at top level — inside a `shared { }` block the receiver is not in scope (`GS0125`/`GS0157`). The translator therefore **lifts** every extension method out of its enclosing `static class` to a top-level sibling (reusing the `pendingTopLevelDeclarations` mechanism of §B.14), and when *every* member of the static class is lifted the now-empty class is **dropped** entirely (a `class` with an empty body and empty `shared` block is `GS0104`/noise). `samples/ExtensionFunctions.gs` and `samples/GenericExtensionFunctions.gs` are the canonical forms.
+
+#### B.20 Lambdas → canonical arrow form — ADR-0074, ADR-0075
+
+A C# lambda maps to the canonical G# **arrow lambda** with a parenthesized, typed parameter list: `n => n % 2 == 0` → `(n int32) -> n % 2 == 0`; `(x, y) => x + y` → `(x int32, y int32) -> x + y`; a block-bodied lambda → `(x int32) -> { …; trailingExpr }` (`samples/ArrowLambda.gs`). Parameter types come from the Roslyn-bound delegate signature; an inferred parameter with no recoverable type falls back to the C# spelling. `Func<int,int>` parameters/returns spell as arrow types `(int32) -> int32` (§B.8). LINQ **method** syntax stays as the instance/extension call chain — `numbers.Where((n int32) -> n % 2 == 0).Select((n int32) -> n * n).Sum()` (`samples/LinqExtensions.gs`, needs `import System.Linq`).
+
+#### B.21 LINQ query syntax → method-call chain (lowering)
+
+G# has **no query-comprehension syntax**, so a C# query expression (`from n in numbers orderby n select n`) is **lowered to the equivalent method-call chain** the C# compiler itself desugars it into: `numbers.OrderBy((n int32) -> n).Select((n int32) -> n)`. `where`/`orderby`/`select`/`from-continuation` map to `.Where`/`.OrderBy`(+`.ThenBy`)/`.Select`/nested calls. The lowering is faithful because it reproduces Roslyn's own query-to-method translation.
+
+#### B.22 `switch` expressions → G# `switch` expression (colon-arm form) — spec §Pattern matching
+
+A C# switch expression maps to the G# **`switch` expression** used in expression position (assignable / returnable): `switch subject { case <pattern>: <expr> … default: <expr> }` (`samples/SwitchExpression.gs`; the colon-arm form is the expression form, distinct from the brace form `samples/PatternSwitch.gs` uses for statements). C# arm patterns map as: constant `0` → `case 0:`; relational `< 10.0` → `case < 10.0:`; type `Circle c` → `case c is Circle:` (the designator is usable in the arm body, e.g. `c.Radius`); property `{ X: 0, Y: 0 }` → `case { X: 0, Y: 0 }:`; discard `_` → `default:`. A property sub-pattern that binds a variable (`Circle { Radius: var r }`) is rewritten to a member access on the arm's type-pattern designator (`r` → `circle.Radius`) because G# has no `var`-binding sub-pattern.
+
+#### B.23 `async`/`await` → G# `async func` with unwrapped return type — spec §Asynchronous, samples `AsyncTask.gs`
+
+A C# `async` method maps to a G# **`async func`**, but the return type is the **UNWRAPPED result type** — the `async` modifier synthesizes the `Task`/`Task<T>` envelope itself (`samples/AsyncTask.gs`, `AsyncValueReturns.gs`). So `async Task<int> M()` → `async func M() int32 { … }` (not `Task[int32]`), and `async Task M()` → `async func M() { … }` (no return type). `await operand` maps to `await operand` unchanged. A **non-async** method that merely *returns* a `Task<T>` keeps its `Task[T]` return type (only `async` methods are unwrapped).
+
+#### B.24 Predefined type as a static-call receiver → BCL type name
+
+A C# predefined-type keyword used as an **expression** receiver of a static call (`string.Concat(parts)`, `int.Parse(s)`) emits the **BCL type name** so the receiver resolves: `string` → `String`, `int` → `Int32`, etc. (`String.Concat(parts)`). The lowercase keyword would not resolve as a static-call target in G#.
+
+#### B.25 Target-typed `new()` → explicit constructed type
+
+A C# target-typed `new()` emits the **explicit constructed type** inferred from the target: `List<int> items = new();` → `List[int32]()`. G# has no target-typed construction, so the type recovered from Roslyn's target type is made explicit.
+
+> **Indexer declaration — discovered compiler gap.** A C# indexer
+> (`public T this[int i] => _items[i];`) has **no canonical G# member form**, and
+> a hand-written indexer-shaped property declaration *crashes* the compiler
+> (`GS9998`, `ArgumentNullException`). The translator emits a clean
+> `translation-unsupported` record (`IndexerDeclaration`) and does not attempt a
+> mapping. Filed as **#944**.
+>
+> **Null-coalescing operator `??` — discovered compiler gap.** `value ?? fallback`
+> has no G# spelling; the parser rejects `??` (`GS0005`). Surfaced as a clean
+> `translation-unsupported` record (`CoalesceExpression`). Filed as **#941**.
+>
+> **Member access on a bare-identifier element access — discovered compiler gap.**
+> `values[i].Member` (a single **bare-identifier** index immediately followed by
+> `.`) hits a parser ambiguity — `ident[ident]` is parsed as a generic
+> instantiation expecting a `(` call, so the `.` is rejected (`GS0005`,
+> `Unexpected token <DotToken>`). Literal and compound indices parse fine
+> (`values[0].M`, `values[i + 1].M`), as does the index alone (`values[i]`), and
+> hoisting the element to a local (`let v = values[i]; v.M`) compiles. Minimal
+> repro:
+> ```gsharp
+> func First(values IReadOnlyList[int32]) int32 { var i = 0  return values[i].CompareTo(0) }   // GS0005 on .CompareTo
+> ```
+> Surfaced as a clean `translation-unsupported` record
+> (`SimpleMemberAccessExpression`); the translator does not auto-hoist (that would
+> risk the passing L1/L2 corpus). Filed as **#942**.
+
+
 
 `Cs2Gs.Pipeline` runs four ordered stages per corpus app. Each stage has an explicit pass/fail gate; a failure short-circuits the remaining stages for that app, emits a triage artifact (section D), and is recorded in the run report. **"Migration completed" ≡ all four stages green: clean compile + clean IL verification + test parity with the original C#.**
 

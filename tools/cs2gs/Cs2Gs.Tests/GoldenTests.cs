@@ -647,6 +647,104 @@ public class GoldenTests
         AssertGolden(expected, unit);
     }
 
+    /// <summary>B.22: a <c>switch</c> expression with a type pattern, a
+    /// relational pattern, a constant pattern, and a <c>default</c> arm, in
+    /// return position (samples <c>SwitchExpression.gs</c>).</summary>
+    [Fact]
+    public void B22_SwitchExpression()
+    {
+        var sw = new SwitchExpression(
+            new IdentifierExpression("shape"),
+            List(
+                new SwitchArm(
+                    new TypePattern("c", Type("Circle")),
+                    new MemberAccessExpression(new IdentifierExpression("c"), "Radius")),
+                new SwitchArm(
+                    new RelationalPattern("<", LiteralExpression.Float("10.0")),
+                    LiteralExpression.Float("1.0")),
+                new SwitchArm(
+                    new ConstantPattern(LiteralExpression.Int("0")),
+                    LiteralExpression.Float("0.0")),
+                new SwitchArm(null, LiteralExpression.Float("9.0"))));
+        var method = new MethodDeclaration(
+            "Classify",
+            returnType: Type("float64"),
+            parameters: List(new Parameter("shape", Type("Shape"))),
+            body: Block(new ReturnStatement(sw)));
+        var unit = new CompilationUnit("Demo", List<ImportDirective>(), Nodes(method));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "func Classify(shape Shape) float64 {",
+            "    return switch shape {",
+            "        case c is Circle: c.Radius",
+            "        case < 10.0: 1.0",
+            "        case 0: 0.0",
+            "        default: 9.0",
+            "    }",
+            "}");
+
+        AssertGolden(expected, unit);
+    }
+
+    /// <summary>B.20: a canonical arrow lambda with a typed, parenthesized
+    /// parameter, as an argument to a method call (samples
+    /// <c>ArrowLambda.gs</c>).</summary>
+    [Fact]
+    public void B20_ArrowLambda()
+    {
+        var lambda = new LambdaExpression(
+            List(new Parameter("n", Type("int32"))),
+            expressionBody: new BinaryExpression(
+                new BinaryExpression(new IdentifierExpression("n"), "%", LiteralExpression.Int("2")),
+                "==",
+                LiteralExpression.Int("0")));
+        var call = new InvocationExpression(
+            new MemberAccessExpression(new IdentifierExpression("numbers"), "Where"),
+            List<GExpression>(lambda));
+        var method = new MethodDeclaration(
+            "Evens",
+            returnType: null,
+            body: Block(new ExpressionStatement(call)));
+        var unit = new CompilationUnit("Demo", List<ImportDirective>(), Nodes(method));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "func Evens() {",
+            "    numbers.Where((n int32) -> n % 2 == 0)",
+            "}");
+
+        AssertGolden(expected, unit);
+    }
+
+    /// <summary>B.23: an <c>async func</c> whose body <c>await</c>s a call and
+    /// returns the unwrapped result (samples <c>AsyncTask.gs</c>).</summary>
+    [Fact]
+    public void B23_AsyncAwait()
+    {
+        var await = new AwaitExpression(new InvocationExpression(
+            new MemberAccessExpression(new IdentifierExpression("Task"), "FromResult"),
+            List<GExpression>(new IdentifierExpression("n"))));
+        var method = new MethodDeclaration(
+            "IdentityAsync",
+            returnType: Type("int32"),
+            parameters: List(new Parameter("n", Type("int32"))),
+            body: Block(new ReturnStatement(await)),
+            isAsync: true);
+        var unit = new CompilationUnit("Demo", List<ImportDirective>(), Nodes(method));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "async func IdentityAsync(n int32) int32 {",
+            "    return await Task.FromResult(n)",
+            "}");
+
+        AssertGolden(expected, unit);
+    }
+
     private static void AssertGolden(string expected, CompilationUnit unit)
     {
         var printed = GSharpPrinter.Print(unit);

@@ -371,6 +371,12 @@ public static class GSharpPrinter
             case LambdaExpression lambda:
                 return RenderLambda(lambda, indent);
 
+            case AwaitExpression await:
+                return $"await {RenderExpression(await.Operand, indent)}";
+
+            case SwitchExpression switchExpression:
+                return RenderSwitchExpression(switchExpression, indent);
+
             case InterpolatedStringExpression interpolated:
                 return RenderInterpolatedString(interpolated, indent);
 
@@ -414,6 +420,52 @@ public static class GSharpPrinter
         }
 
         return $"{asyncPrefix}({parameters}) -> {RenderExpression(lambda.ExpressionBody, indent)}";
+    }
+
+    private static string RenderSwitchExpression(SwitchExpression switchExpression, int indent)
+    {
+        var pad = Indent(indent);
+        var armPad = Indent(indent + 1);
+        var sb = new StringBuilder();
+        sb.Append($"switch {RenderExpression(switchExpression.Subject, indent)} {{");
+        foreach (var arm in switchExpression.Arms)
+        {
+            sb.Append('\n');
+            sb.Append(armPad);
+            sb.Append(arm.Pattern == null ? "default:" : $"case {RenderPattern(arm.Pattern, indent + 1)}:");
+            sb.Append(' ');
+            sb.Append(RenderExpression(arm.Body, indent + 1));
+        }
+
+        sb.Append('\n');
+        sb.Append(pad);
+        sb.Append('}');
+        return sb.ToString();
+    }
+
+    private static string RenderPattern(GPattern pattern, int indent)
+    {
+        switch (pattern)
+        {
+            case ConstantPattern constant:
+                return RenderExpression(constant.Value, indent);
+
+            case RelationalPattern relational:
+                return $"{relational.Operator} {RenderExpression(relational.Value, indent)}";
+
+            case TypePattern type:
+                return $"{type.Designator} is {RenderType(type.Type)}";
+
+            case PropertyPattern property:
+                var fields = string.Join(", ", property.Fields.Select(f => $"{f.Name}: {RenderPattern(f.Pattern, indent)}"));
+                return $"{{ {fields} }}";
+
+            case DiscardPattern _:
+                return "_";
+
+            default:
+                throw new ArgumentException($"Unsupported pattern: {pattern?.GetType().Name}");
+        }
     }
 
     private static string RenderInterpolatedString(InterpolatedStringExpression interpolated, int indent)

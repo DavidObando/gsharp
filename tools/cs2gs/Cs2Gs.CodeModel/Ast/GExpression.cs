@@ -412,6 +412,76 @@ public sealed class LambdaExpression : GExpression
 }
 
 /// <summary>
+/// An <c>await</c> expression <c>await operand</c> (ADR-0115 §B; samples
+/// <c>AsyncTask.gs</c>, <c>AsyncAwaitInLoop.gs</c>). Suspends until the awaited
+/// task completes and yields its result.
+/// </summary>
+public sealed class AwaitExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="AwaitExpression"/> class.
+    /// </summary>
+    /// <param name="operand">The awaited operand.</param>
+    public AwaitExpression(GExpression operand)
+    {
+        Operand = operand;
+    }
+
+    /// <summary>Gets the awaited operand.</summary>
+    public GExpression Operand { get; }
+}
+
+/// <summary>
+/// One arm of a <see cref="SwitchExpression"/>: a pattern (or <c>default</c>
+/// when <see cref="Pattern"/> is <see langword="null"/>) and the result
+/// expression it yields.
+/// </summary>
+public sealed class SwitchArm : GNode
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SwitchArm"/> class.
+    /// </summary>
+    /// <param name="pattern">The arm pattern, or <see langword="null"/> for the <c>default</c> arm.</param>
+    /// <param name="body">The result expression.</param>
+    public SwitchArm(GPattern pattern, GExpression body)
+    {
+        Pattern = pattern;
+        Body = body;
+    }
+
+    /// <summary>Gets the arm pattern, or <see langword="null"/> for the <c>default</c> arm.</summary>
+    public GPattern Pattern { get; }
+
+    /// <summary>Gets the result expression.</summary>
+    public GExpression Body { get; }
+}
+
+/// <summary>
+/// A <c>switch</c> expression <c>switch subject { case &lt;pattern&gt;: &lt;expr&gt; … default: &lt;expr&gt; }</c>
+/// (spec §Pattern matching; samples <c>SwitchExpression.gs</c>). Used in
+/// expression position (assignable / returnable).
+/// </summary>
+public sealed class SwitchExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SwitchExpression"/> class.
+    /// </summary>
+    /// <param name="subject">The value being matched.</param>
+    /// <param name="arms">The ordered arms.</param>
+    public SwitchExpression(GExpression subject, IReadOnlyList<SwitchArm> arms)
+    {
+        Subject = subject;
+        Arms = arms ?? new List<SwitchArm>();
+    }
+
+    /// <summary>Gets the value being matched.</summary>
+    public GExpression Subject { get; }
+
+    /// <summary>Gets the ordered arms.</summary>
+    public IReadOnlyList<SwitchArm> Arms { get; }
+}
+
+/// <summary>
 /// One segment of an interpolated string: either literal text or a hole.
 /// </summary>
 public sealed class InterpolationPart : GNode

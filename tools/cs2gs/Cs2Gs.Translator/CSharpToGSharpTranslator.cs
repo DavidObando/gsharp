@@ -260,6 +260,15 @@ public sealed class CSharpToGSharpTranslator
         // by the document translator.
         private readonly List<GMember> pendingTopLevelDeclarations = new List<GMember>();
 
+        // While translating a switch-expression arm whose C# pattern bound a
+        // variable through a property subpattern (`Circle { Radius: var r }`), the
+        // bound variable has no G# pattern equivalent; it is rewritten to a member
+        // access on the arm's type-pattern designator (`circle.Radius`). The map
+        // from the bound local symbol to its replacement expression is consulted
+        // by reference-translation (ADR-0115 §B switch lowering).
+        private readonly Dictionary<ISymbol, GExpression> patternBindings =
+            new Dictionary<ISymbol, GExpression>(SymbolEqualityComparer.Default);
+
         // The syntax node whose body is currently being translated. It bounds the
         // data-flow scan that decides whether a local is mutable (var) or
         // immutable (let) per ADR-0115 §B.3.
@@ -440,6 +449,15 @@ public sealed class CSharpToGSharpTranslator
         private static bool IsValueAggregate(TypeDeclarationKind kind) =>
             kind == TypeDeclarationKind.Struct || kind == TypeDeclarationKind.DataStruct;
 
+        private static bool IsFieldlessRecord(RecordDeclarationSyntax record)
+        {
+            bool hasPositional = record.ParameterList != null && record.ParameterList.Parameters.Count > 0;
+            bool hasDataMember = record.Members.Any(m =>
+                (m is FieldDeclarationSyntax field && !field.Modifiers.Any(SyntaxKind.StaticKeyword) && !field.Modifiers.Any(SyntaxKind.ConstKeyword)) ||
+                (m is PropertyDeclarationSyntax property && !property.Modifiers.Any(SyntaxKind.StaticKeyword)));
+            return !hasPositional && !hasDataMember;
+        }
+
         private static bool IsIntegral(object value) =>
             value is byte or sbyte or short or ushort or int or uint or long or ulong;
 
@@ -477,6 +495,25 @@ public sealed class CSharpToGSharpTranslator
             }
 
             var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
+
+            // A `data class`/`data struct` requires at least one field (GS0104). A
+            // C# fieldless record — typically an `abstract record Shape;` base of a
+            // closed hierarchy — therefore maps to a plain `class`/`struct` (open
+            // when subclassed), not a `data` type (ADR-0115 §B.4).
+            if ((kind == TypeDeclarationKind.DataClass || kind == TypeDeclarationKind.DataStruct) &&
+                node is RecordDeclarationSyntax record &&
+                IsFieldlessRecord(record))
+            {
+                kind = kind == TypeDeclarationKind.DataStruct
+                    ? TypeDeclarationKind.Struct
+                    : TypeDeclarationKind.Class;
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(SyntaxKind.RecordDeclaration),
+                    $"fieldless record '{node.Identifier.Text}' maps to a plain '{(kind == TypeDeclarationKind.Struct ? "struct" : "class")}' because a G# 'data' type requires at least one field (GS0104, ADR-0115 §B.4).",
+                    node.GetLocation(),
+                    TranslationSeverity.Info));
+            }
+
             bool isStaticClass = symbol != null && symbol.IsStatic && kind == TypeDeclarationKind.Class;
 
             if (isStaticClass)
@@ -511,6 +548,19 @@ public sealed class CSharpToGSharpTranslator
                         continue;
                     }
 
+                    // A C# extension method (`this T self`) on a `static class`
+                    // translates to a receiver-clause `func`; a receiver-clause
+                    // func only binds at top level (its receiver is not in scope
+                    // inside a `shared { }` block), so it is lifted out and the
+                    // enclosing static class is dropped if nothing else remains
+                    // (ADR-0115 §B.5).
+                    if (isStaticClass &&
+                        translated is MethodDeclaration { Receiver: not null })
+                    {
+                        this.pendingTopLevelDeclarations.Add(translated);
+                        continue;
+                    }
+
                     if (isStatic || isStaticClass)
                     {
                         sharedMembers.Add(translated);
@@ -528,6 +578,13 @@ public sealed class CSharpToGSharpTranslator
                 members.Add(new SharedBlock(sharedMembers));
             }
 
+            // A `static class` whose every member was an extension method lifted to
+            // top level has no remaining body; drop the class entirely (ADR-0115 §B.5).
+            if (isStaticClass && members.Count == 0)
+            {
+                return null;
+            }
+
             (GTypeReference baseType, List<GTypeReference> interfaces) = this.MapBaseClause(symbol, node, kind.Value);
             List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
             IReadOnlyList<Parameter> primaryCtor = lift.DropConstructor
@@ -540,6 +597,20 @@ public sealed class CSharpToGSharpTranslator
                 !symbol.IsStatic &&
                 this.subclassedBases.Contains(symbol.OriginalDefinition);
 
+            // G# has no `abstract` class modifier (the keyword is not recognized by
+            // the parser); a C# `abstract class`/`abstract record` therefore maps to
+            // an `open class` — subclassable but without enforced non-instantiation
+            // (ADR-0115 §B.4). The abstractness is intentionally dropped.
+            bool wasAbstract = symbol != null && symbol.IsAbstract && kind == TypeDeclarationKind.Class;
+            if (wasAbstract)
+            {
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(SyntaxKind.ClassDeclaration),
+                    $"C# 'abstract' on '{node.Identifier.Text}' is dropped; G# has no abstract-class modifier, so the type maps to an 'open class' (ADR-0115 §B.4).",
+                    node.GetLocation(),
+                    TranslationSeverity.Info));
+            }
+
             return new TypeDeclaration(
                 kind.Value,
                 node.Identifier.Text,
@@ -549,8 +620,8 @@ public sealed class CSharpToGSharpTranslator
                 interfaces: interfaces,
                 members: members,
                 visibility: MapVisibility(symbol, this.context, node),
-                isOpen: isOpen,
-                isAbstract: symbol != null && symbol.IsAbstract && kind == TypeDeclarationKind.Class,
+                isOpen: isOpen || wasAbstract,
+                isAbstract: false,
                 attributes: this.MapAttributes(node.AttributeLists));
         }
 
@@ -1094,10 +1165,18 @@ public sealed class CSharpToGSharpTranslator
             // `IEquatable<Self>`. Emitting the synthesized `IEquatable[Self]` base
             // clause is both redundant and rejected by the parser on a positional
             // declaration, so it is dropped here (ADR-0115 §B.4).
-            bool isData = kind == TypeDeclarationKind.DataClass || kind == TypeDeclarationKind.DataStruct;
+            // A `data class` / `data struct` (C# record / record struct) synthesizes
+            // structural equality in G#, exactly as the C# record auto-implements
+            // `IEquatable<Self>`. Emitting the synthesized `IEquatable[Self]` base
+            // clause is both redundant and rejected by the parser (a class cannot
+            // name itself in its own base list), so it is dropped here. A fieldless
+            // record mapped to a plain `class` still synthesizes `IEquatable<Self>`
+            // in C#, so the filter keys off the record origin, not the mapped kind
+            // (ADR-0115 §B.4).
+            bool isRecord = symbol.IsRecord;
             foreach (INamedTypeSymbol iface in symbol.Interfaces)
             {
-                if (isData && IsIEquatableOf(iface, symbol))
+                if (isRecord && IsIEquatableOf(iface, symbol))
                 {
                     continue;
                 }
@@ -1155,17 +1234,47 @@ public sealed class CSharpToGSharpTranslator
                 flags.Add("new()");
             }
 
+            // C# `where T : notnull` has no precise G# constraint keyword; it is
+            // dropped (the closest forms `comparable`/`any` change semantics), and
+            // the loss is recorded (ADR-0115 §B.7 gap).
+            if (tp.HasNotNullConstraint)
+            {
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(SyntaxKind.TypeParameterConstraintClause),
+                    $"type parameter '{tp.Name}' has a 'notnull' constraint; G# has no equivalent constraint keyword, so it is dropped (ADR-0115 §B.7 gap).",
+                    tp.Locations.FirstOrDefault(),
+                    TranslationSeverity.Info));
+            }
+
             string legacy = null;
             if (tp.ConstraintTypes.Length > 0)
             {
-                legacy = tp.ConstraintTypes[0].Name;
-                if (tp.ConstraintTypes.Length > 1)
+                ITypeSymbol primary = tp.ConstraintTypes[0];
+
+                // A constructed generic-interface constraint (`where T : IComparable<T>`)
+                // has no canonical G# form: the bracketed constraint slot cannot nest
+                // type arguments (`[T IComparable[T]]` → GS0005), and dropping the
+                // arguments (`[T IComparable]`) names a non-existent type (GS0113).
+                // Surface it as a clean gap and drop the constraint (ADR-0115 §B.7 gap #TBD).
+                if (primary is INamedTypeSymbol { IsGenericType: true } constructedConstraint)
                 {
                     this.context.Report(new TranslationDiagnostic(
                         nameof(SyntaxKind.TypeParameterConstraintClause),
-                        $"type parameter '{tp.Name}' has multiple constraint types; only the first ('{legacy}') is carried into the G# legacy-constraint slot (ADR-0115 §B.7).",
+                        $"type parameter '{tp.Name}' is constrained by the generic interface '{constructedConstraint.Name}<...>'; G# has no nested-generic constraint form (GS0005/GS0113), constraint dropped (ADR-0115 §B.7 gap).",
                         tp.Locations.FirstOrDefault(),
-                        TranslationSeverity.Info));
+                        TranslationSeverity.Unsupported));
+                }
+                else
+                {
+                    legacy = primary.Name;
+                    if (tp.ConstraintTypes.Length > 1)
+                    {
+                        this.context.Report(new TranslationDiagnostic(
+                            nameof(SyntaxKind.TypeParameterConstraintClause),
+                            $"type parameter '{tp.Name}' has multiple constraint types; only the first ('{legacy}') is carried into the G# legacy-constraint slot (ADR-0115 §B.7).",
+                            tp.Locations.FirstOrDefault(),
+                            TranslationSeverity.Info));
+                    }
                 }
             }
 
@@ -1259,9 +1368,27 @@ public sealed class CSharpToGSharpTranslator
         {
             if (symbol != null)
             {
-                return symbol.ReturnsVoid
-                    ? null
-                    : this.typeMapper.Map(symbol.ReturnType, this.context, node.ReturnType.GetLocation());
+                if (symbol.ReturnsVoid)
+                {
+                    return null;
+                }
+
+                ITypeSymbol returnType = symbol.ReturnType;
+
+                // A G# `async func` declares the UNWRAPPED result type; the `async`
+                // modifier synthesizes the `Task`/`Task<T>` envelope (samples
+                // AsyncTask.gs, AsyncValueReturns.gs). C# `async Task` → no return
+                // type; `async Task<int>` → `int32` (ADR-0115 §B async).
+                if (symbol.IsAsync &&
+                    returnType is INamedTypeSymbol { Name: "Task" } task &&
+                    task.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks")
+                {
+                    return task.IsGenericType
+                        ? this.typeMapper.Map(task.TypeArguments[0], this.context, node.ReturnType.GetLocation())
+                        : null;
+                }
+
+                return this.typeMapper.Map(returnType, this.context, node.ReturnType.GetLocation());
             }
 
             return node.ReturnType is PredefinedTypeSyntax predefined &&
@@ -1701,6 +1828,17 @@ public sealed class CSharpToGSharpTranslator
                     return this.TranslateWith(with);
 
                 case BinaryExpressionSyntax binary:
+                    // Null-coalescing `a ?? b` has no canonical G# form; the parser
+                    // rejects `??` (GS0005). Surface it as a clean per-construct gap
+                    // rather than emitting an unparseable operator (ADR-0115 §B gap #TBD).
+                    if (binary.IsKind(SyntaxKind.CoalesceExpression))
+                    {
+                        this.context.ReportUnsupported(
+                            binary,
+                            "null-coalescing operator '??' has no canonical G# form (GS0005: operator not supported); emitted a placeholder (ADR-0115 §B gap).");
+                        return new IdentifierExpression("nil");
+                    }
+
                     return new BinaryExpression(
                         this.TranslateExpression(binary.Left),
                         binary.OperatorToken.Text,
@@ -1729,6 +1867,27 @@ public sealed class CSharpToGSharpTranslator
                         this.TranslateExpression(elementAccess.Expression),
                         index);
 
+                case SimpleLambdaExpressionSyntax simpleLambda:
+                    return this.TranslateLambda(simpleLambda);
+
+                case ParenthesizedLambdaExpressionSyntax parenLambda:
+                    return this.TranslateLambda(parenLambda);
+
+                case AwaitExpressionSyntax awaitExpression:
+                    return new AwaitExpression(this.TranslateExpression(awaitExpression.Expression));
+
+                case SwitchExpressionSyntax switchExpression:
+                    return this.TranslateSwitchExpression(switchExpression);
+
+                case QueryExpressionSyntax query:
+                    return this.TranslateQuery(query);
+
+                case ImplicitObjectCreationExpressionSyntax implicitCreation:
+                    return this.TranslateImplicitObjectCreation(implicitCreation);
+
+                case PredefinedTypeSyntax predefinedType:
+                    return this.TranslatePredefinedTypeExpression(predefinedType);
+
                 default:
                     this.context.ReportUnsupported(
                         expression,
@@ -1739,6 +1898,16 @@ public sealed class CSharpToGSharpTranslator
 
         private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)
         {
+            // A switch-expression property-pattern binding (`Circle { Radius: var r }`)
+            // has no G# equivalent; references to the bound local are rewritten to a
+            // member access on the arm's type-pattern designator (`circle.Radius`).
+            if (this.patternBindings.Count > 0 &&
+                this.context.GetSymbolInfo(identifier).Symbol is { } boundSymbol &&
+                this.patternBindings.TryGetValue(boundSymbol, out GExpression replacement))
+            {
+                return replacement;
+            }
+
             // Inside a lifted owned-struct receiver method (issue #938) a bare
             // reference to an instance member carries an implicit C# `this`; a
             // top-level receiver-clause `func` has no implicit receiver, so the
@@ -1798,6 +1967,22 @@ public sealed class CSharpToGSharpTranslator
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
         {
+            // A member access on a bare-identifier element access (`values[i].M`)
+            // hits a G# parser ambiguity: `ident[ident]` is parsed as a generic
+            // instantiation expecting a `(` call, so the following `.` is rejected
+            // (GS0005: Unexpected <DotToken>). Literal or compound indices
+            // (`values[0]`, `values[i + 1]`) parse fine. There is no faithful G#
+            // form, so surface it as a clean per-construct gap (ADR-0115 §B gap #TBD).
+            if (member.Expression is ElementAccessExpressionSyntax elementAccess &&
+                elementAccess.ArgumentList.Arguments.Count == 1 &&
+                elementAccess.ArgumentList.Arguments[0].Expression is IdentifierNameSyntax)
+            {
+                this.context.ReportUnsupported(
+                    member,
+                    "member access on a bare-identifier element access ('expr[i].Member') has no canonical G# form (GS0005: Unexpected <DotToken>); emitted a placeholder (ADR-0115 §B gap).");
+                return new IdentifierExpression("nil");
+            }
+
             GExpression target = this.TranslateExpression(member.Expression);
             string memberName = member.Name.Identifier.Text;
 
@@ -2044,6 +2229,363 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return new InterpolatedStringExpression(parts);
+        }
+
+        private GExpression TranslateLambda(AnonymousFunctionExpressionSyntax lambda)
+        {
+            var parameters = new List<Parameter>();
+            ParameterListSyntax parameterList = lambda switch
+            {
+                ParenthesizedLambdaExpressionSyntax paren => paren.ParameterList,
+                _ => null,
+            };
+
+            if (lambda is SimpleLambdaExpressionSyntax simple)
+            {
+                parameters.Add(this.MapLambdaParameter(simple.Parameter));
+            }
+            else if (parameterList != null)
+            {
+                foreach (ParameterSyntax parameter in parameterList.Parameters)
+                {
+                    parameters.Add(this.MapLambdaParameter(parameter));
+                }
+            }
+
+            bool isAsync = lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
+
+            if (lambda.Body is BlockSyntax block)
+            {
+                return new LambdaExpression(parameters, blockBody: this.TranslateBlock(block), isAsync: isAsync);
+            }
+
+            return new LambdaExpression(
+                parameters,
+                expressionBody: this.TranslateExpression((ExpressionSyntax)lambda.Body),
+                isAsync: isAsync);
+        }
+
+        private Parameter MapLambdaParameter(ParameterSyntax parameter)
+        {
+            // A lambda parameter's type is inferred by Roslyn from the delegate
+            // target even when the C# spelling omits it (`n => …`); the canonical
+            // G# arrow lambda always names the parameter type (ADR-0074).
+            if (this.context.GetDeclaredSymbol(parameter) is IParameterSymbol symbol)
+            {
+                return this.MapParameter(symbol);
+            }
+
+            GTypeReference type = parameter.Type != null
+                ? this.MapTypeSyntax(parameter.Type)
+                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+            return new Parameter(parameter.Identifier.Text, type);
+        }
+
+        private GTypeReference MapTypeSyntax(TypeSyntax type)
+        {
+            ITypeSymbol symbol = this.context.GetTypeInfo(type).Type;
+            return symbol != null
+                ? this.typeMapper.Map(symbol, this.context, type.GetLocation())
+                : new NamedTypeReference(type.ToString());
+        }
+
+        private GExpression TranslatePredefinedTypeExpression(PredefinedTypeSyntax predefined)
+        {
+            // A C# predefined type used as an expression receiver (`string.Concat`,
+            // `int.Parse`) is a static-call target; G# resolves the BCL type name
+            // (`String`, `Int32`) there, not the lowercase value keyword, so emit
+            // the framework type name (ADR-0115 §B.12 receiver form).
+            ITypeSymbol symbol = this.context.GetTypeInfo(predefined).Type;
+            string name = symbol?.Name ?? predefined.Keyword.Text;
+            return new IdentifierExpression(name);
+        }
+
+        private GExpression TranslateImplicitObjectCreation(ImplicitObjectCreationExpressionSyntax creation)
+        {
+            // A C# target-typed `new()` carries its concrete type only in the bound
+            // model; emit the explicit constructed type (`List[T]()`) so the G#
+            // construction names the type (ADR-0115 §B.7/§B.16).
+            ITypeSymbol typeSymbol = this.context.GetTypeInfo(creation).Type;
+            GTypeReference type = typeSymbol != null
+                ? this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
+                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+
+            var arguments = creation.ArgumentList == null
+                ? new List<GExpression>()
+                : creation.ArgumentList.Arguments
+                    .Select(a => this.TranslateExpression(a.Expression))
+                    .ToList();
+
+            // A value aggregate is constructed with a composite literal; a reference
+            // type with a call on the (bracketed-generic) type name.
+            if (typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Struct, SpecialType: SpecialType.None } valueType &&
+                !valueType.IsTupleType &&
+                creation.Initializer == null)
+            {
+                List<string> targetNames = OrderedValueMemberNames(valueType);
+                if (targetNames.Count == arguments.Count && arguments.Count > 0)
+                {
+                    var fieldInitializers = new List<FieldInitializer>();
+                    for (int i = 0; i < arguments.Count; i++)
+                    {
+                        fieldInitializers.Add(new FieldInitializer(targetNames[i], arguments[i]));
+                    }
+
+                    return new CompositeLiteralExpression(type, fieldInitializers);
+                }
+            }
+
+            if (type is NamedTypeReference named)
+            {
+                IReadOnlyList<GTypeReference> typeArguments = named.TypeArguments.Count > 0
+                    ? named.TypeArguments
+                    : null;
+                return new InvocationExpression(
+                    new IdentifierExpression(named.Name),
+                    arguments,
+                    typeArguments);
+            }
+
+            return new InvocationExpression(new IdentifierExpression(type.ToString()), arguments);
+        }
+
+        private GExpression TranslateSwitchExpression(SwitchExpressionSyntax node)
+        {
+            GExpression subject = this.TranslateExpression(node.GoverningExpression);
+            var arms = new List<SwitchArm>();
+
+            foreach (SwitchExpressionArmSyntax arm in node.Arms)
+            {
+                if (arm.WhenClause != null)
+                {
+                    this.context.ReportUnsupported(
+                        arm.WhenClause,
+                        "switch-arm 'when' guard has no canonical G# form yet (ADR-0115 §B).");
+                }
+
+                var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
+                GPattern pattern = this.TranslatePattern(arm.Pattern, bindings);
+
+                foreach ((ISymbol symbol, GExpression replacement) in bindings)
+                {
+                    this.patternBindings[symbol] = replacement;
+                }
+
+                GExpression body;
+                try
+                {
+                    body = this.TranslateExpression(arm.Expression);
+                }
+                finally
+                {
+                    foreach ((ISymbol symbol, _) in bindings)
+                    {
+                        this.patternBindings.Remove(symbol);
+                    }
+                }
+
+                arms.Add(new SwitchArm(pattern, body));
+            }
+
+            return new SwitchExpression(subject, arms);
+        }
+
+        private GPattern TranslatePattern(
+            PatternSyntax pattern,
+            List<(ISymbol Symbol, GExpression Replacement)> bindings)
+        {
+            switch (pattern)
+            {
+                case ConstantPatternSyntax constant:
+                    return new ConstantPattern(this.TranslateExpression(constant.Expression));
+
+                case RelationalPatternSyntax relational:
+                    return new RelationalPattern(
+                        relational.OperatorToken.Text,
+                        this.TranslateExpression(relational.Expression));
+
+                case DiscardPatternSyntax:
+                    // The discard arm (`_ =>`) is the G# `default:` arm.
+                    return null;
+
+                case DeclarationPatternSyntax declaration
+                    when declaration.Designation is SingleVariableDesignationSyntax variable:
+                    return new TypePattern(
+                        variable.Identifier.Text,
+                        this.MapTypeSyntax(declaration.Type));
+
+                case RecursivePatternSyntax recursive:
+                    return this.TranslateRecursivePattern(recursive, bindings);
+
+                default:
+                    this.context.ReportUnsupported(
+                        pattern,
+                        $"pattern '{pattern.Kind()}' has no canonical G# form yet (ADR-0115 §B).");
+                    return new DiscardPattern();
+            }
+        }
+
+        private GPattern TranslateRecursivePattern(
+            RecursivePatternSyntax recursive,
+            List<(ISymbol Symbol, GExpression Replacement)> bindings)
+        {
+            // A pure property pattern (`{ A: 0, B: 0 }`) with no type maps to the
+            // G# property pattern; a typed recursive pattern (`Circle { Radius: var r }`)
+            // maps to a type pattern whose designator is the binding receiver.
+            if (recursive.Type == null)
+            {
+                var fields = new List<PropertyPatternField>();
+                if (recursive.PropertyPatternClause != null)
+                {
+                    foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
+                    {
+                        if (sub.NameColon == null)
+                        {
+                            this.context.ReportUnsupported(sub, "positional subpattern has no canonical G# form yet (ADR-0115 §B).");
+                            continue;
+                        }
+
+                        fields.Add(new PropertyPatternField(
+                            sub.NameColon.Name.Identifier.Text,
+                            this.TranslatePattern(sub.Pattern, bindings)));
+                    }
+                }
+
+                return new PropertyPattern(fields);
+            }
+
+            // Typed recursive pattern: synthesize a designator named after the type
+            // (`circle`), and rewrite each `Name: var x` property binding to a
+            // member access on that designator (`circle.Radius`).
+            string designator = recursive.Designation is SingleVariableDesignationSyntax named
+                ? named.Identifier.Text
+                : LowerCamel(recursive.Type.ToString());
+
+            if (recursive.PropertyPatternClause != null)
+            {
+                foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
+                {
+                    if (sub.NameColon != null &&
+                        sub.Pattern is VarPatternSyntax { Designation: SingleVariableDesignationSyntax bound } &&
+                        this.context.GetDeclaredSymbol(bound) is { } boundSymbol)
+                    {
+                        bindings.Add((
+                            boundSymbol,
+                            new MemberAccessExpression(
+                                new IdentifierExpression(designator),
+                                sub.NameColon.Name.Identifier.Text)));
+                    }
+                    else
+                    {
+                        this.context.ReportUnsupported(
+                            sub,
+                            "typed property subpattern other than a 'var' binding has no canonical G# form yet (ADR-0115 §B).");
+                    }
+                }
+            }
+
+            return new TypePattern(designator, this.MapTypeSyntax(recursive.Type));
+        }
+
+        private static string LowerCamel(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+            {
+                return name;
+            }
+
+            return char.ToLowerInvariant(name[0]) + name.Substring(1);
+        }
+
+        private GExpression TranslateQuery(QueryExpressionSyntax query)
+        {
+            // G# has no query-comprehension syntax; lower the C# query to the
+            // equivalent System.Linq method chain (`from … where … orderby …
+            // select …` → `.Where(…).OrderBy(…).Select(…)`, ADR-0115 §B LINQ).
+            FromClauseSyntax from = query.FromClause;
+            string rangeVar = from.Identifier.Text;
+            GExpression current = this.TranslateExpression(from.Expression);
+
+            GTypeReference rangeType = from.Type != null
+                ? this.MapTypeSyntax(from.Type)
+                : (this.context.GetTypeInfo(from.Expression).Type is INamedTypeSymbol { IsGenericType: true } src
+                    ? this.typeMapper.Map(src.TypeArguments[0], this.context, from.GetLocation())
+                    : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType));
+
+            current = this.LowerQueryBody(query.Body, rangeVar, rangeType, current);
+            return current;
+        }
+
+        private GExpression LowerQueryBody(
+            QueryBodySyntax body,
+            string rangeVar,
+            GTypeReference rangeType,
+            GExpression current)
+        {
+            foreach (QueryClauseSyntax clause in body.Clauses)
+            {
+                switch (clause)
+                {
+                    case WhereClauseSyntax where:
+                        current = this.QueryCall(current, "Where", rangeVar, rangeType, where.Condition);
+                        break;
+
+                    case OrderByClauseSyntax orderBy:
+                        bool first = true;
+                        foreach (OrderingSyntax ordering in orderBy.Orderings)
+                        {
+                            bool descending = ordering.AscendingOrDescendingKeyword.IsKind(SyntaxKind.DescendingKeyword);
+                            string method = (first ? "OrderBy" : "ThenBy") + (descending ? "Descending" : string.Empty);
+                            current = this.QueryCall(current, method, rangeVar, rangeType, ordering.Expression);
+                            first = false;
+                        }
+
+                        break;
+
+                    default:
+                        this.context.ReportUnsupported(
+                            clause,
+                            $"query clause '{clause.Kind()}' has no canonical G# lowering yet (ADR-0115 §B).");
+                        break;
+                }
+            }
+
+            switch (body.SelectOrGroup)
+            {
+                case SelectClauseSyntax select:
+                    // An identity projection (`select n`) after another clause is a
+                    // no-op the C# compiler elides; keep it only when it transforms.
+                    if (!(select.Expression is IdentifierNameSyntax id && id.Identifier.Text == rangeVar
+                          && body.Clauses.Count > 0))
+                    {
+                        current = this.QueryCall(current, "Select", rangeVar, rangeType, select.Expression);
+                    }
+
+                    break;
+
+                default:
+                    this.context.ReportUnsupported(
+                        body.SelectOrGroup,
+                        $"query '{body.SelectOrGroup.Kind()}' has no canonical G# lowering yet (ADR-0115 §B).");
+                    break;
+            }
+
+            return current;
+        }
+
+        private GExpression QueryCall(
+            GExpression receiver,
+            string method,
+            string rangeVar,
+            GTypeReference rangeType,
+            ExpressionSyntax lambdaBody)
+        {
+            var lambda = new LambdaExpression(
+                new List<Parameter> { new Parameter(rangeVar, rangeType) },
+                expressionBody: this.TranslateExpression(lambdaBody));
+            return new InvocationExpression(
+                new MemberAccessExpression(receiver, method),
+                new List<GExpression> { lambda });
         }
 
         /// <summary>
