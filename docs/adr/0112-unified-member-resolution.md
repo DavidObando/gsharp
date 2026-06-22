@@ -168,3 +168,25 @@ characterization tests remain green.
 - **Reserved `MemberKinds.NestedType`.** Added as a reserved flag value (not
   included in `All`) for future nested-type routing. Nested-type enumeration is
   not wired in P0; it remains future work to avoid scope creep.
+
+## Addendum — A8: operator and protocol single-method lookups
+
+The A8 consumer-migration PR routes the binder's single-method-by-name probes
+through the canonical layer. No behavior, ordering, or diagnostics changed; the
+new helper is a line-for-line mirror of the instance method it replaces.
+
+- **Canonical single-method helper.** Added
+  `TypeMemberModel.TryGetMethodIncludingInherited(TypeSymbol, string, out
+  FunctionSymbol)`. It mirrors `StructSymbol.TryGetMethodIncludingInherited`
+  exactly: the FIRST instance method by name, in declaration order within each
+  level, walking the base chain this-first — instance methods only, no overload
+  set, no statics. The helper is `StructSymbol`-only by design (all current
+  callers pass a user struct); the original instance method is unchanged.
+
+- **Consumer migrations.** User-operator resolution (unary and binary, left and
+  right operands) in `ExpressionBinder.Operators.cs`, duck-typed iterator
+  probing (`GetEnumerator`/`MoveNext`) in `MemberLookup.cs`, and `using`/`defer`
+  dispose probing (`Dispose`/`DisposeAsync`) in `ConversionClassifier.cs` now
+  call the canonical helper instead of the `StructSymbol` instance method. The
+  surrounding parameter/return-type, accessibility, and bound-node construction
+  logic is unchanged. CLR-reflection operator/dispose fallbacks are untouched.

@@ -875,10 +875,10 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when the duck-typed shape matches.</returns>
     public static bool TryGetUserPatternEnumerableElementType(StructSymbol type, out TypeSymbol elementType)
     {
-        if (type.TryGetMethodIncludingInherited("GetEnumerator", out var getEnumerator) &&
+        if (TypeMemberModel.TryGetMethodIncludingInherited(type, "GetEnumerator", out var getEnumerator) &&
             getEnumerator.Parameters.Length == 0 &&
             getEnumerator.Type is StructSymbol enumeratorType &&
-            enumeratorType.TryGetMethodIncludingInherited("MoveNext", out var moveNext) &&
+            TypeMemberModel.TryGetMethodIncludingInherited(enumeratorType, "MoveNext", out var moveNext) &&
             moveNext.Parameters.Length == 0 &&
             moveNext.Type == TypeSymbol.Bool &&
             enumeratorType.TryGetField("Current", out var currentField))

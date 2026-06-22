@@ -1116,7 +1116,7 @@ internal sealed class ConversionClassifier
         // that declares a public parameterless Dispose() (including via
         // IDisposable implementation), route through user-instance-call.
         if (variable.Type is StructSymbol userType
-            && userType.TryGetMethodIncludingInherited("Dispose", out var userDispose)
+            && TypeMemberModel.TryGetMethodIncludingInherited(userType, "Dispose", out var userDispose)
             && userDispose.Parameters.Length == 0
             && (userDispose.Type == TypeSymbol.Void || userDispose.Type == null)
             && userDispose.Accessibility == Accessibility.Public)
@@ -1161,7 +1161,7 @@ internal sealed class ConversionClassifier
 
         // User-defined G# class path: probe for DisposeAsync() returning ValueTask.
         if (variable.Type is StructSymbol userType
-            && userType.TryGetMethodIncludingInherited("DisposeAsync", out var userDisposeAsync)
+            && TypeMemberModel.TryGetMethodIncludingInherited(userType, "DisposeAsync", out var userDisposeAsync)
             && userDisposeAsync.Parameters.Length == 0
             && userDisposeAsync.Accessibility == Accessibility.Public)
         {

@@ -91,6 +91,33 @@ var eq = p == q
         Assert.Equal(true, result.Value);
     }
 
+    [Fact]
+    public void InheritedBinaryOperator_DeclaredOnOpenBase_BindsThroughDerived()
+    {
+        // ADR-0112 A8: a user operator declared on an open base class must be
+        // found when the operands are a derived instance — the binder walks the
+        // base chain via TypeMemberModel.TryGetMethodIncludingInherited.
+        var source = @"
+open class OpBaseVec {
+    var X int32
+}
+
+func (a OpBaseVec) operator +(b OpBaseVec) int32 {
+    return a.X + b.X
+}
+
+class OpDerivedVec : OpBaseVec {
+}
+
+var p = OpDerivedVec{X: 5}
+var q = OpDerivedVec{X: 7}
+var sum = p + q
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(12, result.Value);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

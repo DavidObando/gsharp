@@ -352,6 +352,34 @@ public static class TypeMemberModel
         return false;
     }
 
+    /// <summary>
+    /// ADR-0112: tries to find the FIRST instance method named <paramref name="name"/>
+    /// on <paramref name="type"/>, walking the base chain this-first (declaration order
+    /// within each level). Mirrors <see cref="StructSymbol.TryGetMethodIncludingInherited"/>:
+    /// instance methods only, no overload set, no statics. Used by user-operator
+    /// resolution and duck-typed protocol probes (iterator, dispose).
+    /// </summary>
+    /// <param name="type">The type to resolve against (user-defined struct/class only).</param>
+    /// <param name="name">The method name.</param>
+    /// <param name="method">The found method on success.</param>
+    /// <returns>True if found.</returns>
+    public static bool TryGetMethodIncludingInherited(TypeSymbol type, string name, out FunctionSymbol method)
+    {
+        if (type is StructSymbol structSymbol)
+        {
+            for (var c = structSymbol; c != null; c = c.BaseClass)
+            {
+                if (c.TryGetMethod(name, out method))
+                {
+                    return true;
+                }
+            }
+        }
+
+        method = null;
+        return false;
+    }
+
     private static IEnumerable<Symbol> EnumerateStructMembers(StructSymbol structSymbol, MemberQuery query)
     {
         for (var c = structSymbol; c != null; c = c.BaseClass)
