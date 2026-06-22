@@ -93,6 +93,12 @@ public static class GSharpPrinter
 
     private static string RenderType(GTypeReference type)
     {
+        var rendered = RenderTypeCore(type);
+        return type != null && type.IsNullable ? rendered + "?" : rendered;
+    }
+
+    private static string RenderTypeCore(GTypeReference type)
+    {
         switch (type)
         {
             case NamedTypeReference named:

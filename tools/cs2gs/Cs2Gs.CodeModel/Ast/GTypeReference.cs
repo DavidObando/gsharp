@@ -12,6 +12,13 @@ namespace Cs2Gs.CodeModel.Ast;
 /// </summary>
 public abstract class GTypeReference : GNode
 {
+    /// <summary>
+    /// Gets a value indicating whether this type reference is nullable. A
+    /// nullable type renders with a trailing <c>?</c> per the G# spec (§Type
+    /// clauses); both C# nullable value types (<c>T?</c> / <c>Nullable&lt;T&gt;</c>)
+    /// and annotated nullable reference types map to this flag (ADR-0115 §B).
+    /// </summary>
+    public bool IsNullable { get; init; }
 }
 
 /// <summary>

@@ -101,11 +101,13 @@ namespace Sample.Geometry
 
     /// <summary>
     /// <see cref="CSharpToGSharpTranslator.TranslateDocument(LoadedDocument, TranslationContext)"/>
-    /// emits the trivial G# frame (package + imports) and records the not-yet-translated
-    /// method body as a structured unsupported diagnostic (never silently dropped).
+    /// emits the G# frame (package + imports), maps the type with the B.10
+    /// default-visibility rule (C# <c>public</c> → G# default, omitted), and routes
+    /// the not-yet-translated method body through the deferred body seam as a
+    /// structured <c>body-pending</c> Info diagnostic (never silently dropped).
     /// </summary>
     [Fact]
-    public void TranslateDocument_EmitsFrameAndRecordsUnsupportedBodies()
+    public void TranslateDocument_EmitsFrameAndRecordsPendingBodies()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Point.cs", InlineSource) });
@@ -126,12 +128,12 @@ namespace Sample.Geometry
         TypeDeclaration type = Assert.IsType<TypeDeclaration>(Assert.Single(unit.Members));
         Assert.Equal("Point", type.Name);
         Assert.Equal(TypeDeclarationKind.Class, type.Kind);
-        Assert.Equal(Visibility.Public, type.Visibility);
+        Assert.Equal(Visibility.Default, type.Visibility);
 
         Assert.Contains(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported &&
-                d.ConstructKind == "MethodDeclaration" &&
+            d => d.Severity == TranslationSeverity.Info &&
+                d.ConstructKind == "body-pending" &&
                 d.Message.Contains("Describe"));
     }
 

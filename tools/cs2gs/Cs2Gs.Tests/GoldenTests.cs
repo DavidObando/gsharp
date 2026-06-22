@@ -498,6 +498,31 @@ public class GoldenTests
         Assert.Contains(result.Errors, e => e.StartsWith("GS0005", System.StringComparison.Ordinal));
     }
 
+    /// <summary>B.12 / §Type clauses: a nullable type renders with a trailing
+    /// <c>?</c> (C# <c>T?</c> / <c>Nullable&lt;T&gt;</c> and annotated nullable
+    /// reference types map to <see cref="GTypeReference.IsNullable"/>).</summary>
+    [Fact]
+    public void BNullable_TrailingQuestionMark()
+    {
+        var unit = new CompilationUnit("Demo", members: Nodes(
+            new FieldDeclaration(
+                BindingKind.Var,
+                "maybe",
+                new NamedTypeReference("int32") { IsNullable = true }),
+            new FieldDeclaration(
+                BindingKind.Var,
+                "name",
+                new NamedTypeReference("string") { IsNullable = true })));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "var maybe int32?",
+            "var name string?");
+
+        AssertGolden(expected, unit);
+    }
+
     private static void AssertGolden(string expected, CompilationUnit unit)
     {
         var printed = GSharpPrinter.Print(unit);
