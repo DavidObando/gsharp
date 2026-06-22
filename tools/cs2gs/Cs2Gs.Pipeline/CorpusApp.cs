@@ -24,18 +24,24 @@ public sealed class CorpusApp
     /// <param name="targetKind">The G# output kind (exe or library).</param>
     /// <param name="stdoutGolden">The optional captured-stdout golden file path.</param>
     /// <param name="referencedAssemblies">The optional sibling assemblies passed via <c>/reference:</c>.</param>
+    /// <param name="testsProjectPath">The optional sibling C# <c>.Tests</c> project (library xUnit parity).</param>
+    /// <param name="testsBaselinePath">The optional sibling <c>baseline.tests.json</c> oracle path.</param>
     public CorpusApp(
         string id,
         string projectPath,
         TargetKind targetKind,
         string stdoutGolden = null,
-        IReadOnlyList<string> referencedAssemblies = null)
+        IReadOnlyList<string> referencedAssemblies = null,
+        string testsProjectPath = null,
+        string testsBaselinePath = null)
     {
         this.Id = id ?? throw new ArgumentNullException(nameof(id));
         this.ProjectPath = projectPath ?? throw new ArgumentNullException(nameof(projectPath));
         this.TargetKind = targetKind;
         this.StdoutGolden = stdoutGolden;
         this.ReferencedAssemblies = referencedAssemblies ?? ImmutableArray<string>.Empty;
+        this.TestsProjectPath = testsProjectPath;
+        this.TestsBaselinePath = testsBaselinePath;
     }
 
     /// <summary>Gets the stable corpus app id.</summary>
@@ -52,4 +58,17 @@ public sealed class CorpusApp
 
     /// <summary>Gets the sibling assemblies to pass via <c>/reference:</c>.</summary>
     public IReadOnlyList<string> ReferencedAssemblies { get; }
+
+    /// <summary>
+    /// Gets the sibling C# <c>.Tests</c> project path used for stage-4 library
+    /// xUnit parity, or <see langword="null"/> when the app has no test oracle
+    /// (e.g. an executable verified by stdout parity).
+    /// </summary>
+    public string TestsProjectPath { get; }
+
+    /// <summary>
+    /// Gets the sibling <c>baseline.tests.json</c> oracle path used for stage-4
+    /// library xUnit parity, or <see langword="null"/> when absent.
+    /// </summary>
+    public string TestsBaselinePath { get; }
 }

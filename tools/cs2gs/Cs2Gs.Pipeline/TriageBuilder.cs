@@ -245,6 +245,108 @@ public sealed class TriageBuilder
         return artifact;
     }
 
+    /// <summary>
+    /// Builds a stage-4 <c>test-parity-failure</c> artifact for an executable
+    /// app whose migrated program stdout diverged from the committed
+    /// <c>baseline.stdout.golden</c> (ADR-0115 §C/§E). The diagnostic id is
+    /// <c>STDOUT-MISMATCH</c>; the message summarizes the first differing line;
+    /// <c>offendingCSharpConstruct.kind</c> is <c>ProgramStdout</c> with the
+    /// differing line as the snippet. The C#/G# source positions are
+    /// <see langword="null"/> (the divergence is observed at runtime, not at a
+    /// source position). Labels are <c>Oats</c> + <c>bug</c> (§D).
+    /// </summary>
+    /// <param name="diff">The stdout parity mismatch.</param>
+    /// <param name="gsFile">The emitted G# file (relative path), or null.</param>
+    /// <returns>The populated triage artifact.</returns>
+    public TriageArtifact TestParityStdoutFailure(StdoutParityResult diff, string gsFile = null)
+    {
+        if (diff is null)
+        {
+            throw new ArgumentNullException(nameof(diff));
+        }
+
+        var artifact = this.NewArtifact(MigrationStageKind.TestParity, TriageCategory.TestParityFailure);
+        artifact.Diagnostic = new TriageDiagnostic
+        {
+            Id = "STDOUT-MISMATCH",
+            Message = diff.Describe(),
+            Severity = "error",
+        };
+        artifact.SourceLocation = new TriageSourceLocation
+        {
+            GsFile = gsFile,
+            GsLine = null,
+            GsColumn = null,
+            CsFile = null,
+            CsLine = null,
+            CsColumn = null,
+        };
+        artifact.OffendingCSharpConstruct = new TriageOffendingConstruct
+        {
+            Kind = "ProgramStdout",
+            Snippet = Truncate(diff.ExpectedLine ?? diff.ActualLine ?? diff.Describe()),
+        };
+        artifact.Fingerprint = Fingerprint.Compute(
+            artifact.Category,
+            artifact.Stage,
+            artifact.Diagnostic.Id,
+            artifact.OffendingCSharpConstruct.Kind,
+            artifact.OffendingCSharpConstruct.Snippet);
+        artifact.SuggestedIssue = this.TestParityIssue(artifact);
+        return artifact;
+    }
+
+    /// <summary>
+    /// Builds a stage-4 <c>test-parity-failure</c> artifact for a single ported
+    /// xUnit test whose outcome diverged from the C# baseline oracle
+    /// (ADR-0115 §C/§E). The diagnostic id is <c>TESTPARITY-&lt;kind&gt;</c>
+    /// (<c>Missing</c>/<c>Extra</c>/<c>OutcomeMismatch</c>); the message is the
+    /// expected-vs-actual description; <c>offendingCSharpConstruct.kind</c> is
+    /// the failing test method skeleton (the fully qualified test name). Labels
+    /// are <c>Oats</c> + <c>bug</c> (§D). The fingerprint splits per differing
+    /// test (the test name is the construct kind).
+    /// </summary>
+    /// <param name="diff">The per-test parity difference.</param>
+    /// <param name="gsFile">The emitted G# test file (relative path), or null.</param>
+    /// <returns>The populated triage artifact.</returns>
+    public TriageArtifact TestParityTestFailure(TestParityDiff diff, string gsFile = null)
+    {
+        if (diff is null)
+        {
+            throw new ArgumentNullException(nameof(diff));
+        }
+
+        var artifact = this.NewArtifact(MigrationStageKind.TestParity, TriageCategory.TestParityFailure);
+        artifact.Diagnostic = new TriageDiagnostic
+        {
+            Id = "TESTPARITY-" + diff.Kind,
+            Message = diff.Describe(),
+            Severity = "error",
+        };
+        artifact.SourceLocation = new TriageSourceLocation
+        {
+            GsFile = gsFile,
+            GsLine = null,
+            GsColumn = null,
+            CsFile = null,
+            CsLine = null,
+            CsColumn = null,
+        };
+        artifact.OffendingCSharpConstruct = new TriageOffendingConstruct
+        {
+            Kind = diff.Name,
+            Snippet = Truncate(diff.Describe()),
+        };
+        artifact.Fingerprint = Fingerprint.Compute(
+            artifact.Category,
+            artifact.Stage,
+            artifact.Diagnostic.Id,
+            artifact.OffendingCSharpConstruct.Kind,
+            artifact.OffendingCSharpConstruct.Snippet);
+        artifact.SuggestedIssue = this.TestParityIssue(artifact);
+        return artifact;
+    }
+
     private static (string File, int? Line, int? Column, string Snippet) ResolveCSharpLocation(Location location)
     {
         if (location is null || !location.IsInSource)
@@ -417,6 +519,39 @@ public sealed class TriageBuilder
         };
         issue.Labels.Add("Oats");
         issue.Labels.Add("cil-emit");
+        return issue;
+    }
+
+    private TriageSuggestedIssue TestParityIssue(TriageArtifact artifact)
+    {
+        string title = $"[cs2gs] test-parity {artifact.Diagnostic.Id} in migrated {this.CorpusAppId} " +
+            $"({artifact.OffendingCSharpConstruct.Kind})";
+        bool isStdout = string.Equals(artifact.Diagnostic.Id, "STDOUT-MISMATCH", StringComparison.Ordinal);
+        string repro = isStdout
+            ? "**Reproduction:** `cs2gs migrate` translates the corpus app, compiles it with `gsc`, runs the " +
+                "produced program, and compares its stdout to `baseline.stdout.golden`."
+            : "**Reproduction:** `cs2gs migrate` translates the corpus app and its `.Tests` project to a G# xUnit " +
+                "project, runs `dotnet test`, and compares the per-test outcomes to `baseline.tests.json`.";
+        string[] lines =
+        {
+            $"The migrated **{this.CorpusAppId}** does not reproduce the C# parity oracle with `gsc` {this.GscVersion}.",
+            string.Empty,
+            $"- Failure: `{artifact.Diagnostic.Id}`",
+            $"- Detail: {artifact.Diagnostic.Message}",
+            isStdout ? "- This is a behavioral divergence: the program compiled but produced different output." :
+                $"- Failing test: `{artifact.OffendingCSharpConstruct.Kind}`",
+            string.Empty,
+            repro,
+            $"**Fingerprint:** `{artifact.Fingerprint}`",
+        };
+
+        var issue = new TriageSuggestedIssue
+        {
+            Title = title,
+            Body = string.Join("\n", lines),
+        };
+        issue.Labels.Add("Oats");
+        issue.Labels.Add("bug");
         return issue;
     }
 }

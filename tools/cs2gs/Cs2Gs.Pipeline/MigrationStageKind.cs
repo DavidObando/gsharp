@@ -5,10 +5,9 @@
 namespace Cs2Gs.Pipeline;
 
 /// <summary>
-/// The four ordered migration stages (ADR-0115 §C). Stages 1–2 are implemented;
-/// stages 3–4 are reserved so the <c>stage</c> field of the triage schema
-/// (§D.1) is stable before <see cref="IlVerify"/> / <see cref="TestParity"/>
-/// land in a later step.
+/// The four ordered migration stages (ADR-0115 §C). All four are implemented:
+/// stage 1 translates, stage 2 compiles, stage 3 IL-verifies, and stage 4
+/// (<see cref="TestParity"/>) proves runtime/test parity with the original C#.
 /// </summary>
 public enum MigrationStageKind
 {
@@ -18,17 +17,16 @@ public enum MigrationStageKind
     /// <summary>Stage 2 — compile the emitted G# with the real <c>gsc</c> (<c>compile</c>).</summary>
     Compile,
 
-    /// <summary>Stage 3 — IL verification of the emitted assembly (<c>ilverify</c>). Reserved.</summary>
+    /// <summary>Stage 3 — IL verification of the emitted assembly (<c>ilverify</c>).</summary>
     IlVerify,
 
-    /// <summary>Stage 4 — test parity against the C# baseline oracle (<c>test-parity</c>). Reserved.</summary>
+    /// <summary>Stage 4 — test parity against the C# baseline oracle (<c>test-parity</c>).</summary>
     TestParity,
 }
 
 /// <summary>
 /// The triage category recorded on a failure artifact (ADR-0115 §D.1). One
-/// value per stage; all four are defined now even though only the first two are
-/// produced, so the schema does not shift when stages 3–4 land.
+/// value per stage.
 /// </summary>
 public enum TriageCategory
 {
@@ -38,10 +36,10 @@ public enum TriageCategory
     /// <summary>A <c>gsc</c> error compiling the emitted G# (stage 2).</summary>
     CompileError,
 
-    /// <summary>An <c>ilverify</c> failure on the emitted assembly (stage 3). Reserved.</summary>
+    /// <summary>An <c>ilverify</c> failure on the emitted assembly (stage 3).</summary>
     IlVerifyFailure,
 
-    /// <summary>A ported-test parity mismatch against the C# baseline (stage 4). Reserved.</summary>
+    /// <summary>A ported-test parity mismatch against the C# baseline (stage 4).</summary>
     TestParityFailure,
 }
 

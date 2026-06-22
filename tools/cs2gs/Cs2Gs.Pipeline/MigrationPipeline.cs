@@ -46,9 +46,9 @@ public sealed class MigrationPipeline
     public IReadOnlyList<IMigrationStage> Stages { get; }
 
     /// <summary>
-    /// Gets the default ordered stage list (stages 1–3:
+    /// Gets the default ordered stage list (stages 1–4:
     /// <see cref="TranslateStage"/> → <see cref="CompileStage"/> →
-    /// <see cref="IlVerifyStage"/>). The test-parity stage appends after these.
+    /// <see cref="IlVerifyStage"/> → <see cref="TestParityStage"/>).
     /// </summary>
     /// <returns>The default ordered stages.</returns>
     public static IReadOnlyList<IMigrationStage> DefaultStages() => new IMigrationStage[]
@@ -56,6 +56,7 @@ public sealed class MigrationPipeline
         new TranslateStage(),
         new CompileStage(),
         new IlVerifyStage(),
+        new TestParityStage(),
     };
 
     /// <summary>
@@ -309,6 +310,12 @@ public sealed class MigrationPipeline
         {
             return triage.IlVerifyFailure(
                 new IlVerifyError("IlVerifyError", null, "ilverify stage crashed: " + ex.Message));
+        }
+
+        if (stage == MigrationStageKind.TestParity)
+        {
+            return triage.TestParityStdoutFailure(
+                StdoutParityResult.Mismatch(0, "<no crash>", "test-parity stage crashed: " + ex.Message));
         }
 
         var diagnostic = new Translator.TranslationDiagnostic(

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "1.0",
+  "app": "Sample.Tests",
+  "framework": "xunit",
+  "total": 4,
+  "passed": 4,
+  "failed": 0,
+  "skipped": 0,
+  "tests": [
+    {
+      "name": "Sample.Tests.CalculatorTests.Add_Cases(a: 1, b: 2, expected: 3)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Sample.Tests.CalculatorTests.Add_Cases(a: 2, b: 2, expected: 4)",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Sample.Tests.CalculatorTests.Add_Returns_Sum",
+      "outcome": "Passed"
+    },
+    {
+      "name": "Sample.Tests.CalculatorTests.Subtract_Returns_Difference",
+      "outcome": "Passed"
+    }
+  ]
+}

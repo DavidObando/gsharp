@@ -57,7 +57,16 @@ public static class CorpusDiscovery
             string golden = Path.Combine(projectDir, "baseline.stdout.golden");
             string stdoutGolden = File.Exists(golden) ? golden : null;
 
-            apps.Add(new CorpusApp(id, projectPath, target, stdoutGolden));
+            (string testsProject, string testsBaseline) = FindSiblingTestOracle(fullCorpus, folderName);
+
+            apps.Add(new CorpusApp(
+                id,
+                projectPath,
+                target,
+                stdoutGolden,
+                referencedAssemblies: null,
+                testsProjectPath: testsProject,
+                testsBaselinePath: testsBaseline));
         }
 
         return apps;
@@ -88,6 +97,30 @@ public static class CorpusDiscovery
         string normalized = path.Replace('\\', '/');
         return normalized.Contains("/bin/", StringComparison.Ordinal) ||
             normalized.Contains("/obj/", StringComparison.Ordinal);
+    }
+
+    private static (string TestsProject, string TestsBaseline) FindSiblingTestOracle(
+        string corpusRoot,
+        string folderName)
+    {
+        // A library app `<X>` is verified by stage 4 against a sibling
+        // `<X>.Tests` project plus its committed `baseline.tests.json` oracle.
+        string testsFolder = Path.Combine(corpusRoot, folderName + ".Tests");
+        if (!Directory.Exists(testsFolder))
+        {
+            return (null, null);
+        }
+
+        string baseline = Path.Combine(testsFolder, "baseline.tests.json");
+        string testsProject = Directory
+            .EnumerateFiles(testsFolder, "*.csproj", SearchOption.TopDirectoryOnly)
+            .Where(p => !IsUnderBinOrObj(p))
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+        return (
+            testsProject,
+            File.Exists(baseline) ? baseline : null);
     }
 
     private static TargetKind ReadTargetKind(string projectPath)

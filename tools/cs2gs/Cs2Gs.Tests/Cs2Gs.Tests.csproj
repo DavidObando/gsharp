@@ -21,4 +21,8 @@
     <ProjectReference Include="..\Cs2Gs.Report\Cs2Gs.Report.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -164,7 +164,7 @@ public class IlVerifyStageTests
             "L1 must migrate green through stage 3 (ilverify). Failure category: " +
                 (app.FailureCategory ?? "<none>") + "; artifacts: " + string.Join(", ", app.Artifacts));
         Assert.Empty(app.Artifacts);
-        Assert.Equal(3, app.Stages.Count);
+        Assert.Equal(4, app.Stages.Count);
         Assert.All(app.Stages, s => Assert.Equal("passed", s.Status));
         Assert.Equal("ilverify", app.Stages[2].Stage);
     }
