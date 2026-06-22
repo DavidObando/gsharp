@@ -1108,12 +1108,13 @@ public sealed class CSharpToGSharpTranslator
 
             IReadOnlyList<AccessorDeclarationSyntax> declared = node.AccessorList.Accessors;
             bool anyBodied = declared.Any(a => a.Body != null || a.ExpressionBody != null);
-            bool hasSet = declared.Any(a =>
-                a.IsKind(SyntaxKind.SetAccessorDeclaration) || a.IsKind(SyntaxKind.InitAccessorDeclaration));
+            bool hasSet = declared.Any(a => a.IsKind(SyntaxKind.SetAccessorDeclaration));
             bool hasGet = declared.Any(a => a.IsKind(SyntaxKind.GetAccessorDeclaration));
 
             // A read-write auto-property (all accessors body-less, has get + set)
-            // maps to the canonical auto form `prop Name T` (ADR-0115 §B.11).
+            // maps to the canonical auto form `prop Name T` (ADR-0115 §B.11). An
+            // init-only auto-property (get + init) keeps its explicit accessors so
+            // the init-only semantics are preserved (issue #946).
             if (!anyBodied && hasGet && hasSet)
             {
                 return new List<PropertyAccessor>();
@@ -1129,14 +1130,8 @@ public sealed class CSharpToGSharpTranslator
                 }
                 else if (accessor.IsKind(SyntaxKind.InitAccessorDeclaration))
                 {
-                    // G# has no 'init' accessor (spec property grammar only allows
-                    // get/set); map to 'set' and record the discovered gap.
-                    this.context.Report(new TranslationDiagnostic(
-                        nameof(SyntaxKind.InitAccessorDeclaration),
-                        $"{displayName} uses an 'init' accessor; G# has no 'init' accessor, mapped to 'set' (discovered gap, ADR-0115 §B.11).",
-                        accessor.GetLocation(),
-                        TranslationSeverity.Info));
-                    kind = AccessorKind.Set;
+                    // Issue #946: G# now supports a first-class 'init' accessor.
+                    kind = AccessorKind.Init;
                 }
                 else
                 {

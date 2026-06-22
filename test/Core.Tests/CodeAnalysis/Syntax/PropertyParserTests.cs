@@ -185,4 +185,64 @@ public class PropertyParserTests
         Assert.False(propDecl.IsIndexer);
         Assert.Empty(propDecl.Parameters);
     }
+
+    [Fact]
+    public void ParsesAutoInitProperty()
+    {
+        // Issue #946: `{ get; init; }` bodyless init accessor.
+        const string source = "package P\nclass Foo {\n  prop Name string { get; init; }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var propDecl = structDecl.Properties.Single();
+        Assert.Equal(2, propDecl.Accessors.Length);
+        Assert.True(propDecl.Accessors[0].IsGetter);
+        Assert.True(propDecl.Accessors[1].IsInit);
+        Assert.True(propDecl.Accessors[1].IsSetterOrInit);
+        Assert.False(propDecl.Accessors[1].IsSetter);
+    }
+
+    [Fact]
+    public void ParsesInitProperty_WithBody()
+    {
+        // Issue #946: `init { ... }` accessor with a block body.
+        const string source = "package P\nclass Foo {\n  var raw int32\n  prop X int32 { get { return raw } init { raw = value } }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var propDecl = structDecl.Properties.Single();
+        var initAccessor = propDecl.Accessors.Single(a => a.IsInit);
+        Assert.NotNull(initAccessor.Body);
+    }
+
+    [Fact]
+    public void ParsesInitProperty_WithExplicitParameterName()
+    {
+        // Issue #946: `init(v) { ... }` mirrors `set(v) { ... }`.
+        const string source = "package P\nclass Foo {\n  var raw int32\n  prop X int32 { get { return raw } init(v) { raw = v } }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var propDecl = structDecl.Properties.Single();
+        var initAccessor = propDecl.Accessors.Single(a => a.IsInit);
+        Assert.Equal("v", initAccessor.ParameterIdentifier.Text);
+    }
+
+    [Fact]
+    public void InitConstructor_NotConfusedWithInitAccessor()
+    {
+        // Issue #946: `init(...)` at member level is still a constructor, not a
+        // property accessor; both coexist in one class.
+        const string source = "package P\nclass Foo {\n  prop Name string { get; init; }\n  init(name string) {\n    this.Name = name\n  }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        Assert.Single(structDecl.Constructors);
+        var propDecl = structDecl.Properties.Single();
+        Assert.True(propDecl.Accessors.Single(a => a.IsInit).IsInit);
+    }
 }

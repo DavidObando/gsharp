@@ -18,13 +18,14 @@ public sealed class PropertySymbol : Symbol
     /// <param name="type">The property type.</param>
     /// <param name="accessibility">The property accessibility.</param>
     /// <param name="hasGetter">Whether this property has a getter accessor.</param>
-    /// <param name="hasSetter">Whether this property has a setter accessor.</param>
+    /// <param name="hasSetter">Whether this property has a setter accessor (a <c>set</c> or an <c>init</c> accessor).</param>
     /// <param name="isAutoProperty">Whether this is an auto-property (compiler-synthesized backing field).</param>
     /// <param name="isVirtual">Whether this property is virtual (open).</param>
     /// <param name="isOverride">Whether this property overrides a base property.</param>
     /// <param name="setterParameterName">The setter parameter name (defaults to "value").</param>
     /// <param name="isStatic">Whether this property is declared inside a <c>shared</c> block (ADR-0053).</param>
     /// <param name="declaration">The declaring syntax node, or <see langword="null"/> for synthesized properties.</param>
+    /// <param name="isInitOnly">Whether the property's setter is an <c>init</c>-only accessor (issue #946).</param>
     public PropertySymbol(
         string name,
         TypeSymbol type,
@@ -36,7 +37,8 @@ public sealed class PropertySymbol : Symbol
         bool isOverride,
         string setterParameterName = "value",
         bool isStatic = false,
-        PropertyDeclarationSyntax declaration = null)
+        PropertyDeclarationSyntax declaration = null,
+        bool isInitOnly = false)
         : base(name)
     {
         Type = type;
@@ -49,6 +51,7 @@ public sealed class PropertySymbol : Symbol
         SetterParameterName = setterParameterName;
         IsStatic = isStatic;
         Declaration = declaration;
+        IsInitOnly = isInitOnly;
     }
 
     /// <inheritdoc/>
@@ -63,8 +66,19 @@ public sealed class PropertySymbol : Symbol
     /// <summary>Gets a value indicating whether this property has a getter accessor.</summary>
     public bool HasGetter { get; }
 
-    /// <summary>Gets a value indicating whether this property has a setter accessor.</summary>
+    /// <summary>Gets a value indicating whether this property has a setter accessor (a <c>set</c> or an <c>init</c> accessor).</summary>
     public bool HasSetter { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this property's setter is an
+    /// <c>init</c>-only accessor (issue #946). An init-only setter is emitted
+    /// as a <c>set_Prop</c> method whose void return carries the
+    /// <c>System.Runtime.CompilerServices.IsExternalInit</c> modreq, and
+    /// assignment is restricted to object initialization (the declaring type's
+    /// constructors, object/aggregate initializers at the creation site, and
+    /// other <c>init</c> accessors of the same instance).
+    /// </summary>
+    public bool IsInitOnly { get; }
 
     /// <summary>Gets a value indicating whether this is an auto-property (compiler-synthesized backing field).</summary>
     public bool IsAutoProperty { get; }

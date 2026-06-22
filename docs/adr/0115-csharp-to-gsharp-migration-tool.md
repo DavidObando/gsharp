@@ -202,7 +202,7 @@ Defaults: top-level declarations default to `public` (ADR-0014); top-level `priv
 #### B.11 Members: fields, properties, constructors, statics, enums, attributes
 
 - **Fields** require `var`/`let` (ADR-0067, §B.3).
-- **Properties** → `prop Name T` for auto-properties, with `{ get { … } set(v) { … } }` bodies for computed/custom accessors (ADR-0051, `samples/PropertyRef/Lib/Lib.gs`). `open prop`/`override prop` mirror method virtuality.
+- **Properties** → `prop Name T` for auto-properties, with `{ get { … } set(v) { … } }` bodies for computed/custom accessors (ADR-0051, `samples/PropertyRef/Lib/Lib.gs`). `open prop`/`override prop` mirror method virtuality. A C# **`init` accessor** maps to the first-class G# `init` accessor (issue #946); an init-only auto-property `{ get; init; }` keeps its explicit accessors (it is *not* collapsed to the read-write `prop Name T` auto form, which would lose the init-only semantics). *(Superseded note: earlier revisions mapped C# `init` to G# `set` with an Info gap diagnostic because G# had no `init` accessor; that gap is now closed.)*
 - **Constructors** → `init(params) { … }`, chaining via `: Base(args)` (ADR-0065). C# primary constructors / positional records map to the G# primary-constructor `Name(params)` head.
 - **Static members** → a `shared { … }` block (ADR-0053); except the program entry's static class, which is hoisted to top level (T3, above). Sibling static calls inside a non-entry `shared { }` block are emitted **qualified** (`Geometry.Round(...)`), since an unqualified sibling static call does not resolve there (`GS0130`).
 

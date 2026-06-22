@@ -312,6 +312,23 @@ internal sealed class WellKnownReferences
         return this.getTypeReference(attrType);
     }
 
+    /// <summary>
+    /// Issue #946: returns the TypeRef handle for
+    /// <c>System.Runtime.CompilerServices.IsExternalInit</c>, used as the
+    /// <c>modreq</c> on the void return of an <c>init</c>-only property setter
+    /// (mirroring the C# 9 init-only setter encoding). Resolved against the
+    /// target framework's reference assemblies (every runtime G# targets ships
+    /// this type since .NET 5), falling back to the host runtime's type.
+    /// </summary>
+    /// <returns>The TypeRef entity handle.</returns>
+    public EntityHandle GetIsExternalInitTypeRef()
+    {
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsExternalInit", out var resolved)
+            ? resolved
+            : typeof(System.Runtime.CompilerServices.IsExternalInit);
+        return this.getTypeReference(attrType);
+    }
+
     public MemberReferenceHandle GetIsReadOnlyAttributeCtorRef()
     {
         if (this.isReadOnlyAttributeCtorRef.HasValue)

@@ -5,7 +5,7 @@
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
-/// Represents a single <c>get</c> or <c>set</c> accessor inside a property body (ADR-0051).
+/// Represents a single <c>get</c>, <c>set</c>, or <c>init</c> accessor inside a property body (ADR-0051, issue #946).
 /// </summary>
 public sealed class PropertyAccessorSyntax : SyntaxNode
 {
@@ -63,4 +63,17 @@ public sealed class PropertyAccessorSyntax : SyntaxNode
 
     /// <summary>Gets a value indicating whether this accessor is a setter.</summary>
     public bool IsSetter => AccessorKeyword?.Text == "set";
+
+    /// <summary>
+    /// Gets a value indicating whether this accessor is an <c>init</c>-only
+    /// setter (issue #946). An <c>init</c> accessor is emitted as a
+    /// <c>set_Prop</c> method whose void return carries the
+    /// <c>IsExternalInit</c> modreq; assignment is restricted to object
+    /// initialization (constructors, object initializers, and other
+    /// <c>init</c> accessors).
+    /// </summary>
+    public bool IsInit => AccessorKeyword?.Text == "init";
+
+    /// <summary>Gets a value indicating whether this accessor writes the property (a <c>set</c> or an <c>init</c> accessor).</summary>
+    public bool IsSetterOrInit => IsSetter || IsInit;
 }
