@@ -2334,6 +2334,16 @@ public class Parser
         SyntaxToken overrideModifier)
     {
         var propKeyword = MatchToken(SyntaxKind.IdentifierToken); // consumes "prop"
+
+        // ADR-0118: indexer member — `prop this[<params>] T { get; set }`.
+        // The property name is replaced by the contextual `this` keyword
+        // followed by a bracketed index-parameter list.
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "this"
+            && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken)
+        {
+            return ParseIndexerDeclaration(accessibilityModifier, openModifier, overrideModifier, propKeyword);
+        }
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var type = ParseTypeClause();
 
@@ -2367,6 +2377,73 @@ public class Parser
             openBraceToken: null,
             accessors: ImmutableArray<PropertyAccessorSyntax>.Empty,
             closeBraceToken: null);
+    }
+
+    // ADR-0118: parse the indexer member form `prop this[<params>] T { get; set }`.
+    // The leading `prop` keyword has already been consumed. The `this` token is
+    // current. The resulting PropertyDeclarationSyntax carries IsIndexer = true.
+    private PropertyDeclarationSyntax ParseIndexerDeclaration(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken openModifier,
+        SyntaxToken overrideModifier,
+        SyntaxToken propKeyword)
+    {
+        var thisKeyword = MatchToken(SyntaxKind.IdentifierToken); // consumes "this"
+        var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+        var parameters = ParseIndexerParameterList();
+        var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        var type = ParseTypeClause();
+
+        SyntaxToken openBrace = null;
+        var accessors = ImmutableArray<PropertyAccessorSyntax>.Empty;
+        SyntaxToken closeBrace = null;
+        if (Current.Kind == SyntaxKind.OpenBraceToken)
+        {
+            openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+            accessors = ParsePropertyAccessors();
+            closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        }
+
+        return new PropertyDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier,
+            openModifier,
+            overrideModifier,
+            propKeyword,
+            identifier: thisKeyword,
+            type,
+            openBrace,
+            accessors,
+            closeBrace)
+            .WithIndexer(thisKeyword, openBracket, parameters, closeBracket);
+    }
+
+    // ADR-0118: parse the bracketed index-parameter list of an indexer member.
+    // Mirrors ParseParameterList but terminates at the closing square bracket.
+    private SeparatedSyntaxList<ParameterSyntax> ParseIndexerParameterList()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+
+        var parseNextParameter = true;
+        while (parseNextParameter &&
+               Current.Kind != SyntaxKind.CloseSquareBracketToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var parameter = ParseParameter();
+            nodesAndSeparators.Add(parameter);
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                var comma = MatchToken(SyntaxKind.CommaToken);
+                nodesAndSeparators.Add(comma);
+            }
+            else
+            {
+                parseNextParameter = false;
+            }
+        }
+
+        return new SeparatedSyntaxList<ParameterSyntax>(nodesAndSeparators.ToImmutable());
     }
 
     private EventDeclarationSyntax ParseEventDeclaration(

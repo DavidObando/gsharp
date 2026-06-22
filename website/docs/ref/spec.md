@@ -439,13 +439,41 @@ ConstructorDecl  = "init" "(" Parameters? ")" ( ":" identifier "(" Arguments? ")
 SharedBlock      = "shared" "{" SharedMember* "}" .
 SharedMember     = Accessibility? ( MethodDecl | PropertyDecl | EventDecl | FieldDecl ) .
 FieldDecl        = Accessibility? ( "var" | "let" ) identifier TypeClause ( "=" Expression )? .
-PropertyDecl     = "prop" identifier TypeClause PropertyBody? .
+PropertyDecl     = "prop" ( identifier | IndexerHeader ) TypeClause PropertyBody? .
+IndexerHeader    = "this" "[" Parameters "]" .  (* ADR-0118: user indexer member, emitted as the CLR default `Item` property *)
 PropertyAccessor = ( "get" | "set" ( "(" identifier ")" )? ) ( Block | ";" )? .
 EventDecl        = "event" identifier TypeClause EventBody? .
 EventAccessor    = ( "add" | "remove" | "raise" ) ( Block | ";" )? .
 InterfaceBody    = "{" ( InterfaceMethodDecl | PropertyDecl | EventDecl )* "}" .
 InterfaceMethodDecl = "func" identifier "(" Parameters? ")" TypeClause? FunctionBody .  (* FunctionBody ";" = no-body (abstract) marker; issue #881 *)
 ```
+
+#### Indexer members (ADR-0118)
+
+A type can declare a **user indexer member** with the `prop this[...]` form,
+giving it an element-access syntax (`obj[i]`, `obj[i] = v`):
+
+```gsharp
+class Repo[T] {
+    private let _items List[T] = List[T]()
+    func Add(item T) { _items.Add(item) }
+    prop this[index int32] T {        // get-only indexer
+        get { return _items[index] }
+    }
+}
+```
+
+An indexer is an instance member with a non-empty index parameter list and at
+least one accessor body. It is emitted as the CLR default indexer: an `Item`
+property whose accessors are `get_Item` / `set_Item`, with a
+`System.Reflection.DefaultMemberAttribute("Item")` on the declaring type, so
+the indexer round-trips with C# and other CLR consumers. The enclosing type may
+be generic; index parameter and element types are substituted through the
+receiver's type arguments. An indexer declared without index parameters reports
+`GS0370`; one declared without an accessor body (an "auto-indexer") reports
+`GS0371`. Element **access** (`obj[i]`) currently binds single-parameter
+indexers; multi-parameter and overloaded indexers are reserved for a future
+revision.
 
 ## Expressions
 
@@ -1042,7 +1070,8 @@ SharedBlock       ::= 'shared' '{' SharedMember* '}'
 SharedMember      ::= Annotation* Accessibility? (Async? MethodDecl | PropertyDecl | EventDecl | FieldDecl)
 MethodDecl        ::= FunctionDecl
 FieldDecl         ::= Accessibility? ('var' | 'let') identifier TypeClause ('=' Expression)?
-PropertyDecl      ::= 'prop' identifier TypeClause PropertyBody?
+PropertyDecl      ::= 'prop' (identifier | IndexerHeader) TypeClause PropertyBody?
+IndexerHeader     ::= 'this' '[' Parameters ']'   (* ADR-0118: user indexer member; emitted as CLR default 'Item' property *)
 PropertyBody      ::= '{' PropertyAccessor* '}'
 PropertyAccessor  ::= ('get' | 'set' ('(' identifier ')')?) (Block | ';')?
 EventDecl         ::= 'event' identifier TypeClause EventBody?

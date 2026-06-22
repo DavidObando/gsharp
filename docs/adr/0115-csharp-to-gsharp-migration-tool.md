@@ -300,12 +300,13 @@ A C# predefined-type keyword used as an **expression** receiver of a static call
 
 A C# target-typed `new()` emits the **explicit constructed type** inferred from the target: `List<int> items = new();` → `List[int32]()`. G# has no target-typed construction, so the type recovered from Roslyn's target type is made explicit.
 
-> **Indexer declaration — discovered compiler gap.** A C# indexer
-> (`public T this[int i] => _items[i];`) has **no canonical G# member form**, and
-> a hand-written indexer-shaped property declaration *crashes* the compiler
-> (`GS9998`, `ArgumentNullException`). The translator emits a clean
-> `translation-unsupported` record (`IndexerDeclaration`) and does not attempt a
-> mapping. Filed as **#944**.
+> **Indexer declaration — RESOLVED (#944, ADR-0118).** A C# indexer
+> (`public T this[int i] => _items[i];`) now maps to the canonical G# indexer
+> member `prop this[i int32] T { get { … } }` (ADR-0118). Originally this was a
+> compiler gap: G# had no indexer-member form and a hand-written indexer-shaped
+> property declaration *crashed* the compiler (`GS9998`, `ArgumentNullException`).
+> The translator now emits the canonical indexer form and no longer reports an
+> `IndexerDeclaration` unsupported record.
 >
 > **Null-coalescing operator `??` — RESOLVED (#941).** `value ?? fallback` now
 > maps directly to G#'s `??` null-coalescing operator. Originally this was a
@@ -466,7 +467,7 @@ friction:
 | #941 | binary `??` operator unsupported (only `??=` exists) | GS0005 |
 | #942 | `expr[i].Member` mis-parses `[i]` as type arguments | GS0005 |
 | #943 | generic-interface constraint `[T IComparable[T]]` won't parse | GS0005 |
-| #944 | no user-indexer declaration form; attempts crash | GS9998 |
+| #944 | user-indexer declaration form — **resolved** (ADR-0118): `prop this[i int32] T` emits a CLR default indexer | GS9998 |
 
 L2/L3 not going fully green is the **intended** objective-2 outcome: the residual
 failures are real compiler gaps, captured and filed rather than worked around or

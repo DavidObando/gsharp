@@ -133,9 +133,30 @@ internal sealed class MemberDefEmitter
 
             // Emit PropertyDef row.
             var propertySignature = new BlobBuilder();
-            new BlobEncoder(propertySignature)
-                .PropertySignature(isInstanceProperty: true)
-                .Parameters(0, returnType => this.encodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
+            if (prop.IsIndexer && !prop.Parameters.IsDefaultOrEmpty)
+            {
+                // ADR-0118 / issue #944: a CLR default indexer property carries
+                // its index parameter types in the PropertyDef signature.
+                var indexParams = prop.Parameters;
+                new BlobEncoder(propertySignature)
+                    .PropertySignature(isInstanceProperty: true)
+                    .Parameters(
+                        indexParams.Length,
+                        returnType => this.encodeTypeSymbol(returnType.Type(), prop.Type),
+                        parameters =>
+                        {
+                            foreach (var indexParam in indexParams)
+                            {
+                                this.encodeTypeSymbol(parameters.AddParameter().Type(), indexParam.Type);
+                            }
+                        });
+            }
+            else
+            {
+                new BlobEncoder(propertySignature)
+                    .PropertySignature(isInstanceProperty: true)
+                    .Parameters(0, returnType => this.encodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
+            }
 
             var propDef = this.emitCtx.Metadata.AddProperty(
                 attributes: PropertyAttributes.None,

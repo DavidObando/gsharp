@@ -348,6 +348,14 @@ public sealed class Binder
                         {
                             foreach (var prop in t.Properties)
                             {
+                                // ADR-0118 / issue #944: an indexer member has the
+                                // CLR name `Item` but is not accessible by bare name —
+                                // it is reached only through `this[i]` index access.
+                                if (prop.IsIndexer)
+                                {
+                                    continue;
+                                }
+
                                 if (seenMembers.Add(prop.Name))
                                 {
                                     scope.TryDeclareVariable(new ImplicitPropertyVariableSymbol(function.ThisParameter, t, prop));
@@ -3668,6 +3676,16 @@ public sealed class Binder
 
     private TypeSymbol LookupType(string name)
     {
+        // Issue #944: a parse-recovery artifact (e.g. a malformed type clause
+        // with no identifier) can reach here with a null/empty name. Treat it
+        // as unresolved and let the caller surface the ordinary GS0113
+        // diagnostic, rather than indexing a name-keyed dictionary with a null
+        // key (which threw ArgumentNullException → GS9998 ICE).
+        if (string.IsNullOrEmpty(name))
+        {
+            return null;
+        }
+
         // Phase 4.1 / ADR-0020: a generic function's type parameters shadow
         // outer type names while we are binding its signature and body.
         if (binderCtx.CurrentTypeParameters != null && binderCtx.CurrentTypeParameters.TryGetValue(name, out var tp))

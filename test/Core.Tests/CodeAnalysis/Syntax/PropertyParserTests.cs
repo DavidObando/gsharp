@@ -130,4 +130,59 @@ public class PropertyParserTests
         Assert.Single(propDecl.Accessors);
         Assert.True(propDecl.Accessors[0].IsGetter);
     }
+
+    [Fact]
+    public void ParsesGetOnlyIndexerDeclaration()
+    {
+        // ADR-0118 / issue #944: `prop this[i int32] T { get {...} }`.
+        const string source = "package P\nclass Repo {\n  prop this[index int32] int32 { get { return 0 } }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+    }
+
+    [Fact]
+    public void ParsesGetSetIndexerDeclaration()
+    {
+        const string source = "package P\nclass Repo {\n  prop this[index int32] int32 { get { return 0 } set { } }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+    }
+
+    [Fact]
+    public void IndexerDeclaration_IsMarkedAsIndexer()
+    {
+        const string source = "package P\nclass Repo {\n  prop this[index int32] int32 { get { return 0 } }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var propDecl = structDecl.Properties.Single();
+        Assert.True(propDecl.IsIndexer);
+        Assert.Single(propDecl.Parameters);
+        Assert.Equal("index", propDecl.Parameters[0].Identifier.Text);
+    }
+
+    [Fact]
+    public void IndexerDeclaration_OnGenericClass_Parses()
+    {
+        const string source = "package P\nclass Repo[T] {\n  prop this[index int32] T { get { return _items[index] } }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        Assert.True(structDecl.Properties.Single().IsIndexer);
+    }
+
+    [Fact]
+    public void NonIndexerProperty_IsNotMarkedAsIndexer()
+    {
+        const string source = "package P\nclass Foo {\n  prop Name string\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var propDecl = structDecl.Properties.Single();
+        Assert.False(propDecl.IsIndexer);
+        Assert.Empty(propDecl.Parameters);
+    }
 }

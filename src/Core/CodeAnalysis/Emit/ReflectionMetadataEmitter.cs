@@ -1194,6 +1194,7 @@ internal sealed class ReflectionMetadataEmitter
                 }
 
                 this.cache.PropertyAccessorHandles[prop] = (getterHandle, setterHandle);
+                this.RegisterIndexerAccessorHandles(prop, getterHandle, setterHandle);
             }
 
             // ADR-0052: plan accessor method rows for class events.
@@ -1300,6 +1301,7 @@ internal sealed class ReflectionMetadataEmitter
                 }
 
                 this.cache.PropertyAccessorHandles[prop] = (getterHandle, setterHandle);
+                this.RegisterIndexerAccessorHandles(prop, getterHandle, setterHandle);
             }
 
             // ADR-0052: plan accessor method rows for struct events.
@@ -2084,6 +2086,7 @@ internal sealed class ReflectionMetadataEmitter
 
             // ADR-0051 Phase 6: emit property accessor methods for classes.
             this.memberDefEmitter.EmitPropertyAccessors(c);
+            this.EmitDefaultMemberAttributeIfIndexer(c);
 
             // ADR-0052: emit event accessor methods for classes.
             this.memberDefEmitter.EmitEventAccessors(c);
@@ -2156,6 +2159,7 @@ internal sealed class ReflectionMetadataEmitter
 
             // ADR-0051 Phase 6: emit property accessor methods for structs.
             this.memberDefEmitter.EmitPropertyAccessors(s);
+            this.EmitDefaultMemberAttributeIfIndexer(s);
 
             // ADR-0052: emit event accessor methods for structs.
             this.memberDefEmitter.EmitEventAccessors(s);
@@ -6306,6 +6310,68 @@ internal sealed class ReflectionMetadataEmitter
     /// bare <c>MethodDef</c>; for a generic containing type returns a
     /// <c>MemberRef</c> parented at the constructed (or self-) <c>TypeSpec</c>.
     /// </summary>
+    // ADR-0118 / issue #944: a type that declares a user indexer member must
+    // carry a System.Reflection.DefaultMemberAttribute("Item") so the CLR (and
+    // C# consumers) recognise its `Item` property as the default indexer.
+    private void EmitDefaultMemberAttributeIfIndexer(StructSymbol structSym)
+    {
+        if (structSym.Properties.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var hasIndexer = false;
+        foreach (var prop in structSym.Properties)
+        {
+            if (prop.IsIndexer)
+            {
+                hasIndexer = true;
+                break;
+            }
+        }
+
+        if (!hasIndexer)
+        {
+            return;
+        }
+
+        if (!this.cache.StructTypeDefs.TryGetValue(structSym, out var typeDefHandle))
+        {
+            return;
+        }
+
+        this.customAttrEncoder.EmitStringAttribute(
+            typeDefHandle,
+            "System.Reflection.DefaultMemberAttribute",
+            typeof(System.Reflection.DefaultMemberAttribute),
+            "Item");
+    }
+
+    // ADR-0118 / issue #944: indexer get_Item/set_Item accessors are reached
+    // through BoundUserInstanceCallExpression (obj[i] / obj[i]=v), whose emit
+    // resolves the accessor via cache.MethodHandles. Mirror the planned
+    // PropertyAccessorHandles rows into MethodHandles for indexer accessors.
+    private void RegisterIndexerAccessorHandles(
+        PropertySymbol prop,
+        MethodDefinitionHandle? getterHandle,
+        MethodDefinitionHandle? setterHandle)
+    {
+        if (!prop.IsIndexer)
+        {
+            return;
+        }
+
+        if (prop.GetterSymbol != null && getterHandle.HasValue)
+        {
+            this.cache.MethodHandles[prop.GetterSymbol] = getterHandle.Value;
+        }
+
+        if (prop.SetterSymbol != null && setterHandle.HasValue)
+        {
+            this.cache.MethodHandles[prop.SetterSymbol] = setterHandle.Value;
+        }
+    }
+
     internal EntityHandle ResolveUserInstanceMethodToken(StructSymbol containingType, FunctionSymbol method)
     {
         if (!this.cache.MethodHandles.TryGetValue(method, out var openDef))
