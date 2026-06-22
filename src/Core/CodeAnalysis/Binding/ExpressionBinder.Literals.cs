@@ -488,7 +488,7 @@ internal sealed partial class ExpressionBinder
                 // consistent with Phase 4.1 call-site inference).
                 foreach (var initSyntax in syntax.Initializers)
                 {
-                    if (!structSymbol.TryGetFieldIncludingInherited(initSyntax.FieldIdentifier.Text, out var field, out _))
+                    if (!TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, initSyntax.FieldIdentifier.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
                     {
                         continue;
                     }
@@ -540,7 +540,7 @@ internal sealed partial class ExpressionBinder
         foreach (var initSyntax in syntax.Initializers)
         {
             var fieldName = initSyntax.FieldIdentifier.Text;
-            if (!structSymbol.TryGetFieldIncludingInherited(fieldName, out var field, out _))
+            if (!TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
             {
                 Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName);
                 continue;

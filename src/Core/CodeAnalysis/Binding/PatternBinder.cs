@@ -185,7 +185,7 @@ internal sealed class PatternBinder
 
         foreach (var fieldSyntax in syntax.Fields)
         {
-            if (!structType.TryGetFieldIncludingInherited(fieldSyntax.Identifier.Text, out var field, out _))
+            if (!TypeMemberModel.TryGetFieldIncludingInherited(structType, fieldSyntax.Identifier.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
             {
                 Diagnostics.ReportUndefinedFieldOnType(fieldSyntax.Identifier.Location, fieldSyntax.Identifier.Text, discriminantType);
                 fields.Add(new BoundPropertyPatternField(syntax, new FieldSymbol(fieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public), BindPattern(fieldSyntax.Pattern, TypeSymbol.Error)));
