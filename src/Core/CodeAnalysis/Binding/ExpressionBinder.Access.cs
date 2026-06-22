@@ -1159,6 +1159,24 @@ internal sealed partial class ExpressionBinder
             var isVariadic = method.Parameters.Length > 0 && method.Parameters[method.Parameters.Length - 1].IsVariadic;
             var fixedParamCount = isVariadic ? method.Parameters.Length - 1 : method.Parameters.Length;
 
+            // ADR-0063 / issue #936: count the leading non-optional parameters.
+            // A static (`shared`) call may omit any trailing parameter that
+            // declares a default value, mirroring the instance-call path in
+            // OverloadResolver. Omitted slots are synthesized below from each
+            // parameter's captured default constant.
+            var requiredParamCount = method.Parameters.Length;
+            for (var i = method.Parameters.Length - 1; i >= 0; i--)
+            {
+                if (method.Parameters[i].HasExplicitDefaultValue)
+                {
+                    requiredParamCount = i;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
             if (isVariadic)
             {
                 if (arguments.Length < fixedParamCount)
@@ -1167,7 +1185,7 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
             }
-            else if (arguments.Length != method.Parameters.Length)
+            else if (arguments.Length < requiredParamCount || arguments.Length > method.Parameters.Length)
             {
                 Diagnostics.ReportWrongArgumentCount(ce.Location, method.Name, method.Parameters.Length, arguments.Length);
                 return new BoundErrorExpression(null);
@@ -1294,7 +1312,25 @@ internal sealed partial class ExpressionBinder
             }
             else
             {
-                permutedArgs = arguments;
+                // ADR-0063 / issue #936: pad any trailing optional parameters
+                // the static call omitted with their captured default values so
+                // the per-position conversion loop binds the full parameter
+                // list (matching instance-method behavior).
+                if (arguments.Length < method.Parameters.Length)
+                {
+                    var padded = ImmutableArray.CreateBuilder<BoundExpression>(method.Parameters.Length);
+                    padded.AddRange(arguments);
+                    for (var i = arguments.Length; i < method.Parameters.Length; i++)
+                    {
+                        padded.Add(OverloadResolver.CreateOptionalUserDefaultArgument(method.Parameters[i]));
+                    }
+
+                    permutedArgs = padded.MoveToImmutable();
+                }
+                else
+                {
+                    permutedArgs = arguments;
+                }
             }
 
             var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(permutedArgs.Length);
