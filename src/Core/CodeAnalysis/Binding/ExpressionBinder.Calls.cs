@@ -2074,6 +2074,17 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
+            // Issue #943: dispatch through a type parameter's *imported CLR*
+            // interface constraint (generic or not), e.g. `a.CompareTo(b)` where
+            // `a : T` and `T : IComparable[T]`. Emitted as a verifiable
+            // `constrained. !!T  callvirt IComparable`1<!!T>::CompareTo(!0)`.
+            if (receiver != null && receiver.Type is TypeParameterSymbol tpClrRecv
+                && tpClrRecv.ClrInterfaceConstraint != null
+                && TryBindConstrainedClrInterfaceCall(receiver, tpClrRecv, methodName, arguments, ce, argumentNames, out var constrainedCall))
+            {
+                return constrainedCall;
+            }
+
             // Phase 3.B.3 sub-step 2b: dispatch to a user-defined class method
             // if receiver is a user struct symbol.
             if (receiver != null && receiver.Type is StructSymbol userClass)
@@ -3370,5 +3381,103 @@ internal sealed partial class ExpressionBinder
         }
 
         return "<top-level>";
+    }
+
+    /// <summary>
+    /// Issue #943: binds an instance call dispatched through a type parameter's
+    /// imported CLR interface constraint (e.g. <c>a.CompareTo(b)</c> where
+    /// <c>a : T</c> and <c>T : IComparable[T]</c>). The method is resolved
+    /// against the constraint interface's (type-erased) CLR type; the resulting
+    /// <see cref="BoundImportedInstanceCallExpression"/> carries the constrained
+    /// type parameter and the symbolic interface type so the emitter produces a
+    /// verifiable <c>constrained. !!T  callvirt</c> sequence with the
+    /// <c>MemberRef</c> parented at the constructed interface
+    /// (<c>IComparable`1&lt;!!T&gt;::CompareTo(!0)</c>).
+    /// </summary>
+    /// <param name="receiver">The bound receiver (its type is the constrained type parameter).</param>
+    /// <param name="tp">The receiver's type parameter, carrying the CLR interface constraint.</param>
+    /// <param name="methodName">The invoked method name.</param>
+    /// <param name="arguments">The bound argument expressions.</param>
+    /// <param name="ce">The originating call-expression syntax.</param>
+    /// <param name="argumentNames">Optional named-argument labels in source order.</param>
+    /// <param name="result">The bound constrained call on success.</param>
+    /// <returns><see langword="true"/> when a matching interface method was found and bound.</returns>
+    private bool TryBindConstrainedClrInterfaceCall(
+        BoundExpression receiver,
+        TypeParameterSymbol tp,
+        string methodName,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        ImmutableArray<string> argumentNames,
+        out BoundExpression result)
+    {
+        result = null;
+        var constraintInterface = tp.ClrInterfaceConstraint;
+        var clrType = constraintInterface?.ClrType;
+        if (clrType is not { IsInterface: true })
+        {
+            return false;
+        }
+
+        var candidates = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(clrType, BindingFlags.Instance | BindingFlags.Public)
+            .Where(m => m.Name == methodName)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        var argTypes = new Type[arguments.Length];
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
+            if (t == null && arguments[i].Type != TypeSymbol.Null)
+            {
+                return false;
+            }
+
+            argTypes[i] = t;
+        }
+
+        var resolution = OverloadResolution.Resolve(
+            candidates,
+            argTypes,
+            null,
+            scope.References.MapClrTypeToReferences,
+            null,
+            argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
+        if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
+        {
+            return false;
+        }
+
+        var method = resolution.Best;
+        var parameters = method.GetParameters();
+
+        // Return type: a return that names the interface type-variable is
+        // recovered by projecting through the constructed constraint interface;
+        // a concrete return (e.g. IComparable.CompareTo -> int32) falls back to
+        // the direct CLR mapping.
+        var returnType = ResolveInstanceReturnTypeFromReceiver(constraintInterface, method)
+            ?? MapClrMemberType(method.ReturnType);
+
+        // Order positionally for named arguments; deliberately skip the CLR
+        // boxing/conversion pass — the emitted MemberRef parameter is the
+        // interface type-variable `!0` (== the reified `!!T`), so a `T`-typed
+        // argument must be passed unboxed.
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, resolution.ParameterMapping, parameters);
+        var refKinds = ComputeArgumentRefKinds(parameters);
+
+        result = new BoundImportedInstanceCallExpression(
+            ce,
+            receiver,
+            method,
+            returnType,
+            orderedArgs,
+            refKinds,
+            default,
+            constrainedReceiverTypeParameter: tp,
+            constrainedInterfaceType: constraintInterface);
+        return true;
     }
 }

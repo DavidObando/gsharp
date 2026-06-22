@@ -30,14 +30,37 @@ public sealed class TypeParameterSymbol : TypeSymbol
     /// <summary>Gets the zero-based ordinal of this type parameter in its declaring list.</summary>
     public int Ordinal { get; }
 
-    /// <summary>Gets the constraint applied to this type parameter (Phase 4.2 will add comparable / sealed-interface bounds).</summary>
-    public TypeParameterConstraint Constraint { get; }
+    /// <summary>Gets or sets the constraint applied to this type parameter (Phase 4.2 will add comparable / sealed-interface bounds).</summary>
+    public TypeParameterConstraint Constraint { get; set; }
 
     /// <summary>Gets the variance modifier (Phase 4.3 / ADR-0021).</summary>
     public TypeParameterVariance Variance { get; }
 
     /// <summary>Gets or sets the sealed-interface constraint, if any (Phase 4.2b / ADR-0020). When non-<c>null</c>, type arguments must implement this interface. ADR-0089 allows late patching by the binder when the constraint is a self-referential constructed generic such as <c>[T IAdd[T]]</c>.</summary>
     public InterfaceSymbol InterfaceConstraint { get; set; }
+
+    /// <summary>
+    /// Gets or sets the imported CLR interface constraint, if any (issue #943).
+    /// Holds an imported (possibly constructed-generic) CLR interface — e.g.
+    /// <c>System.IComparable[T]</c> from <c>[T IComparable[T]]</c> — that a
+    /// type argument must implement. Unlike <see cref="InterfaceConstraint"/>
+    /// (which models a G#-declared <see cref="InterfaceSymbol"/>), this models a
+    /// BCL / reference-assembly interface. Self-referential generic constraints
+    /// (the type parameter appears in its own constraint) are supported. The
+    /// emitter projects this onto a <c>GenericParamConstraint</c> metadata row
+    /// and routes instance calls on the type parameter through it with a
+    /// <c>constrained.</c> prefix so the IL is verifiable.
+    /// </summary>
+    public TypeSymbol ClrInterfaceConstraint { get; set; }
+
+    /// <summary>
+    /// Gets the single interface bound carried by this type parameter, if any —
+    /// either the G# <see cref="InterfaceConstraint"/> or the imported
+    /// <see cref="ClrInterfaceConstraint"/> (issue #943). Used by the emitter to
+    /// emit the <c>GenericParamConstraint</c> row and by the binder to enforce
+    /// constraint satisfaction at call sites.
+    /// </summary>
+    public TypeSymbol ConstraintInterfaceType => (TypeSymbol)InterfaceConstraint ?? ClrInterfaceConstraint;
 
     /// <summary>
     /// Gets or sets a value indicating whether this type parameter carries a

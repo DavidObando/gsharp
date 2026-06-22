@@ -37,6 +37,16 @@ public static class GSharpPrinter
         return RenderCompilationUnit(unit);
     }
 
+    /// <summary>
+    /// Issue #943: renders a <see cref="GTypeReference"/> to its G# surface form
+    /// (e.g. <c>IComparable[T]</c>). Exposed so the translator can place a
+    /// constructed-generic interface constraint into a type parameter's legacy
+    /// constraint slot.
+    /// </summary>
+    /// <param name="type">The type reference to render.</param>
+    /// <returns>The rendered G# type form.</returns>
+    public static string RenderTypeReference(GTypeReference type) => RenderType(type);
+
     private static string Indent(int level)
     {
         return string.Concat(Enumerable.Repeat(IndentUnit, level));

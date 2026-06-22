@@ -1001,6 +1001,37 @@ internal sealed partial class MethodBodyEmitter
     }
 
     /// <summary>
+    /// Issue #943: loads the address of a receiver whose static type is a type
+    /// parameter constrained to a CLR interface, so it can feed a
+    /// <c>constrained.</c> prefix on the subsequent <c>callvirt</c>. A managed
+    /// pointer is required regardless of whether the type argument is ultimately
+    /// a value type or a reference type — the <c>constrained.</c> opcode handles
+    /// both. Addressable variables (parameters, locals, globals) load directly;
+    /// non-addressable rvalue receivers are spilled to a pre-planned local.
+    /// </summary>
+    /// <param name="receiver">The constrained type-parameter receiver expression.</param>
+    private void EmitConstrainedTypeParameterReceiver(BoundExpression receiver)
+    {
+        if (receiver is BoundVariableExpression bve
+            && this.TryLoadVariableAddress(bve.Variable))
+        {
+            return;
+        }
+
+        this.EmitExpression(receiver);
+        if (!this.receiverSpillSlots.TryGetValue(receiver, out var slot))
+        {
+            throw new InvalidOperationException(
+                $"No slot populated for constrained type-parameter receiver of kind "
+                + $"'{receiver.Kind}' — walker pre-pass missed this child? "
+                + "Check ReceiverSpillCollector.VisitImportedInstanceCallExpression.");
+        }
+
+        this.il.StoreLocal(slot);
+        this.il.LoadLocalAddress(slot);
+    }
+
+    /// <summary>
     /// Returns <c>true</c> when <paramref name="fa"/> is addressable —
     /// i.e. <c>ldflda</c> against its receiver yields a valid managed
     /// pointer. Static fields are always addressable; instance fields on

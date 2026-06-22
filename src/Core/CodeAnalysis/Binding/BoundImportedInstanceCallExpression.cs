@@ -32,6 +32,17 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// reference-context CLR type) are written as their own TypeDef token. Default
     /// when there are no explicit type arguments.
     /// </param>
+    /// <param name="constrainedReceiverTypeParameter">
+    /// Issue #943: when the call is dispatched through a type parameter's CLR
+    /// interface constraint (e.g. <c>a.CompareTo(b)</c> with <c>T : IComparable[T]</c>),
+    /// the constrained type parameter whose address feeds a <c>constrained.</c>
+    /// prefix. Default for ordinary imported instance calls.
+    /// </param>
+    /// <param name="constrainedInterfaceType">
+    /// Issue #943: the symbolic (possibly constructed generic) interface type
+    /// that parents the emitted <c>MemberRef</c> for a constrained call. Default
+    /// for ordinary imported instance calls.
+    /// </param>
     public BoundImportedInstanceCallExpression(
         SyntaxNode syntax,
         BoundExpression receiver,
@@ -39,7 +50,9 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
         TypeSymbol returnType,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<RefKind> argumentRefKinds = default,
-        ImmutableArray<TypeSymbol> typeArgumentSymbols = default)
+        ImmutableArray<TypeSymbol> typeArgumentSymbols = default,
+        TypeParameterSymbol constrainedReceiverTypeParameter = null,
+        TypeSymbol constrainedInterfaceType = null)
         : base(syntax)
     {
         Receiver = receiver;
@@ -48,6 +61,8 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
         Arguments = arguments;
         ArgumentRefKinds = argumentRefKinds.IsDefault ? default : argumentRefKinds;
         TypeArgumentSymbols = typeArgumentSymbols.IsDefault ? default : typeArgumentSymbols;
+        ConstrainedReceiverTypeParameter = constrainedReceiverTypeParameter;
+        ConstrainedInterfaceType = constrainedInterfaceType;
     }
 
     /// <inheritdoc/>
@@ -82,4 +97,28 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// method (issue #320). Default when there are no explicit type arguments.
     /// </summary>
     public ImmutableArray<TypeSymbol> TypeArgumentSymbols { get; }
+
+    /// <summary>
+    /// Gets the type parameter the call is constrained through, when the
+    /// receiver is a value of a generic type parameter whose interface
+    /// constraint declares the invoked method (issue #943, e.g. calling
+    /// <c>a.CompareTo(b)</c> where <c>a : T</c> and <c>T : IComparable[T]</c>).
+    /// When non-<c>null</c>, the emitter loads the receiver by address, prefixes
+    /// the call with <c>constrained. !!T</c>, and parents the <c>MemberRef</c> at
+    /// <see cref="ConstrainedInterfaceType"/> so the IL is verifiable for both
+    /// value-type and reference-type substitutions. <c>null</c> for an ordinary
+    /// imported instance call.
+    /// </summary>
+    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+
+    /// <summary>
+    /// Gets the (possibly constructed-generic) interface type that parents the
+    /// emitted <c>MemberRef</c> when <see cref="ConstrainedReceiverTypeParameter"/>
+    /// is set (issue #943) — e.g. <c>System.IComparable[T]</c>. <c>null</c> for an
+    /// ordinary imported instance call.
+    /// </summary>
+    public TypeSymbol ConstrainedInterfaceType { get; }
+
+    /// <summary>Gets a value indicating whether this call dispatches through a type-parameter interface constraint (issue #943).</summary>
+    public bool IsConstrainedTypeParameterCall => ConstrainedReceiverTypeParameter != null;
 }

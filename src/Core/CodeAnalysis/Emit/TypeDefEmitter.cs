@@ -1555,7 +1555,8 @@ internal sealed class TypeDefEmitter
                 Owner: owner,
                 Attributes: attrs,
                 Name: tp.Name,
-                Index: (ushort)i));
+                Index: (ushort)i,
+                InterfaceConstraintType: tp.ClrInterfaceConstraint));
         }
     }
 
@@ -1565,7 +1566,14 @@ internal sealed class TypeDefEmitter
     /// uses bit 0 as tag (0=TypeDef, 1=MethodDef); the upper bits are the row id.
     /// </summary>
     /// <param name="emitCtx">The emit context whose pending rows are flushed.</param>
-    internal static void FlushPendingGenericParameters(EmitContext emitCtx)
+    /// <param name="resolveConstraintHandle">
+    /// Issue #943: resolves an interface-constraint <see cref="TypeSymbol"/> to its
+    /// <c>TypeDefOrRefOrSpec</c> handle for the matching <c>GenericParamConstraint</c>
+    /// row. Supplied by the emitter (its <c>GetElementTypeToken</c>).
+    /// </param>
+    internal static void FlushPendingGenericParameters(
+        EmitContext emitCtx,
+        Func<TypeSymbol, EntityHandle> resolveConstraintHandle)
     {
         var pending = emitCtx.PendingGenericParameters;
         if (pending.Count == 0)
@@ -1589,11 +1597,24 @@ internal sealed class TypeDefEmitter
         for (int i = 0; i < pending.Count; i++)
         {
             var row = pending[i];
-            metadata.AddGenericParameter(
+            var gpHandle = metadata.AddGenericParameter(
                 parent: row.Owner,
                 attributes: row.Attributes,
                 name: metadata.GetOrAddString(row.Name),
                 index: row.Index);
+
+            // Issue #943: emit the GenericParamConstraint row for an
+            // interface-constrained parameter so the produced metadata is
+            // verifiable and the `constrained.` dispatch is sound. Rows are
+            // added in ascending GenericParam-handle order (the pending list is
+            // already sorted by owner/index), satisfying the ECMA-335 II.22.21
+            // sort-by-Owner requirement.
+            if (row.InterfaceConstraintType != null)
+            {
+                metadata.AddGenericParameterConstraint(
+                    gpHandle,
+                    resolveConstraintHandle(row.InterfaceConstraintType));
+            }
         }
 
         pending.Clear();
