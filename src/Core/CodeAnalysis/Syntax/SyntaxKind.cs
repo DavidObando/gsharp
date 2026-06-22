@@ -353,6 +353,25 @@ public enum SyntaxKind
     // case-parsing path before primary-expression dispatch, so this kind
     // only fires for true value-position uses.
     DefaultExpression,
+
+    // Issue #479 / ADR-0117: a collection initializer applied to a generic
+    // collection construction, e.g. `List[int32]{1, 2, 3}`,
+    // `HashSet[int32](){…}`, `Dictionary[string, int32]{"a": 1}`, or
+    // `Dictionary[K, V](comparer){ ["k"] = v }`. The target is a constructor
+    // call; each element is one of the three `CollectionElement` shapes below.
+    // Lowers in the binder to a `BoundBlockExpression` that constructs into a
+    // synthetic local, calls `Add(...)` / sets the indexer for each element,
+    // and yields the local.
+    CollectionInitializerExpression,
+
+    // A bare element of a sequence/set collection initializer (`expr`).
+    ExpressionCollectionElement,
+
+    // A key/value element of a dictionary collection initializer (`key: value`).
+    KeyedCollectionElement,
+
+    // An indexed element of a dictionary collection initializer (`[key] = value`).
+    IndexedCollectionElement,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

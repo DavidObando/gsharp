@@ -211,6 +211,79 @@ public sealed class CompositeLiteralExpression : GExpression
 }
 
 /// <summary>
+/// A single element of a <see cref="CollectionInitializerExpression"/>:
+/// a bare element, a <c>key: value</c> pair, or an <c>[key] = value</c>
+/// indexer entry (ADR-0117).
+/// </summary>
+public sealed class CollectionInitializerElement : GNode
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CollectionInitializerElement"/>
+    /// class representing a bare element <c>e</c>.
+    /// </summary>
+    /// <param name="value">The element expression.</param>
+    public CollectionInitializerElement(GExpression value)
+    {
+        Kind = CollectionInitializerElementKind.Expression;
+        Value = value;
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CollectionInitializerElement"/>
+    /// class representing a <c>key: value</c> pair or an <c>[key] = value</c>
+    /// indexer entry.
+    /// </summary>
+    /// <param name="key">The key expression.</param>
+    /// <param name="value">The value expression.</param>
+    /// <param name="indexed">
+    /// <see langword="true"/> for an <c>[key] = value</c> indexer entry;
+    /// <see langword="false"/> for a <c>key: value</c> pair.
+    /// </param>
+    public CollectionInitializerElement(GExpression key, GExpression value, bool indexed)
+    {
+        Kind = indexed
+            ? CollectionInitializerElementKind.Indexed
+            : CollectionInitializerElementKind.Keyed;
+        Key = key;
+        Value = value;
+    }
+
+    /// <summary>Gets the element kind.</summary>
+    public CollectionInitializerElementKind Kind { get; }
+
+    /// <summary>Gets the key expression, or <see langword="null"/> for a bare element.</summary>
+    public GExpression Key { get; }
+
+    /// <summary>Gets the value expression.</summary>
+    public GExpression Value { get; }
+}
+
+/// <summary>
+/// A collection initializer <c>Target{ elements }</c> — e.g.
+/// <c>List[int32]{1, 2, 3}</c> or <c>Dictionary[string, int32]{ "a": 1 }</c>
+/// (ADR-0117). <see cref="Target"/> is the construction call.
+/// </summary>
+public sealed class CollectionInitializerExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CollectionInitializerExpression"/> class.
+    /// </summary>
+    /// <param name="target">The construction-call target.</param>
+    /// <param name="elements">The collection elements.</param>
+    public CollectionInitializerExpression(GExpression target, IReadOnlyList<CollectionInitializerElement> elements = null)
+    {
+        Target = target;
+        Elements = elements ?? new List<CollectionInitializerElement>();
+    }
+
+    /// <summary>Gets the construction-call target.</summary>
+    public GExpression Target { get; }
+
+    /// <summary>Gets the collection elements.</summary>
+    public IReadOnlyList<CollectionInitializerElement> Elements { get; }
+}
+
+/// <summary>
 /// An array/slice literal <c>[]T{a, b, c}</c>.
 /// </summary>
 public sealed class ArrayLiteralExpression : GExpression

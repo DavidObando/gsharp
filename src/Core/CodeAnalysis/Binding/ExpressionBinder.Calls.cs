@@ -144,6 +144,138 @@ internal sealed partial class ExpressionBinder
         return new BoundBlockExpression(syntax, statements.ToImmutable(), resultExpr);
     }
 
+    /// <summary>
+    /// Issue #479 / ADR-0117: binds a collection initializer
+    /// (<c>List[int32]{1, 2, 3}</c>, <c>Dictionary[K, V]{"a": 1}</c>,
+    /// <c>Dictionary[K, V](cmp){ ["k"] = v }</c>). The target constructor call
+    /// is bound into a synthetic local; each element lowers to an
+    /// <c>Add(...)</c> call (bare / <c>key: value</c> entries) or an indexer set
+    /// (<c>[key] = value</c> entries); the block yields the local. The lowering
+    /// uses only existing bound nodes, so emit and the interpreter both work
+    /// without a new bound-node kind.
+    /// </summary>
+    private BoundExpression BindCollectionInitializerExpression(CollectionInitializerExpressionSyntax syntax)
+    {
+        var target = BindExpression(syntax.Target);
+        if (target.Type == TypeSymbol.Error || target.Type == null)
+        {
+            BindCollectionElementsForDiagnostics(syntax);
+            return new BoundErrorExpression(null);
+        }
+
+        var resultType = target.Type;
+        var clrType = resultType.ClrType;
+        var hasIndexedElement = syntax.Elements.Any(e => e is IndexedCollectionElementSyntax);
+        var hasNonIndexedElement = syntax.Elements.Any(e => e is not IndexedCollectionElementSyntax);
+
+        // A collection initializer requires an accessible instance `Add` for the
+        // bare / key:value element forms. Indexed `[k] = v` entries go through
+        // the indexer-set path, which reports its own GS0226/indexability errors.
+        var hasAdd = clrType != null && MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, "Add").Count > 0;
+        if (clrType == null || (hasNonIndexedElement && !hasAdd))
+        {
+            Diagnostics.ReportTypeNotCollectionInitializable(syntax.OpenBraceToken.Location, resultType);
+            BindCollectionElementsForDiagnostics(syntax);
+            return new BoundErrorExpression(null);
+        }
+
+        var tempName = "$collinit" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, resultType);
+        scope.TryDeclareVariable(tempVar);
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundVariableDeclaration(syntax, tempVar, target));
+
+        foreach (var element in syntax.Elements)
+        {
+            BoundExpression bound;
+            switch (element)
+            {
+                case ExpressionCollectionElementSyntax bare:
+                    bound = BindCollectionAddCall(tempVar, element, ImmutableArray.Create(bare.Expression));
+                    break;
+                case KeyedCollectionElementSyntax keyed:
+                    bound = BindCollectionAddCall(tempVar, element, ImmutableArray.Create(keyed.Key, keyed.Value));
+                    break;
+                case IndexedCollectionElementSyntax indexed:
+                    bound = BindIndexedAssignmentToVariable(tempVar, indexed.Key, indexed.Value, indexed.EqualsToken.Location);
+                    break;
+                default:
+                    bound = new BoundErrorExpression(null);
+                    break;
+            }
+
+            statements.Add(new BoundExpressionStatement(element, bound));
+        }
+
+        _ = hasIndexedElement;
+        var resultExpr = new BoundVariableExpression(syntax, tempVar);
+        return new BoundBlockExpression(syntax, statements.ToImmutable(), resultExpr);
+    }
+
+    /// <summary>
+    /// Issue #479 / ADR-0117: lowers one bare / key:value collection element to
+    /// an <c>Add(...)</c> call on the synthetic collection local. A synthetic
+    /// <see cref="CallExpressionSyntax"/> named <c>Add</c> is bound through the
+    /// shared accessor-call path so overload resolution, generic-argument
+    /// inference, and parameter conversions all match a hand-written
+    /// <c>coll.Add(...)</c>.
+    /// </summary>
+    private BoundExpression BindCollectionAddCall(LocalVariableSymbol receiverLocal, SyntaxNode anchor, ImmutableArray<ExpressionSyntax> arguments)
+    {
+        var receiver = new BoundVariableExpression(anchor, receiverLocal);
+        var addCall = SynthesizeInstanceCall(anchor, "Add", arguments);
+        return BindAccessorCall(receiver, classSymbol: null, addCall);
+    }
+
+    /// <summary>
+    /// Issue #479 / ADR-0117: builds a synthetic instance-call syntax node
+    /// (<c>Add(arg0, arg1, …)</c>) anchored at <paramref name="anchor"/> so the
+    /// shared call binder can resolve the method and bind the argument syntaxes.
+    /// </summary>
+    private CallExpressionSyntax SynthesizeInstanceCall(SyntaxNode anchor, string methodName, ImmutableArray<ExpressionSyntax> arguments)
+    {
+        var tree = anchor.SyntaxTree;
+        var position = anchor.Span.Start;
+        var identifier = new SyntaxToken(tree, SyntaxKind.IdentifierToken, position, methodName, null);
+        var openParen = new SyntaxToken(tree, SyntaxKind.OpenParenthesisToken, position, "(", null);
+        var closeParen = new SyntaxToken(tree, SyntaxKind.CloseParenthesisToken, position, ")", null);
+
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            nodesAndSeparators.Add(arguments[i]);
+            if (i < arguments.Length - 1)
+            {
+                nodesAndSeparators.Add(new SyntaxToken(tree, SyntaxKind.CommaToken, position, ",", null));
+            }
+        }
+
+        var argumentList = new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
+        return new CallExpressionSyntax(tree, identifier, openParen, argumentList, closeParen);
+    }
+
+    private void BindCollectionElementsForDiagnostics(CollectionInitializerExpressionSyntax syntax)
+    {
+        foreach (var element in syntax.Elements)
+        {
+            switch (element)
+            {
+                case ExpressionCollectionElementSyntax bare:
+                    _ = BindExpression(bare.Expression);
+                    break;
+                case KeyedCollectionElementSyntax keyed:
+                    _ = BindExpression(keyed.Key);
+                    _ = BindExpression(keyed.Value);
+                    break;
+                case IndexedCollectionElementSyntax indexed:
+                    _ = BindExpression(indexed.Key);
+                    _ = BindExpression(indexed.Value);
+                    break;
+            }
+        }
+    }
+
     private static bool TryGetCopyOverrides(CallExpressionSyntax call, out SeparatedSyntaxList<FieldInitializerSyntax> overrides)
     {
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();

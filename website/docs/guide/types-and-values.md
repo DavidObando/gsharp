@@ -30,6 +30,26 @@ let fixed = [3]int32{1, 2, 3}
 let names = map[int32,string]{1: "one", 2: "two"}
 ```
 
+## Collection initializers
+
+Any CLR collection type can be constructed and populated in a single expression with a brace-enclosed element list after the construction target. This is G#'s equivalent of C# collection initializers (`new List<int>{1, 2, 3}`) and the named-type counterpart to Swift's `[…]` literals; the design is captured in [ADR-0117](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0117-collection-initializers.md).
+
+```gsharp
+let xs = List[int32]{ 1, 2, 3 }                              // sequence
+let hs = HashSet[int32]{ 1, 2, 2, 3 }                        // set — duplicates collapse
+let scores = Dictionary[string, int32]{ "alice": 90, "bob": 85 }   // key: value pairs
+let ages = Dictionary[string, int32]{ ["carol"] = 31 }       // [key] = value entries
+```
+
+The no-parentheses form `List[T]{…}` is shorthand for `List[T](){…}`. To pass constructor arguments — for example a comparer — use the explicit form, mirroring C#'s `new(StringComparer.OrdinalIgnoreCase){ … }`:
+
+```gsharp
+let headers = Dictionary[string, int32](StringComparer.OrdinalIgnoreCase){ "Content-Length": 42 }
+Console.WriteLine(headers["content-length"])   // case-insensitive: prints 42
+```
+
+Each element lowers to a method call on the freshly constructed collection: a bare element `e` becomes `Add(e)`, a `key: value` pair becomes `Add(key, value)`, and an `[key] = value` entry becomes an indexer set (`coll[key] = value`, last write wins). Initializers nest, so `List[List[int32]]{ List[int32]{1, 2} }` and `Dictionary[string, List[int32]]{ "evens": List[int32]{2, 4} }` both work. Because dictionary `{ x: y }` with an identifier key is reserved for struct-literal field initialization, use the `["x"] = y` form when the key is an identifier or other expression. A type with no accessible `Add` reports diagnostic `GS0369` instead of failing internally.
+
 
 ## Structs, data classes/structs, and inline structs
 

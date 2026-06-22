@@ -43,6 +43,7 @@ ClassKeyword
 CloseBraceToken
 CloseParenthesisToken
 CloseSquareBracketToken
+CollectionInitializerExpression
 ColonEqualsToken
 ColonToken
 CommaToken
@@ -79,6 +80,7 @@ EqualsToken
 EventAccessor
 EventDeclaration
 EventSubscriptionExpression
+ExpressionCollectionElement
 ExpressionStatement
 FallthroughKeyword
 FalseKeyword
@@ -117,6 +119,7 @@ ImportDeclaration
 ImportKeyword
 IndexAssignmentExpression
 IndexExpression
+IndexedCollectionElement
 IndirectAssignmentExpression
 InterfaceDeclaration
 InterfaceKeyword
@@ -125,6 +128,7 @@ InterpolatedStringExpression
 InterpolatedStringToken
 IsExpression
 IsKeyword
+KeyedCollectionElement
 LabeledStatement
 LambdaExpression
 LeftArrowToken

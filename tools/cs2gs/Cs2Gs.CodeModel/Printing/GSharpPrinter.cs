@@ -349,6 +349,9 @@ public static class GSharpPrinter
                 var inits = string.Join(", ", composite.FieldInitializers.Select(f => $"{f.Name}: {RenderExpression(f.Value, indent)}"));
                 return $"{RenderType(composite.Type)}{{{inits}}}";
 
+            case CollectionInitializerExpression collection:
+                return RenderCollectionInitializer(collection, indent);
+
             case ConversionExpression conversion:
                 return $"{RenderType(conversion.TargetType)}({RenderExpression(conversion.Operand, indent)})";
 
@@ -393,6 +396,35 @@ public static class GSharpPrinter
             default:
                 throw new ArgumentException($"Unsupported expression: {expression?.GetType().Name}");
         }
+    }
+
+    private static string RenderCollectionInitializer(CollectionInitializerExpression collection, int indent)
+    {
+        // Canonical form: drop the empty `()` on a zero-argument construction
+        // so `List[int32](){...}` renders as `List[int32]{...}`.
+        string target;
+        if (collection.Target is InvocationExpression invocation && invocation.Arguments.Count == 0)
+        {
+            var typeArgs = invocation.TypeArguments.Count == 0
+                ? string.Empty
+                : $"[{string.Join(", ", invocation.TypeArguments.Select(RenderType))}]";
+            target = $"{RenderExpression(invocation.Target, indent)}{typeArgs}";
+        }
+        else
+        {
+            target = RenderExpression(collection.Target, indent);
+        }
+
+        var elements = collection.Elements.Select(element => element.Kind switch
+        {
+            CollectionInitializerElementKind.Keyed =>
+                $"{RenderExpression(element.Key, indent)}: {RenderExpression(element.Value, indent)}",
+            CollectionInitializerElementKind.Indexed =>
+                $"[{RenderExpression(element.Key, indent)}] = {RenderExpression(element.Value, indent)}",
+            _ => RenderExpression(element.Value, indent),
+        });
+
+        return $"{target}{{ {string.Join(", ", elements)} }}";
     }
 
     private static string RenderLiteral(LiteralExpression literal)

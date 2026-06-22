@@ -172,6 +172,8 @@ internal sealed partial class ExpressionBinder
                 return overloads.BindCallExpression((CallExpressionSyntax)syntax);
             case SyntaxKind.ObjectCreationExpression:
                 return BindObjectCreationExpression((ObjectCreationExpressionSyntax)syntax);
+            case SyntaxKind.CollectionInitializerExpression:
+                return BindCollectionInitializerExpression((CollectionInitializerExpressionSyntax)syntax);
             case SyntaxKind.AccessorExpression:
                 return BindAccessorExpression((AccessorExpressionSyntax)syntax);
             case SyntaxKind.ArrayCreationExpression:
