@@ -112,8 +112,10 @@ When **every** constructor parameter is consumed by exactly one direct `_f = par
 > ```
 > This is **why T1 maps tuples to native positional tuples rather than a
 > synthesized `data struct`** — `for item in List[(string, int32, int32)]` binds
-> and `item.Item2` resolves. Filed for the compiler team; the translator does not
-> work around it.
+> and `item.Item2` resolves. Filed as **#939**; the translator does not work
+> around it. The indexer path (`xs[0].Name`) binds correctly, so the defect is
+> specific to the for-in enumerable element-type recovery, not `List[T]`
+> instantiation in general.
 
 #### B.5 Methods: in-body vs receiver-clause — ADR-0079, ADR-0024, spec §Functions and methods
 
