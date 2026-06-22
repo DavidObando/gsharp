@@ -316,15 +316,15 @@ namespace Demo
     }
 
     /// <summary>
-    /// ADR-0115 §B.7 gap: a constructed generic-interface constraint
-    /// (<c>where T : IComparable&lt;T&gt;</c>) has no canonical G# form
-    /// (GS0005/GS0113), so it surfaces as a clean unsupported diagnostic and the
-    /// constraint is dropped.
+    /// Issue #943 (was an ADR-0115 §B.7 gap): a constructed generic-interface
+    /// constraint (<c>where T : IComparable&lt;T&gt;</c>) now has a canonical G#
+    /// form — <c>[T IComparable[T]]</c> — so the translator emits it into the
+    /// legacy constraint slot rather than dropping it.
     /// </summary>
     [Fact]
-    public void GenericInterfaceConstraint_SurfacesAsUnsupported()
+    public void GenericInterfaceConstraint_EmitsBracketedConstraint()
     {
-        TranslationContext context = TranslateForDiagnostics(@"
+        (string printed, TranslationContext context) = Translate(@"
 namespace Demo
 {
     using System;
@@ -339,7 +339,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains(
+        Assert.Contains("[T IComparable[T]]", printed);
+        Assert.DoesNotContain(
             context.Diagnostics,
             d => d.IsUnsupported && d.ConstructKind == "TypeParameterConstraintClause");
     }

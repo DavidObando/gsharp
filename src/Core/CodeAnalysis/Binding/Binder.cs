@@ -3129,6 +3129,15 @@ public sealed class Binder
             }
         }
 
+        // Issue #943: enforce a CLR interface constraint (generic or not), e.g.
+        // `[T IComparable[T]]`. The type argument must implement the (self-ref
+        // substituted) closed interface.
+        if (tp.ClrInterfaceConstraint != null
+            && !SatisfiesClrInterfaceConstraint(typeArgument, tp.ClrInterfaceConstraint, tp))
+        {
+            return false;
+        }
+
         if (tp.Constraint == TypeParameterConstraint.Comparable && !IsComparable(typeArgument))
         {
             return false;
@@ -3346,6 +3355,110 @@ public sealed class Binder
         return false;
     }
 
+    /// <summary>
+    /// Issue #943: returns <see langword="true"/> when <paramref name="typeArgument"/>
+    /// satisfies a CLR interface constraint <paramref name="constraint"/> (e.g.
+    /// <c>IComparable[T]</c>). For a self-referential generic constraint the
+    /// constrained parameter <paramref name="tp"/> is substituted by the type
+    /// argument itself, so <c>[T IComparable[T]]</c> checks that the argument
+    /// implements <c>IComparable&lt;argument&gt;</c>. Matching is performed by
+    /// metadata full name to avoid mixing reflection load contexts.
+    /// </summary>
+    /// <param name="typeArgument">The supplied type argument.</param>
+    /// <param name="constraint">The CLR interface constraint type.</param>
+    /// <param name="tp">The constrained type parameter (for self-substitution).</param>
+    /// <returns><see langword="true"/> when the constraint is satisfied.</returns>
+    internal static bool SatisfiesClrInterfaceConstraint(TypeSymbol typeArgument, TypeSymbol constraint, TypeParameterSymbol tp)
+    {
+        // Constraint propagation: another type parameter constrained to the same
+        // interface trivially satisfies the constraint.
+        if (typeArgument is TypeParameterSymbol argTp)
+        {
+            return argTp.ClrInterfaceConstraint != null
+                && string.Equals(
+                    argTp.ClrInterfaceConstraint.ClrType?.FullName,
+                    constraint.ClrType?.FullName,
+                    StringComparison.Ordinal);
+        }
+
+        var typeArgClr = typeArgument?.ClrType;
+        var constraintClr = constraint?.ClrType;
+        if (typeArgClr == null || constraintClr == null)
+        {
+            return false;
+        }
+
+        if (!constraintClr.IsGenericType)
+        {
+            // Non-generic interface constraint (e.g. `[T IDisposable]`).
+            return string.Equals(typeArgClr.FullName, constraintClr.FullName, StringComparison.Ordinal)
+                || typeArgClr.GetInterfaces().Any(i =>
+                    string.Equals(i.FullName, constraintClr.FullName, StringComparison.Ordinal));
+        }
+
+        var openDefName = constraintClr.GetGenericTypeDefinition().FullName;
+        var constraintArgs = (constraint as ImportedTypeSymbol)?.TypeArguments ?? ImmutableArray<TypeSymbol>.Empty;
+
+        foreach (var candidate in EnumerateSelfAndInterfaces(typeArgClr))
+        {
+            if (!candidate.IsGenericType
+                || !string.Equals(candidate.GetGenericTypeDefinition().FullName, openDefName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (GenericConstraintArgumentsMatch(candidate.GetGenericArguments(), constraintArgs, tp, typeArgClr))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<Type> EnumerateSelfAndInterfaces(Type type)
+    {
+        if (type.IsInterface)
+        {
+            yield return type;
+        }
+
+        foreach (var i in type.GetInterfaces())
+        {
+            yield return i;
+        }
+    }
+
+    private static bool GenericConstraintArgumentsMatch(
+        Type[] candidateArgs,
+        ImmutableArray<TypeSymbol> constraintArgs,
+        TypeParameterSymbol tp,
+        Type typeArgClr)
+    {
+        if (constraintArgs.IsDefaultOrEmpty || candidateArgs.Length != constraintArgs.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < candidateArgs.Length; i++)
+        {
+            // A self-referential constraint argument (the constrained parameter
+            // itself) is expected to be the type argument; any other argument is
+            // matched against its own resolved CLR type.
+            var expectedName = constraintArgs[i] is TypeParameterSymbol cArgTp && ReferenceEquals(cArgTp, tp)
+                ? typeArgClr.FullName
+                : constraintArgs[i].ClrType?.FullName;
+
+            if (expectedName == null
+                || !string.Equals(candidateArgs[i].FullName, expectedName, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     internal static bool IsComparable(TypeSymbol type)
     {
         if (type == TypeSymbol.Int32 || type == TypeSymbol.String || type == TypeSymbol.Bool)
@@ -3379,6 +3492,11 @@ public sealed class Binder
         if (tp.InterfaceConstraint != null)
         {
             flags.Add(tp.InterfaceConstraint.Name);
+        }
+
+        if (tp.ClrInterfaceConstraint != null)
+        {
+            flags.Add(tp.ClrInterfaceConstraint.Name);
         }
 
         if (tp.Constraint == TypeParameterConstraint.Comparable)

@@ -3330,9 +3330,16 @@ internal sealed class DeclarationBinder
             return ImmutableArray<TypeParameterSymbol>.Empty;
         }
 
-        var builder = ImmutableArray.CreateBuilder<TypeParameterSymbol>(syntax.Parameters.Count);
+        var count = syntax.Parameters.Count;
+        var symbols = new TypeParameterSymbol[count];
         var seen = new HashSet<string>();
-        for (var i = 0; i < syntax.Parameters.Count; i++)
+
+        // Pass 1: create the bare type-parameter symbols (name, ordinal, variance)
+        // so that a constraint clause appearing later in the list — or a
+        // self-referential constraint such as `[T IComparable[T]]` (issue #943)
+        // / `[T IAdd[T]]` (ADR-0089) — can resolve every in-flight type
+        // parameter while binding the constraint type below.
+        for (var i = 0; i < count; i++)
         {
             var p = syntax.Parameters[i];
             var name = p.Identifier.Text;
@@ -3341,156 +3348,154 @@ internal sealed class DeclarationBinder
                 Diagnostics.ReportSymbolAlreadyDeclared(p.Identifier.Location, name);
             }
 
-            var constraint = TypeParameterConstraint.Any;
-            InterfaceSymbol interfaceConstraint = null;
             var variance = TypeParameterVariance.None;
             if (p.VarianceModifier != null)
             {
                 variance = p.VarianceModifier.Text == "in" ? TypeParameterVariance.In : TypeParameterVariance.Out;
             }
 
-            if (p.Constraint != null)
-            {
-                switch (p.Constraint.Text)
-                {
-                    case "any":
-                        constraint = TypeParameterConstraint.Any;
-                        break;
-                    case "comparable":
-                        constraint = TypeParameterConstraint.Comparable;
-                        break;
-                    default:
-                        // Phase 4.2b / ADR-0020: a non-keyword constraint is treated as a
-                        // sealed-interface bound. The interface must exist and be sealed
-                        // (since open interfaces could be implemented by unknown future
-                        // types, defeating the binder's purpose).
-                        //
-                        // ADR-0089: when the constraint interface has any
-                        // static-virtual members, the sealed restriction is
-                        // relaxed — the static-virtual contract itself
-                        // enforces the dispatch shape, so sealedness adds no
-                        // safety. Likewise, when the constraint syntax
-                        // carries a generic argument list (e.g.
-                        // <c>[T IAdd[T]]</c>), we construct the closed
-                        // generic interface here so the bound is
-                        // self-referential as written.
-                        var resolved = lookupType(p.Constraint.Text);
-                        if (resolved is InterfaceSymbol iface)
-                        {
-                            if (p.HasConstraintTypeArguments && !iface.TypeParameters.IsDefaultOrEmpty)
-                            {
-                                // Self-referential generic constraint. Each
-                                // type argument is bound in the current
-                                // scope; references to the in-flight type
-                                // parameter (name == p.Identifier.Text) are
-                                // resolved via the partially-built builder.
-                                var argsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(p.ConstraintTypeArguments.Count);
-                                foreach (var argSyntax in p.ConstraintTypeArguments)
-                                {
-                                    TypeSymbol argType = null;
-                                    if (argSyntax is TypeClauseSyntax tcs
-                                        && tcs.Identifier != null
-                                        && tcs.OpenBracketToken == null)
-                                    {
-                                        // bare identifier — could be the current type parameter or an in-scope name.
-                                        if (tcs.Identifier.Text == name)
-                                        {
-                                            // Will be patched below — we
-                                            // need the final
-                                            // TypeParameterSymbol that
-                                            // we're about to construct.
-                                            argType = null;
-                                        }
-                                        else
-                                        {
-                                            foreach (var existing in builder)
-                                            {
-                                                if (existing.Name == tcs.Identifier.Text)
-                                                {
-                                                    argType = existing;
-                                                    break;
-                                                }
-                                            }
-
-                                            argType ??= bindTypeClause(tcs);
-                                        }
-                                    }
-                                    else
-                                    {
-                                        argType = bindTypeClause(argSyntax);
-                                    }
-
-                                    argsBuilder.Add(argType);
-                                }
-
-                                // Construct the type parameter first so
-                                // that any self-reference slot above can
-                                // be patched in.
-                                var tpSymbol = new TypeParameterSymbol(name, i, constraint, variance, iface);
-                                for (var ai = 0; ai < argsBuilder.Count; ai++)
-                                {
-                                    if (argsBuilder[ai] == null)
-                                    {
-                                        argsBuilder[ai] = tpSymbol;
-                                    }
-                                }
-
-                                interfaceConstraint = InterfaceSymbol.Construct(iface, argsBuilder.MoveToImmutable());
-                                tpSymbol.InterfaceConstraint = interfaceConstraint;
-                                builder.Add(tpSymbol);
-                                continue;
-                            }
-
-                            if (!iface.IsSealed && !iface.HasStaticVirtualMembers)
-                            {
-                                Diagnostics.ReportInterfaceConstraintNotSealed(p.Constraint.Location, iface.Name);
-                            }
-
-                            interfaceConstraint = iface;
-                        }
-                        else
-                        {
-                            Diagnostics.ReportUndefinedType(p.Constraint.Location, p.Constraint.Text);
-                        }
-
-                        break;
-                }
-            }
-
-            // ADR-0097 / issue #775: consume the `class` / `struct` / `new()`
-            // flag-style constraints. Disjoint combinations (`class struct`,
-            // `struct new()`) are rejected as GS0361. The order is determined
-            // by the syntax — combining class + new() is legal and produces
-            // both CLR flag bits.
-            var hasRefType = p.HasClassConstraint;
-            var hasValueType = p.HasStructConstraint;
-            var hasDefaultCtor = p.HasNewConstraint;
-
-            if (hasRefType && hasValueType)
-            {
-                Diagnostics.ReportTypeParameterConstraintConflict(p.StructConstraintKeyword.Location, name, "class", "struct");
-                hasValueType = false;
-            }
-
-            if (hasValueType && hasDefaultCtor)
-            {
-                // `struct` already implies `new()` at the CLR level (ECMA-335 II.10.1.7);
-                // emitting both would be redundant and would force callers to
-                // remember an arbitrary order. Flag the explicit `new()`.
-                Diagnostics.ReportTypeParameterConstraintConflict(p.NewConstraintKeyword.Location, name, "struct", "new()");
-                hasDefaultCtor = false;
-            }
-
-            var symbol = new TypeParameterSymbol(name, i, constraint, variance, interfaceConstraint)
-            {
-                HasReferenceTypeConstraint = hasRefType,
-                HasValueTypeConstraint = hasValueType,
-                HasDefaultConstructorConstraint = hasDefaultCtor,
-            };
-            builder.Add(symbol);
+            symbols[i] = new TypeParameterSymbol(name, i, TypeParameterConstraint.Any, variance);
         }
 
-        return builder.MoveToImmutable();
+        // Publish the bare symbols into the binder's type-parameter scope so the
+        // constraint type clauses bound in pass 2 can see them. Enclosing type
+        // parameters (e.g. for a generic method declared inside a generic type)
+        // remain visible because we copy the previous map.
+        var previousTypeParameters = binderCtx.CurrentTypeParameters;
+        var constraintScope = previousTypeParameters == null
+            ? new Dictionary<string, TypeParameterSymbol>()
+            : new Dictionary<string, TypeParameterSymbol>(previousTypeParameters);
+        foreach (var s in symbols)
+        {
+            constraintScope[s.Name] = s;
+        }
+
+        binderCtx.CurrentTypeParameters = constraintScope;
+        try
+        {
+            // Pass 2: resolve each constraint against the published scope.
+            for (var i = 0; i < count; i++)
+            {
+                var p = syntax.Parameters[i];
+                var symbol = symbols[i];
+                var name = symbol.Name;
+
+                if (p.Constraint != null)
+                {
+                    switch (p.Constraint.Text)
+                    {
+                        case "any":
+                            symbol.Constraint = TypeParameterConstraint.Any;
+                            break;
+                        case "comparable":
+                            symbol.Constraint = TypeParameterConstraint.Comparable;
+                            break;
+                        default:
+                            ResolveInterfaceConstraint(p, symbol);
+                            break;
+                    }
+                }
+
+                // ADR-0097 / issue #775: consume the `class` / `struct` / `new()`
+                // flag-style constraints. Disjoint combinations (`class struct`,
+                // `struct new()`) are rejected as GS0361. The order is determined
+                // by the syntax — combining class + new() is legal and produces
+                // both CLR flag bits.
+                var hasRefType = p.HasClassConstraint;
+                var hasValueType = p.HasStructConstraint;
+                var hasDefaultCtor = p.HasNewConstraint;
+
+                if (hasRefType && hasValueType)
+                {
+                    Diagnostics.ReportTypeParameterConstraintConflict(p.StructConstraintKeyword.Location, name, "class", "struct");
+                    hasValueType = false;
+                }
+
+                if (hasValueType && hasDefaultCtor)
+                {
+                    // `struct` already implies `new()` at the CLR level (ECMA-335 II.10.1.7);
+                    // emitting both would be redundant and would force callers to
+                    // remember an arbitrary order. Flag the explicit `new()`.
+                    Diagnostics.ReportTypeParameterConstraintConflict(p.NewConstraintKeyword.Location, name, "struct", "new()");
+                    hasDefaultCtor = false;
+                }
+
+                symbol.HasReferenceTypeConstraint = hasRefType;
+                symbol.HasValueTypeConstraint = hasValueType;
+                symbol.HasDefaultConstructorConstraint = hasDefaultCtor;
+            }
+        }
+        finally
+        {
+            binderCtx.CurrentTypeParameters = previousTypeParameters;
+        }
+
+        return ImmutableArray.Create(symbols);
+    }
+
+    /// <summary>
+    /// Resolves a non-keyword type-parameter constraint (anything other than
+    /// <c>any</c> / <c>comparable</c>) as an interface bound and records it on
+    /// <paramref name="symbol"/>.
+    /// <para>
+    /// Phase 4.2b / ADR-0020 accepts a G#-declared sealed interface. ADR-0089
+    /// accepts a constructed generic G# interface carrying static-virtual
+    /// members (e.g. <c>[T IAdd[T]]</c>). Issue #943 generalises this to any
+    /// imported CLR interface — generic or not — so the canonical C#
+    /// <c>where T : IComparable&lt;T&gt;</c> shape (<c>[T IComparable[T]]</c>)
+    /// binds, dispatches instance members, and emits verifiable IL. The
+    /// constraint type clause is bound through the regular type binder, so a
+    /// self-referential type argument (the type parameter appearing in its own
+    /// constraint) resolves against the in-flight scope published by
+    /// <see cref="BindTypeParameterList"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="p">The type-parameter syntax carrying the constraint.</param>
+    /// <param name="symbol">The bare type-parameter symbol to annotate.</param>
+    private void ResolveInterfaceConstraint(TypeParameterSyntax p, TypeParameterSymbol symbol)
+    {
+        var constraintClause = new TypeClauseSyntax(
+            p.SyntaxTree,
+            openBracketToken: null,
+            lengthToken: null,
+            closeBracketToken: null,
+            identifier: p.Constraint,
+            typeArgumentOpenBracketToken: p.ConstraintTypeArgumentOpenBracketToken,
+            typeArguments: p.ConstraintTypeArguments,
+            typeArgumentCloseBracketToken: p.ConstraintTypeArgumentCloseBracketToken,
+            questionToken: null);
+
+        var resolved = bindTypeClause(constraintClause);
+        if (resolved == null || ReferenceEquals(resolved, TypeSymbol.Error))
+        {
+            // bindTypeClause already reported the failure (e.g. undefined type).
+            return;
+        }
+
+        if (resolved is InterfaceSymbol iface)
+        {
+            var definition = iface.Definition ?? iface;
+            if (!definition.IsSealed && !definition.HasStaticVirtualMembers)
+            {
+                Diagnostics.ReportInterfaceConstraintNotSealed(p.Constraint.Location, definition.Name);
+            }
+
+            symbol.InterfaceConstraint = iface;
+            return;
+        }
+
+        // Issue #943: an imported CLR interface (generic or not). Reference-set
+        // interfaces are universally implementable, so no sealedness rule
+        // applies; the GenericParamConstraint metadata row carries the bound.
+        if (resolved.ClrType is { IsInterface: true })
+        {
+            symbol.ClrInterfaceConstraint = resolved;
+            return;
+        }
+
+        // Resolved to something that is not an interface (a class, struct, …) —
+        // not a legal constraint.
+        Diagnostics.ReportInterfaceConstraintNotSealed(p.Constraint.Location, resolved.Name);
     }
 
     private static bool SignaturesMatch(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType)

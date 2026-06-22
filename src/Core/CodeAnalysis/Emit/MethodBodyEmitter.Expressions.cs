@@ -192,6 +192,27 @@ internal sealed partial class MethodBodyEmitter
                 break;
             case BoundImportedInstanceCallExpression instCall:
                 {
+                    // Issue #943: a call dispatched through a type parameter's
+                    // CLR interface constraint (e.g. `a.CompareTo(b)` with
+                    // `T : IComparable[T]`) emits a verifiable
+                    // `constrained. !!T  callvirt IComparable`1<!!T>::M(...)`.
+                    if (instCall.IsConstrainedTypeParameterCall)
+                    {
+                        this.EmitConstrainedTypeParameterReceiver(instCall.Receiver);
+                        this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds);
+
+                        var constrainedHandle = this.outer.GetMethodEntityHandle(
+                            instCall.Method,
+                            instCall.TypeArgumentSymbols,
+                            instCall.ConstrainedInterfaceType);
+
+                        this.il.OpCode(ILOpCode.Constrained);
+                        this.il.Token(this.outer.GetElementTypeToken(instCall.ConstrainedReceiverTypeParameter));
+                        this.il.OpCode(ILOpCode.Callvirt);
+                        this.il.Token(constrainedHandle);
+                        break;
+                    }
+
                     var receiverType = instCall.Receiver.Type is ByRefTypeSymbol byRef
                         ? byRef.PointeeType
                         : instCall.Receiver.Type;

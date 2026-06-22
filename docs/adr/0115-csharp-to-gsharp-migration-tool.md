@@ -151,22 +151,28 @@ C# **extension methods** (`static R M(this T self, …)`) translate to the recei
 #### B.7 Generics — ADR-0020, ADR-0097, ADR-0098/ADR-0049
 
 - Bracket form for both declaration and instantiation: `func Identity[T any](value T) T`, `List[int32]()` (ADR-0020). **No angle brackets** ever appear in output.
-- Constraints render in the bracket: the legacy slot (`any`, `comparable`, sealed-interface bound) plus repeatable flag constraints `class`, `struct`, `new()` (ADR-0097). C# `where T : class` → `[T class]`, `where T : struct` → `[T struct]`, `where T : new()` → `[T new()]`, `where T : IFoo` → `[T IFoo]`. Variance `in`/`out` is carried on type parameters of interfaces/delegates (ADR-0021).
+- Constraints render in the bracket: the legacy slot (`any`, `comparable`, an interface bound — non-generic or **constructed-generic**, including the self-referential `IComparable[T]`) plus repeatable flag constraints `class`, `struct`, `new()` (ADR-0097). C# `where T : class` → `[T class]`, `where T : struct` → `[T struct]`, `where T : new()` → `[T new()]`, `where T : IFoo` → `[T IFoo]`, `where T : IComparable<T>` → `[T IComparable[T]]` (issue #943). Variance `in`/`out` is carried on type parameters of interfaces/delegates (ADR-0021).
 - **`where T : notnull`** has no precise G# constraint keyword; the translator **drops** it (records an Info diagnostic). `comparable`/`any` would change the semantics, so the faithful choice is no constraint.
 
-> **Generic-interface constraint `where T : IComparable<T>` — discovered compiler gap.**
-> A constructed generic-interface constraint has no canonical G# spelling: the
-> bracketed constraint slot does not accept a nested generic argument
-> (`func Max[T IComparable[T]]` → `GS0005`, `Unexpected token <DotToken>`/nested
-> bracket parse error), and dropping the argument (`[T IComparable]`) names a
-> non-existent constraint type (`GS0113`, `Type 'IComparable' doesn't exist`).
-> Minimal repro:
+> **Generic-interface constraint `where T : IComparable<T>` — RESOLVED (issue #943).**
+> Previously a constructed generic-interface constraint had no canonical G#
+> spelling: the bracketed constraint slot's lookahead failed to skip the
+> constraint's own generic-argument brackets (`func Max[T IComparable[T]]` →
+> `GS0005`), and dropping the argument (`[T IComparable]`) named a non-existent
+> constraint type (`GS0113`). Issue #943 fixed the parser lookahead and threaded
+> the constraint through the binder (so members of the constraint interface are
+> available on `T`) and the emitter (a `constrained. !!T  callvirt` plus a
+> `GenericParamConstraint` metadata row), so the constructed-generic constraint
+> now parses, binds, emits verifiable IL, and is enforced (GS0152). The
+> translator therefore **emits the constraint directly** — `where T : IComparable<T>`
+> renders as `[T IComparable[T]]` — rather than dropping it. Minimal repro, now
+> compiling and running:
 > ```gsharp
-> func Max[T IComparable[T]](values IReadOnlyList[T]) T { return values[0] }   // GS0005
+> func Max[T IComparable[T]](a T, b T) T {
+>     if a.CompareTo(b) > 0 { return a }
+>     return b
+> }
 > ```
-> The translator surfaces this as a clean `translation-unsupported` record
-> (`TypeParameterConstraintClause`) and **drops** the constraint rather than
-> emitting unparseable G#. Filed as **#943**.
 
 #### B.8 Delegate types — arrow form, ADR-0075
 

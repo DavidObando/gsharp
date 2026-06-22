@@ -2733,6 +2733,42 @@ public class Parser
                 continue;
             }
 
+            // ADR-0089 / issue #943: a constraint identifier may carry a generic
+            // type-argument list (e.g. the curiously-recurring `[T IComparable[T]]`).
+            // Skip the balanced `[ ... ]` segment so the disambiguation following
+            // it (a `,` between type parameters or the closing `]` of the whole
+            // type-parameter list) is examined against the right token.
+            if (k == SyntaxKind.OpenSquareBracketToken)
+            {
+                var depth = 0;
+                while (true)
+                {
+                    var inner = Peek(ahead).Kind;
+                    if (inner == SyntaxKind.EndOfFileToken)
+                    {
+                        return false;
+                    }
+
+                    if (inner == SyntaxKind.OpenSquareBracketToken)
+                    {
+                        depth++;
+                    }
+                    else if (inner == SyntaxKind.CloseSquareBracketToken)
+                    {
+                        depth--;
+                        if (depth == 0)
+                        {
+                            ahead++;
+                            break;
+                        }
+                    }
+
+                    ahead++;
+                }
+
+                continue;
+            }
+
             break;
         }
 

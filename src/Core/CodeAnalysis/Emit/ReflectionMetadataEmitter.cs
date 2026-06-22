@@ -2497,7 +2497,7 @@ internal sealed class ReflectionMetadataEmitter
         // MethodDefs are emitted in interleaved visit orders, the rows
         // were buffered into emitCtx.PendingGenericParameters and are
         // flushed in sorted order here, just before PE serialisation.
-        TypeDefEmitter.FlushPendingGenericParameters(this.emitCtx);
+        TypeDefEmitter.FlushPendingGenericParameters(this.emitCtx, this.GetElementTypeToken);
         var peHeaderBuilder = new PEHeaderBuilder(
             imageCharacteristics: entryHandle.IsNil
                 ? Characteristics.Dll | Characteristics.ExecutableImage

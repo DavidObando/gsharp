@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
+using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator.Loading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -1251,30 +1252,29 @@ public sealed class CSharpToGSharpTranslator
             {
                 ITypeSymbol primary = tp.ConstraintTypes[0];
 
-                // A constructed generic-interface constraint (`where T : IComparable<T>`)
-                // has no canonical G# form: the bracketed constraint slot cannot nest
-                // type arguments (`[T IComparable[T]]` → GS0005), and dropping the
-                // arguments (`[T IComparable]`) names a non-existent type (GS0113).
-                // Surface it as a clean gap and drop the constraint (ADR-0115 §B.7 gap #TBD).
-                if (primary is INamedTypeSymbol { IsGenericType: true } constructedConstraint)
+                // Issue #943: a constructed generic-interface constraint
+                // (`where T : IComparable<T>`) now has a canonical G# form —
+                // `[T IComparable[T]]` — which parses, binds, emits verifiable
+                // IL, and is enforced. Render the constraint type (including its
+                // type arguments, e.g. the self-referential `T`) into the legacy
+                // constraint slot via the type mapper + printer.
+                if (primary is INamedTypeSymbol { IsGenericType: true })
                 {
-                    this.context.Report(new TranslationDiagnostic(
-                        nameof(SyntaxKind.TypeParameterConstraintClause),
-                        $"type parameter '{tp.Name}' is constrained by the generic interface '{constructedConstraint.Name}<...>'; G# has no nested-generic constraint form (GS0005/GS0113), constraint dropped (ADR-0115 §B.7 gap).",
-                        tp.Locations.FirstOrDefault(),
-                        TranslationSeverity.Unsupported));
+                    GTypeReference constraintRef = this.typeMapper.Map(primary, this.context, tp.Locations.FirstOrDefault());
+                    legacy = GSharpPrinter.RenderTypeReference(constraintRef);
                 }
                 else
                 {
                     legacy = primary.Name;
-                    if (tp.ConstraintTypes.Length > 1)
-                    {
-                        this.context.Report(new TranslationDiagnostic(
-                            nameof(SyntaxKind.TypeParameterConstraintClause),
-                            $"type parameter '{tp.Name}' has multiple constraint types; only the first ('{legacy}') is carried into the G# legacy-constraint slot (ADR-0115 §B.7).",
-                            tp.Locations.FirstOrDefault(),
-                            TranslationSeverity.Info));
-                    }
+                }
+
+                if (tp.ConstraintTypes.Length > 1)
+                {
+                    this.context.Report(new TranslationDiagnostic(
+                        nameof(SyntaxKind.TypeParameterConstraintClause),
+                        $"type parameter '{tp.Name}' has multiple constraint types; only the first ('{legacy}') is carried into the G# legacy-constraint slot (ADR-0115 §B.7).",
+                        tp.Locations.FirstOrDefault(),
+                        TranslationSeverity.Info));
                 }
             }
 
