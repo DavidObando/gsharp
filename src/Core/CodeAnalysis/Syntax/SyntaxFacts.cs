@@ -74,10 +74,15 @@ public static class SyntaxFacts
                 return 2;
 
             case SyntaxKind.PipePipeToken:               // logical or
-            case SyntaxKind.QuestionColonToken:          // Phase 3.C.3 / ADR-0001: null-coalescing
                 return 1;
 
             default:
+
+                // Issue #941: `??` null-coalescing is NOT handled by the
+                // left-associative binary loop. It is parsed separately by
+                // Parser.ParseNullCoalescingExpression so it can be
+                // right-associative and sit at a precedence strictly below `||`.
+                // Returning 0 here keeps the binary loop from consuming it.
                 return 0;
         }
 #pragma warning restore SA1025 // Code should not contain multiple whitespace in a row
@@ -353,8 +358,8 @@ public static class SyntaxFacts
                 return "?";
             case SyntaxKind.QuestionDotToken:
                 return "?.";
-            case SyntaxKind.QuestionColonToken:
-                return "?:";
+            case SyntaxKind.QuestionQuestionToken:
+                return "??";
             case SyntaxKind.QuestionQuestionEqualsToken:
                 return "??=";
             case SyntaxKind.QuestionOpenBracketToken:

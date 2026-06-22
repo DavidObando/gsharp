@@ -12,7 +12,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 /// Issue #709 / ADR-0072: lexer-level coverage for the new <c>??=</c>
 /// null-coalescing compound assignment operator. The doubled-question-mark
 /// is recognized only as part of the three-character <c>??=</c> sequence —
-/// the bare <c>?</c>, the existing <c>?:</c>-null-coalescing-read, and the
+/// the bare <c>?</c>, the <c>??</c>-null-coalescing-read, and the
 /// existing <c>?.</c>-safe-navigation tokens must keep their meaning.
 /// </summary>
 public class Issue709NullCoalescingAssignmentLexerTests
@@ -26,11 +26,22 @@ public class Issue709NullCoalescingAssignmentLexerTests
     }
 
     [Fact]
+    public void Lexes_QuestionQuestion_AsSingleToken()
+    {
+        // Issue #941: bare `??` is the null-coalescing read operator.
+        var tokens = SyntaxTree.ParseTokens("??").ToList();
+        Assert.Equal(SyntaxKind.QuestionQuestionToken, tokens[0].Kind);
+        Assert.Equal("??", tokens[0].Text);
+    }
+
+    [Fact]
     public void Lexes_QuestionColon_AsSeparateTokens()
     {
+        // Issue #941: `?:` was removed. It now lexes as a `?` followed by a
+        // separate `:` (no longer a single QuestionColonToken).
         var tokens = SyntaxTree.ParseTokens("?:").ToList();
-        Assert.Equal(SyntaxKind.QuestionColonToken, tokens[0].Kind);
-        Assert.Equal("?:", tokens[0].Text);
+        Assert.Equal(SyntaxKind.QuestionToken, tokens[0].Kind);
+        Assert.Equal(SyntaxKind.ColonToken, tokens[1].Kind);
     }
 
     [Fact]
@@ -54,15 +65,14 @@ public class Issue709NullCoalescingAssignmentLexerTests
     }
 
     [Fact]
-    public void Lexes_QuestionQuestionWithoutEquals_AsTwoQuestionTokens()
+    public void Lexes_QuestionQuestionWithoutEquals_AsNullCoalescingToken()
     {
-        // G# does not introduce a bare `??` token — it falls back to two
-        // separate `?` tokens (which the parser will reject in any context
-        // that does not expect them, but the lexer must not synthesize a
-        // new token kind for the two-character sequence).
+        // Per issue #941, bare `??` is the binary null-coalescing operator and
+        // lexes as a single QuestionQuestionToken (distinct from the `??=`
+        // compound-assignment token).
         var tokens = SyntaxTree.ParseTokens("??").ToList();
-        Assert.Equal(SyntaxKind.QuestionToken, tokens[0].Kind);
-        Assert.Equal(SyntaxKind.QuestionToken, tokens[1].Kind);
+        Assert.Equal(SyntaxKind.QuestionQuestionToken, tokens[0].Kind);
+        Assert.Equal("??", tokens[0].Text);
     }
 
     [Fact]

@@ -299,9 +299,12 @@ A C# target-typed `new()` emits the **explicit constructed type** inferred from 
 > `translation-unsupported` record (`IndexerDeclaration`) and does not attempt a
 > mapping. Filed as **#944**.
 >
-> **Null-coalescing operator `??` — discovered compiler gap.** `value ?? fallback`
-> has no G# spelling; the parser rejects `??` (`GS0005`). Surfaced as a clean
-> `translation-unsupported` record (`CoalesceExpression`). Filed as **#941**.
+> **Null-coalescing operator `??` — RESOLVED (#941).** `value ?? fallback` now
+> maps directly to G#'s `??` null-coalescing operator. Originally this was a
+> compiler gap (G# spelled the read `?:` and the parser rejected `??`); issue
+> #941 / ADR-0116 respelled the G# operator to `??` and removed `?:`, so the
+> translator emits `value ?? fallback` verbatim. No longer surfaced as a
+> `translation-unsupported` record.
 >
 > **Member access on a bare-identifier element access — discovered compiler gap.**
 > `values[i].Member` (a single **bare-identifier** index immediately followed by

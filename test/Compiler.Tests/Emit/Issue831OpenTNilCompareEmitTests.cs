@@ -12,14 +12,14 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <summary>
 /// Issue #831 / ADR-0084 follow-up. End-to-end emit + IL-verify
 /// coverage for `T? == nil` / `T? != nil` and the closely-related
-/// `self!!` / `self ?: defaultValue` patterns where `T` is an open
+/// `self!!` / `self ?? defaultValue` patterns where `T` is an open
 /// type parameter constrained with `[T class]` (or left unconstrained).
 ///
 /// Pre-fix the emitter naively produced
 ///
 ///   ldarg.0; ldnull; ceq            // for `== nil`
 ///   ldarg.0; dup; brtrue; ...        // for `!!`
-///   ldarg.0; dup; brtrue; ...        // for `?:`
+///   ldarg.0; dup; brtrue; ...        // for `??`
 ///
 /// against an opaque `!!T` stack value — the runtime JIT tolerated it
 /// for reference-typed T but `ilverify` rejected the IL with
@@ -100,7 +100,7 @@ public class Issue831OpenTNilCompareEmitTests
     public void OpenTNullCoalesce_ClassConstrained_Verifiable()
     {
         // Mirrors `OrElse[T class]` from Optional.gs:
-        // `func (self T?) OrElse[T class](defaultValue T) T { return self ?: defaultValue }`.
+        // `func (self T?) OrElse[T class](defaultValue T) T { return self ?? defaultValue }`.
         // Pre-fix the bottom-of-EmitBinary `dup; brtrue` emitted an
         // invalid `dup` over an opaque `!!T` slot. The fix spills the
         // LHS to a `!!T`-typed slot and probes via `box; brfalse`.
@@ -109,7 +109,7 @@ public class Issue831OpenTNilCompareEmitTests
             import System
 
             func OrElse[T class](self T?, defaultValue T) T {
-                return self ?: defaultValue
+                return self ?? defaultValue
             }
 
             var present string? = "value"

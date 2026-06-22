@@ -22,7 +22,7 @@ public class Issue751RichReceiverInterpreterTests
     {
         var source = """
             func (self string?) OrElse(fb string) string {
-                return self ?: fb
+                return self ?? fb
             }
 
             var present string? = "hi"

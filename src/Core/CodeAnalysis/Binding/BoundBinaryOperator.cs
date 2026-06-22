@@ -148,14 +148,14 @@ public sealed class BoundBinaryOperator
             return new BoundBinaryOperator(syntaxKind, kind, leftType, rightType, TypeSymbol.Bool);
         }
 
-        // Phase 3.C.3 / ADR-0001: null-coalescing `?:` returns the left if
+        // Issue #941 / ADR-0001: null-coalescing `??` returns the left if
         // non-nil, otherwise the right. Type is the underlying of the left
         // side (when the right is the same underlying or is itself nullable
         // with that underlying).
         //
         // Issue #614 audit: intentionally a single arm — there is only ONE
         // null-coalescing operator token; no combinatorial dimension to tabulate.
-        if (syntaxKind == SyntaxKind.QuestionColonToken)
+        if (syntaxKind == SyntaxKind.QuestionQuestionToken)
         {
             TypeSymbol leftUnderlying = leftType is NullableTypeSymbol leftNullable ? leftNullable.UnderlyingType : leftType;
             TypeSymbol rightUnderlying = rightType is NullableTypeSymbol rightNullable ? rightNullable.UnderlyingType : rightType;

@@ -36,7 +36,7 @@ public class Issue750ConstraintOverloadEmitTests
             let upper = name.Map(func(s string) string { return s.ToUpper() })
             let doubled = count.Map(func(n int32) int32 { return n * 2 })
 
-            Console.WriteLine(upper ?: "<none>")
+            Console.WriteLine(upper ?? "<none>")
             Console.WriteLine(doubled.OrElse(-1).ToString())
             """;
 
@@ -54,7 +54,7 @@ public class Issue750ConstraintOverloadEmitTests
 
             let absent string? = nil
             let mapped = absent.Map(func(s string) string { return s.ToUpper() })
-            Console.WriteLine(mapped ?: "<none>")
+            Console.WriteLine(mapped ?? "<none>")
             """;
 
         var output = CompileAndRun(source);
@@ -113,7 +113,7 @@ public class Issue750ConstraintOverloadEmitTests
             let names = Sequences.Of("alpha", "beta")
             let nums = Sequences.Of(11, 22, 33)
 
-            Console.WriteLine(names.FirstOrNil() ?: "<none>")
+            Console.WriteLine(names.FirstOrNil() ?? "<none>")
             Console.WriteLine(nums.FirstOrNil().OrElse(-1).ToString())
             """;
 

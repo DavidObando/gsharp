@@ -13,7 +13,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 3.C.3 — null-safe operators <c>?:</c> (Elvis) and postfix <c>!!</c>
+/// Phase 3.C.3 — null-safe operators <c>??</c> (null-coalescing) and postfix <c>!!</c>
 /// (null assertion), plus Phase 3.C.3b null-conditional member access
 /// <c>?.</c>.
 /// </summary>
@@ -24,7 +24,7 @@ public class NullSafeOperatorTests
     {
         var source = @"
 var x int32? = nil
-x ?: 42
+x ?? 42
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
@@ -36,7 +36,7 @@ x ?: 42
     {
         var source = @"
 var x int32? = 7
-x ?: 42
+x ?? 42
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
@@ -74,7 +74,7 @@ x!!
         // (the whole expression's type becomes string?).
         var source = @"
 var s string? = nil
-s?.ToUpper() ?: ""fallback""
+s?.ToUpper() ?? ""fallback""
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
@@ -86,7 +86,7 @@ s?.ToUpper() ?: ""fallback""
     {
         var source = @"
 var s string? = ""hi""
-s?.ToUpper() ?: ""fallback""
+s?.ToUpper() ?? ""fallback""
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);

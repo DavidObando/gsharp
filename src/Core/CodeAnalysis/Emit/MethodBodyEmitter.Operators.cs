@@ -164,7 +164,7 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitBinary(BoundBinaryExpression b)
     {
-        // Phase 3.C.3: `?:` (NullCoalesce). Short-circuit on the left.
+        // Issue #941 / Phase 3.C.3: `??` (NullCoalesce). Short-circuit on the left.
         if (b.Op.Kind == BoundBinaryOperatorKind.NullCoalesce)
         {
             // P3-5 / Issue #420: `dup; brtrue` is only legal for object
@@ -183,7 +183,7 @@ internal sealed partial class MethodBodyEmitter
                 if (!this.nullableCoalesceSpillSlots.TryGetValue(b, out var slot))
                 {
                     throw new InvalidOperationException(
-                        "No scratch slot pre-allocated for value-type Nullable<T> '?:' LHS — "
+                        "No scratch slot pre-allocated for value-type Nullable<T> '??' LHS — "
                         + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
                 }
 
@@ -253,7 +253,7 @@ internal sealed partial class MethodBodyEmitter
                 if (!this.nullableCoalesceSpillSlots.TryGetValue(b, out var tpSlot))
                 {
                     throw new InvalidOperationException(
-                        "No scratch slot pre-allocated for class-constrained `T?` '?:' LHS — "
+                        "No scratch slot pre-allocated for class-constrained `T?` '??' LHS — "
                         + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
                 }
 
@@ -278,7 +278,7 @@ internal sealed partial class MethodBodyEmitter
             }
 
             // Defensive: any other value-typed LHS (raw struct or enum)
-            // remains unsupported by `?:`. Today the encoder rejects
+            // remains unsupported by `??`. Today the encoder rejects
             // nullable user-defined structs/enums, so this branch is
             // unreachable from valid source, but fail loudly rather
             // than silently producing PEVerify-rejected IL.
@@ -286,7 +286,7 @@ internal sealed partial class MethodBodyEmitter
             if (ReflectionMetadataEmitter.IsValueTypeSymbol(leftType))
             {
                 throw new NotSupportedException(
-                    $"Null-coalesce '?:' over value-type operand '{leftType?.Name}' is not yet supported by the emitter. "
+                    $"Null-coalesce '??' over value-type operand '{leftType?.Name}' is not yet supported by the emitter. "
                     + "The current `dup; brtrue` short-circuit is invalid IL for struct stack values; a HasValue/Value "
                     + "(or box-before-brtrue) emit path is required when nullable value types are supported.");
             }

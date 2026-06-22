@@ -15,7 +15,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// PR N-4 / §6.1 / C# §7.3.7: lifted binary operators over a value-type
 /// <c>Nullable&lt;T&gt;</c>. Adds arithmetic / bitwise / equality /
 /// ordering operators on <c>T?</c> using the same HasValue / get_Value
-/// emit shape established by PR #541 (<c>!!</c>) and PR #544 (<c>?:</c>).
+/// emit shape established by PR #541 (<c>!!</c>) and PR #544 (<c>??</c>).
 ///
 /// These tests pin down the new behaviour:
 /// <list type="bullet">
@@ -218,7 +218,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             var a int32? = 3
             var b int32? = 5
             var s = a + b
-            Console.WriteLine(s ?: -1)
+            Console.WriteLine(s ?? -1)
             """;
 
         Assert.Equal("8\n", CompileAndRun(source));
@@ -236,9 +236,9 @@ public class NullableLiftedBinaryOperatorEmitTests
             var s1 = a + n
             var s2 = n + a
             var s3 = n + n
-            Console.WriteLine(s1 ?: -1)
-            Console.WriteLine(s2 ?: -1)
-            Console.WriteLine(s3 ?: -1)
+            Console.WriteLine(s1 ?? -1)
+            Console.WriteLine(s2 ?? -1)
+            Console.WriteLine(s3 ?? -1)
             """;
 
         Assert.Equal("-1\n-1\n-1\n", CompileAndRun(source));
@@ -255,8 +255,8 @@ public class NullableLiftedBinaryOperatorEmitTests
             var b int32? = 4
             var diff = a - b
             var prod = a * b
-            Console.WriteLine(diff ?: 0)
-            Console.WriteLine(prod ?: 0)
+            Console.WriteLine(diff ?? 0)
+            Console.WriteLine(prod ?? 0)
             """;
 
         Assert.Equal("6\n40\n", CompileAndRun(source));
@@ -273,8 +273,8 @@ public class NullableLiftedBinaryOperatorEmitTests
             var b int32? = 5
             var q = a / b
             var r = a % b
-            Console.WriteLine(q ?: -1)
-            Console.WriteLine(r ?: -1)
+            Console.WriteLine(q ?? -1)
+            Console.WriteLine(r ?? -1)
             """;
 
         Assert.Equal("3\n2\n", CompileAndRun(source));
@@ -294,9 +294,9 @@ public class NullableLiftedBinaryOperatorEmitTests
             var orV  = a | b
             var andV = a & b
             var xorV = a ^ b
-            Console.WriteLine(orV  ?: -1)
-            Console.WriteLine(andV ?: -1)
-            Console.WriteLine(xorV ?: -1)
+            Console.WriteLine(orV  ?? -1)
+            Console.WriteLine(andV ?? -1)
+            Console.WriteLine(xorV ?? -1)
             """;
 
         Assert.Equal("7\n2\n5\n", CompileAndRun(source));
@@ -314,9 +314,9 @@ public class NullableLiftedBinaryOperatorEmitTests
             var orV  = a | n
             var andV = n & a
             var xorV = n ^ n
-            Console.WriteLine(orV  ?: -1)
-            Console.WriteLine(andV ?: -1)
-            Console.WriteLine(xorV ?: -1)
+            Console.WriteLine(orV  ?? -1)
+            Console.WriteLine(andV ?? -1)
+            Console.WriteLine(xorV ?? -1)
             """;
 
         Assert.Equal("-1\n-1\n-1\n", CompileAndRun(source));
@@ -336,10 +336,10 @@ public class NullableLiftedBinaryOperatorEmitTests
 
             var a int32? = 7
             var s = a + 3
-            Console.WriteLine(s ?: -1)
+            Console.WriteLine(s ?? -1)
 
             var t = 3 + a
-            Console.WriteLine(t ?: -1)
+            Console.WriteLine(t ?? -1)
 
             Console.WriteLine(a == 7)
             Console.WriteLine(7 == a)
@@ -359,7 +359,7 @@ public class NullableLiftedBinaryOperatorEmitTests
 
             var n int32? = nil
             var s = n + 3
-            Console.WriteLine(s ?: -1)
+            Console.WriteLine(s ?? -1)
             Console.WriteLine(n == 7)
             Console.WriteLine(7 != n)
             Console.WriteLine(n < 9)
@@ -413,7 +413,7 @@ public class NullableLiftedBinaryOperatorEmitTests
     [Fact]
     public void NullableCoalesce_StillWorksAfterLift()
     {
-        // Regression: PR #544's `?:` lowering must still own value-type
+        // Regression: PR #544's `??` lowering must still own value-type
         // Nullable<T> NullCoalesce — it is excluded from the lifted
         // collector and stays in receiverSpillSlots.
         var source = """
@@ -422,8 +422,8 @@ public class NullableLiftedBinaryOperatorEmitTests
 
             var a int32? = 7
             var n int32? = nil
-            Console.WriteLine(a ?: 99)
-            Console.WriteLine(n ?: 99)
+            Console.WriteLine(a ?? 99)
+            Console.WriteLine(n ?? 99)
             """;
 
         Assert.Equal("7\n99\n", CompileAndRun(source));

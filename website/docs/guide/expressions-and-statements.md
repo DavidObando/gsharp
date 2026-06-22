@@ -23,8 +23,8 @@ Arguments may be positional, named (`f(timeout: 30, retries: 3)`), or ref-kind-p
 ```gsharp
 let p = Point{X: 3, Y: 4}
 let q = p with { X = 10 }
-let value = maybePoint?.X ?: 0
-let first = matrix?[0]?[0] ?: -1
+let value = maybePoint?.X ?? 0
+let first = matrix?[0]?[0] ?? -1
 let kind = (p.X + p.Y).GetType()
 ```
 

@@ -154,7 +154,7 @@ The `0.1` version base identifies the current pre-1.0 line. This is not a dated 
 
 - Packages, imports, import aliases, top-level declarations, and multi-file or multi-package compilation.
 - Width-bearing primitive names such as `int32`, `uint64`, `float32`, and `float64`, plus `bool`, `char`, `string`, `object`, `decimal`, `nint`, `nuint`, and `void`.
-- Nullable `T?` types with `nil`, `?.`, `?:`, and `!!`.
+- Nullable `T?` types with `nil`, `?.`, `??`, and `!!`.
 - Structs, classes, interfaces, enums, `data struct`, `record` as a `data struct` alias, and `inline struct` value wrappers.
 - Generic functions and types with square-bracket type parameters and arguments, constraints, method inference, and CLR variance support where applicable.
 - Fixed arrays, slices, maps, tuples, function values, delegates, `sequence[T]`, `async sequence[T]`, and iterator `yield` support.

@@ -3,11 +3,17 @@
 - **Status**: Accepted
 - **Date**: 2026-06-12
 - **Phase**: Phase 9 — language depth / null-handling ergonomics
-- **Related**: ADR-0001 (nullable reference types), ADR-0066 (`?:` null-coalescing read), parent [#706](https://github.com/DavidObando/gsharp/issues/706) (control-flow polish), this ADR [#709](https://github.com/DavidObando/gsharp/issues/709)
+- **Related**: ADR-0001 (nullable reference types), ADR-0001 (`?:` null-coalescing read, now spelled `??` per ADR-0116), parent [#706](https://github.com/DavidObando/gsharp/issues/706) (control-flow polish), this ADR [#709](https://github.com/DavidObando/gsharp/issues/709)
+
+> **Update (ADR-0116, issue #941):** The null-coalescing **read** operator was
+> respelled from `a ?: b` to `a ?? b` and the `?:` spelling was removed. Where
+> this ADR shows `?:` below it now reads `??`; the `??=` compound assignment
+> described here is unchanged.
 
 ## Context
 
-G# spells the null-coalescing **read** as `a ?: b` — `b` is returned only
+G# spells the null-coalescing **read** as `a ?? b` (originally `a ?: b`; see
+ADR-0116) — `b` is returned only
 when `a` is nil, with short-circuit semantics. There is no compound form for
 the very common "assign default if currently nil" pattern, so today programmers
 write the long-hand:
@@ -21,7 +27,7 @@ if cfg.Endpoint == nil {
 …or the read-and-write pair:
 
 ```gs
-cfg.Endpoint = cfg.Endpoint ?: "https://example.com"
+cfg.Endpoint = cfg.Endpoint ?? "https://example.com"
 ```
 
 The first is verbose and easy to forget; the second re-evaluates the receiver
@@ -46,7 +52,7 @@ Add `??=` as a **statement-only** compound assignment with these semantics:
 
 The operator is the three-character sequence `??=` (two `?` followed by `=`).
 The lexer recognizes the sequence directly. G# does **not** introduce a bare
-`??` token (its null-coalescing read remains `?:` from ADR-0066); the doubled
+`??` token (its null-coalescing read was `?:` at the time of this ADR; ADR-0116 later made the read itself `??`); the doubled
 `?` only appears as part of `??=`. Whitespace inside the sequence is not
 allowed.
 
@@ -192,7 +198,7 @@ avoided because the interpreter only reads `node.Receiver` (the
   path), so the change is small and self-contained.
 - Guarantees single evaluation of receiver and RHS — a property that the
   hand-written `if x == nil { x = b() }` form already gives but that the
-  one-line `x = x ?: b()` form does not.
+  one-line `x = x ?? b()` form does not.
 
 ### Negative
 

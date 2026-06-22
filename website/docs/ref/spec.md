@@ -31,7 +31,7 @@ The lexer produces identifiers, reserved keywords, literal tokens, punctuation a
 ```text
 +  +=  ++  -  -=  --  *  *=  /  /=  %  %=  (  )  [  ]  {  }
 :  ;  ,  .  ...  ^  ^=  &  &&  &=  &^  &^=  |  |=  ||
-=  ==  !  !=  !!  ?  ?.  ?[  ?:  ??=  <  <=  <-  ->  <<  <<=  >  >=  >>  >>=  @
+=  ==  !  !=  !!  ?  ?.  ?[  ??  ??=  <  <=  <-  ->  <<  <<=  >  >=  >>  >>=  @
 ```
 
 The `:=` sequence is still lexed (as `ColonEqualsToken`) for diagnostic
@@ -157,7 +157,7 @@ Integral types are `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64
 
 ### Object and nil
 
-`object` is the universal upper bound. Values backed by CLR types and user value types can implicitly convert or box to `object`; explicit conversions can unbox to CLR value types. Nullable types are written by appending `?` to a type clause. `nil` converts implicitly to nullable types but not to non-nullable types. Postfix `!!` asserts non-null and `?:` is null coalescing.
+`object` is the universal upper bound. Values backed by CLR types and user value types can implicitly convert or box to `object`; explicit conversions can unbox to CLR value types. Nullable types are written by appending `?` to a type clause. `nil` converts implicitly to nullable types but not to non-nullable types. Postfix `!!` asserts non-null and `??` is null coalescing.
 
 ### Arrays and slices
 
@@ -455,15 +455,22 @@ Unary operators bind tighter than binary operators. Binary operators are left-as
 
 | Precedence | Operators | Meaning |
 | --- | --- | --- |
-| 7 | `+`, `-`, `!`, `^`, `*`, `&`, `<-`, `await` | unary |
-| 6 | `*`, `/`, `%`, `<<`, `>>`, `&`, `&^` | multiplicative, shifts, bitwise and, bit clear |
-| 5 | `+`, `-`, `\|`, `^` | additive, bitwise or, xor |
-| 4 | `==`, `!=`, `<`, `<=`, `>`, `>=`, `is`, `as` | equality, comparison, type test, safe cast |
-| 3 | `&&` | logical and |
-| 2 | `\|\|`, `?:` | logical or and null coalescing |
+| 8 | `+`, `-`, `!`, `^`, `*`, `&`, `<-`, `await` | unary |
+| 7 | `*`, `/`, `%`, `<<`, `>>`, `&`, `&^` | multiplicative, shifts, bitwise and, bit clear |
+| 6 | `+`, `-`, `\|`, `^` | additive, bitwise or, xor |
+| 5 | `==`, `!=`, `<`, `<=`, `>`, `>=`, `is`, `as` | equality, comparison, type test, safe cast |
+| 4 | `&&` | logical and |
+| 3 | `\|\|` | logical or |
+| 2 | `??` | null coalescing (right-associative) |
 | 1 | `?` … `:` … | conditional (ternary, right-associative) |
 
 The conditional expression `cond ? whenTrue : whenFalse` (ADR-0062) requires `cond` to be `bool` and the two branches to share a common type. Mismatched branches report `GS0263`. The narrow ADR-0061 form `ref cond ? lhs : rhs` (and its `out` / `in` siblings) survives as a payload to a ref-kind argument; diagnostics `GS0260`–`GS0262` apply there.
+
+### Null-coalescing operator `??` (Issue #941)
+
+The binary null-coalescing operator `a ?? b` evaluates `a`; if it is non-nil the result is `a`, otherwise `b` is evaluated and yields the result. The right operand `b` is evaluated **lazily** — only when `a` reads as nil. The left operand must be of a nullable type (a nullable reference type `T?` or a `Nullable<T>` value type); for a value-type `T?`, "is nil" is `HasValue == false`. The result type is the best common type of the operands: when both sides share an underlying type `T`, the result is `T` (when `b` is non-nullable) or `T?` (when `b` is itself nullable).
+
+`??` is **right-associative** and sits at a precedence below `||` (logical or) and above the ternary conditional, so `a ?? b ?? c` parses as `a ?? (b ?? c)` and `a ?? b ? c : d` parses as `(a ?? b) ? c : d`. The compound form `a ??= b` (ADR-0072) is the assignment analogue. (G# previously spelled this operator `?:`; that spelling was removed in favor of `??` — see ADR-0116.)
 
 ### Type-test and safe-cast operators
 
@@ -1127,7 +1134,8 @@ Assignment        ::= identifier '=' Assignment
                     | '*' PrefixExpression '=' Assignment                (* indirect (pointer) assignment, ADR-0060 *)
                     | (identifier | PostfixExpression) ('+=' | '-=') Assignment   (* event subscribe / unsubscribe *)
                     | ConditionalExpression
-ConditionalExpression ::= WithExpression ('?' Assignment ':' Assignment)?   (* ternary, ADR-0062 *)
+ConditionalExpression ::= NullCoalescingExpression ('?' Assignment ':' Assignment)?   (* ternary, ADR-0062 *)
+NullCoalescingExpression ::= WithExpression ('??' NullCoalescingExpression)?  (* right-assoc null-coalescing, Issue #941 *)
 WithExpression    ::= BinaryExpression ('with' '{' FieldEqualsList? '}')*    (* non-destructive record update *)
 CompoundAssign    ::= '+=' | '-=' | '*=' | '/=' | '%=' | '^=' | '&=' | '|=' | '&^=' | '<<=' | '>>=' | '??='
 BinaryExpression  ::= PrefixExpression BinaryTail*
@@ -1137,7 +1145,7 @@ BinaryOperator    ::= '*' | '/' | '%' | '<<' | '>>' | '&' | '&^'
                     | '+' | '-' | '|' | '^'
                     | '==' | '!=' | '<' | '<=' | '>' | '>='
                     | '&&'
-                    | '||' | '?:'                                        (* '?:' is null-coalescing, ADR-0001 *)
+                    | '||'
 PrefixExpression  ::= ('+' | '-' | '!' | '^' | '*' | '&' | '<-' | 'await') PrefixExpression | PostfixExpression
 PostfixExpression ::= PrimaryExpression PostfixOp*
 PostfixOp         ::= '!!' | ('.' | '?.') NameOrCall | ('[' | '?[') Expression ']'

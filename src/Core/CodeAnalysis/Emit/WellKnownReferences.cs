@@ -653,7 +653,7 @@ internal sealed class WellKnownReferences
 
     // Issue #752 / ADR-0084 L3: returns a callable MemberRef for
     // `System.Nullable<T>::GetValueOrDefault()` closed over the supplied value-type
-    // underlying CLR type. Used by `?:` emit on a value-type `Nullable<T>` operand
+    // underlying CLR type. Used by `??` emit on a value-type `Nullable<T>` operand
     // on the non-null branch: since `HasValue` was just observed true, the result
     // is the same as `get_Value()` but without the BCL's redundant HasValue check
     // and exception path. No boxing, no callvirt.
@@ -679,7 +679,7 @@ internal sealed class WellKnownReferences
     }
 
     // Issue #519: returns a callable MemberRef for `System.Nullable<T>::get_HasValue`
-    // closed over the supplied value-type underlying CLR type. Used by `?:` emit
+    // closed over the supplied value-type underlying CLR type. Used by `??` emit
     // on a value-type `Nullable<T>` operand to branch on the presence flag without
     // box/dup tricks (which are illegal on a struct stack value).
     public MemberReferenceHandle GetNullableGetHasValueReference(Type underlyingValueType)

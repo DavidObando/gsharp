@@ -81,7 +81,7 @@ public class Issue814OrNilOverloadEmitTests
             }
 
             public var head = ""
-            head = ([]string{"alpha", "beta"}).FirstOrNil() ?: "<none>"
+            head = ([]string{"alpha", "beta"}).FirstOrNil() ?? "<none>"
             """;
 
         var assembly = CompileAndRun(source);
@@ -107,7 +107,7 @@ public class Issue814OrNilOverloadEmitTests
             }
 
             public var head = 0
-            head = ([]int32{11, 22, 33}).FirstOrNil() ?: -1
+            head = ([]int32{11, 22, 33}).FirstOrNil() ?? -1
             """;
 
         var assembly = CompileAndRun(source);
@@ -133,7 +133,7 @@ public class Issue814OrNilOverloadEmitTests
             }
 
             public var head = ""
-            head = ([]string{}).FirstOrNil() ?: "<none>"
+            head = ([]string{}).FirstOrNil() ?? "<none>"
             """;
 
         var assembly = CompileAndRun(source);
@@ -159,7 +159,7 @@ public class Issue814OrNilOverloadEmitTests
             }
 
             public var head = 0
-            head = ([]int32{}).FirstOrNil() ?: -1
+            head = ([]int32{}).FirstOrNil() ?? -1
             """;
 
         var assembly = CompileAndRun(source);
@@ -188,8 +188,8 @@ public class Issue814OrNilOverloadEmitTests
 
             public var sLast = ""
             public var nLast = 0
-            sLast = ([]string{"a", "b", "c"}).LastOrNil() ?: "<none>"
-            nLast = ([]int32{10, 20, 30}).LastOrNil() ?: -1
+            sLast = ([]string{"a", "b", "c"}).LastOrNil() ?? "<none>"
+            nLast = ([]int32{10, 20, 30}).LastOrNil() ?? -1
             """;
 
         var assembly = CompileAndRun(source);
@@ -230,9 +230,9 @@ public class Issue814OrNilOverloadEmitTests
             public var sSolo = ""
             public var nSolo = 0
             public var sNone = ""
-            sSolo = ([]string{"x"}).SingleOrNil() ?: "<none>"
-            nSolo = ([]int32{42}).SingleOrNil() ?: -1
-            sNone = ([]string{"a", "b"}).SingleOrNil() ?: "<none>"
+            sSolo = ([]string{"x"}).SingleOrNil() ?? "<none>"
+            nSolo = ([]int32{42}).SingleOrNil() ?? -1
+            sNone = ([]string{"a", "b"}).SingleOrNil() ?? "<none>"
             """;
 
         var assembly = CompileAndRun(source);

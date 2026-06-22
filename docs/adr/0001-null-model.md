@@ -22,7 +22,7 @@ Adopt the **Kotlin-style** model:
 - Reference types are non-null by default. Nullability is opted into with the postfix `?` type operator: `string?`, `User?`, `List[int]?`.
 - Value types use the same `T?` spelling, lowered to `System.Nullable<T>` in IL.
 - `nil` is the only inhabitant of the bottom of nullable types; assigning `nil` to a non-nullable is a binder diagnostic.
-- Operators: safe call `?.`, Elvis `?:`, null-assert `!!`.
+- Operators: safe call `?.`, null-coalescing `??` (originally spelled `?:`; respelled by ADR-0116, issue #941), null-assert `!!`.
 - Flow-typed smart casts narrow a nullable to non-null after a `!= nil` check inside the controlled block.
 - The reference resolver honors `[Nullable]` / `[NullableContext]` attributes from imported assemblies so BCL APIs project their declared nullability into GSharp.
 

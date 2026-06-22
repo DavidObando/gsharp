@@ -9,7 +9,7 @@
 ## Context
 
 G# has had nullable types (`T?`), the postfix null-assertion operator
-`!!`, the Elvis/null-coalescing expression operator `?:`, the
+`!!`, the null-coalescing expression operator `??` (originally `?:`; respelled by ADR-0116), the
 null-conditional member access `?.`, and the null-conditional index
 access `?[…]` for several releases. The binder emits a small family of
 diagnostics whenever a user writes code that does not yet thread these
@@ -24,7 +24,7 @@ operators through correctly:
 | `GS0274` | `DiagnosticBag.ReportNilNotAssignableToNonNullableParameter` | A literal `nil` was passed to a non-nullable parameter. |
 
 Without quick-fixes the user is stuck consulting prose docs (or
-guessing) to remember which of `?.`, `?:`, or `!!` is appropriate. The
+guessing) to remember which of `?.`, `??`, or `!!` is appropriate. The
 issue (parent #706 §6.4) asks the LSP to surface those three rewrites
 as `textDocument/codeAction` results directly off the diagnostic.
 
@@ -43,8 +43,8 @@ re-parsing.
 | Operator | Trigger diagnostics | Edit |
 | -------- | ------------------- | ---- |
 | `.` → `?.` | `GS0158` on the right-hand identifier of an `AccessorExpressionSyntax` whose left-part is statically nullable (chained `?.`, literal `nil`, or a local/parameter/field whose declared type-clause text ends with `?`). | Replace the dot token's span with `?.`. |
-| `expr` → `(expr ?: <default>)` | `GS0154` / `GS0155` / `GS0156` whose diagnostic message contains the canonical `'T?'` → `'T'` pair. `GS0274` is excluded — the source is literal `nil`, the rewrite is degenerate. | Replace the diagnostic span with `(<original> ?: <default>)`, where `<default>` is a primitive-aware literal (`""`, `0`, `false`, `default`). |
-| `expr` → `(expr!!)` | Same as `?:`. | Replace the diagnostic span with `(<original>!!)`. |
+| `expr` → `(expr ?? <default>)` | `GS0154` / `GS0155` / `GS0156` whose diagnostic message contains the canonical `'T?'` → `'T'` pair. `GS0274` is excluded — the source is literal `nil`, the rewrite is degenerate. | Replace the diagnostic span with `(<original> ?? <default>)`, where `<default>` is a primitive-aware literal (`""`, `0`, `false`, `default`). |
+| `expr` → `(expr!!)` | Same as `??`. | Replace the diagnostic span with `(<original>!!)`. |
 
 ### Edit-construction strategy
 
@@ -60,7 +60,7 @@ rewrites** rather than syntax-tree rewrites for three reasons:
    syntax-tree rewrite would force the server to claim ownership of
    the in-flight text.
 3. The three rewrites are extremely narrow (`.` → `?.`, span → `(span
-   ?: x)`, span → `(span!!)`). A syntax-tree rewrite would need a
+   ?? x)`, span → `(span!!)`). A syntax-tree rewrite would need a
    formatter pass to reconstruct trivia for the surrounding parens,
    which adds complexity for no gain.
 
@@ -82,7 +82,7 @@ acceptance criteria:
   whose result type is nullable, the rewrite is *not* offered yet — a
   future refinement can re-bind the left-part to recover the type.
   The user is no worse off than today; the diagnostic still surfaces.
-- The `?:` and `!!` rewrites are gated on the diagnostic message
+- The `??` and `!!` rewrites are gated on the diagnostic message
   carrying the `'T?'` → `'T'` pair the binder produces verbatim from
   `TypeSymbol.ToString()`. This is robust against the binder reporting
   the same code (`GS0155`) for non-nullable mismatches.
@@ -94,7 +94,7 @@ The provider must remain silent for:
 - Diagnostics outside the requested range.
 - Diagnostic codes not in the supported set (any of the existing
   GS0001…GS0153, GS0157, GS0159…, etc.).
-- `GS0274` on literal `nil`, where wrapping `nil` in `?:` or `!!` is
+- `GS0274` on literal `nil`, where wrapping `nil` in `??` or `!!` is
   always wrong — the only sensible fix is to make the parameter
   nullable, which the diagnostic message already suggests.
 
@@ -138,7 +138,7 @@ The provider must remain silent for:
   the edit text, applies the edit, and re-binds to confirm the
   triggering diagnostic is no longer reported.
 - Negative tests cover: a `GS0158` on a non-nullable receiver (no
-  `?.` fix), a `GS0274` on literal `nil` (no `?:` / `!!`), an
+  `?.` fix), a `GS0274` on literal `nil` (no `??` / `!!`), an
   unrelated diagnostic (no nullable fixes at all), and a request range
   that does not overlap any diagnostic span.
 

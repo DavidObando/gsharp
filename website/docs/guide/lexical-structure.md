@@ -48,6 +48,6 @@ Console.WriteLine("$$ stays literal")
 
 ## Operators and punctuation
 
-G# includes compact operators plus CLR-oriented additions: null assertion `!!`, null-conditional access `?.`, null-conditional indexing `?[`, null coalescing `?:`, null-coalescing compound assignment `??=`, channel receive and send `<-`, switch-expression arrows `->`, and annotations introduced by `@`. Compound assignment exists for arithmetic, bitwise, bit-clear, and shift operators.
+G# includes compact operators plus CLR-oriented additions: null assertion `!!`, null-conditional access `?.`, null-conditional indexing `?[`, null coalescing `??`, null-coalescing compound assignment `??=`, channel receive and send `<-`, switch-expression arrows `->`, and annotations introduced by `@`. Compound assignment exists for arithmetic, bitwise, bit-clear, and shift operators.
 
 `while`, `null`, `nameof`, `typeof`, and `make` are not all keywords. `while` and `null` are not implemented language forms; use `for condition { ... }` and `nil`.

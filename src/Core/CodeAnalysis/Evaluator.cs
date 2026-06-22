@@ -2964,7 +2964,7 @@ public sealed class Evaluator
         // (value-type) to a BoundDefaultExpression so the emitter can
         // materialise `default(Nullable<T>)` via ldloca/initobj/ldloc; the
         // interpreter must mirror that by producing the absent-value sentinel
-        // (null) so `?:`, `!!`, and equality checks see a missing value.
+        // (null) so `??`, `!!`, and equality checks see a missing value.
         if (node.Type is Symbols.NullableTypeSymbol)
         {
             return null;

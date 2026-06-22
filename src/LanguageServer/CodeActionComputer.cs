@@ -26,7 +26,7 @@ namespace GSharp.LanguageServer;
 ///     is nullable (GS0158 with a nullable receiver type).</description>
 ///   </item>
 ///   <item>
-///     <description><c>expr</c> → <c>(expr ?: default)</c> on a nullable
+///     <description><c>expr</c> → <c>(expr ?? default)</c> on a nullable
 ///     value used where a non-nullable value is required (GS0154 / GS0155
 ///     / GS0156 / GS0274).</description>
 ///   </item>

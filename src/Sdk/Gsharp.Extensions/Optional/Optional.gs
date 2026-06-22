@@ -206,7 +206,7 @@ func (self T?) FlatMap[T struct, U struct](f (T) -> U?) U? {
 /// @returns the receiver's value when present, otherwise `defaultValue`.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
 func (self T?) OrElse[T class](defaultValue T) T {
-    return self ?: defaultValue
+    return self ?? defaultValue
 }
 
 /// Returns the present value-typed value, or `defaultValue` if the

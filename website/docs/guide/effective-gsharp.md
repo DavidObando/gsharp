@@ -89,7 +89,7 @@ Use imported CLR extension methods when they fit existing .NET conventions; G# r
 
 ## Error handling
 
-Use CLR exceptions for exceptional failures and let `try`/`catch`/`finally` show the lifetime of recovery logic. Catch the most specific type available. Use `nil` and nullable types for absence, not `null`. When unwrapping a nullable value, prefer explicit checks or `?:`; reserve `!!` for places where failure should be immediate and obvious.
+Use CLR exceptions for exceptional failures and let `try`/`catch`/`finally` show the lifetime of recovery logic. Catch the most specific type available. Use `nil` and nullable types for absence, not `null`. When unwrapping a nullable value, prefer explicit checks or `??`; reserve `!!` for places where failure should be immediate and obvious.
 
 ```gsharp
 try {

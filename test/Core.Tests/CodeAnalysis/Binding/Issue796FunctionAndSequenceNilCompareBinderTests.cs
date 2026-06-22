@@ -48,7 +48,7 @@ func (self T?) OrCompute[T class](factory () -> T) T {
     if factory == nil {
         throw ArgumentNullException(""factory"")
     }
-    return self ?: factory()
+    return self ?? factory()
 }
 ";
         Assert.Empty(GetErrors(source));

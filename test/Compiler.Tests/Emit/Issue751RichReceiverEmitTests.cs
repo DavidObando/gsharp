@@ -29,7 +29,7 @@ public class Issue751RichReceiverEmitTests
             import System
 
             func (self string?) OrElse(fb string) string {
-                return self ?: fb
+                return self ?? fb
             }
 
             var present string? = "hi"

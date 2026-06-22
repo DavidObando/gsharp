@@ -26,7 +26,7 @@ import System
 
 let names []string = []string { ""alpha"", ""beta"" }
 let head = names.FirstOrNil()
-Console.WriteLine(head ?: ""<none>"")
+Console.WriteLine(head ?? ""<none>"")
 ";
 
     private const string SnippetWithImport = @"
@@ -37,7 +37,7 @@ import Gsharp.Extensions.Sequences
 
 let names []string = []string { ""alpha"", ""beta"" }
 let head = names.FirstOrNil()
-Console.WriteLine(head ?: ""<none>"")
+Console.WriteLine(head ?? ""<none>"")
 ";
 
     [Fact]

@@ -1828,17 +1828,9 @@ public sealed class CSharpToGSharpTranslator
                     return this.TranslateWith(with);
 
                 case BinaryExpressionSyntax binary:
-                    // Null-coalescing `a ?? b` has no canonical G# form; the parser
-                    // rejects `??` (GS0005). Surface it as a clean per-construct gap
-                    // rather than emitting an unparseable operator (ADR-0115 §B gap #TBD).
-                    if (binary.IsKind(SyntaxKind.CoalesceExpression))
-                    {
-                        this.context.ReportUnsupported(
-                            binary,
-                            "null-coalescing operator '??' has no canonical G# form (GS0005: operator not supported); emitted a placeholder (ADR-0115 §B gap).");
-                        return new IdentifierExpression("nil");
-                    }
-
+                    // Issue #941: C# null-coalescing `a ?? b` now maps directly to
+                    // G#'s `a ?? b` (the operator token text is identical), so it
+                    // flows through the generic binary translation below.
                     return new BinaryExpression(
                         this.TranslateExpression(binary.Left),
                         binary.OperatorToken.Text,

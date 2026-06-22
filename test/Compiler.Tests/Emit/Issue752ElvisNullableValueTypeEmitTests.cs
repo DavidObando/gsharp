@@ -12,7 +12,7 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #752 / ADR-0084 L3: the Elvis (<c>?:</c>) operator over a value-type
+/// Issue #752 / ADR-0084 L3: the null-coalescing (<c>??</c>) operator over a value-type
 /// <c>Nullable&lt;T&gt;</c> receiver. Issue #519 introduced the HasValue-based
 /// emit path; this file pins down the exact patterns enumerated in #752 and
 /// guards against regression in the cheaper <c>GetValueOrDefault()</c> shape
@@ -38,7 +38,7 @@ public class Issue752ElvisNullableValueTypeEmitTests
             import System
 
             let v int32? = nil
-            let n = v ?: 0
+            let n = v ?? 0
             Console.WriteLine(n)
             """;
 
@@ -58,7 +58,7 @@ public class Issue752ElvisNullableValueTypeEmitTests
             import System
 
             let v int32? = 42
-            let n = v ?: 0
+            let n = v ?? 0
             Console.WriteLine(n)
             """;
 
@@ -69,7 +69,7 @@ public class Issue752ElvisNullableValueTypeEmitTests
     [Fact]
     public void Elvis_NullableInt_Nested_BothNullableOperands_ChainsThroughRightArm()
     {
-        // `(a ?: b) ?: 0` — both inner operands are `int32?`. The inner
+        // `(a ?? b) ?? 0` — both inner operands are `int32?`. The inner
         // expression's result is `int32?` (preserving wrapper shape per
         // existing typing rules), and the outer's result is `int32`.
         // Two separate spill slots are pre-allocated, one per BoundBinary.
@@ -80,7 +80,7 @@ public class Issue752ElvisNullableValueTypeEmitTests
 
             let a int32? = nil
             let b int32? = 7
-            let n = (a ?: b) ?: 0
+            let n = (a ?? b) ?? 0
             Console.WriteLine(n)
             """;
 
@@ -100,7 +100,7 @@ public class Issue752ElvisNullableValueTypeEmitTests
 
             let a int32? = nil
             let b int32? = nil
-            let n = (a ?: b) ?: 0
+            let n = (a ?? b) ?? 0
             Console.WriteLine(n)
             """;
 
@@ -121,11 +121,11 @@ public class Issue752ElvisNullableValueTypeEmitTests
             import System
 
             let s string? = nil
-            let r string = s ?: "missing"
+            let r string = s ?? "missing"
             Console.WriteLine(r)
 
             let t string? = "hello"
-            let u string = t ?: "missing"
+            let u string = t ?? "missing"
             Console.WriteLine(u)
             """;
 
@@ -147,7 +147,7 @@ public class Issue752ElvisNullableValueTypeEmitTests
 
             let a int32? = nil
             let b int32? = 99
-            let r int32? = a ?: b
+            let r int32? = a ?? b
             Console.WriteLine(r!!)
             """;
 
@@ -158,7 +158,7 @@ public class Issue752ElvisNullableValueTypeEmitTests
     [Fact]
     public void Elvis_NullableInt_ReceiverOfInstanceCall_TakesAddressOfUnderlyingResult()
     {
-        // Repro at the heart of #752: when the `?:` result is the
+        // Repro at the heart of #752: when the `??` result is the
         // receiver of an instance call on the underlying value type
         // (e.g. `.ToString()`), the emitter needs TWO distinct
         // scratch slots — a `Nullable<T>`-typed slot for the HasValue
@@ -175,10 +175,10 @@ public class Issue752ElvisNullableValueTypeEmitTests
             import System
 
             let v int32? = 42
-            Console.WriteLine((v ?: -1).ToString())
+            Console.WriteLine((v ?? -1).ToString())
 
             let w int32? = nil
-            Console.WriteLine((w ?: -1).ToString())
+            Console.WriteLine((w ?? -1).ToString())
             """;
 
         var output = CompileAndRun(source);
