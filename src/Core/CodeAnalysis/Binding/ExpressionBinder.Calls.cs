@@ -1533,10 +1533,17 @@ internal sealed partial class ExpressionBinder
     {
         targets = null;
 
-        // Symbolic recovery is anchored on the receiver's symbolic
-        // TypeArguments. Without a receiver type symbol there is nothing to
-        // recover (the CLR paths handle static/accessor calls).
-        if (receiver?.Type == null)
+        // Symbolic recovery is anchored on the candidate's symbolic argument
+        // vector: the receiver's symbolic TypeArguments for instance/extension
+        // calls, or — for a static call (issue #932:
+        // `Assert.DoesNotContain(items, i -> ...)`) — the same-compilation user
+        // type carried by a non-deferred argument such as `items : List[Item]`.
+        // An extension probe (offset == 1) places the receiver in slot 0, so it
+        // genuinely needs a receiver; a static/instance probe (offset == 0) does
+        // not. The success gate below (`anySameCompilationType`) still ensures
+        // this path only fires — and pre-empts the CLR erasure paths — when a
+        // real same-compilation user type is recovered.
+        if (offset == 1 && receiver?.Type == null)
         {
             return false;
         }
@@ -1692,8 +1699,6 @@ internal sealed partial class ExpressionBinder
 
                 slotTargets[idx] = parameterTypes.ToImmutable();
             }
-
-            var dbgMapped = slotTargets.TryGetValue(deferredIndices[0], out var dbgSt) && dbgSt.Length > 0 ? dbgSt[0]?.ToString() : "-";
 
             if (!candidateUsable || slotTargets.Count != deferredIndices.Count)
             {

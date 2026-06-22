@@ -5711,6 +5711,17 @@ public class Parser
                 // tokens match a lambda shape.
                 return ParseLambdaExpression();
 
+            case SyntaxKind.IdentifierToken when Peek(1).Kind == SyntaxKind.RightArrowToken:
+                // Issue #932: a single-identifier arrow lambda `x -> body` is
+                // accepted as shorthand for the parenthesised single-parameter
+                // form `(x) -> body`. Disambiguation is unconditional here: in
+                // an expression position `IDENT ->` cannot begin any other
+                // construct (function-type clauses `(T) -> R` and the
+                // deprecated switch-arm `case v -> r` are parsed in their own
+                // type/pattern contexts, never via primary-expression
+                // dispatch), so committing to a lambda is always correct.
+                return ParseSingleIdentifierLambdaExpression();
+
             case SyntaxKind.SwitchKeyword:
                 return ParsePostfixChain(ParseSwitchExpression());
 
@@ -6084,6 +6095,25 @@ public class Parser
             ? ParseBlockExpression()
             : ParseExpression();
         return new LambdaExpressionSyntax(syntaxTree, asyncModifier, openParen, parameters, closeParen, arrow, body);
+    }
+
+    // Issue #932: parses the single-identifier arrow-lambda shorthand
+    // `x -> body`, equivalent to the parenthesised `(x) -> body`. The opening
+    // and closing parentheses are absent (the corresponding tokens are left
+    // null and are skipped by SyntaxNode child enumeration / span computation),
+    // and the sole parameter carries no type clause, so the binder infers its
+    // type from the target delegate exactly as it does for `(x) -> body` (or
+    // reports GS0304 when no target type is in scope).
+    private LambdaExpressionSyntax ParseSingleIdentifierLambdaExpression()
+    {
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var parameter = new ParameterSyntax(syntaxTree, identifier, ellipsisToken: null, type: null);
+        var parameters = new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray.Create<SyntaxNode>(parameter));
+        var arrow = MatchToken(SyntaxKind.RightArrowToken);
+        var body = Current.Kind == SyntaxKind.OpenBraceToken
+            ? ParseBlockExpression()
+            : ParseExpression();
+        return new LambdaExpressionSyntax(syntaxTree, asyncModifier: null, openParenToken: null, parameters, closeParenToken: null, arrow, body);
     }
 
     // ADR-0076 / issue #716: arrow-lambda parameter lists allow each parameter's

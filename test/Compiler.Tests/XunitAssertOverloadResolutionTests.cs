@@ -313,9 +313,139 @@ public class XunitAssertOverloadResolutionTests
             """);
     }
 
+    [Fact]
+    public void Issue932_AssertDoesNotContain_PredicateFuncLiteral_UserType_Resolves()
+    {
+        // Issue #932: `Assert.DoesNotContain<T>(IEnumerable<T>, Predicate<T>)`
+        // must resolve when the predicate is a G# function literal whose
+        // natural type is `Func[T,bool]`. A function literal's natural
+        // delegate is structurally identical to `Predicate[T]` but differently
+        // named, so overload resolution must treat it as convertible. The
+        // element type here is a same-compilation user class (`LibraryItem`),
+        // which is the case that previously failed with GS0159.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import Xunit
+            import System.Collections.Generic
+
+            class LibraryItem {
+                var Asin string
+            }
+
+            class P {
+                @Fact
+                func DoesNotContainFunc() {
+                    var items = List[LibraryItem]()
+                    Assert.DoesNotContain(items, func (i LibraryItem) bool { return i.Asin == "A3" })
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void Issue932_AssertDoesNotContain_PredicateArrowLambda_UserType_Resolves()
+    {
+        // Issue #932: the parenthesised arrow-lambda spelling
+        // `(i) -> i.Asin == "A3"` must resolve against the predicate overload.
+        // The untyped arrow lambda flows through the deferred-inference path,
+        // which must recover the same-compilation element type from the
+        // `items : List[LibraryItem]` argument (not erase it to `object`) so
+        // the lambda body's `i.Asin` member access binds.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import Xunit
+            import System.Collections.Generic
+
+            class LibraryItem {
+                var Asin string
+            }
+
+            class P {
+                @Fact
+                func DoesNotContainArrow() {
+                    var items = List[LibraryItem]()
+                    Assert.DoesNotContain(items, (i) -> i.Asin == "A3")
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void Issue932_AssertDoesNotContain_PredicateBareArrowLambda_UserType_Resolves()
+    {
+        // Issue #932: the bare single-identifier arrow-lambda spelling
+        // `i -> i.Asin == "A3"` (exactly as written in the issue) must parse
+        // as a single-parameter lambda and resolve against the predicate
+        // overload.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import Xunit
+            import System.Collections.Generic
+
+            class LibraryItem {
+                var Asin string
+            }
+
+            class P {
+                @Fact
+                func DoesNotContainBareArrow() {
+                    var items = List[LibraryItem]()
+                    Assert.DoesNotContain(items, i -> i.Asin == "A3")
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void Issue932_AssertDoesNotContain_PredicateLambda_StringElement_Resolves()
+    {
+        // Issue #932: the same predicate overload must resolve for a BCL
+        // element type (`string`) across all three lambda spellings.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import Xunit
+            import System.Collections.Generic
+
+            class P {
+                @Fact
+                func DoesNotContainStrings() {
+                    var items = List[string]()
+                    Assert.DoesNotContain(items, func (i string) bool { return i == "A3" })
+                    Assert.DoesNotContain(items, (i) -> i == "A3")
+                    Assert.DoesNotContain(items, i -> i == "A3")
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void Issue932_AssertContains_PredicateLambda_UserType_Resolves()
+    {
+        // Issue #932: the structurally-compatible-delegate conversion applies
+        // uniformly to the sibling `Assert.Contains<T>(IEnumerable<T>,
+        // Predicate<T>)` overload as well.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import Xunit
+            import System.Collections.Generic
+
+            class LibraryItem {
+                var Asin string
+            }
+
+            class P {
+                @Fact
+                func ContainsPredicate() {
+                    var items = List[LibraryItem]()
+                    Assert.Contains(items, func (i LibraryItem) bool { return i.Asin == "A3" })
+                    Assert.Contains(items, i -> i.Asin == "A3")
+                }
+            }
+            """);
+    }
+
     private static void AssertGsCompilesCleanly(string source)
         => CompileGsAgainstReferences(source, ReferenceModeTpa);
-
     /// <summary>
     /// Issue #504-reopen: drives gsc with the same reference-assembly closure
     /// real users get from the SDK (ref-pack facades + xUnit) — NOT the test
