@@ -234,6 +234,25 @@ public sealed class ArrayLiteralExpression : GExpression
 }
 
 /// <summary>
+/// A tuple literal <c>(a, b, c)</c> (spec §Primary expressions, <c>TupleLiteral</c>).
+/// A tuple literal always has at least two elements.
+/// </summary>
+public sealed class TupleLiteralExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TupleLiteralExpression"/> class.
+    /// </summary>
+    /// <param name="elements">The tuple element expressions.</param>
+    public TupleLiteralExpression(IReadOnlyList<GExpression> elements)
+    {
+        Elements = elements ?? new List<GExpression>();
+    }
+
+    /// <summary>Gets the tuple element expressions.</summary>
+    public IReadOnlyList<GExpression> Elements { get; }
+}
+
+/// <summary>
 /// A binary operation <c>left op right</c>.
 /// </summary>
 public sealed class BinaryExpression : GExpression

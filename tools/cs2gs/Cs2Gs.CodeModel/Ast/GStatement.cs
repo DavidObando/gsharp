@@ -186,6 +186,71 @@ public sealed class WhileStatement : GStatement
 }
 
 /// <summary>
+/// A C-style three-clause <c>for init; cond; incr { }</c> loop. Each clause is
+/// optional. The init/incr clauses are "simple" statements (local declaration,
+/// assignment, increment/decrement, or expression statement) per the G# grammar
+/// (spec §For loops; ADR-0115 §B.11).
+/// </summary>
+public sealed class ForStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ForStatement"/> class.
+    /// </summary>
+    /// <param name="initializer">The optional init clause (a simple statement).</param>
+    /// <param name="condition">The optional loop condition.</param>
+    /// <param name="incrementor">The optional incrementor clause (a simple statement).</param>
+    /// <param name="body">The loop body.</param>
+    public ForStatement(
+        GStatement initializer,
+        GExpression condition,
+        GStatement incrementor,
+        BlockStatement body)
+    {
+        Initializer = initializer;
+        Condition = condition;
+        Incrementor = incrementor;
+        Body = body;
+    }
+
+    /// <summary>Gets the optional init clause.</summary>
+    public GStatement Initializer { get; }
+
+    /// <summary>Gets the optional loop condition.</summary>
+    public GExpression Condition { get; }
+
+    /// <summary>Gets the optional incrementor clause.</summary>
+    public GStatement Incrementor { get; }
+
+    /// <summary>Gets the loop body.</summary>
+    public BlockStatement Body { get; }
+}
+
+/// <summary>
+/// An increment / decrement statement <c>target++</c> / <c>target--</c>. G#
+/// models increment/decrement as statements, not expressions (spec §Statements,
+/// <c>IncDecStmt</c>); the operand is an identifier-shaped lvalue.
+/// </summary>
+public sealed class IncrementDecrementStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="IncrementDecrementStatement"/> class.
+    /// </summary>
+    /// <param name="target">The incremented/decremented lvalue.</param>
+    /// <param name="op">The operator token (<c>++</c> or <c>--</c>).</param>
+    public IncrementDecrementStatement(GExpression target, string op)
+    {
+        Target = target;
+        Operator = op;
+    }
+
+    /// <summary>Gets the incremented/decremented lvalue.</summary>
+    public GExpression Target { get; }
+
+    /// <summary>Gets the operator token (<c>++</c> or <c>--</c>).</summary>
+    public string Operator { get; }
+}
+
+/// <summary>
 /// A <c>for x in coll</c> loop (ADR-0031, ADR-0115 §B.11).
 /// </summary>
 public sealed class ForInStatement : GStatement
@@ -203,8 +268,27 @@ public sealed class ForInStatement : GStatement
         Body = body;
     }
 
-    /// <summary>Gets the iteration variable name.</summary>
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ForInStatement"/> class for a
+    /// key/value iteration <c>for k, v in dict</c>.
+    /// </summary>
+    /// <param name="keyName">The key iteration variable name.</param>
+    /// <param name="valueName">The optional value iteration variable name.</param>
+    /// <param name="iterable">The iterated expression.</param>
+    /// <param name="body">The loop body.</param>
+    public ForInStatement(string keyName, string valueName, GExpression iterable, BlockStatement body)
+    {
+        VariableName = keyName;
+        ValueName = valueName;
+        Iterable = iterable;
+        Body = body;
+    }
+
+    /// <summary>Gets the iteration variable name (the key, for a key/value loop).</summary>
     public string VariableName { get; }
+
+    /// <summary>Gets the optional value iteration variable name (key/value loop), else <see langword="null"/>.</summary>
+    public string ValueName { get; }
 
     /// <summary>Gets the iterated expression.</summary>
     public GExpression Iterable { get; }

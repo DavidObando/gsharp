@@ -226,17 +226,19 @@ namespace Corpus.L1
         Assert.Equal(Visibility.Private, main.Visibility);
     }
 
-    /// <summary>Every method/property/constructor body is routed through the
-    /// single body seam, recording a <c>body-pending</c> Info diagnostic (step 7
-    /// replaces the seam implementation).</summary>
+    /// <summary>Every method/property/constructor body is translated by the
+    /// step-7 statement/expression translator: no <c>body-pending</c> placeholder
+    /// diagnostic remains, and the printed G# round-trips.</summary>
     [Fact]
-    public void L1Document_RoutesBodiesThroughPendingSeam()
+    public void L1Document_TranslatesBodiesWithNoPendingPlaceholder()
     {
-        (_, TranslationContext context) = TranslateL1();
+        (CompilationUnit unit, TranslationContext context) = TranslateL1();
 
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Info && d.ConstructKind == "body-pending");
+        Assert.DoesNotContain(context.Diagnostics, d => d.ConstructKind == "body-pending");
+
+        string printed = GSharpPrinter.Print(unit);
+        Assert.DoesNotContain("// pending", printed);
+        Assert.True(GSharpRoundTrip.Validate(printed).Success);
     }
 
     private static (CompilationUnit Unit, TranslationContext Context) TranslateL1()

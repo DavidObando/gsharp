@@ -340,6 +340,10 @@ public static class GSharpPrinter
                 var elements = string.Join(", ", arrayLiteral.Elements.Select(e => RenderExpression(e, indent)));
                 return $"[]{RenderType(arrayLiteral.ElementType)}{{{elements}}}";
 
+            case TupleLiteralExpression tuple:
+                var tupleElements = string.Join(", ", tuple.Elements.Select(e => RenderExpression(e, indent)));
+                return $"({tupleElements})";
+
             case BinaryExpression binary:
                 return $"{RenderExpression(binary.Left, indent)} {binary.Operator} {RenderExpression(binary.Right, indent)}";
 
@@ -473,8 +477,17 @@ public static class GSharpPrinter
             case WhileStatement whileStatement:
                 return $"{pad}while {RenderExpression(whileStatement.Condition, indent)} {RenderBlock(whileStatement.Body, indent)}";
 
+            case ForStatement forStatement:
+                return RenderForStatement(forStatement, indent);
+
+            case IncrementDecrementStatement incDec:
+                return $"{pad}{RenderExpression(incDec.Target, indent)}{incDec.Operator}";
+
             case ForInStatement forIn:
-                return $"{pad}for {forIn.VariableName} in {RenderExpression(forIn.Iterable, indent)} {RenderBlock(forIn.Body, indent)}";
+                var loopVars = string.IsNullOrEmpty(forIn.ValueName)
+                    ? forIn.VariableName
+                    : $"{forIn.VariableName}, {forIn.ValueName}";
+                return $"{pad}for {loopVars} in {RenderExpression(forIn.Iterable, indent)} {RenderBlock(forIn.Body, indent)}";
 
             case DeferStatement defer:
                 return $"{pad}defer {RenderBlock(defer.Body, indent)}";
@@ -488,6 +501,28 @@ public static class GSharpPrinter
             default:
                 throw new ArgumentException($"Unsupported statement: {statement?.GetType().Name}");
         }
+    }
+
+    private static string RenderForStatement(ForStatement forStatement, int indent)
+    {
+        var pad = Indent(indent);
+        var init = forStatement.Initializer == null
+            ? string.Empty
+            : RenderSimpleStatement(forStatement.Initializer, indent);
+        var cond = forStatement.Condition == null
+            ? string.Empty
+            : RenderExpression(forStatement.Condition, indent);
+        var incr = forStatement.Incrementor == null
+            ? string.Empty
+            : RenderSimpleStatement(forStatement.Incrementor, indent);
+        return $"{pad}for {init}; {cond}; {incr} {RenderBlock(forStatement.Body, indent)}";
+    }
+
+    private static string RenderSimpleStatement(GStatement statement, int indent)
+    {
+        // A "simple" statement (init/incr clause of a C-style for) is rendered
+        // inline with no leading indentation.
+        return RenderStatement(statement, indent).TrimStart();
     }
 
     private static string RenderIf(IfStatement ifStatement, int indent)

@@ -523,6 +523,98 @@ public class GoldenTests
         AssertGolden(expected, unit);
     }
 
+    /// <summary>§For loops: the C-style three-clause <c>for init; cond; incr { }</c>
+    /// loop with a <c>var</c> init and an increment incrementor.</summary>
+    [Fact]
+    public void BFor_CStyleThreeClause()
+    {
+        var loop = new ForStatement(
+            new LocalDeclarationStatement(BindingKind.Var, "i", initializer: LiteralExpression.Int("0")),
+            new BinaryExpression(new IdentifierExpression("i"), "<", LiteralExpression.Int("3")),
+            new IncrementDecrementStatement(new IdentifierExpression("i"), "++"),
+            Block(new ExpressionStatement(new InvocationExpression(
+                new MemberAccessExpression(new IdentifierExpression("Console"), "WriteLine"),
+                List<GExpression>(new IdentifierExpression("i"))))));
+        var unit = new CompilationUnit("Demo", List(new ImportDirective("System")), Nodes(loop));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "import System",
+            string.Empty,
+            "for var i = 0; i < 3; i++ {",
+            "    Console.WriteLine(i)",
+            "}");
+
+        AssertGolden(expected, unit);
+    }
+
+    /// <summary>§Statements: <c>++</c> / <c>--</c> are statement forms on
+    /// identifiers (<c>IncDecStmt</c>).</summary>
+    [Fact]
+    public void BIncrementDecrement_StatementForm()
+    {
+        var unit = new CompilationUnit("Demo", members: Nodes(
+            new LocalDeclarationStatement(BindingKind.Var, "n", initializer: LiteralExpression.Int("0")),
+            new IncrementDecrementStatement(new IdentifierExpression("n"), "++"),
+            new IncrementDecrementStatement(new IdentifierExpression("n"), "--")));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "var n = 0",
+            "n++",
+            "n--");
+
+        AssertGolden(expected, unit);
+    }
+
+    /// <summary>§Primary expressions: a tuple literal <c>(a, b, c)</c>.</summary>
+    [Fact]
+    public void BTupleLiteral_Parenthesized()
+    {
+        var unit = new CompilationUnit("Demo", members: Nodes(
+            new LocalDeclarationStatement(
+                BindingKind.Var,
+                "t",
+                initializer: new TupleLiteralExpression(List<GExpression>(
+                    LiteralExpression.Int("1"),
+                    LiteralExpression.Int("2"),
+                    LiteralExpression.Int("3"))))));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "var t = (1, 2, 3)");
+
+        AssertGolden(expected, unit);
+    }
+
+    /// <summary>§For loops: the key/value <c>for k, v in coll { }</c> form.</summary>
+    [Fact]
+    public void BForIn_KeyValue()
+    {
+        var loop = new ForInStatement(
+            "k",
+            "v",
+            new IdentifierExpression("pairs"),
+            Block(new ExpressionStatement(new InvocationExpression(
+                new MemberAccessExpression(new IdentifierExpression("Console"), "WriteLine"),
+                List<GExpression>(new IdentifierExpression("v"))))));
+        var unit = new CompilationUnit("Demo", List(new ImportDirective("System")), Nodes(loop));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "import System",
+            string.Empty,
+            "for k, v in pairs {",
+            "    Console.WriteLine(v)",
+            "}");
+
+        AssertGolden(expected, unit);
+    }
+
     private static void AssertGolden(string expected, CompilationUnit unit)
     {
         var printed = GSharpPrinter.Print(unit);

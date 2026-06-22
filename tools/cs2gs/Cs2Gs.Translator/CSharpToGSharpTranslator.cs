@@ -213,11 +213,14 @@ public sealed class CSharpToGSharpTranslator
     /// </summary>
     private sealed class DeclarationVisitor : CSharpSyntaxVisitor<GMember>
     {
-        private const string BodyPendingComment = "// pending: body translated in step 7 (issue #914)";
-
         private readonly TranslationContext context;
         private readonly CSharpTypeMapper typeMapper;
         private readonly HashSet<INamedTypeSymbol> subclassedBases;
+
+        // The syntax node whose body is currently being translated. It bounds the
+        // data-flow scan that decides whether a local is mutable (var) or
+        // immutable (let) per ADR-0115 §B.3.
+        private SyntaxNode currentBodyScope;
 
         public DeclarationVisitor(
             TranslationContext context,
@@ -942,23 +945,539 @@ public sealed class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// The single body-translation seam (ADR-0115 §B). For now it records a
-        /// <c>body-pending</c> info diagnostic and returns a minimal, parseable
-        /// placeholder block (a single line comment) so the emitted G#
-        /// round-trips. Step 7 replaces this implementation with real statement /
-        /// expression translation.
+        /// The single body-translation seam (ADR-0115 §B): a recursive statement /
+        /// expression translator over the C# body that produces a parseable G#
+        /// <see cref="BlockStatement"/>. Constructs with no canonical G# form are
+        /// recorded as structured <see cref="TranslationDiagnostic"/> records and
+        /// emit the nearest parseable placeholder — never non-parsing text.
         /// </summary>
-        /// <param name="bodyOwner">The C# node whose body is deferred.</param>
-        /// <param name="description">A human-readable label for the deferred body.</param>
-        /// <returns>A parseable placeholder block.</returns>
+        /// <param name="bodyOwner">The C# node that owns the body.</param>
+        /// <param name="description">A human-readable label for the body.</param>
+        /// <returns>The translated block.</returns>
         private BlockStatement TranslateBody(SyntaxNode bodyOwner, string description)
         {
-            this.context.Report(new TranslationDiagnostic(
-                "body-pending",
-                $"{description} body is deferred to step 7 (issue #914); emitted a placeholder block.",
-                bodyOwner.GetLocation(),
-                TranslationSeverity.Info));
-            return new BlockStatement(new List<GStatement> { new RawStatement(BodyPendingComment) });
+            SyntaxNode previousScope = this.currentBodyScope;
+            this.currentBodyScope = bodyOwner;
+            try
+            {
+                return this.TranslateBodyCore(bodyOwner, description);
+            }
+            finally
+            {
+                this.currentBodyScope = previousScope;
+            }
+        }
+
+        private BlockStatement TranslateBodyCore(SyntaxNode bodyOwner, string description)
+        {
+            switch (bodyOwner)
+            {
+                case MethodDeclarationSyntax method:
+                    if (method.Body != null)
+                    {
+                        return this.TranslateBlock(method.Body);
+                    }
+
+                    if (method.ExpressionBody != null)
+                    {
+                        bool returnsVoid =
+                            (this.context.GetDeclaredSymbol(method) as IMethodSymbol)?.ReturnsVoid ?? false;
+                        return this.WrapExpressionBody(method.ExpressionBody.Expression, returnsVoid);
+                    }
+
+                    break;
+
+                case ConstructorDeclarationSyntax ctor:
+                    if (ctor.Body != null)
+                    {
+                        return this.TranslateBlock(ctor.Body);
+                    }
+
+                    if (ctor.ExpressionBody != null)
+                    {
+                        return this.WrapExpressionBody(ctor.ExpressionBody.Expression, isVoid: true);
+                    }
+
+                    break;
+
+                case AccessorDeclarationSyntax accessor:
+                    if (accessor.Body != null)
+                    {
+                        return this.TranslateBlock(accessor.Body);
+                    }
+
+                    if (accessor.ExpressionBody != null)
+                    {
+                        bool isGetter = accessor.IsKind(SyntaxKind.GetAccessorDeclaration);
+                        return this.WrapExpressionBody(accessor.ExpressionBody.Expression, isVoid: !isGetter);
+                    }
+
+                    break;
+
+                case PropertyDeclarationSyntax property when property.ExpressionBody != null:
+                    // An expression-bodied property is a get-only computed property.
+                    return this.WrapExpressionBody(property.ExpressionBody.Expression, isVoid: false);
+            }
+
+            // No recognizable body; emit an empty parseable block.
+            return new BlockStatement(new List<GStatement>());
+        }
+
+        private BlockStatement WrapExpressionBody(ExpressionSyntax expression, bool isVoid)
+        {
+            GExpression translated = this.TranslateExpression(expression);
+            GStatement statement = isVoid
+                ? new ExpressionStatement(translated)
+                : new ReturnStatement(translated);
+            return new BlockStatement(new List<GStatement> { statement });
+        }
+
+        private BlockStatement TranslateBlock(BlockSyntax block)
+        {
+            var statements = new List<GStatement>();
+            foreach (StatementSyntax statement in block.Statements)
+            {
+                statements.AddRange(this.TranslateStatement(statement));
+            }
+
+            return new BlockStatement(statements);
+        }
+
+        private BlockStatement TranslateStatementAsBlock(StatementSyntax statement)
+        {
+            if (statement is BlockSyntax block)
+            {
+                return this.TranslateBlock(block);
+            }
+
+            return new BlockStatement(this.TranslateStatement(statement).ToList());
+        }
+
+        private IEnumerable<GStatement> TranslateStatement(StatementSyntax statement)
+        {
+            switch (statement)
+            {
+                case LocalDeclarationStatementSyntax local:
+                    return this.TranslateLocalDeclaration(local.Declaration, local.IsConst);
+
+                case ExpressionStatementSyntax expressionStatement:
+                    return new[] { this.TranslateExpressionStatement(expressionStatement.Expression) };
+
+                case ReturnStatementSyntax ret:
+                    return new[]
+                    {
+                        (GStatement)new ReturnStatement(
+                            ret.Expression == null ? null : this.TranslateExpression(ret.Expression)),
+                    };
+
+                case IfStatementSyntax ifStatement:
+                    return new[] { this.TranslateIf(ifStatement) };
+
+                case WhileStatementSyntax whileStatement:
+                    return new[]
+                    {
+                        (GStatement)new WhileStatement(
+                            this.TranslateExpression(whileStatement.Condition),
+                            this.TranslateStatementAsBlock(whileStatement.Statement)),
+                    };
+
+                case ForStatementSyntax forStatement:
+                    return new[] { this.TranslateForStatement(forStatement) };
+
+                case ForEachStatementSyntax forEach:
+                    return new[]
+                    {
+                        (GStatement)new ForInStatement(
+                            forEach.Identifier.Text,
+                            this.TranslateExpression(forEach.Expression),
+                            this.TranslateStatementAsBlock(forEach.Statement)),
+                    };
+
+                case ThrowStatementSyntax throwStatement:
+                    return new[]
+                    {
+                        (GStatement)new ThrowStatement(
+                            throwStatement.Expression == null
+                                ? new IdentifierExpression("nil")
+                                : this.TranslateExpression(throwStatement.Expression)),
+                    };
+
+                case BlockSyntax block:
+                    return new[] { (GStatement)this.TranslateBlock(block) };
+
+                case EmptyStatementSyntax:
+                    return System.Array.Empty<GStatement>();
+
+                default:
+                    this.context.ReportUnsupported(
+                        statement,
+                        $"statement '{statement.Kind()}' has no canonical G# form yet; emitted a placeholder comment (ADR-0115 §B).");
+                    return new[] { (GStatement)new RawStatement($"// unsupported: {statement.Kind()}") };
+            }
+        }
+
+        private IEnumerable<GStatement> TranslateLocalDeclaration(VariableDeclarationSyntax declaration, bool isConst)
+        {
+            var results = new List<GStatement>();
+            bool hasExplicitType = !declaration.Type.IsVar;
+
+            foreach (VariableDeclaratorSyntax declarator in declaration.Variables)
+            {
+                GExpression initializer = declarator.Initializer == null
+                    ? null
+                    : this.TranslateExpression(declarator.Initializer.Value);
+
+                BindingKind binding;
+                if (isConst)
+                {
+                    binding = BindingKind.Const;
+                }
+                else
+                {
+                    var local = this.context.GetDeclaredSymbol(declarator) as ILocalSymbol;
+                    binding = local != null && this.IsLocalReassigned(local)
+                        ? BindingKind.Var
+                        : BindingKind.Let;
+                }
+
+                // A type clause is required when there is no initializer (it names
+                // the zero/default value, spec §Bindings). With an initializer the
+                // type is inferred (ADR-0115 §B.3).
+                GTypeReference type = null;
+                if (initializer == null && hasExplicitType)
+                {
+                    ITypeSymbol typeSymbol = this.context.GetTypeInfo(declaration.Type).Type;
+                    type = typeSymbol != null
+                        ? this.typeMapper.Map(typeSymbol, this.context, declaration.Type.GetLocation())
+                        : null;
+                }
+
+                results.Add(new LocalDeclarationStatement(
+                    binding,
+                    declarator.Identifier.Text,
+                    type,
+                    initializer));
+            }
+
+            return results;
+        }
+
+        private GStatement TranslateExpressionStatement(ExpressionSyntax expression)
+        {
+            switch (expression)
+            {
+                case AssignmentExpressionSyntax assignment:
+                    string op = assignment.OperatorToken.Text;
+                    return new AssignmentStatement(
+                        this.TranslateExpression(assignment.Left),
+                        this.TranslateExpression(assignment.Right),
+                        op);
+
+                case PostfixUnaryExpressionSyntax postfix
+                    when postfix.IsKind(SyntaxKind.PostIncrementExpression)
+                        || postfix.IsKind(SyntaxKind.PostDecrementExpression):
+                    return new IncrementDecrementStatement(
+                        this.TranslateExpression(postfix.Operand),
+                        postfix.OperatorToken.Text);
+
+                case PrefixUnaryExpressionSyntax prefix
+                    when prefix.IsKind(SyntaxKind.PreIncrementExpression)
+                        || prefix.IsKind(SyntaxKind.PreDecrementExpression):
+                    // G# has no prefix ++/--; both forms are statements with the
+                    // same effect, so emit the canonical postfix increment.
+                    return new IncrementDecrementStatement(
+                        this.TranslateExpression(prefix.Operand),
+                        prefix.OperatorToken.Text);
+
+                default:
+                    return new ExpressionStatement(this.TranslateExpression(expression));
+            }
+        }
+
+        private GStatement TranslateIf(IfStatementSyntax ifStatement)
+        {
+            BlockStatement then = this.TranslateStatementAsBlock(ifStatement.Statement);
+            GStatement elseBranch = null;
+            if (ifStatement.Else != null)
+            {
+                if (ifStatement.Else.Statement is IfStatementSyntax elseIf)
+                {
+                    elseBranch = this.TranslateIf(elseIf);
+                }
+                else
+                {
+                    elseBranch = this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+                }
+            }
+
+            return new IfStatement(this.TranslateExpression(ifStatement.Condition), then, elseBranch);
+        }
+
+        private GStatement TranslateForStatement(ForStatementSyntax forStatement)
+        {
+            GStatement initializer = null;
+            if (forStatement.Declaration != null)
+            {
+                initializer = this.TranslateLocalDeclaration(forStatement.Declaration, isConst: false)
+                    .FirstOrDefault();
+            }
+            else if (forStatement.Initializers.Count > 0)
+            {
+                initializer = this.TranslateExpressionStatement(forStatement.Initializers[0]);
+            }
+
+            GExpression condition = forStatement.Condition == null
+                ? null
+                : this.TranslateExpression(forStatement.Condition);
+
+            GStatement incrementor = forStatement.Incrementors.Count > 0
+                ? this.TranslateExpressionStatement(forStatement.Incrementors[0])
+                : null;
+
+            return new ForStatement(
+                initializer,
+                condition,
+                incrementor,
+                this.TranslateStatementAsBlock(forStatement.Statement));
+        }
+
+        private bool IsLocalReassigned(ILocalSymbol local)
+        {
+            SyntaxNode scope = this.currentBodyScope;
+            if (scope == null)
+            {
+                return false;
+            }
+
+            foreach (SyntaxNode node in scope.DescendantNodes())
+            {
+                switch (node)
+                {
+                    case AssignmentExpressionSyntax assignment
+                        when this.BindsTo(assignment.Left, local):
+                        return true;
+
+                    case PostfixUnaryExpressionSyntax postfix
+                        when (postfix.IsKind(SyntaxKind.PostIncrementExpression)
+                                || postfix.IsKind(SyntaxKind.PostDecrementExpression))
+                            && this.BindsTo(postfix.Operand, local):
+                        return true;
+
+                    case PrefixUnaryExpressionSyntax prefix
+                        when (prefix.IsKind(SyntaxKind.PreIncrementExpression)
+                                || prefix.IsKind(SyntaxKind.PreDecrementExpression))
+                            && this.BindsTo(prefix.Operand, local):
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool BindsTo(ExpressionSyntax expression, ILocalSymbol local)
+        {
+            ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            return symbol != null && SymbolEqualityComparer.Default.Equals(symbol, local);
+        }
+
+        private GExpression TranslateExpression(ExpressionSyntax expression)
+        {
+            switch (expression)
+            {
+                case LiteralExpressionSyntax literal:
+                    return this.TranslateLiteral(literal);
+
+                case IdentifierNameSyntax identifier:
+                    return new IdentifierExpression(identifier.Identifier.Text);
+
+                case GenericNameSyntax generic:
+                    return new IdentifierExpression(generic.Identifier.Text);
+
+                case ThisExpressionSyntax:
+                    return new ThisExpression();
+
+                case MemberAccessExpressionSyntax member:
+                    return new MemberAccessExpression(
+                        this.TranslateExpression(member.Expression),
+                        member.Name.Identifier.Text);
+
+                case InvocationExpressionSyntax invocation:
+                    return this.TranslateInvocation(invocation);
+
+                case ObjectCreationExpressionSyntax creation:
+                    return this.TranslateObjectCreation(creation);
+
+                case BinaryExpressionSyntax binary:
+                    return new BinaryExpression(
+                        this.TranslateExpression(binary.Left),
+                        binary.OperatorToken.Text,
+                        this.TranslateExpression(binary.Right));
+
+                case PrefixUnaryExpressionSyntax prefix:
+                    return new UnaryExpression(
+                        prefix.OperatorToken.Text,
+                        this.TranslateExpression(prefix.Operand));
+
+                case ParenthesizedExpressionSyntax parenthesized:
+                    return new ParenthesizedExpression(this.TranslateExpression(parenthesized.Expression));
+
+                case InterpolatedStringExpressionSyntax interpolated:
+                    return this.TranslateInterpolatedString(interpolated);
+
+                case TupleExpressionSyntax tuple:
+                    return new TupleLiteralExpression(
+                        tuple.Arguments.Select(a => this.TranslateExpression(a.Expression)).ToList());
+
+                case ElementAccessExpressionSyntax elementAccess:
+                    GExpression index = elementAccess.ArgumentList.Arguments.Count > 0
+                        ? this.TranslateExpression(elementAccess.ArgumentList.Arguments[0].Expression)
+                        : new IdentifierExpression("nil");
+                    return new IndexExpression(
+                        this.TranslateExpression(elementAccess.Expression),
+                        index);
+
+                default:
+                    this.context.ReportUnsupported(
+                        expression,
+                        $"expression '{expression.Kind()}' has no canonical G# form yet; emitted an identifier placeholder (ADR-0115 §B).");
+                    return new IdentifierExpression("nil");
+            }
+        }
+
+        private GExpression TranslateLiteral(LiteralExpressionSyntax literal)
+        {
+            switch (literal.Kind())
+            {
+                case SyntaxKind.NumericLiteralExpression:
+                    object value = literal.Token.Value;
+                    if (value is float or double or decimal)
+                    {
+                        return LiteralExpression.Float(literal.Token.ValueText);
+                    }
+
+                    return LiteralExpression.Int(literal.Token.ValueText);
+
+                case SyntaxKind.StringLiteralExpression:
+                    return LiteralExpression.String(literal.Token.ValueText);
+
+                case SyntaxKind.CharacterLiteralExpression:
+                    return LiteralExpression.Char(literal.Token.ValueText);
+
+                case SyntaxKind.TrueLiteralExpression:
+                    return LiteralExpression.Bool(true);
+
+                case SyntaxKind.FalseLiteralExpression:
+                    return LiteralExpression.Bool(false);
+
+                case SyntaxKind.NullLiteralExpression:
+                    return LiteralExpression.Null();
+
+                default:
+                    this.context.ReportUnsupported(
+                        literal,
+                        $"literal '{literal.Kind()}' has no canonical G# form yet; emitted nil (ADR-0115 §B.12).");
+                    return LiteralExpression.Null();
+            }
+        }
+
+        private GExpression TranslateInvocation(InvocationExpressionSyntax invocation)
+        {
+            GExpression target;
+            IReadOnlyList<GTypeReference> typeArguments = null;
+
+            // A generic call `Foo<T>(...)` carries its type arguments on the name;
+            // lift them onto the G# bracket-type-argument form `Foo[T](...)`.
+            if (invocation.Expression is GenericNameSyntax generic)
+            {
+                target = new IdentifierExpression(generic.Identifier.Text);
+                typeArguments = this.MapTypeArguments(generic);
+            }
+            else if (invocation.Expression is MemberAccessExpressionSyntax member
+                && member.Name is GenericNameSyntax memberGeneric)
+            {
+                target = new MemberAccessExpression(
+                    this.TranslateExpression(member.Expression),
+                    memberGeneric.Identifier.Text);
+                typeArguments = this.MapTypeArguments(memberGeneric);
+            }
+            else
+            {
+                target = this.TranslateExpression(invocation.Expression);
+            }
+
+            var arguments = invocation.ArgumentList.Arguments
+                .Select(a => this.TranslateExpression(a.Expression))
+                .ToList();
+
+            return new InvocationExpression(target, arguments, typeArguments);
+        }
+
+        private GExpression TranslateObjectCreation(ObjectCreationExpressionSyntax creation)
+        {
+            ITypeSymbol typeSymbol = this.context.GetTypeInfo(creation).Type;
+            GTypeReference type = typeSymbol != null
+                ? this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
+                : new NamedTypeReference(creation.Type.ToString());
+
+            var arguments = creation.ArgumentList == null
+                ? new List<GExpression>()
+                : creation.ArgumentList.Arguments
+                    .Select(a => this.TranslateExpression(a.Expression))
+                    .ToList();
+
+            // A G# construction is a call on the type name; generic types carry
+            // their type arguments in brackets: `List[int32](...)` (ADR-0115 §B.7).
+            if (type is NamedTypeReference named)
+            {
+                IReadOnlyList<GTypeReference> typeArguments = named.TypeArguments.Count > 0
+                    ? named.TypeArguments
+                    : null;
+                return new InvocationExpression(
+                    new IdentifierExpression(named.Name),
+                    arguments,
+                    typeArguments);
+            }
+
+            return new InvocationExpression(new IdentifierExpression(creation.Type.ToString()), arguments);
+        }
+
+        private IReadOnlyList<GTypeReference> MapTypeArguments(GenericNameSyntax generic)
+        {
+            var result = new List<GTypeReference>();
+            foreach (TypeSyntax argument in generic.TypeArgumentList.Arguments)
+            {
+                ITypeSymbol symbol = this.context.GetTypeInfo(argument).Type;
+                result.Add(symbol != null
+                    ? this.typeMapper.Map(symbol, this.context, argument.GetLocation())
+                    : new NamedTypeReference(argument.ToString()));
+            }
+
+            return result;
+        }
+
+        private GExpression TranslateInterpolatedString(InterpolatedStringExpressionSyntax interpolated)
+        {
+            var parts = new List<InterpolationPart>();
+            foreach (InterpolatedStringContentSyntax content in interpolated.Contents)
+            {
+                switch (content)
+                {
+                    case InterpolatedStringTextSyntax text:
+                        parts.Add(InterpolationPart.Literal(text.TextToken.ValueText));
+                        break;
+
+                    case InterpolationSyntax hole:
+                        string alignment = hole.AlignmentClause?.Value.ToString();
+                        string format = hole.FormatClause?.FormatStringToken.ValueText;
+                        parts.Add(InterpolationPart.Hole(
+                            this.TranslateExpression(hole.Expression),
+                            alignment,
+                            format));
+                        break;
+                }
+            }
+
+            return new InterpolatedStringExpression(parts);
         }
     }
 }

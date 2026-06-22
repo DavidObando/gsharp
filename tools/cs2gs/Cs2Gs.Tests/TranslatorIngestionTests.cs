@@ -102,12 +102,12 @@ namespace Sample.Geometry
     /// <summary>
     /// <see cref="CSharpToGSharpTranslator.TranslateDocument(LoadedDocument, TranslationContext)"/>
     /// emits the G# frame (package + imports), maps the type with the B.10
-    /// default-visibility rule (C# <c>public</c> → G# default, omitted), and routes
-    /// the not-yet-translated method body through the deferred body seam as a
-    /// structured <c>body-pending</c> Info diagnostic (never silently dropped).
+    /// default-visibility rule (C# <c>public</c> → G# default, omitted), and
+    /// translates the method body (step 7) into structured statements — no
+    /// <c>body-pending</c> placeholder remains.
     /// </summary>
     [Fact]
-    public void TranslateDocument_EmitsFrameAndRecordsPendingBodies()
+    public void TranslateDocument_EmitsFrameAndTranslatesBodies()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Point.cs", InlineSource) });
@@ -130,11 +130,14 @@ namespace Sample.Geometry
         Assert.Equal(TypeDeclarationKind.Class, type.Kind);
         Assert.Equal(Visibility.Default, type.Visibility);
 
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Info &&
-                d.ConstructKind == "body-pending" &&
-                d.Message.Contains("Describe"));
+        // The body seam no longer defers: there is no body-pending diagnostic and
+        // the `return x + 1;` body became a real return statement.
+        Assert.DoesNotContain(context.Diagnostics, d => d.ConstructKind == "body-pending");
+
+        MethodDeclaration describe = type.Members.OfType<MethodDeclaration>().Single(m => m.Name == "Describe");
+        ReturnStatement ret = Assert.IsType<ReturnStatement>(Assert.Single(describe.Body.Statements));
+        BinaryExpression sum = Assert.IsType<BinaryExpression>(ret.Expression);
+        Assert.Equal("+", sum.Operator);
     }
 
     private static string ResolveCorpusProject(string projectFolder, string projectFile)
