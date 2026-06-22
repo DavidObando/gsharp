@@ -467,14 +467,15 @@ public class GoldenTests
     }
 
     /// <summary>
-    /// Documents the §B.5 discrepancy: ADR-0115 §B.5 states in-body methods apply
-    /// to "both class and struct" receivers, but the real G# parser rejects a
-    /// <c>func</c> member inside a <c>struct</c> body (<c>GS0005</c>). This test
-    /// pins that behavior so the suite fails loudly if the parser ever changes —
-    /// at which point the §B.5 golden can be widened to cover structs.
+    /// Issue #938: ADR-0115 §B.5 states in-body methods apply to "both class and
+    /// struct" receivers, and as of issue #938 the real G# parser and binder
+    /// honour that — a <c>func</c> member inside a <c>struct</c> body now binds
+    /// as a value-type instance method and compiles warning-free. This test pins
+    /// that the printed in-body struct method round-trips cleanly (no
+    /// <c>GS0005</c>, no <c>GS0314</c>).
     /// </summary>
     [Fact]
-    public void B5_StructInBodyMethodDoesNotRoundTrip()
+    public void B5_StructInBodyMethodRoundTrips()
     {
         var structWithMethod = new TypeDeclaration(
             TypeDeclarationKind.Struct,
@@ -489,13 +490,14 @@ public class GoldenTests
 
         var printed = GSharpPrinter.Print(unit);
 
-        // The printer faithfully renders the ADR's described form...
+        // The printer renders the ADR's described in-body form...
         Assert.Contains("func Negate()", printed);
 
-        // ...but the real parser rejects an in-body func inside a struct body.
+        // ...and the real parser + binder now accept it warning-free.
         var result = GSharpRoundTrip.Validate(printed);
-        Assert.False(result.Success);
-        Assert.Contains(result.Errors, e => e.StartsWith("GS0005", System.StringComparison.Ordinal));
+        Assert.True(result.Success);
+        Assert.DoesNotContain(result.Errors, e => e.StartsWith("GS0005", System.StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Errors, e => e.Contains("GS0314", System.StringComparison.Ordinal));
     }
 
     /// <summary>B.12 / §Type clauses: a nullable type renders with a trailing

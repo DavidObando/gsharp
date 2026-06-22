@@ -94,14 +94,17 @@ suppressed per file via `<NoWarn>GS0314</NoWarn>` in a `.gsproj` or
 via `<WarningsAsErrors>` / `/warnaserror+:GS0314` for projects that
 want to enforce the policy locally today.
 
-Note that `struct`, `data struct`, and `inline struct` bodies currently
-accept only field declarations (the parser rejects in-body methods on
-value types — see ADR-0017 / the §3.B.3 binder). For owned structs the
-warning therefore flags the receiver-clause form as deprecated even
-though there is no in-body alternative today; users can either suppress
-`GS0314` per-declaration / per-project, or migrate the data carrier
-from `struct` to `class`. Extending in-body methods to structs is a
-separate future ADR.
+Note that `struct`, `data struct`, and `inline struct` bodies accept
+in-body instance methods as of issue #938. The parser and binder treat an
+owned value type's in-body `func` member exactly like a class's: it binds
+onto `StructSymbol.Methods` with a synthesized by-ref `this`, reusing the
+receiver-clause owned-struct method lowering and emission. The in-body form
+is therefore the canonical, warning-free declaration site for owned-struct
+instance methods, just as it is for classes, and `GS0314` continues to flag
+the receiver-clause form on owned structs as deprecated in favour of it.
+(User-defined `init(...)` constructors remain class-only; value types are
+constructed via primary constructors and struct literals, so no constructor
+gap exists for structs — see ADR-0115 §B.5.)
 
 Escalation to error (and removal of the receiver-clause method form for
 owned types entirely) is **out of scope** for this ADR and is a separate

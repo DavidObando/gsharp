@@ -310,9 +310,12 @@ class Pt(X int32) {
     }
 
     [Fact]
-    public void Method_OnStruct_Diagnoses()
+    public void Method_OnStruct_IsAccepted()
     {
-        // Methods are class-only in 3.B.3 sub-step 2b.
+        // Issue #938 / ADR-0079: in-body `func` methods are the canonical
+        // declaration site for owned `struct` (and `data struct`) instance
+        // methods, mirroring the long-standing `class` support. The method
+        // binds as an instance method on the value type with no diagnostics.
         var source = @"
 struct Pt {
     var X int32
@@ -324,7 +327,7 @@ struct Pt {
 0
 ";
         var result = Evaluate(source);
-        Assert.NotEmpty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics);
     }
 
     // Phase 3.B.3 sub-step 3: open / override + single inheritance (ADR-0017).

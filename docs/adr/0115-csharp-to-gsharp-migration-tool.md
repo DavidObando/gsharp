@@ -123,25 +123,23 @@ When **every** constructor parameter is consumed by exactly one direct `_f = par
 
 Instance methods on a **`class`** (or `data class`) the package **owns** are declared **in-body** as `func M(...) R { ... }`. The receiver-clause form `func (r T) M(...) R` is **reserved for non-owned receiver types** — CLR/BCL types, primitives, and types from other packages — i.e. C# *extension methods* (`this T` first parameter). ADR-0079 (issue #719) made this the rule and emits the soft `GS0314` warning when a receiver clause names an owned type; `samples/MethodsWithReceivers.gs` is the canonical example (in-body method on an owned class) and `samples/ExtensionFunctions.gs` is the canonical receiver-clause example (on `int32`). Operator overloads keep the receiver-clause form and are exempt from `GS0314` (spec §Functions and methods).
 
-> **Owned-`struct` methods — discovered compiler gap.** ADR-0079 frames the
+> **Owned-`struct` methods — RESOLVED (issue #938).** ADR-0079 frames the
 > in-body canonical form as applying to owned `class` **and** `struct` receivers.
-> The current parser does **not** honour that for value types: a `func` member
-> inside a `struct`/`data struct` body is rejected with `GS0005`
-> (`Parser.cs` ~L1809 only accepts method/constructor members when the aggregate
-> keyword is `ClassKeyword`). The only spelling the parser accepts for an
-> instance method on an owned `struct` is therefore the receiver-clause form
-> `func (r T) M(...) R` — which the binder then flags with `GS0314`
-> (`DeclarationBinder.cs`:3129 fires for owned `struct` and `class` alike).
-> Consequently **no warning-free way to declare an instance method on an owned
-> `struct` exists today.** The translator emits the receiver-clause form for
-> owned-`struct` methods (the only form that compiles), records the resulting
-> `GS0314` as an *expected, known* diagnostic (not a parity failure), and the
-> pipeline surfaces this as a discovered compiler gap (a triage record /
-> filed issue) per objective (2) of issue #914 (tracked as issue #938). If the compiler later allows
-> in-body `struct` methods (or exempts owned `struct` receivers from `GS0314`),
-> the canonical form switches to whichever becomes warning-free; the round-trip
-> validator and the `B5_StructInBodyMethodDoesNotRoundTrip` pin test will catch
-> the change.
+> As of issue #938 the compiler honours that for value types: a `func` member
+> inside a `struct`/`data struct` body now binds as an instance method on the
+> value type (synthesized by-ref `this`), reusing the receiver-clause
+> owned-struct lowering and emission (`Parser.cs` accepts the member; the
+> `DeclarationBinder` in-body path is no longer gated on `syntax.IsClass`).
+> The **in-body form is therefore the canonical, warning-free spelling** for an
+> owned-`struct` instance method, exactly as for classes; the receiver-clause
+> form `func (r T) M(...) R` still binds identically but is flagged with
+> `GS0314` (`DeclarationBinder.cs`:3129) to steer authors to the in-body site.
+> User-defined `init(...)` constructors remain class-only by design — value
+> types are constructed via primary constructors and struct literals, so no
+> constructor gap exists for structs. The cs2gs translator (§B.14) may still
+> lift owned-`struct` methods to the receiver-clause form for mechanical
+> reasons; emitting the in-body form instead would now be warning-free and is
+> a possible future translator improvement.
 
 C# **extension methods** (`static R M(this T self, …)`) translate to the receiver-clause form `func (self T) M(…) R` (ADR-0019), since `T` is non-owned by definition.
 
@@ -248,7 +246,7 @@ A `data class`/`data struct` auto-synthesizes value (structural) equality, `GetH
 
 #### B.14 Owned value-aggregate methods → lifted receiver-clause funcs — issue #938, ADR-0079
 
-A `struct`/`data struct` instance method cannot live in the type body (the parser rejects an in-body `func` on a value aggregate, and a plain `struct` admits neither in-body methods nor an explicit `init`). Such a method is **lifted to a top-level receiver-clause `func (self T) Name(...)`** emitted as a sibling immediately after the type (§B.5). A top-level receiver-clause `func` has no implicit `this`, so inside the lifted body every bare instance-member reference is made explicit through the receiver (`self.X`). This compiles and runs correctly but emits the soft `GS0314` warning (ADR-0079, owned-type receiver clause); the warning is the tracked surface of #938 until owned value-aggregate methods gain an in-body spelling.
+As of issue #938 a `struct`/`data struct` instance method **can** live in the type body — the parser and binder accept an in-body `func` on a value aggregate and bind it warning-free (§B.5). The cs2gs translator nonetheless still **lifts** such a method to a top-level receiver-clause `func (self T) Name(...)` emitted as a sibling immediately after the type, for mechanical reasons (its declaration-lifting pipeline predates the compiler fix). A top-level receiver-clause `func` has no implicit `this`, so inside the lifted body every bare instance-member reference is made explicit through the receiver (`self.X`). This compiles and runs correctly but emits the soft `GS0314` warning (ADR-0079, owned-type receiver clause). Emitting the in-body form instead — now warning-free — is a possible future translator improvement; the `GS0314` it currently produces is an expected, known diagnostic rather than a parity failure. (A plain `struct` still admits no explicit `init`; value types are constructed via primary constructors and struct literals.)
 
 #### B.15 `with`-expressions — spec §Records and `with`
 
@@ -451,7 +449,7 @@ friction:
 
 | Issue | Construct | Diagnostic |
 | --- | --- | --- |
-| #938 | owned-`struct` instance methods (no warning-free spelling) | GS0314 |
+| #938 | owned-`struct` instance methods (no warning-free spelling) — **resolved**: in-body `func` now binds on value types | GS0314 |
 | #939 | `for…in List[userType]` element-type erasure | GS0158 |
 | #940 | static (`shared`) method overloads ignore arity | GS0144 |
 | #941 | binary `??` operator unsupported (only `??=` exists) | GS0005 |

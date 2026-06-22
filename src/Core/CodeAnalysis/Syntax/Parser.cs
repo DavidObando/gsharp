@@ -1806,11 +1806,11 @@ public class Parser
                 }
                 else
                 {
-                    if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
-                    {
-                        Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken);
-                    }
-
+                    // Issue #938 / ADR-0079: in-body `func` instance methods are
+                    // the canonical declaration site for owned `class` AND owned
+                    // `struct`/`data struct` types. Both aggregate kinds accept
+                    // the member here; the binder records it as an instance
+                    // method on the receiver type (by-ref `this` for value types).
                     var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier, memberAsyncModifier);
                     method.WithAnnotations(memberAnnotations);
                     methods.Add(method);
