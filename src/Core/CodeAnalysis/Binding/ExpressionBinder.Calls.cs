@@ -2005,7 +2005,7 @@ internal sealed partial class ExpressionBinder
             // the static receiver type is an interface.
             if (receiver != null && receiver.Type is InterfaceSymbol ifaceRecv)
             {
-                var ifaceOverloads = ifaceRecv.GetMethods(methodName);
+                var ifaceOverloads = TypeMemberModel.GetMethods(ifaceRecv, methodName, MemberQuery.Instance(MemberKinds.Method));
 
                 // ADR-0090 / issue #756: private interface helpers are visible
                 // ONLY when the call is made from inside another member of the
@@ -2056,7 +2056,7 @@ internal sealed partial class ExpressionBinder
             // typed as the interface itself.
             if (receiver != null && receiver.Type is TypeParameterSymbol tpRecv && tpRecv.InterfaceConstraint != null)
             {
-                var tpOverloads = tpRecv.InterfaceConstraint.GetMethods(methodName);
+                var tpOverloads = TypeMemberModel.GetMethods(tpRecv.InterfaceConstraint, methodName, MemberQuery.Instance(MemberKinds.Method));
                 if (tpOverloads.Length > 0)
                 {
                     var tpIfaceMethod = overloads.SelectInstanceOverloadOrReport(tpOverloads, arguments, ce, methodName, argumentNames);
@@ -2396,7 +2396,7 @@ internal sealed partial class ExpressionBinder
                     continue;
                 }
 
-                var candidates = iface.GetMethods(methodName);
+                var candidates = TypeMemberModel.GetMethods(iface, methodName, MemberQuery.Instance(MemberKinds.Method));
                 var defaultsOnly = ImmutableArray.CreateBuilder<FunctionSymbol>();
                 for (var i = 0; i < candidates.Length; i++)
                 {

@@ -2480,7 +2480,7 @@ internal sealed class OverloadResolver
             if (getCurrentFunction()?.ThisParameter != null
                 && getCurrentFunction().ReceiverType is InterfaceSymbol implicitReceiverIface)
             {
-                var implicitIfaceOverloads = implicitReceiverIface.GetMethods(syntax.Identifier.Text);
+                var implicitIfaceOverloads = TypeMemberModel.GetMethods(implicitReceiverIface, syntax.Identifier.Text, MemberQuery.Instance(MemberKinds.Method));
                 var implicitPrivateIfaceOverloads = implicitReceiverIface.GetPrivateMethods(syntax.Identifier.Text);
                 if (implicitPrivateIfaceOverloads.Length > 0)
                 {
@@ -2509,7 +2509,7 @@ internal sealed class OverloadResolver
             if (getCurrentFunction()?.ThisParameter == null
                 && getCurrentFunction()?.StaticOwnerType is InterfaceSymbol implicitStaticIface)
             {
-                var implicitStaticOverloads = implicitStaticIface.GetStaticMethods(syntax.Identifier.Text);
+                var implicitStaticOverloads = TypeMemberModel.GetMethods(implicitStaticIface, syntax.Identifier.Text, MemberQuery.Static(MemberKinds.Method));
                 var implicitStaticPrivateOverloads = implicitStaticIface.GetStaticPrivateMethods(syntax.Identifier.Text);
                 if (implicitStaticPrivateOverloads.Length > 0)
                 {

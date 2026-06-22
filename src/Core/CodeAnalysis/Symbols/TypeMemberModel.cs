@@ -107,6 +107,7 @@ public static class TypeMemberModel
 
         if (type is InterfaceSymbol interfaceSymbol)
         {
+            interfaceSymbol.EnsureMembersResolved();
             ImmutableArray<FunctionSymbol>.Builder builder = null;
             if (query.IncludeInstance)
             {
