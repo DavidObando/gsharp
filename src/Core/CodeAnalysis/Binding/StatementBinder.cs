@@ -2573,13 +2573,18 @@ internal sealed class StatementBinder
 
     private BoundStatement BindAwaitForRangeStatement(AwaitForRangeStatementSyntax syntax)
     {
+        return BindAwaitForRangeStatementCore(syntax, labelName: null, originatingSyntax: syntax);
+    }
+
+    private BoundStatement BindAwaitForRangeStatementCore(AwaitForRangeStatementSyntax syntax, string labelName, SyntaxNode originatingSyntax)
+    {
         // Phase 5.8 / ADR-0023: `await for v := range stream { … }`.
         // The stream operand must be an `IAsyncEnumerable[T]` (a CLR type
         // that exposes a `GetAsyncEnumerator` method). The value variable
-        // is typed as the stream's element `T`. The interpreter handles
-        // the underlying `MoveNextAsync`/`Current`/`DisposeAsync` cycle
-        // synchronously (matching Phase 5.1's `await` lowering). The
-        // async-aware lowering and emit are deferred.
+        // is typed as the stream's element `T`. Issue #937: the loop body
+        // is bound through BindLoopBody so that `break`, `continue`, and
+        // labeled break/continue resolve to the loop's synthesized labels —
+        // achieving parity with the synchronous `for … in` loop.
         var stream = bindExpression(syntax.Stream);
         if (stream is BoundErrorExpression)
         {
@@ -2594,10 +2599,10 @@ internal sealed class StatementBinder
 
         scope = new BoundScope(scope);
         var variable = bindLocalVariable(syntax.Identifier, isReadOnly: false, type: elementType);
-        var body = BindStatement(syntax.Body);
+        var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel);
         scope = scope.Parent;
 
-        return new BoundAwaitForRangeStatement(null, variable, stream, body);
+        return new BoundAwaitForRangeStatement(originatingSyntax, variable, stream, body, breakLabel, continueLabel);
     }
 
     private BoundStatement BindYieldStatement(YieldStatementSyntax syntax)
@@ -3193,6 +3198,8 @@ internal sealed class StatementBinder
                 BindForClauseStatementCore((ForClauseStatementSyntax)inner, syntax, labelName),
             SyntaxKind.ForRangeStatement =>
                 BindForRangeStatementCore((ForRangeStatementSyntax)inner, labelName, syntax),
+            SyntaxKind.AwaitForRangeStatement =>
+                BindAwaitForRangeStatementCore((AwaitForRangeStatementSyntax)inner, labelName, syntax),
             _ => BindStatement(inner),
         };
     }
@@ -3208,6 +3215,7 @@ internal sealed class StatementBinder
             SyntaxKind.ForConditionStatement => true,
             SyntaxKind.ForClauseStatement => true,
             SyntaxKind.ForRangeStatement => true,
+            SyntaxKind.AwaitForRangeStatement => true,
             _ => false,
         };
     }

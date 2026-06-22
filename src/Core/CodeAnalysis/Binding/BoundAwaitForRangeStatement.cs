@@ -18,7 +18,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// idiom Phase 5.1 uses for plain <c>await</c>). The async-aware
 /// lowering and emit are deferred.
 /// </summary>
-public sealed class BoundAwaitForRangeStatement : BoundStatement
+public sealed class BoundAwaitForRangeStatement : BoundLoopStatement
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundAwaitForRangeStatement"/> class.
@@ -27,12 +27,16 @@ public sealed class BoundAwaitForRangeStatement : BoundStatement
     /// <param name="valueVariable">The element variable.</param>
     /// <param name="stream">The async-stream expression.</param>
     /// <param name="body">The loop body.</param>
+    /// <param name="breakLabel">The break label targeted by <c>break</c> inside the loop body.</param>
+    /// <param name="continueLabel">The continue label targeted by <c>continue</c> inside the loop body.</param>
     public BoundAwaitForRangeStatement(
         SyntaxNode syntax,
         VariableSymbol valueVariable,
         BoundExpression stream,
-        BoundStatement body)
-        : base(syntax)
+        BoundStatement body,
+        BoundLabel breakLabel,
+        BoundLabel continueLabel)
+        : base(syntax, breakLabel, continueLabel)
     {
         ValueVariable = valueVariable;
         Stream = stream;

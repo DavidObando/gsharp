@@ -872,7 +872,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundAwaitForRangeStatement(null, node.ValueVariable, stream, body);
+        return new BoundAwaitForRangeStatement(null, node.ValueVariable, stream, body, node.BreakLabel, node.ContinueLabel);
     }
 
     /// <summary>Rewrites a bound yield statement (ADR-0040).</summary>

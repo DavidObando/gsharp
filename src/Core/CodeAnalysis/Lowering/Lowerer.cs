@@ -430,7 +430,7 @@ public sealed class Lowerer : BoundTreeRewriter
         var stream = RewriteExpression(node.Stream);
         var body = RewriteStatement(node.Body);
 
-        var lowered = LowerAwaitForRange(node.ValueVariable, stream, body);
+        var lowered = LowerAwaitForRange(node.ValueVariable, stream, body, node.BreakLabel, node.ContinueLabel);
         return RewriteStatement(lowered);
     }
 
@@ -478,7 +478,7 @@ public sealed class Lowerer : BoundTreeRewriter
         return base.RewritePropertyAssignmentExpression(node);
     }
 
-    private BoundStatement LowerAwaitForRange(VariableSymbol valueVariable, BoundExpression stream, BoundStatement body)
+    private BoundStatement LowerAwaitForRange(VariableSymbol valueVariable, BoundExpression stream, BoundStatement body, BoundLabel breakLabel, BoundLabel continueLabel)
     {
         var streamClr = stream.Type?.ClrType;
         if (streamClr == null)
@@ -572,8 +572,12 @@ public sealed class Lowerer : BoundTreeRewriter
             ImmutableArray.Create<BoundExpression>(new BoundDefaultExpression(null, cancellationTokenType)));
         var enumeratorDecl = new BoundVariableDeclaration(null, enumeratorSymbol, getEnumCall);
 
-        var startLabel = GenerateLabel();
-        var endLabel = GenerateLabel();
+        // Issue #937: the loop's continue label sits at the MoveNextAsync
+        // step (so `continue` advances to the next element) and the break
+        // label sits at the loop exit, still inside the try so the finally's
+        // DisposeAsync await runs when `break` leaves the loop.
+        var startLabel = continueLabel;
+        var endLabel = breakLabel;
         var moreSymbol = new LocalVariableSymbol("$more", isReadOnly: false, type: TypeSymbol.Bool);
 
         var moveNextCall = new BoundImportedInstanceCallExpression(
