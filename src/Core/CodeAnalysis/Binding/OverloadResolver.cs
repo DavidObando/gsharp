@@ -665,7 +665,9 @@ internal sealed class OverloadResolver
     /// primitive/string previously captured on the parameter symbol; <c>nil</c>
     /// becomes a <see cref="BoundDefaultExpression"/>.
     /// </summary>
-    private static BoundExpression CreateOptionalUserDefaultArgument(ParameterSymbol parameter)
+    /// <param name="parameter">The omitted optional parameter.</param>
+    /// <returns>The bound default-value argument for the omitted slot.</returns>
+    internal static BoundExpression CreateOptionalUserDefaultArgument(ParameterSymbol parameter)
     {
         if (!parameter.HasExplicitDefaultValue)
         {
