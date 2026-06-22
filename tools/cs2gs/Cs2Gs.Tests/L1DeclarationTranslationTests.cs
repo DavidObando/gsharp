@@ -130,34 +130,59 @@ namespace Corpus.L1
         Assert.Null(cart.BaseType);
     }
 
-    /// <summary>B.3/B.11/B.12: <c>private readonly string _customer</c> maps to a
-    /// <c>let</c>-bound, <c>private</c>, <c>string</c>-typed field.</summary>
+    /// <summary>B.3 (T2): the parameter-sourced <c>readonly</c> field
+    /// <c>_customer</c> is canonicalized to a primary-constructor parameter; the
+    /// independently-initialized <c>readonly</c> field <c>_items</c> becomes a
+    /// <c>let</c> field carrying its initializer, and the explicit <c>init</c> is
+    /// dropped.</summary>
     [Fact]
-    public void L1Document_MapsReadonlyFieldToLet()
+    public void L1Document_CanonicalizesImmutableFieldInitialization()
     {
-        TypeDeclaration cart = FindType("Cart");
-        FieldDeclaration customer = cart.Members
-            .OfType<FieldDeclaration>()
-            .Single(f => f.Name == "_customer");
+        (CompilationUnit unit, TranslationContext context) = TranslateL1();
+        TypeDeclaration cart = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Cart");
 
-        Assert.Equal(BindingKind.Let, customer.Binding);
-        Assert.Equal(Visibility.Private, customer.Visibility);
+        // `_customer = customer` lifts to a primary-constructor parameter named
+        // after the field; the standalone `_customer` field is gone.
+        Parameter customer = Assert.Single(cart.PrimaryConstructorParameters);
+        Assert.Equal("_customer", customer.Name);
         Assert.Equal("string", Assert.IsType<NamedTypeReference>(customer.Type).Name);
+        Assert.DoesNotContain(cart.Members.OfType<FieldDeclaration>(), f => f.Name == "_customer");
+
+        // `_items = new List<...>()` stays a `let` field but gains the initializer.
+        FieldDeclaration items = cart.Members
+            .OfType<FieldDeclaration>()
+            .Single(f => f.Name == "_items");
+        Assert.Equal(BindingKind.Let, items.Binding);
+        Assert.Equal(Visibility.Private, items.Visibility);
+        Assert.NotNull(items.Initializer);
+
+        // The fully-consumed constructor is dropped (no in-body constructor remains).
+        Assert.DoesNotContain(cart.Members.OfType<MethodDeclaration>(), m => m.Name == "Cart");
+
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Info &&
+                d.Message.Contains("primary constructor") &&
+                d.Message.Contains("_customer"));
     }
 
-    /// <summary>Type-mapper gap: the named-tuple field type has no canonical G#
-    /// form, so it is recorded as an <see cref="TranslationSeverity.Unsupported"/>
-    /// diagnostic and emitted as the parseable placeholder type.</summary>
+    /// <summary>T1 (ADR-0115 §B.4): a C# named-tuple field type maps to the
+    /// canonical G# positional tuple type <c>(string, int32, int32)</c> — element
+    /// names dropped — recorded as an Info decision, no longer Unsupported.</summary>
     [Fact]
-    public void L1Document_NamedTupleFieldIsRecordedAsUnsupported()
+    public void L1Document_MapsNamedTupleFieldToPositionalTuple()
     {
         (CompilationUnit unit, TranslationContext context) = TranslateL1();
 
         Assert.Contains(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported &&
-                d.ConstructKind.Contains("string Name") &&
-                d.ConstructKind.Contains("int Price"));
+            d => d.Severity == TranslationSeverity.Info &&
+                d.Message.Contains("positional tuple"));
+
+        // No tuple is left as an Unsupported placeholder.
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("value-tuple"));
 
         TypeDeclaration cart = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Cart");
         FieldDeclaration items = cart.Members
@@ -165,9 +190,10 @@ namespace Corpus.L1
             .Single(f => f.Name == "_items");
         var list = Assert.IsType<NamedTypeReference>(items.Type);
         Assert.Equal("List", list.Name);
+        var tuple = Assert.IsType<TupleTypeReference>(Assert.Single(list.TypeArguments));
         Assert.Equal(
-            CSharpTypeMapper.UnsupportedPlaceholderType,
-            Assert.IsType<NamedTypeReference>(Assert.Single(list.TypeArguments)).Name);
+            new[] { "string", "int32", "int32" },
+            tuple.ElementTypes.Select(e => Assert.IsType<NamedTypeReference>(e).Name));
     }
 
     /// <summary>B.11: an expression-bodied property (<c>int LineCount =&gt; ...</c>)

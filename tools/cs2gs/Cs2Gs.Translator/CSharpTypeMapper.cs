@@ -77,6 +77,8 @@ public sealed class CSharpTypeMapper
                 return new NamedTypeReference(named.Name, named.TypeArguments) { IsNullable = isNullable };
             case ArrayTypeReference array:
                 return new ArrayTypeReference(array.ElementType) { IsNullable = isNullable };
+            case TupleTypeReference tuple:
+                return new TupleTypeReference(tuple.ElementTypes) { IsNullable = isNullable };
             case ArrowTypeReference arrow:
                 return new ArrowTypeReference(arrow.ParameterTypes, arrow.ReturnTypes, arrow.IsAsync)
                 {
@@ -147,16 +149,21 @@ public sealed class CSharpTypeMapper
 
         if (type is INamedTypeSymbol named)
         {
-            // Value tuples / named tuples have no canonical G# form yet
-            // (deliberate gap-discovery path, ADR-0115 §B/§D).
+            // Value tuples / named tuples map to the canonical G# positional
+            // tuple type `(T1, T2, …)` (spec §Type syntax). G# tuples are
+            // positional, so C# element names are dropped here and named element
+            // access lowers to `.Item1`/`.Item2` at the use site (ADR-0115 §B.4).
             if (named.IsTupleType)
             {
+                List<GTypeReference> elementTypes = named.TupleElements
+                    .Select(e => this.Map(e.Type, context, location))
+                    .ToList();
                 context.Report(new TranslationDiagnostic(
                     named.ToDisplayString(),
-                    $"C# value-tuple / named-tuple types have no canonical G# form yet; emitted the '{UnsupportedPlaceholderType}' placeholder (ADR-0115 §B).",
+                    "C# value-tuple / named-tuple type mapped to the canonical G# positional tuple type; element names are dropped and named access lowers to '.ItemN' (ADR-0115 §B.4).",
                     location,
-                    TranslationSeverity.Unsupported));
-                return new NamedTypeReference(UnsupportedPlaceholderType);
+                    TranslationSeverity.Info));
+                return new TupleTypeReference(elementTypes);
             }
 
             // Delegate types (Func/Action/named delegates) render in arrow form

@@ -73,6 +73,15 @@ This is the contract the pretty-printer in `Cs2Gs.CodeModel` must satisfy. Outpu
 
 The immutability decision is driven by Roslyn's definite-assignment/data-flow analysis, not by the C# `var`/explicit-type spelling — C#'s `var` is a type-inference keyword, G#'s `let`/`var` is a mutability keyword (ADR-0008), so the mapping is semantic, not lexical. Type clauses are emitted only when C# wrote an explicit type *and* inference would be ambiguous; otherwise inferred (`let x = e`).
 
+**T2 — immutable-field initialization canonicalization.** A G# `let` field is read-only **everywhere**, including inside `init` (`GS0127`; `ExpressionBinder.Assignments.cs`). A C# `readonly` field assigned in the constructor therefore cannot be reproduced as a `let` field assigned in `init`; the assignment must move to a **field initializer** or a **primary-constructor parameter**. The translator analyzes a type's single instance constructor (no `: base(...)`/`: this(...)` chain) when every statement is a `field = …` assignment:
+
+| C# constructor assignment | G# canonical form | Rule |
+| --- | --- | --- |
+| `_f = ctorParam;` (RHS is exactly a constructor parameter) | primary-constructor parameter `Type(_f T)` | the field is lifted to a primary-constructor parameter **named after the field**; the standalone field declaration is dropped. The parameter-field becomes public (G# primary-ctor parameters are public fields) — recorded as an Info diagnostic. |
+| `_f = expr;` (RHS independent of every constructor parameter) | field initializer `private let _f T = expr` | the assignment becomes a `let`-field initializer; the field keeps its `private` visibility and immutable binding. |
+
+When **every** constructor parameter is consumed by exactly one direct `_f = param` assignment, the explicit constructor is **dropped entirely** (its remaining `_f = expr` statements have all become field initializers), leaving no illegal `init`-time `let` assignment. If any statement does not fit the pattern (a non-assignment statement, a parameter used in an expression, a duplicate/unconsumed parameter, multiple constructors, a record) the constructor is left untouched and translated as-is. Chosen over option (b) (a privacy-preserving `var` field) because for L1 the primary-constructor form yields clean, idiomatic, compiling G#; the public-visibility change is recorded for the human to review.
+
 #### B.4 `class` vs `struct` vs `data class` vs `data struct` — ADR-0029, ADR-0025, ADR-0078, spec §Structs…
 
 | C# | G# |
@@ -83,6 +92,28 @@ The immutability decision is driven by Roslyn's definite-assignment/data-flow an
 | `record struct` | `data struct` (value, structural equality) |
 
 `data class`/`data struct` synthesize equality and copy/update ergonomics (ADR-0029, ADR-0032). The `record` *keyword* is **not** emitted (removed by ADR-0078); the canonical spelling is `data class`/`data struct`. C# positional records map to the G# primary-constructor form (`data struct Point(X int32, Y int32)`), fields-only records to the body form. A C# `struct` with exactly one field that C# treats as a newtype is *not* auto-promoted to `inline struct` (ADR-0033) — that is a semantic judgment the tool will not make; it emits a plain `struct` and leaves `inline struct` adoption to the human.
+
+**T1 — C# tuples → native G# positional tuples.** A C# value/named tuple (`(string Name, int Price, int Quantity)`) maps to the **native G# positional tuple type** `(string, int32, int32)` (spec §Type syntax), *not* to a synthesized `data struct`. G# tuples are **positional only** — the named-element spelling `(Name string, …)` does not parse — so C# element **names are dropped** at the type, and a named-element **access** `item.Price` lowers to the positional field `item.Item2` (resolved via Roslyn's `IFieldSymbol.CorrespondingTupleField`); positional `item.Item1` passes through. Tuple **construction** `(a, b, c)` maps to the G# tuple literal `(a, b, c)`. The mapping is recorded as an Info diagnostic. This was chosen over synthesizing a `data struct` per tuple shape because a `data struct` element type triggers a real compiler gap (below) and because native tuples are the genuinely canonical, round-trippable G# form.
+
+> **`for … in List[ownedType]` element-type erasure — discovered compiler gap.**
+> Iterating a `List[T]` whose element `T` is a **user type owned by the same
+> compilation** (a `data struct`/`class` declared in the same program) and then
+> accessing a member of the loop variable fails to bind (`GS0158`/`GS0159`): the
+> for-in binder erases the element type via `TypeSymbol.FromClrType`
+> (`StatementBinder.cs` ~L2852, `case ImportedTypeSymbol`), which cannot resolve
+> a same-compilation user type, so `item.Member` has no type. Arrays (`[]T`) and
+> lists of BCL/primitive elements (`List[int32]`, `List[string]`) bind correctly;
+> only `List[ownedUserType]` is affected. Minimal repro:
+> ```gsharp
+> data struct Item(Name string, Price int32)
+> var xs = List[Item]()
+> xs.Add(Item{Name: "a", Price: 1})
+> for it in xs { Console.WriteLine(it.Name) }   // GS0158 on it.Name
+> ```
+> This is **why T1 maps tuples to native positional tuples rather than a
+> synthesized `data struct`** — `for item in List[(string, int32, int32)]` binds
+> and `item.Item2` resolves. Filed for the compiler team; the translator does not
+> work around it.
 
 #### B.5 Methods: in-body vs receiver-clause — ADR-0079, ADR-0024, spec §Functions and methods
 
@@ -150,10 +181,20 @@ Defaults: top-level declarations default to `public` (ADR-0014); top-level `priv
 - **Fields** require `var`/`let` (ADR-0067, §B.3).
 - **Properties** → `prop Name T` for auto-properties, with `{ get { … } set(v) { … } }` bodies for computed/custom accessors (ADR-0051, `samples/PropertyRef/Lib/Lib.gs`). `open prop`/`override prop` mirror method virtuality.
 - **Constructors** → `init(params) { … }`, chaining via `: Base(args)` (ADR-0065). C# primary constructors / positional records map to the G# primary-constructor `Name(params)` head.
-- **Static members** → a `shared { … }` block (ADR-0053).
+- **Static members** → a `shared { … }` block (ADR-0053); except the program entry's static class, which is hoisted to top level (T3, above).
 - **Enums** → `enum Name { A, B, C }` (`samples/Enum.gs`); payload-bearing C# unions (sealed hierarchy idioms) map to discriminated-union enums (ADR-0078 §5) only when the source is unambiguously that shape, else triaged.
 - **Attributes** → `@Name(args)`, one per line, order preserved (ADR-0047): C# `[Obsolete("x")]` → `@Obsolete("x")`. Explicit attribute targets (`[return: …]`, `[field: …]`, `[assembly: …]`) map to the `@target:Name(...)` form.
 - **`foreach`** → `for x in coll` (ADR-0031); LINQ/extension calls keep instance-call syntax (`xs.Where((x int32) -> x % 2 == 0)`, `samples/LinqExtensions.gs`).
+
+**T3 — C# entry point + static class → top-level.** The program entry in G# is **top-level statements** (a sample `.gs` runs its top-level code; there is no `Main` method entry), and an unqualified sibling static call inside a `shared { }` block does not resolve (`GS0130`). The translator uses `Compilation.GetEntryPoint(...)` to find the C# `Main` and rewrites its enclosing static class to top level:
+
+| C# (entry class) | G# |
+| --- | --- |
+| `static void Main()` body | **top-level statements** appended after all package declarations (this is the program entry) |
+| other `static` method of the entry class | **top-level `func`** (siblings call each other unqualified at top level, which resolves) |
+| the entry `static class` itself / a `shared { }` wrapper | **dropped** — neither is emitted |
+
+The mapping is recorded as an Info diagnostic. Only the type that *contains the entry point* is hoisted; other `static` utility classes still map to a class whose members sit in a `shared { }` block (§B.11, ADR-0053). This applies to executable compilations (a library compilation has no entry point, so its static classes keep the `shared { }` mapping).
 
 #### B.12 Numeric type names and identifiers — ADR-0049, ADR-0098
 

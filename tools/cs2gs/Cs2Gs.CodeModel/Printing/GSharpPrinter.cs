@@ -112,6 +112,9 @@ public static class GSharpPrinter
             case ArrayTypeReference array:
                 return $"[]{RenderType(array.ElementType)}";
 
+            case TupleTypeReference tuple:
+                return $"({string.Join(", ", tuple.ElementTypes.Select(RenderType))})";
+
             case ArrowTypeReference arrow:
                 var prefix = arrow.IsAsync ? "async " : string.Empty;
                 var parameters = string.Join(", ", arrow.ParameterTypes.Select(RenderType));

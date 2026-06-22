@@ -27,9 +27,9 @@ public class BodyTranslationTests
     /// <summary>
     /// The real <c>L1-Console/Program.cs</c> translates to complete G# — every
     /// body translated, no <c>// pending</c> placeholder, no <c>body-pending</c>
-    /// diagnostic — and the printed text round-trip-parses. The only
-    /// <see cref="TranslationSeverity.Unsupported"/> records are the pre-existing
-    /// named-tuple gaps from step 6 (the element type of <c>_items</c>).
+    /// diagnostic — and the printed text round-trip-parses. After the T1–T3
+    /// canonicalization there are no <see cref="TranslationSeverity.Unsupported"/>
+    /// records: the former named-tuple gap now maps to a native positional tuple.
     /// </summary>
     [Fact]
     public async Task L1Corpus_FullyTranslatesAndRoundTrips()
@@ -47,10 +47,11 @@ public class BodyTranslationTests
         Assert.DoesNotContain("// unsupported", printed);
         Assert.DoesNotContain(context.Diagnostics, d => d.ConstructKind == "body-pending");
 
-        // Every remaining Unsupported diagnostic is the known named-tuple gap.
-        Assert.All(
-            context.Diagnostics.Where(d => d.Severity == TranslationSeverity.Unsupported),
-            d => Assert.Contains("value-tuple", d.Message));
+        // T1–T3 leave no Unsupported diagnostic: tuples, immutable fields, and the
+        // entry point all have canonical G# forms now.
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
     }
 
     /// <summary>if / else-if / else chains map to nested <see cref="IfStatement"/>

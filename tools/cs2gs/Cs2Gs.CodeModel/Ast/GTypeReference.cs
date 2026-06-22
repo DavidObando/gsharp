@@ -65,6 +65,28 @@ public sealed class ArrayTypeReference : GTypeReference
 }
 
 /// <summary>
+/// A positional tuple type rendered as <c>(T1, T2, …)</c> (spec §Type syntax,
+/// the <c>"(" TypeClause { "," TypeClause } ")"</c> production). C# value tuples
+/// (named or unnamed) map to this form; G# tuples are positional, so C# element
+/// names are dropped and named element access lowers to <c>.Item1</c>/<c>.Item2</c>
+/// (ADR-0115 §B.4). At least two element types are required for a tuple type.
+/// </summary>
+public sealed class TupleTypeReference : GTypeReference
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TupleTypeReference"/> class.
+    /// </summary>
+    /// <param name="elementTypes">The ordered element types.</param>
+    public TupleTypeReference(IReadOnlyList<GTypeReference> elementTypes)
+    {
+        ElementTypes = elementTypes ?? new List<GTypeReference>();
+    }
+
+    /// <summary>Gets the ordered element types.</summary>
+    public IReadOnlyList<GTypeReference> ElementTypes { get; }
+}
+
+/// <summary>
 /// A delegate type in the canonical arrow form <c>(A, B) -&gt; R</c>
 /// (ADR-0075, ADR-0115 §B.8). A multi-value return spells <c>-&gt; (T1, T2)</c>;
 /// a void return spells <c>-&gt; void</c>; an async delegate spells

@@ -65,15 +65,41 @@ public sealed class CSharpToGSharpTranslator
 
         HashSet<INamedTypeSymbol> openBases = CollectSubclassedBaseTypes(context.Compilation);
         var visitor = new DeclarationVisitor(context, new CSharpTypeMapper(), openBases);
+
+        // T3 (ADR-0115 §B.1/§B.11): the C# program entry point and its enclosing
+        // static class become top-level G#. The entry `Main` body translates to
+        // top-level statements (the program entry in G# is top-level statements,
+        // not a `Main` method) and the sibling static methods become top-level
+        // `func`s — never a `shared { }` block.
+        IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
+        INamedTypeSymbol entryType = entryPoint?.ContainingType;
+
         var members = new List<GNode>();
+        var trailingStatements = new List<GNode>();
         foreach (MemberDeclarationSyntax member in EnumerateTopLevelDeclarations(root))
         {
+            if (entryType != null
+                && member is TypeDeclarationSyntax typeDecl
+                && context.GetDeclaredSymbol(member) is INamedTypeSymbol declaredType
+                && SymbolEqualityComparer.Default.Equals(declaredType.OriginalDefinition, entryType.OriginalDefinition))
+            {
+                (IReadOnlyList<GNode> hoistedFuncs, IReadOnlyList<GNode> entryStatements) =
+                    visitor.TranslateEntryType(typeDecl, entryPoint);
+                members.AddRange(hoistedFuncs);
+                trailingStatements.AddRange(entryStatements);
+                continue;
+            }
+
             GMember translated = visitor.Visit(member);
             if (translated is not null)
             {
                 members.Add(translated);
             }
         }
+
+        // Top-level statements are appended after every declaration so the program
+        // entry runs with all package types and funcs already in scope.
+        members.AddRange(trailingStatements);
 
         return new CompilationUnit(package, imports, members);
     }
@@ -269,6 +295,56 @@ public sealed class CSharpToGSharpTranslator
             return null;
         }
 
+        /// <summary>
+        /// T3 (ADR-0115 §B.1/§B.11): translates the C# program entry point's
+        /// enclosing static class into top-level G#. The entry method's body
+        /// becomes top-level statements (the G# program entry), and every other
+        /// static method becomes a top-level <c>func</c>. The class itself — and
+        /// any <c>shared { }</c> wrapping — is dropped.
+        /// </summary>
+        /// <param name="node">The entry point's enclosing type declaration.</param>
+        /// <param name="entryPoint">The bound entry-point method symbol.</param>
+        /// <returns>The hoisted top-level funcs and the entry top-level statements.</returns>
+        public (IReadOnlyList<GNode> Funcs, IReadOnlyList<GNode> Statements) TranslateEntryType(
+            TypeDeclarationSyntax node,
+            IMethodSymbol entryPoint)
+        {
+            this.context.Report(new TranslationDiagnostic(
+                nameof(SyntaxKind.ClassDeclaration),
+                $"C# entry point '{entryPoint.ContainingType.Name}.{entryPoint.Name}' and its enclosing static class are hoisted to top level: the entry body becomes top-level statements and sibling static methods become top-level 'func's (no 'shared {{ }}' block) (ADR-0115 §B.1/§B.11 / T3).",
+                node.GetLocation(),
+                TranslationSeverity.Info));
+
+            var funcs = new List<GNode>();
+            var statements = new List<GNode>();
+
+            foreach (MemberDeclarationSyntax member in node.Members)
+            {
+                switch (member)
+                {
+                    case MethodDeclarationSyntax method
+                        when SymbolEqualityComparer.Default.Equals(
+                            this.context.GetDeclaredSymbol(method), entryPoint):
+                        BlockStatement body = this.TranslateBody(method, $"entry point '{entryPoint.Name}'");
+                        statements.AddRange(body.Statements);
+                        break;
+
+                    case MethodDeclarationSyntax method:
+                        (GMember func, _) = this.TranslateMethod(method, TypeDeclarationKind.Class);
+                        funcs.Add(func);
+                        break;
+
+                    default:
+                        this.context.ReportUnsupported(
+                            member,
+                            $"member '{member.Kind()}' of the entry class has no top-level G# mapping yet (ADR-0115 §B.11 / T3).");
+                        break;
+                }
+            }
+
+            return (funcs, statements);
+        }
+
         private static Visibility MapVisibility(ISymbol symbol, TranslationContext context, SyntaxNode node)
         {
             if (symbol is null)
@@ -370,11 +446,17 @@ public sealed class CSharpToGSharpTranslator
                     TranslationSeverity.Info));
             }
 
+            // T2 (ADR-0115 §B.3): canonicalize immutable-field initialization.
+            // A `let` field is read-only everywhere in G# (including inside `init`),
+            // so a `readonly` field assigned in the constructor must instead be a
+            // field initializer or a primary-constructor parameter.
+            ConstructorLift lift = this.AnalyzeConstructorLift(node, symbol, kind.Value);
+
             var instanceMembers = new List<GMember>();
             var sharedMembers = new List<GMember>();
             foreach (MemberDeclarationSyntax member in node.Members)
             {
-                foreach ((GMember translated, bool isStatic) in this.TranslateMember(member, kind.Value))
+                foreach ((GMember translated, bool isStatic) in this.TranslateMember(member, kind.Value, lift))
                 {
                     if (isStatic || isStaticClass)
                     {
@@ -395,7 +477,9 @@ public sealed class CSharpToGSharpTranslator
 
             (GTypeReference baseType, List<GTypeReference> interfaces) = this.MapBaseClause(symbol, node);
             List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
-            IReadOnlyList<Parameter> primaryCtor = this.MapPrimaryConstructor(node);
+            IReadOnlyList<Parameter> primaryCtor = lift.DropConstructor
+                ? lift.PrimaryParameters
+                : this.MapPrimaryConstructor(node);
 
             bool isOpen = symbol != null &&
                 kind == TypeDeclarationKind.Class &&
@@ -417,14 +501,164 @@ public sealed class CSharpToGSharpTranslator
                 attributes: this.MapAttributes(node.AttributeLists));
         }
 
+        /// <summary>
+        /// Analyzes a type's single instance constructor to decide the canonical
+        /// G# immutable-field initialization form (ADR-0115 §B.3 / T2). A field
+        /// assigned directly from a constructor parameter is lifted to a primary
+        /// constructor parameter; a field assigned an expression independent of the
+        /// constructor parameters becomes a field initializer; when every
+        /// statement and parameter is consumed this way the explicit
+        /// <c>init</c> constructor is dropped. Anything that does not fit the
+        /// pattern leaves the constructor untouched (<see cref="ConstructorLift.None"/>).
+        /// </summary>
+        private ConstructorLift AnalyzeConstructorLift(
+            TypeDeclarationSyntax node,
+            INamedTypeSymbol symbol,
+            TypeDeclarationKind kind)
+        {
+            if (symbol == null || kind != TypeDeclarationKind.Class)
+            {
+                return ConstructorLift.None;
+            }
+
+            List<ConstructorDeclarationSyntax> instanceCtors = node.Members
+                .OfType<ConstructorDeclarationSyntax>()
+                .Where(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword))
+                .ToList();
+
+            // A record already owns a primary constructor, and zero or many
+            // instance constructors are out of scope for the L1 canonicalization.
+            if (instanceCtors.Count != 1 || node is RecordDeclarationSyntax)
+            {
+                return ConstructorLift.None;
+            }
+
+            ConstructorDeclarationSyntax ctor = instanceCtors[0];
+            if (ctor.Body == null || ctor.Initializer != null)
+            {
+                return ConstructorLift.None;
+            }
+
+            var ctorSymbol = this.context.GetDeclaredSymbol(ctor) as IMethodSymbol;
+            if (ctorSymbol == null)
+            {
+                return ConstructorLift.None;
+            }
+
+            var paramToField = new Dictionary<IParameterSymbol, IFieldSymbol>(SymbolEqualityComparer.Default);
+            var fieldInitializers = new Dictionary<string, GExpression>();
+            var fieldTypes = new Dictionary<string, ITypeSymbol>();
+
+            SyntaxNode previousScope = this.currentBodyScope;
+            this.currentBodyScope = ctor;
+            try
+            {
+                foreach (StatementSyntax statement in ctor.Body.Statements)
+                {
+                    if (statement is not ExpressionStatementSyntax exprStatement
+                        || exprStatement.Expression is not AssignmentExpressionSyntax assignment
+                        || !assignment.OperatorToken.IsKind(SyntaxKind.EqualsToken))
+                    {
+                        return ConstructorLift.None;
+                    }
+
+                    if (this.context.GetSymbolInfo(assignment.Left).Symbol is not IFieldSymbol fieldSymbol
+                        || fieldSymbol.IsStatic
+                        || !SymbolEqualityComparer.Default.Equals(fieldSymbol.ContainingType, symbol))
+                    {
+                        return ConstructorLift.None;
+                    }
+
+                    fieldTypes[fieldSymbol.Name] = fieldSymbol.Type;
+
+                    // `_field = ctorParam` → lift to a primary-constructor parameter.
+                    if (assignment.Right is IdentifierNameSyntax rightId
+                        && this.context.GetSymbolInfo(rightId).Symbol is IParameterSymbol paramSymbol
+                        && SymbolEqualityComparer.Default.Equals(paramSymbol.ContainingSymbol, ctorSymbol))
+                    {
+                        if (paramToField.ContainsKey(paramSymbol))
+                        {
+                            return ConstructorLift.None;
+                        }
+
+                        paramToField[paramSymbol] = fieldSymbol;
+                        continue;
+                    }
+
+                    // Otherwise the RHS must be independent of the constructor
+                    // parameters to become a field initializer.
+                    if (this.ReferencesAnyParameter(assignment.Right, ctorSymbol))
+                    {
+                        return ConstructorLift.None;
+                    }
+
+                    fieldInitializers[fieldSymbol.Name] = this.TranslateExpression(assignment.Right);
+                }
+            }
+            finally
+            {
+                this.currentBodyScope = previousScope;
+            }
+
+            // Every constructor parameter must be consumed by exactly one direct
+            // field assignment for the constructor to drop cleanly.
+            if (ctorSymbol.Parameters.Any(p => !paramToField.ContainsKey(p)))
+            {
+                return ConstructorLift.None;
+            }
+
+            var primaryParameters = new List<Parameter>();
+            var fieldsAsParams = new HashSet<string>();
+            foreach (IParameterSymbol param in ctorSymbol.Parameters)
+            {
+                IFieldSymbol field = paramToField[param];
+                GTypeReference type = this.typeMapper.Map(field.Type, this.context, param.Locations.FirstOrDefault());
+                primaryParameters.Add(new Parameter(field.Name, type));
+                fieldsAsParams.Add(field.Name);
+            }
+
+            if (fieldsAsParams.Count > 0)
+            {
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(SyntaxKind.ConstructorDeclaration),
+                    $"constructor on '{node.Identifier.Text}' is canonicalized to a primary constructor: parameter-sourced field(s) {string.Join(", ", fieldsAsParams.OrderBy(n => n))} become primary-constructor parameter fields (now public) and the explicit 'init' is dropped (ADR-0115 §B.3 / T2).",
+                    ctor.GetLocation(),
+                    TranslationSeverity.Info));
+            }
+
+            return new ConstructorLift
+            {
+                Constructor = ctor,
+                DropConstructor = true,
+                PrimaryParameters = primaryParameters,
+                FieldsAsPrimaryParameters = fieldsAsParams,
+                FieldInitializers = fieldInitializers,
+            };
+        }
+
+        private bool ReferencesAnyParameter(ExpressionSyntax expression, IMethodSymbol ctorSymbol)
+        {
+            foreach (IdentifierNameSyntax id in expression.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+            {
+                if (this.context.GetSymbolInfo(id).Symbol is IParameterSymbol p
+                    && SymbolEqualityComparer.Default.Equals(p.ContainingSymbol, ctorSymbol))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private IEnumerable<(GMember Member, bool IsStatic)> TranslateMember(
             MemberDeclarationSyntax member,
-            TypeDeclarationKind ownerKind)
+            TypeDeclarationKind ownerKind,
+            ConstructorLift lift)
         {
             switch (member)
             {
                 case FieldDeclarationSyntax field:
-                    foreach ((GMember m, bool s) in this.TranslateField(field))
+                    foreach ((GMember m, bool s) in this.TranslateField(field, lift))
                     {
                         yield return (m, s);
                     }
@@ -440,6 +674,14 @@ public sealed class CSharpToGSharpTranslator
                     break;
 
                 case ConstructorDeclarationSyntax ctor:
+                    // T2: a fully-lifted constructor is dropped entirely; its field
+                    // initialization moved to field initializers / primary-ctor
+                    // parameters (ADR-0115 §B.3).
+                    if (lift.DropConstructor && lift.Constructor == ctor)
+                    {
+                        break;
+                    }
+
                     GMember built = this.TranslateConstructor(ctor);
                     if (built != null)
                     {
@@ -465,11 +707,21 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
-        private IEnumerable<(GMember Member, bool IsStatic)> TranslateField(FieldDeclarationSyntax field)
+        private IEnumerable<(GMember Member, bool IsStatic)> TranslateField(
+            FieldDeclarationSyntax field,
+            ConstructorLift lift)
         {
             foreach (VariableDeclaratorSyntax declarator in field.Declaration.Variables)
             {
                 var symbol = this.context.GetDeclaredSymbol(declarator) as IFieldSymbol;
+
+                // T2: a field that became a primary-constructor parameter is no
+                // longer a standalone member (the parameter declares the field).
+                if (lift.FieldsAsPrimaryParameters.Contains(declarator.Identifier.Text))
+                {
+                    continue;
+                }
+
                 BindingKind binding = symbol switch
                 {
                     { IsConst: true } => BindingKind.Const,
@@ -481,20 +733,24 @@ public sealed class CSharpToGSharpTranslator
                     ? this.typeMapper.Map(symbol.Type, this.context, declarator.GetLocation())
                     : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
 
-                if (declarator.Initializer != null)
+                // T2: a field initializer (ADR-0115 §B.3) comes either from a
+                // constructor assignment independent of the constructor parameters
+                // (lifted out of the dropped `init`) or from a C# field initializer.
+                GExpression initializer = null;
+                if (lift.FieldInitializers.TryGetValue(declarator.Identifier.Text, out GExpression lifted))
                 {
-                    this.context.Report(new TranslationDiagnostic(
-                        nameof(SyntaxKind.EqualsValueClause),
-                        $"field '{declarator.Identifier.Text}' has an initializer; the initializer expression is deferred to step 7 (issue #914).",
-                        declarator.Initializer.GetLocation(),
-                        TranslationSeverity.Info));
+                    initializer = lifted;
+                }
+                else if (declarator.Initializer != null)
+                {
+                    initializer = this.TranslateExpression(declarator.Initializer.Value);
                 }
 
                 var declaration = new FieldDeclaration(
                     binding,
                     declarator.Identifier.Text,
                     type,
-                    initializer: null,
+                    initializer: initializer,
                     visibility: MapVisibility(symbol, this.context, field),
                     attributes: this.MapAttributes(field.AttributeLists));
 
@@ -1297,9 +1553,7 @@ public sealed class CSharpToGSharpTranslator
                     return new ThisExpression();
 
                 case MemberAccessExpressionSyntax member:
-                    return new MemberAccessExpression(
-                        this.TranslateExpression(member.Expression),
-                        member.Name.Identifier.Text);
+                    return this.TranslateMemberAccess(member);
 
                 case InvocationExpressionSyntax invocation:
                     return this.TranslateInvocation(invocation);
@@ -1378,6 +1632,26 @@ public sealed class CSharpToGSharpTranslator
                         $"literal '{literal.Kind()}' has no canonical G# form yet; emitted nil (ADR-0115 §B.12).");
                     return LiteralExpression.Null();
             }
+        }
+
+        private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
+        {
+            GExpression target = this.TranslateExpression(member.Expression);
+            string memberName = member.Name.Identifier.Text;
+
+            // A C# tuple element access (`item.Name`, `item.Price`) lowers to the
+            // positional G# tuple field `.Item1`/`.Item2`, because G# tuples are
+            // positional and carry no element names (ADR-0115 §B.4). The default
+            // `.ItemN` access already resolves; only named-element access needs the
+            // rewrite, detected via the bound tuple-element field symbol.
+            if (this.context.GetSymbolInfo(member).Symbol is IFieldSymbol field &&
+                field.ContainingType is { IsTupleType: true })
+            {
+                IFieldSymbol positional = field.CorrespondingTupleField ?? field;
+                memberName = positional.Name;
+            }
+
+            return new MemberAccessExpression(target, memberName);
         }
 
         private GExpression TranslateInvocation(InvocationExpressionSyntax invocation)
@@ -1478,6 +1752,28 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return new InterpolatedStringExpression(parts);
+        }
+
+        /// <summary>
+        /// Carries the result of the T2 constructor-lift analysis (ADR-0115 §B.3):
+        /// which immutable fields move to a primary-constructor parameter, which
+        /// gain a field initializer, and whether the explicit <c>init</c>
+        /// constructor can be dropped entirely.
+        /// </summary>
+        private sealed class ConstructorLift
+        {
+            public static readonly ConstructorLift None = new ConstructorLift();
+
+            public ConstructorDeclarationSyntax Constructor { get; init; }
+
+            public bool DropConstructor { get; init; }
+
+            public IReadOnlyList<Parameter> PrimaryParameters { get; init; } = new List<Parameter>();
+
+            public HashSet<string> FieldsAsPrimaryParameters { get; init; } = new HashSet<string>();
+
+            public Dictionary<string, GExpression> FieldInitializers { get; init; } =
+                new Dictionary<string, GExpression>();
         }
     }
 }

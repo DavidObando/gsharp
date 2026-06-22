@@ -590,6 +590,38 @@ public class GoldenTests
         AssertGolden(expected, unit);
     }
 
+    /// <summary>§Type syntax (T1, ADR-0115 §B.4): a positional tuple TYPE
+    /// <c>(string, int32, int32)</c> — here as the element type of a
+    /// <c>List[...]</c> field — renders parenthesized and comma-joined.</summary>
+    [Fact]
+    public void BTupleType_PositionalElements()
+    {
+        var unit = new CompilationUnit("Demo", members: Nodes(
+            new FieldDeclaration(
+                BindingKind.Let,
+                "_items",
+                new NamedTypeReference("List", List<GTypeReference>(
+                    new TupleTypeReference(List<GTypeReference>(
+                        Type("string"),
+                        Type("int32"),
+                        Type("int32"))))),
+                initializer: new InvocationExpression(
+                    new IdentifierExpression("List"),
+                    List<GExpression>(),
+                    List<GTypeReference>(new TupleTypeReference(List<GTypeReference>(
+                        Type("string"),
+                        Type("int32"),
+                        Type("int32"))))),
+                visibility: Visibility.Private)));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "private let _items List[(string, int32, int32)] = List[(string, int32, int32)]()");
+
+        AssertGolden(expected, unit);
+    }
+
     /// <summary>§For loops: the key/value <c>for k, v in coll { }</c> form.</summary>
     [Fact]
     public void BForIn_KeyValue()
