@@ -1242,6 +1242,21 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0181", $"Class '{baseTypeName}' is not open; declare 'open class {baseTypeName}' to allow subclassing.");
     }
 
+    /// <summary>
+    /// Issue #949: reports a class that directly names itself as its own base
+    /// class (e.g. <c>class A : A</c> or the generic <c>class A[T] : A[T]</c>),
+    /// which is an illegal self-inheritance cycle. Note that naming the
+    /// enclosing type merely as a generic type argument of a base/interface
+    /// type — the common <c>class Shape : IEquatable[Shape]</c> pattern — is
+    /// legal and is not reported here.
+    /// </summary>
+    /// <param name="location">The text location of the base-type identifier.</param>
+    /// <param name="typeName">The declaring type name.</param>
+    public void ReportClassInheritsFromItself(TextLocation location, string typeName)
+    {
+        Report(location, "GS0378", $"Class '{typeName}' cannot inherit from itself.");
+    }
+
     /// <summary>Reports base-constructor arguments (<c>: Base(args)</c>) on a class that declares no base class (issue #306).</summary>
     /// <param name="location">The text location of the base-constructor argument list.</param>
     public void ReportBaseConstructorArgumentsWithoutBase(TextLocation location)

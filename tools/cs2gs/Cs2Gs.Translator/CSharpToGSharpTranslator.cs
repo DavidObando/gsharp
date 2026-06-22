@@ -1212,17 +1212,14 @@ public sealed class CSharpToGSharpTranslator
 
             // A `data class` / `data struct` (C# record / record struct) synthesizes
             // structural equality in G#, exactly as the C# record auto-implements
-            // `IEquatable<Self>`. Emitting the synthesized `IEquatable[Self]` base
-            // clause is both redundant and rejected by the parser on a positional
-            // declaration, so it is dropped here (ADR-0115 §B.4).
-            // A `data class` / `data struct` (C# record / record struct) synthesizes
-            // structural equality in G#, exactly as the C# record auto-implements
-            // `IEquatable<Self>`. Emitting the synthesized `IEquatable[Self]` base
-            // clause is both redundant and rejected by the parser (a class cannot
-            // name itself in its own base list), so it is dropped here. A fieldless
-            // record mapped to a plain `class` still synthesizes `IEquatable<Self>`
-            // in C#, so the filter keys off the record origin, not the mapped kind
-            // (ADR-0115 §B.4).
+            // `IEquatable<Self>`. Re-stating the synthesized `IEquatable[Self]` base
+            // clause is redundant for a `data` type (equality comes from the `data`
+            // modifier) and would be unimplemented on a fieldless record mapped to a
+            // plain `class` (no synthesized `Equals`), so it is dropped here.
+            // (Naming the enclosing type as a base-clause type ARGUMENT is itself
+            // legal since issue #949 — `open class Shape : IEquatable[Shape]` now
+            // compiles; the drop is a semantic redundancy filter, not a syntax
+            // limitation.) See ADR-0115 §B.4.
             bool isRecord = symbol.IsRecord;
             foreach (INamedTypeSymbol iface in symbol.Interfaces)
             {
