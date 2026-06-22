@@ -430,6 +430,40 @@ Both are written under the run directory alongside the per-failure triage artifa
 
 **CLI wiring.** A `cs2gs migrate` run generates both artifacts into the run directory automatically at the end (and prints their paths). `cs2gs report --run <runDir> [--out <file-or-dir>]` regenerates both from an existing `run.json` without re-running the pipeline, so a CI job can re-render a report (e.g. against an updated report template) without a fresh corpus run.
 
+### G. Validation outcome (issue #914 capstone)
+
+The tool was validated end-to-end across the full L1–L3 corpus. The deterministic
+report (`report.html` / `summary.json`) is byte-stable and fully self-contained
+(zero external asset/network references), and every discovered gap deduplicates
+to a single fingerprinted entry that maps to a filed compiler issue. Final matrix:
+
+| App | translate | compile | ilverify | test-parity | Blocking gap |
+| --- | --- | --- | --- | --- | --- |
+| `corpus/L1-Console` | PASS | PASS | PASS | PASS | — (fully green E2E) |
+| `corpus/L2-Library` | PASS | FAIL | skip | skip | #940 (static-overload) |
+| `corpus/L3-Library` | FAIL | skip | skip | skip | #941–#944 (`Advanced.gs` compiles standalone; `Generics.cs` blocked) |
+
+**Objective 1 (faithful migration)** is demonstrated by L1 reaching full
+stdout/test parity and by L2 + L3-`Advanced` translating to canonical G# that
+`gsc` accepts. **Objective 2 (gap discovery)** is demonstrated by seven
+structured, reproduced, and filed compiler gaps surfaced purely by migration
+friction:
+
+| Issue | Construct | Diagnostic |
+| --- | --- | --- |
+| #938 | owned-`struct` instance methods (no warning-free spelling) | GS0314 |
+| #939 | `for…in List[userType]` element-type erasure | GS0158 |
+| #940 | static (`shared`) method overloads ignore arity | GS0144 |
+| #941 | binary `??` operator unsupported (only `??=` exists) | GS0005 |
+| #942 | `expr[i].Member` mis-parses `[i]` as type arguments | GS0005 |
+| #943 | generic-interface constraint `[T IComparable[T]]` won't parse | GS0005 |
+| #944 | no user-indexer declaration form; attempts crash | GS9998 |
+
+L2/L3 not going fully green is the **intended** objective-2 outcome: the residual
+failures are real compiler gaps, captured and filed rather than worked around or
+hidden. Each will close as the cited compiler issue is fixed and the corpus run
+re-greens automatically.
+
 ## Consequences
 
 ### Positive
