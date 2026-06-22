@@ -6474,6 +6474,19 @@ public class Parser
     // coverage lives in test/Core.Tests/CodeAnalysis/Syntax/Issue693MultiTypeArgGenericCallParserTests.cs
     // and end-to-end emit coverage in
     // test/Compiler.Tests/Emit/Issue693DictionaryConstructionEmitTests.cs.
+    //
+    // Issue #942: the `.` follow-set marker is genuinely ambiguous with
+    // indexer-then-member access. A single bracketed argument that is also a
+    // legal expression (e.g. `xs[i]`, `xs[i].ToString()`) scans as a lone
+    // type clause and would otherwise be mis-committed to a generic
+    // type-argument list, so the trailing `.Member` mis-binds. An indexer can
+    // only ever hold a *single* index expression, never a comma-separated
+    // list, so we restrict the `.` follow-set to the unambiguous multi-arg
+    // shape (`Pair[int, string].zero`). A single bracketed argument followed
+    // by `.` is parsed as an indexer-then-member access, matching the
+    // literal-index behaviour (`xs[0].ToString()`). The `(`/`{` markers stay
+    // arity-agnostic: `Map[int](xs)` and `List[int]{...}` remain generic
+    // instantiations regardless of arity.
     private bool LooksLikeGenericCallSite(int bracketOffset)
     {
         if (Peek(bracketOffset).Kind != SyntaxKind.OpenSquareBracketToken)
@@ -6487,12 +6500,15 @@ public class Parser
             return false;
         }
 
+        var typeArgumentCount = 0;
         while (true)
         {
             if (!TryScanTypeClause(ref pos))
             {
                 return false;
             }
+
+            typeArgumentCount++;
 
             if (Peek(pos).Kind == SyntaxKind.CommaToken)
             {
@@ -6511,9 +6527,16 @@ public class Parser
 
         // Follow-set per ADR-0020: '(' (call), '{' (composite literal), '.' (member access).
         var nextKind = Peek(pos).Kind;
-        return nextKind == SyntaxKind.OpenParenthesisToken
-            || nextKind == SyntaxKind.OpenBraceToken
-            || nextKind == SyntaxKind.DotToken;
+        if (nextKind == SyntaxKind.OpenParenthesisToken
+            || nextKind == SyntaxKind.OpenBraceToken)
+        {
+            return true;
+        }
+
+        // Issue #942: only a multi-type-argument list (which cannot be an
+        // indexer) commits to a generic call site on a trailing `.`. A single
+        // bracketed argument followed by `.` is an indexer-then-member access.
+        return nextKind == SyntaxKind.DotToken && typeArgumentCount > 1;
     }
 
     private bool TryScanTypeClause(ref int pos)
