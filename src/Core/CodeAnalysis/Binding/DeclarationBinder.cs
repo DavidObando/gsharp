@@ -788,16 +788,37 @@ internal sealed class DeclarationBinder
         }
 
         // Phase 3.B.3 sub-step 2b: bind methods declared inside the class body.
-        // Methods are only legal on `class` types (struct methods rejected by
-        // the parser already). Each method becomes a FunctionSymbol with
+        // Issue #938 / ADR-0079: in-body methods are the canonical declaration
+        // site for owned `class` AND owned `struct`/`data struct` instance
+        // methods. Each method becomes a FunctionSymbol with
         // ReceiverType = structSymbol; method bodies are bound later by
-        // BindProgram by walking StructSymbol.Methods.
-        if (syntax.IsClass && !syntax.Methods.IsDefaultOrEmpty)
+        // BindProgram by walking StructSymbol.Methods. For value-type receivers
+        // the emitter synthesizes a by-ref `this`, identical to the
+        // receiver-clause owned-struct method lowering.
+        if (!syntax.Methods.IsDefaultOrEmpty)
         {
             var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
             foreach (var methodSyntax in syntax.Methods)
             {
                 var methodName = methodSyntax.Identifier.Text;
+
+                // Issue #938 / ADR-0029: inline and data structs synthesize a
+                // fixed set of members (Equals, GetHashCode, ToString,
+                // op_Equality, op_Inequality, Deconstruct). User code may not
+                // hand-write any of them via the in-body form either — this
+                // mirrors the receiver-clause guard below so both spellings of
+                // an owned-struct instance method reject the same collisions.
+                if (structSymbol.IsInline && IsInlineSynthesizedMemberName(methodName))
+                {
+                    Diagnostics.ReportInlineStructSynthesizedMemberConflict(methodSyntax.Identifier.Location, structSymbol.Name, methodName);
+                    continue;
+                }
+
+                if (structSymbol.IsData && IsDataStructSynthesizedMemberName(methodName))
+                {
+                    Diagnostics.ReportDataStructSynthesizedMemberConflict(methodSyntax.Identifier.Location, structSymbol.Name, methodName);
+                    continue;
+                }
 
                 // ADR-0063: allow same-name overloads on a class body. The duplicate
                 // check is replaced by a signature-identity check applied below, after
