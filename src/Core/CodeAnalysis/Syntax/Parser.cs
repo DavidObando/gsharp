@@ -2537,15 +2537,15 @@ public class Parser
             var startToken = Current;
 
             if (Current.Kind == SyntaxKind.IdentifierToken &&
-                (Current.Text == "get" || Current.Text == "set"))
+                (Current.Text == "get" || Current.Text == "set" || Current.Text == "init"))
             {
                 var accessorKeyword = NextToken();
 
-                // For set, optionally parse (paramName)
+                // For set/init, optionally parse (paramName)
                 SyntaxToken openParen = null;
                 SyntaxToken paramIdentifier = null;
                 SyntaxToken closeParen = null;
-                if (accessorKeyword.Text == "set" && Current.Kind == SyntaxKind.OpenParenthesisToken)
+                if ((accessorKeyword.Text == "set" || accessorKeyword.Text == "init") && Current.Kind == SyntaxKind.OpenParenthesisToken)
                 {
                     openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
                     paramIdentifier = MatchToken(SyntaxKind.IdentifierToken);

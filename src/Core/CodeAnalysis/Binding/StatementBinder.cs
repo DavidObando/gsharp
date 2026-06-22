@@ -3779,6 +3779,23 @@ internal sealed class StatementBinder
                     return (null, null);
                 }
 
+                // Issue #946: a compound assignment (`+=` / `??=`) to an
+                // init-only property is only legal during object initialization.
+                if (propAccess.Property.IsInitOnly)
+                {
+                    var fn = this.function;
+                    var inInitContext = fn != null && (fn.Name == ".ctor" || fn.IsInitOnlySetter);
+                    var receiverIsThis = propAccess.Receiver == null
+                        || (propAccess.Receiver is BoundVariableExpression rbve
+                            && fn?.ThisParameter != null
+                            && ReferenceEquals(rbve.Variable, fn.ThisParameter));
+                    if (!inInitContext || !receiverIsThis)
+                    {
+                        Diagnostics.ReportInitOnlyPropertyAssignment(syntax.OperatorToken.Location, propAccess.Property.Name);
+                        return (null, null);
+                    }
+                }
+
                 var receiver = propAccess.Receiver == null
                     ? null
                     : CaptureReceiver(syntax, propAccess.Receiver, preStatements);

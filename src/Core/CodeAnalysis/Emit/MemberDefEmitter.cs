@@ -295,7 +295,26 @@ internal sealed class MemberDefEmitter
 
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
-            .Parameters(1, r => r.Void(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type));
+            .Parameters(
+                1,
+                r =>
+                {
+                    // Issue #946: an `init`-only setter encodes its void return
+                    // with modreq(System.Runtime.CompilerServices.IsExternalInit),
+                    // exactly as a C# 9 init-only setter does. This is how the
+                    // CLR and peer compilers recognize the accessor as init-only.
+                    if (prop.IsInitOnly)
+                    {
+                        var isExternalInit = this.wellKnown.GetIsExternalInitTypeRef();
+                        if (!isExternalInit.IsNil)
+                        {
+                            r.CustomModifiers().AddModifier(isExternalInit, isOptional: false);
+                        }
+                    }
+
+                    r.Void();
+                },
+                ps => this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type));
 
         var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
         if (prop.IsVirtual)

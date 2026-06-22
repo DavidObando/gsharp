@@ -96,6 +96,28 @@ namespace Demo
     }
 
     /// <summary>
+    /// Issue #946: a C# <c>init</c> accessor maps to a first-class G# <c>init</c>
+    /// accessor (previously mapped to <c>set</c> with a gap diagnostic per
+    /// ADR-0115 §B.11).
+    /// </summary>
+    [Fact]
+    public void InitAccessor_TranslatesToInit()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public sealed class Config
+    {
+        public string Name { get; init; }
+    }
+}");
+
+        Assert.Contains("get;", printed);
+        Assert.Contains("init;", printed);
+        Assert.DoesNotContain("set;", printed);
+    }
+
+    /// <summary>
     /// ADR-0115 §B.15: a C# <c>with</c>-expression maps to the canonical G#
     /// <c>expr with { Field = value }</c> form (using <c>=</c>); an empty update
     /// list renders <c>expr with { }</c>.

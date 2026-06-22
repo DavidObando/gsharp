@@ -441,7 +441,7 @@ SharedMember     = Accessibility? ( MethodDecl | PropertyDecl | EventDecl | Fiel
 FieldDecl        = Accessibility? ( "var" | "let" ) identifier TypeClause ( "=" Expression )? .
 PropertyDecl     = "prop" ( identifier | IndexerHeader ) TypeClause PropertyBody? .
 IndexerHeader    = "this" "[" Parameters "]" .  (* ADR-0118: user indexer member, emitted as the CLR default `Item` property *)
-PropertyAccessor = ( "get" | "set" ( "(" identifier ")" )? ) ( Block | ";" )? .
+PropertyAccessor = ( "get" | ( "set" | "init" ) ( "(" identifier ")" )? ) ( Block | ";" )? .
 EventDecl        = "event" identifier TypeClause EventBody? .
 EventAccessor    = ( "add" | "remove" | "raise" ) ( Block | ";" )? .
 InterfaceBody    = "{" ( InterfaceMethodDecl | PropertyDecl | EventDecl )* "}" .
@@ -474,6 +474,29 @@ receiver's type arguments. An indexer declared without index parameters reports
 `GS0371`. Element **access** (`obj[i]`) currently binds single-parameter
 indexers; multi-parameter and overloaded indexers are reserved for a future
 revision.
+
+#### Init-only accessors (issue #946)
+
+A property may declare an **`init` accessor** in place of `set`, in either the
+auto-property (`prop Name string { get; init; }`) or explicit-body
+(`init { backingField = value }`) form. An `init` accessor behaves like a `set`
+accessor — it writes the property — except that it may only be invoked while the
+object is being initialized:
+
+* inside a constructor of the declaring type,
+* in an object/aggregate initializer at the creation site (`T() { Prop = v }`),
+* or from another `init` accessor of the same instance.
+
+Assigning to an init-only property anywhere else (after construction completes)
+is a compile error, `GS0372`. Reading an init-only property is always allowed.
+A property may not declare both `set` and `init` (`GS0373`), and an `init`
+accessor may not appear on a `shared` (static) property (`GS0374`).
+
+An `init` accessor is emitted as a `set_Prop` method whose `void` return carries
+the `System.Runtime.CompilerServices.IsExternalInit` required-custom-modifier
+(modreq), exactly as C# encodes init-only setters, so the accessor round-trips
+with C# and other CLR consumers. An auto-property `init;` emits a writable
+backing field plus the init-only setter.
 
 ## Expressions
 

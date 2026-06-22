@@ -420,6 +420,45 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #946: reports that an <c>init</c>-only property was assigned
+    /// outside of object initialization. An <c>init</c>-only property may only
+    /// be assigned in the declaring type's constructor(s), in an object/
+    /// aggregate initializer at the creation site, or within an <c>init</c>
+    /// accessor of the same instance.
+    /// </summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="name">The name of the property.</param>
+    public void ReportInitOnlyPropertyAssignment(TextLocation location, string name)
+    {
+        var message = $"Init-only property '{name}' can only be assigned during object initialization (in a constructor, an object initializer, or an 'init' accessor).";
+        Report(location, "GS0372", message);
+    }
+
+    /// <summary>
+    /// Issue #946: reports that a property declared both a <c>set</c> and an
+    /// <c>init</c> accessor, which is not allowed (mirrors C#'s rule).
+    /// </summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="name">The name of the property.</param>
+    public void ReportPropertyHasBothSetAndInit(TextLocation location, string name)
+    {
+        var message = $"Property '{name}' cannot declare both a 'set' and an 'init' accessor.";
+        Report(location, "GS0373", message);
+    }
+
+    /// <summary>
+    /// Issue #946: reports that an <c>init</c>-only accessor was declared on a
+    /// static property. The <c>init</c> accessor is instance-only.
+    /// </summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="name">The name of the property.</param>
+    public void ReportInitAccessorOnStaticProperty(TextLocation location, string name)
+    {
+        var message = $"Static property '{name}' cannot declare an 'init' accessor; 'init' is only valid on instance properties.";
+        Report(location, "GS0374", message);
+    }
+
+    /// <summary>
     /// Reports that the specified unary operator is not defined for the specified type.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>

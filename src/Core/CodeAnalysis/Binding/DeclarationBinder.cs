@@ -1108,6 +1108,7 @@ internal sealed class DeclarationBinder
                 bool hasGetter = true;
                 bool hasSetter;
                 bool isAutoProperty;
+                bool isInitOnly = false;
                 string setterParamName = "value";
 
                 if (propSyntax.OpenBraceToken == null)
@@ -1121,17 +1122,28 @@ internal sealed class DeclarationBinder
                     // Has body — check accessors
                     var getAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsGetter);
                     var setAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsSetter);
-                    hasGetter = getAccessor != null || propSyntax.Accessors.IsDefaultOrEmpty;
-                    hasSetter = setAccessor != null;
+                    var initAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsInit);
 
-                    if (setAccessor != null && setAccessor.ParameterIdentifier != null)
+                    // Issue #946: a property may declare a `set` or an `init`
+                    // accessor, but not both (mirrors C#).
+                    if (setAccessor != null && initAccessor != null)
                     {
-                        setterParamName = setAccessor.ParameterIdentifier.Text;
+                        Diagnostics.ReportPropertyHasBothSetAndInit(initAccessor.AccessorKeyword.Location, propName);
+                    }
+
+                    var writeAccessor = setAccessor ?? initAccessor;
+                    hasGetter = getAccessor != null || propSyntax.Accessors.IsDefaultOrEmpty;
+                    hasSetter = writeAccessor != null;
+                    isInitOnly = setAccessor == null && initAccessor != null;
+
+                    if (writeAccessor != null && writeAccessor.ParameterIdentifier != null)
+                    {
+                        setterParamName = writeAccessor.ParameterIdentifier.Text;
                     }
 
                     // Auto-property if accessors have no bodies
                     isAutoProperty = (getAccessor == null || getAccessor.Body == null)
-                                  && (setAccessor == null || setAccessor.Body == null)
+                                  && (writeAccessor == null || writeAccessor.Body == null)
                                   && propSyntax.Accessors.All(a => a.Body == null);
                 }
 
@@ -1186,7 +1198,8 @@ internal sealed class DeclarationBinder
                     isVirtual,
                     isOverride,
                     setterParamName,
-                    declaration: propSyntax)
+                    declaration: propSyntax,
+                    isInitOnly: isInitOnly)
                 {
                     IsIndexer = isIndexer,
                     Parameters = indexerParameters,
@@ -1208,7 +1221,9 @@ internal sealed class DeclarationBinder
                 if (!isAutoProperty)
                 {
                     var getAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsGetter);
-                    var setAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsSetter);
+
+                    // Issue #946: the write accessor is either `set` or `init`.
+                    var setAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsSetterOrInit);
 
                     if (hasGetter && getAccessor?.Body != null)
                     {
@@ -1247,6 +1262,7 @@ internal sealed class DeclarationBinder
                             isOpen: isVirtual,
                             isOverride: isOverride);
                         setterSymbol.IsSpecialName = isIndexer;
+                        setterSymbol.IsInitOnlySetter = isInitOnly;
                         propertySymbol.SetterSymbol = setterSymbol;
                         propertySymbol.SetterBodySyntax = setAccessor.Body;
                     }
@@ -1663,8 +1679,17 @@ internal sealed class DeclarationBinder
                 {
                     var getAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsGetter);
                     var setAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsSetter);
+                    var initAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsInit);
+
+                    // Issue #946: `init` is instance-only; reject it on a static
+                    // property declared inside a `shared` block (ADR-0053).
+                    if (initAccessor != null)
+                    {
+                        Diagnostics.ReportInitAccessorOnStaticProperty(initAccessor.AccessorKeyword.Location, propName);
+                    }
+
                     hasGetter = getAccessor != null || propSyntax.Accessors.IsDefaultOrEmpty;
-                    hasSetter = setAccessor != null;
+                    hasSetter = setAccessor != null || initAccessor != null;
 
                     if (setAccessor != null && setAccessor.ParameterIdentifier != null)
                     {
@@ -2826,11 +2851,24 @@ internal sealed class DeclarationBinder
 
                 bool hasGetter = true;
                 bool hasSetter = false;
+                bool isInitOnly = false;
 
                 if (propSyntax.OpenBraceToken != null)
                 {
                     hasGetter = propSyntax.Accessors.Any(a => a.IsGetter);
-                    hasSetter = propSyntax.Accessors.Any(a => a.IsSetter);
+                    var hasSet = propSyntax.Accessors.Any(a => a.IsSetter);
+                    var hasInit = propSyntax.Accessors.Any(a => a.IsInit);
+
+                    // Issue #946: a property may declare a `set` or an `init`
+                    // accessor, but not both.
+                    if (hasSet && hasInit)
+                    {
+                        var initAccessor = propSyntax.Accessors.First(a => a.IsInit);
+                        Diagnostics.ReportPropertyHasBothSetAndInit(initAccessor.AccessorKeyword.Location, propName);
+                    }
+
+                    hasSetter = hasSet || hasInit;
+                    isInitOnly = !hasSet && hasInit;
                     if (!hasGetter && !hasSetter)
                     {
                         hasGetter = true;
@@ -2852,7 +2890,8 @@ internal sealed class DeclarationBinder
                     isAutoProperty: false,
                     isVirtual: false,
                     isOverride: false,
-                    declaration: propSyntax);
+                    declaration: propSyntax,
+                    isInitOnly: isInitOnly);
 
                 Binder.AttachDocumentation(propSymbol, propSyntax);
                 propertiesBuilder.Add(propSymbol);

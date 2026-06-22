@@ -102,6 +102,8 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name);
             }
 
+            EnforceInitOnlyAssignment(implicitProp.Property, receiver: null, syntax.EqualsToken.Location);
+
             reportObsoleteUseIfApplicable(
                 syntax.IdentifierToken.Location,
                 implicitProp.Property,
@@ -134,6 +136,41 @@ internal sealed partial class ExpressionBinder
         var convertedExpression = conversions.BindConversion(syntax.Expression.Location, boundExpression, variable.Type);
 
         return new BoundAssignmentExpression(null, variable, convertedExpression);
+    }
+
+    /// <summary>
+    /// Issue #946: enforces that an <c>init</c>-only property is only assigned
+    /// during object initialization. Assignment is permitted when the current
+    /// binding context is the declaring type's constructor (<c>.ctor</c>) or an
+    /// <c>init</c> accessor, and the receiver is the instance being initialized
+    /// (<c>this</c>). Object/aggregate initializers at the creation site bind
+    /// through <see cref="BindObjectInitializerAssignment"/> and do not call
+    /// this guard, so they are always allowed. Any other assignment reports
+    /// <c>GS0372</c>. Reads are never restricted.
+    /// </summary>
+    /// <param name="prop">The property being assigned.</param>
+    /// <param name="receiver">The bound receiver expression, or <see langword="null"/> for an implicit <c>this</c> receiver.</param>
+    /// <param name="location">The location to report a diagnostic against.</param>
+    private void EnforceInitOnlyAssignment(PropertySymbol prop, BoundExpression receiver, TextLocation location)
+    {
+        if (prop == null || !prop.IsInitOnly)
+        {
+            return;
+        }
+
+        var fn = this.function;
+        var inInitContext = fn != null && (fn.Name == ".ctor" || fn.IsInitOnlySetter);
+        var receiverIsThis = receiver == null
+            || (receiver is BoundVariableExpression bve
+                && fn?.ThisParameter != null
+                && ReferenceEquals(bve.Variable, fn.ThisParameter));
+
+        if (inInitContext && receiverIsThis)
+        {
+            return;
+        }
+
+        Diagnostics.ReportInitOnlyPropertyAssignment(location, prop.Name);
     }
 
     private BoundExpression BindObjectInitializerAssignment(LocalVariableSymbol receiverLocal, TypeSymbol receiverType, PropertyInitializerSyntax initSyntax)
@@ -372,6 +409,7 @@ internal sealed partial class ExpressionBinder
 
                 var propConverted = conversions.BindConversion(syntax.Value.Location, value, prop.Type);
                 var propReceiver = implicitFieldReceiverExpr ?? new BoundVariableExpression(null, variable);
+                EnforceInitOnlyAssignment(prop, propReceiver, syntax.EqualsToken.Location);
                 return new BoundPropertyAssignmentExpression(null, propReceiver, structSymbol, prop, propConverted);
             }
 
@@ -543,6 +581,8 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
             }
 
+            EnforceInitOnlyAssignment(implicitProp.Property, receiver: null, syntax.OperatorToken.Location);
+
             return new BoundPropertyAssignmentExpression(
                 null,
                 new BoundVariableExpression(null, implicitProp.Receiver),
@@ -687,6 +727,7 @@ internal sealed partial class ExpressionBinder
 
             var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
             var converted = conversions.BindConversion(syntax.Value.Location, binary, prop.Type);
+            EnforceInitOnlyAssignment(prop, boundReceiver, syntax.OperatorToken.Location);
             return new BoundPropertyAssignmentExpression(null, boundReceiver, structSym, prop, converted);
         }
 
@@ -1029,6 +1070,7 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var propConverted = conversions.BindConversion(syntax.Value.Location, value, prop.Type);
+                EnforceInitOnlyAssignment(prop, receiver, syntax.EqualsToken.Location);
                 return new BoundPropertyAssignmentExpression(null, receiver, structSym, prop, propConverted);
             }
 
