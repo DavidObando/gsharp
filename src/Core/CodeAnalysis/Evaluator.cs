@@ -439,11 +439,26 @@ public sealed class Evaluator
                 Assign(node.ValueVariable, current);
                 EvaluateStatement((BoundBlockStatement)node.Body);
 
-                // Issue #738: honor in-arm returns / labeled gotos that
-                // escape the loop body. Without this check the iterator
-                // would keep dispatching MoveNextAsync past the transfer.
+                // Issue #937: honor `break`/`continue` (lowered to gotos that
+                // target this loop's break/continue labels) and labeled
+                // gotos / returns that escape the body. A pending goto to
+                // this loop's continue label advances to the next element;
+                // a goto to this loop's break label (or a plain return)
+                // exits the loop; any other pending goto belongs to an
+                // enclosing loop and is left parked so it propagates.
+                if (pendingGotoLabel != null && pendingGotoLabel == node.ContinueLabel)
+                {
+                    pendingGotoLabel = null;
+                    continue;
+                }
+
                 if (isReturning || pendingGotoLabel != null)
                 {
+                    if (pendingGotoLabel == node.BreakLabel)
+                    {
+                        pendingGotoLabel = null;
+                    }
+
                     break;
                 }
             }
