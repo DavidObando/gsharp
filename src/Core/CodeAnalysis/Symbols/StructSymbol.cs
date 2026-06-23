@@ -1016,12 +1016,91 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         constructed.SetMethods(definition.Methods);
+
+        // Issue #989: a generic auto-property (or computed property) whose type
+        // mentions the class type parameter must resolve on a constructed
+        // instance with `T` substituted — exactly like instance fields above.
+        // Carry the property tables across with substituted property/indexer
+        // types so `TryGetProperty` finds them and the bound access reports the
+        // substituted type. Accessor FunctionSymbols and backing fields are
+        // shared with the open definition (only the definition is emitted; the
+        // external accessor call is parented at the constructed TypeSpec by the
+        // emitter, and inside-the-type access lowers against the definition).
+        constructed.SetProperties(SubstituteProperties(definition.Properties, subst));
+        constructed.SetStaticProperties(SubstituteProperties(definition.StaticProperties, subst));
+
         if (definition.ImportedBaseType != null)
         {
             constructed.SetImportedBaseType(definition.ImportedBaseType);
         }
 
         return constructed;
+    }
+
+    private static ImmutableArray<PropertySymbol> SubstituteProperties(
+        ImmutableArray<PropertySymbol> properties,
+        Dictionary<TypeParameterSymbol, TypeSymbol> subst)
+    {
+        if (properties.IsDefaultOrEmpty)
+        {
+            return properties;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<PropertySymbol>(properties.Length);
+        foreach (var p in properties)
+        {
+            var newType = SubstituteTypeForConstruction(p.Type, subst);
+
+            var newParams = p.Parameters;
+            var paramsChanged = false;
+            if (!p.Parameters.IsDefaultOrEmpty)
+            {
+                var pb = ImmutableArray.CreateBuilder<ParameterSymbol>(p.Parameters.Length);
+                foreach (var par in p.Parameters)
+                {
+                    var st = SubstituteTypeForConstruction(par.Type, subst);
+                    paramsChanged |= !ReferenceEquals(st, par.Type);
+                    pb.Add(new ParameterSymbol(par.Name, st, isVariadic: par.IsVariadic, isScoped: par.IsScoped));
+                }
+
+                if (paramsChanged)
+                {
+                    newParams = pb.MoveToImmutable();
+                }
+            }
+
+            if (ReferenceEquals(newType, p.Type) && !paramsChanged)
+            {
+                builder.Add(p);
+                continue;
+            }
+
+            var substituted = new PropertySymbol(
+                p.Name,
+                newType,
+                p.Accessibility,
+                p.HasGetter,
+                p.HasSetter,
+                p.IsAutoProperty,
+                p.IsVirtual,
+                p.IsOverride,
+                p.SetterParameterName,
+                p.IsStatic,
+                p.Declaration,
+                p.IsInitOnly)
+            {
+                IsIndexer = p.IsIndexer,
+                Parameters = newParams,
+                BackingField = p.BackingField,
+                GetterSymbol = p.GetterSymbol,
+                SetterSymbol = p.SetterSymbol,
+                GetterBodySyntax = p.GetterBodySyntax,
+                SetterBodySyntax = p.SetterBodySyntax,
+            };
+            builder.Add(substituted);
+        }
+
+        return builder.MoveToImmutable();
     }
 
     private static TypeSymbol SubstituteTypeForConstruction(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> subst)

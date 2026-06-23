@@ -547,7 +547,7 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #986 | `base.Method()` virtual base-class call has no canonical G# form (`base[Base].M` is interface-only per ADR-0091) | GS0157 / GS0338 | **resolved** (issue #986 — `base.M(...)` / `base[Base].M(...)` emit a non-virtual base-class call; ADR-0091 extended) |
 | #987 | an `abstract` (no-body) method on an `open class` → emitter crash | GS9998 (NRE) | **resolved** (issue #987 — no-body `open func F() R;` emits a CLR `abstract virtual` slot; the declaring type becomes `TypeAttributes.Abstract`; new diagnostics GS0386 not-instantiable / GS0387 missing-override / GS0388 abstract-requires-open) |
 | #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | **resolved** (issue #988 — `[T new()]` declares a `new()` constraint and `T()` constructs the parameter, lowered to a reified `Activator.CreateInstance<T>()`; new diagnostic GS0389 when constructing without the constraint; GS0152 still guards bad type arguments) |
-| #989 | a generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | open (L5 uses a generic field instead) |
+| #989 | a generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | **resolved** (issue #989 — `StructSymbol` construction now carries the property table across with the property/indexer type substituted, exactly like fields; the emitter parents the external accessor call at the constructed `TypeSpec` and routes the auto-accessor backing-field token through the self-`TypeSpec` MemberRef so read/write round-trips and IL-verifies) |
 | #990 | a user reference-type iterator (`sequence[UserClass]`) → emitter crash | GS9998 | open (L5 yields `string`; `sequence[int32]`/`sequence[string]` compile) |
 | #991 | a `when` guard on a `switch` statement/expression arm won't parse | GS0005 | open (translation-unsupported) |
 | #992 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | open (translation-unsupported) |
@@ -752,21 +752,26 @@ func make[T new()]() T { return T() } // also on generic functions
 class Box[T class](Value T) { }
 ```
 
-**#989 — a generic auto-property over `T` (`prop Value T`) cannot be member-accessed (`GS0158`).**
-Declaring `prop Value T` on a generic class and then reading `box.Value` →
-`GS0158` "Cannot find member Value". Classification: **compile-error**. A generic
-**field** (`var Value T`) and a non-generic auto-property both work, so L5 uses a
-field.
+**#989 — a generic auto-property over `T` (`prop Value T`) can now be member-accessed (was `GS0158`).**
+Declaring `prop Value T` on a generic class and then reading `box.Value` previously
+produced `GS0158` "Cannot find member Value" because `StructSymbol` construction
+substituted only the field table, never the property table. **Resolved**:
+construction now carries properties (and indexer parameter/element types) across
+with `T` substituted — the same path generic fields already used — and the
+emitter parents the external accessor call at the constructed `TypeSpec` while
+the auto-accessor body addresses its backing field through the self-`TypeSpec`
+MemberRef. Read and write round-trip and IL-verify; L5 may now use a generic
+auto-property directly.
 
 ```gs
-// repro — GS0158 on member access of a generic auto-property:
+// now resolves — member access of a generic auto-property:
 class Box[T class] {
-    prop Value T
+    prop Value T { get; set; }
 }
-// ... box.Value  -> GS0158
+// ... box.Value  -> binds as the substituted type argument
 ```
 ```gs
-// control — a generic field resolves:
+// control — a generic field resolves (unchanged):
 class Box[T class](Value T) { }   // ... box.Value works
 ```
 
