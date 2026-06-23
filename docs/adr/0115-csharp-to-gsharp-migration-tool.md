@@ -553,6 +553,7 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #992 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | **resolved** (issue #992 — `and`/`or`/`not` pattern combinators with C# precedence (`not` > `and` > `or`) and parentheses; compose with all pattern kinds; binding type patterns under `or`/`not` rejected with GS0390; smart-cast narrows under `and`, soundly under `or`, never under `not`; combined patterns never satisfy exhaustiveness; cs2gs now translates C# `and`/`or`/`not` patterns to the new form) |
 | #993 | an `is`/`case` type pattern **with** a binder (`x is T t`) leaves the binder unbound | GS0125 | open (L5 uses the no-binder form `x is T`) |
 | #994 | `yield break` has no canonical G# form | GS0005 | open (translation-unsupported) |
+| #1002 | a user reference-type async iterator (`IAsyncEnumerable[UserClass]`) → IL erases to `IAsyncEnumerable<object>` | ilverify `StackUnexpected` | **resolved** (user reference- and value-type element async iterators emit, ilverify, and run; `await for s in seq` recovers the user element type) |
 
 Earlier L3 not going fully green was the **intended** objective-2 outcome: the
 residual failure was a real compiler gap (#985), captured and filed rather than
@@ -795,6 +796,38 @@ func shapes() sequence[Shape] { yield Shape() }
 ```gs
 // control — a BCL element type compiles:
 func names() sequence[string] { yield "a" }
+```
+
+**#1002 — a user reference-type async iterator (`IAsyncEnumerable[UserClass]`) → IL erases to `IAsyncEnumerable<object>`. RESOLVED.**
+Parallel to #990 but for the async-iterator path. The synthesized state machine's
+`IAsyncEnumerable<T>` / `IAsyncEnumerator<T>` interface rows and the
+`GetAsyncEnumerator` return signature erased the user element type to `object`
+(`elementType.ClrType ?? typeof(object)`), making the kickoff's `IAsyncEnumerable<Shape>`
+return type generic-invariance-invalid (ilverify `StackUnexpected`). The consumer
+side (`await for s in seq`) suffered a parallel erasure: the lowering read `Current`
+off the closed `IAsyncEnumerator<object>` shape, yielding an `object` assigned into
+a strongly-typed `Shape` loop slot. Both are now fixed by routing user element
+types through the symbolic TypeSpec encoder (interface rows + `GetAsyncEnumerator`
+signature) and through a symbolic `IAsyncEnumerator[ElementSym]` enumerator type
+in the `await for` lowering, mirroring the synchronous symbolic-open path. User
+reference- and value-type element async iterators now compile, ilverify, and run.
+
+```gs
+// now compiles, ilverifies, and runs:
+open class Shape { func Tag() string { return "shape" } }
+async func shapes() IAsyncEnumerable[Shape] {
+    yield Shape()
+    await Task.Delay(1)
+    yield Shape()
+}
+async func Run() {
+    await for s in shapes() { Console.WriteLine(s.Tag()) }
+}
+Run().Wait()
+```
+```gs
+// control — a BCL element type compiles:
+async func nums() IAsyncEnumerable[int32] { yield 1 }
 ```
 
 **#991 — a `when` guard (resolved).**

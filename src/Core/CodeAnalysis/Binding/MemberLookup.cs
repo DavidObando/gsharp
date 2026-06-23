@@ -246,6 +246,44 @@ internal sealed class MemberLookup
     public static bool TryGetAsyncEnumerableElementType(TypeSymbol type, out TypeSymbol elementType)
     {
         elementType = null;
+
+        // Issue #1002 (parallel to #939 / #990 for sync `for-in`): an
+        // `IAsyncEnumerable[Shape]` whose `Shape` is a same-compilation
+        // user `class` / `data struct` is modelled as an
+        // `ImportedTypeSymbol` carrying `Shape` symbolically in
+        // `TypeArguments` while its `ClrType` is the erased
+        // `IAsyncEnumerable<object>` (user types have no ClrType yet, so
+        // `MakeGenericType` falls back to `object`). Walking only the CLR
+        // type below would type the `await for s in seq` loop variable as
+        // `object` and member access (`s.Tag()`) would fail to bind.
+        // Honour the symbolic argument first so the loop variable
+        // recovers the member-bearing user `Shape` symbol.
+        if (type is ImportedTypeSymbol importedSym
+            && importedSym.OpenDefinition != null
+            && importedSym.HasSubstitutableTypeArgument)
+        {
+            if (importedSym.OpenDefinition.FullName == "System.Collections.Generic.IAsyncEnumerable`1"
+                && importedSym.TypeArguments.Length == 1)
+            {
+                elementType = importedSym.TypeArguments[0];
+                return true;
+            }
+
+            // The receiver may be a user/BCL type that implements
+            // `IAsyncEnumerable[Shape]`; probe the OpenDefinition for the
+            // interface and substitute the symbolic argument back.
+            foreach (var iface in EnumerateSelfAndInterfaces(importedSym.OpenDefinition))
+            {
+                if (iface.IsGenericType
+                    && !iface.IsGenericTypeDefinition
+                    && iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IAsyncEnumerable`1")
+                {
+                    elementType = MapOpenClrTypeToSymbolic(iface.GetGenericArguments()[0], importedSym);
+                    return true;
+                }
+            }
+        }
+
         var clr = type?.ClrType;
         if (clr == null)
         {

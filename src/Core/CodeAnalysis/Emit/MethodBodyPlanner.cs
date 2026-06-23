@@ -915,12 +915,38 @@ internal sealed class MethodBodyPlanner
 
     public void AddAsyncIteratorInterfaceImplementations(StructSymbol smClass, AsyncIteratorPlan plan)
     {
-        var elementClr = plan.ElementType.ClrType ?? typeof(object);
+        var elementType = plan.ElementType;
         var typeDef = this.cache.StructTypeDefs[smClass];
 
+        // Issue #1002 (parallel to #990): a user-declared element type
+        // (`class` / `data struct` emitted in this same assembly) has no
+        // ClrType, so the CLR-erased
+        // `MakeGenericType(elementType.ClrType ?? object)` path below would
+        // record `IAsyncEnumerable<object>` / `IAsyncEnumerator<object>` on
+        // the SM class. That makes `shapes()` (signature
+        // `IAsyncEnumerable<Shape>`) return a value whose runtime type only
+        // implements `IAsyncEnumerable<object>` — invalid under generic
+        // invariance (ilverify StackUnexpected). Route such element types
+        // through the symbolic TypeSpec encoder so the interface rows
+        // carry the strongly-typed `IAsyncEnumerable<Shape>` /
+        // `IAsyncEnumerator<Shape>`.
+        var elementNeedsSymbolic = elementType?.ClrType == null;
+        EntityHandle asyncEnumeratorHandle;
+        EntityHandle asyncEnumerableHandle;
+        if (elementNeedsSymbolic)
+        {
+            asyncEnumeratorHandle = this.BuildGenericInterfaceTypeSpec(typeof(System.Collections.Generic.IAsyncEnumerator<>), elementType);
+            asyncEnumerableHandle = this.BuildGenericInterfaceTypeSpec(typeof(System.Collections.Generic.IAsyncEnumerable<>), elementType);
+        }
+        else
+        {
+            var elementClr = elementType.ClrType;
+            asyncEnumeratorHandle = this.getTypeHandleForMember(typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementClr));
+            asyncEnumerableHandle = this.getTypeHandleForMember(typeof(System.Collections.Generic.IAsyncEnumerable<>).MakeGenericType(elementClr));
+        }
+
         // IAsyncEnumerator<T>
-        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
-            this.getTypeHandleForMember(typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementClr)));
+        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef, asyncEnumeratorHandle);
 
         // IAsyncDisposable
         this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
@@ -929,8 +955,7 @@ internal sealed class MethodBodyPlanner
         if (plan.IsEnumerable)
         {
             // IAsyncEnumerable<T>
-            this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
-                this.getTypeHandleForMember(typeof(System.Collections.Generic.IAsyncEnumerable<>).MakeGenericType(elementClr)));
+            this.emitCtx.Metadata.AddInterfaceImplementation(typeDef, asyncEnumerableHandle);
         }
 
         // IValueTaskSource<bool>
