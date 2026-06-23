@@ -485,6 +485,9 @@ internal sealed partial class MethodBodyEmitter
             case BoundDefaultExpression defaultExpr:
                 this.EmitDefault(defaultExpr);
                 break;
+            case BoundTypeParameterConstructionExpression tpCtor:
+                this.EmitTypeParameterConstruction(tpCtor);
+                break;
             case BoundIsExpression isExpr:
                 this.EmitIsExpression(isExpr);
                 break;

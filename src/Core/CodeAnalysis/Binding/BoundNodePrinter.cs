@@ -295,6 +295,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.DefaultExpression:
                 WriteDefaultExpression((BoundDefaultExpression)node, writer);
                 break;
+            case BoundNodeKind.TypeParameterConstructionExpression:
+                WriteTypeParameterConstructionExpression((BoundTypeParameterConstructionExpression)node, writer);
+                break;
             case BoundNodeKind.IsExpression:
                 WriteIsExpression((BoundIsExpression)node, writer);
                 break;
@@ -1756,6 +1759,13 @@ public static class BoundNodePrinter
         writer.WriteKeyword("default");
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
         writer.WriteIdentifier(node.Type.Name);
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteTypeParameterConstructionExpression(BoundTypeParameterConstructionExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(node.TypeParameter.Name);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
     }
 

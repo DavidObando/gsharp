@@ -200,6 +200,28 @@ namespace Demo
     }
 
     /// <summary>
+    /// Issue #988 / ADR-0115 §G #988: a C# generic constrained with
+    /// <c>where T : new()</c> that constructs its parameter via <c>new T()</c>
+    /// translates to the canonical G# <c>[T new()]</c> constraint and the
+    /// call-like construction <c>T()</c> (which now compiles against gsc).
+    /// </summary>
+    [Fact]
+    public void NewConstraintConstruction_EmitsNewConstraintAndCallLikeConstruction()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public sealed class Factory<T> where T : new()
+    {
+        public T Make() { return new T(); }
+    }
+}");
+
+        Assert.Contains("new()", printed);
+        Assert.Contains("T()", printed);
+    }
+
+    /// <summary>
     /// ADR-0115 §B.5: a C# extension method on a <c>static class</c> is lifted to
     /// a top-level receiver-clause <c>func</c>, and a static class whose every
     /// member is lifted is dropped entirely (a receiver-clause func binds only at

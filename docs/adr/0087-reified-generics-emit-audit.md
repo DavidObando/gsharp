@@ -173,6 +173,23 @@ For each generic `data struct`/`class`/`struct`/`interface`/`delegate type` decl
 - A call to `Map[int32, string](...)` (a user-declared generic method) emits a `MethodSpec` whose blob is `GENERICINST <n=2> I4 STRING`, parented at the open `MethodDef` (or the closed `MemberRef` if the declaring type is a generic instantiation).
 - A call to a generic method whose type arguments are inferred from arguments under ADR-0038 emits the same `MethodSpec` with the inferred types substituted in.
 
+#### 3.4.1 `new()`-constraint construction (issue #988)
+
+Constructing a type parameter that carries a `new()` constraint — the G# form
+`T()` where `[T new()]` — lowers to a reified call to the BCL generic method
+`System.Activator::CreateInstance<T>()`. The call site emits a `MethodSpec`
+parented at the open `Activator.CreateInstance<>` `MemberRef`, with a one-argument
+`GENERICINST`-style argument blob that encodes the in-scope type parameter as
+`MVar(idx)` (method type parameter) or `Var(idx)` (declaring-type type parameter)
+exactly as §3.1/§3.2. This is the standard C# `new()`-constraint lowering and
+verifies clean for both reference types with a public parameterless constructor
+and value types, so no `constrained.`/`initobj` special-casing is required. The
+declaring type's `GenericParam` row carries the `DefaultConstructorConstraint`
+flag (set by `TypeDefEmitter`), so the metadata round-trips faithfully and the
+JIT enforces the constraint at the call site. Constructing without the `new()`
+constraint is a binder error (GS0389), so the unverifiable shape never reaches
+emit.
+
 ### 3.5 MemberRef parents for generic-type member access
 
 - `Box[int32].Value` field-access: the `MemberRef` parent is the `TypeSpec` from §3.3; the field signature is `Var(0)` (the generic type's first slot). At the receiver site, no `box`/`unbox.any` is emitted — `ldfld` reads `T`, which **is** `int32` under this instantiation, and the CLR resolves the slot itself.

@@ -152,6 +152,12 @@ public enum BoundNodeKind
     // base implementation runs without re-dispatching through the derived
     // type's v-table (which would recurse infinitely).
     BaseClassCallExpression,
+
+    // Issue #988: construction of a type parameter under a `new()` constraint —
+    // `T()` where `[T new()]`. Lowered to a reified
+    // `call !!0 System.Activator::CreateInstance<!!T>()` (ADR-0087), which works
+    // for both reference types with a public parameterless ctor and value types.
+    TypeParameterConstructionExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

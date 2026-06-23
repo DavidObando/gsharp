@@ -2428,6 +2428,27 @@ internal sealed class OverloadResolver
             return BindConstructorCallExpression(syntax, classType);
         }
 
+        // Issue #988: `T()` constructs the type parameter `T` when the enclosing
+        // generic declares a `new()` default-constructor constraint (`[T new()]`).
+        // Lowered to a reified `Activator.CreateInstance<T>()` (ADR-0087). A
+        // type parameter has no user-callable members, so a zero-argument call
+        // to it can only mean construction. When the `new()` constraint is
+        // absent we cannot guarantee an accessible parameterless constructor, so
+        // report GS0389 pointing at the missing constraint.
+        if (syntax.Arguments.Count == 0
+            && syntax.TypeArgumentList == null
+            && lookupType(syntax.Identifier.Text) is TypeParameterSymbol typeParam)
+        {
+            if (typeParam.HasDefaultConstructorConstraint)
+            {
+                return new BoundTypeParameterConstructionExpression(syntax, typeParam);
+            }
+
+            Diagnostics.ReportConstructedTypeParameterRequiresNewConstraint(
+                syntax.Identifier.Location, typeParam.Name);
+            return new BoundErrorExpression(null);
+        }
+
         if (tryBindIntrinsicCall(syntax, out var intrinsic))
         {
             return intrinsic;

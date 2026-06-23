@@ -375,6 +375,7 @@ public static class SpillSequenceSpiller
                 case BoundLiteralExpression:
                 case BoundVariableExpression:
                 case BoundDefaultExpression:
+                case BoundTypeParameterConstructionExpression:
                 case BoundTypeOfExpression:
                 case BoundMethodGroupExpression:
                 case BoundClrMethodGroupExpression:

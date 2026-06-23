@@ -161,6 +161,7 @@ public class BoundNodeKindExhaustivenessTests
         "IsExpression",
         "AsExpression",
         "ConstructorChainingExpression",
+        "TypeParameterConstructionExpression",
 
         // Pattern kinds.
         "ConstantPattern",
@@ -305,6 +306,7 @@ public class BoundNodeKindExhaustivenessTests
         "IsExpression",
         "AsExpression",
         "ConstructorChainingExpression",
+        "TypeParameterConstructionExpression",
 
         // Pattern kinds.
         "ConstantPattern",
