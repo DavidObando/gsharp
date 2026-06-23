@@ -1303,6 +1303,97 @@ internal sealed partial class ExpressionBinder
     /// the corresponding closed delegate parameter type target-types the lambda,
     /// which is then bound in place inside <paramref name="boundArgs"/>.
     /// </summary>
+    /// <summary>
+    /// Issue #951: resolves deferred un-typed arrow-lambda arguments of a
+    /// member-style call whose receiver is a <em>user-declared</em>
+    /// class/struct/interface (no CLR type to reflect over). For each still-
+    /// deferred lambda index, the matching parameter symbol of the candidate
+    /// user method(s) supplies the target delegate shape, which target-types
+    /// the lambda exactly like the CLR reflection path. When no candidate
+    /// exposes a delegate-typed parameter at that position — or candidates
+    /// disagree on the shape — the lambda is left deferred so the caller's
+    /// fallback binds it without a target (surfacing GS0304).
+    /// </summary>
+    /// <param name="receiver">The bound receiver of the member call.</param>
+    /// <param name="methodName">The invoked method name.</param>
+    /// <param name="ce">The call syntax (used for the argument syntax nodes).</param>
+    /// <param name="deferredIndices">The argument indices still awaiting a target.</param>
+    /// <param name="boundArgs">The in-progress bound-argument array, mutated in place.</param>
+    private void ResolveDeferredArrowLambdaArgumentsFromUserMethods(
+        BoundExpression receiver,
+        string methodName,
+        CallExpressionSyntax ce,
+        List<int> deferredIndices,
+        BoundExpression[] boundArgs)
+    {
+        if (deferredIndices.Count == 0 || receiver?.Type == null)
+        {
+            return;
+        }
+
+        ImmutableArray<FunctionSymbol> candidates;
+        switch (receiver.Type)
+        {
+            case StructSymbol structRecv:
+                candidates = TypeMemberModel.GetMethods(structRecv, methodName, MemberQuery.Instance(MemberKinds.Method));
+                break;
+            case InterfaceSymbol ifaceRecv:
+                candidates = TypeMemberModel.GetMethods(ifaceRecv, methodName, MemberQuery.Instance(MemberKinds.Method));
+                break;
+            case TypeParameterSymbol { InterfaceConstraint: { } constraint }:
+                candidates = TypeMemberModel.GetMethods(constraint, methodName, MemberQuery.Instance(MemberKinds.Method));
+                break;
+            default:
+                return;
+        }
+
+        if (candidates.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var idx in deferredIndices.ToArray())
+        {
+            if (boundArgs[idx] is not BoundErrorExpression { Syntax: LambdaExpressionSyntax lambdaSyntax })
+            {
+                continue;
+            }
+
+            FunctionTypeSymbol target = null;
+            var disagree = false;
+            foreach (var candidate in candidates)
+            {
+                var offset = candidate.ExplicitReceiverParameter == null ? 0 : 1;
+                var paramPos = idx + offset;
+                if (paramPos < 0 || paramPos >= candidate.Parameters.Length)
+                {
+                    continue;
+                }
+
+                if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(candidate.Parameters[paramPos].Type, out var fn) || fn == null)
+                {
+                    continue;
+                }
+
+                if (target == null)
+                {
+                    target = fn;
+                }
+                else if (!ReferenceEquals(target, fn) && !target.Equals(fn))
+                {
+                    disagree = true;
+                    break;
+                }
+            }
+
+            if (target != null && !disagree)
+            {
+                boundArgs[idx] = lambdas.BindLambdaExpression(lambdaSyntax, target);
+                deferredIndices.Remove(idx);
+            }
+        }
+    }
+
     private void ResolveDeferredArrowLambdaArguments(
         BoundExpression receiver,
         ImportedClassSymbol classSymbol,
@@ -2050,6 +2141,14 @@ internal sealed partial class ExpressionBinder
         {
             var mutableArgs = boundArguments.ToArray();
             ResolveDeferredArrowLambdaArguments(receiver, classSymbol, methodName, ce, explicitTypeArgs, deferredArrowLambdaIndices, mutableArgs);
+
+            // Issue #951: the reflection-driven resolution above only covers CLR
+            // (imported) methods. When the receiver is a user-declared
+            // class/struct/interface, recover the target delegate shape from the
+            // user method's own parameter symbols so an arrow lambda passed to a
+            // user method with a delegate-typed parameter (e.g.
+            // `calc.Apply((x) -> x * 2)`) infers its parameter type too.
+            ResolveDeferredArrowLambdaArgumentsFromUserMethods(receiver, methodName, ce, deferredArrowLambdaIndices, mutableArgs);
 
             // Any lambda whose target could not be inferred is now bound without
             // a target so the established GS0304 diagnostic still surfaces.

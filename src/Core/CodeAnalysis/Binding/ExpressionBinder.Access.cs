@@ -1135,16 +1135,27 @@ internal sealed partial class ExpressionBinder
         var methodName = ce.Identifier.Text;
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
+        List<int> deferredStaticLambdaIndices = null;
+        var staticArgIndex = 0;
         foreach (var argument in ce.Arguments)
         {
             if (argument is RefArgumentExpressionSyntax refArg)
             {
                 boundArguments.Add(BindRefArgumentExpression(refArg, parameter: null));
             }
+            else if (IsUntypedArrowLambda(OverloadResolver.UnwrapNamedArgumentValue(argument)))
+            {
+                // Issue #951: defer un-typed arrow lambdas until the static
+                // method overload (and its delegate-typed parameters) is known.
+                (deferredStaticLambdaIndices ??= new List<int>()).Add(staticArgIndex);
+                boundArguments.Add(new BoundErrorExpression(OverloadResolver.UnwrapNamedArgumentValue(argument)));
+            }
             else
             {
                 boundArguments.Add(BindExpression(argument));
             }
+
+            staticArgIndex++;
         }
 
         var arguments = boundArguments.ToImmutable();
@@ -1166,6 +1177,38 @@ internal sealed partial class ExpressionBinder
             if (method == null)
             {
                 return new BoundErrorExpression(null);
+            }
+
+            // Issue #951: bind any deferred un-typed arrow lambda against the
+            // selected static method's delegate-typed parameter so its omitted
+            // parameter type(s) and inferred return type are filled in from the
+            // parameter shape. Static (`shared`) methods carry no receiver
+            // parameter, so the argument index maps directly to the parameter
+            // index. A non-delegate parameter leaves the lambda deferred; it is
+            // then bound with no target (surfacing GS0304).
+            if (deferredStaticLambdaIndices != null)
+            {
+                var rebound = arguments.ToBuilder();
+                foreach (var idx in deferredStaticLambdaIndices)
+                {
+                    if (rebound[idx] is not BoundErrorExpression { Syntax: LambdaExpressionSyntax staticLambda })
+                    {
+                        continue;
+                    }
+
+                    if (idx < method.Parameters.Length
+                        && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(method.Parameters[idx].Type, out var staticTarget)
+                        && staticTarget != null)
+                    {
+                        rebound[idx] = lambdas.BindLambdaExpression(staticLambda, staticTarget);
+                    }
+                    else
+                    {
+                        rebound[idx] = lambdas.BindLambdaExpression(staticLambda);
+                    }
+                }
+
+                arguments = rebound.ToImmutable();
             }
 
             // ADR-0101 follow-up / issue #812: a user-declared static method
