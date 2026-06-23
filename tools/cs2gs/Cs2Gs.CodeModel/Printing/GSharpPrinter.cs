@@ -124,6 +124,9 @@ public static class GSharpPrinter
             case ArrayTypeReference array:
                 return $"[]{RenderType(array.ElementType)}";
 
+            case PointerTypeReference pointer:
+                return $"*{RenderType(pointer.ElementType)}";
+
             case TupleTypeReference tuple:
                 return $"({string.Join(", ", tuple.ElementTypes.Select(RenderType))})";
 

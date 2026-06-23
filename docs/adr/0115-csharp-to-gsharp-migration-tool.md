@@ -636,6 +636,8 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #993 | an `is`/`case` type pattern **with** a binder (`x is T t`) leaves the binder unbound | GS0125 | open (L5 uses the no-binder form `x is T`) |
 | #994 | `yield break` has no canonical G# form | GS0005 | open (translation-unsupported) |
 | #1002 | a user reference-type async iterator (`IAsyncEnumerable[UserClass]`) → IL erases to `IAsyncEnumerable<object>` | ilverify `StackUnexpected` | **resolved** (user reference- and value-type element async iterators emit, ilverify, and run; `await for s in seq` recovers the user element type) |
+| #1006 | interface inheritance `interface B : A { … }` won't parse | GS0005 | **resolved** (parser/binder accept an interface base-interface clause; cs2gs now emits `interface B : A, C { … }` — Oahu.Foundation `Types/Interfaces.cs`) |
+| #1007 | a generic interface method signature `func F[T](…) R;` won't parse | GS0005 | **resolved** (parser/binder accept generic methods in interfaces; cs2gs now emits the `[T]` clause on interface methods — Oahu.Foundation `Diagnostics/Interfaces.cs`) |
 
 Earlier L3 not going fully green was the **intended** objective-2 outcome: the
 residual failure was a real compiler gap (#985), captured and filed rather than
@@ -991,62 +993,64 @@ constant keeps its explicit `init()` body, because G# has a field member initial
 
 Translating the external **`Oahu.Foundation`** project drove its
 `translation-unsupported` count from **105** (25 construct kinds) to **9
-diagnostics across 3 files**, all of which are **genuine G# compiler/language
-gaps** (not translator defects) — every other Foundation file translates **and**
-round-trips. The translator emits the canonical mappings of §B.35 for all other
-constructs. The three residual gaps were each reproduced directly with `gsc`
-(version **0.2.132+417bdb25ec**) and contrasted with a passing control; per
-ADR-0115 they are documented here for the orchestrator to file as `bug,Oats`
-issues and are out of scope for the translator-only PR.
+diagnostics across 3 files**, and a **follow-up round (this PR, leveraging the
+now-merged compiler fixes #1006 and #1007) drove that to 0** — `Oahu.Foundation`
+now reaches **translate = passed** (every file round-trips, 0 unsupported). The
+three residual gaps were each reproduced directly with `gsc`
+(version **0.2.132+417bdb25ec**) and contrasted with a passing control; the
+first two were genuine G# compiler/language gaps that the compiler team has since
+fixed (#1006 interface inheritance, #1007 generic interface methods), and the
+translator now emits the canonical G# form for all three (the pointer surface is
+the excepted unsafe-interop surface — see OF-3).
 
-**OF-1 — interface inheritance `interface B : A { … }` won't parse (`GS0005`).**
-A C# interface that extends another interface has no canonical G# spelling: the
-parser's `ParseInterfaceDeclarationNew` has no base-clause handling and goes
-straight to `MatchToken(OpenBraceToken)`. A **class** base clause
-(`class C : A, B {}`) parses, so this is interface-specific. The translator
-reports the base interface as unsupported and drops it (leaving non-gating
-semantic diagnostics). Source: `Types/Interfaces.cs`.
-
-```gs
-// repro — GS0005: Unexpected token <ColonToken>, expected <OpenBraceToken>:
-package T
-interface A { func F(); }
-interface B : A { func G(); }
-```
-```gs
-// control — a class base clause parses:
-package T
-interface A { func F(); }
-class C : A { func F() { } }
-```
-
-**OF-2 — a generic interface method signature `func IsPrim[T]() bool;` won't parse (`GS0005`).**
-A type-parameterized method **signature** inside an interface has no G# spelling:
-the parser rejects the `[T]` type-parameter list on an interface method. Generic
-methods work on **classes** and **free functions** — only the interface signature
-form fails. The translator reports it unsupported and drops the type parameters.
-Source: `Diagnostics/Interfaces.cs`.
+**OF-1 — interface inheritance `interface B : A { … }` (RESOLVED, #1006).**
+A C# interface that extends another interface originally had no canonical G#
+spelling: the parser's `ParseInterfaceDeclarationNew` had no base-clause handling
+and went straight to `MatchToken(OpenBraceToken)`. **Issue #1006 added an
+interface base-interface clause to the parser/binder**, so `interface B : A, C { … }`
+is now legal G#. The translator now emits the base list through the same
+base-clause path as a class (no Unsupported diagnostic). Source:
+`Types/Interfaces.cs` → emits `interface IBookMeta : IAudioQuality { … }`.
 
 ```gs
-// repro — GS0005: Unexpected token <OpenSquareBracketToken>, expected <OpenParenthesisToken>:
+// now compiles (#1006 merged):
 package T
-interface IP { func IsPrim[T]() bool; }
-```
-```gs
-// control — a generic method on a class parses:
-package T
-class C { func IsPrim[T]() bool { return true } }
+interface A { func F() int32; }
+interface B : A { func G() int32; }
 ```
 
-**OF-3 — unsafe pointer types (`void*` / `byte*` / `int*`) have no G# form.**
+**OF-2 — a generic interface method signature `func IsPrim[T]() bool;` (RESOLVED, #1007).**
+A type-parameterized method **signature** inside an interface originally had no G#
+spelling: the parser rejected the `[T]` type-parameter list on an interface
+method. **Issue #1007 added generic methods in interfaces**, so the bodyless form
+`func F[T](…) R;` is now legal G#. The translator now retains the type-parameter
+list on interface methods (no Unsupported diagnostic). Source:
+`Diagnostics/Interfaces.cs` → emits `func IsPrimitiveType[T]() bool;`.
+
+```gs
+// now compiles (#1007 merged):
+package T
+interface A { func Echo[T](x T) T; }
+```
+
+**OF-3 — unsafe pointer types (`void*` / `byte*` / `int*`) → canonical prefix `*T` (excepted unsafe-interop surface).**
 `Win32/Win32FileIO.cs` is an `unsafe class` using raw pointer types throughout.
-G# has **no pointer-type token** at all, so there is no canonical mapping. The
-type mapper records a structured `PointerType` Unsupported diagnostic and emits
-an `object` placeholder for the field/parameter type. Source: `Win32/Win32FileIO.cs`.
+G# has a **byref/pointer prefix form `*T`** (spec §"Byref/pointer syntax exists
+as `*T`"; grammar `'*' TypeClause '?'?`), so a C# **postfix** `T*` translates to
+the canonical G# **prefix** `*T` — `byte*` → `*uint8`, `int*` → `*int32`, and
+`void*` (no managed pointee) → `*uint8` (a raw byte pointer). The emitted form
+**round-trips through the parser**, so the translate stage passes with no
+Unsupported diagnostic. This is the **excepted unsafe-interop surface**: the G#
+binder (not the parser) steers callers to `ref`/`out`/`in` (`GS0243`) and rejects
+pointer **fields** (`GS9006`), so the **compile** stage still fails on
+`Win32FileIO.gs` — this is expected and accepted (managed G# has no unsafe
+pointer-deref/field semantics). A C# **function pointer** still has no canonical
+managed form and remains a `PointerType` Unsupported diagnostic. Source:
+`Win32/Win32FileIO.cs`.
 
 ```cs
-// repro (C#) — no G# equivalent exists for a pointer type:
-public unsafe void Read(byte* buffer, int length) { }
+// repro (C#) — postfix T* maps to prefix *T (parses; binder flags GS0243):
+public unsafe bool ReadFile(byte* buffer, int* bytesRead, void* pBuf);
 ```
 
 Two **translator faithfulness additions** the Oahu.Foundation round surfaced (no

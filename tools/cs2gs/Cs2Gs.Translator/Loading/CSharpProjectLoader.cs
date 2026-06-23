@@ -120,7 +120,7 @@ public static class CSharpProjectLoader
             assemblyName,
             trees,
             resolvedReferences,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithAllowUnsafe(true));
 
         IReadOnlyList<LoadedDocument> documents = BuildDocuments(compilation);
         IReadOnlyList<Diagnostic> loadDiagnostics = SignificantDiagnostics(compilation);
