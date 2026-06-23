@@ -3023,6 +3023,24 @@ public sealed class CSharpToGSharpTranslator
                 case RecursivePatternSyntax recursive:
                     return this.TranslateRecursivePattern(recursive, bindings);
 
+                // Issue #992: C# `and` / `or` pattern combinators map to G#
+                // `and` / `or`. C# `BinaryPatternSyntax` carries an `and`/`or`
+                // operator keyword.
+                case BinaryPatternSyntax binary
+                    when binary.OperatorToken.IsKind(SyntaxKind.AndKeyword) || binary.OperatorToken.IsKind(SyntaxKind.OrKeyword):
+                    return new BinaryPattern(
+                        binary.OperatorToken.IsKind(SyntaxKind.AndKeyword),
+                        this.TranslatePattern(binary.Left, bindings),
+                        this.TranslatePattern(binary.Right, bindings));
+
+                // Issue #992: C# `not <pattern>` maps to G# `not <pattern>`.
+                case UnaryPatternSyntax unary
+                    when unary.OperatorToken.IsKind(SyntaxKind.NotKeyword):
+                    return new NotPattern(this.TranslatePattern(unary.Pattern, bindings));
+
+                case ParenthesizedPatternSyntax parenthesized:
+                    return new ParenthesizedPattern(this.TranslatePattern(parenthesized.Pattern, bindings));
+
                 default:
                     this.context.ReportUnsupported(
                         pattern,

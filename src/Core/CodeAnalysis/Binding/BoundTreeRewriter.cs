@@ -794,6 +794,17 @@ public abstract class BoundTreeRewriter
                 }
 
                 return elementsBuilder == null ? node : new BoundListPattern(null, node.Type, elementsBuilder.MoveToImmutable(), list.ElementType);
+            case BoundNodeKind.BinaryPattern:
+                var binary = (BoundBinaryPattern)node;
+                var newLeft = RewritePattern(binary.Left);
+                var newRight = RewritePattern(binary.Right);
+                return newLeft == binary.Left && newRight == binary.Right
+                    ? node
+                    : new BoundBinaryPattern(null, node.Type, binary.IsConjunction, newLeft, newRight);
+            case BoundNodeKind.NotPattern:
+                var not = (BoundNotPattern)node;
+                var newInner = RewritePattern(not.Pattern);
+                return newInner == not.Pattern ? node : new BoundNotPattern(null, node.Type, newInner);
             default:
                 throw new Exception($"Unexpected pattern node: {node.Kind}");
         }

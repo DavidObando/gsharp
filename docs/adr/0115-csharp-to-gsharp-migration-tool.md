@@ -550,7 +550,7 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #989 | a generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | **resolved** (issue #989 — `StructSymbol` construction now carries the property table across with the property/indexer type substituted, exactly like fields; the emitter parents the external accessor call at the constructed `TypeSpec` and routes the auto-accessor backing-field token through the self-`TypeSpec` MemberRef so read/write round-trips and IL-verifies) |
 | #990 | a user reference-type iterator (`sequence[UserClass]`) → emitter crash | GS9998 | **resolved** (user reference- and value-type element iterators emit, ilverify, and run) |
 | #991 | a `when` guard on a `switch` statement/expression arm won't parse | GS0005 | **resolved** (issue #991 — `case <pattern> when <bool>:` / `case <pattern> when <bool> { … }` parse a contextual `when` guard; an arm matches only when the pattern matches AND the guard is true; guarded arms never satisfy exhaustiveness; cs2gs now translates C# `when` guards to the new form) |
-| #992 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | open (translation-unsupported) |
+| #992 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | **resolved** (issue #992 — `and`/`or`/`not` pattern combinators with C# precedence (`not` > `and` > `or`) and parentheses; compose with all pattern kinds; binding type patterns under `or`/`not` rejected with GS0390; smart-cast narrows under `and`, soundly under `or`, never under `not`; combined patterns never satisfy exhaustiveness; cs2gs now translates C# `and`/`or`/`not` patterns to the new form) |
 | #993 | an `is`/`case` type pattern **with** a binder (`x is T t`) leaves the binder unbound | GS0125 | open (L5 uses the no-binder form `x is T`) |
 | #994 | `yield break` has no canonical G# form | GS0005 | open (translation-unsupported) |
 
@@ -819,17 +819,20 @@ let r = switch n {
 }
 ```
 
-**#992 — `and`/`or` binary patterns won't parse (`GS0005`).**
-A combined relational pattern (`case > 0 and < 10:`) → `GS0005`. Classification:
-**translation-unsupported**. L5 nests single relational patterns instead.
+**#992 — `and`/`or`/`not` pattern combinators (resolved).**
+Combined patterns (`case > 0 and < 10:`, `case < 0 or > 100:`, `case not > 0:`)
+are now supported end-to-end in G# (issue #992): `and`/`or`/`not` are contextual
+keywords with C# precedence (`not` > `and` > `or`) and parentheses override
+grouping. They compose with every pattern kind. A binding type pattern under
+`or`/`not` is rejected with `GS0390` (use `_`); smart-cast narrowing applies under
+`and`, soundly under `or` (only when both branches agree), and never under `not`;
+combined patterns never satisfy exhaustiveness. cs2gs now translates C#
+`BinaryPatternSyntax` (`and`/`or`) and `UnaryPatternSyntax` (`not`) to the
+canonical G# combinator forms.
 
 ```gs
-// repro — GS0005 on an `and` pattern:
-let r = switch n { case > 0 and < 10: "x" default: "y" }
-```
-```gs
-// control — a single relational pattern parses:
-let r = switch n { case < 10: "x" default: "y" }
+// now compiles — combined relational patterns:
+let r = switch n { case > 0 and < 10: "x" case < 0 or > 100: "y" default: "z" }
 ```
 
 **#993 — an `is`/`case` type pattern WITH a binder leaves the binder unbound (`GS0125`).**

@@ -168,6 +168,12 @@ internal sealed partial class MethodBodyEmitter
             case BoundListPattern lp:
                 this.EmitListPattern(lp, loadValue, failLabel);
                 break;
+            case BoundBinaryPattern bp:
+                this.EmitBinaryPattern(bp, loadValue, valueType, failLabel);
+                break;
+            case BoundNotPattern np:
+                this.EmitNotPattern(np, loadValue, valueType, failLabel);
+                break;
             default:
                 throw new NotSupportedException(
                     $"Pattern kind '{pattern.Kind}' is not yet supported by the emitter.");
@@ -398,5 +404,45 @@ internal sealed partial class MethodBodyEmitter
 
             this.EmitPattern(lp.Elements[index], loadElement, lp.ElementType, failLabel);
         }
+    }
+
+    // Issue #992: combinator emit.
+    //
+    // `and` (conjunction): both sub-patterns must match. Emit the left with the
+    // outer fail label, then the right with the same fail label. Either failing
+    // branches to failLabel; falling through both means a match.
+    //
+    // `or` (disjunction): either sub-pattern matching succeeds (short-circuit).
+    // Emit the left with a local "try-right" fail label; if it falls through
+    // (match) jump to a local match label. Otherwise emit the right with the
+    // outer fail label. A match on either path lands on the match label.
+    private void EmitBinaryPattern(BoundBinaryPattern bp, Action loadValue, TypeSymbol valueType, LabelHandle failLabel)
+    {
+        if (bp.IsConjunction)
+        {
+            this.EmitPattern(bp.Left, loadValue, valueType, failLabel);
+            this.EmitPattern(bp.Right, loadValue, valueType, failLabel);
+            return;
+        }
+
+        var matchLabel = this.il.DefineLabel();
+        var tryRight = this.il.DefineLabel();
+        this.EmitPattern(bp.Left, loadValue, valueType, tryRight);
+        this.il.Branch(ILOpCode.Br, matchLabel);
+        this.il.MarkLabel(tryRight);
+        this.EmitPattern(bp.Right, loadValue, valueType, failLabel);
+        this.il.MarkLabel(matchLabel);
+    }
+
+    // `not P` matches when P does not. Emit P with a local "P-did-not-match"
+    // label; if P falls through (matched) jump to the outer fail label. The
+    // binder forbids variable bindings under `not`, so the sub-pattern stores
+    // nothing that could be read on the matched (i.e. failing) path.
+    private void EmitNotPattern(BoundNotPattern np, Action loadValue, TypeSymbol valueType, LabelHandle failLabel)
+    {
+        var notMatched = this.il.DefineLabel();
+        this.EmitPattern(np.Pattern, loadValue, valueType, notMatched);
+        this.il.Branch(ILOpCode.Br, failLabel);
+        this.il.MarkLabel(notMatched);
     }
 }

@@ -131,3 +131,71 @@ public sealed class PropertyPattern : GPattern
 public sealed class DiscardPattern : GPattern
 {
 }
+
+/// <summary>
+/// A binary pattern combinator — a conjunction (<c>and</c>) or disjunction
+/// (<c>or</c>) of two sub-patterns (issue #992, spec §Pattern matching,
+/// <c>BinaryPattern</c>).
+/// </summary>
+public sealed class BinaryPattern : GPattern
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BinaryPattern"/> class.
+    /// </summary>
+    /// <param name="isConjunction"><see langword="true"/> for <c>and</c>; <see langword="false"/> for <c>or</c>.</param>
+    /// <param name="left">The left sub-pattern.</param>
+    /// <param name="right">The right sub-pattern.</param>
+    public BinaryPattern(bool isConjunction, GPattern left, GPattern right)
+    {
+        IsConjunction = isConjunction;
+        Left = left;
+        Right = right;
+    }
+
+    /// <summary>Gets a value indicating whether this is an <c>and</c> (conjunction) pattern.</summary>
+    public bool IsConjunction { get; }
+
+    /// <summary>Gets the left sub-pattern.</summary>
+    public GPattern Left { get; }
+
+    /// <summary>Gets the right sub-pattern.</summary>
+    public GPattern Right { get; }
+}
+
+/// <summary>
+/// A negated pattern <c>not &lt;pattern&gt;</c> (issue #992, spec §Pattern
+/// matching, <c>NotPattern</c>).
+/// </summary>
+public sealed class NotPattern : GPattern
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="NotPattern"/> class.
+    /// </summary>
+    /// <param name="pattern">The negated sub-pattern.</param>
+    public NotPattern(GPattern pattern)
+    {
+        Pattern = pattern;
+    }
+
+    /// <summary>Gets the negated sub-pattern.</summary>
+    public GPattern Pattern { get; }
+}
+
+/// <summary>
+/// A parenthesized pattern <c>( &lt;pattern&gt; )</c> used to override
+/// combinator precedence (issue #992, spec §Pattern matching).
+/// </summary>
+public sealed class ParenthesizedPattern : GPattern
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ParenthesizedPattern"/> class.
+    /// </summary>
+    /// <param name="pattern">The inner pattern.</param>
+    public ParenthesizedPattern(GPattern pattern)
+    {
+        Pattern = pattern;
+    }
+
+    /// <summary>Gets the inner pattern.</summary>
+    public GPattern Pattern { get; }
+}

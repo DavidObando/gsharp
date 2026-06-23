@@ -4113,6 +4113,26 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Error);
     }
 
+    /// <summary>
+    /// Issue #992: GS0390 — a type pattern that introduces a binding variable
+    /// appears under an <c>or</c> or <c>not</c> pattern combinator, where the
+    /// variable would not be definitely assigned when the arm runs. Mirrors
+    /// C#'s CS8780. Use the discard identifier <c>_</c> instead, or restructure
+    /// the pattern.
+    /// </summary>
+    /// <param name="location">The source location of the binding identifier.</param>
+    /// <param name="variableName">The name of the would-be binding variable.</param>
+    public void ReportPatternVariableNotAllowedUnderOrNot(
+        TextLocation location,
+        string variableName)
+    {
+        Report(
+            location,
+            "GS0390",
+            $"A pattern variable ('{variableName}') may not be declared under an 'or' or 'not' pattern; it would not be definitely assigned. Use '_' instead (issue #992).",
+            DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

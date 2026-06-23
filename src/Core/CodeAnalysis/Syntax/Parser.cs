@@ -5130,8 +5130,57 @@ public class Parser
 
     private PatternSyntax ParsePattern()
     {
+        return ParseOrPattern();
+    }
+
+    // Combinator precedence (matches C#): `not` binds tightest, then `and`,
+    // then `or`. `and` / `or` / `not` are contextual keywords matched as
+    // identifiers in pattern position so they remain usable as ordinary
+    // identifiers elsewhere.
+    private PatternSyntax ParseOrPattern()
+    {
+        var left = ParseAndPattern();
+        while (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "or")
+        {
+            var operatorToken = NextToken();
+            var right = ParseAndPattern();
+            left = new BinaryPatternSyntax(syntaxTree, left, operatorToken, right);
+        }
+
+        return left;
+    }
+
+    private PatternSyntax ParseAndPattern()
+    {
+        var left = ParseUnaryPattern();
+        while (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "and")
+        {
+            var operatorToken = NextToken();
+            var right = ParseUnaryPattern();
+            left = new BinaryPatternSyntax(syntaxTree, left, operatorToken, right);
+        }
+
+        return left;
+    }
+
+    private PatternSyntax ParseUnaryPattern()
+    {
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "not")
+        {
+            var notKeyword = NextToken();
+            var operand = ParseUnaryPattern();
+            return new NotPatternSyntax(syntaxTree, notKeyword, operand);
+        }
+
+        return ParsePrimaryPattern();
+    }
+
+    private PatternSyntax ParsePrimaryPattern()
+    {
         switch (Current.Kind)
         {
+            case SyntaxKind.OpenParenthesisToken:
+                return ParseParenthesizedPattern();
             case SyntaxKind.OpenSquareBracketToken:
                 return ParseListPattern();
             case SyntaxKind.OpenBraceToken:
@@ -5150,6 +5199,14 @@ public class Parser
             default:
                 return new ConstantPatternSyntax(syntaxTree, ParseExpression());
         }
+    }
+
+    private PatternSyntax ParseParenthesizedPattern()
+    {
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var pattern = ParsePattern();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new ParenthesizedPatternSyntax(syntaxTree, openParen, pattern, closeParen);
     }
 
     private PatternSyntax ParseTypePattern()

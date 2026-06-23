@@ -116,6 +116,8 @@ public enum BoundNodeKind
     PropertyPatternField,
     RelationalPattern,
     ListPattern,
+    BinaryPattern,
+    NotPattern,
     GoStatement,
     MakeChannelExpression,
     ChannelReceiveExpression,

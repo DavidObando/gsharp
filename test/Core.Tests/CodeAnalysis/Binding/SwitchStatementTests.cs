@@ -166,6 +166,79 @@ public class SwitchStatementTests
         Assert.Contains(diagnostics, d => d.Message.Contains("Cannot convert type", System.StringComparison.Ordinal) && d.Message.Contains("'bool'", System.StringComparison.Ordinal));
     }
 
+    // Issue #992: a binding type pattern under `or` / `not` is rejected (GS0390),
+    // because the variable would not be definitely assigned when the arm runs.
+    [Fact]
+    public void Switch_TypePatternBindingUnderOr_Diagnoses()
+    {
+        var src = @"open class Animal { var Name string }
+class Dog : Animal { }
+class Cat : Animal { }
+func F(a Animal) {
+ switch a {
+ case d is Dog or e is Cat { var x = 1 }
+ default { var y = 2 }
+ }
+}
+";
+        var diagnostics = Bind(src);
+        Assert.Contains(diagnostics, d => d.Message.Contains("may not be declared under an 'or' or 'not' pattern", System.StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Switch_DiscardTypePatternUnderOr_IsAllowed()
+    {
+        // Discard (`_`) type patterns under `or` introduce no binding and are
+        // permitted.
+        var src = @"open class Animal { var Name string }
+class Dog : Animal { }
+class Cat : Animal { }
+func F(a Animal) {
+ switch a {
+ case _ is Dog or _ is Cat { var x = 1 }
+ default { var y = 2 }
+ }
+}
+";
+        Assert.Empty(Bind(src));
+    }
+
+    // Issue #992: smart-cast under `and` narrows the discriminant in the arm
+    // body; under `or` it does NOT (which keeps the narrowing sound).
+    [Fact]
+    public void Switch_TypePatternUnderAnd_NarrowsDiscriminant()
+    {
+        var src = @"open class Animal { var Name string }
+class Dog : Animal { func Bark() string { return ""woof"" } }
+func F(a Animal) {
+ switch a {
+ case d is Dog and { Name: ""Rex"" } { var s = a.Bark() }
+ default { }
+ }
+}
+";
+        Assert.Empty(Bind(src));
+    }
+
+    [Fact]
+    public void Switch_TypePatternUnderOr_DoesNotNarrowDiscriminant()
+    {
+        // `a` is not narrowed across an `or`, so `a.Bark()` (defined only on Dog)
+        // does not resolve.
+        var src = @"open class Animal { var Name string }
+class Dog : Animal { func Bark() string { return ""woof"" } }
+class Cat : Animal { }
+func F(a Animal) {
+ switch a {
+ case _ is Dog or _ is Cat { var s = a.Bark() }
+ default { }
+ }
+}
+";
+        var diagnostics = Bind(src);
+        Assert.Contains(diagnostics, d => d.Message.Contains("Bark", System.StringComparison.Ordinal));
+    }
+
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

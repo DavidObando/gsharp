@@ -779,6 +779,20 @@ public static class BoundNodePrinter
 
                 writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
                 break;
+            case BoundNodeKind.BinaryPattern:
+                var binary = (BoundBinaryPattern)pattern;
+                WritePattern(binary.Left, writer);
+                writer.WriteSpace();
+                writer.WriteIdentifier(binary.IsConjunction ? "and" : "or");
+                writer.WriteSpace();
+                WritePattern(binary.Right, writer);
+                break;
+            case BoundNodeKind.NotPattern:
+                var not = (BoundNotPattern)pattern;
+                writer.WriteIdentifier("not");
+                writer.WriteSpace();
+                WritePattern(not.Pattern, writer);
+                break;
             default:
                 throw new Exception($"Unexpected pattern node {pattern.Kind}");
         }

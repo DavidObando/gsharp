@@ -555,6 +555,13 @@ internal sealed class SlotPlanner
                     }
 
                     break;
+                case BoundBinaryPattern bp:
+                    AllocatePatternBindings(bp.Left, locals, localTypes, typePatternScratchSlots);
+                    AllocatePatternBindings(bp.Right, locals, localTypes, typePatternScratchSlots);
+                    break;
+                case BoundNotPattern np:
+                    AllocatePatternBindings(np.Pattern, locals, localTypes, typePatternScratchSlots);
+                    break;
             }
         }
     }
