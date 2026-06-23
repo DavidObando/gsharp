@@ -271,6 +271,72 @@ public class Issue949SelfTypeArgumentInBaseClauseEmitTests
         Assert.True(diagnostics.Count > 0, "expected an inheritance-cycle diagnostic");
     }
 
+    [Fact]
+    public void ThreeTypeInheritanceCycle_IsRejected()
+    {
+        // A transitive base-class cycle spanning three types (A : B, B : C,
+        // C : A) must be rejected. This guards the multi-hop chain walk in the
+        // post-bind cycle detector (#973), not just the two-type case.
+        var diagnostics = CompileExpectingErrors("""
+            package Probe
+
+            open class A : B {
+                let U int32
+            }
+
+            open class B : C {
+                let V int32
+            }
+
+            open class C : A {
+                let W int32
+            }
+            """);
+
+        Assert.Contains(diagnostics, d => d.Contains("GS0381"));
+    }
+
+    [Fact]
+    public void TwoTypeInheritanceCycle_ReportsGS0381()
+    {
+        // The two-type cycle must surface the dedicated inheritance-cycle
+        // diagnostic (GS0381), distinct from direct self-inheritance (GS0378).
+        var diagnostics = CompileExpectingErrors("""
+            package Probe
+
+            open class B : C {
+                let V int32
+            }
+
+            open class C : B {
+                let W int32
+            }
+            """);
+
+        Assert.Contains(diagnostics, d => d.Contains("GS0381"));
+    }
+
+    [Fact]
+    public void ForwardBaseClassReference_IsAccepted()
+    {
+        // A class deriving from a base declared later in source is a legitimate
+        // forward reference (enabled by the #973 two-phase split) and must NOT
+        // be misreported as an inheritance cycle.
+        var path = CompileLibrary("""
+            package Probe
+
+            class Derived : Base {
+                let V int32
+            }
+
+            open class Base {
+                let W int32
+            }
+            """);
+
+        Assert.True(File.Exists(path));
+    }
+
     private static string CompileLibrary(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue949_lib_").FullName;

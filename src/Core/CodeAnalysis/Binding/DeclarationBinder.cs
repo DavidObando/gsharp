@@ -330,7 +330,130 @@ internal sealed class DeclarationBinder
         return enumSymbol;
     }
 
+    /// <summary>
+    /// Issue #973: declares and fully binds a struct/class in a single pass
+    /// (phase 1 + phase 2). Used for nested type declarations, which are bound
+    /// recursively from within their container's body rather than through the
+    /// top-level two-phase loop.
+    /// </summary>
     internal StructSymbol BindStructDeclaration(StructDeclarationSyntax syntax, PackageSymbol package)
+    {
+        var structSymbol = DeclareStructShell(syntax, package);
+        if (structSymbol == null)
+        {
+            return null;
+        }
+
+        BindStructDeclarationBody(syntax, package, structSymbol);
+        return structSymbol;
+    }
+
+    /// <summary>
+    /// Issue #973: detects transitive base-class inheritance cycles among the
+    /// supplied class symbols and reports a diagnostic for each one. Before the
+    /// two-phase declaration split (#973) a base clause could only resolve a
+    /// type declared earlier in source, so a mutual cycle such as
+    /// <c>class B : C</c> / <c>class C : B</c> was implicitly rejected because
+    /// the forward reference failed to resolve. Now that all type-name shells
+    /// are declared before any base clause is bound — which is exactly what
+    /// makes legitimate forward references work — the cycle resolves cleanly
+    /// and must be caught here, after every base class is installed via
+    /// <see cref="StructSymbol.SetBaseClass"/>. Each <see cref="StructSymbol"/>
+    /// has at most one user base class, so the base relation forms a functional
+    /// graph; this walks every node's chain and, on finding a back-edge into the
+    /// current path, reports the cycle and clears the offending base link so the
+    /// later base-chain walks in <see cref="StructSymbol"/> and the emitter do
+    /// not loop forever. Direct self-inheritance (<c>class A : A</c>) never
+    /// reaches here because it is rejected — and its base left unset — in the
+    /// base-clause loop.
+    /// </summary>
+    internal void DetectClassInheritanceCycles(IEnumerable<StructSymbol> classSymbols)
+    {
+        var acyclic = new HashSet<StructSymbol>();
+        foreach (var start in classSymbols)
+        {
+            if (start.BaseClass == null || acyclic.Contains(start))
+            {
+                continue;
+            }
+
+            var path = new List<StructSymbol>();
+            var onPath = new HashSet<StructSymbol>();
+            var current = start;
+            while (current != null)
+            {
+                if (onPath.Contains(current))
+                {
+                    var baseLocation = GetBaseClauseLocation(current);
+                    Diagnostics.ReportClassInheritanceCycle(baseLocation, current.Name);
+
+                    // Break the back-edge so subsequent base-chain walks (member
+                    // lookup, the emitter, etc.) terminate. Binding already
+                    // failed, so the program will not be emitted.
+                    current.SetBaseClass(null);
+                    break;
+                }
+
+                if (acyclic.Contains(current))
+                {
+                    break;
+                }
+
+                path.Add(current);
+                onPath.Add(current);
+                current = current.BaseClass;
+            }
+
+            foreach (var node in path)
+            {
+                acyclic.Add(node);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #973: returns the text location of a class declaration's base-type
+    /// clause (the first base/interface identifier), falling back to the type
+    /// identifier when the base clause carries no usable location. Used to
+    /// anchor inheritance-cycle diagnostics.
+    /// </summary>
+    private static TextLocation GetBaseClauseLocation(StructSymbol classSymbol)
+    {
+        var declaration = classSymbol.Declaration;
+        if (declaration == null)
+        {
+            return default;
+        }
+
+        if (declaration.BaseTypeClauses.Count > 0)
+        {
+            var location = declaration.BaseTypeClauses[0].Identifier?.Location;
+            if (location != null)
+            {
+                return location.Value;
+            }
+        }
+
+        if (declaration.BaseTypeIdentifier != null)
+        {
+            return declaration.BaseTypeIdentifier.Location;
+        }
+
+        return declaration.Identifier.Location;
+    }
+
+    /// <summary>
+    /// Issue #973 (phase 1): declares the struct/class type-name shell and
+    /// registers it in scope BEFORE any member body is bound, so that field,
+    /// parameter, and base-clause types may forward-reference a user type
+    /// declared later in the same compilation (e.g. a <c>class</c> whose field
+    /// type is a <c>struct</c> declared further down). The returned shell has
+    /// empty <see cref="StructSymbol.Fields"/> and
+    /// <see cref="StructSymbol.PrimaryConstructorParameters"/>; those — along
+    /// with the base clause and all members — are bound and installed later by
+    /// <see cref="BindStructDeclarationBody"/>.
+    /// </summary>
+    internal StructSymbol DeclareStructShell(StructDeclarationSyntax syntax, PackageSymbol package)
     {
         var name = syntax.Identifier.Text;
 
@@ -357,8 +480,67 @@ internal sealed class DeclarationBinder
                     binderCtx.CurrentTypeParameters[tp.Name] = tp;
                 }
             }
+        }
+        finally
+        {
+            binderCtx.CurrentTypeParameters = previousTypeParameters;
+        }
 
-            return BindStructDeclarationBody(syntax, package, accessibility, name, typeParameters);
+        // Issue #949 / #973: construct the struct symbol shell now and register
+        // it in scope so that (a) the type may reference itself as a generic
+        // type argument in its own base/interface clause, and (b) any other
+        // user type may reference it by name regardless of declaration order.
+        // Instance fields and primary-constructor parameters are bound and
+        // installed later by BindStructDeclarationBody.
+        var structSymbol = new StructSymbol(
+            name,
+            ImmutableArray<FieldSymbol>.Empty,
+            accessibility,
+            syntax,
+            package.Name,
+            syntax.IsData,
+            syntax.IsInline,
+            syntax.IsClass,
+            ImmutableArray<ParameterSymbol>.Empty,
+            isOpen: syntax.IsOpen && syntax.IsClass,
+            baseClass: null);
+        Binder.AttachDocumentation(structSymbol, syntax);
+
+        if (!typeParameters.IsDefaultOrEmpty)
+        {
+            structSymbol.SetTypeParameters(typeParameters);
+        }
+
+        if (!scope.TryDeclareTypeAlias(name, structSymbol))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+        }
+
+        return structSymbol;
+    }
+
+    /// <summary>
+    /// Issue #973 (phase 2): binds the body of a previously declared struct/class
+    /// shell — its instance fields, primary-constructor parameters, base clause,
+    /// and all members — and installs them on <paramref name="structSymbol"/>.
+    /// Re-establishes the type-parameter scope captured at declaration time so
+    /// member types can reference the type's own type parameters.
+    /// </summary>
+    internal void BindStructDeclarationBody(StructDeclarationSyntax syntax, PackageSymbol package, StructSymbol structSymbol)
+    {
+        var previousTypeParameters = binderCtx.CurrentTypeParameters;
+        try
+        {
+            if (!structSymbol.TypeParameters.IsDefaultOrEmpty)
+            {
+                binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+                foreach (var tp in structSymbol.TypeParameters)
+                {
+                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
+                }
+            }
+
+            BindStructDeclarationBodyCore(syntax, package, structSymbol);
         }
         finally
         {
@@ -460,13 +642,13 @@ internal sealed class DeclarationBinder
         _ => null,
     };
 
-    private StructSymbol BindStructDeclarationBody(
+    private void BindStructDeclarationBodyCore(
         StructDeclarationSyntax syntax,
         PackageSymbol package,
-        Accessibility accessibility,
-        string name,
-        ImmutableArray<TypeParameterSymbol> typeParameters)
+        StructSymbol structSymbol)
     {
+        var name = structSymbol.Name;
+        var accessibility = structSymbol.Accessibility;
         var seenFieldNames = new HashSet<string>();
         var fields = ImmutableArray.CreateBuilder<FieldSymbol>();
 
@@ -690,37 +872,17 @@ internal sealed class DeclarationBinder
         // any conflicting explicit base.
         var hasAttributeSugar = HasAttributeSugarMarker(syntax.Annotations);
 
-        // Issue #949: construct the struct symbol BEFORE binding its base-type
-        // clause and register it in scope, so the enclosing type may reference
-        // itself as a generic type argument within its own base/interface list
-        // (the common `class Shape : IEquatable[Shape]` pattern). Name
-        // resolution of the self type argument (see `LookupType`) finds this
-        // in-progress symbol. The resolved base class — if any — is installed
-        // afterwards via `SetBaseClass`. Genuine self-inheritance
-        // (`class A : A`) is rejected explicitly in the base-clause loop below.
-        var structSymbol = new StructSymbol(
-            name,
+        // Issue #949 / #973: the struct symbol shell was constructed and
+        // registered in scope by DeclareStructShell (phase 1) so it could be
+        // referenced as a self type argument in its own base/interface clause
+        // and forward-referenced by other user types. Now that the instance
+        // fields and primary-constructor parameters have been bound, install
+        // them on the shell. The resolved base class — if any — is installed
+        // afterwards via SetBaseClass. Genuine self-inheritance (`class A : A`)
+        // is rejected explicitly in the base-clause loop below.
+        structSymbol.SetInstanceFieldsAndPrimaryConstructorParameters(
             fields.ToImmutable(),
-            accessibility,
-            syntax,
-            package.Name,
-            syntax.IsData,
-            syntax.IsInline,
-            syntax.IsClass,
-            primaryCtorParameters,
-            isOpen: syntax.IsOpen && syntax.IsClass,
-            baseClass: null);
-        Binder.AttachDocumentation(structSymbol, syntax);
-
-        if (!typeParameters.IsDefaultOrEmpty)
-        {
-            structSymbol.SetTypeParameters(typeParameters);
-        }
-
-        if (!scope.TryDeclareTypeAlias(name, structSymbol))
-        {
-            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
-        }
+            primaryCtorParameters);
 
         // Phase 3.B.3 sub-step 3 + 3.B.4: resolve the optional `: X, Y, Z` clause.
         // Each identifier is either the (single) base class or an interface
@@ -2213,8 +2375,6 @@ internal sealed class DeclarationBinder
         // interface / enum) declared inside this aggregate's body, recording the
         // enclosing type so the emitter materialises real CLR nested types.
         BindNestedTypeDeclarations(syntax, structSymbol, package);
-
-        return structSymbol;
     }
 
     /// <summary>

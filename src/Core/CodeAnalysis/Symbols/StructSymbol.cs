@@ -153,7 +153,7 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>Gets the field declarations in source order.</summary>
-    public ImmutableArray<FieldSymbol> Fields { get; }
+    public ImmutableArray<FieldSymbol> Fields { get; private set; }
 
     /// <summary>Gets the struct CLR accessibility.</summary>
     public Accessibility Accessibility { get; }
@@ -185,7 +185,7 @@ public sealed class StructSymbol : TypeSymbol
     public bool IsClass { get; }
 
     /// <summary>Gets the Kotlin-style primary constructor parameters (Phase 3.B.3 sub-step 2). Each entry corresponds 1:1 to a field of the same name and type on this class; empty when no primary constructor was declared (default parameterless ctor).</summary>
-    public ImmutableArray<ParameterSymbol> PrimaryConstructorParameters { get; }
+    public ImmutableArray<ParameterSymbol> PrimaryConstructorParameters { get; private set; }
 
     /// <summary>Gets a value indicating whether this type carries an explicit primary constructor (Phase 3.B.3 sub-step 2).</summary>
     public bool HasPrimaryConstructor => !PrimaryConstructorParameters.IsDefaultOrEmpty;
@@ -394,6 +394,26 @@ public sealed class StructSymbol : TypeSymbol
     public void SetInterfaces(ImmutableArray<InterfaceSymbol> interfaces)
     {
         Interfaces = interfaces;
+    }
+
+    /// <summary>
+    /// Issue #973: sets <see cref="Fields"/> and
+    /// <see cref="PrimaryConstructorParameters"/> after the symbol shell is
+    /// declared. The binder declares every top-level struct/class name (with
+    /// empty fields) up front so that field types may forward-reference a user
+    /// type declared later in the same compilation, then binds each body and
+    /// installs the resolved instance fields and primary-constructor parameters
+    /// here. Intended to be called exactly once by the binder during
+    /// <c>BindStructDeclaration</c>.
+    /// </summary>
+    /// <param name="fields">The bound instance field symbols in source order.</param>
+    /// <param name="primaryConstructorParameters">The bound primary-constructor parameters, or empty when none were declared.</param>
+    public void SetInstanceFieldsAndPrimaryConstructorParameters(
+        ImmutableArray<FieldSymbol> fields,
+        ImmutableArray<ParameterSymbol> primaryConstructorParameters)
+    {
+        Fields = fields;
+        PrimaryConstructorParameters = primaryConstructorParameters;
     }
 
     /// <summary>

@@ -646,14 +646,41 @@ public sealed class Binder
             binder.declarations.BindEnumDeclaration(enumSyntax, owningPackage);
         }
 
+        // Issue #973: declare all struct/class type-name shells first (phase 1),
+        // then bind their bodies (phase 2). Splitting declaration from body
+        // binding lets a field/parameter/base-clause type forward-reference a
+        // user struct or class declared later in the same compilation —
+        // e.g. a `class` whose field type is a `struct` declared below it —
+        // mirroring the two-phase scheme already used for interfaces above.
         var structDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
                                             .OfType<StructDeclarationSyntax>();
+        var declaredStructs = new List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)>();
         foreach (var structSyntax in structDeclarations)
         {
             var owningPackage = packageByTree[structSyntax.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(structSyntax.AccessibilityModifier);
-            binder.declarations.BindStructDeclaration(structSyntax, owningPackage);
+            var structSymbol = binder.declarations.DeclareStructShell(structSyntax, owningPackage);
+            if (structSymbol != null)
+            {
+                declaredStructs.Add((structSyntax, structSymbol));
+            }
         }
+
+        foreach (var (structSyntax, structSymbol) in declaredStructs)
+        {
+            var owningPackage = packageByTree[structSyntax.SyntaxTree];
+            binder.declarations.BindStructDeclarationBody(structSyntax, owningPackage, structSymbol);
+        }
+
+        // Issue #973: now that every class shell has had its base clause bound
+        // and its base class installed, screen the resolved base relation for
+        // transitive inheritance cycles (e.g. `class B : C` / `class C : B`).
+        // The two-phase split declares all type-name shells before any base
+        // clause is bound — which is what makes legitimate forward references
+        // work — so such cycles can no longer be rejected by declaration order
+        // and must be detected explicitly here.
+        binder.declarations.DetectClassInheritanceCycles(
+            declaredStructs.Where(d => d.Symbol.IsClass).Select(d => d.Symbol));
 
         foreach (var (ifaceSyntax, ifaceSymbol) in declaredInterfaces)
         {
