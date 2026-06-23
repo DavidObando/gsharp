@@ -2851,7 +2851,7 @@ internal sealed partial class ExpressionBinder
         foreach (var property in clrType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
         {
             var indexParams = property.GetIndexParameters();
-            if (indexParams.Length == 1 && indexParams[0].ParameterType == typeof(System.Range))
+            if (indexParams.Length == 1 && indexParams[0].ParameterType.IsSameAs(typeof(System.Range)))
             {
                 indexer = property;
                 return true;
@@ -2868,12 +2868,12 @@ internal sealed partial class ExpressionBinder
         sliceMethod = null;
 
         var lengthProp = clrType.GetProperty("Length", BindingFlags.Public | BindingFlags.Instance);
-        if (lengthProp == null || lengthProp.PropertyType != typeof(int))
+        if (lengthProp == null || !lengthProp.PropertyType.IsSameAs(typeof(int)))
         {
             lengthProp = clrType.GetProperty("Count", BindingFlags.Public | BindingFlags.Instance);
         }
 
-        if (lengthProp == null || lengthProp.PropertyType != typeof(int))
+        if (lengthProp == null || !lengthProp.PropertyType.IsSameAs(typeof(int)))
         {
             return false;
         }
