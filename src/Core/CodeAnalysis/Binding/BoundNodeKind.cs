@@ -145,6 +145,13 @@ public enum BoundNodeKind
     // `call instance R IFoo::Method(...)` so the inherited default runs
     // without re-dispatching through the implementer's v-table.
     BaseInterfaceCallExpression,
+
+    // Issue #986: base-class call into the nearest base implementation of a
+    // virtual member — `base.Method(args)` (and `base[BaseClass].Method(args)`).
+    // Emitted as a non-virtual `call instance R BaseClass::Method(...)` so the
+    // base implementation runs without re-dispatching through the derived
+    // type's v-table (which would recurse infinitely).
+    BaseClassCallExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

@@ -596,4 +596,31 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(methodToken);
     }
+
+    // Issue #986: emits `base.M(args)` (and `base[BaseClass].M(args)`) as a
+    // non-virtual `call instance R BaseClass::M(...)`. The receiver is `this`
+    // (the derived instance); because the opcode is `call` (not `callvirt`)
+    // the CLR resolves statically to the base implementation, bypassing the
+    // v-table. This is exactly the IL shape `csc` produces for C# `base.M()`.
+    private void EmitBaseClassCall(BoundBaseClassCallExpression call)
+    {
+        // Load `this` (the derived instance).
+        this.EmitInstanceReceiver(call.Receiver);
+
+        // Evaluate each argument left-to-right.
+        for (var i = 0; i < call.Arguments.Length; i++)
+        {
+            this.EmitExpression(call.Arguments[i]);
+        }
+
+        // Resolve the MethodDef of the base implementation. For a non-generic
+        // base this is the bare MethodDef row; for a constructed generic base
+        // it is a MemberRef parented at the base TypeSpec.
+        var methodToken = this.outer.ResolveUserInstanceMethodToken(call.BaseClass, call.Method);
+
+        // Issue #986: non-virtual `call`, NOT `callvirt`. callvirt would
+        // re-dispatch through the v-table and re-enter the derived override.
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(methodToken);
+    }
 }

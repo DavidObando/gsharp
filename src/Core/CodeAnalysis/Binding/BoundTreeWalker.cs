@@ -223,6 +223,9 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.BaseInterfaceCallExpression:
                 VisitBaseInterfaceCallExpression((BoundBaseInterfaceCallExpression)node);
                 break;
+            case BoundNodeKind.BaseClassCallExpression:
+                VisitBaseClassCallExpression((BoundBaseClassCallExpression)node);
+                break;
             case BoundNodeKind.FieldAccessExpression:
                 VisitFieldAccessExpression((BoundFieldAccessExpression)node);
                 break;
@@ -643,6 +646,14 @@ public abstract class BoundTreeWalker
     /// <summary>ADR-0091: visits a <see cref="BoundBaseInterfaceCallExpression"/>.</summary>
     /// <param name="node">The node being visited.</param>
     protected virtual void VisitBaseInterfaceCallExpression(BoundBaseInterfaceCallExpression node)
+    {
+        VisitExpression(node.Receiver);
+        VisitList(node.Arguments);
+    }
+
+    /// <summary>Issue #986: visits a <see cref="BoundBaseClassCallExpression"/>.</summary>
+    /// <param name="node">The node being visited.</param>
+    protected virtual void VisitBaseClassCallExpression(BoundBaseClassCallExpression node)
     {
         VisitExpression(node.Receiver);
         VisitList(node.Arguments);

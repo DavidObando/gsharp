@@ -256,6 +256,7 @@ AwaitExpression
 AwaitForRangeStatement
 AwaitResumePoint
 AwaitYieldPoint
+BaseClassCallExpression
 BaseInterfaceCallExpression
 BinaryExpression
 BlockExpression

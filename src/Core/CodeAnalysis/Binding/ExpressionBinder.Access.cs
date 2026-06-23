@@ -523,6 +523,18 @@ internal sealed partial class ExpressionBinder
             var name = leftName.IdentifierToken.Text;
             var variableHit = scope.TryLookupSymbol(name) as VariableSymbol;
 
+            // Issue #986: `base.M(args)` — a non-virtual call to the nearest
+            // base class implementation of `M`, mirroring C# `base.M(...)`.
+            // `base` is a contextual keyword: only intercepted when it is not a
+            // real value in scope (so a hypothetical local named `base` still
+            // wins) and the right side is a method call. Property/field access
+            // through `base` is not yet supported and falls through to the
+            // existing "cannot find type base" path.
+            if (name == "base" && variableHit == null && rightPart is CallExpressionSyntax baseCall)
+            {
+                return BindBaseClassCall(baseCall, leftName.Location, explicitBaseType: null, selectorLocation: leftName.Location);
+            }
+
             // Issue #687 (Option A — C#-style "color color"): when an identifier
             // resolves to both a value (field/local/parameter) AND a same-named
             // type in scope, prefer the type interpretation if the right-hand
