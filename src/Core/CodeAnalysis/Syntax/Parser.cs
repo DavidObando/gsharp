@@ -2247,6 +2247,13 @@ public class Parser
     {
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
+
+        // Issue #1007: an interface method may be generic, declaring a
+        // type-parameter list `[T]` (and constraints) between the method name
+        // and the `(` parameter list, exactly as class methods and free
+        // functions do (ADR-0020). Reuse the same helper so the syntax and
+        // binding pipeline is identical.
+        var typeParameterList = ParseOptionalTypeParameterList();
         var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
         var parameters = ParseParameterList();
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
@@ -2281,7 +2288,11 @@ public class Parser
             openModifier: null,
             overrideModifier: null,
             functionKeyword,
+            receiverOpenParenthesisToken: null,
+            receiver: null,
+            receiverCloseParenthesisToken: null,
             identifier,
+            typeParameterList,
             openParenthesisToken,
             parameters,
             closeParenthesisToken,

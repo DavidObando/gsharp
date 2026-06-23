@@ -898,7 +898,15 @@ internal sealed class TypeDefEmitter
     public void EmitAbstractMethod(FunctionSymbol method)
     {
         var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+
+        // Issue #1007: a bodyless interface method may be generic
+        // (`func M[T](...) T;`). Stamp the signature's generic-parameter count
+        // and (after the MethodDef is minted) the per-method GenericParam rows
+        // so the abstract slot is a proper CLR generic method definition — its
+        // parameter / return types reference the method type parameters as
+        // MVAR(idx) through the shared type encoder.
+        var methodGenericArity = method.TypeParameters.IsDefaultOrEmpty ? 0 : method.TypeParameters.Length;
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true, genericParameterCount: methodGenericArity)
             .Parameters(
                 method.Parameters.Length,
                 r => this.encodeReturnSymbol(r, method.Type, method.ReturnRefKind),
@@ -913,13 +921,18 @@ internal sealed class TypeDefEmitter
         var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
             | MethodAttributes.Virtual | MethodAttributes.Abstract
             | MethodAttributes.NewSlot;
-        this.emitCtx.Metadata.AddMethodDefinition(
+        var handle = this.emitCtx.Metadata.AddMethodDefinition(
             attributes: attrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString(method.Name),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: -1,
             parameterList: this.nextParameterHandle());
+
+        if (methodGenericArity > 0)
+        {
+            EmitGenericParamRows(this.emitCtx, handle, method.TypeParameters);
+        }
     }
 
     /// <summary>
