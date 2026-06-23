@@ -22,6 +22,7 @@ so the simplest possible gap is isolated first.
 | **L2** | `L2-Library` + `L2-Library.Tests` | classlib + xUnit | `class`/`struct`/`record`/`record struct` (B.4); interface impl + base-clause ordering, get-only/`init` props (B.6, B.11); `public`/`internal` visibility (B.10); `enum`, auto-properties, static members, method overloads (B.11) |
 | **L3** | `L3-Library` + `L3-Library.Tests` | richer classlib + xUnit | generics + constraints `where T : …` (B.7); generic method with inference; indexer (B.11); nullable reference types; extension methods `this T` → receiver clause (B.5); `Func<>`/`Action<>`/lambdas → arrow form (B.8); `switch` expression + type/property/relational patterns; LINQ method **and** query syntax; `async`/`await` over `Task<T>` |
 | **L4** | `L4-Console` | console exe, no tests | exception handling: `try`/typed `catch`/`finally`, custom `Exception` subtype + `: base(message)` chaining, re-throw (B.27, B.28); `Dictionary<K,V>` + `HashSet<T>` (add/`TryGetValue`/`Contains`/`Count`, sorted iteration); `using` statement **and** `using var` over an `IDisposable` (B.29); nullable value types `int?` (`.HasValue`/`.Value`, `??`); operator overloading `+`/`*`/`==`/`!=` on a `struct` → receiver-clause `operator` funcs (B.31); conditional/ternary → if-expression (B.26); pre-declared `out` argument → `&x` (B.30) |
+| **L5** | `L5-Console` | console exe, no tests | inheritance & polymorphism: open base class, `virtual`/`override` method, `protected` field, dynamic dispatch through a base-typed variable (B.4, B.5); `is` type pattern (no binder) + `switch` **statement** over type patterns → `switch subj { case P { … } }` (B.32); `switch` **expression** with relational patterns (`< 10.0`) → colon-arm form; iterator `yield return` returning `IEnumerable<T>` → `sequence[T]` (B.32); generic constraints `where T : class` / `where T : IComparable<T>` → bracket constraint clause (B.7); integer literal implicitly promoted to a `double` parameter → emitted as a float literal (B.12). Surfaces the next compiler-gap batch (ADR-0115 §G): `base.M()` virtual call, `abstract` method, `new T()` under `new()`, generic auto-property over `T`, user-class `sequence[T]` iterator, `when` guards, `and`/`or` patterns, `is`-binder, `yield break` |
 
 Each level builds **and** tests green in C# **first** — that captured C# state
 is the parity oracle.
@@ -50,6 +51,8 @@ committed baseline artifacts:
 | Artifact | Produced from | Role |
 | --- | --- | --- |
 | `L1-Console/baseline.stdout.golden` | running the console exe | golden stdout the G# port must reproduce byte-for-byte |
+| `L4-Console/baseline.stdout.golden` | running the console exe | golden stdout the G# port must reproduce byte-for-byte |
+| `L5-Console/baseline.stdout.golden` | running the console exe | golden stdout the G# port must reproduce byte-for-byte |
 | `L2-Library.Tests/baseline.tests.json` | `dotnet test --logger trx` | sorted `{name → outcome}` + pass/fail/skip counts the G# port must reproduce |
 | `L3-Library.Tests/baseline.tests.json` | `dotnet test --logger trx` | same, for L3 |
 
@@ -81,6 +84,10 @@ a G# run — so pipeline retries always compare against a fixed target
 ```bash
 # build + run L1 and see its (deterministic) stdout
 dotnet run --project L1-Console/L1-Console.csproj -c Release
+
+# build + run L4 / L5 console exes
+dotnet run --project L4-Console/L4-Console.csproj -c Release
+dotnet run --project L5-Console/L5-Console.csproj -c Release
 
 # test L2 / L3
 dotnet test L2-Library.Tests/L2-Library.Tests.csproj -c Release

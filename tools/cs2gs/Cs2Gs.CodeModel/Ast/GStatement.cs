@@ -425,3 +425,75 @@ public sealed class TryStatement : GStatement
     /// <summary>Gets the finally block, or <see langword="null"/>.</summary>
     public BlockStatement FinallyBlock { get; }
 }
+
+/// <summary>
+/// One <c>case</c> (or <c>default</c>) arm of a <see cref="SwitchStatement"/>:
+/// a pattern and a brace-delimited body. When <see cref="Pattern"/> is
+/// <see langword="null"/> the arm is the <c>default</c> arm.
+/// </summary>
+public sealed class SwitchStatementCase : GNode
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SwitchStatementCase"/> class.
+    /// </summary>
+    /// <param name="pattern">The arm pattern, or <see langword="null"/> for the <c>default</c> arm.</param>
+    /// <param name="body">The arm body block.</param>
+    public SwitchStatementCase(GPattern pattern, BlockStatement body)
+    {
+        Pattern = pattern;
+        Body = body;
+    }
+
+    /// <summary>Gets the arm pattern, or <see langword="null"/> for the <c>default</c> arm.</summary>
+    public GPattern Pattern { get; }
+
+    /// <summary>Gets the arm body block.</summary>
+    public BlockStatement Body { get; }
+}
+
+/// <summary>
+/// A <c>switch</c> statement <c>switch subject { case &lt;pattern&gt; { … } default { … } }</c>
+/// used in statement position for side effects (spec §Pattern matching; sample
+/// <c>PatternSwitch.gs</c>). Distinct from <c>SwitchExpression</c>, which yields
+/// a value.
+/// </summary>
+public sealed class SwitchStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SwitchStatement"/> class.
+    /// </summary>
+    /// <param name="subject">The value being matched.</param>
+    /// <param name="cases">The ordered case arms.</param>
+    public SwitchStatement(GExpression subject, IReadOnlyList<SwitchStatementCase> cases)
+    {
+        Subject = subject;
+        Cases = cases ?? new List<SwitchStatementCase>();
+    }
+
+    /// <summary>Gets the value being matched.</summary>
+    public GExpression Subject { get; }
+
+    /// <summary>Gets the ordered case arms.</summary>
+    public IReadOnlyList<SwitchStatementCase> Cases { get; }
+}
+
+/// <summary>
+/// A <c>yield</c> statement inside an iterator <c>func</c> whose return type is
+/// <c>sequence[T]</c> (spec §Iterators; sample <c>TupleSequenceIterators.gs</c>).
+/// When <see cref="Expression"/> is non-<see langword="null"/> the statement is
+/// <c>yield &lt;expr&gt;</c> (C# <c>yield return</c>).
+/// </summary>
+public sealed class YieldStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="YieldStatement"/> class.
+    /// </summary>
+    /// <param name="expression">The yielded value.</param>
+    public YieldStatement(GExpression expression)
+    {
+        Expression = expression;
+    }
+
+    /// <summary>Gets the yielded value.</summary>
+    public GExpression Expression { get; }
+}

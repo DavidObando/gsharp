@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Corpus.L5</RootNamespace>
+    <AssemblyName>L5-Console</AssemblyName>
+  </PropertyGroup>
+
+</Project>

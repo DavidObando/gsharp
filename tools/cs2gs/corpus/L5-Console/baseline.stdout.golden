@@ -1,0 +1,16 @@
+circle area=4
+rectangle area=36
+circle area=144
+round small
+circle r2=4
+angular medium
+rectangle wh=36
+round large
+circle r2=144
+-1
+0
+1
+large: rectangle area=36
+large: circle area=144
+max=75
+box=empty

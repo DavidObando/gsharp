@@ -25,7 +25,7 @@ oracle, §F reporting). This README is the operational quick start.
 | `Cs2Gs.Report` | Aggregates a run into a self-contained `report.html` + `summary.json`. |
 | `Cs2Gs.Cli` | The `cs2gs` command-line front end (`migrate` / `report` verbs). |
 | `Cs2Gs.Tests` | Unit + golden + live tests for all of the above. |
-| `corpus/` | The curated C# **input** corpus (L1–L3) plus xUnit oracles. Isolated from `GSharp.sln`; see [`corpus/README.md`](corpus/README.md). |
+| `corpus/` | The curated C# **input** corpus (L1–L5) plus xUnit oracles. Isolated from `GSharp.sln`; see [`corpus/README.md`](corpus/README.md). |
 
 Why Roslyn here does not contradict ADR-0027 (no Roslyn *in the compiler*):
 `cs2gs` uses Roslyn as an **external, offline C# reader** in a separate process;
@@ -136,18 +136,24 @@ details.
 | App | translate | compile | ilverify | test-parity |
 | --- | --- | --- | --- | --- |
 | `corpus/L1-Console` | PASS | PASS | PASS | PASS |
-| `corpus/L2-Library` | PASS | FAIL (#973) | skip | skip |
-| `corpus/L3-Library` | PASS | FAIL (#974) | skip | skip |
+| `corpus/L2-Library` | PASS | PASS | PASS | PASS |
+| `corpus/L3-Library` | PASS | FAIL (#985) | skip | skip |
 | `corpus/L4-Console` | PASS | PASS | PASS | PASS |
+| `corpus/L5-Console` | PASS | PASS | PASS | PASS |
 
-L1 and L4 migrate fully green end-to-end. L2 and L3 both translate to canonical G#
-in full; each is now blocked at the **compile** stage by a single open compiler gap
-(#973 a `class` with a value-type field; #974 generic-interface implementation).
-L3's `Advanced.cs` translates and compiles standalone. L4 exercises exception
-handling, `Dictionary`/`HashSet`, `using`/`IDisposable`, nullable value types, and
-operator overloading (see §B.26–B.32 of ADR-0115). As gaps are fixed the
-frontier advances automatically — the seven gaps #938–#944 have already been
-fixed, which is what moved L3 from `translate FAIL` to `translate PASS`.
+L1, L2, L4, and L5 migrate fully green end-to-end. L2 went green when #973/#974 were
+fixed. L4 emits the **canonical** forms for an interpolated `: base(...)` argument,
+a `struct` interface clause, and an inline BCL `out var x` now that #975/#976/#977
+are fixed. L3 translates in full but is blocked at **compile** by a residual gap
+(#985: `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by
+return type — GS0264 + GS0187). L3's `Advanced.cs` translates and compiles
+standalone. L5 (inheritance/polymorphism, `is`/`switch` pattern matching, a
+`yield return` iterator → `sequence[T]`, generic constraints) reaches **full
+parity** by using only the canonical/compiling forms, and surfaces the next batch
+of gaps (#986…#994) — captured as verified triage records (the constructs with
+no canonical form, or that ICE/mis-compile, are held out of L5). As gaps are fixed
+the frontier advances automatically — #938–#944 moved L3 to `translate PASS`, and
+#973–#977 took L2 green and let L4 use the canonical forms.
 
 ## Discovered compiler gaps (objective 2)
 
@@ -160,18 +166,32 @@ fixed, which is what moved L3 from `translate FAIL` to `translate PASS`.
 | [#942](https://github.com/DavidObando/gsharp/issues/942) | `expr[i].Member` mis-parses `[i]` as type arguments | GS0005 | resolved |
 | [#943](https://github.com/DavidObando/gsharp/issues/943) | Generic-interface constraint `[T IComparable[T]]` won't parse | GS0005 | resolved |
 | [#944](https://github.com/DavidObando/gsharp/issues/944) | No user-indexer declaration form; attempts crash | GS9998 | resolved |
-| [#973](https://github.com/DavidObando/gsharp/issues/973) | A `class` with a user `struct`/`data struct` field — emit ICE | GS9998 | open |
-| [#974](https://github.com/DavidObando/gsharp/issues/974) | Generic-interface impl: method returning a constructed generic over `T` (e.g. `IEnumerator[T]`) fails satisfaction | GS0187 | open |
-| #975 | Interpolated string in a `: base(...)` constructor-arg position — emit ICE | GS9998 | open (L4; worked around) |
-| #976 | A `struct` cannot declare a base / interface clause (`struct S : I {…}`) | GS0005 | open (L4) |
-| #977 | BCL method with an inline `out var x` declaration fails overload resolution | GS0159 | open (L4; `&x` works) |
+| [#973](https://github.com/DavidObando/gsharp/issues/973) | A `class` with a user `struct`/`data struct` field — emit ICE | GS9998 | resolved (L2 green) |
+| [#974](https://github.com/DavidObando/gsharp/issues/974) | Generic-interface impl: method returning a constructed generic over `T` (e.g. `IEnumerator[T]`) fails satisfaction | GS0187 | resolved |
+| [#975](https://github.com/DavidObando/gsharp/issues/975) | Interpolated string in a `: base(...)` constructor-arg position — emit ICE | GS9998 | resolved (emitted directly) |
+| [#976](https://github.com/DavidObando/gsharp/issues/976) | A `struct` cannot declare a base / interface clause (`struct S : I {…}`) | GS0005 | resolved (interface clause parses; class base → GS0382) |
+| [#977](https://github.com/DavidObando/gsharp/issues/977) | BCL method with an inline `out var x` declaration fails overload resolution | GS0159 | resolved (inline `out var` binds) |
+| #985 | Implementing `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by return type | GS0264 + GS0187 | open (blocks L3-`Generics`) |
+| #986 | `base.Method()` virtual base-class call has no canonical G# form | GS0157 / GS0338 | open (translation-unsupported) |
+| #987 | An `abstract` (no-body) method on an `open class` crashes the emitter | GS9998 (NRE) | open |
+| #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | open (translation-unsupported) |
+| #989 | A generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | open |
+| #990 | A user reference-type iterator (`sequence[UserClass]`) crashes the emitter | GS9998 | open |
+| #991 | A `when` guard on a `switch` arm won't parse | GS0005 | open (translation-unsupported) |
+| #992 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | open (translation-unsupported) |
+| #993 | An `is`/`case` type pattern **with** a binder (`x is T t`) leaves the binder unbound | GS0125 | open |
+| #994 | `yield break` has no canonical G# form | GS0005 | open (translation-unsupported) |
 
-The three L4 gaps each have a canonical-form workaround the translator emits, so
-L4 reaches full parity while the gaps are recorded for the compiler backlog:
-#975 forwards the message as a normal constructor argument and chains
-`init(message string, …) : base(message)`; #976 drops the struct's interface
-clause (the value type keeps its typed `Equals`/`GetHashCode` + `operator ==`);
-#977 uses the pre-declared pass-by-address `&x` out form for BCL methods.
+Gaps #975/#976/#977 — discovered by L4 — are now **resolved**, so the translator
+emits the canonical forms directly: the interpolated `: base("…$n…")` argument, the
+`struct Money(Cents int32) : IEquatable[Money]` interface clause, and the inline
+BCL `out var x`. The residual L3 gap and the L5 batch (#986…#994) are each a
+verified minimal repro (with a contrasting passing control) documented in
+ADR-0115 §G for the compiler backlog. L5 also drove two **translator faithfulness
+fixes** (no compiler change): an `int` literal implicitly promoted to a `double`
+parameter is emitted as a float literal (avoiding an `ilverify` `StackUnexpected`),
+and a parameterless constructor that initializes a **property** keeps its explicit
+`init()` body (G# has no property member initializer).
 
 ## Conventions
 
