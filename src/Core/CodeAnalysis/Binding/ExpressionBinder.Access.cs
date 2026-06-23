@@ -2342,7 +2342,19 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
-                var valueType = TypeSymbol.FromClrType(idxProp.PropertyType);
+                // Issue #968: recover the symbolic element type the same way
+                // the READ path does (MapErasedIndexerElementType). On a
+                // `List[T]` whose element `T` is the enclosing type's generic
+                // parameter, `idxProp.PropertyType` is the type-erased CLR
+                // `object` (T -> object). Typing the write value as `object`
+                // here would reject the assignment `_items[i] = value` (where
+                // `value: T`) with GS0155 ("Cannot convert type 'T' to
+                // 'object'"). Substituting the open `set_Item` value parameter
+                // back through the receiver's symbolic type arguments yields the
+                // real element type (`T`), so the `T` value binds without a
+                // spurious boxing conversion — the WRITE-path counterpart to the
+                // READ-path element-type recovery (issues #313 / #671 / #957).
+                var valueType = MapErasedIndexerElementType((ImportedTypeSymbol)variable.Type, idxProp);
                 var boundValue = BindValue(valueType);
                 return new BoundClrIndexAssignmentExpression(null, variable, idxProp, idxArgs, boundValue, valueType);
             }
