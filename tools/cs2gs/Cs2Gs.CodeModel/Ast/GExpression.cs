@@ -429,6 +429,26 @@ public sealed class UnaryExpression : GExpression
 }
 
 /// <summary>
+/// A postfix non-null assertion <c>operand!!</c> — the G# analogue of the C#
+/// null-forgiving operator <c>operand!</c> (spec: "Postfix <c>!!</c> asserts
+/// non-null").
+/// </summary>
+public sealed class NonNullAssertionExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="NonNullAssertionExpression"/> class.
+    /// </summary>
+    /// <param name="operand">The asserted operand.</param>
+    public NonNullAssertionExpression(GExpression operand)
+    {
+        Operand = operand;
+    }
+
+    /// <summary>Gets the asserted operand.</summary>
+    public GExpression Operand { get; }
+}
+
+/// <summary>
 /// A parenthesized expression <c>(inner)</c>.
 /// </summary>
 public sealed class ParenthesizedExpression : GExpression
@@ -777,4 +797,38 @@ public sealed class ConditionalAccessExpression : GExpression
 
     /// <summary>Gets the non-null continuation.</summary>
     public GExpression WhenNotNull { get; }
+}
+
+/// <summary>
+/// A C# <c>throw</c> expression used in value position (<c>a ?? throw e</c>,
+/// <c>cond ? a : throw e</c>, a <c>switch</c> arm value). G# models <c>throw</c>
+/// as a statement only (spec §If expressions), so the canonical faithful form
+/// lowers the throw to an if-expression whose then-branch is a block that runs
+/// the <c>throw</c> statement and supplies an (unreachable) tail of the result
+/// type: <c>if true { throw e\n default(T) } else { default(T) }</c>. This shape
+/// is a primary expression and therefore valid in every value position
+/// (ADR-0115 §B).
+/// </summary>
+public sealed class ThrowExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ThrowExpression"/> class.
+    /// </summary>
+    /// <param name="operand">The thrown exception value.</param>
+    /// <param name="resultType">
+    /// The type the surrounding expression position expects, used for the
+    /// unreachable <c>default(T)</c> tail. May be <see langword="null"/> when no
+    /// type is resolvable, in which case a bare <c>default</c> is emitted.
+    /// </param>
+    public ThrowExpression(GExpression operand, GTypeReference resultType)
+    {
+        Operand = operand;
+        ResultType = resultType;
+    }
+
+    /// <summary>Gets the thrown exception value.</summary>
+    public GExpression Operand { get; }
+
+    /// <summary>Gets the result type used for the unreachable tail.</summary>
+    public GTypeReference ResultType { get; }
 }
