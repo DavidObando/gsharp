@@ -636,13 +636,14 @@ Primary expressions include literals, identifiers, calls, generic calls, struct 
 
 Generic instantiation uses brackets and bounded lookahead to distinguish type arguments from indexing. Examples include `Id[int32](1)` and `Box[string]{Value: "x"}`.
 
-Function literals use `func` or `async func`. A trailing lambda can appear after an explicit call close-paren and is desugared into the final argument. ADR-0074 (issue #714) also introduces a dedicated arrow-lambda expression form: `(p1 T1, p2 T2) -> body`. The parameter list is always parenthesized — there is no bare-identifier shorthand. The body is either a single expression or a brace-delimited block expression whose trailing expression is the lambda value. Arrow lambdas share the function-literal capture, lowering, and emit pipeline (closures, `ldftn`/`newobj`, delegate construction).
+Function literals use `func` or `async func`. A trailing lambda can appear after an explicit call close-paren and is desugared into the final argument. ADR-0074 (issue #714) also introduces a dedicated arrow-lambda expression form: `(p1, p2) -> body`. Parameter types and the return type are **inferred** from the target delegate type (ADR-0076, ADR-0119); they may also be spelled explicitly (`(p1 T1, p2 T2) -> body`). A single-parameter lambda may drop the parentheses (`x -> body`, issue #932). The body is either a single expression or a brace-delimited block expression whose trailing expression is the lambda value. Arrow lambdas share the function-literal capture, lowering, and emit pipeline (closures, `ldftn`/`newobj`, delegate construction). The inferred-type arrow lambda is the **canonical** lambda form (ADR-0119); the explicit `func (x T) R { … }` literal remains the alternative for when explicit typing is desired or no target type is available.
 
 ```ebnf
 FunctionLiteral = "func" "(" Parameters? ")" TypeClause? Block
                 | "async" "func" "(" Parameters? ")" TypeClause? Block .
 TrailingLambda  = FunctionLiteral .
-LambdaExpression = "(" Parameters? ")" "->" ( Expression | Block ) .
+LambdaExpression = "(" Parameters? ")" "->" ( Expression | Block )
+                | Identifier "->" ( Expression | Block ) .
 ```
 
 ### Accessor chains
@@ -682,20 +683,30 @@ default: "many"
 
 Patterns include list-like patterns, property patterns, type tests with `is`, wildcard `_`, relational patterns, and expression patterns.
 
-### Lambda expressions (ADR-0074)
+### Lambda expressions (ADR-0074, ADR-0076, ADR-0119)
 
-`->` introduces a lambda expression with a parenthesized parameter list. There is no bare-identifier shorthand: `(x int32) -> x + 1` is a lambda, `x -> x + 1` is not. The body is either a single expression or a brace-delimited block whose trailing expression supplies the lambda value. Lambdas may capture outer locals; the closure machinery is shared with `func` literals.
+`->` introduces a lambda expression. The **canonical** form omits parameter and return types and lets them be **inferred** from the expected delegate type at the use site (ADR-0119): `(x) -> x + 1`, `(a, b) -> a + b`. A single-parameter lambda may drop the parentheses entirely: `x -> x + 1` (issue #932). Parameter types may also be spelled explicitly when desired (`(x int32) -> x + 1`). The body is either a single expression or a brace-delimited block whose trailing expression (or `return`) supplies the lambda value. Lambdas may capture outer locals; the closure machinery is shared with `func` literals.
 
 ```gsharp
-let inc = (x int32) -> x + 1
-let add = (a int32, b int32) -> a + b
-let triple = (x int32) -> {
+// Canonical: inferred parameter/return types, target-typed from the use site.
+let nums = List[int32]{ 1, 2, 3, 4 }
+let evens = nums.Where(x -> x % 2 == 0)          // bare single parameter
+let squares = nums.Select((x) -> x * x)          // parenthesized single parameter
+
+func Apply(f Func[int32, int32], v int32) int32 { return f(v) }
+let r = Apply((x) -> x + 1, 41)                  // 42 — param type inferred from Func[int32,int32]
+
+let add = (a, b) -> a + b                         // inferred when a target type is present
+let triple = (x) -> {
     let doubled = x * 2
-    doubled + x
+    return doubled + x
 }
+
+// Alternative: explicit types (no target type required).
+let inc = func (x int32) int32 { return x + 1 }
 ```
 
-Parameter type inference and a dedicated function-type syntax (`(T) -> R`) are tracked separately — see issues #715 and #716. Today every lambda parameter must carry an explicit type clause.
+Inference is **target-typed**: when an untyped arrow lambda flows into a position whose type is delegate-convertible — a G# `(T) -> R` function type, a named delegate, or a CLR `Func` / `Action` / `Predicate` — the binder extracts that shape and fills in the omitted parameter types and inferred return type. This works for arguments to free functions, instance / interface / static methods (user-declared and imported), and for typed local bindings. Where no target type is available (e.g. a class field initializer, assignment to an existing delegate-typed lvalue, or overload disambiguation that depends on the lambda's shape) the parameter type must be spelled or the explicit `func` form used; see ADR-0119 *Deferred* for the exact cases. A lambda with no inferable parameter type reports `GS0304`.
 
 ### If expressions (ADR-0064)
 

@@ -654,9 +654,10 @@ internal sealed class StatementBinder
                 variableType = type;
                 convertedInitializer = bindInterpolatedStringAsFormattable(interpolatedInit, type);
             }
-            else if (type is FunctionTypeSymbol targetFnType
+            else if (type != null
                 && syntax.Initializer is LambdaExpressionSyntax targetTypedLambda
-                && bindLambdaWithTargetType != null)
+                && bindLambdaWithTargetType != null
+                && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(type, out var targetFnType))
             {
                 // ADR-0076 / issue #716: when a binding has an explicit
                 // function-type and is initialised with an arrow lambda,
@@ -665,6 +666,12 @@ internal sealed class StatementBinder
                 // slots. The conversion that follows is identity for a
                 // matching lambda shape; for a mismatch the regular
                 // conversion diagnostic still fires.
+                //
+                // Issue #951: the target shape is extracted via
+                // TryGetDelegateFunctionTypeFromSymbol so it also covers an
+                // explicit CLR delegate binding type (e.g.
+                // `let f Func[int32, int32] = (x) -> x + 1`), not just the
+                // canonical `(int32) -> int32` function-type clause.
                 variableType = type;
                 var lambda = bindLambdaWithTargetType(targetTypedLambda, targetFnType);
                 convertedInitializer = conversions.BindConversion(syntax.Initializer.Location, lambda, variableType);

@@ -36,7 +36,7 @@ G# is a modern .NET language with concise syntax influenced by Go, Kotlin, and S
 | `delegate void Handler(object sender)` | `type Handler = delegate func(sender Object)` | Named delegate types. |
 | `cond ? a : b` | `cond ? a : b` | Ternary expression. |
 | `/// <summary>…</summary>` XML doc | `/// summary text` Markdown doc | Markdown documentation comments round-trip to CLR XML. |
-| lambda `x => x + 1` | `(x int32) -> x + 1` | Arrow lambdas are the canonical lambda literal form. |
+| lambda `x => x + 1` | `x -> x + 1` | Arrow lambdas with inferred parameter/return types are the canonical lambda form (ADR-0119). |
 | extension method | `func (r Receiver) M()` on a non-owned `Receiver` | A receiver clause declares a CLR-visible extension method. The receiver type must be a type the package does not own. |
 
 ## Packages replace namespaces in source
@@ -126,10 +126,11 @@ default {
 
 ## Lambdas use arrow syntax
 
-Lambdas use arrow syntax, with delegate conversions on the emit path:
+Lambdas use arrow syntax with delegate conversions on the emit path. Parameter and return types are inferred from the target delegate (the canonical form); they can also be written explicitly:
 
 ```gsharp
-let twice = (x int32) -> x * 2
+let evens = nums.Where(x -> x % 2 == 0)   // canonical: inferred, bare single param
+let twice = func (x int32) int32 { return x * 2 }   // explicit alternative
 ```
 
 Passing G# lambdas to imported CLR methods is supported when you build through the SDK or `gsc /out`. The interpreter path does not support that conversion.

@@ -28,7 +28,7 @@ let first = matrix?[0]?[0] ?? -1
 let kind = (p.X + p.Y).GetType()
 ```
 
-Lambda literals use the arrow form `(params) -> expr` or `(params) -> { ... }`; async lambdas use `async (params) -> ...`. A trailing lambda may follow a call as the final argument.
+Lambda literals use the arrow form. The canonical form infers parameter and return types from the target delegate: `(x) -> expr`, `(a, b) -> expr`, or the paren-dropped single-parameter `x -> expr`; block bodies use `(params) -> { ... }`. Types may also be written explicitly (`(x int32) -> expr`), and async lambdas use `async (params) -> ...`. A trailing lambda may follow a call as the final argument. See [ADR-0119](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0119-canonical-arrow-lambda-inference.md).
 
 ## Interpolation
 

@@ -224,7 +224,8 @@ public sealed class Binder
             substituteType: SubstituteType,
             satisfiesConstraint: SatisfiesConstraint,
             describeConstraint: DescribeConstraint,
-            getCurrentFunction: () => this.function);
+            getCurrentFunction: () => this.function,
+            bindLambdaWithTarget: (syntax, targetType) => lambdas.BindLambdaExpression(syntax, targetType));
         patterns = new PatternBinder(
             binderCtx,
             conversions,

@@ -131,6 +131,7 @@ internal sealed class OverloadResolver
     private readonly Func<TypeSymbol, TypeParameterSymbol, bool> satisfiesConstraint;
     private readonly Func<TypeParameterSymbol, string> describeConstraint;
     private readonly Func<FunctionSymbol> getCurrentFunction;
+    private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTarget;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="OverloadResolver"/>
@@ -204,6 +205,10 @@ internal sealed class OverloadResolver
     /// enclosing <see cref="FunctionSymbol"/> being bound (or
     /// <c>null</c> at top-level), used by the implicit-<c>this</c>
     /// dispatch path in <see cref="BindCallExpression"/>.</param>
+    /// <param name="bindLambdaWithTarget">Issue #951: callback that binds an
+    /// arrow-lambda syntax against a target <see cref="FunctionTypeSymbol"/>,
+    /// used to target-type a deferred un-typed arrow-lambda argument from the
+    /// resolved parameter's delegate shape. May be <see langword="null"/>.</param>
     public OverloadResolver(
         BinderContext binderCtx,
         MemberLookup memberLookup,
@@ -228,7 +233,8 @@ internal sealed class OverloadResolver
         Func<TypeSymbol, Dictionary<TypeParameterSymbol, TypeSymbol>, TypeSymbol> substituteType,
         Func<TypeSymbol, TypeParameterSymbol, bool> satisfiesConstraint,
         Func<TypeParameterSymbol, string> describeConstraint,
-        Func<FunctionSymbol> getCurrentFunction)
+        Func<FunctionSymbol> getCurrentFunction,
+        Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTarget = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.memberLookup = memberLookup ?? throw new ArgumentNullException(nameof(memberLookup));
@@ -254,6 +260,7 @@ internal sealed class OverloadResolver
         this.satisfiesConstraint = satisfiesConstraint ?? throw new ArgumentNullException(nameof(satisfiesConstraint));
         this.describeConstraint = describeConstraint ?? throw new ArgumentNullException(nameof(describeConstraint));
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
+        this.bindLambdaWithTarget = bindLambdaWithTarget;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
@@ -2424,12 +2431,22 @@ internal sealed class OverloadResolver
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
 
+        // Issue #951: indices of un-typed arrow lambda arguments whose binding
+        // is deferred until the callee's parameter types are known, so the
+        // target delegate shape can drive lambda-parameter-type inference.
+        // Without the deferral the lambda binds with no target, reports GS0304
+        // ("cannot infer parameter type"), and aborts the call — even though
+        // the parameter (e.g. `Func[int32, int32]` / `(int32) -> int32`)
+        // fully determines the lambda's shape.
+        HashSet<int> deferredArrowLambdaIndices = null;
+
         // ADR-0060: argument binding needs the matching parameter to resolve
         // inline `out var`/`out let`/`out _` payloads. For free-function calls
         // we don't have the FunctionSymbol resolved until below, so we first
         // bind everything with parameter=null (the inline-out form falls back
         // to its declared type) and patch up the type later. The plain
         // lvalue ref/in/out form is parameter-independent.
+        var argIndex = 0;
         foreach (var argument in syntax.Arguments)
         {
             // Issue #343: a named-argument wrapper carries the value expression
@@ -2440,12 +2457,23 @@ internal sealed class OverloadResolver
             {
                 boundArgument = bindRefArgumentExpression(refArg, null);
             }
+            else if (argumentNames.IsDefault
+                && bindLambdaWithTarget != null
+                && IsUntypedArrowLambda(argSyntax))
+            {
+                // Issue #951: defer; bind once the parameter delegate target is
+                // known (per-position loop below). A placeholder carrying the
+                // lambda syntax keeps argument positions aligned.
+                (deferredArrowLambdaIndices ??= new HashSet<int>()).Add(argIndex);
+                boundArgument = new BoundErrorExpression(argSyntax);
+            }
             else
             {
                 boundArgument = bindExpression(argSyntax);
             }
 
             boundArguments.Add(boundArgument);
+            argIndex++;
         }
 
         var symbol = Scope.TryLookupSymbol(syntax.Identifier.Text);
@@ -2950,6 +2978,37 @@ internal sealed class OverloadResolver
             var parameter = function.Parameters[i];
             var expectedType = substitution != null ? substituteType(parameter.Type, substitution) : parameter.Type;
 
+            // Issue #951: a deferred un-typed arrow lambda argument is now
+            // bound against the resolved parameter's delegate target so its
+            // omitted parameter type(s) and inferred return type are filled in
+            // from the parameter shape (e.g. `func F(f Func[int32, int32])`
+            // accepts `F((x) -> x + 1)`). The bound lambda is then converted to
+            // the exact parameter type so the correct delegate adapter
+            // (`Func`/`Action`/`Predicate`/a named delegate) is materialised.
+            // If the parameter is not a delegate type, fall back to binding the
+            // lambda with no target, which surfaces the established GS0304
+            // diagnostic through the regular conversion checks below.
+            if (deferredArrowLambdaIndices != null
+                && deferredArrowLambdaIndices.Remove(i)
+                && i < parameterSyntax.Length
+                && UnwrapNamedArgumentValue(parameterSyntax[i]) is LambdaExpressionSyntax deferredLambda)
+            {
+                var lambdaLoc = parameterSyntax[i].Location;
+                if (bindLambdaWithTarget != null
+                    && expectedType != null
+                    && expectedType != TypeSymbol.Error
+                    && !TypeSymbol.ContainsTypeParameter(expectedType)
+                    && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(expectedType, out var deferredTarget)
+                    && deferredTarget != null)
+                {
+                    var targeted = bindLambdaWithTarget(deferredLambda, deferredTarget);
+                    boundArguments[i] = conversions.BindConversion(lambdaLoc, targeted, expectedType);
+                    continue;
+                }
+
+                boundArguments[i] = argument = bindExpression(deferredLambda);
+            }
+
             // ADR-0100 / issue #795: materialise a bare-`default`
             // placeholder argument (BoundDefaultExpression with Error
             // type and bare DefaultExpressionSyntax) against the
@@ -3147,6 +3206,23 @@ internal sealed class OverloadResolver
             }
         }
 
+        // Issue #951: any deferred un-typed arrow lambda that did not map to a
+        // fixed parameter (e.g. it landed in a trailing variadic slot) is bound
+        // here with no target so the established GS0304 diagnostic surfaces
+        // rather than leaving an unbound placeholder.
+        if (deferredArrowLambdaIndices != null)
+        {
+            foreach (var idx in deferredArrowLambdaIndices)
+            {
+                if (idx < boundArguments.Count
+                    && boundArguments[idx] is BoundErrorExpression placeholder
+                    && placeholder.Syntax is LambdaExpressionSyntax pendingLambda)
+                {
+                    boundArguments[idx] = bindExpression(pendingLambda);
+                }
+            }
+        }
+
         // Phase 4.8: type-check trailing variadic arguments against the slice
         // element type, then pack them into a single slice-typed argument.
         // ADR-0101 / issue #799: a single trailing argument whose type already
@@ -3226,6 +3302,32 @@ internal sealed class OverloadResolver
         }
 
         return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), returnType: null);
+    }
+
+    /// <summary>
+    /// Issue #951: determines whether the supplied expression is an arrow
+    /// lambda with at least one parameter whose type clause is omitted, so its
+    /// parameter type(s) must be inferred from a target delegate.
+    /// </summary>
+    /// <param name="inner">The (already name-unwrapped) argument expression.</param>
+    /// <returns><see langword="true"/> for an arrow lambda carrying an
+    /// untyped parameter slot.</returns>
+    private static bool IsUntypedArrowLambda(ExpressionSyntax inner)
+    {
+        if (inner is not LambdaExpressionSyntax lambda)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < lambda.Parameters.Count; i++)
+        {
+            if (lambda.Parameters[i].Type == null)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
