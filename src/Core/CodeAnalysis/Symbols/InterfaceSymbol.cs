@@ -585,6 +585,67 @@ public sealed class InterfaceSymbol : TypeSymbol
             return concrete;
         }
 
+        // Issue #974: a constructed generic interface used as a member type
+        // (e.g. a base interface `ISeq[T]` exposing `IComparable[T]`) carries
+        // the definition's type parameters in its arguments. Recurse so they
+        // are substituted with this constructed instance's type arguments.
+        if (type is InterfaceSymbol iface && !iface.TypeArguments.IsDefaultOrEmpty)
+        {
+            var substitutedArgs = ImmutableArray.CreateBuilder<TypeSymbol>(iface.TypeArguments.Length);
+            var changed = false;
+            for (var i = 0; i < iface.TypeArguments.Length; i++)
+            {
+                var substituted = SubstituteType(iface.TypeArguments[i], subst);
+                substitutedArgs.Add(substituted);
+                changed |= !ReferenceEquals(substituted, iface.TypeArguments[i]);
+            }
+
+            return changed
+                ? Construct(iface.Definition, substitutedArgs.MoveToImmutable())
+                : iface;
+        }
+
+        // Issue #974: a member type that is a constructed imported generic over
+        // the interface's type parameter (e.g. `func Iter() IEnumerator[T]`)
+        // must have its symbolic type arguments rewritten so the constructed
+        // interface exposes `IEnumerator[T_class]` rather than the definition's
+        // `IEnumerator[T_iface]`. Mirrors StructSymbol's construction-time
+        // substitution.
+        if (type is ImportedTypeSymbol imported
+            && imported.OpenDefinition != null
+            && !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            var substitutedArgs = ImmutableArray.CreateBuilder<TypeSymbol>(imported.TypeArguments.Length);
+            var changed = false;
+            for (var i = 0; i < imported.TypeArguments.Length; i++)
+            {
+                var substituted = SubstituteType(imported.TypeArguments[i], subst);
+                substitutedArgs.Add(substituted);
+                changed |= !ReferenceEquals(substituted, imported.TypeArguments[i]);
+            }
+
+            if (!changed)
+            {
+                return imported;
+            }
+
+            var resolvedClrArgs = new System.Type[substitutedArgs.Count];
+            for (var i = 0; i < substitutedArgs.Count; i++)
+            {
+                resolvedClrArgs[i] = substitutedArgs[i].ClrType ?? typeof(object);
+            }
+
+            try
+            {
+                var closed = imported.OpenDefinition.MakeGenericType(resolvedClrArgs);
+                return ImportedTypeSymbol.GetConstructed(closed, imported.OpenDefinition, substitutedArgs.MoveToImmutable());
+            }
+            catch (System.ArgumentException)
+            {
+                return imported;
+            }
+        }
+
         if (type is SliceTypeSymbol s)
         {
             var sub = SubstituteType(s.ElementType, subst);
