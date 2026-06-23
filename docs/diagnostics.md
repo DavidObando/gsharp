@@ -693,6 +693,18 @@ self-inheritance cycle and is reported here.
 | --- | --- | --- |
 | GS0378 | Error | Class `{name}` cannot inherit from itself (e.g. `class A : A` or the generic `class A[T] : A[T]`). Naming the enclosing type merely as a type argument of a base/interface type — `class Shape : IEquatable[Shape]` — is legal. |
 
+## Struct base-clause diagnostic (GS0382)
+
+Issue #976: a `struct` (CLR value type) may declare an implemented-interface
+clause (`struct Money : IEquatable[Money] { … }`), mirroring a `class`. Because
+every value type always derives from `System.ValueType`, a struct's clause may
+list **interfaces only** — naming a class or another struct as a base type is
+rejected here.
+
+| ID | Severity | Summary |
+| --- | --- | --- |
+| GS0382 | Error | Struct `{structName}` cannot declare base type `{baseTypeName}`; a struct may only implement interfaces. |
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |
