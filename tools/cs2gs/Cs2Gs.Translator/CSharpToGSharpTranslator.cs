@@ -415,17 +415,47 @@ public sealed class CSharpToGSharpTranslator
                 case Accessibility.Internal:
                     return Visibility.Internal;
                 case Accessibility.Protected:
+                    // Issue #950: G# now has a first-class `protected` modifier
+                    // (CIL family). It is only valid on members of an `open`
+                    // class; the translator emits `open` on translatable
+                    // non-sealed classes so this maps cleanly.
+                    return Visibility.Protected;
                 case Accessibility.ProtectedOrInternal:
                 case Accessibility.ProtectedAndInternal:
+                    // `protected internal` (family-or-assembly) and
+                    // `private protected` (family-and-assembly) have no single
+                    // G# spelling; map to the nearest accessibility 'internal'.
                     context.Report(new TranslationDiagnostic(
                         symbol.DeclaredAccessibility.ToString(),
-                        $"'{symbol.Name}' is '{symbol.DeclaredAccessibility}'; G# has no 'protected' spelling, mapped to the nearest accessibility 'internal' (ADR-0115 §B.10).",
+                        $"'{symbol.Name}' is '{symbol.DeclaredAccessibility}'; G# has no combined 'protected internal'/'private protected' spelling, mapped to the nearest accessibility 'internal' (ADR-0115 §B.10).",
                         node?.GetLocation(),
                         TranslationSeverity.Warning));
                     return Visibility.Internal;
                 default:
                     return Visibility.Default;
             }
+        }
+
+        /// <summary>
+        /// Issue #950: returns <see langword="true"/> when <paramref name="type"/>
+        /// declares any member with a <c>protected</c>-family accessibility.
+        /// Such a class is intended for inheritance, so it must be emitted as an
+        /// <c>open class</c> for the G# <c>protected</c> modifier to be valid.
+        /// </summary>
+        private static bool HasProtectedMember(INamedTypeSymbol type)
+        {
+            foreach (var member in type.GetMembers())
+            {
+                switch (member.DeclaredAccessibility)
+                {
+                    case Accessibility.Protected:
+                    case Accessibility.ProtectedOrInternal:
+                    case Accessibility.ProtectedAndInternal:
+                        return true;
+                }
+            }
+
+            return false;
         }
 
         private static TypeDeclarationKind? MapAggregateKind(BaseTypeDeclarationSyntax node)
@@ -600,7 +630,7 @@ public sealed class CSharpToGSharpTranslator
                 kind == TypeDeclarationKind.Class &&
                 !symbol.IsSealed &&
                 !symbol.IsStatic &&
-                this.subclassedBases.Contains(symbol.OriginalDefinition);
+                (this.subclassedBases.Contains(symbol.OriginalDefinition) || HasProtectedMember(symbol));
 
             // G# has no `abstract` class modifier (the keyword is not recognized by
             // the parser); a C# `abstract class`/`abstract record` therefore maps to

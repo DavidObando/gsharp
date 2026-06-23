@@ -1559,16 +1559,30 @@ internal sealed partial class ExpressionBinder
                         // Issue #186 / #175: dotted field read fires
                         // GS0204 if the field carries `@Obsolete`.
                         reportObsoleteUseIfApplicable(ne.IdentifierToken.Location, field, $"{declaringType.Name}.{field.Name}");
+
+                        // Issue #950: enforce `protected` field access — only the
+                        // declaring type and its derived types may read it.
+                        if (!AccessibilityChecker.IsAccessible(field.Accessibility, declaringType, this.function))
+                        {
+                            Diagnostics.ReportProtectedMemberInaccessible(ne.IdentifierToken.Location, field.Name, declaringType.Name);
+                        }
+
                         return new BoundFieldAccessExpression(null, receiver, declaringType, field);
                     }
 
                     // ADR-0051: check properties before reporting "unable to find member".
-                    if (TypeMemberModel.TryGetProperty(structSym, ne.IdentifierToken.Text, out var prop))
+                    if (TypeMemberModel.TryGetProperty(structSym, ne.IdentifierToken.Text, out var prop, out var propDeclaringType))
                     {
                         if (!prop.HasGetter)
                         {
                             Diagnostics.ReportCannotAssign(ne.Location, ne.IdentifierToken.Text);
                             return new BoundErrorExpression(null);
+                        }
+
+                        // Issue #950: enforce `protected` property access.
+                        if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
+                        {
+                            Diagnostics.ReportProtectedMemberInaccessible(ne.IdentifierToken.Location, prop.Name, propDeclaringType.Name);
                         }
 
                         return new BoundPropertyAccessExpression(null, receiver, structSym, prop);

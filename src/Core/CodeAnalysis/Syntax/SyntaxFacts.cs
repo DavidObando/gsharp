@@ -198,6 +198,8 @@ public static class SyntaxFacts
                 return SyntaxKind.PackageKeyword;
             case "private":
                 return SyntaxKind.PrivateKeyword;
+            case "protected":
+                return SyntaxKind.ProtectedKeyword;
             case "public":
                 return SyntaxKind.PublicKeyword;
             case "range":
@@ -460,6 +462,8 @@ public static class SyntaxFacts
                 return "package";
             case SyntaxKind.PrivateKeyword:
                 return "private";
+            case SyntaxKind.ProtectedKeyword:
+                return "protected";
             case SyntaxKind.PublicKeyword:
                 return "public";
             case SyntaxKind.RangeKeyword:

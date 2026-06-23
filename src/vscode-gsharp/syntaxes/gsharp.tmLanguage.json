@@ -215,7 +215,7 @@
         },
         {
           "name": "keyword.modifier.gsharp",
-          "match": "\\b(public|private|internal|open|sealed|override|const)\\b"
+          "match": "\\b(public|private|protected|internal|open|sealed|override|const)\\b"
         },
         {
           "name": "keyword.modifier.contextual.gsharp",

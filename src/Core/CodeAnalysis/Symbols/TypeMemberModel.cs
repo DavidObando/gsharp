@@ -239,6 +239,20 @@ public static class TypeMemberModel
     /// <param name="property">The found property on success.</param>
     /// <returns>True if found.</returns>
     public static bool TryGetProperty(TypeSymbol type, string name, out PropertySymbol property)
+        => TryGetProperty(type, name, out property, out _);
+
+    /// <summary>
+    /// Issue #950: like <see cref="TryGetProperty(TypeSymbol, string, out PropertySymbol)"/>
+    /// but also surfaces the <see cref="StructSymbol"/> that declares the
+    /// property, so callers can enforce <c>protected</c> accessibility against
+    /// the declaring type.
+    /// </summary>
+    /// <param name="type">The type to resolve against.</param>
+    /// <param name="name">The property name.</param>
+    /// <param name="property">The found property on success.</param>
+    /// <param name="declaringType">The struct/class that declares the property, or <see langword="null"/>.</param>
+    /// <returns>True if found.</returns>
+    public static bool TryGetProperty(TypeSymbol type, string name, out PropertySymbol property, out StructSymbol declaringType)
     {
         if (type is StructSymbol structSymbol)
         {
@@ -256,6 +270,7 @@ public static class TypeMemberModel
                     if (p.Name == name)
                     {
                         property = p;
+                        declaringType = c;
                         return true;
                     }
                 }
@@ -268,12 +283,14 @@ public static class TypeMemberModel
                 if (p.Name == name)
                 {
                     property = p;
+                    declaringType = null;
                     return true;
                 }
             }
         }
 
         property = null;
+        declaringType = null;
         return false;
     }
 

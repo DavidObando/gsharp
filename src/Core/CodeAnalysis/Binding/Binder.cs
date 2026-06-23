@@ -600,6 +600,7 @@ public sealed class Binder
                                                .OfType<TypeAliasDeclarationSyntax>();
         foreach (var typeAlias in typeAliasDeclarations)
         {
+            binder.declarations.ValidateTopLevelProtected(typeAlias.AccessibilityModifier);
             binder.declarations.BindTypeAliasDeclaration(typeAlias);
         }
 
@@ -611,6 +612,7 @@ public sealed class Binder
         foreach (var delegateSyntax in delegateDeclarations)
         {
             var owningPackage = packageByTree[delegateSyntax.SyntaxTree];
+            binder.declarations.ValidateTopLevelProtected(delegateSyntax.AccessibilityModifier);
             binder.declarations.BindDelegateDeclaration(delegateSyntax, owningPackage);
         }
 
@@ -626,6 +628,7 @@ public sealed class Binder
         foreach (var ifaceSyntax in interfaceDeclarations)
         {
             var owningPackage = packageByTree[ifaceSyntax.SyntaxTree];
+            binder.declarations.ValidateTopLevelProtected(ifaceSyntax.AccessibilityModifier);
             var sym = binder.declarations.DeclareInterfaceSymbol(ifaceSyntax, owningPackage);
             if (sym != null)
             {
@@ -638,6 +641,7 @@ public sealed class Binder
         foreach (var enumSyntax in enumDeclarations)
         {
             var owningPackage = packageByTree[enumSyntax.SyntaxTree];
+            binder.declarations.ValidateTopLevelProtected(enumSyntax.AccessibilityModifier);
             binder.declarations.BindEnumDeclaration(enumSyntax, owningPackage);
         }
 
@@ -646,6 +650,7 @@ public sealed class Binder
         foreach (var structSyntax in structDeclarations)
         {
             var owningPackage = packageByTree[structSyntax.SyntaxTree];
+            binder.declarations.ValidateTopLevelProtected(structSyntax.AccessibilityModifier);
             binder.declarations.BindStructDeclaration(structSyntax, owningPackage);
         }
 
@@ -660,6 +665,7 @@ public sealed class Binder
         foreach (var function in functionDeclarations)
         {
             var owningPackage = packageByTree[function.SyntaxTree];
+            binder.declarations.ValidateTopLevelProtected(function.AccessibilityModifier);
             binder.declarations.BindFunctionDeclaration(function, owningPackage);
         }
 
@@ -1729,6 +1735,8 @@ public sealed class Binder
                 return Accessibility.Internal;
             case SyntaxKind.PrivateKeyword:
                 return Accessibility.Private;
+            case SyntaxKind.ProtectedKeyword:
+                return Accessibility.Protected;
             default:
                 return Accessibility.Public;
         }

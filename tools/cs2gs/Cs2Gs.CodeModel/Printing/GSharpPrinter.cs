@@ -62,6 +62,8 @@ public static class GSharpPrinter
                 return "internal ";
             case Visibility.Private:
                 return "private ";
+            case Visibility.Protected:
+                return "protected ";
             default:
                 return string.Empty;
         }

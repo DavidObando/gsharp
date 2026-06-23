@@ -52,7 +52,7 @@ letter     = unicode_letter | "_" .
 The reserved keywords are:
 
 ```text
-as async await break case catch chan class const continue default defer do else enum false fallthrough finally for func go goto guard if import interface internal is let map nil open operator override package private public range return scope sealed select sequence struct switch throw true try type using var while
+as async await break case catch chan class const continue default defer do else enum false fallthrough finally for func go goto guard if import interface internal is let map nil open operator override package private protected public range return scope sealed select sequence struct switch throw true try type using var while
 ```
 
 Several words are contextual rather than reserved. `data`, `inline`, `prop`, `event`, `shared`, `init`, `get`, `set`, `add`, `remove`, `raise`, `in`, `out`, `yield`, `with`, `typeof`, `nameof`, and `make` retain identifier status except in the grammar contexts described below. The legacy `record` contextual keyword was removed by ADR-0078; the lexer still recognises it so the parser can emit the GS0307 migration diagnostic (`use data struct` / `data class`).
@@ -366,11 +366,11 @@ ImportDecl      = "import" ( identifier "=" )? identifier { "." identifier } .
 
 ### Top-level declarations
 
-Top-level members are functions, type declarations, variable declarations, or top-level statements. Mixing explicit `Main` and top-level statements is diagnosed. Accessibility modifiers are `public`, `internal`, and `private`; defaults depend on declaration context.
+Top-level members are functions, type declarations, variable declarations, or top-level statements. Mixing explicit `Main` and top-level statements is diagnosed. Accessibility modifiers are `public`, `internal`, `protected`, and `private`; defaults depend on declaration context. The `protected` modifier is only valid on members of an inheritable `open class` (see *Protected accessibility* below); applying it to a top-level declaration, a non-`open` (sealed) class, or a struct member is rejected with GS0380.
 
 ```ebnf
 Member        = Annotation* Accessibility? ( Async? FunctionDecl | TypeDecl | VariableDecl | GlobalStatement ) .
-Accessibility = "public" | "internal" | "private" .
+Accessibility = "public" | "internal" | "protected" | "private" .
 Annotation   = "@" ( AnnotationTarget ":" )? identifier { "." identifier } ( "(" Arguments? ")" )? .
 ```
 
@@ -416,7 +416,7 @@ TypeAliasDecl     = "type" identifier TypeParamList? "=" identifier .
 DelegateAliasDecl = "type" identifier TypeParamList? "=" "delegate" "func" "(" Parameters? ")" TypeClause? .
 AggregateDecl     = Visibility? OpenOrSealed? Data? Inline? AggregateKeyword identifier TypeParamList? PrimaryCtor? BaseClause? AggregateBody? .
 AggregateKeyword  = "class" | "struct" | "enum" | "interface" .
-Visibility        = "public" | "internal" | "private" .
+Visibility        = "public" | "internal" | "private" .  (* type-level; "protected" is a member-only modifier *)
 OpenOrSealed      = "open" | "sealed" .
 PrimaryCtor       = "(" Parameters? ")" .
 BaseClause        = ":" QualifiedTypeName ( "(" Arguments? ")" )? { "," QualifiedTypeName } .
@@ -447,6 +447,37 @@ EventAccessor    = ( "add" | "remove" | "raise" ) ( Block | ";" )? .
 InterfaceBody    = "{" ( InterfaceMethodDecl | PropertyDecl | EventDecl )* "}" .
 InterfaceMethodDecl = "func" identifier "(" Parameters? ")" TypeClause? FunctionBody .  (* FunctionBody ";" = no-body (abstract) marker; issue #881 *)
 ```
+
+#### Protected accessibility (issue #950)
+
+The `protected` modifier (CIL `family`) makes a member accessible **within its
+declaring type and within the bodies of types that derive from it**, and
+inaccessible from unrelated external code. It mirrors C# `protected`:
+
+- A `protected` field, method, property (and its `get`/`set`/`init` accessors),
+  event, or constructor is visible to the declaring class and to any class that
+  derives — directly or transitively — from it, when accessed from the derived
+  class's own body. Access from outside that inheritance chain reports
+  **GS0379** (`'<member>' is inaccessible due to its protection level`).
+- Because protection is only meaningful where a derived type can exist,
+  `protected` is permitted **only on members of an `open class`** (the only
+  inheritable G# types). Applying it to a member of a non-`open`/sealed class, a
+  `struct` member (structs are CLR value types and are never inheritable), a
+  nested type whose container is not an `open class`, or a top-level
+  declaration is rejected with **GS0380**
+  (`'protected' is only valid on members of an inheritable 'open' class`).
+- `protected` composes with `open`/`override`: a `protected open func` may be
+  overridden by a `protected override func` in a derived `open class`, and the
+  call dispatches virtually.
+- Emit: `protected` maps to `MethodAttributes.Family` / `FieldAttributes.Family`
+  (and `TypeAttributes.NestedFamily` for an eligible nested type), so the CLR
+  enforces the same rule on consumers compiled separately and the metadata is
+  IL-verifiable.
+
+Unlike `private`/`internal` — which G# currently leaves to CLR enforcement at
+run time — `protected` is enforced both at bind time (GS0379) and by the emitted
+`family` metadata.
+
 
 #### Indexer members (ADR-0118)
 
@@ -1116,7 +1147,7 @@ Member            ::= Annotation* Accessibility?
                       | DelegateDecl
                       | VariableDecl                 (* requires Accessibility *)
                       | GlobalStatement )
-Accessibility     ::= 'public' | 'internal' | 'private'
+Accessibility     ::= 'public' | 'internal' | 'protected' | 'private'  (* 'protected' is valid only on members of an inheritable 'open class'; see issue #950 *)
 Async             ::= 'async'
 Annotation        ::= '@' (AnnotationTarget ':')? identifier ('.' identifier)* ('(' Arguments? ')')?
 AnnotationTarget  ::= 'field' | 'param' | 'return' | 'type' | 'method' | 'property' | 'event' | 'module' | 'assembly' | 'genericparam'

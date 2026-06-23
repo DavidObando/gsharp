@@ -33,6 +33,7 @@ internal static class AccessibilityMap
         {
             Accessibility.Internal => TypeAttributes.NestedAssembly,
             Accessibility.Private => TypeAttributes.NestedPrivate,
+            Accessibility.Protected => TypeAttributes.NestedFamily,
             _ => TypeAttributes.NestedPublic,
         };
     }
@@ -43,6 +44,7 @@ internal static class AccessibilityMap
         {
             Accessibility.Internal => FieldAttributes.Assembly,
             Accessibility.Private => FieldAttributes.Private,
+            Accessibility.Protected => FieldAttributes.Family,
             _ => FieldAttributes.Public,
         };
     }
@@ -57,6 +59,8 @@ internal static class AccessibilityMap
                 return MethodAttributes.Assembly;
             case Accessibility.Private:
                 return MethodAttributes.Private;
+            case Accessibility.Protected:
+                return MethodAttributes.Family;
             default:
                 return MethodAttributes.Public;
         }

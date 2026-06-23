@@ -238,7 +238,8 @@ public class Parser
         SyntaxToken accessibilityModifier = null;
         if (Current.Kind == SyntaxKind.PublicKeyword ||
             Current.Kind == SyntaxKind.InternalKeyword ||
-            Current.Kind == SyntaxKind.PrivateKeyword)
+            Current.Kind == SyntaxKind.PrivateKeyword ||
+            Current.Kind == SyntaxKind.ProtectedKeyword)
         {
             accessibilityModifier = NextToken();
         }
@@ -1540,7 +1541,8 @@ public class Parser
             {
                 var nestedHeadOffset = (Current.Kind == SyntaxKind.PublicKeyword
                     || Current.Kind == SyntaxKind.InternalKeyword
-                    || Current.Kind == SyntaxKind.PrivateKeyword) ? 1 : 0;
+                    || Current.Kind == SyntaxKind.PrivateKeyword
+                    || Current.Kind == SyntaxKind.ProtectedKeyword) ? 1 : 0;
 
                 if (TryDetectAggregateDeclarationHead(nestedHeadOffset))
                 {
@@ -1579,7 +1581,8 @@ public class Parser
             SyntaxToken memberAccessibility = null;
             if (Current.Kind == SyntaxKind.PublicKeyword ||
                 Current.Kind == SyntaxKind.InternalKeyword ||
-                Current.Kind == SyntaxKind.PrivateKeyword)
+                Current.Kind == SyntaxKind.PrivateKeyword ||
+                Current.Kind == SyntaxKind.ProtectedKeyword)
             {
                 // Accessibility modifier may be followed by an optional
                 // `open`/`override` and an optional `async` (only meaningful
@@ -1997,7 +2000,8 @@ public class Parser
             SyntaxToken memberAccessibility = null;
             if (Current.Kind == SyntaxKind.PublicKeyword ||
                 Current.Kind == SyntaxKind.InternalKeyword ||
-                Current.Kind == SyntaxKind.PrivateKeyword)
+                Current.Kind == SyntaxKind.PrivateKeyword ||
+                Current.Kind == SyntaxKind.ProtectedKeyword)
             {
                 var ahead = 1;
                 while (Peek(ahead).Kind == SyntaxKind.OpenKeyword || Peek(ahead).Kind == SyntaxKind.OverrideKeyword)
@@ -2594,7 +2598,8 @@ public class Parser
         SyntaxToken fieldAccessibility = null;
         if (Current.Kind == SyntaxKind.PublicKeyword ||
             Current.Kind == SyntaxKind.InternalKeyword ||
-            Current.Kind == SyntaxKind.PrivateKeyword)
+            Current.Kind == SyntaxKind.PrivateKeyword ||
+            Current.Kind == SyntaxKind.ProtectedKeyword)
         {
             fieldAccessibility = NextToken();
         }

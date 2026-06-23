@@ -22,4 +22,7 @@ public enum Visibility
 
     /// <summary>The <c>private</c> modifier.</summary>
     Private,
+
+    /// <summary>The <c>protected</c> modifier (issue #950).</summary>
+    Protected,
 }

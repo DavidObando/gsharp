@@ -366,6 +366,100 @@ internal sealed class DeclarationBinder
         }
     }
 
+    /// <summary>
+    /// Issue #950: reports GS0380 for any member declared <c>protected</c> when
+    /// the enclosing type is not an inheritable <c>open class</c>. Structs
+    /// (value types) and non-open/sealed classes cannot be derived from, so a
+    /// <c>protected</c> member there has no meaning.
+    /// </summary>
+    private void ValidateProtectedMemberPlacement(StructDeclarationSyntax syntax)
+    {
+        if (syntax.IsClass && syntax.IsOpen)
+        {
+            return;
+        }
+
+        foreach (var field in syntax.Fields)
+        {
+            ReportProtectedToken(field.AccessibilityModifier);
+        }
+
+        foreach (var method in syntax.Methods)
+        {
+            ReportProtectedToken(method.AccessibilityModifier);
+        }
+
+        foreach (var prop in syntax.Properties)
+        {
+            ReportProtectedToken(prop.AccessibilityModifier);
+        }
+
+        foreach (var evt in syntax.Events)
+        {
+            ReportProtectedToken(evt.AccessibilityModifier);
+        }
+
+        if (!syntax.Constructors.IsDefaultOrEmpty)
+        {
+            foreach (var ctor in syntax.Constructors)
+            {
+                ReportProtectedToken(ctor.AccessibilityModifier);
+            }
+        }
+
+        if (syntax.SharedBlock != null)
+        {
+            foreach (var field in syntax.SharedBlock.Fields)
+            {
+                ReportProtectedToken(field.AccessibilityModifier);
+            }
+
+            foreach (var method in syntax.SharedBlock.Methods)
+            {
+                ReportProtectedToken(method.AccessibilityModifier);
+            }
+
+            foreach (var prop in syntax.SharedBlock.Properties)
+            {
+                ReportProtectedToken(prop.AccessibilityModifier);
+            }
+
+            foreach (var evt in syntax.SharedBlock.Events)
+            {
+                ReportProtectedToken(evt.AccessibilityModifier);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #950: reports GS0380 when <paramref name="modifier"/> is the
+    /// <c>protected</c> keyword. Used by callers that have already determined
+    /// the surrounding context does not permit <c>protected</c>.
+    /// </summary>
+    private void ReportProtectedToken(SyntaxToken modifier)
+    {
+        if (modifier != null && modifier.Kind == SyntaxKind.ProtectedKeyword)
+        {
+            Diagnostics.ReportProtectedRequiresOpenType(modifier.Location);
+        }
+    }
+
+    /// <summary>
+    /// Issue #950: rejects a top-level declaration marked <c>protected</c>.
+    /// A top-level type or function has no enclosing type to be inherited, so
+    /// <c>protected</c> is meaningless there (GS0380).
+    /// </summary>
+    internal void ValidateTopLevelProtected(SyntaxToken modifier) => ReportProtectedToken(modifier);
+
+    private static SyntaxToken GetMemberAccessibilityModifier(MemberSyntax member) => member switch
+    {
+        StructDeclarationSyntax s => s.AccessibilityModifier,
+        EnumDeclarationSyntax e => e.AccessibilityModifier,
+        InterfaceDeclarationSyntax i => i.AccessibilityModifier,
+        DelegateDeclarationSyntax d => d.AccessibilityModifier,
+        _ => null,
+    };
+
     private StructSymbol BindStructDeclarationBody(
         StructDeclarationSyntax syntax,
         PackageSymbol package,
@@ -375,6 +469,12 @@ internal sealed class DeclarationBinder
     {
         var seenFieldNames = new HashSet<string>();
         var fields = ImmutableArray.CreateBuilder<FieldSymbol>();
+
+        // Issue #950: `protected` is only meaningful on members of an
+        // inheritable `open class`. Reject it on members of a non-open class,
+        // a struct (value types are not inheritable), or a sealed type before
+        // binding the members so the user sees one clean GS0380 diagnostic.
+        ValidateProtectedMemberPlacement(syntax);
 
         // Phase 3.B.3 sub-step 2: Kotlin-style primary constructor parameters
         // declare fields of the same name + type, in source order, in addition
@@ -2141,6 +2241,14 @@ internal sealed class DeclarationBinder
 
         foreach (var nested in containerSyntax.NestedTypes)
         {
+            // Issue #950: a `protected` nested type is only meaningful when the
+            // container is an inheritable `open class`. Otherwise nothing can
+            // derive from the container to reach the nested type.
+            if (!(containerSyntax.IsClass && containerSyntax.IsOpen))
+            {
+                ReportProtectedToken(GetMemberAccessibilityModifier(nested));
+            }
+
             switch (nested)
             {
                 case StructDeclarationSyntax nestedStruct:
