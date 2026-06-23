@@ -697,6 +697,8 @@ public sealed class Binder
             binder.declarations.BindFunctionDeclaration(function, owningPackage);
         }
 
+        binder.declarations.ExpandStructInterfaceClosures();
+
         binder.declarations.VerifyInterfaceImplementations();
 
         // Issue #987: verify the abstract-member contract — a concrete class

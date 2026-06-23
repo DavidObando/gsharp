@@ -1477,6 +1477,55 @@ internal sealed class ReflectionMetadataEmitter
             this.typeDefEmitter.EmitInterfaceTypeDef(i, interfaceFirstMethodRow[i], 1);
         }
 
+        // Issue #1006: emit the InterfaceImpl rows recording each interface's
+        // base interfaces (`interface B : A` → InterfaceImpl{B -> A}). All
+        // interface TypeDefs are emitted above, so the cache is fully populated
+        // before any base reference is resolved. Emitting here — before the
+        // class/struct TypeDefs — keeps the InterfaceImpl Class column
+        // ascending (interface TypeDef RIDs precede class/struct RIDs).
+        void EmitInterfaceBaseImplRows(InterfaceSymbol iface)
+        {
+            if (!this.cache.InterfaceTypeDefs.TryGetValue(iface, out var ifaceTypeDef))
+            {
+                return;
+            }
+
+            if (!iface.BaseInterfaces.IsDefaultOrEmpty)
+            {
+                foreach (var baseIface in iface.BaseInterfaces)
+                {
+                    if (ReflectionMetadataEmitter.IsUserGenericInterfaceReference(baseIface))
+                    {
+                        this.emitCtx.Metadata.AddInterfaceImplementation(
+                            ifaceTypeDef,
+                            this.GetUserInterfaceTypeSpec(baseIface));
+                    }
+                    else if (this.cache.InterfaceTypeDefs.TryGetValue(baseIface, out var baseHandle))
+                    {
+                        this.emitCtx.Metadata.AddInterfaceImplementation(ifaceTypeDef, baseHandle);
+                    }
+                }
+            }
+
+            if (!iface.BaseClrInterfaces.IsDefaultOrEmpty)
+            {
+                foreach (var clrBase in iface.BaseClrInterfaces)
+                {
+                    if (clrBase?.ClrType is System.Type clrType)
+                    {
+                        this.emitCtx.Metadata.AddInterfaceImplementation(
+                            ifaceTypeDef,
+                            this.GetTypeHandleForMember(clrType));
+                    }
+                }
+            }
+        }
+
+        foreach (var i in topInterfaces)
+        {
+            EmitInterfaceBaseImplRows(i);
+        }
+
         // ADR-0059 / issue #255: emit named delegate TypeDefs immediately
         // after interfaces and before non-SM classes/structs. Each delegate's
         // TypeDef methodList points at the ctor row reserved above; the
@@ -1649,6 +1698,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 case InterfaceSymbol ni:
                     this.typeDefEmitter.EmitInterfaceTypeDef(ni, interfaceFirstMethodRow[ni], nestedFieldListRow[ni]);
+                    EmitInterfaceBaseImplRows(ni);
                     break;
                 case StructSymbol ns when ns.IsClass:
                     EmitClassTypeDefRow(ns);

@@ -1289,6 +1289,22 @@ Cause/fix:
   where it is definitely assigned.
 
 
+## Interface base-clause diagnostic (GS0391)
+
+See issue #1006. An interface may extend one or more base interfaces via a
+`: A, B` clause (mirroring C# `interface B : A`). Every entry must resolve to an
+interface — a G# interface or an imported CLR interface.
+
+| ID | Severity | Message |
+| --- | --- | --- |
+| GS0391 | Error | `Interface '<interfaceName>' cannot declare base type '<baseTypeName>'; an interface may only extend other interfaces.` |
+
+Cause/fix:
+
+- **GS0391** — an interface's base clause names a class or struct. Remove the
+  offending entry; an interface may only extend other interfaces.
+
+
 ## `@LibraryImport` P/Invoke diagnostics (GS0342–GS0345)
 
 See ADR-0092 (issue #758). G# accepts the modern

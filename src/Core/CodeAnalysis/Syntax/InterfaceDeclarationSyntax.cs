@@ -192,4 +192,21 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the closing brace.</summary>
     public SyntaxToken CloseBraceToken { get; }
+
+    /// <summary>
+    /// Gets or sets the optional base-interface clause colon token (issue #1006).
+    /// Non-null when the interface declares one or more base interfaces, e.g.
+    /// <c>interface B : A</c>. Mirrors <see cref="StructDeclarationSyntax.BaseColonToken"/>.
+    /// </summary>
+    public SyntaxToken BaseColonToken { get; set; }
+
+    /// <summary>
+    /// Gets or sets the comma-separated base-interface type clauses (issue #1006).
+    /// Empty when the interface declares no base interfaces. Each clause must
+    /// resolve to an interface; the binder rejects class/struct bases.
+    /// </summary>
+    public SeparatedSyntaxList<TypeClauseSyntax> BaseTypeClauses { get; set; } = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
+
+    /// <summary>Gets a value indicating whether this interface declares one or more base interfaces (issue #1006).</summary>
+    public bool HasBaseInterfaces => BaseColonToken != null;
 }

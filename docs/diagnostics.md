@@ -751,6 +751,20 @@ GS0390 fires when a binding type pattern appears under `or`/`not`. Use the
 discard `_` (e.g. `_ is Dog or _ is Cat`) or move the binding under `and` (or to
 the top level), where it is definitely assigned.
 
+## Interface base-clause diagnostic (GS0391)
+
+Issue #1006: an interface may extend one or more base interfaces via a `: A, B`
+clause (mirroring C# `interface B : A`). Every entry in the clause must resolve
+to an interface — a G# interface or an imported CLR interface. Naming a class or
+struct as a base type is rejected.
+
+| ID | Severity | Summary |
+| --- | --- | --- |
+| GS0391 | Error | Interface `{interfaceName}` cannot declare base type `{baseTypeName}`; an interface may only extend other interfaces. |
+
+GS0391 fires when an interface's base clause names a class or struct. Remove the
+offending entry (an interface may only extend interfaces).
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

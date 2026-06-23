@@ -109,14 +109,25 @@ public static class TypeMemberModel
         {
             interfaceSymbol.EnsureMembersResolved();
             ImmutableArray<FunctionSymbol>.Builder builder = null;
-            if (query.IncludeInstance)
-            {
-                AddMethodsDeduped(ref builder, interfaceSymbol.Methods, name);
-            }
 
-            if (query.IncludeStatic)
+            // Issue #1006: walk this interface and its transitive base
+            // interfaces so an `interface B : A` surfaces A's methods. When
+            // inherited lookup is disabled, only the interface's own methods
+            // are considered.
+            foreach (var iface in query.IncludeInherited
+                ? interfaceSymbol.SelfAndAllBaseInterfaces()
+                : new[] { interfaceSymbol })
             {
-                AddMethodsDeduped(ref builder, interfaceSymbol.StaticMethods, name);
+                iface.EnsureMembersResolved();
+                if (query.IncludeInstance)
+                {
+                    AddMethodsDeduped(ref builder, iface.Methods, name);
+                }
+
+                if (query.IncludeStatic)
+                {
+                    AddMethodsDeduped(ref builder, iface.StaticMethods, name);
+                }
             }
 
             return builder?.ToImmutable() ?? ImmutableArray<FunctionSymbol>.Empty;
@@ -278,13 +289,18 @@ public static class TypeMemberModel
         }
         else if (type is InterfaceSymbol interfaceSymbol)
         {
-            foreach (var p in interfaceSymbol.Properties)
+            // Issue #1006: walk base interfaces too.
+            foreach (var iface in interfaceSymbol.SelfAndAllBaseInterfaces())
             {
-                if (p.Name == name)
+                iface.EnsureMembersResolved();
+                foreach (var p in iface.Properties)
                 {
-                    property = p;
-                    declaringType = null;
-                    return true;
+                    if (p.Name == name)
+                    {
+                        property = p;
+                        declaringType = null;
+                        return true;
+                    }
                 }
             }
         }
@@ -340,12 +356,17 @@ public static class TypeMemberModel
         }
         else if (type is InterfaceSymbol interfaceSymbol)
         {
-            foreach (var e in interfaceSymbol.Events)
+            // Issue #1006: walk base interfaces too.
+            foreach (var iface in interfaceSymbol.SelfAndAllBaseInterfaces())
             {
-                if (e.Name == name)
+                iface.EnsureMembersResolved();
+                foreach (var e in iface.Events)
                 {
-                    @event = e;
-                    return true;
+                    if (e.Name == name)
+                    {
+                        @event = e;
+                        return true;
+                    }
                 }
             }
         }
@@ -501,37 +522,46 @@ public static class TypeMemberModel
     /// </summary>
     private static IEnumerable<Symbol> EnumerateInterfaceMembers(InterfaceSymbol interfaceSymbol, MemberQuery query)
     {
-        if ((query.Kinds & MemberKinds.Property) != 0 && query.IncludeInstance)
+        // Issue #1006: include inherited base-interface members when the query
+        // permits inherited lookup.
+        var interfaces = query.IncludeInherited
+            ? interfaceSymbol.SelfAndAllBaseInterfaces()
+            : new[] { interfaceSymbol };
+        foreach (var iface in interfaces)
         {
-            foreach (var p in interfaceSymbol.Properties)
+            iface.EnsureMembersResolved();
+            if ((query.Kinds & MemberKinds.Property) != 0 && query.IncludeInstance)
             {
-                yield return p;
-            }
-        }
-
-        if ((query.Kinds & MemberKinds.Event) != 0 && query.IncludeInstance)
-        {
-            foreach (var e in interfaceSymbol.Events)
-            {
-                yield return e;
-            }
-        }
-
-        if ((query.Kinds & MemberKinds.Method) != 0)
-        {
-            if (query.IncludeInstance)
-            {
-                foreach (var m in interfaceSymbol.Methods)
+                foreach (var p in iface.Properties)
                 {
-                    yield return m;
+                    yield return p;
                 }
             }
 
-            if (query.IncludeStatic)
+            if ((query.Kinds & MemberKinds.Event) != 0 && query.IncludeInstance)
             {
-                foreach (var m in interfaceSymbol.StaticMethods)
+                foreach (var e in iface.Events)
                 {
-                    yield return m;
+                    yield return e;
+                }
+            }
+
+            if ((query.Kinds & MemberKinds.Method) != 0)
+            {
+                if (query.IncludeInstance)
+                {
+                    foreach (var m in iface.Methods)
+                    {
+                        yield return m;
+                    }
+                }
+
+                if (query.IncludeStatic)
+                {
+                    foreach (var m in iface.StaticMethods)
+                    {
+                        yield return m;
+                    }
                 }
             }
         }
@@ -592,38 +622,46 @@ public static class TypeMemberModel
 
     private static Symbol LookupInterfaceMember(InterfaceSymbol interfaceSymbol, string name, MemberQuery query)
     {
-        if ((query.Kinds & MemberKinds.Property) != 0 && query.IncludeInstance)
+        // Issue #1006: walk this interface together with its transitive base
+        // interfaces so members inherited from an extended interface resolve.
+        foreach (var iface in query.IncludeInherited
+            ? interfaceSymbol.SelfAndAllBaseInterfaces()
+            : new[] { interfaceSymbol })
         {
-            foreach (var p in interfaceSymbol.Properties)
+            iface.EnsureMembersResolved();
+            if ((query.Kinds & MemberKinds.Property) != 0 && query.IncludeInstance)
             {
-                if (p.Name == name)
+                foreach (var p in iface.Properties)
                 {
-                    return p;
+                    if (p.Name == name)
+                    {
+                        return p;
+                    }
                 }
             }
-        }
 
-        if ((query.Kinds & MemberKinds.Event) != 0 && query.IncludeInstance)
-        {
-            foreach (var e in interfaceSymbol.Events)
+            if ((query.Kinds & MemberKinds.Event) != 0 && query.IncludeInstance)
             {
-                if (e.Name == name)
+                foreach (var e in iface.Events)
                 {
-                    return e;
+                    if (e.Name == name)
+                    {
+                        return e;
+                    }
                 }
             }
-        }
 
-        if ((query.Kinds & MemberKinds.Method) != 0)
-        {
-            if (query.IncludeInstance && interfaceSymbol.TryGetMethod(name, out var method))
+            if ((query.Kinds & MemberKinds.Method) != 0)
             {
-                return method;
-            }
+                if (query.IncludeInstance && iface.TryGetMethod(name, out var method))
+                {
+                    return method;
+                }
 
-            if (query.IncludeStatic && interfaceSymbol.TryGetStaticMethod(name, out var staticMethod))
-            {
-                return staticMethod;
+                if (query.IncludeStatic && iface.TryGetStaticMethod(name, out var staticMethod))
+                {
+                    return staticMethod;
+                }
             }
         }
 

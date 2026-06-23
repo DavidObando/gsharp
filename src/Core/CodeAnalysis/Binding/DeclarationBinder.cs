@@ -2541,6 +2541,79 @@ internal sealed class DeclarationBinder
         }
     }
 
+    /// <summary>
+    /// Issue #1006: once interface base clauses have been bound, expand each
+    /// implementer's interface set to include the transitive closure of base
+    /// interfaces. A <c>class C : B</c> where <c>interface B : A</c> must
+    /// implement (and metadata-declare) both <c>B</c> and <c>A</c>, matching
+    /// C#. Base CLR interfaces of user interfaces are folded into the
+    /// implementer's CLR interface set so dispatch through them works too.
+    /// </summary>
+    internal void ExpandStructInterfaceClosures()
+    {
+        foreach (var (_, structSymbol) in pendingInterfaceImplementationChecks)
+        {
+            if (structSymbol.Interfaces.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            var ordered = new List<InterfaceSymbol>();
+            var seen = new HashSet<InterfaceSymbol>();
+            var clrSeen = new HashSet<System.Type>();
+            var extraClr = ImmutableArray.CreateBuilder<TypeSymbol>();
+            if (!structSymbol.ImplementedClrInterfaces.IsDefaultOrEmpty)
+            {
+                foreach (var existing in structSymbol.ImplementedClrInterfaces)
+                {
+                    if (existing.ClrType != null)
+                    {
+                        clrSeen.Add(existing.ClrType);
+                    }
+                }
+            }
+
+            foreach (var direct in structSymbol.Interfaces)
+            {
+                foreach (var iface in direct.SelfAndAllBaseInterfaces())
+                {
+                    if (seen.Add(iface))
+                    {
+                        ordered.Add(iface);
+                    }
+
+                    if (!iface.BaseClrInterfaces.IsDefaultOrEmpty)
+                    {
+                        foreach (var clr in iface.BaseClrInterfaces)
+                        {
+                            if (clr.ClrType != null && clrSeen.Add(clr.ClrType))
+                            {
+                                extraClr.Add(clr);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (ordered.Count != structSymbol.Interfaces.Length)
+            {
+                structSymbol.SetInterfaces(ordered.ToImmutableArray());
+            }
+
+            if (extraClr.Count > 0)
+            {
+                var merged = ImmutableArray.CreateBuilder<TypeSymbol>();
+                if (!structSymbol.ImplementedClrInterfaces.IsDefaultOrEmpty)
+                {
+                    merged.AddRange(structSymbol.ImplementedClrInterfaces);
+                }
+
+                merged.AddRange(extraClr);
+                structSymbol.SetImplementedClrInterfaces(merged.ToImmutable());
+            }
+        }
+    }
+
     internal void VerifyInterfaceImplementations()
     {
         foreach (var (syntax, structSymbol) in pendingInterfaceImplementationChecks)
@@ -3584,8 +3657,83 @@ internal sealed class DeclarationBinder
         }
     }
 
+    /// <summary>
+    /// Issue #1006: binds the base-interface clause of an interface declaration
+    /// (<c>interface B : A</c>). Each entry must resolve to an interface — a
+    /// user <see cref="InterfaceSymbol"/> or an imported CLR interface — or a
+    /// GS0391 diagnostic fires. Resolved bases are recorded on the
+    /// <see cref="InterfaceSymbol"/> so member lookup and emit can surface and
+    /// re-emit them.
+    /// </summary>
+    private void BindInterfaceBaseInterfaces(InterfaceDeclarationSyntax syntax, InterfaceSymbol interfaceSymbol)
+    {
+        if (!syntax.HasBaseInterfaces || syntax.BaseTypeClauses.Count == 0)
+        {
+            return;
+        }
+
+        var name = syntax.Identifier.Text;
+        var baseInterfaces = ImmutableArray.CreateBuilder<InterfaceSymbol>();
+        var baseClrInterfaces = ImmutableArray.CreateBuilder<TypeSymbol>();
+        for (var i = 0; i < syntax.BaseTypeClauses.Count; i++)
+        {
+            var baseTypeSyntax = syntax.BaseTypeClauses[i];
+            var baseName = GetBaseClauseTypeDisplayName(baseTypeSyntax);
+            var baseLocation = baseTypeSyntax.Identifier?.Location ?? syntax.Identifier.Location;
+
+            var resolved = bindTypeClause(baseTypeSyntax);
+            if (resolved == null || resolved == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            if (resolved is InterfaceSymbol iface)
+            {
+                // Issue #1006: reject direct self-inheritance (`interface A : A`).
+                if (iface == interfaceSymbol || iface.Definition == interfaceSymbol)
+                {
+                    Diagnostics.ReportInterfaceCannotHaveClassBase(baseLocation, name, baseName);
+                    continue;
+                }
+
+                if (iface.IsGenericDefinition)
+                {
+                    Diagnostics.ReportWrongTypeArgumentCount(baseLocation, baseName, iface.TypeParameters.Length, 0);
+                    continue;
+                }
+
+                baseInterfaces.Add(iface);
+                continue;
+            }
+
+            // An imported CLR interface (e.g. `: System.IDisposable`) is a valid
+            // base interface too.
+            if (resolved.ClrType != null && resolved.ClrType.IsInterface)
+            {
+                baseClrInterfaces.Add(resolved);
+                continue;
+            }
+
+            // Anything else (a user class/struct or a CLR class) is illegal —
+            // only interfaces may appear in an interface's base list.
+            Diagnostics.ReportInterfaceCannotHaveClassBase(baseLocation, name, baseName);
+        }
+
+        if (baseInterfaces.Count > 0)
+        {
+            interfaceSymbol.SetBaseInterfaces(baseInterfaces.ToImmutable());
+        }
+
+        if (baseClrInterfaces.Count > 0)
+        {
+            interfaceSymbol.SetBaseClrInterfaces(baseClrInterfaces.ToImmutable());
+        }
+    }
+
     private void BindInterfaceMembersCore(InterfaceDeclarationSyntax syntax, InterfaceSymbol interfaceSymbol, PackageSymbol package)
     {
+        BindInterfaceBaseInterfaces(syntax, interfaceSymbol);
+
         var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
         var staticMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
         var privateMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
