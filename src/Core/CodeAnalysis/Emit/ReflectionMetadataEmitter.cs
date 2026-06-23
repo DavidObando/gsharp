@@ -1399,6 +1399,74 @@ internal sealed class ReflectionMetadataEmitter
             fieldList: MetadataTokens.FieldDefinitionHandle(moduleFirstFieldRow),
             methodList: MetadataTokens.MethodDefinitionHandle(1));
 
+        // Issue #973: pre-reserve the TypeDefinitionHandle for every user
+        // TypeDef (interfaces, delegates, classes, structs, enums — top-level
+        // and nested) BEFORE any member signature is encoded. A field, method,
+        // or return signature may reference a user type whose TypeDef row is
+        // emitted later in this same pass — e.g. a `class` field whose type is a
+        // user `struct`, since classes are emitted before structs below. Without
+        // a pre-reserved handle, EncodeTypeSymbol cannot resolve such a forward
+        // reference and throws ("type has no emitted TypeDef").
+        //
+        // The emission order below is fixed and each type contributes exactly
+        // one TypeDef row (the first being `<Module>` at row 1 per ECMA-335), so
+        // the row numbers are fully deterministic at this point. Pre-populating
+        // the caches with the predicted handles lets EncodeTypeSymbol resolve a
+        // referenced type regardless of relative emission order. Each
+        // EmitXxxTypeDef call below re-assigns the identical handle, so emitted
+        // metadata is byte-for-byte unchanged for programs that already
+        // compiled.
+        int reservedTypeDefRow = this.emitCtx.Metadata.GetRowCount(TableIndex.TypeDef) + 1;
+        void ReserveTypeDefHandle(TypeSymbol type)
+        {
+            var handle = MetadataTokens.TypeDefinitionHandle(reservedTypeDefRow++);
+            switch (type)
+            {
+                case InterfaceSymbol ifaceSym:
+                    this.cache.InterfaceTypeDefs[ifaceSym] = handle;
+                    break;
+                case DelegateTypeSymbol delegateSym:
+                    this.cache.DelegateTypeDefs[delegateSym] = handle;
+                    break;
+                case StructSymbol structSym:
+                    this.cache.StructTypeDefs[structSym] = handle;
+                    break;
+                case EnumSymbol enumSym:
+                    this.cache.EnumTypeDefs[enumSym] = handle;
+                    break;
+            }
+        }
+
+        foreach (var i in topInterfaces)
+        {
+            ReserveTypeDefHandle(i);
+        }
+
+        foreach (var d in delegates)
+        {
+            ReserveTypeDefHandle(d);
+        }
+
+        foreach (var c in topClasses)
+        {
+            ReserveTypeDefHandle(c);
+        }
+
+        foreach (var s in topStructs)
+        {
+            ReserveTypeDefHandle(s);
+        }
+
+        foreach (var e in topEnums)
+        {
+            ReserveTypeDefHandle(e);
+        }
+
+        foreach (var nested in nestedOrdered)
+        {
+            ReserveTypeDefHandle(nested);
+        }
+
         // 2a. Phase 3.B.4: Emit interface TypeDefs + their abstract method
         // rows. Interfaces have no fields and only abstract method bodies, so
         // they are the simplest TypeDefs to emit. Their methodList points at

@@ -160,17 +160,15 @@ public class MigrationPipelineTests
     }
 
     /// <summary>
-    /// Pointing the pipeline at <c>corpus/L2-Library</c> now translates cleanly
-    /// (interfaces, casts, owned-struct methods, composite literals, etc. are all
-    /// mapped) and reaches the compile stage, where it captures a
-    /// <c>compile-error</c> triage artifact for the residual <c>GS0144</c>
-    /// static-overload-resolution compiler gap (a sibling <c>shared</c> overload
-    /// is bound by name only, ignoring arity). The artifact carries a non-empty
-    /// diagnostic id and a stable <c>sha256:</c> fingerprint. Gated on compiler
+    /// Issue #973 regression guard: pointing the pipeline at
+    /// <c>corpus/L2-Library</c> (a <c>class Rectangle</c> holding a
+    /// <c>Dimensions</c> value-type field) now migrates GREEN through the
+    /// compile stage. This previously failed with the emit ICE
+    /// <c>GS9998: Struct 'S' has no emitted TypeDef.</c> Gated on compiler
     /// presence (the pipeline resolves <c>gsc</c> up front).
     /// </summary>
     [Fact]
-    public async Task L2_CompileStageFailure_WritesTriageArtifact()
+    public async Task L2_StagesOneAndTwo_AreGreen_WithZeroArtifacts()
     {
         string compiler = FindCompiler();
         if (compiler is null)
@@ -179,12 +177,52 @@ public class MigrationPipelineTests
         }
 
         string corpus = ResolveCorpusDir();
-        string outRoot = NewOutputRoot("l2-capture");
+        string outRoot = NewOutputRoot("l2-green");
+        var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
+
+        // Pin to stages 1–2 so this test stays focused on the compile gate
+        // regardless of the default stage list (which also runs ilverify).
+        var pipeline = new MigrationPipeline(
+            options,
+            new IMigrationStage[] { new TranslateStage(), new CompileStage() });
+
+        CorpusApp l2 = CorpusDiscovery.FindById(corpus, "corpus/L2-Library");
+        Assert.NotNull(l2);
+
+        RunResult result = await pipeline.RunAsync(new[] { l2 });
+        AppResult app = Assert.Single(result.Apps);
+
+        Assert.True(app.Succeeded, "L2 must migrate green through stage 2 (issue #973).");
+        Assert.Empty(app.Artifacts);
+        Assert.All(app.Stages, s => Assert.Equal("passed", s.Status));
+        Assert.Equal(2, app.Stages.Count);
+    }
+
+    /// <summary>
+    /// Pointing the pipeline at <c>corpus/L3-Library</c> translates cleanly but
+    /// reaches the compile stage and captures a <c>compile-error</c> triage
+    /// artifact for residual compiler gaps (generic <c>IEnumerable</c>
+    /// implementation / <c>GetEnumerator</c> overload resolution). The artifact
+    /// carries a non-empty diagnostic id and a stable <c>sha256:</c>
+    /// fingerprint. Gated on compiler presence (the pipeline resolves
+    /// <c>gsc</c> up front).
+    /// </summary>
+    [Fact]
+    public async Task L3_CompileStageFailure_WritesTriageArtifact()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        string corpus = ResolveCorpusDir();
+        string outRoot = NewOutputRoot("l3-capture");
         var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
         var pipeline = new MigrationPipeline(options);
 
-        CorpusApp l2 = CorpusDiscovery.FindById(corpus, "corpus/L2-Library");
-        RunResult result = await pipeline.RunAsync(new[] { l2 });
+        CorpusApp l3 = CorpusDiscovery.FindById(corpus, "corpus/L3-Library");
+        RunResult result = await pipeline.RunAsync(new[] { l3 });
         AppResult app = Assert.Single(result.Apps);
 
         Assert.False(app.Succeeded);
@@ -203,8 +241,9 @@ public class MigrationPipelineTests
 
     /// <summary>
     /// Re-running against the same <c>--gsc</c> carries the prior run forward in
-    /// each fingerprint's <c>retryHistory</c> (the §C retry mechanism). Gated on
-    /// compiler presence.
+    /// each fingerprint's <c>retryHistory</c> (the §C retry mechanism). Anchored
+    /// on <c>corpus/L3-Library</c>, which still fails at the compile stage.
+    /// Gated on compiler presence.
     /// </summary>
     [Fact]
     public async Task RetryHistory_AccumulatesAcrossRuns_ForSameFingerprint()
@@ -219,10 +258,10 @@ public class MigrationPipelineTests
         string outRoot = NewOutputRoot("retry");
         var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
 
-        CorpusApp l2 = CorpusDiscovery.FindById(corpus, "corpus/L2-Library");
+        CorpusApp l3 = CorpusDiscovery.FindById(corpus, "corpus/L3-Library");
 
-        RunResult first = await new MigrationPipeline(options).RunAsync(new[] { l2 });
-        RunResult second = await new MigrationPipeline(options).RunAsync(new[] { l2 });
+        RunResult first = await new MigrationPipeline(options).RunAsync(new[] { l3 });
+        RunResult second = await new MigrationPipeline(options).RunAsync(new[] { l3 });
 
         Assert.NotEqual(first.RunId, second.RunId);
 
