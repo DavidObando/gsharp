@@ -177,6 +177,20 @@ internal static class OverloadResolution
     public static Func<Type, Type, bool> UserDefinedImplicitConversionLookup { get; set; }
 
     /// <summary>
+    /// ADR-0060 / issue #977: sentinel argument type representing an inline
+    /// <c>out var</c>/<c>out let</c>/<c>out _</c> declaration whose local type is
+    /// not yet known. Such an argument is applicable to — and only to — a by-ref
+    /// (<c>ref</c>/<c>out</c>/<c>in</c>) parameter; its declared local type is
+    /// inferred from the chosen overload's parameter after resolution succeeds.
+    /// Using a dedicated marker keeps the out-var neutral during betterness
+    /// ranking (it always classifies as an identity conversion against a by-ref
+    /// parameter) while still rejecting non-by-ref candidates.
+    /// </summary>
+#pragma warning disable SA1201 // Elements should appear in the correct order
+    public static readonly Type InlineOutVarArgumentType = typeof(InlineOutVarArgumentMarker);
+#pragma warning restore SA1201
+
+    /// <summary>
     /// Issue #658: per-call supplementary interface check for user-defined G#
     /// classes whose CLR type does not exist at bind time. When set (non-null),
     /// <see cref="ClassifyImplicit"/> invokes this callback as a final
@@ -206,6 +220,14 @@ internal static class OverloadResolution
         if (target is null)
         {
             return ImplicitConversionKind.None;
+        }
+
+        // Issue #977: an inline `out var`/`out let`/`out _` argument has no known
+        // type until an overload is chosen; it matches exactly the by-ref
+        // parameters (out/ref/in) and nothing else.
+        if (ReferenceEquals(source, InlineOutVarArgumentType))
+        {
+            return target.IsByRef ? ImplicitConversionKind.Identity : ImplicitConversionKind.None;
         }
 
         // Issue #533: a null source represents the `nil` literal in G#.
@@ -3135,5 +3157,14 @@ internal static class OverloadResolution
         internal static Result<T> Single(T best, ImmutableArray<int> parameterMapping, bool isExpanded) => new(ResolutionOutcome.Resolved, best, ImmutableArray<T>.Empty, parameterMapping, isExpanded);
 
         internal static Result<T> AmbiguousResult(ImmutableArray<T> tied) => new(ResolutionOutcome.Ambiguous, default, tied, default, false);
+    }
+
+    /// <summary>
+    /// Issue #977: private marker type whose <see cref="Type"/> identity is used as
+    /// the <see cref="InlineOutVarArgumentType"/> sentinel for inline <c>out var</c>
+    /// arguments during overload resolution. Never instantiated.
+    /// </summary>
+    private sealed class InlineOutVarArgumentMarker
+    {
     }
 }
