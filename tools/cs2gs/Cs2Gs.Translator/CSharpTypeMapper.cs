@@ -55,6 +55,20 @@ public sealed class CSharpTypeMapper
             return new NamedTypeReference(UnsupportedPlaceholderType);
         }
 
+        // G# has no unsafe pointer types: a C# `T*`, `void*`, or function pointer
+        // has no canonical managed G# form (ADR-0115 §B / G# language gap). Record
+        // a structured Unsupported diagnostic rather than emit a malformed
+        // type-less field/parameter.
+        if (type is IPointerTypeSymbol or IFunctionPointerTypeSymbol)
+        {
+            context.Report(new TranslationDiagnostic(
+                "PointerType",
+                $"unsafe pointer type '{type.ToDisplayString()}' has no canonical G# form; G# does not support pointer/unsafe types.",
+                location,
+                TranslationSeverity.Unsupported));
+            return new NamedTypeReference(UnsupportedPlaceholderType);
+        }
+
         // A nullable value type (Nullable<T>) carries its payload as the single
         // type argument; map the underlying type and mark the result nullable.
         if (type is INamedTypeSymbol nullableValue &&

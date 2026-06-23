@@ -256,19 +256,29 @@ public sealed class ConstructorDeclaration : GMember
     /// <param name="baseArguments">The base-constructor arguments, or <see langword="null"/> for no chaining.</param>
     /// <param name="visibility">The accessibility.</param>
     /// <param name="attributes">The constructor attributes.</param>
+    /// <param name="isConvenience">Whether this is a delegating <c>convenience init</c>.</param>
     public ConstructorDeclaration(
         IReadOnlyList<Parameter> parameters,
         BlockStatement body,
         IReadOnlyList<GExpression> baseArguments = null,
         Visibility visibility = Visibility.Default,
-        IReadOnlyList<AttributeUse> attributes = null)
+        IReadOnlyList<AttributeUse> attributes = null,
+        bool isConvenience = false)
     {
         Parameters = parameters ?? new List<Parameter>();
         Body = body;
         BaseArguments = baseArguments;
         Visibility = visibility;
         Attributes = attributes ?? new List<AttributeUse>();
+        IsConvenience = isConvenience;
     }
+
+    /// <summary>
+    /// Gets a value indicating whether this is a <c>convenience init</c> that
+    /// delegates to another initializer of the same class (ADR-0065). The
+    /// delegation call (<c>init(args)</c>) is the first statement of the body.
+    /// </summary>
+    public bool IsConvenience { get; }
 
     /// <summary>Gets the constructor parameters.</summary>
     public IReadOnlyList<Parameter> Parameters { get; }
@@ -303,4 +313,24 @@ public sealed class SharedBlock : GMember
 
     /// <summary>Gets the static members.</summary>
     public IReadOnlyList<GMember> Members { get; }
+}
+
+/// <summary>
+/// A class finalizer / destructor mapped to the canonical G# <c>deinit { … }</c>
+/// form (ADR-0068; class-only, no parameters or return type). Maps the C#
+/// <c>~Type() { … }</c> destructor.
+/// </summary>
+public sealed class DestructorDeclaration : GMember
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DestructorDeclaration"/> class.
+    /// </summary>
+    /// <param name="body">The finalizer body.</param>
+    public DestructorDeclaration(BlockStatement body)
+    {
+        Body = body;
+    }
+
+    /// <summary>Gets the finalizer body.</summary>
+    public BlockStatement Body { get; }
 }

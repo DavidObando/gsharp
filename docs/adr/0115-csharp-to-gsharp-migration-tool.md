@@ -391,7 +391,89 @@ A C# iterator method (a body containing `yield return`) returning `IEnumerable<T
 > Issue #942 fixed the parser, so the translator now emits `values[i].Member`
 > through the normal member-access path with no placeholder.
 
+#### B.35 Oahu.Foundation round — additional statement/expression mappings
 
+Translating the external **`Oahu.Foundation`** project (issue #914 continuation;
+105 initial `translation-unsupported` diagnostics across 25 construct kinds)
+required the following additional canonical mappings. Each printed form
+round-trips through the real G# parser; gsc-accepted forms were verified
+empirically before adoption.
+
+- **Conditional access `a?.b` / `a?.b()` / `a?[i]` → G# null-conditional access.**
+  A C# `ConditionalAccessExpression` maps to the corresponding G# null-conditional
+  chain: `a?.b`, `a?.b()`, and `a?[i]` keep the `?.` / `?[` spelling. Nested and
+  chained when-not-null member bindings flatten onto the conditioned receiver.
+- **`is`-pattern → nil tests + Kotlin-style smart cast (no binder).** G# has **no**
+  `x is T t` pattern binder (that is compiler gap #993). The translator therefore
+  maps: `x is null` → `x == nil`; `x is not null` → `x != nil`; a bare type test
+  `x is T` → the boolean `x is T`; and a binding type pattern `if (x is T t) { …t… }`
+  → `if x is T { …x… }`, relying on G#'s in-block smart-cast of `x` to `T` (every
+  use of the binder `t` is rewritten to the smart-cast subject `x`). Predefined
+  types keep their value-keyword spelling (`x is string`, not `x is String`).
+- **Array creation / initializer → G# array forms.** `new T[n]` →
+  `array[T](n)` (sized array); `new T[]{ a, b, c }`, `new[]{ a, b, c }`
+  (implicit element type), a bare `{ a, b, c }` array-initializer, and a
+  `new List<T>{ a, b }` collection-initializer all map to the canonical G#
+  composite/array literal forms. `T[]` as an `ArrayType` maps to the G# array
+  type spelling.
+- **`typeof(T)` → `typeof(T)`.** Maps directly; the operand type is rendered
+  through the type mapper so a predefined type stays a value keyword
+  (`typeof(string)`, `typeof(object)`). An **unbound generic** `typeof(IEnumerable<>)`
+  drops the empty type-argument list → `typeof(IEnumerable)` (G# has no
+  open-generic `typeof`).
+- **`default` / `default(T)` → `default`.** Both the `DefaultLiteralExpression`
+  (`default`) and the `DefaultExpression` (`default(T)`) map to G#'s `default`
+  zero-value expression.
+- **`sizeof(T)` → `sizeof(T)`.** Maps directly for the blittable primitive set.
+- **Assignment as an expression / chained `a = b = c`.** A
+  `SimpleAssignmentExpression` used in **expression** position (inside another
+  expression, or right-associatively chained `a = b = c`) emits the G# assignment
+  expression rather than only the statement form.
+- **`out var x` declaration expression → inline `out var x`.** A `DeclarationExpression`
+  in argument position emits the inline `out var x` form (§B.30), with the binder
+  name sanitized (below).
+- **`: this(args)` constructor delegation → `init(params) : this(args)`.** A
+  `ThisConstructorInitializer` maps to the G# `this`-chained initializer, mirroring
+  the `: base(args)` mapping of §B.28.
+- **Local function → nested `func`.** A `LocalFunctionStatement` maps to a G# local
+  `func` declaration in the enclosing body.
+- **`break` / `continue` → `break` / `continue`.** Both map to their identical G#
+  loop-control keywords (these had no prior translator case).
+- **`do … while (c)` → G# do-while.** A `DoStatement` maps to the canonical G#
+  do-while loop.
+- **`lock (m) { … }` → G# lock.** A `LockStatement` maps to the canonical G#
+  `lock` form over the monitor expression.
+- **`unchecked { … }` → block body.** An `UncheckedStatement` (G# arithmetic is
+  unchecked by default) flattens to its inner statements.
+- **`~T()` destructor → `deinit`.** A `DestructorDeclaration` maps to the G#
+  finalizer/`deinit` member.
+- **`namespace N { … }` → G# `package`.** A file-scoped or block
+  `NamespaceDeclaration` maps to the G# `package` declaration / membership; the
+  `CompilationUnit`-level handling threads the package through the document so
+  the doc-level translator no longer rejects the unit.
+
+> **Reserved-word & verbatim-identifier sanitization (`SanitizeIdentifier`).**
+> A C# identifier that collides with a **G# hard keyword** (e.g. `type`, `func`,
+> `default`, `in`) cannot be emitted verbatim — the round-trip parser rejects it.
+> The translator sanitizes every emitted identifier: a leading `@` (C# verbatim
+> escape, e.g. `@default`, `@In`) is stripped, then a name equal to a G# reserved
+> word is suffixed with `_` (`type` → `type_`, `func` → `func_`). Applied at
+> parameters, receivers, identifier references, `foreach`/`for-in` variables, local
+> declarations, field/property/method/enum-case names, member-access member names,
+> conditional-access bindings, and `out var` binders. (Oahu.Foundation has a
+> `@default` field, an `@In` enum member, and `type`/`func` identifier sites.)
+>
+> **Width-bearing integer literals (`NormalizeIntegerLiteralText`).** A suffix-less
+> C# integer literal whose **bound** type is wider/unsigned than `int32` is emitted
+> with the matching G# suffix (`UL`/`L`/`U`) so the round-trip parser infers the
+> same width — without this a `uint64` constant such as the CRC seed
+> `0xD800000000000000` parses as an overflowing `int32`/`int64` (`GS0004`). The
+> suffix is derived from the Roslyn-bound constant type.
+>
+> **Catch-all `catch { }` → typed binder.** G# requires a typed catch binder
+> (`catch (e Exception) { }`); a bare `catch { }`, `catch e { }`, or
+> `catch Exception { }` all fail to parse. The translator synthesizes
+> `catch (ex Exception) { }` for a C# bare catch-all (extending §B.27).
 
 `Cs2Gs.Pipeline` runs four ordered stages per corpus app. Each stage has an explicit pass/fail gate; a failure short-circuits the remaining stages for that app, emits a triage artifact (section D), and is recorded in the run report. **"Migration completed" ≡ all four stages green: clean compile + clean IL verification + test parity with the original C#.**
 
@@ -871,6 +953,75 @@ Double) (§B.12); and a parameterless constructor that initializes a **property*
 constant keeps its explicit `init()` body, because G# has a field member initializer
 (`var Name T = expr`) but no property member initializer (`prop Name T = expr` →
 `GS0288`/`GS0113`) (§B.3).
+
+#### Discovered gaps from the Oahu.Foundation round (minimal repros)
+
+Translating the external **`Oahu.Foundation`** project drove its
+`translation-unsupported` count from **105** (25 construct kinds) to **9
+diagnostics across 3 files**, all of which are **genuine G# compiler/language
+gaps** (not translator defects) — every other Foundation file translates **and**
+round-trips. The translator emits the canonical mappings of §B.35 for all other
+constructs. The three residual gaps were each reproduced directly with `gsc`
+(version **0.2.132+417bdb25ec**) and contrasted with a passing control; per
+ADR-0115 they are documented here for the orchestrator to file as `bug,Oats`
+issues and are out of scope for the translator-only PR.
+
+**OF-1 — interface inheritance `interface B : A { … }` won't parse (`GS0005`).**
+A C# interface that extends another interface has no canonical G# spelling: the
+parser's `ParseInterfaceDeclarationNew` has no base-clause handling and goes
+straight to `MatchToken(OpenBraceToken)`. A **class** base clause
+(`class C : A, B {}`) parses, so this is interface-specific. The translator
+reports the base interface as unsupported and drops it (leaving non-gating
+semantic diagnostics). Source: `Types/Interfaces.cs`.
+
+```gs
+// repro — GS0005: Unexpected token <ColonToken>, expected <OpenBraceToken>:
+package T
+interface A { func F(); }
+interface B : A { func G(); }
+```
+```gs
+// control — a class base clause parses:
+package T
+interface A { func F(); }
+class C : A { func F() { } }
+```
+
+**OF-2 — a generic interface method signature `func IsPrim[T]() bool;` won't parse (`GS0005`).**
+A type-parameterized method **signature** inside an interface has no G# spelling:
+the parser rejects the `[T]` type-parameter list on an interface method. Generic
+methods work on **classes** and **free functions** — only the interface signature
+form fails. The translator reports it unsupported and drops the type parameters.
+Source: `Diagnostics/Interfaces.cs`.
+
+```gs
+// repro — GS0005: Unexpected token <OpenSquareBracketToken>, expected <OpenParenthesisToken>:
+package T
+interface IP { func IsPrim[T]() bool; }
+```
+```gs
+// control — a generic method on a class parses:
+package T
+class C { func IsPrim[T]() bool { return true } }
+```
+
+**OF-3 — unsafe pointer types (`void*` / `byte*` / `int*`) have no G# form.**
+`Win32/Win32FileIO.cs` is an `unsafe class` using raw pointer types throughout.
+G# has **no pointer-type token** at all, so there is no canonical mapping. The
+type mapper records a structured `PointerType` Unsupported diagnostic and emits
+an `object` placeholder for the field/parameter type. Source: `Win32/Win32FileIO.cs`.
+
+```cs
+// repro (C#) — no G# equivalent exists for a pointer type:
+public unsafe void Read(byte* buffer, int length) { }
+```
+
+Two **translator faithfulness additions** the Oahu.Foundation round surfaced (no
+compiler change): a suffix-less integer literal whose bound type is wider/unsigned
+than `int32` is emitted with the matching `UL`/`L`/`U` suffix so the round-trip
+parser infers the same width (§B.35); and every emitted identifier is sanitized
+against the G# reserved-word set with the C# verbatim `@` prefix stripped (§B.35),
+so corpus identifiers such as `@default`, `@In`, `type`, and `func` round-trip.
 
 ## Consequences
 

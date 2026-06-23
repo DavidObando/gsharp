@@ -398,6 +398,23 @@ public static class GSharpPrinter
             case OutArgumentExpression outArgument:
                 return $"{outArgument.Keyword} {outArgument.Name}";
 
+            case TypeOfExpression typeOf:
+                return $"typeof({RenderType(typeOf.Type)})";
+
+            case DefaultValueExpression defaultValue:
+                return defaultValue.Type == null
+                    ? "default"
+                    : $"default({RenderType(defaultValue.Type)})";
+
+            case TypeExpression typeExpression:
+                return RenderType(typeExpression.Type);
+
+            case ConditionalReceiverExpression:
+                return string.Empty;
+
+            case ConditionalAccessExpression conditionalAccess:
+                return $"{RenderExpression(conditionalAccess.Target, indent)}?{RenderExpression(conditionalAccess.WhenNotNull, indent)}";
+
             case InterpolatedStringExpression interpolated:
                 return RenderInterpolatedString(interpolated, indent);
 
@@ -647,6 +664,22 @@ public static class GSharpPrinter
 
             case SwitchStatement switchStatement:
                 return RenderSwitchStatement(switchStatement, indent);
+
+            case BreakStatement:
+                return $"{pad}break";
+
+            case ContinueStatement:
+                return $"{pad}continue";
+
+            case DoWhileStatement doWhile:
+                return $"{pad}do {RenderBlock(doWhile.Body, indent)} while {RenderExpression(doWhile.Condition, indent)}";
+
+            case TupleDeconstructionStatement deconstruction:
+                var targets = string.Join(", ", deconstruction.Names);
+                return $"{pad}{RenderBinding(deconstruction.Binding)} ({targets}) = {RenderExpression(deconstruction.Initializer, indent)}";
+
+            case LocalFunctionStatement localFunction:
+                return $"{pad}{RenderBinding(BindingKind.Let)} {localFunction.Name} = {RenderExpression(localFunction.Lambda, indent)}";
 
             default:
                 throw new ArgumentException($"Unsupported statement: {statement?.GetType().Name}");
@@ -903,6 +936,8 @@ public static class GSharpPrinter
                 return RenderMethod(method, indent);
             case ConstructorDeclaration constructor:
                 return RenderConstructor(constructor, indent);
+            case DestructorDeclaration destructor:
+                return $"{Indent(indent)}deinit {RenderBlock(destructor.Body, indent)}";
             case SharedBlock sharedBlock:
                 return RenderSharedBlock(sharedBlock, indent);
             default:
@@ -1168,6 +1203,11 @@ public static class GSharpPrinter
         sb.Append(RenderAttributeBlock(constructor.Attributes, indent));
         sb.Append(pad);
         sb.Append(RenderVisibility(constructor.Visibility));
+        if (constructor.IsConvenience)
+        {
+            sb.Append("convenience ");
+        }
+
         sb.Append($"init({RenderParameterList(constructor.Parameters)})");
         if (constructor.BaseArguments != null)
         {
