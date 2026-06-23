@@ -81,6 +81,18 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
             statement = newStatement;
         }
 
+        // Issue #975: base-constructor-initializer arguments (`: base(args)`) are
+        // stored on the constructor / struct symbols rather than inside a method
+        // body, so they bypass the function-body rewrite above. Lower any
+        // interpolated strings sitting in that position too, otherwise the emitter
+        // meets a raw BoundInterpolatedStringExpression and ICEs (GS9998). The
+        // symbols are mutated in place; emission re-runs binding for each call, so
+        // sharing across the discarded pre-lowering program is harmless.
+        foreach (var structSym in program.Structs)
+        {
+            changed |= lowerer.RewriteBaseInitializers(structSym);
+        }
+
         if (!changed)
         {
             return program;
@@ -199,6 +211,73 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
             ImmutableArray<BoundExpression>.Empty);
 
         return new BoundBlockExpression(node.Syntax, statements.ToImmutable(), result);
+    }
+
+    /// <summary>
+    /// Issue #975: rewrites the base-constructor-initializer argument lists held by
+    /// the struct's primary constructor and every explicit constructor, lowering any
+    /// interpolated strings (and other handled nodes) in <c>: base(args)</c> position
+    /// the same way ordinary call arguments are lowered. Returns <see langword="true"/>
+    /// when any initializer's arguments were rewritten.
+    /// </summary>
+    /// <param name="structSym">The class whose constructor base initializers to lower.</param>
+    /// <returns><see langword="true"/> when at least one initializer changed.</returns>
+    private bool RewriteBaseInitializers(StructSymbol structSym)
+    {
+        var changed = false;
+
+        var primary = structSym.BaseConstructorInitializer;
+        if (primary != null && this.TryRewriteInitializerArguments(primary, out var loweredPrimary))
+        {
+            structSym.SetBaseConstructorInitializer(loweredPrimary);
+            changed = true;
+        }
+
+        foreach (var ctor in structSym.ExplicitConstructors)
+        {
+            var init = ctor.BaseInitializer;
+            if (init != null && this.TryRewriteInitializerArguments(init, out var loweredInit))
+            {
+                ctor.SetBaseInitializer(loweredInit);
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>
+    /// Lowers each argument of <paramref name="initializer"/>. When any argument is
+    /// rewritten, produces a replacement initializer targeting the same base
+    /// constructor and reports it via <paramref name="rewritten"/>.
+    /// </summary>
+    /// <param name="initializer">The base-constructor initializer to lower.</param>
+    /// <param name="rewritten">The rewritten initializer when arguments changed; otherwise <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when the arguments were rewritten.</returns>
+    private bool TryRewriteInitializerArguments(BaseConstructorInitializer initializer, out BaseConstructorInitializer rewritten)
+    {
+        rewritten = null;
+        if (initializer.Arguments.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<BoundExpression>(initializer.Arguments.Length);
+        var changed = false;
+        foreach (var argument in initializer.Arguments)
+        {
+            var loweredArgument = this.RewriteExpression(argument);
+            changed |= loweredArgument != argument;
+            builder.Add(loweredArgument);
+        }
+
+        if (!changed)
+        {
+            return false;
+        }
+
+        rewritten = initializer.WithArguments(builder.ToImmutable());
+        return true;
     }
 
     /// <summary>

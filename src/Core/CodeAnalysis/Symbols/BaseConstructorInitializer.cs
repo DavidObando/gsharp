@@ -62,4 +62,19 @@ public sealed class BaseConstructorInitializer
 
     /// <summary>Gets a value indicating whether the targeted base constructor lives on an imported CLR type.</summary>
     public bool IsClrBase => ClrConstructor != null;
+
+    /// <summary>
+    /// Produces a copy of this initializer targeting the same base constructor but
+    /// carrying a different forwarded argument list. Used by the emit-path lowerers
+    /// (e.g. interpolated-string lowering) to replace base-initializer arguments
+    /// with their lowered forms while preserving the resolved target and ref kinds.
+    /// </summary>
+    /// <param name="arguments">The replacement bound argument expressions.</param>
+    /// <returns>A new <see cref="BaseConstructorInitializer"/> with the supplied arguments.</returns>
+    public BaseConstructorInitializer WithArguments(ImmutableArray<BoundExpression> arguments)
+    {
+        return IsClrBase
+            ? new BaseConstructorInitializer(arguments, ClrConstructor, ArgumentRefKinds)
+            : new BaseConstructorInitializer(arguments, GSharpBaseType);
+    }
 }
