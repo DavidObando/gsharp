@@ -1,0 +1,37 @@
+Stock levels:
+  apple = 15
+  banana = 6
+  wrench = 3
+Categories tracked: 2
+Has 'tool' category: True
+Has 'spice' category: False
+
+[audit] open ledger
+[audit] ledger: start
+[audit] ledger: removed 4 apple
+[audit] ledger: done apple
+Rejected: cannot remove 9 of 'wrench': only 3 in stock
+[audit] ledger: rejected wrench
+[audit] ledger: done wrench
+[audit] ledger: end
+[audit] close ledger
+[audit] open summary
+[audit] summary: apples remaining: 11
+[audit] close summary
+
+Unit price: $2.50
+Three units: $7.50
+Bundle: $8.49
+three == bundle: False
+three != bundle: True
+unit*3 == three: True
+Equal via Equals: True
+
+apple threshold has value: True
+apple threshold: 8
+ghost threshold has value: False
+ghost effective (?? 0): 0
+Apple OK: 11 >= 8
+
+Audit rethrow (banana)
+Reconcile failed for banana: cannot remove 99 of 'banana': only 6 in stock

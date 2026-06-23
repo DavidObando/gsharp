@@ -138,11 +138,14 @@ details.
 | `corpus/L1-Console` | PASS | PASS | PASS | PASS |
 | `corpus/L2-Library` | PASS | FAIL (#973) | skip | skip |
 | `corpus/L3-Library` | PASS | FAIL (#974) | skip | skip |
+| `corpus/L4-Console` | PASS | PASS | PASS | PASS |
 
-L1 migrates fully green end-to-end. L2 and L3 both translate to canonical G# in
-full; each is now blocked at the **compile** stage by a single open compiler gap
+L1 and L4 migrate fully green end-to-end. L2 and L3 both translate to canonical G#
+in full; each is now blocked at the **compile** stage by a single open compiler gap
 (#973 a `class` with a value-type field; #974 generic-interface implementation).
-L3's `Advanced.cs` translates and compiles standalone. As gaps are fixed the
+L3's `Advanced.cs` translates and compiles standalone. L4 exercises exception
+handling, `Dictionary`/`HashSet`, `using`/`IDisposable`, nullable value types, and
+operator overloading (see §B.26–B.32 of ADR-0115). As gaps are fixed the
 frontier advances automatically — the seven gaps #938–#944 have already been
 fixed, which is what moved L3 from `translate FAIL` to `translate PASS`.
 
@@ -159,6 +162,16 @@ fixed, which is what moved L3 from `translate FAIL` to `translate PASS`.
 | [#944](https://github.com/DavidObando/gsharp/issues/944) | No user-indexer declaration form; attempts crash | GS9998 | resolved |
 | [#973](https://github.com/DavidObando/gsharp/issues/973) | A `class` with a user `struct`/`data struct` field — emit ICE | GS9998 | open |
 | [#974](https://github.com/DavidObando/gsharp/issues/974) | Generic-interface impl: method returning a constructed generic over `T` (e.g. `IEnumerator[T]`) fails satisfaction | GS0187 | open |
+| #975 | Interpolated string in a `: base(...)` constructor-arg position — emit ICE | GS9998 | open (L4; worked around) |
+| #976 | A `struct` cannot declare a base / interface clause (`struct S : I {…}`) | GS0005 | open (L4) |
+| #977 | BCL method with an inline `out var x` declaration fails overload resolution | GS0159 | open (L4; `&x` works) |
+
+The three L4 gaps each have a canonical-form workaround the translator emits, so
+L4 reaches full parity while the gaps are recorded for the compiler backlog:
+#975 forwards the message as a normal constructor argument and chains
+`init(message string, …) : base(message)`; #976 drops the struct's interface
+clause (the value type keeps its typed `Equals`/`GetHashCode` + `operator ==`);
+#977 uses the pre-declared pass-by-address `&x` out form for BCL methods.
 
 ## Conventions
 

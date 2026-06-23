@@ -311,6 +311,34 @@ A C# predefined-type keyword used as an **expression** receiver of a static call
 
 A C# target-typed `new()` emits the **explicit constructed type** inferred from the target: `List<int> items = new();` → `List[int32]()`. G# has no target-typed construction, so the type recovered from Roslyn's target type is made explicit.
 
+#### B.26 Conditional (ternary) expression → value-producing `if`-expression — ADR-0064, sample `IfExpression.gs`
+
+A C# conditional expression `cond ? a : b` maps to the canonical G# value-producing `if cond { a } else { b }` if-expression (issue #711 / ADR-0064). The terminal `else` is required in value position (the if-expression is exhaustive), so the two arms map directly; `else if` chains arise naturally from a nested conditional. Used wherever an expression is expected — `let x = cond ? a : b` → `let x = if cond { a } else { b }`.
+
+#### B.27 `try`/`catch`/`finally` and `throw` → G# `try` statement — sample `Exceptions.gs`
+
+A C# `try`/`catch`/`finally` maps to the canonical G# `try { } catch (e T) { } finally { }`. A **typed** catch `catch (FooException ex)` becomes `catch (ex FooException)` (binder name first, then type — the receiver-clause ordering); a bare `catch { }` (no type) becomes an untyped `catch { }`; `finally` carries over verbatim. `throw new FooException(args)` maps to `throw FooException(args)` (object construction, §B.16). A C# **bare re-throw** `throw;` has no G# spelling (`throw` alone is `GS0005`), so within a named catch it re-emits the caught binder — `throw ex` — reproducing the same exception instance; a bare re-throw outside a named catch is reported unsupported.
+
+#### B.28 Custom exception with `: base(message)` → explicit `init` with base chaining — sample `ExplicitConstructor.gs`
+
+A C# constructor with a base initializer `: base(args)` maps to the canonical G# explicit-base form `init(params) : base(args) { … }`. This is how a custom exception (`class FooException : Exception { public FooException(string m) : base(m) { } }`) forwards its message to `System.Exception`. The base arguments are translated as ordinary arguments; a `: this(...)` constructor *delegation* has no canonical form yet and is reported unsupported. (Note the discovered gap #975: an *interpolated string* in base-argument position ICEs the emitter, so an interpolated message is passed as a normal constructor argument and forwarded as a bare parameter.)
+
+#### B.29 `using` statement / `using` declaration → `using let` resource — sample `Defer.gs`
+
+A C# `using (var r = expr) { body }` statement maps to a scoped block whose resource binds with the `using` prefix — `{ using let r = expr; …body }` — so the resource is disposed at the end of that block (the explicit braces preserve the C# block's disposal scope). A C# 8 `using var r = expr;` *declaration* binds the same way at statement scope (`using let r = expr`), disposed at the end of the enclosing function/block. The resource is read-only after acquisition, hence `let`.
+
+#### B.30 `out`/`ref` arguments → pass-by-address `&x` / inline `out var x` — ADR-0060, sample `TryParseOutVar.gs`
+
+A C# `out`/`ref` argument maps to the canonical G# argument forms. A **pre-declared** `out`/`ref` variable passes **by address**: `d.TryGetValue(k, out existing)` → `d.TryGetValue(k, &existing)`; the uninitialised local binds as a mutable `var existing T` (an immutable `let` requires an initializer — see B.3). An **inline** `out var x` declaration maps to `out var x` and `out _` to the discard `out _`. (Note the discovered gap #977: inline `out var` fails overload resolution against BCL methods, so the pre-declared `&x` form is canonical for BCL `out` calls.)
+
+#### B.31 Operator overloading → receiver-clause `operator` funcs — ADR-0035, sample `Operators.gs`
+
+A C# operator overload `public static X operator +(X a, X b)` maps to the canonical G# receiver-clause operator func `func (a X) operator +(b X) X`: the first operand becomes the **receiver**, the remaining operand(s) become parameters (a unary operator `operator -(X a)` has no parameters: `func (a X) operator -() X`). Like every receiver-clause func, an `operator` func only binds at top level, so it is **lifted to a top-level sibling** of its owning type (for both value- and reference-aggregate owners) and carries no `open`/`override` modifier. The matching `Equals`/`GetHashCode` instance methods lift the same way on a value aggregate (§B.14).
+
+#### B.32 Uninitialised local → mutable `var name T`
+
+A C# local declaration with **no initializer** (`int existing;`, typically a pre-declared `out` target) binds as a mutable `var name T` rather than `let name T`: an immutable `let` requires an initializer (the spec's binding rules), and the type clause names the zero/default value. With an initializer the binding follows the usual `let`/`var` reassignment analysis (§B.3).
+
 > **Indexer declaration — RESOLVED (#944, ADR-0118).** A C# indexer
 > (`public T this[int i] => _items[i];`) now maps to the canonical G# indexer
 > member `prop this[i int32] T { get { … } }` (ADR-0118). Originally this was a
@@ -456,13 +484,18 @@ to a single fingerprinted entry that maps to a filed compiler issue. Final matri
 | `corpus/L1-Console` | PASS | PASS | PASS | PASS | — (fully green E2E) |
 | `corpus/L2-Library` | PASS | FAIL | skip | skip | #973 (class with a value-type field — emit ICE) |
 | `corpus/L3-Library` | PASS | FAIL | skip | skip | #974 (`Repository[T] : IEnumerable[T]` generic-interface impl); `Advanced.gs` compiles standalone |
+| `corpus/L4-Console` | PASS | PASS | PASS | PASS | — (fully green E2E) |
 
-**Objective 1 (faithful migration)** is demonstrated by L1 reaching full
+**Objective 1 (faithful migration)** is demonstrated by L1 + L4 reaching full
 stdout/test parity and by L2 + L3 translating to canonical G# (L3 now translates
-in full; `Advanced.gs` also compiles standalone). **Objective 2 (gap discovery)**
-is demonstrated by nine structured, reproduced, and filed compiler gaps surfaced
-purely by migration friction — seven of which the compiler team has already
-fixed, re-greening earlier stages and surfacing the next layer of gaps:
+in full; `Advanced.gs` also compiles standalone). L4 additionally proves the
+canonical mappings for exception handling (custom exception + `base` chaining,
+typed `catch`, `finally`, re-throw), `Dictionary`/`HashSet`, `using`/`IDisposable`,
+nullable value types (`T?`, `.HasValue`/`.Value`, `??`), and operator overloading
+(receiver-clause `operator` funcs). **Objective 2 (gap discovery)** is demonstrated
+by structured, reproduced, and filed compiler gaps surfaced purely by migration
+friction — most of which the compiler team has already fixed, re-greening earlier
+stages and surfacing the next layer of gaps:
 
 | Issue | Construct | Diagnostic | Status |
 | --- | --- | --- | --- |
@@ -475,13 +508,102 @@ fixed, re-greening earlier stages and surfacing the next layer of gaps:
 | #944 | user-indexer declaration form crashes | GS9998 | resolved (ADR-0118) |
 | #973 | a `class` with a user value-type (`struct`/`data struct`) field — emit ICE | GS9998 | open (blocks L2) |
 | #974 | generic-interface impl: method returning a constructed generic over `T` (e.g. `IEnumerator[T]`) fails satisfaction | GS0187 | open (blocks L3-`Generics`) |
+| #975 | interpolated string in a `: base(...)` constructor-arg position — emit ICE | GS9998 | open (discovered by L4; worked around in corpus) |
+| #976 | a `struct` cannot declare a base / interface clause (`struct S : I {…}` won't parse) | GS0005 | open (discovered by L4) |
+| #977 | BCL method invoked with an inline `out var x` declaration fails overload resolution | GS0159 | open (discovered by L4; `&x` pre-declared form works) |
 
 L2/L3 not going fully green is the **intended** objective-2 outcome: the residual
 failures are real compiler gaps, captured and filed rather than worked around or
 hidden. Each closes as the cited compiler issue is fixed and the corpus run
 re-greens automatically — as already happened for #938–#944, which advanced L3
 from `translate FAIL` to `translate PASS` and pushed the frontier into the
-compile stage (#973/#974).
+compile stage (#973/#974). L4 reaches full parity because its three discovered
+gaps (#975/#976/#977) each have a canonical-form workaround the translator
+emits (a `base` parameter forward, no struct interface clause, and the
+pass-by-address `&x` out form), so they are documented for the compiler backlog
+without blocking the migration.
+
+#### Discovered gaps from L4 (minimal repros)
+
+Each was reproduced directly with `gsc` and contrasted with a passing control.
+The orchestrator files the issue and replaces the `#TBD-x` placeholder.
+
+**#975 — interpolated string in a `: base(...)` argument → `GS9998` ICE.**
+Translation is correct (canonical `init(params) : base(args)` form, §B.13); the
+emitter ICEs on an interpolated string in base-constructor-argument position.
+Classification: `compile-error` (a real emitter bug, not a translation gap).
+
+```gs
+// repro — GS9998: EmitDiagnosticException:
+//   Bound expression kind 'InterpolatedStringExpression' is not yet supported by the emitter.
+class E1 : Exception {
+    init(n int32) : base("only $n left") {
+    }
+}
+```
+
+```gs
+// control — both compile and run:
+class E3 : Exception {
+    init(n int32) : base("plain literal") {            // plain literal: OK
+    }
+}
+class E4 : Exception {
+    init(n int32) : base("only " + n.ToString() + " left") {  // concatenation: OK
+    }
+}
+```
+
+Workaround the translator relies on: pass the (interpolated) message as an
+ordinary constructor argument (interpolation works in normal call-argument
+position) and forward the bare parameter to `base` — exactly the canonical
+`ExplicitConstructor.gs` form `init(message string, …) : base(message)`.
+
+**#976 — a `struct` cannot declare a base / interface clause → `GS0005`.**
+No `struct` in `samples/`, the test corpus, or `src/` declares a base or
+interface; the parser rejects the `:` after a struct name. A C# `struct S :
+IEquatable<S>` therefore has no canonical G# spelling; the interface is dropped
+(the value type keeps its typed `Equals`/`GetHashCode` and `operator ==`).
+Classification: `translation-unsupported` (no canonical form) — but L4 avoids it
+by not naming the interface.
+
+```gs
+// repro — GS0005: Unexpected token <ColonToken>, expected <OpenBraceToken>.
+struct Money : IEquatable[Money] {
+    var Cents int32
+}
+```
+
+```gs
+// control — a class may implement the interface:
+class Money : IEquatable[Money] {
+    var Cents int32
+    func Equals(other Money) bool { return Cents == other.Cents }
+}
+```
+
+**#977 — BCL method with inline `out var x` fails overload resolution → `GS0159`.**
+A user-defined `func` with an `out` parameter resolves an inline `out var x`
+declaration (ADR-0060, `TryParseOutVar.gs`), but the same `out var` shape against
+a BCL method (e.g. `Dictionary.TryGetValue`) fails to bind. Classification:
+`compile-error`; the translator emits the legacy pass-by-address `&x` form (a
+pre-declared `var x T` then `&x`), which binds for BCL methods.
+
+```gs
+// repro — GS0159: Cannot find function TryGetValue.
+let d = Dictionary[string, int32]()
+d["a"] = 5
+d.TryGetValue("a", out var v)
+```
+
+```gs
+// control — user-func out var binds; BCL via pre-declared &x binds:
+func tryProduce(out result int32) bool { result = 42; return true }
+tryProduce(out var n)            // OK (user func)
+
+var slot int32
+let ok = d.TryGetValue("a", &slot)   // OK (BCL, pass-by-address)
+```
 
 ## Consequences
 

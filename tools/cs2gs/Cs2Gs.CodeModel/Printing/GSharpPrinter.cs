@@ -392,6 +392,12 @@ public static class GSharpPrinter
             case SwitchExpression switchExpression:
                 return RenderSwitchExpression(switchExpression, indent);
 
+            case IfExpression ifExpression:
+                return $"if {RenderExpression(ifExpression.Condition, indent)} {{ {RenderExpression(ifExpression.ThenExpression, indent)} }} else {{ {RenderExpression(ifExpression.ElseExpression, indent)} }}";
+
+            case OutArgumentExpression outArgument:
+                return $"{outArgument.Keyword} {outArgument.Name}";
+
             case InterpolatedStringExpression interpolated:
                 return RenderInterpolatedString(interpolated, indent);
 
@@ -566,7 +572,8 @@ public static class GSharpPrinter
                 var initClause = local.Initializer == null
                     ? string.Empty
                     : $" = {RenderExpression(local.Initializer, indent)}";
-                return $"{pad}{RenderBinding(local.Binding)} {local.Name}{typeClause}{initClause}";
+                var usingPrefix = local.IsUsing ? "using " : string.Empty;
+                return $"{pad}{usingPrefix}{RenderBinding(local.Binding)} {local.Name}{typeClause}{initClause}";
 
             case ExpressionStatement expression:
                 return $"{pad}{RenderExpression(expression.Expression, indent)}";
@@ -602,6 +609,9 @@ public static class GSharpPrinter
 
             case DeferStatement defer:
                 return $"{pad}defer {RenderBlock(defer.Body, indent)}";
+
+            case TryStatement tryStatement:
+                return RenderTry(tryStatement, indent);
 
             case BlockStatement block:
                 return $"{pad}{RenderBlock(block, indent)}";
@@ -650,6 +660,34 @@ public static class GSharpPrinter
         {
             sb.Append(" else ");
             sb.Append(RenderBlock(elseBlock, indent));
+        }
+
+        return sb.ToString();
+    }
+
+    private static string RenderTry(TryStatement tryStatement, int indent)
+    {
+        var pad = Indent(indent);
+        var sb = new StringBuilder();
+        sb.Append($"{pad}try {RenderBlock(tryStatement.TryBlock, indent)}");
+        foreach (var catchClause in tryStatement.CatchClauses)
+        {
+            if (catchClause.ExceptionType != null)
+            {
+                var binder = string.IsNullOrEmpty(catchClause.VariableName)
+                    ? RenderType(catchClause.ExceptionType)
+                    : $"{catchClause.VariableName} {RenderType(catchClause.ExceptionType)}";
+                sb.Append($" catch ({binder}) {RenderBlock(catchClause.Body, indent)}");
+            }
+            else
+            {
+                sb.Append($" catch {RenderBlock(catchClause.Body, indent)}");
+            }
+        }
+
+        if (tryStatement.FinallyBlock != null)
+        {
+            sb.Append($" finally {RenderBlock(tryStatement.FinallyBlock, indent)}");
         }
 
         return sb.ToString();

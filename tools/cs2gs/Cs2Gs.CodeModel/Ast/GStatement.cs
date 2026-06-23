@@ -44,20 +44,30 @@ public sealed class LocalDeclarationStatement : GStatement
     /// <param name="name">The local name.</param>
     /// <param name="type">The optional explicit type clause.</param>
     /// <param name="initializer">The optional initializer expression.</param>
+    /// <param name="isUsing">Whether this is a <c>using</c> resource declaration.</param>
     public LocalDeclarationStatement(
         BindingKind binding,
         string name,
         GTypeReference type = null,
-        GExpression initializer = null)
+        GExpression initializer = null,
+        bool isUsing = false)
     {
         Binding = binding;
         Name = name;
         Type = type;
         Initializer = initializer;
+        IsUsing = isUsing;
     }
 
     /// <summary>Gets the binding keyword.</summary>
     public BindingKind Binding { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this declaration is a <c>using</c>
+    /// resource declaration (the resource is disposed at the end of the
+    /// enclosing block; sample <c>Defer.gs</c>).
+    /// </summary>
+    public bool IsUsing { get; }
 
     /// <summary>Gets the local name.</summary>
     public string Name { get; }
@@ -351,4 +361,67 @@ public sealed class RawStatement : GStatement
 
     /// <summary>Gets the verbatim G# text.</summary>
     public string Text { get; }
+}
+
+/// <summary>
+/// One <c>catch</c> clause of a <see cref="TryStatement"/>: an optional typed
+/// exception binding (<c>catch (e Exception)</c>) and the handler block. When
+/// <see cref="ExceptionType"/> is <see langword="null"/> the clause is a bare
+/// catch-all (<c>catch { }</c>).
+/// </summary>
+public sealed class CatchClause : GNode
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CatchClause"/> class.
+    /// </summary>
+    /// <param name="variableName">The bound exception variable name, when present.</param>
+    /// <param name="exceptionType">The caught exception type, when present.</param>
+    /// <param name="body">The handler block.</param>
+    public CatchClause(string variableName, GTypeReference exceptionType, BlockStatement body)
+    {
+        VariableName = variableName;
+        ExceptionType = exceptionType;
+        Body = body;
+    }
+
+    /// <summary>Gets the bound exception variable name, or <see langword="null"/>.</summary>
+    public string VariableName { get; }
+
+    /// <summary>Gets the caught exception type, or <see langword="null"/> for catch-all.</summary>
+    public GTypeReference ExceptionType { get; }
+
+    /// <summary>Gets the handler block.</summary>
+    public BlockStatement Body { get; }
+}
+
+/// <summary>
+/// A <c>try</c> statement with zero or more <c>catch</c> clauses and an optional
+/// <c>finally</c> block (ADR-0115 §B; sample <c>Exceptions.gs</c>).
+/// </summary>
+public sealed class TryStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TryStatement"/> class.
+    /// </summary>
+    /// <param name="tryBlock">The protected block.</param>
+    /// <param name="catchClauses">The catch clauses, in source order.</param>
+    /// <param name="finallyBlock">The finally block, when present.</param>
+    public TryStatement(
+        BlockStatement tryBlock,
+        IReadOnlyList<CatchClause> catchClauses,
+        BlockStatement finallyBlock)
+    {
+        TryBlock = tryBlock;
+        CatchClauses = catchClauses ?? new List<CatchClause>();
+        FinallyBlock = finallyBlock;
+    }
+
+    /// <summary>Gets the protected block.</summary>
+    public BlockStatement TryBlock { get; }
+
+    /// <summary>Gets the catch clauses, in source order.</summary>
+    public IReadOnlyList<CatchClause> CatchClauses { get; }
+
+    /// <summary>Gets the finally block, or <see langword="null"/>.</summary>
+    public BlockStatement FinallyBlock { get; }
 }

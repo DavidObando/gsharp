@@ -54,6 +54,44 @@ public class BodyTranslationTests
             d => d.Severity == TranslationSeverity.Unsupported);
     }
 
+    /// <summary>
+    /// The real <c>L4-Console/Program.cs</c> — which exercises exception handling
+    /// (custom exception + base chaining, typed catch, finally, re-throw),
+    /// Dictionary/HashSet, <c>using</c>/<c>IDisposable</c>, nullable value types,
+    /// and operator overloading — translates to complete canonical G# with no
+    /// pending placeholder, no <see cref="TranslationSeverity.Unsupported"/>
+    /// record, and the printed text round-trip-parses (ADR-0115 §B).
+    /// </summary>
+    [Fact]
+    public async Task L4Corpus_FullyTranslatesAndRoundTrips()
+    {
+        (CompilationUnit unit, TranslationContext context) = await TranslateConsoleCorpusAsync("L4-Console", "L4-Console.csproj");
+        string printed = GSharpPrinter.Print(unit);
+
+        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        Assert.True(
+            result.Success,
+            "Translated L4 must round-trip-parse. Errors:\n" +
+                string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
+
+        Assert.DoesNotContain("// pending", printed);
+        Assert.DoesNotContain("// unsupported", printed);
+        Assert.DoesNotContain(context.Diagnostics, d => d.ConstructKind == "body-pending");
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+
+        // The new construct families each surface in the canonical output.
+        Assert.Contains("init(sku string, message string) : base(message) {", printed);
+        Assert.Contains("func (a Money) operator +(b Money) Money {", printed);
+        Assert.Contains("using let log = AuditLog(\"ledger\")", printed);
+        Assert.Contains("} catch (ex InsufficientStockException) {", printed);
+        Assert.Contains("} finally {", printed);
+        Assert.Contains("throw ex", printed);
+        Assert.Contains("let available = if _stock.TryGetValue(sku, &qty) {", printed);
+        Assert.Contains("threshold ?? 0", printed);
+    }
+
     /// <summary>if / else-if / else chains map to nested <see cref="IfStatement"/>
     /// nodes (else-if is an <see cref="IfStatement"/> else branch).</summary>
     [Fact]
@@ -98,6 +136,85 @@ public class BodyTranslationTests
             "foreach (var item in items) { n = n + item; }",
             extraLocals: "var items = new System.Collections.Generic.List<int>();");
         Assert.Contains("for item in items {", body);
+    }
+
+    /// <summary>A C# conditional (ternary) expression maps to the canonical G#
+    /// value-producing <c>if cond { a } else { b }</c> if-expression (sample
+    /// <c>IfExpression.gs</c>, ADR-0064).</summary>
+    [Fact]
+    public void Ternary_TranslatesToIfExpression()
+    {
+        string body = GetMethodBody("var label = n > 0 ? 1 : 2;");
+        Assert.Contains("let label = if n > 0 { 1 } else { 2 }", body);
+    }
+
+    /// <summary>C# <c>try</c>/<c>catch (T e)</c>/<c>finally</c> maps to the
+    /// canonical G# <c>try { } catch (e T) { } finally { }</c> (sample
+    /// <c>Exceptions.gs</c>).</summary>
+    [Fact]
+    public void TryCatchFinally_TranslatesToTry()
+    {
+        string body = GetMethodBody(@"
+            try { n = 1; }
+            catch (Exception ex) { n = ex.Message.Length; }
+            finally { n = 3; }");
+        Assert.Contains("try {", body);
+        Assert.Contains("} catch (ex Exception) {", body);
+        Assert.Contains("} finally {", body);
+    }
+
+    /// <summary>A C# explicit re-throw <c>throw;</c> in a named catch maps to
+    /// re-throwing the caught binder (<c>throw ex</c>); G# has no bare
+    /// <c>throw</c> form.</summary>
+    [Fact]
+    public void Rethrow_TranslatesToThrowCaughtVariable()
+    {
+        string body = GetMethodBody(@"
+            try { n = 1; }
+            catch (Exception ex) { n = ex.Message.Length; throw; }");
+        Assert.Contains("} catch (ex Exception) {", body);
+        Assert.Contains("throw ex", body);
+    }
+
+    /// <summary>A pre-declared C# <c>out</c> argument maps to the legacy
+    /// pass-by-address form <c>&amp;x</c>; the uninitialised local binds as a
+    /// mutable <c>var x T</c> (BCL methods reject inline <c>out var</c>, so the
+    /// pre-declared form is canonical here).</summary>
+    [Fact]
+    public void PreDeclaredOutArgument_TranslatesToAddressOf()
+    {
+        string body = GetMethodBody(
+            @"int v;
+              d.TryGetValue(""a"", out v);
+              n = v;",
+            extraLocals: "var d = new System.Collections.Generic.Dictionary<string,int>();");
+        Assert.Contains("var v int32", body);
+        Assert.Contains("d.TryGetValue(\"a\", &v)", body);
+    }
+
+    /// <summary>A C# <c>using</c> statement maps to a scoped block whose resource
+    /// binds as <c>using let r = ...</c> (sample <c>Defer.gs</c>); a C# 8
+    /// <c>using var</c> declaration binds the same way at statement scope.</summary>
+    [Fact]
+    public void UsingStatement_TranslatesToUsingLet()
+    {
+        string body = GetMethodBody(
+            @"using (var r = new System.IO.MemoryStream()) { n = (int)r.Length; }
+              using var s = new System.IO.MemoryStream();
+              n = (int)s.Length;");
+        Assert.Contains("using let r = MemoryStream()", body);
+        Assert.Contains("using let s = MemoryStream()", body);
+    }
+
+    /// <summary>A C# null-coalescing operator <c>??</c> is preserved (issue #941,
+    /// sample <c>NullCoalescingAssignment.gs</c>).</summary>
+    [Fact]
+    public void NullCoalescing_IsPreserved()
+    {
+        string body = GetMethodBody(
+            @"int? maybe = null;
+              n = maybe ?? 0;");
+        Assert.Contains("maybe ?? 0", body);
     }
 
     /// <summary>Compound assignment <c>total += x</c> is preserved (G# supports
@@ -220,12 +337,17 @@ public class BodyTranslationTests
 
     private static async Task<(CompilationUnit Unit, TranslationContext Context)> TranslateL1CorpusAsync()
     {
-        string projectPath = ResolveCorpusProject("L1-Console", "L1-Console.csproj");
+        return await TranslateConsoleCorpusAsync("L1-Console", "L1-Console.csproj");
+    }
+
+    private static async Task<(CompilationUnit Unit, TranslationContext Context)> TranslateConsoleCorpusAsync(string projectFolder, string projectFile)
+    {
+        string projectPath = ResolveCorpusProject(projectFolder, projectFile);
         LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
 
         Assert.True(
             project.BoundWithoutErrors,
-            "L1-Console should bind with no C# errors: " +
+            $"{projectFolder} should bind with no C# errors: " +
                 string.Join(Environment.NewLine, project.ErrorDiagnostics));
 
         LoadedDocument document = project.Documents.Single(d => d.FilePath.EndsWith("Program.cs", StringComparison.Ordinal));
