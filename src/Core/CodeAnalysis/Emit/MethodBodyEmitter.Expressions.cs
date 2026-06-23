@@ -410,6 +410,9 @@ internal sealed partial class MethodBodyEmitter
             case BoundBaseInterfaceCallExpression bic:
                 this.EmitBaseInterfaceCall(bic);
                 break;
+            case BoundBaseClassCallExpression bcc:
+                this.EmitBaseClassCall(bcc);
+                break;
             case BoundFieldAccessExpression fa:
                 this.EmitFieldAccess(fa);
                 break;

@@ -1147,6 +1147,46 @@ Cross-references:
   interfaces), #756 (private interface helpers), #706
   (advanced-interfaces parent).
 
+## Base-class call diagnostics (GS0383–GS0385)
+
+See ADR-0091 (issue #986). G# can call the **base class** implementation
+of a virtual/overridable member non-virtually from within a derived type
+using `base.Member(args)` — the faithful mapping of C# `base.M(...)` — or
+the bracketed `base[BaseClass].Member(args)` form. Both emit
+`ldarg.0` followed by a non-virtual `call instance R BaseClass::Member(...)`,
+so the nearest base implementation runs without re-dispatching through
+the v-table (no infinite recursion when called from the override that
+shadows it). The bracketed selector names the *immediate* base class; the
+member is resolved by walking the base chain, so a grandparent's
+implementation is reached when the immediate base does not declare its
+own override.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0383 | Error | `'base' is not valid here: '<T>' must be an instance member of a class that has a base class to use 'base.Member(...)'.` |
+| GS0384 | Error | `Base class '<Base>' does not declare an accessible method named '<Name>' to call via 'base'.` |
+| GS0385 | Error | `'base[<Type>]' is not valid: '<Type>' is not a base class of '<T>'. Use the immediate base class name, or the plain 'base.Member(...)' form.` |
+
+Cause/fix:
+
+- **GS0383** — `base.Member(...)` is only valid inside an instance member
+  of a class that has a base class. It fires for top-level functions,
+  `shared` statics, structs (no base class), and classes that derive only
+  from `System.Object`. Move the call into an instance member of a derived
+  class, or call the member directly.
+- **GS0384** — the named member does not exist on any base class. Check the
+  spelling, arity, or accessibility of the member. `base` reaches only
+  members inherited from a base class.
+- **GS0385** — the type named in the brackets is not a base class of the
+  enclosing type. Use the immediate base class name, or prefer the plain
+  `base.Member(...)` form, which resolves the base chain automatically.
+
+Cross-references:
+
+- ADR-0091 — explicit-base interface call syntax, extended by #986 to
+  cover base-class calls.
+- Issue #986 (this feature), #757 (base-interface call sibling).
+
 
 
 ## `@LibraryImport` P/Invoke diagnostics (GS0342–GS0345)

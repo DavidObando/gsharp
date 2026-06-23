@@ -3510,6 +3510,34 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindBaseInterfaceCallExpression(BaseInterfaceCallExpressionSyntax syntax)
     {
+        // Resolve the selector inside the brackets first. Issue #986: when it
+        // names a base CLASS instead of an interface, route to the base-class
+        // call form so `base[BaseClass].M(args)` works as an alternative
+        // spelling of `base.M(args)` — binding arguments there (not here) so
+        // they are not bound twice. Type-clause binding already reports the
+        // relevant "type not found" diagnostic (GS0046) when resolution fails.
+        var ifaceType = bindTypeClause(syntax.InterfaceTypeClause);
+        if (ifaceType is null || ifaceType == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        if (ifaceType is StructSymbol classSelector && classSelector.IsClass)
+        {
+            var synthesizedCall = new CallExpressionSyntax(
+                syntax.SyntaxTree,
+                syntax.MethodIdentifier,
+                syntax.MethodTypeArgumentList,
+                syntax.OpenParenthesisToken,
+                syntax.Arguments,
+                syntax.CloseParenthesisToken);
+            return BindBaseClassCall(
+                synthesizedCall,
+                syntax.BaseKeyword.Location,
+                classSelector,
+                syntax.InterfaceTypeClause.Location);
+        }
+
         // Bind the user arguments unconditionally — even on the failure paths
         // below we want any nested binder diagnostics (unknown name in arg
         // position, etc.) to surface in the same pass.
@@ -3517,15 +3545,6 @@ internal sealed partial class ExpressionBinder
         for (var i = 0; i < syntax.Arguments.Count; i++)
         {
             boundArguments.Add(BindExpression(syntax.Arguments[i]));
-        }
-
-        // Resolve the interface selector inside the brackets. Type-clause
-        // binding already reports the relevant "type not found" diagnostic
-        // (GS0046) when resolution fails; no need to duplicate it.
-        var ifaceType = bindTypeClause(syntax.InterfaceTypeClause);
-        if (ifaceType is null || ifaceType == TypeSymbol.Error)
-        {
-            return new BoundErrorExpression(null);
         }
 
         // The selector must denote an interface.
@@ -3707,6 +3726,133 @@ internal sealed partial class ExpressionBinder
         }
 
         return "<top-level>";
+    }
+
+    /// <summary>
+    /// Issue #986: binds a base-class call of the form <c>base.M(args)</c>
+    /// (when <paramref name="explicitBaseType"/> is <see langword="null"/>) or
+    /// the bracketed <c>base[BaseClass].M(args)</c> form (when it names the
+    /// base class). Resolves <c>M</c> on the nearest base class's member set
+    /// (walking grandparents), reuses the standard overload resolution and
+    /// argument-conversion pipeline via
+    /// <see cref="OverloadResolver.BindUserInstanceCall"/>, then wraps the
+    /// result in a <see cref="BoundBaseClassCallExpression"/> so the emitter
+    /// produces a non-virtual <c>call</c> (not <c>callvirt</c>) — exactly like
+    /// C# <c>base.M(...)</c>.
+    /// </summary>
+    /// <param name="ce">The method-call syntax (<c>M(args)</c>).</param>
+    /// <param name="baseLocation">The location of the <c>base</c> token for context diagnostics.</param>
+    /// <param name="explicitBaseType">The class named in <c>base[BaseClass]</c>, or <see langword="null"/> for the plain <c>base.M</c> form.</param>
+    /// <param name="selectorLocation">The location of the bracketed selector (for GS0385); ignored when <paramref name="explicitBaseType"/> is null.</param>
+    /// <returns>The bound base-class call, or a bound error on failure.</returns>
+    private BoundExpression BindBaseClassCall(
+        CallExpressionSyntax ce,
+        TextLocation baseLocation,
+        StructSymbol explicitBaseType,
+        TextLocation selectorLocation)
+    {
+        // The call site must live in an instance member of a class. Top-level
+        // functions, `shared` statics, and structs (no base class) all fail.
+        var enclosingType = function?.ReceiverType as StructSymbol;
+        if (enclosingType == null || function?.ThisParameter == null || !enclosingType.IsClass)
+        {
+            Diagnostics.ReportBaseClassCallHasNoBaseClass(baseLocation, EnclosingTypeDisplayName());
+            return new BoundErrorExpression(null);
+        }
+
+        // Determine the base class to start the method search from. For the
+        // bracketed form, the named selector must be an actual base class of
+        // the enclosing type; for the plain form, use the immediate base.
+        StructSymbol searchBase;
+        if (explicitBaseType != null)
+        {
+            if (!IsBaseClassOf(enclosingType, explicitBaseType))
+            {
+                Diagnostics.ReportBaseClassCallSelectorNotBaseClass(selectorLocation, enclosingType.Name, explicitBaseType.Name);
+                return new BoundErrorExpression(null);
+            }
+
+            searchBase = explicitBaseType;
+        }
+        else
+        {
+            searchBase = enclosingType.BaseClass;
+        }
+
+        if (searchBase == null)
+        {
+            Diagnostics.ReportBaseClassCallHasNoBaseClass(baseLocation, enclosingType.Name);
+            return new BoundErrorExpression(null);
+        }
+
+        var methodName = ce.Identifier.Text;
+
+        // Resolve the overload set on the base chain (this-first from the
+        // search base), which walks grandparents — so the nearest base
+        // implementation of an inherited member is chosen.
+        var baseOverloads = TypeMemberModel.GetMethods(searchBase, methodName, MemberQuery.Instance(MemberKinds.Method));
+        if (baseOverloads.IsEmpty)
+        {
+            Diagnostics.ReportBaseClassCallMemberNotFound(ce.Identifier.Location, searchBase.Name, methodName);
+            return new BoundErrorExpression(null);
+        }
+
+        if (!overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames))
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(ce.Arguments.Count);
+        foreach (var argument in ce.Arguments)
+        {
+            boundArguments.Add(BindExpression(OverloadResolver.UnwrapNamedArgumentValue(argument)));
+        }
+
+        var arguments = boundArguments.ToImmutable();
+        var method = overloads.SelectInstanceOverloadOrReport(baseOverloads, arguments, ce, methodName, argumentNames);
+        if (method == null)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        // Reuse the full instance-call binding pipeline (named-argument
+        // reordering, generic substitution, variadic packing, per-argument
+        // conversions). The receiver is the enclosing method's `this`.
+        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        var bound = overloads.BindUserInstanceCall(receiver, method, arguments, ce, argumentNames);
+        if (bound is not BoundUserInstanceCallExpression uic)
+        {
+            return bound;
+        }
+
+        var declaringType = uic.Method.ReceiverType as StructSymbol ?? searchBase;
+        return new BoundBaseClassCallExpression(
+            ce,
+            uic.Receiver,
+            declaringType,
+            uic.Method,
+            uic.Arguments,
+            uic.Type);
+    }
+
+    /// <summary>
+    /// Issue #986: returns true when <paramref name="candidate"/> is a base
+    /// class of <paramref name="derived"/> (compared by definition identity to
+    /// allow constructed generics).
+    /// </summary>
+    private static bool IsBaseClassOf(StructSymbol derived, StructSymbol candidate)
+    {
+        var candidateDef = candidate.Definition ?? candidate;
+        for (var t = derived.BaseClass; t != null; t = t.BaseClass)
+        {
+            var tDef = t.Definition ?? t;
+            if (ReferenceEquals(tDef, candidateDef) || ReferenceEquals(t, candidate))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

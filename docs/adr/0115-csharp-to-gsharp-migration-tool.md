@@ -544,7 +544,7 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #976 | a `struct` cannot declare a base / interface clause (`struct S : I {…}` won't parse) | GS0005 | resolved (struct interface clause parses; class/struct base → GS0382) |
 | #977 | BCL method invoked with an inline `out var x` declaration fails overload resolution | GS0159 | resolved (inline `out var x` binds for BCL calls) |
 | #985 | implementing `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by return type (generic `IEnumerator[T]` + non-generic `IEnumerator`) | GS0264 + GS0187 | resolved (covariant-return interface bridge: GS0264 relaxed when two same-name/param methods satisfy distinct interface slots; inherited base-interface slots now required so a missing bridge still errors GS0187; emit writes the `MethodImpl` + non-generic `IEnumerable` `InterfaceImpl` rows) |
-| #986 | `base.Method()` virtual base-class call has no canonical G# form (`base[Base].M` is interface-only per ADR-0091) | GS0157 / GS0338 | open (translation-unsupported; L5 uses dynamic dispatch instead) |
+| #986 | `base.Method()` virtual base-class call has no canonical G# form (`base[Base].M` is interface-only per ADR-0091) | GS0157 / GS0338 | **resolved** (issue #986 — `base.M(...)` / `base[Base].M(...)` emit a non-virtual base-class call; ADR-0091 extended) |
 | #987 | an `abstract` (no-body) method on an `open class` → emitter crash | GS9998 (NRE) | open (L5 uses a virtual method with a body) |
 | #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | open (translation-unsupported; L5 has the caller supply the value) |
 | #989 | a generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | open (L5 uses a generic field instead) |
@@ -678,15 +678,18 @@ class Circle(Radius float64) : Shape {
 }
 ```
 
-**#986 — `base.Method()` virtual base-class call has no canonical G# form.**
-A C# `override` that chains to the base implementation via `base.Describe()` has no
-G# spelling: `base.M()` → `GS0157` "Cannot find type base"; the interface-only
-`base[Base].M()` form (ADR-0091) → `GS0338` (valid only for an interface default
-member, `base[IFoo].M`). Classification: **translation-unsupported**. L5 therefore
-calls the inherited member directly (it is not re-declared on the derived type).
+**#986 — `base.Method()` virtual base-class call (RESOLVED, issue #986).**
+A C# `override` that chains to the base implementation via `base.Describe()` now
+maps to the canonical G# base-class call `base.Describe()` (the faithful C#
+spelling) — and the explicit bracketed `base[Shape].Describe()` form — which binds
+to a `BoundBaseClassCallExpression` and emits `ldarg.0` + a non-virtual
+`call instance string Shape::Describe()`, running the base implementation without
+re-dispatching (no infinite recursion). The translator (`§B`) emits `base.M(...)`
+directly for C# `base.M(...)`. ADR-0091 is extended to cover class bases; misuse is
+diagnosed with GS0383–GS0385. The earlier GS0157/GS0338 failures no longer occur.
 
 ```gs
-// repro — GS0157: base.M() does not resolve:
+// now compiles — base.M() resolves to a non-virtual base-class call:
 open class Shape {
     open func Describe() string { return "shape" }
 }
@@ -695,12 +698,9 @@ class Circle() : Shape {
 }
 ```
 ```gs
-// control — call the inherited member directly (no base. qualifier):
-open class Shape {
-    open func Describe() string { return "shape" }
-}
+// also valid — explicit bracketed base-class selector:
 class Circle() : Shape {
-    func Tagged() string { return Describe() + " circle" }
+    override func Describe() string { return base[Shape].Describe() + " circle" }
 }
 ```
 

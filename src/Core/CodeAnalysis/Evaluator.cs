@@ -629,6 +629,7 @@ public sealed class Evaluator
                 BoundNodeKind.ConstructorCallExpression => EvaluateConstructorCallExpression((BoundConstructorCallExpression)node),
                 BoundNodeKind.UserInstanceCallExpression => EvaluateUserInstanceCallExpression((BoundUserInstanceCallExpression)node),
                 BoundNodeKind.BaseInterfaceCallExpression => EvaluateBaseInterfaceCallExpression((BoundBaseInterfaceCallExpression)node),
+                BoundNodeKind.BaseClassCallExpression => EvaluateBaseClassCallExpression((BoundBaseClassCallExpression)node),
                 BoundNodeKind.FieldAccessExpression => EvaluateFieldAccessExpression((BoundFieldAccessExpression)node),
                 BoundNodeKind.FieldAssignmentExpression => EvaluateFieldAssignmentExpression((BoundFieldAssignmentExpression)node),
                 BoundNodeKind.PropertyAccessExpression => EvaluatePropertyAccessExpression((BoundPropertyAccessExpression)node),
@@ -3328,6 +3329,43 @@ public sealed class Evaluator
     /// <param name="node">The bound base-interface call.</param>
     /// <returns>The default body's return value.</returns>
     private object EvaluateBaseInterfaceCallExpression(BoundBaseInterfaceCallExpression node)
+    {
+        var receiverValue = EvaluateExpression(node.Receiver);
+        var method = node.Method;
+
+        var frame = new Dictionary<VariableSymbol, object>
+        {
+            [method.ThisParameter] = receiverValue,
+        };
+
+        var parameterOffset = method.ExplicitReceiverParameter == null ? 0 : 1;
+        for (int i = 0; i < node.Arguments.Length; i++)
+        {
+            var parameter = method.Parameters[i + parameterOffset];
+            var value = EvaluateExpression(node.Arguments[i]);
+            frame.Add(parameter, value);
+        }
+
+        locals.Push(frame);
+        var statement = program.Functions[method];
+        var result = EvaluateFunctionBody(statement);
+        locals.Pop();
+
+        return result;
+    }
+
+    /// <summary>
+    /// Issue #986: interprets <c>base.M(args)</c> (and
+    /// <c>base[BaseClass].M(args)</c>). Like
+    /// <see cref="EvaluateBaseInterfaceCallExpression"/>, this dispatches
+    /// directly to the base method body without walking the runtime class's
+    /// v-table (the interpreter analogue of <c>call instance</c> rather than
+    /// <c>callvirt</c>). Re-dispatching virtually would re-enter the derived
+    /// override that issued the base-call and recurse infinitely.
+    /// </summary>
+    /// <param name="node">The bound base-class call.</param>
+    /// <returns>The base method body's return value.</returns>
+    private object EvaluateBaseClassCallExpression(BoundBaseClassCallExpression node)
     {
         var receiverValue = EvaluateExpression(node.Receiver);
         var method = node.Method;

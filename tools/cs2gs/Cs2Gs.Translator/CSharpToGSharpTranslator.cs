@@ -2164,6 +2164,14 @@ public sealed class CSharpToGSharpTranslator
                 case ThisExpressionSyntax:
                     return new ThisExpression();
 
+                case BaseExpressionSyntax:
+                    // Issue #986: C# `base.M(...)` maps directly to the G#
+                    // base-class call form `base.M(...)`, which emits a
+                    // non-virtual `call` into the base implementation. The
+                    // `base` receiver is rendered as a bare identifier; the
+                    // enclosing member-access / invocation supplies the `.M(...)`.
+                    return new IdentifierExpression("base");
+
                 case MemberAccessExpressionSyntax member:
                     return this.TranslateMemberAccess(member);
 

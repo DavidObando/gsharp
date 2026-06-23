@@ -3879,6 +3879,67 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #986: GS0383 — a <c>base.M(...)</c> (or
+    /// <c>base[BaseClass].M(...)</c>) call appears outside an instance member
+    /// of a class that has a base class, so there is no base implementation to
+    /// delegate to. Fires for top-level functions, <c>shared</c> statics,
+    /// structs (which have no base class), and classes that derive only from
+    /// <c>System.Object</c>.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>base</c> expression.</param>
+    /// <param name="enclosingTypeName">The display name of the enclosing type, or a placeholder for non-member contexts.</param>
+    public void ReportBaseClassCallHasNoBaseClass(
+        TextLocation location,
+        string enclosingTypeName)
+    {
+        Report(
+            location,
+            "GS0383",
+            $"'base' is not valid here: '{enclosingTypeName}' must be an instance member of a class that has a base class to use 'base.Member(...)' (issue #986).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Issue #986: GS0384 — a <c>base.M(...)</c> (or
+    /// <c>base[BaseClass].M(...)</c>) call names a member <c>M</c> that does
+    /// not exist on any base class of the enclosing type.
+    /// </summary>
+    /// <param name="location">The source location of the method identifier.</param>
+    /// <param name="baseTypeName">The nearest base class searched.</param>
+    /// <param name="methodName">The missing member name.</param>
+    public void ReportBaseClassCallMemberNotFound(
+        TextLocation location,
+        string baseTypeName,
+        string methodName)
+    {
+        Report(
+            location,
+            "GS0384",
+            $"Base class '{baseTypeName}' does not declare an accessible method named '{methodName}' to call via 'base' (issue #986).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Issue #986: GS0385 — a <c>base[Type].M(...)</c> call names a
+    /// <c>Type</c> in the brackets that is not the enclosing type's actual
+    /// base class.
+    /// </summary>
+    /// <param name="location">The source location of the bracketed type clause.</param>
+    /// <param name="enclosingTypeName">The display name of the enclosing class.</param>
+    /// <param name="selectorTypeName">The type named in the brackets.</param>
+    public void ReportBaseClassCallSelectorNotBaseClass(
+        TextLocation location,
+        string enclosingTypeName,
+        string selectorTypeName)
+    {
+        Report(
+            location,
+            "GS0385",
+            $"'base[{selectorTypeName}]' is not valid: '{selectorTypeName}' is not a base class of '{enclosingTypeName}'. Use the immediate base class name, or the plain 'base.Member(...)' form (issue #986).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Reports GS0367 — issue #836: a <c>yield</c> statement appears
     /// lexically inside a <c>try</c> block that also has one or more
     /// <c>catch</c> clauses. The C# spec (§15.14) and ECMA-335 forbid
