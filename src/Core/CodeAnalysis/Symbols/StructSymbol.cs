@@ -194,7 +194,7 @@ public sealed class StructSymbol : TypeSymbol
     public bool IsOpen { get; }
 
     /// <summary>Gets the immediate base class (Phase 3.B.3 sub-step 3), or <c>null</c> when this class derives directly from <c>System.Object</c>. Always null for structs.</summary>
-    public StructSymbol BaseClass { get; }
+    public StructSymbol BaseClass { get; private set; }
 
     /// <summary>Gets the interfaces this type implements (Phase 3.B.4). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
     public ImmutableArray<InterfaceSymbol> Interfaces { get; private set; }
@@ -394,6 +394,20 @@ public sealed class StructSymbol : TypeSymbol
     public void SetInterfaces(ImmutableArray<InterfaceSymbol> interfaces)
     {
         Interfaces = interfaces;
+    }
+
+    /// <summary>
+    /// Issue #949: sets <see cref="BaseClass"/> after the symbol is constructed.
+    /// The symbol is created before its base-type clause is bound so that a
+    /// class may reference itself as a generic type argument in its own base
+    /// clause (e.g. <c>class Shape : IEquatable[Shape]</c>); the resolved base
+    /// class is then installed here once the clause has been bound. Intended to
+    /// be called exactly once by the binder during <c>BindStructDeclaration</c>.
+    /// </summary>
+    /// <param name="baseClass">The resolved base class symbol, or <c>null</c>.</param>
+    public void SetBaseClass(StructSymbol baseClass)
+    {
+        BaseClass = baseClass;
     }
 
     /// <summary>

@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
@@ -83,6 +84,29 @@ internal static class MethodInfoHelpers
             var returnClr = method.Type?.ClrType;
             foreach (var ifaceSym in structSym.ImplementedClrInterfaces)
             {
+                // Issue #949: a CLR generic interface closed over a user G# type
+                // (e.g. `IEquatable[Shape]`) is type-erased; match against the
+                // open definition with the symbolic arguments substituted so the
+                // user method (`Equals(Shape)`) is recognised as an implicit
+                // implementation and is promoted to a virtual interface slot.
+                if (MemberLookup.TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var symbolicArgs))
+                {
+                    foreach (var openMethod in openDefinition.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                    {
+                        if (openMethod.IsSpecialName || openMethod.Name != method.Name)
+                        {
+                            continue;
+                        }
+
+                        if (MemberLookup.HasMatchingMethodForSymbolicClrInterface(structSym, openMethod, symbolicArgs))
+                        {
+                            return true;
+                        }
+                    }
+
+                    continue;
+                }
+
                 var clrIface = ifaceSym?.ClrType;
                 if (clrIface == null)
                 {

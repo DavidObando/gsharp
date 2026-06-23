@@ -1149,6 +1149,182 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Issue #949: detects a CLR generic interface constructed over at least
+    /// one user-defined G# type argument (e.g. <c>IEquatable[Shape]</c>,
+    /// including the self-referential <c>class Shape : IEquatable[Shape]</c>
+    /// pattern). Such an interface is represented as an
+    /// <see cref="ImportedTypeSymbol"/> whose <c>ClrType</c> is the type-erased
+    /// closed shape (<c>IEquatable&lt;object&gt;</c>) but whose
+    /// <see cref="ImportedTypeSymbol.TypeArguments"/> preserve the real,
+    /// symbolic arguments. Matching against the erased shape would demand
+    /// <c>Equals(object)</c>; we must instead substitute the symbolic
+    /// arguments into the OPEN definition's method signatures.
+    /// </summary>
+    /// <param name="ifaceSym">The implemented interface type symbol.</param>
+    /// <param name="openDefinition">The open generic CLR definition (e.g. <c>IEquatable`1</c>) on success.</param>
+    /// <param name="symbolicArgs">The symbolic type arguments (e.g. <c>[Shape]</c>) on success.</param>
+    /// <returns><see langword="true"/> when the interface is a symbolic constructed CLR generic.</returns>
+    public static bool TryGetSymbolicClrGenericInterface(
+        TypeSymbol ifaceSym,
+        out Type openDefinition,
+        out ImmutableArray<TypeSymbol> symbolicArgs)
+    {
+        openDefinition = null;
+        symbolicArgs = default;
+
+        if (ifaceSym is ImportedTypeSymbol imported
+            && imported.OpenDefinition != null
+            && imported.OpenDefinition.IsInterface
+            && !imported.TypeArguments.IsDefaultOrEmpty
+            && imported.TypeArguments.Any(IsSymbolicTypeArgument))
+        {
+            openDefinition = imported.OpenDefinition;
+            symbolicArgs = imported.TypeArguments;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #949: walks <paramref name="structSymbol"/> (and its base chain)
+    /// for an instance method that satisfies <paramref name="openMethod"/> from
+    /// a CLR generic interface's OPEN definition, with the interface's
+    /// generic parameters substituted by <paramref name="symbolicArgs"/>. A
+    /// generic-parameter position in the contract (e.g. the <c>T</c> in
+    /// <c>IEquatable&lt;T&gt;.Equals(T)</c>) is matched against the symbolic
+    /// type argument (e.g. <c>Shape</c>) using G# type-symbol identity;
+    /// non-generic positions fall back to CLR-projected comparison.
+    /// </summary>
+    /// <param name="structSymbol">The user struct symbol to inspect.</param>
+    /// <param name="openMethod">The interface method from the open definition.</param>
+    /// <param name="symbolicArgs">The symbolic type arguments closing the interface.</param>
+    /// <returns><see langword="true"/> when a matching overload exists.</returns>
+    public static bool HasMatchingMethodForSymbolicClrInterface(
+        StructSymbol structSymbol,
+        MethodInfo openMethod,
+        ImmutableArray<TypeSymbol> symbolicArgs)
+    {
+        var clrParams = openMethod.GetParameters();
+        foreach (var candidate in structSymbol.GetMethodsIncludingInherited(openMethod.Name))
+        {
+            var callable = GetCallableParameters(candidate);
+            if (callable.Length != clrParams.Length)
+            {
+                continue;
+            }
+
+            if (!ReturnTypeMatchesSubstituted(candidate.Type, openMethod.ReturnType, symbolicArgs))
+            {
+                continue;
+            }
+
+            var allMatch = true;
+            for (var i = 0; i < callable.Length; i++)
+            {
+                var clrParamType = clrParams[i].ParameterType;
+                var gsParam = callable[i];
+
+                if (clrParamType.IsByRef)
+                {
+                    if (gsParam.RefKind == RefKind.None)
+                    {
+                        allMatch = false;
+                        break;
+                    }
+
+                    if (!ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType.GetElementType(), symbolicArgs))
+                    {
+                        allMatch = false;
+                        break;
+                    }
+                }
+                else
+                {
+                    if (gsParam.RefKind != RefKind.None)
+                    {
+                        allMatch = false;
+                        break;
+                    }
+
+                    if (!ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType, symbolicArgs))
+                    {
+                        allMatch = false;
+                        break;
+                    }
+                }
+            }
+
+            if (allMatch)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #949: tests whether a candidate G# property satisfies an open
+    /// CLR interface property whose type may be a generic parameter, with
+    /// <paramref name="symbolicArgs"/> substituted in.
+    /// </summary>
+    /// <param name="structSymbol">The user struct symbol to inspect.</param>
+    /// <param name="openProp">The interface property from the open definition.</param>
+    /// <param name="symbolicArgs">The symbolic type arguments closing the interface.</param>
+    /// <returns>The matching <see cref="PropertySymbol"/>, or <see langword="null"/>.</returns>
+    public static PropertySymbol FindMatchingPropertyForSymbolicClrInterface(
+        StructSymbol structSymbol,
+        PropertyInfo openProp,
+        ImmutableArray<TypeSymbol> symbolicArgs)
+    {
+        foreach (var implProp in structSymbol.Properties)
+        {
+            if (implProp.Name == openProp.Name
+                && ParameterTypeMatchesSubstituted(implProp.Type, openProp.PropertyType, symbolicArgs))
+            {
+                return implProp;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #949: a type argument is "symbolic" (preserved rather than erased
+    /// to <c>object</c>) when it is a user-defined G# type, a generic type
+    /// parameter, or a constructed generic mentioning one of those. Mirrors the
+    /// emitter's <c>ArgIsSymbolicUserDefined</c> so binding and emit agree on
+    /// which arguments survive erasure.
+    /// </summary>
+    /// <param name="arg">The type argument to classify.</param>
+    /// <returns><see langword="true"/> when the argument is symbolic.</returns>
+    public static bool IsSymbolicTypeArgument(TypeSymbol arg)
+    {
+        switch (arg)
+        {
+            case StructSymbol:
+            case InterfaceSymbol:
+            case EnumSymbol:
+            case DelegateTypeSymbol:
+            case TypeParameterSymbol:
+                return true;
+            case ImportedTypeSymbol nested when nested.OpenDefinition != null
+                && !nested.TypeArguments.IsDefaultOrEmpty
+                && nested.TypeArguments.Any(IsSymbolicTypeArgument):
+                return true;
+            case ArrayTypeSymbol arr:
+                return IsSymbolicTypeArgument(arr.ElementType);
+            case SliceTypeSymbol slice:
+                return IsSymbolicTypeArgument(slice.ElementType);
+            case NullableTypeSymbol nullable when nullable.UnderlyingType != null:
+                return IsSymbolicTypeArgument(nullable.UnderlyingType);
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
     /// Looks up a user-declared property on <paramref name="structSymbol"/>
     /// whose name and CLR-projected type match <paramref name="clrProp"/>.
     /// </summary>
@@ -1399,6 +1575,80 @@ internal sealed class MemberLookup
     /// <returns>The parameters visible to a non-extension caller.</returns>
     private static ImmutableArray<ParameterSymbol> GetCallableParameters(FunctionSymbol method)
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
+
+    private static bool ReturnTypeMatchesSubstituted(TypeSymbol candidateReturn, Type openReturn, ImmutableArray<TypeSymbol> symbolicArgs)
+    {
+        if (openReturn.IsSameAs(typeof(void)))
+        {
+            return candidateReturn == TypeSymbol.Void;
+        }
+
+        return ParameterTypeMatchesSubstituted(candidateReturn, openReturn, symbolicArgs);
+    }
+
+    private static bool ParameterTypeMatchesSubstituted(TypeSymbol candidate, Type openType, ImmutableArray<TypeSymbol> symbolicArgs)
+    {
+        if (openType.IsGenericParameter)
+        {
+            var position = openType.GenericParameterPosition;
+            if (position < 0 || position >= symbolicArgs.Length)
+            {
+                return false;
+            }
+
+            return SameTypeSymbol(candidate, symbolicArgs[position]);
+        }
+
+        // Non-generic contract position — compare against the CLR-projected
+        // effective type, exactly as the erased path does.
+        return ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(candidate), openType);
+    }
+
+    private static bool SameTypeSymbol(TypeSymbol a, TypeSymbol b)
+    {
+        if (ReferenceEquals(a, b))
+        {
+            return true;
+        }
+
+        if (a == null || b == null)
+        {
+            return false;
+        }
+
+        // Constructed user generics are interned (StructSymbol.Construct uses a
+        // cache), so reference identity usually holds; fall back to a
+        // structural comparison by definition + ordered type arguments.
+        if (a is StructSymbol sa && b is StructSymbol sb)
+        {
+            if (!ReferenceEquals(sa.Definition, sb.Definition))
+            {
+                return false;
+            }
+
+            if (sa.TypeArguments.Length != sb.TypeArguments.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < sa.TypeArguments.Length; i++)
+            {
+                if (!SameTypeSymbol(sa.TypeArguments[i], sb.TypeArguments[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        if (a.ClrType != null && b.ClrType != null)
+        {
+            return ClrTypeUtilities.AreSame(a.ClrType, b.ClrType);
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Returns whether <paramref name="candidate"/> is hidden by any method

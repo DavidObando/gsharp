@@ -682,6 +682,17 @@ constraints.
 | GS0376 | Error | A `const` field initializer must be a compile-time constant expression. |
 | GS0377 | Error | A field initializer cannot reference the instance member or constructor parameter `{name}` (initializers run before the constructor body, so `this` is not available — assign it in an `init(...)` constructor instead). |
 
+## Self-inheritance diagnostic (GS0378)
+
+Issue #949: a class may name itself as a generic type *argument* in its own
+base/implements clause (the common `class Shape : IEquatable[Shape]` pattern is
+legal). However, naming itself directly as its own base class is an illegal
+self-inheritance cycle and is reported here.
+
+| ID | Severity | Summary |
+| --- | --- | --- |
+| GS0378 | Error | Class `{name}` cannot inherit from itself (e.g. `class A : A` or the generic `class A[T] : A[T]`). Naming the enclosing type merely as a type argument of a base/interface type — `class Shape : IEquatable[Shape]` — is legal. |
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

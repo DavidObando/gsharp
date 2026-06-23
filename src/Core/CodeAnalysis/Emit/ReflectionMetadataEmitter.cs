@@ -1456,6 +1456,20 @@ internal sealed class ReflectionMetadataEmitter
             {
                 foreach (var ifaceSym in c.ImplementedClrInterfaces)
                 {
+                    // Issue #949: a CLR generic interface closed over a user G#
+                    // type (e.g. `IEquatable[Shape]`) carries symbolic type
+                    // arguments alongside its type-erased ClrType. Emit the
+                    // InterfaceImpl over the real constructed shape
+                    // (`IEquatable<Shape>`) via a symbolic TypeSpec rather than
+                    // the erased `IEquatable<object>`.
+                    if (MemberLookup.TryGetSymbolicClrGenericInterface(ifaceSym, out _, out _))
+                    {
+                        this.emitCtx.Metadata.AddInterfaceImplementation(
+                            this.cache.StructTypeDefs[c],
+                            this.GetElementTypeToken(ifaceSym));
+                        continue;
+                    }
+
                     if (ifaceSym?.ClrType is System.Type clrIface)
                     {
                         this.emitCtx.Metadata.AddInterfaceImplementation(

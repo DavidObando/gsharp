@@ -590,6 +590,38 @@ internal sealed class DeclarationBinder
         // any conflicting explicit base.
         var hasAttributeSugar = HasAttributeSugarMarker(syntax.Annotations);
 
+        // Issue #949: construct the struct symbol BEFORE binding its base-type
+        // clause and register it in scope, so the enclosing type may reference
+        // itself as a generic type argument within its own base/interface list
+        // (the common `class Shape : IEquatable[Shape]` pattern). Name
+        // resolution of the self type argument (see `LookupType`) finds this
+        // in-progress symbol. The resolved base class — if any — is installed
+        // afterwards via `SetBaseClass`. Genuine self-inheritance
+        // (`class A : A`) is rejected explicitly in the base-clause loop below.
+        var structSymbol = new StructSymbol(
+            name,
+            fields.ToImmutable(),
+            accessibility,
+            syntax,
+            package.Name,
+            syntax.IsData,
+            syntax.IsInline,
+            syntax.IsClass,
+            primaryCtorParameters,
+            isOpen: syntax.IsOpen && syntax.IsClass,
+            baseClass: null);
+        Binder.AttachDocumentation(structSymbol, syntax);
+
+        if (!typeParameters.IsDefaultOrEmpty)
+        {
+            structSymbol.SetTypeParameters(typeParameters);
+        }
+
+        if (!scope.TryDeclareTypeAlias(name, structSymbol))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+        }
+
         // Phase 3.B.3 sub-step 3 + 3.B.4: resolve the optional `: X, Y, Z` clause.
         // Each identifier is either the (single) base class or an interface
         // implemented by this class. A base class, if present, must be the
@@ -669,6 +701,20 @@ internal sealed class DeclarationBinder
 
                     if (resolved is StructSymbol baseStruct && baseStruct.IsClass)
                     {
+                        // Issue #949: reject genuine self-inheritance
+                        // (`class A : A`, or the generic `class A[T] : A[T]`)
+                        // where the type names itself as its OWN base class.
+                        // This is distinct from — and must not be confused
+                        // with — naming the enclosing type as a generic type
+                        // ARGUMENT of a base/interface (`class A : Base[A]`,
+                        // `class A : IEquatable[A]`), which is legal and is
+                        // handled by the branches above / below.
+                        if (baseStruct == structSymbol || baseStruct.Definition == structSymbol)
+                        {
+                            Diagnostics.ReportClassInheritsFromItself(baseLocation, name);
+                            continue;
+                        }
+
                         if (baseStruct.IsGenericDefinition)
                         {
                             Diagnostics.ReportWrongTypeArgumentCount(baseLocation, baseName, baseStruct.TypeParameters.Length, 0);
@@ -742,24 +788,10 @@ internal sealed class DeclarationBinder
             }
         }
 
-        var structSymbol = new StructSymbol(
-            name,
-            fields.ToImmutable(),
-            accessibility,
-            syntax,
-            package.Name,
-            syntax.IsData,
-            syntax.IsInline,
-            syntax.IsClass,
-            primaryCtorParameters,
-            isOpen: syntax.IsOpen && syntax.IsClass,
-            baseClass: baseClassSymbol);
-        Binder.AttachDocumentation(structSymbol, syntax);
-
-        if (!typeParameters.IsDefaultOrEmpty)
-        {
-            structSymbol.SetTypeParameters(typeParameters);
-        }
+        // Issue #949: install the resolved base class now that the base-type
+        // clause has been bound (the symbol itself was created earlier so it
+        // could be referenced as a self type argument in that clause).
+        structSymbol.SetBaseClass(baseClassSymbol);
 
         structSymbol.SetAttributes(BindAttributes(
             syntax.Annotations,
@@ -851,11 +883,6 @@ internal sealed class DeclarationBinder
             }
 
             structSymbol.SetConstFields(constFieldsBuilder.ToImmutable());
-        }
-
-        if (!scope.TryDeclareTypeAlias(name, structSymbol))
-        {
-            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
         }
 
         // Collect existing member names for duplicate detection across fields,
@@ -2576,6 +2603,18 @@ internal sealed class DeclarationBinder
                 continue;
             }
 
+            // Issue #949: a CLR generic interface closed over a user-defined G#
+            // type (e.g. the self-referential `class Shape : IEquatable[Shape]`)
+            // is represented with a type-erased ClrType (`IEquatable<object>`)
+            // but carries the real symbolic arguments. Verify against the OPEN
+            // definition's members with those arguments substituted in, so the
+            // contract demands `Equals(Shape)` rather than `Equals(object)`.
+            if (MemberLookup.TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var symbolicArgs))
+            {
+                VerifySymbolicClrGenericInterface(syntax, structSymbol, clrIface, openDefinition, symbolicArgs);
+                continue;
+            }
+
             // Methods excluding property/event accessors (those are validated
             // through their owning property / event below).
             foreach (var clrMethod in clrIface.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
@@ -2658,6 +2697,75 @@ internal sealed class DeclarationBinder
                         clrIface.FullName ?? clrIface.Name,
                         clrProp.Name + " (setter)");
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #949: verifies a class against a CLR generic interface that is
+    /// closed over at least one user-defined G# type argument (e.g.
+    /// <c>IEquatable[Shape]</c>, including the self-referential
+    /// <c>class Shape : IEquatable[Shape]</c>). The interface's <c>ClrType</c>
+    /// is type-erased (<c>IEquatable&lt;object&gt;</c>), so the contract is
+    /// checked against the OPEN definition's members with the symbolic
+    /// arguments substituted in — the class must provide <c>Equals(Shape)</c>,
+    /// not <c>Equals(object)</c>.
+    /// </summary>
+    private void VerifySymbolicClrGenericInterface(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        System.Type clrIface,
+        System.Type openDefinition,
+        ImmutableArray<TypeSymbol> symbolicArgs)
+    {
+        foreach (var openMethod in openDefinition.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            if (openMethod.IsSpecialName || !openMethod.IsAbstract)
+            {
+                continue;
+            }
+
+            if (MemberLookup.HasMatchingMethodForSymbolicClrInterface(structSymbol, openMethod, symbolicArgs))
+            {
+                continue;
+            }
+
+            Diagnostics.ReportInterfaceMethodNotImplemented(
+                syntax.Identifier.Location,
+                structSymbol.Name,
+                clrIface.FullName ?? clrIface.Name,
+                FormatClrMethodSignature(openMethod));
+        }
+
+        foreach (var openProp in openDefinition.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            var implProp = MemberLookup.FindMatchingPropertyForSymbolicClrInterface(structSymbol, openProp, symbolicArgs);
+            if (implProp == null)
+            {
+                Diagnostics.ReportInterfaceMethodNotImplemented(
+                    syntax.Identifier.Location,
+                    structSymbol.Name,
+                    clrIface.FullName ?? clrIface.Name,
+                    openProp.Name);
+                continue;
+            }
+
+            if (openProp.GetMethod != null && !implProp.HasGetter)
+            {
+                Diagnostics.ReportInterfaceMethodNotImplemented(
+                    syntax.Identifier.Location,
+                    structSymbol.Name,
+                    clrIface.FullName ?? clrIface.Name,
+                    openProp.Name + " (getter)");
+            }
+
+            if (openProp.SetMethod != null && !implProp.HasSetter)
+            {
+                Diagnostics.ReportInterfaceMethodNotImplemented(
+                    syntax.Identifier.Location,
+                    structSymbol.Name,
+                    clrIface.FullName ?? clrIface.Name,
+                    openProp.Name + " (setter)");
             }
         }
     }
