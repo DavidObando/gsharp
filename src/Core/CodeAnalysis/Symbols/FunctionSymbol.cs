@@ -303,6 +303,20 @@ public sealed class FunctionSymbol : Symbol
     /// </summary>
     public PInvokeMetadata PInvokeMetadata { get; set; }
 
+    /// <summary>
+    /// Gets or sets the CLR interface slot this method explicitly implements via
+    /// a covariant-return interface bridge (issue #985). Two same-name,
+    /// same-parameter methods that differ only by return type and satisfy two
+    /// DIFFERENT interface slots — e.g. the non-generic
+    /// <c>IEnumerable.GetEnumerator()</c> alongside the generic
+    /// <c>IEnumerable&lt;T&gt;.GetEnumerator()</c> — form a bridge. This carries
+    /// the CLR interface method the emitter must bind to with an explicit
+    /// <c>MethodImpl</c> row. A private bridge method cannot implicitly
+    /// implement an interface slot, so the explicit row is required for the
+    /// resulting type to load. Defaults to <c>null</c> for ordinary methods.
+    /// </summary>
+    public System.Reflection.MethodInfo ExplicitInterfaceSlot { get; set; }
+
     /// <summary>Gets a value indicating whether this function is a P/Invoke stub (ADR-0086).</summary>
     public bool IsPInvoke => PInvokeMetadata != null;
 
