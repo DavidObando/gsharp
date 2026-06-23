@@ -672,6 +672,16 @@ public sealed class Binder
             binder.declarations.BindStructDeclarationBody(structSyntax, owningPackage, structSymbol);
         }
 
+        // Issue #973: now that every class shell has had its base clause bound
+        // and its base class installed, screen the resolved base relation for
+        // transitive inheritance cycles (e.g. `class B : C` / `class C : B`).
+        // The two-phase split declares all type-name shells before any base
+        // clause is bound — which is what makes legitimate forward references
+        // work — so such cycles can no longer be rejected by declaration order
+        // and must be detected explicitly here.
+        binder.declarations.DetectClassInheritanceCycles(
+            declaredStructs.Where(d => d.Symbol.IsClass).Select(d => d.Symbol));
+
         foreach (var (ifaceSyntax, ifaceSymbol) in declaredInterfaces)
         {
             var owningPackage = packageByTree[ifaceSyntax.SyntaxTree];

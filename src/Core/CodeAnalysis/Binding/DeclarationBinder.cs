@@ -349,6 +349,100 @@ internal sealed class DeclarationBinder
     }
 
     /// <summary>
+    /// Issue #973: detects transitive base-class inheritance cycles among the
+    /// supplied class symbols and reports a diagnostic for each one. Before the
+    /// two-phase declaration split (#973) a base clause could only resolve a
+    /// type declared earlier in source, so a mutual cycle such as
+    /// <c>class B : C</c> / <c>class C : B</c> was implicitly rejected because
+    /// the forward reference failed to resolve. Now that all type-name shells
+    /// are declared before any base clause is bound — which is exactly what
+    /// makes legitimate forward references work — the cycle resolves cleanly
+    /// and must be caught here, after every base class is installed via
+    /// <see cref="StructSymbol.SetBaseClass"/>. Each <see cref="StructSymbol"/>
+    /// has at most one user base class, so the base relation forms a functional
+    /// graph; this walks every node's chain and, on finding a back-edge into the
+    /// current path, reports the cycle and clears the offending base link so the
+    /// later base-chain walks in <see cref="StructSymbol"/> and the emitter do
+    /// not loop forever. Direct self-inheritance (<c>class A : A</c>) never
+    /// reaches here because it is rejected — and its base left unset — in the
+    /// base-clause loop.
+    /// </summary>
+    internal void DetectClassInheritanceCycles(IEnumerable<StructSymbol> classSymbols)
+    {
+        var acyclic = new HashSet<StructSymbol>();
+        foreach (var start in classSymbols)
+        {
+            if (start.BaseClass == null || acyclic.Contains(start))
+            {
+                continue;
+            }
+
+            var path = new List<StructSymbol>();
+            var onPath = new HashSet<StructSymbol>();
+            var current = start;
+            while (current != null)
+            {
+                if (onPath.Contains(current))
+                {
+                    var baseLocation = GetBaseClauseLocation(current);
+                    Diagnostics.ReportClassInheritanceCycle(baseLocation, current.Name);
+
+                    // Break the back-edge so subsequent base-chain walks (member
+                    // lookup, the emitter, etc.) terminate. Binding already
+                    // failed, so the program will not be emitted.
+                    current.SetBaseClass(null);
+                    break;
+                }
+
+                if (acyclic.Contains(current))
+                {
+                    break;
+                }
+
+                path.Add(current);
+                onPath.Add(current);
+                current = current.BaseClass;
+            }
+
+            foreach (var node in path)
+            {
+                acyclic.Add(node);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #973: returns the text location of a class declaration's base-type
+    /// clause (the first base/interface identifier), falling back to the type
+    /// identifier when the base clause carries no usable location. Used to
+    /// anchor inheritance-cycle diagnostics.
+    /// </summary>
+    private static TextLocation GetBaseClauseLocation(StructSymbol classSymbol)
+    {
+        var declaration = classSymbol.Declaration;
+        if (declaration == null)
+        {
+            return default;
+        }
+
+        if (declaration.BaseTypeClauses.Count > 0)
+        {
+            var location = declaration.BaseTypeClauses[0].Identifier?.Location;
+            if (location != null)
+            {
+                return location.Value;
+            }
+        }
+
+        if (declaration.BaseTypeIdentifier != null)
+        {
+            return declaration.BaseTypeIdentifier.Location;
+        }
+
+        return declaration.Identifier.Location;
+    }
+
+    /// <summary>
     /// Issue #973 (phase 1): declares the struct/class type-name shell and
     /// registers it in scope BEFORE any member body is bound, so that field,
     /// parameter, and base-clause types may forward-reference a user type

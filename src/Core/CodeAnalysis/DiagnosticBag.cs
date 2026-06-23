@@ -1290,6 +1290,23 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0378", $"Class '{typeName}' cannot inherit from itself.");
     }
 
+    /// <summary>
+    /// Issue #973: reports a class that participates in a transitive base-class
+    /// inheritance cycle (e.g. <c>class B : C</c> together with
+    /// <c>class C : B</c>). The two-phase declaration model (#973) declares all
+    /// type-name shells before binding any base clause, so such mutually
+    /// forward-referencing cycles can no longer be screened out by declaration
+    /// order and must be detected explicitly once every base class is resolved.
+    /// Direct self-inheritance (<c>class A : A</c>) is reported separately by
+    /// <see cref="ReportClassInheritsFromItself"/>.
+    /// </summary>
+    /// <param name="location">The text location of the base-type clause.</param>
+    /// <param name="typeName">The declaring type name.</param>
+    public void ReportClassInheritanceCycle(TextLocation location, string typeName)
+    {
+        Report(location, "GS0381", $"Class '{typeName}' is part of an inheritance cycle.");
+    }
+
     /// <summary>Reports base-constructor arguments (<c>: Base(args)</c>) on a class that declares no base class (issue #306).</summary>
     /// <param name="location">The text location of the base-constructor argument list.</param>
     public void ReportBaseConstructorArgumentsWithoutBase(TextLocation location)
