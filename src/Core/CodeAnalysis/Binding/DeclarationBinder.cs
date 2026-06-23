@@ -4358,7 +4358,7 @@ internal sealed class DeclarationBinder
 
     private static bool SignaturesMatch(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType, RefKind derivedReturnRefKind)
     {
-        if (baseMethod.Type != derivedReturnType)
+        if (!TypeSignaturesEquivalent(baseMethod.Type, derivedReturnType))
         {
             return false;
         }
@@ -4378,7 +4378,7 @@ internal sealed class DeclarationBinder
 
         for (var i = 0; i < derivedParams.Length; i++)
         {
-            if (baseParams[i].Type != derivedParams[i].Type)
+            if (!TypeSignaturesEquivalent(baseParams[i].Type, derivedParams[i].Type))
             {
                 return false;
             }
@@ -4404,7 +4404,7 @@ internal sealed class DeclarationBinder
     /// </summary>
     private static int FindRefKindMismatchIndex(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType)
     {
-        if (baseMethod.Type != derivedReturnType)
+        if (!TypeSignaturesEquivalent(baseMethod.Type, derivedReturnType))
         {
             return -1;
         }
@@ -4417,7 +4417,7 @@ internal sealed class DeclarationBinder
 
         for (var i = 0; i < derivedParams.Length; i++)
         {
-            if (baseParams[i].Type != derivedParams[i].Type)
+            if (!TypeSignaturesEquivalent(baseParams[i].Type, derivedParams[i].Type))
             {
                 return -1;
             }
@@ -4436,6 +4436,122 @@ internal sealed class DeclarationBinder
 
     private static ImmutableArray<ParameterSymbol> GetCallableParameters(FunctionSymbol method)
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
+
+    /// <summary>
+    /// Issue #974: structural equivalence used by override / interface-
+    /// implementation signature matching. Constructed generic types are not
+    /// interned (<see cref="ImportedTypeSymbol.GetConstructed"/> and
+    /// <see cref="InterfaceSymbol.Construct"/> can yield fresh instances), so a
+    /// raw reference comparison wrongly rejects, for example, the class method
+    /// <c>func Iter() IEnumerator[T]</c> against the interface requirement
+    /// <c>ISeq[T].Iter() IEnumerator[T]</c> once the interface's type
+    /// parameters have been substituted with the implementing type's
+    /// arguments. Reference identity is honoured first (covering plain type
+    /// parameters, primitives and cached imported types); constructed generics
+    /// are then compared by definition and ordered type arguments, recursing
+    /// through slice / array / nullable wrappers. The comparison stays strict —
+    /// distinct type arguments (e.g. <c>IEnumerator[int32]</c> vs
+    /// <c>IEnumerator[T]</c>) are not equated — so genuinely mismatched
+    /// signatures are still rejected with GS0187.
+    /// </summary>
+    private static bool TypeSignaturesEquivalent(TypeSymbol a, TypeSymbol b)
+    {
+        if (ReferenceEquals(a, b))
+        {
+            return true;
+        }
+
+        if (a == null || b == null)
+        {
+            return false;
+        }
+
+        if (a is StructSymbol sa && b is StructSymbol sb)
+        {
+            return ReferenceEquals(sa.Definition, sb.Definition)
+                && TypeArgumentsEquivalent(sa.TypeArguments, sb.TypeArguments);
+        }
+
+        if (a is InterfaceSymbol ia && b is InterfaceSymbol ib)
+        {
+            return ReferenceEquals(ia.Definition, ib.Definition)
+                && TypeArgumentsEquivalent(ia.TypeArguments, ib.TypeArguments);
+        }
+
+        if (a is ImportedTypeSymbol pa && b is ImportedTypeSymbol pb)
+        {
+            // Constructed imported generics carrying symbolic arguments (e.g.
+            // `IEnumerator[T]`) are compared by open definition and ordered
+            // arguments so an unbound type parameter compares by identity
+            // rather than by its erased `object` CLR projection.
+            if (pa.OpenDefinition != null
+                && pb.OpenDefinition != null
+                && pa.OpenDefinition == pb.OpenDefinition
+                && TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments))
+            {
+                return true;
+            }
+
+            // Otherwise (one or both sides expressed as a plain closed CLR
+            // type, e.g. a fully concrete `IEnumerator[int32]`) fall back to a
+            // closed-type comparison. This is only sound when neither side
+            // carries an unbound type parameter, whose CLR shape is erased to
+            // `object` and would otherwise equate distinct constructions.
+            if (!TypeSymbol.ContainsTypeParameter(pa) && !TypeSymbol.ContainsTypeParameter(pb))
+            {
+                return pa.ClrType != null
+                    && pb.ClrType != null
+                    && ClrTypeUtilities.AreSame(pa.ClrType, pb.ClrType);
+            }
+
+            return false;
+        }
+
+        if (a is SliceTypeSymbol sla && b is SliceTypeSymbol slb)
+        {
+            return TypeSignaturesEquivalent(sla.ElementType, slb.ElementType);
+        }
+
+        if (a is ArrayTypeSymbol ara && b is ArrayTypeSymbol arb)
+        {
+            return ara.Length == arb.Length
+                && TypeSignaturesEquivalent(ara.ElementType, arb.ElementType);
+        }
+
+        if (a is NullableTypeSymbol na && b is NullableTypeSymbol nb)
+        {
+            return TypeSignaturesEquivalent(na.UnderlyingType, nb.UnderlyingType);
+        }
+
+        // Leaf fallback for non-generic types that are not reference-interned
+        // (e.g. a primitive supplied as a concrete type argument such as the
+        // `int32` in `ISeq[int32]`). Type parameters keep an absent ClrType so
+        // distinct parameters are never wrongly equated here.
+        return a.ClrType != null && b.ClrType != null && a.ClrType == b.ClrType;
+    }
+
+    private static bool TypeArgumentsEquivalent(ImmutableArray<TypeSymbol> a, ImmutableArray<TypeSymbol> b)
+    {
+        if (a.IsDefaultOrEmpty && b.IsDefaultOrEmpty)
+        {
+            return true;
+        }
+
+        if (a.IsDefaultOrEmpty || b.IsDefaultOrEmpty || a.Length != b.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < a.Length; i++)
+        {
+            if (!TypeSignaturesEquivalent(a[i], b[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Issue #490 (ADR-0060 follow-up): validates a function's optional <c>ref</c> return modifier
