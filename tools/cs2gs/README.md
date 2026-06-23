@@ -137,7 +137,7 @@ details.
 | --- | --- | --- | --- | --- |
 | `corpus/L1-Console` | PASS | PASS | PASS | PASS |
 | `corpus/L2-Library` | PASS | PASS | PASS | PASS |
-| `corpus/L3-Library` | PASS | FAIL (#TBD-1) | skip | skip |
+| `corpus/L3-Library` | PASS | FAIL (#985) | skip | skip |
 | `corpus/L4-Console` | PASS | PASS | PASS | PASS |
 | `corpus/L5-Console` | PASS | PASS | PASS | PASS |
 
@@ -145,12 +145,12 @@ L1, L2, L4, and L5 migrate fully green end-to-end. L2 went green when #973/#974 
 fixed. L4 emits the **canonical** forms for an interpolated `: base(...)` argument,
 a `struct` interface clause, and an inline BCL `out var x` now that #975/#976/#977
 are fixed. L3 translates in full but is blocked at **compile** by a residual gap
-(#TBD-1: `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by
+(#985: `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by
 return type — GS0264 + GS0187). L3's `Advanced.cs` translates and compiles
 standalone. L5 (inheritance/polymorphism, `is`/`switch` pattern matching, a
 `yield return` iterator → `sequence[T]`, generic constraints) reaches **full
 parity** by using only the canonical/compiling forms, and surfaces the next batch
-of gaps (#TBD-2…#TBD-10) — captured as verified triage records (the constructs with
+of gaps (#986…#994) — captured as verified triage records (the constructs with
 no canonical form, or that ICE/mis-compile, are held out of L5). As gaps are fixed
 the frontier advances automatically — #938–#944 moved L3 to `translate PASS`, and
 #973–#977 took L2 green and let L4 use the canonical forms.
@@ -171,21 +171,21 @@ the frontier advances automatically — #938–#944 moved L3 to `translate PASS`
 | [#975](https://github.com/DavidObando/gsharp/issues/975) | Interpolated string in a `: base(...)` constructor-arg position — emit ICE | GS9998 | resolved (emitted directly) |
 | [#976](https://github.com/DavidObando/gsharp/issues/976) | A `struct` cannot declare a base / interface clause (`struct S : I {…}`) | GS0005 | resolved (interface clause parses; class base → GS0382) |
 | [#977](https://github.com/DavidObando/gsharp/issues/977) | BCL method with an inline `out var x` declaration fails overload resolution | GS0159 | resolved (inline `out var` binds) |
-| #TBD-1 | Implementing `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by return type | GS0264 + GS0187 | open (blocks L3-`Generics`) |
-| #TBD-2 | `base.Method()` virtual base-class call has no canonical G# form | GS0157 / GS0338 | open (translation-unsupported) |
-| #TBD-3 | An `abstract` (no-body) method on an `open class` crashes the emitter | GS9998 (NRE) | open |
-| #TBD-4 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | open (translation-unsupported) |
-| #TBD-5 | A generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | open |
-| #TBD-6 | A user reference-type iterator (`sequence[UserClass]`) crashes the emitter | GS9998 | open |
-| #TBD-7 | A `when` guard on a `switch` arm won't parse | GS0005 | open (translation-unsupported) |
-| #TBD-8 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | open (translation-unsupported) |
-| #TBD-9 | An `is`/`case` type pattern **with** a binder (`x is T t`) leaves the binder unbound | GS0125 | open |
-| #TBD-10 | `yield break` has no canonical G# form | GS0005 | open (translation-unsupported) |
+| #985 | Implementing `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by return type | GS0264 + GS0187 | open (blocks L3-`Generics`) |
+| #986 | `base.Method()` virtual base-class call has no canonical G# form | GS0157 / GS0338 | open (translation-unsupported) |
+| #987 | An `abstract` (no-body) method on an `open class` crashes the emitter | GS9998 (NRE) | open |
+| #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | open (translation-unsupported) |
+| #989 | A generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | open |
+| #990 | A user reference-type iterator (`sequence[UserClass]`) crashes the emitter | GS9998 | open |
+| #991 | A `when` guard on a `switch` arm won't parse | GS0005 | open (translation-unsupported) |
+| #992 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | open (translation-unsupported) |
+| #993 | An `is`/`case` type pattern **with** a binder (`x is T t`) leaves the binder unbound | GS0125 | open |
+| #994 | `yield break` has no canonical G# form | GS0005 | open (translation-unsupported) |
 
 Gaps #975/#976/#977 — discovered by L4 — are now **resolved**, so the translator
 emits the canonical forms directly: the interpolated `: base("…$n…")` argument, the
 `struct Money(Cents int32) : IEquatable[Money]` interface clause, and the inline
-BCL `out var x`. The residual L3 gap and the L5 batch (#TBD-2…#TBD-10) are each a
+BCL `out var x`. The residual L3 gap and the L5 batch (#986…#994) are each a
 verified minimal repro (with a contrasting passing control) documented in
 ADR-0115 §G for the compiler backlog. L5 also drove two **translator faithfulness
 fixes** (no compiler change): an `int` literal implicitly promoted to a `double`

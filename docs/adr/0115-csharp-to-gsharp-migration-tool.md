@@ -343,11 +343,11 @@ A C# local declaration with **no initializer** (`int existing;`, typically a pre
 
 #### B.33 `switch` statement over patterns → G# `switch` block — sample `PatternSwitch.gs`
 
-A C# `switch` **statement** maps to the canonical G# `switch subj { case <pat> { … } default { … } }` block form (sample `PatternSwitch.gs`): each `case` section's labels become a `case <pattern>` arm whose body is the section's statements wrapped in a block, a type pattern `case T x:` maps to `case x is T`, and the per-section `break;` (required in C#) is **dropped** (G# arms do not fall through). The `default:` section maps to a `default { … }` arm. A `when` guard on a case has **no** G# spelling (§G #TBD-7) and a value-returning `switch` statement is emitted as a `switch` **expression** instead (the statement form is not exhaustiveness-checked for value returns), so the translator reserves the block form for void-bodied dispatch. Reuses the same pattern set as the §B switch-expression mapping (type/relational patterns).
+A C# `switch` **statement** maps to the canonical G# `switch subj { case <pat> { … } default { … } }` block form (sample `PatternSwitch.gs`): each `case` section's labels become a `case <pattern>` arm whose body is the section's statements wrapped in a block, a type pattern `case T x:` maps to `case x is T`, and the per-section `break;` (required in C#) is **dropped** (G# arms do not fall through). The `default:` section maps to a `default { … }` arm. A `when` guard on a case has **no** G# spelling (§G #991) and a value-returning `switch` statement is emitted as a `switch` **expression** instead (the statement form is not exhaustiveness-checked for value returns), so the translator reserves the block form for void-bodied dispatch. Reuses the same pattern set as the §B switch-expression mapping (type/relational patterns).
 
 #### B.34 Iterator (`yield return`) → `sequence[T]` generator — sample `TupleSequenceIterators.gs`
 
-A C# iterator method (a body containing `yield return`) returning `IEnumerable<T>`/`IEnumerator<T>` maps to a G# generator whose **return type is rewritten to `sequence[T]`** (the element type `T`), with each `yield return expr;` emitted as a bare `yield expr` (sample `TupleSequenceIterators.gs`). The `IEnumerable<T>` wrapper is **not** carried through — `sequence[T]` is the canonical G# enumeration surface and is directly `for x in …`-iterable. `yield break;` has no G# spelling (§G #TBD-10), and a **user reference-type** element (`sequence[UserClass]`) currently crashes the emitter (§G #TBD-6), so the canonical iterator yields BCL element types (e.g. `string`).
+A C# iterator method (a body containing `yield return`) returning `IEnumerable<T>`/`IEnumerator<T>` maps to a G# generator whose **return type is rewritten to `sequence[T]`** (the element type `T`), with each `yield return expr;` emitted as a bare `yield expr` (sample `TupleSequenceIterators.gs`). The `IEnumerable<T>` wrapper is **not** carried through — `sequence[T]` is the canonical G# enumeration surface and is directly `for x in …`-iterable. `yield break;` has no G# spelling (§G #994), and a **user reference-type** element (`sequence[UserClass]`) currently crashes the emitter (§G #990), so the canonical iterator yields BCL element types (e.g. `string`).
 
 > **Numeric literal promotion at a converted-type site (§B.12 note).** C# applies
 > an implicit `int`→`double`/`float` conversion when an integer literal is passed
@@ -512,9 +512,9 @@ to a single fingerprinted entry that maps to a filed compiler issue. Final matri
 | --- | --- | --- | --- | --- | --- |
 | `corpus/L1-Console` | PASS | PASS | PASS | PASS | — (fully green E2E) |
 | `corpus/L2-Library` | PASS | PASS | PASS | PASS | — (#973 resolved → fully green E2E) |
-| `corpus/L3-Library` | PASS | FAIL | skip | skip | #TBD-1 (`IEnumerable[T]` needs dual `GetEnumerator` overloads → GS0264 + GS0187); `Advanced.gs` compiles standalone |
+| `corpus/L3-Library` | PASS | FAIL | skip | skip | #985 (`IEnumerable[T]` needs dual `GetEnumerator` overloads → GS0264 + GS0187); `Advanced.gs` compiles standalone |
 | `corpus/L4-Console` | PASS | PASS | PASS | PASS | — (fully green E2E; #975/#976/#977 resolved) |
-| `corpus/L5-Console` | PASS | PASS | PASS | PASS | — (fully green E2E; next gap batch #TBD-2…#TBD-10 surfaced and captured, see below) |
+| `corpus/L5-Console` | PASS | PASS | PASS | PASS | — (fully green E2E; next gap batch #986…#994 surfaced and captured, see below) |
 
 **Objective 1 (faithful migration)** is demonstrated by L1 + L2 + L4 + L5 reaching full
 parity (L2 went fully green when #973/#974 were fixed; L5 is fully green E2E) and by
@@ -543,16 +543,16 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #975 | interpolated string in a `: base(...)` constructor-arg position — emit ICE | GS9998 | resolved (translator emits `: base("…$n…")` directly) |
 | #976 | a `struct` cannot declare a base / interface clause (`struct S : I {…}` won't parse) | GS0005 | resolved (struct interface clause parses; class/struct base → GS0382) |
 | #977 | BCL method invoked with an inline `out var x` declaration fails overload resolution | GS0159 | resolved (inline `out var x` binds for BCL calls) |
-| #TBD-1 | implementing `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by return type (generic `IEnumerator[T]` + non-generic `IEnumerator`) | GS0264 + GS0187 | open (blocks L3-`Generics`; residual after #974) |
-| #TBD-2 | `base.Method()` virtual base-class call has no canonical G# form (`base[Base].M` is interface-only per ADR-0091) | GS0157 / GS0338 | open (translation-unsupported; L5 uses dynamic dispatch instead) |
-| #TBD-3 | an `abstract` (no-body) method on an `open class` → emitter crash | GS9998 (NRE) | open (L5 uses a virtual method with a body) |
-| #TBD-4 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | open (translation-unsupported; L5 has the caller supply the value) |
-| #TBD-5 | a generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | open (L5 uses a generic field instead) |
-| #TBD-6 | a user reference-type iterator (`sequence[UserClass]`) → emitter crash | GS9998 | open (L5 yields `string`; `sequence[int32]`/`sequence[string]` compile) |
-| #TBD-7 | a `when` guard on a `switch` statement/expression arm won't parse | GS0005 | open (translation-unsupported) |
-| #TBD-8 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | open (translation-unsupported) |
-| #TBD-9 | an `is`/`case` type pattern **with** a binder (`x is T t`) leaves the binder unbound | GS0125 | open (L5 uses the no-binder form `x is T`) |
-| #TBD-10 | `yield break` has no canonical G# form | GS0005 | open (translation-unsupported) |
+| #985 | implementing `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by return type (generic `IEnumerator[T]` + non-generic `IEnumerator`) | GS0264 + GS0187 | open (blocks L3-`Generics`; residual after #974) |
+| #986 | `base.Method()` virtual base-class call has no canonical G# form (`base[Base].M` is interface-only per ADR-0091) | GS0157 / GS0338 | open (translation-unsupported; L5 uses dynamic dispatch instead) |
+| #987 | an `abstract` (no-body) method on an `open class` → emitter crash | GS9998 (NRE) | open (L5 uses a virtual method with a body) |
+| #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | open (translation-unsupported; L5 has the caller supply the value) |
+| #989 | a generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | open (L5 uses a generic field instead) |
+| #990 | a user reference-type iterator (`sequence[UserClass]`) → emitter crash | GS9998 | open (L5 yields `string`; `sequence[int32]`/`sequence[string]` compile) |
+| #991 | a `when` guard on a `switch` statement/expression arm won't parse | GS0005 | open (translation-unsupported) |
+| #992 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | open (translation-unsupported) |
+| #993 | an `is`/`case` type pattern **with** a binder (`x is T t`) leaves the binder unbound | GS0125 | open (L5 uses the no-binder form `x is T`) |
+| #994 | `yield break` has no canonical G# form | GS0005 | open (translation-unsupported) |
 
 L3 not going fully green is the **intended** objective-2 outcome: the residual
 failure is a real compiler gap, captured and filed rather than worked around or
@@ -618,7 +618,7 @@ if d.TryGetValue("a", out var v) {
 Each was reproduced directly with `gsc` and contrasted with a passing control.
 The orchestrator files the issue and replaces the `#TBD-x` placeholder.
 
-**#TBD-1 — implementing `IEnumerable[T]` needs two `GetEnumerator` overloads → `GS0264` + `GS0187`.**
+**#985 — implementing `IEnumerable[T]` needs two `GetEnumerator` overloads → `GS0264` + `GS0187`.**
 A C# generic collection implements `IEnumerable<T>` by declaring the generic
 `IEnumerator<T> GetEnumerator()` and an explicit-interface non-generic
 `IEnumerator IEnumerable.GetEnumerator()`. G# has no explicit-interface-impl
@@ -670,7 +670,7 @@ class Circle(Radius float64) : Shape {
 }
 ```
 
-**#TBD-2 — `base.Method()` virtual base-class call has no canonical G# form.**
+**#986 — `base.Method()` virtual base-class call has no canonical G# form.**
 A C# `override` that chains to the base implementation via `base.Describe()` has no
 G# spelling: `base.M()` → `GS0157` "Cannot find type base"; the interface-only
 `base[Base].M()` form (ADR-0091) → `GS0338` (valid only for an interface default
@@ -696,7 +696,7 @@ class Circle() : Shape {
 }
 ```
 
-**#TBD-3 — an `abstract` (no-body) method on an `open class` → emitter crash (`GS9998`).**
+**#987 — an `abstract` (no-body) method on an `open class` → emitter crash (`GS9998`).**
 The translator lowers a C# `abstract` method to a no-body `open func F() T;`. The
 parser accepts it, but the emitter throws a `NullReferenceException` (`GS9998`).
 Classification: **compile-error / ICE**. L5 uses a `virtual` method with a default
@@ -715,7 +715,7 @@ open class Shape {
 }
 ```
 
-**#TBD-4 — `new T()` construction under a `new()` constraint has no canonical G# form.**
+**#988 — `new T()` construction under a `new()` constraint has no canonical G# form.**
 A C# generic that constructs its type parameter (`where T : new()`, `new T()`) has
 no G# spelling: `T()` → `GS0130`, `T{}` → `GS0157`, `new T()` → `GS0125`.
 Classification: **translation-unsupported**. L5 has the caller supply the value
@@ -732,7 +732,7 @@ class Factory[T new()] {
 class Box[T class](Value T) { }
 ```
 
-**#TBD-5 — a generic auto-property over `T` (`prop Value T`) cannot be member-accessed (`GS0158`).**
+**#989 — a generic auto-property over `T` (`prop Value T`) cannot be member-accessed (`GS0158`).**
 Declaring `prop Value T` on a generic class and then reading `box.Value` →
 `GS0158` "Cannot find member Value". Classification: **compile-error**. A generic
 **field** (`var Value T`) and a non-generic auto-property both work, so L5 uses a
@@ -750,7 +750,7 @@ class Box[T class] {
 class Box[T class](Value T) { }   // ... box.Value works
 ```
 
-**#TBD-6 — a user reference-type iterator (`sequence[UserClass]`) → emitter crash (`GS9998`).**
+**#990 — a user reference-type iterator (`sequence[UserClass]`) → emitter crash (`GS9998`).**
 A `yield`-generator whose element type is a user reference type
 (`func F() sequence[Shape]`) → `GS9998` "Conversion from '\<T>' to 'object' is not
 yet supported by the emitter". Both `sequence[int32]` and `sequence[string]` (a BCL
@@ -767,7 +767,7 @@ func shapes() sequence[Shape] { yield Shape() }
 func names() sequence[string] { yield "a" }
 ```
 
-**#TBD-7 — a `when` guard won't parse (`GS0005`).**
+**#991 — a `when` guard won't parse (`GS0005`).**
 A `when` guard on a `switch` statement or expression arm (`case > 0 when cond:`) →
 `GS0005` parse error. Classification: **translation-unsupported**. L5 omits guards.
 
@@ -786,7 +786,7 @@ let r = switch n {
 }
 ```
 
-**#TBD-8 — `and`/`or` binary patterns won't parse (`GS0005`).**
+**#992 — `and`/`or` binary patterns won't parse (`GS0005`).**
 A combined relational pattern (`case > 0 and < 10:`) → `GS0005`. Classification:
 **translation-unsupported**. L5 nests single relational patterns instead.
 
@@ -799,7 +799,7 @@ let r = switch n { case > 0 and < 10: "x" default: "y" }
 let r = switch n { case < 10: "x" default: "y" }
 ```
 
-**#TBD-9 — an `is`/`case` type pattern WITH a binder leaves the binder unbound (`GS0125`).**
+**#993 — an `is`/`case` type pattern WITH a binder leaves the binder unbound (`GS0125`).**
 `if x is Shape s` (a type pattern that binds `s`) → `GS0125` "Variable 's' doesn't
 exist" when `s` is used. Classification: **compile-error**. The no-binder form
 `if x is Shape` works, so L5 tests the type without binding.
@@ -813,7 +813,7 @@ if shape is Circle c { Console.WriteLine(c.Area().ToString()) }
 if shape is Circle { Console.WriteLine("a circle") }
 ```
 
-**#TBD-10 — `yield break` has no canonical G# form (`GS0005`).**
+**#994 — `yield break` has no canonical G# form (`GS0005`).**
 A `yield break;` in a generator → `GS0005`. Classification:
 **translation-unsupported**. L5's iterator runs to natural completion.
 
