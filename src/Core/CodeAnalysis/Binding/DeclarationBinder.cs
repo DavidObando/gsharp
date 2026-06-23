@@ -2641,7 +2641,15 @@ internal sealed class DeclarationBinder
                     foreach (var candidate in implCandidates)
                     {
                         impl ??= candidate;
-                        if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind))
+                        var methodTypeParamMap = TryBuildMethodTypeParameterMap(imethod, candidate);
+                        if (methodTypeParamMap == null)
+                        {
+                            // Generic-arity mismatch: not a viable implementor
+                            // of this interface method overload (issue #1007).
+                            continue;
+                        }
+
+                        if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, methodTypeParamMap))
                         {
                             signatureMatch = candidate;
                             break;
@@ -3766,6 +3774,30 @@ internal sealed class DeclarationBinder
             var isPrivateInterfaceMethod = methodSyntax.AccessibilityModifier != null
                 && string.Equals(methodSyntax.AccessibilityModifier.Text, "private", System.StringComparison.Ordinal);
 
+            // Issue #1007 / ADR-0020: an interface method may declare its own
+            // generic type-parameter list (`func M[T](...) T`). Bind it first
+            // and seed it into the binding scope — merged with any enclosing
+            // interface type parameters — so the method's parameter types and
+            // return type (and, for default-bodied methods, the body) can
+            // reference `T`. The seeding is unwound at the end of each
+            // iteration so one method's type parameters never leak into the
+            // next or the surrounding interface, mirroring the class-method
+            // path.
+            var methodTypeParameters = BindTypeParameterList(methodSyntax.TypeParameterList);
+            var enclosingTypeParameters = binderCtx.CurrentTypeParameters;
+            if (!methodTypeParameters.IsDefaultOrEmpty)
+            {
+                binderCtx.CurrentTypeParameters = enclosingTypeParameters == null
+                    ? new Dictionary<string, TypeParameterSymbol>()
+                    : new Dictionary<string, TypeParameterSymbol>(enclosingTypeParameters);
+                foreach (var tp in methodTypeParameters)
+                {
+                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
+                }
+            }
+
+            try
+            {
             // ADR-0063: overloads are allowed on interfaces; the post-bind signature
             // check below detects duplicate signatures. Name collision with a
             // property/event member of the same name is still rejected (handled later
@@ -3844,6 +3876,7 @@ internal sealed class DeclarationBinder
                 receiverType: isStaticInterfaceMethod ? null : (TypeSymbol)interfaceSymbol);
             methodSymbol.ReturnRefKind = methodReturnRefKind;
             methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
+            methodSymbol.TypeParameters = methodTypeParameters;
             if (isStaticInterfaceMethod)
             {
                 methodSymbol.IsStatic = true;
@@ -3909,6 +3942,11 @@ internal sealed class DeclarationBinder
             {
                 seenNames.Add(methodName);
                 targetBuilder.Add(methodSymbol);
+            }
+            }
+            finally
+            {
+                binderCtx.CurrentTypeParameters = enclosingTypeParameters;
             }
         }
 
@@ -4704,8 +4742,26 @@ internal sealed class DeclarationBinder
         => SignaturesMatch(baseMethod, derivedParams, derivedReturnType, RefKind.None);
 
     private static bool SignaturesMatch(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType, RefKind derivedReturnRefKind)
+        => SignaturesMatch(baseMethod, derivedParams, derivedReturnType, derivedReturnRefKind, typeParamMap: null);
+
+    /// <summary>
+    /// Issue #1007: signature matching for interface satisfaction / override
+    /// resolution, with optional support for generic methods. When the base
+    /// (interface) method and the derived (implementing) method are both
+    /// generic with the same arity, <paramref name="typeParamMap"/> maps the
+    /// base method's type-parameter symbols onto the derived method's so that
+    /// the plain type-parameter references in the parameter / return types
+    /// compare equal positionally (the interface's <c>T</c> carries a distinct
+    /// <see cref="TypeParameterSymbol"/> instance from the class's <c>T</c>).
+    /// </summary>
+    private static bool SignaturesMatch(
+        FunctionSymbol baseMethod,
+        ImmutableArray<ParameterSymbol> derivedParams,
+        TypeSymbol derivedReturnType,
+        RefKind derivedReturnRefKind,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap)
     {
-        if (!TypeSignaturesEquivalent(baseMethod.Type, derivedReturnType))
+        if (!TypeSignaturesEquivalent(baseMethod.Type, derivedReturnType, typeParamMap))
         {
             return false;
         }
@@ -4725,7 +4781,7 @@ internal sealed class DeclarationBinder
 
         for (var i = 0; i < derivedParams.Length; i++)
         {
-            if (!TypeSignaturesEquivalent(baseParams[i].Type, derivedParams[i].Type))
+            if (!TypeSignaturesEquivalent(baseParams[i].Type, derivedParams[i].Type, typeParamMap))
             {
                 return false;
             }
@@ -4740,6 +4796,40 @@ internal sealed class DeclarationBinder
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #1007: builds the positional map from a generic interface
+    /// method's type-parameter symbols onto a candidate implementing method's
+    /// type-parameter symbols. Returns <c>null</c> when the candidate is not a
+    /// viable generic match (mismatched arity) so the caller treats it as no
+    /// match; returns an empty map when neither method is generic.
+    /// </summary>
+    private static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> TryBuildMethodTypeParameterMap(
+        FunctionSymbol baseMethod,
+        FunctionSymbol candidate)
+    {
+        var baseTps = baseMethod.TypeParameters;
+        var candTps = candidate.TypeParameters;
+        var baseArity = baseTps.IsDefaultOrEmpty ? 0 : baseTps.Length;
+        var candArity = candTps.IsDefaultOrEmpty ? 0 : candTps.Length;
+        if (baseArity != candArity)
+        {
+            return null;
+        }
+
+        if (baseArity == 0)
+        {
+            return System.Collections.Immutable.ImmutableDictionary<TypeParameterSymbol, TypeSymbol>.Empty;
+        }
+
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        for (var i = 0; i < baseArity; i++)
+        {
+            map[baseTps[i]] = candTps[i];
+        }
+
+        return map;
     }
 
     /// <summary>
@@ -4802,7 +4892,21 @@ internal sealed class DeclarationBinder
     /// signatures are still rejected with GS0187.
     /// </summary>
     private static bool TypeSignaturesEquivalent(TypeSymbol a, TypeSymbol b)
+        => TypeSignaturesEquivalent(a, b, typeParamMap: null);
+
+    private static bool TypeSignaturesEquivalent(
+        TypeSymbol a,
+        TypeSymbol b,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap)
     {
+        // Issue #1007: substitute a generic interface method's type parameter
+        // with the implementing method's positionally-corresponding type
+        // parameter before comparing, so `T_iface` and `T_class` match.
+        if (typeParamMap != null && a is TypeParameterSymbol tpa && typeParamMap.TryGetValue(tpa, out var mappedA))
+        {
+            a = mappedA;
+        }
+
         if (ReferenceEquals(a, b))
         {
             return true;
@@ -4816,13 +4920,13 @@ internal sealed class DeclarationBinder
         if (a is StructSymbol sa && b is StructSymbol sb)
         {
             return ReferenceEquals(sa.Definition, sb.Definition)
-                && TypeArgumentsEquivalent(sa.TypeArguments, sb.TypeArguments);
+                && TypeArgumentsEquivalent(sa.TypeArguments, sb.TypeArguments, typeParamMap);
         }
 
         if (a is InterfaceSymbol ia && b is InterfaceSymbol ib)
         {
             return ReferenceEquals(ia.Definition, ib.Definition)
-                && TypeArgumentsEquivalent(ia.TypeArguments, ib.TypeArguments);
+                && TypeArgumentsEquivalent(ia.TypeArguments, ib.TypeArguments, typeParamMap);
         }
 
         if (a is ImportedTypeSymbol pa && b is ImportedTypeSymbol pb)
@@ -4834,7 +4938,7 @@ internal sealed class DeclarationBinder
             if (pa.OpenDefinition != null
                 && pb.OpenDefinition != null
                 && pa.OpenDefinition == pb.OpenDefinition
-                && TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments))
+                && TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments, typeParamMap))
             {
                 return true;
             }
@@ -4856,18 +4960,18 @@ internal sealed class DeclarationBinder
 
         if (a is SliceTypeSymbol sla && b is SliceTypeSymbol slb)
         {
-            return TypeSignaturesEquivalent(sla.ElementType, slb.ElementType);
+            return TypeSignaturesEquivalent(sla.ElementType, slb.ElementType, typeParamMap);
         }
 
         if (a is ArrayTypeSymbol ara && b is ArrayTypeSymbol arb)
         {
             return ara.Length == arb.Length
-                && TypeSignaturesEquivalent(ara.ElementType, arb.ElementType);
+                && TypeSignaturesEquivalent(ara.ElementType, arb.ElementType, typeParamMap);
         }
 
         if (a is NullableTypeSymbol na && b is NullableTypeSymbol nb)
         {
-            return TypeSignaturesEquivalent(na.UnderlyingType, nb.UnderlyingType);
+            return TypeSignaturesEquivalent(na.UnderlyingType, nb.UnderlyingType, typeParamMap);
         }
 
         // Leaf fallback for non-generic types that are not reference-interned
@@ -4878,6 +4982,12 @@ internal sealed class DeclarationBinder
     }
 
     private static bool TypeArgumentsEquivalent(ImmutableArray<TypeSymbol> a, ImmutableArray<TypeSymbol> b)
+        => TypeArgumentsEquivalent(a, b, typeParamMap: null);
+
+    private static bool TypeArgumentsEquivalent(
+        ImmutableArray<TypeSymbol> a,
+        ImmutableArray<TypeSymbol> b,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap)
     {
         if (a.IsDefaultOrEmpty && b.IsDefaultOrEmpty)
         {
@@ -4891,7 +5001,7 @@ internal sealed class DeclarationBinder
 
         for (var i = 0; i < a.Length; i++)
         {
-            if (!TypeSignaturesEquivalent(a[i], b[i]))
+            if (!TypeSignaturesEquivalent(a[i], b[i], typeParamMap))
             {
                 return false;
             }
