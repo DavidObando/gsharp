@@ -1322,6 +1322,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #1016: GS0392 — a range/slice expression (<c>a[lo..hi]</c>) was
+    /// applied to a value whose type cannot be sliced. Sliceable targets are
+    /// arrays/slices, <c>string</c>, span-like types with an <c>int Length</c>
+    /// (or <c>Count</c>) plus a <c>Slice(int, int)</c> method, and types with a
+    /// <c>System.Range</c> indexer.
+    /// </summary>
+    /// <param name="location">The text location of the range expression.</param>
+    /// <param name="type">The non-sliceable target type.</param>
+    public void ReportTypeNotSliceable(TextLocation location, TypeSymbol type)
+    {
+        Report(location, "GS0392", $"Type '{type.Name}' cannot be sliced with a range ('..') expression.");
+    }
+
+    /// <summary>
     /// Issue #1006: GS0391 — an <c>interface</c> named a class or struct in its
     /// base-interface clause (e.g. <c>interface B : SomeClass</c>). An
     /// interface may only extend other interfaces.

@@ -26,6 +26,7 @@ public class LexerTests
     [InlineData("||", SyntaxKind.PipePipeToken)]
     [InlineData(":=", SyntaxKind.ColonEqualsToken)]
     [InlineData("...", SyntaxKind.EllipsisToken)]
+    [InlineData("..", SyntaxKind.DotDotToken)]
     [InlineData("<-", SyntaxKind.LeftArrowToken)]
     public void Lexes_Operator(string text, SyntaxKind expected)
     {

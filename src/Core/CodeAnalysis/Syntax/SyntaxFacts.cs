@@ -324,6 +324,8 @@ public static class SyntaxFacts
                 return ",";
             case SyntaxKind.DotToken:
                 return ".";
+            case SyntaxKind.DotDotToken:
+                return "..";
             case SyntaxKind.EllipsisToken:
                 return "...";
             case SyntaxKind.HatToken:

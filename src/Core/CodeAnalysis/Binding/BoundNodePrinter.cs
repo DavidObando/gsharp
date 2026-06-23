@@ -226,6 +226,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ClrConstructorCallExpression:
                 WriteClrConstructorCallExpression((BoundClrConstructorCallExpression)node, writer);
                 break;
+            case BoundNodeKind.ClrStaticCallExpression:
+                WriteClrStaticCallExpression((BoundClrStaticCallExpression)node, writer);
+                break;
             case BoundNodeKind.ClrPropertyAccessExpression:
                 WriteClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node, writer);
                 break;
@@ -1052,6 +1055,16 @@ public static class BoundNodePrinter
 
         writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
         writer.WriteIdentifier(node.ElementType.Name);
+
+        // Issue #1016: runtime-length form prints as `[]T(length)`.
+        if (node.LengthExpression != null)
+        {
+            writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+            node.LengthExpression.WriteTo(writer);
+            writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+            return;
+        }
+
         writer.WritePunctuation(SyntaxKind.OpenBraceToken);
 
         var isFirst = true;
@@ -1237,6 +1250,30 @@ public static class BoundNodePrinter
     private static void WriteClrConstructorCallExpression(BoundClrConstructorCallExpression node, IndentedTextWriter writer)
     {
         writer.WriteIdentifier(node.ClrType.Name);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Arguments[i].WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteClrStaticCallExpression(BoundClrStaticCallExpression node, IndentedTextWriter writer)
+    {
+        if (node.Method.DeclaringType is not null)
+        {
+            writer.WriteIdentifier(node.Method.DeclaringType.Name);
+            writer.WritePunctuation(SyntaxKind.DotToken);
+        }
+
+        writer.WriteIdentifier(node.Method.Name);
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
         for (var i = 0; i < node.Arguments.Length; i++)
         {

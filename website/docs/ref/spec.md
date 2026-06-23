@@ -59,7 +59,7 @@ Several words are contextual rather than reserved. `data`, `inline`, `prop`, `ev
 
 ### Operators and punctuation
 
-Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, and `>>=`. The parser rewrites these as assignment with the corresponding binary operator. `++` and `--` are statement forms on identifiers. The null-coalescing compound assignment `??=` (ADR-0072) writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment--adr-0072) under *Statements*. `@` begins annotations on declarations.
+Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, and `>>=`. The parser rewrites these as assignment with the corresponding binary operator. `++` and `--` are statement forms on identifiers. The null-coalescing compound assignment `??=` (ADR-0072) writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment--adr-0072) under *Statements*. The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`); see [Range and slice expressions](#range-and-slice-expressions-issue-1016). `@` begins annotations on declarations.
 
 ### Integer literals
 
@@ -657,6 +657,31 @@ LambdaExpression = "(" Parameters? ")" "->" ( Expression | Block )
 
 Member access and indexing chain after primaries. `a.b`, `a?.b`, `a[i]`, `a?[i]`, `a.b(c)`, and generic call access forms are valid where the binder can resolve the target. Chains also apply to parenthesized and literal receivers — `(a + b).GetType()`, `(nums)[0]`, `("s").Length`, and `switch v { … }.ToString()` — with one exception: a bare numeric literal does not chain (`42.Member` is unsupported; write `(42).Member`). Assignment permits identifiers, indexed targets, field/property targets, and event `+=` or `-=` on accessors. Null-conditional forms (`?.`, `?[]`) are not allowed on the left-hand side of an assignment (see ADR-0073, diagnostic GS0301).
 
+### Range and slice expressions (issue #1016)
+
+A **range** uses the `..` operator inside an indexer to slice a contiguous portion of a sliceable value, mirroring C# range expressions. The lower and upper bounds are optional, giving four forms:
+
+```gsharp
+let xs = []int32{10, 20, 30, 40, 50}
+let a = xs[1..3]   // elements 1,2 -> {20, 30}
+let b = xs[..2]    // open lower bound -> {10, 20}
+let c = xs[2..]    // open upper bound -> {30, 40, 50}
+let d = xs[..]     // full copy -> {10, 20, 30, 40, 50}
+```
+
+The lower bound defaults to `0` and the upper bound defaults to the length of the target. Both bounds are `int32` offsets from the start; the result spans `[lower, upper)` (upper-exclusive), exactly like C#. The `..` operator is only recognized inside an index `[...]`; there is no standalone `System.Range`-producing expression yet.
+
+The binder resolves the target type to one of the following sliceable shapes and lowers the range to the corresponding BCL surface:
+
+| Target | Lowering |
+| --- | --- |
+| Array `[N]T` / slice `[]T` | a fresh `[]T` allocated with the computed length and filled via `System.Array.Copy(src, start, dst, 0, length)` (a copy, not an alias) |
+| `string` | `s.Substring(start, length)` |
+| Span-like value (`int Length`/`int Count` + `Slice(int, int)`, e.g. `Span[T]`, `ReadOnlySpan[T]`, `Memory[T]`, `ArraySegment[T]`) | `value.Slice(start, length)` |
+| A type exposing an indexer accepting `System.Range` | the `this[System.Range]` indexer is called directly with a constructed `System.Range` |
+
+Slicing a target that matches none of these shapes reports `GS0392`. The from-end index operator (`^n`, as in `a[..^1]`) is **not** supported because `^` is already the one's-complement / bitwise-XOR operator in G#; from-end indices are tracked as a follow-up. Standalone `System.Range` values (`let r = 1..3`) are likewise not yet supported.
+
 ### Composite literals
 
 Struct literals use `TypeName{Field: value}`. Data structs also support copy/update with `expr with { Field = value }`. Array and slice literals use `[N]T{...}` or `[]T{...}`. Map literals use `map[K,V]{key: value}`.
@@ -768,7 +793,8 @@ Assignment        = identifier "=" Assignment
                   | BinaryExpression .
 BinaryExpression  = PrefixExpression { BinaryOperator PrefixExpression } .
 PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" ) PrefixExpression | PostfixExpression .
-PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) Expression "]" } ( "with" "{" FieldEqualsList? "}" )? .
+PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) IndexArgument "]" } ( "with" "{" FieldEqualsList? "}" )? .
+IndexArgument     = Expression | Expression? ".." Expression? .  (* the range form slices; see "Range and slice expressions" *)
 PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | SwitchExpr | IfExpression | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
 (* Postfix chains apply to every PrimaryExpression except a bare numeric Literal: `42.Member` is not accepted; use `(42).Member`. See ADR-0054. *)
 Literal           = Number | String | InterpolatedString | "true" | "false" | "nil" | char .
@@ -1349,7 +1375,8 @@ BinaryOperator    ::= '*' | '/' | '%' | '<<' | '>>' | '&' | '&^'
                     | '||'
 PrefixExpression  ::= ('+' | '-' | '!' | '^' | '*' | '&' | '<-' | 'await') PrefixExpression | PostfixExpression
 PostfixExpression ::= PrimaryExpression PostfixOp*
-PostfixOp         ::= '!!' | ('.' | '?.') NameOrCall | ('[' | '?[') Expression ']'
+PostfixOp         ::= '!!' | ('.' | '?.') NameOrCall | ('[' | '?[') IndexArgument ']'
+IndexArgument     ::= Expression | Expression? '..' Expression?   (* range/slice form, issue #1016 *)
 NameOrCall        ::= identifier | Call | GenericCall
 PrimaryExpression ::= Literal | identifier
                     | Call | GenericCall | NullableTypeCall | ObjectCreation

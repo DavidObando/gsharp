@@ -1172,6 +1172,16 @@ public abstract class BoundTreeRewriter
     /// <returns>The rewritten node.</returns>
     protected virtual BoundExpression RewriteArrayCreationExpression(BoundArrayCreationExpression node)
     {
+        // Issue #1016: runtime-length form has no element initialisers; rewrite
+        // the length expression instead.
+        if (node.LengthExpression != null)
+        {
+            var newLength = RewriteExpression(node.LengthExpression);
+            return newLength == node.LengthExpression
+                ? node
+                : new BoundArrayCreationExpression(node.Syntax, node.ContainerType, newLength);
+        }
+
         ImmutableArray<BoundExpression>.Builder builder = null;
         for (var i = 0; i < node.Elements.Length; i++)
         {

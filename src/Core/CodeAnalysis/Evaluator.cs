@@ -642,6 +642,7 @@ public sealed class Evaluator
                 BoundNodeKind.ClrMethodGroupExpression => EvaluateClrMethodGroupExpression((BoundClrMethodGroupExpression)node),
                 BoundNodeKind.IndirectCallExpression => EvaluateIndirectCallExpression((BoundIndirectCallExpression)node),
                 BoundNodeKind.ClrConstructorCallExpression => EvaluateClrConstructorCallExpression((BoundClrConstructorCallExpression)node),
+                BoundNodeKind.ClrStaticCallExpression => EvaluateClrStaticCallExpression((BoundClrStaticCallExpression)node),
                 BoundNodeKind.ClrPropertyAccessExpression => EvaluateClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node),
                 BoundNodeKind.ClrPropertyAssignmentExpression => EvaluateClrPropertyAssignmentExpression((BoundClrPropertyAssignmentExpression)node),
                 BoundNodeKind.ClrEventSubscriptionExpression => EvaluateClrEventSubscriptionExpression((BoundClrEventSubscriptionExpression)node),
@@ -911,6 +912,14 @@ public sealed class Evaluator
     private object EvaluateArrayCreationExpression(BoundArrayCreationExpression node)
     {
         var clrType = node.ElementType.ClrType ?? typeof(object);
+
+        // Issue #1016: runtime-length form yields a zero-initialised array.
+        if (node.LengthExpression != null)
+        {
+            var length = System.Convert.ToInt32(EvaluateExpression(node.LengthExpression));
+            return System.Array.CreateInstance(clrType, length);
+        }
+
         var array = System.Array.CreateInstance(clrType, node.Elements.Length);
         for (var i = 0; i < node.Elements.Length; i++)
         {
@@ -1512,6 +1521,16 @@ public sealed class Evaluator
         var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
 
         var result = node.Constructor.Invoke(args);
+        WriteBackRefSlots(refSlots, args);
+        return result;
+    }
+
+    private object EvaluateClrStaticCallExpression(BoundClrStaticCallExpression node)
+    {
+        var args = new object[node.Arguments.Length];
+        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
+
+        var result = node.Method.Invoke(null, args);
         WriteBackRefSlots(refSlots, args);
         return result;
     }

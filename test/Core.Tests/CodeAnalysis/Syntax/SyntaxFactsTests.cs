@@ -24,6 +24,7 @@ public class SyntaxFactsTests
     [InlineData(SyntaxKind.PlusToken, "+")]
     [InlineData(SyntaxKind.FuncKeyword, "func")]
     [InlineData(SyntaxKind.ColonEqualsToken, ":=")]
+    [InlineData(SyntaxKind.DotDotToken, "..")]
     public void GetText_ReturnsExpected(SyntaxKind kind, string expected)
     {
         Assert.Equal(expected, SyntaxFacts.GetText(kind));

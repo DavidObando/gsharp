@@ -6039,7 +6039,7 @@ public class Parser
                 ExpressionSyntax index;
                 try
                 {
-                    index = ParseExpression();
+                    index = ParseIndexArgument();
                 }
                 finally
                 {
@@ -6058,7 +6058,40 @@ public class Parser
         return current;
     }
 
-    // Issue #507: lift a trailing index access out of an accessor chain so it can
+    // Issue #1016: parse the argument of an index expression, allowing a
+    // range/slice operand (`lo..hi`, `..hi`, `lo..`, `..`) in addition to an
+    // ordinary single index. The `..` token is only meaningful in this
+    // position, so range parsing is scoped here rather than to the general
+    // expression grammar (keeping `.` member-access and float literals
+    // unambiguous everywhere else).
+    private ExpressionSyntax ParseIndexArgument()
+    {
+        ExpressionSyntax lower = null;
+        if (Current.Kind != SyntaxKind.DotDotToken
+            && Current.Kind != SyntaxKind.CloseSquareBracketToken)
+        {
+            lower = ParseExpression();
+        }
+
+        if (Current.Kind != SyntaxKind.DotDotToken)
+        {
+            // No `..` — an ordinary index. `lower` is necessarily non-null here
+            // (an empty `[]` falls through to MatchToken's error recovery).
+            return lower ?? ParseExpression();
+        }
+
+        var dotDotToken = NextToken();
+
+        ExpressionSyntax upper = null;
+        if (Current.Kind != SyntaxKind.CloseSquareBracketToken
+            && Current.Kind != SyntaxKind.DotDotToken)
+        {
+            upper = ParseExpression();
+        }
+
+        return new RangeExpressionSyntax(syntaxTree, lower, dotDotToken, upper);
+    }
+
     // be reused as the LHS of an indexer assignment. Returns true and yields a
     // canonical `IndexExpression(<receiver-chain>, [k])` when the expression's
     // rightmost primary is an index access; returns false otherwise.
