@@ -34,7 +34,7 @@ public class Issue661NullableEnumAssertEqualEmitTests
             }
             """;
 
-        Assert.Equal("PASS\n", CompileAndRun(source));
+        Assert.Equal("PASS\n", CompileAndRun(source).Replace("\r\n", "\n"));
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class Issue661NullableEnumAssertEqualEmitTests
             }
             """;
 
-        Assert.Equal("PASS\n", CompileAndRun(source));
+        Assert.Equal("PASS\n", CompileAndRun(source).Replace("\r\n", "\n"));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class Issue661NullableEnumAssertEqualEmitTests
             }
             """;
 
-        Assert.Equal("PASS\n", CompileAndRun(source));
+        Assert.Equal("PASS\n", CompileAndRun(source).Replace("\r\n", "\n"));
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class Issue661NullableEnumAssertEqualEmitTests
             }
             """;
 
-        Assert.Equal("EQUAL\n", CompileAndRun(source));
+        Assert.Equal("EQUAL\n", CompileAndRun(source).Replace("\r\n", "\n"));
     }
 
     private static string CompileAndRun(string source)
