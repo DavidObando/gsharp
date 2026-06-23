@@ -444,6 +444,19 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
+        // Issue #990: a user-declared reference type (a `class`, modelled as
+        // a StructSymbol with IsClass == true) has no ClrType during emit
+        // because its TypeDef only exists in the assembly being emitted, so
+        // the CLR-backed rule above cannot fire. Such a reference still
+        // widens to `object` as a no-op (the slot already holds the
+        // reference). This unblocks generators whose element type is a user
+        // class: the synthesized non-generic `IEnumerator.Current` property
+        // converts the strongly-typed `<>2__current` field to `object`.
+        if (b?.ClrType.IsSameAs(typeof(object)) == true && a is StructSymbol userClass && userClass.IsClass)
+        {
+            return true;
+        }
+
         if (a is StructSymbol aClass && b is StructSymbol bClass && aClass.IsClass && bClass.IsClass)
         {
             for (var c = aClass; c != null; c = c.BaseClass)

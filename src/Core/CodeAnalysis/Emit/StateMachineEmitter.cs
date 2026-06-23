@@ -493,7 +493,15 @@ internal sealed class StateMachineEmitter
             // emit-time remap then translates the outer-method TP to the
             // class's TP. Closed element types continue through the CLR
             // `MakeGenericType` path unchanged.
-            var getEnumeratorType = ContainsOuterMethodTypeParameter(plan.ElementType, outerMethodTPs)
+            // Issue #990: a user-declared element type (`class` / `data
+            // struct`) has no ClrType, so the `MakeGenericType` path would
+            // erase to `IEnumerator<object>`. Route it through the same
+            // symbolic encoder so the GetEnumerator signature stays
+            // strongly typed as `IEnumerator<Shape>`.
+            var elementNeedsSymbolicEnumerator =
+                ContainsOuterMethodTypeParameter(plan.ElementType, outerMethodTPs)
+                || plan.ElementType?.ClrType == null;
+            var getEnumeratorType = elementNeedsSymbolicEnumerator
                 ? (TypeSymbol)ImportedTypeSymbol.GetConstructed(
                     typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(typeof(object)),
                     typeof(System.Collections.Generic.IEnumerator<>),

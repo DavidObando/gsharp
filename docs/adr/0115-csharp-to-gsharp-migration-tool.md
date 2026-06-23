@@ -347,7 +347,7 @@ A C# `switch` **statement** maps to the canonical G# `switch subj { case <pat> {
 
 #### B.34 Iterator (`yield return`) → `sequence[T]` generator — sample `TupleSequenceIterators.gs`
 
-A C# iterator method (a body containing `yield return`) returning `IEnumerable<T>`/`IEnumerator<T>` maps to a G# generator whose **return type is rewritten to `sequence[T]`** (the element type `T`), with each `yield return expr;` emitted as a bare `yield expr` (sample `TupleSequenceIterators.gs`). The `IEnumerable<T>` wrapper is **not** carried through — `sequence[T]` is the canonical G# enumeration surface and is directly `for x in …`-iterable. `yield break;` has no G# spelling (§G #994), and a **user reference-type** element (`sequence[UserClass]`) currently crashes the emitter (§G #990), so the canonical iterator yields BCL element types (e.g. `string`).
+A C# iterator method (a body containing `yield return`) returning `IEnumerable<T>`/`IEnumerator<T>` maps to a G# generator whose **return type is rewritten to `sequence[T]`** (the element type `T`), with each `yield return expr;` emitted as a bare `yield expr` (sample `TupleSequenceIterators.gs`). The `IEnumerable<T>` wrapper is **not** carried through — `sequence[T]` is the canonical G# enumeration surface and is directly `for x in …`-iterable. `yield break;` has no G# spelling (§G #994). A **user reference-type** element (`sequence[UserClass]`) is now fully supported (§G #990, resolved); user `data struct` elements work too.
 
 > **Numeric literal promotion at a converted-type site (§B.12 note).** C# applies
 > an implicit `int`→`double`/`float` conversion when an integer literal is passed
@@ -548,7 +548,7 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #987 | an `abstract` (no-body) method on an `open class` → emitter crash | GS9998 (NRE) | **resolved** (issue #987 — no-body `open func F() R;` emits a CLR `abstract virtual` slot; the declaring type becomes `TypeAttributes.Abstract`; new diagnostics GS0386 not-instantiable / GS0387 missing-override / GS0388 abstract-requires-open) |
 | #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | **resolved** (issue #988 — `[T new()]` declares a `new()` constraint and `T()` constructs the parameter, lowered to a reified `Activator.CreateInstance<T>()`; new diagnostic GS0389 when constructing without the constraint; GS0152 still guards bad type arguments) |
 | #989 | a generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | **resolved** (issue #989 — `StructSymbol` construction now carries the property table across with the property/indexer type substituted, exactly like fields; the emitter parents the external accessor call at the constructed `TypeSpec` and routes the auto-accessor backing-field token through the self-`TypeSpec` MemberRef so read/write round-trips and IL-verifies) |
-| #990 | a user reference-type iterator (`sequence[UserClass]`) → emitter crash | GS9998 | open (L5 yields `string`; `sequence[int32]`/`sequence[string]` compile) |
+| #990 | a user reference-type iterator (`sequence[UserClass]`) → emitter crash | GS9998 | **resolved** (user reference- and value-type element iterators emit, ilverify, and run) |
 | #991 | a `when` guard on a `switch` statement/expression arm won't parse | GS0005 | open (translation-unsupported) |
 | #992 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | open (translation-unsupported) |
 | #993 | an `is`/`case` type pattern **with** a binder (`x is T t`) leaves the binder unbound | GS0125 | open (L5 uses the no-binder form `x is T`) |
@@ -775,16 +775,21 @@ class Box[T class] {
 class Box[T class](Value T) { }   // ... box.Value works
 ```
 
-**#990 — a user reference-type iterator (`sequence[UserClass]`) → emitter crash (`GS9998`).**
+**#990 — a user reference-type iterator (`sequence[UserClass]`) → emitter crash (`GS9998`). RESOLVED.**
 A `yield`-generator whose element type is a user reference type
-(`func F() sequence[Shape]`) → `GS9998` "Conversion from '\<T>' to 'object' is not
-yet supported by the emitter". Both `sequence[int32]` and `sequence[string]` (a BCL
-reference type) compile. Classification: **compile-error / ICE**. L5's iterator
-yields `string` (the shape descriptions), not `Shape`.
+(`func F() sequence[Shape]`) previously emitted `GS9998` "Conversion from '\<T>' to
+'object' is not yet supported by the emitter". The root cause was twofold: (1) the
+synthesized non-generic `IEnumerator.Current` converts the strongly-typed
+`<>2__current` field to `object`, but `IsReferenceCompatible` did not recognise a
+user class (null `ClrType` during emit) as widening to `object`; (2) the SM class's
+`IEnumerable<T>`/`IEnumerator<T>` interface rows and `GetEnumerator` signature erased
+the user element type to `object` (`elementType.ClrType ?? typeof(object)`), producing
+generic-invariance-invalid IL. Both are now fixed; user reference- and value-type
+element iterators compile, ilverify, and run. L5 may now yield the user type directly.
 
 ```gs
-// repro — GS9998 emitter crash on a user-class element type:
-open class Shape { }
+// now compiles, ilverifies, and runs:
+open class Shape { func Tag() string { return "shape" } }
 func shapes() sequence[Shape] { yield Shape() }
 ```
 ```gs
