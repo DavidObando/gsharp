@@ -1901,6 +1901,29 @@ internal sealed class StatementBinder
                 break;
             case BoundDiscardPattern:
                 break;
+            case BoundBinaryPattern binaryPattern when binaryPattern.IsConjunction:
+                // Issue #992: `and` — both sub-patterns hold, so the union of
+                // their narrowings is sound.
+                {
+                    var left = TryClassifyPatternNarrowing(discriminant, binaryPattern.Left);
+                    var right = TryClassifyPatternNarrowing(discriminant, binaryPattern.Right);
+                    return MergeNarrowingFrames(left, right);
+                }
+
+            case BoundBinaryPattern binaryPattern:
+                // Issue #992: `or` — only narrowings proven by BOTH branches
+                // (same variable, same type) survive. This keeps the smart-cast
+                // sound: `x is Cat or x is Dog` narrows nothing.
+                {
+                    var left = TryClassifyPatternNarrowing(discriminant, binaryPattern.Left);
+                    var right = TryClassifyPatternNarrowing(discriminant, binaryPattern.Right);
+                    return IntersectNarrowingFrames(left, right);
+                }
+
+            case BoundNotPattern:
+                // Issue #992: `not P` tells us P did NOT match, which carries no
+                // positive narrowing.
+                break;
             case BoundRelationalPattern:
             case BoundPropertyPattern:
             case BoundListPattern:

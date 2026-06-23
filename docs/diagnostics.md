@@ -735,6 +735,22 @@ declare a `new()` constraint. A type **argument** that cannot satisfy the
 `new()` constraint at the instantiation site is reported separately as GS0152.
 Mirrors C# CS0304.
 
+## `and`/`or`/`not` pattern combinator diagnostic (GS0390)
+
+Issue #992: switch patterns may be combined with the contextual keywords `and`,
+`or`, and `not` (precedence: `not` > `and` > `or`; parentheses override). A type
+pattern that introduces a binding variable (`<ident> is T`) is not allowed under
+an `or` or `not` combinator, because the variable would not be definitely
+assigned when the arm runs (mirrors C# CS8780).
+
+| ID | Severity | Summary |
+| --- | --- | --- |
+| GS0390 | Error | A pattern variable (`{name}`) may not be declared under an `or` or `not` pattern; it would not be definitely assigned. Use `_` instead. |
+
+GS0390 fires when a binding type pattern appears under `or`/`not`. Use the
+discard `_` (e.g. `_ is Dog or _ is Cat`) or move the binding under `and` (or to
+the top level), where it is definitely assigned.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

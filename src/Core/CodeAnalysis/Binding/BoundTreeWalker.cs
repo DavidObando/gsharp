@@ -364,6 +364,12 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.ListPattern:
                 VisitListPattern((BoundListPattern)node);
                 break;
+            case BoundNodeKind.BinaryPattern:
+                VisitBinaryPattern((BoundBinaryPattern)node);
+                break;
+            case BoundNodeKind.NotPattern:
+                VisitNotPattern((BoundNotPattern)node);
+                break;
             default:
                 throw new InvalidOperationException(
                     $"BoundTreeWalker: unexpected pattern kind '{node.Kind}'.");
@@ -943,6 +949,17 @@ public abstract class BoundTreeWalker
         {
             VisitPattern(element);
         }
+    }
+
+    protected virtual void VisitBinaryPattern(BoundBinaryPattern node)
+    {
+        VisitPattern(node.Left);
+        VisitPattern(node.Right);
+    }
+
+    protected virtual void VisitNotPattern(BoundNotPattern node)
+    {
+        VisitPattern(node.Pattern);
     }
 
     // ----- Helpers -------------------------------------------------------

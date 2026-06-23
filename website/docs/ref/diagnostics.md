@@ -1269,6 +1269,26 @@ Cross-references:
   ADR-0115 §G (cs2gs migration mapping for C# `where T : new()` / `new T()`).
 
 
+## `and`/`or`/`not` pattern combinator diagnostic (GS0390)
+
+See issue #992. Switch patterns may be combined with the contextual keywords
+`and`, `or`, and `not` (precedence: `not` > `and` > `or`; parentheses override).
+A type pattern that introduces a binding variable (`<ident> is T`) is not allowed
+under an `or` or `not` combinator, because the variable would not be definitely
+assigned when the arm runs (mirrors C# CS8780).
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0390 | Error | `A pattern variable ('<name>') may not be declared under an 'or' or 'not' pattern; it would not be definitely assigned. Use '_' instead.` |
+
+Cause/fix:
+
+- **GS0390** — a binding type pattern (`d is Dog`) appears under `or` or `not`.
+  Replace the binding identifier with the discard `_` (e.g. `_ is Dog or _ is Cat`)
+  or restructure the pattern so the binding sits under `and` (or at the top level),
+  where it is definitely assigned.
+
+
 ## `@LibraryImport` P/Invoke diagnostics (GS0342–GS0345)
 
 See ADR-0092 (issue #758). G# accepts the modern

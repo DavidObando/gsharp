@@ -112,6 +112,34 @@ namespace Demo
     }
 
     /// <summary>
+    /// Issue #992: C# <c>and</c> / <c>or</c> / <c>not</c> pattern combinators are
+    /// translated to the canonical G# <c>and</c> / <c>or</c> / <c>not</c> forms.
+    /// </summary>
+    [Fact]
+    public void SwitchExpression_AndOrNotPatterns_EmittedAsCombinators()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public static class Shapes
+    {
+        public static string Kind(int n) => n switch
+        {
+            > 0 and < 10 => ""small-positive"",
+            < 0 or > 100 => ""extreme"",
+            not > 0 => ""nonpositive"",
+            _ => ""other"",
+        };
+    }
+}");
+
+        Assert.Contains("case > 0 and < 10:", printed);
+        Assert.Contains("case < 0 or > 100:", printed);
+        Assert.Contains("case not > 0:", printed);
+        Assert.DoesNotContain("has no canonical G# form", printed);
+    }
+
+    /// <summary>
     /// A C# iterator method (<c>yield return</c>) returning
     /// <c>IEnumerable&lt;string&gt;</c> is emitted with the return type rewritten
     /// to <c>sequence[string]</c> and a bare <c>yield expr</c> body

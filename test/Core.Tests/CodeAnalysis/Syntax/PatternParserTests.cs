@@ -107,4 +107,67 @@ public class PatternParserTests
         var expression = Assert.IsType<SwitchExpressionSyntax>(declaration.Initializer);
         return expression.Arms.First(a => !a.IsDefault);
     }
+
+    // Issue #992: `and` / `or` / `not` pattern combinators and parentheses.
+    [Fact]
+    public void SwitchExpression_AndPattern_ParsesAsBinaryPattern()
+    {
+        var arm = ParseFirstSwitchExpressionArm("let x = switch v { case > 0 and < 10: 1 default: 0 }");
+        var binary = Assert.IsType<BinaryPatternSyntax>(arm.Value);
+        Assert.Equal("and", binary.OperatorToken.Text);
+        Assert.Equal(SyntaxKind.RelationalPattern, binary.Left.Kind);
+        Assert.Equal(SyntaxKind.RelationalPattern, binary.Right.Kind);
+    }
+
+    [Fact]
+    public void SwitchExpression_OrPattern_ParsesAsBinaryPattern()
+    {
+        var arm = ParseFirstSwitchExpressionArm("let x = switch v { case < 0 or > 100: 1 default: 0 }");
+        var binary = Assert.IsType<BinaryPatternSyntax>(arm.Value);
+        Assert.Equal("or", binary.OperatorToken.Text);
+    }
+
+    [Fact]
+    public void SwitchExpression_NotPattern_ParsesAsNotPattern()
+    {
+        var arm = ParseFirstSwitchExpressionArm("let x = switch v { case not > 0: 1 default: 0 }");
+        var not = Assert.IsType<NotPatternSyntax>(arm.Value);
+        Assert.Equal("not", not.NotKeyword.Text);
+        Assert.Equal(SyntaxKind.RelationalPattern, not.Pattern.Kind);
+    }
+
+    // Precedence: `not` binds tightest, then `and`, then `or`. So
+    // `a or b and c` parses as `a or (b and c)`.
+    [Fact]
+    public void SwitchExpression_Precedence_AndBindsTighterThanOr()
+    {
+        var arm = ParseFirstSwitchExpressionArm("let x = switch v { case == 0 or > 5 and < 10: 1 default: 0 }");
+        var or = Assert.IsType<BinaryPatternSyntax>(arm.Value);
+        Assert.Equal("or", or.OperatorToken.Text);
+        Assert.Equal(SyntaxKind.RelationalPattern, or.Left.Kind);
+        var and = Assert.IsType<BinaryPatternSyntax>(or.Right);
+        Assert.Equal("and", and.OperatorToken.Text);
+    }
+
+    // `not a and b` parses as `(not a) and b`.
+    [Fact]
+    public void SwitchExpression_Precedence_NotBindsTighterThanAnd()
+    {
+        var arm = ParseFirstSwitchExpressionArm("let x = switch v { case not > 0 and < 10: 1 default: 0 }");
+        var and = Assert.IsType<BinaryPatternSyntax>(arm.Value);
+        Assert.Equal("and", and.OperatorToken.Text);
+        Assert.Equal(SyntaxKind.NotPattern, and.Left.Kind);
+        Assert.Equal(SyntaxKind.RelationalPattern, and.Right.Kind);
+    }
+
+    [Fact]
+    public void SwitchExpression_ParenthesizedPattern_OverridesPrecedence()
+    {
+        var arm = ParseFirstSwitchExpressionArm("let x = switch v { case (== 0 or == 1) and < 10: 1 default: 0 }");
+        var and = Assert.IsType<BinaryPatternSyntax>(arm.Value);
+        Assert.Equal("and", and.OperatorToken.Text);
+        var paren = Assert.IsType<ParenthesizedPatternSyntax>(and.Left);
+        var or = Assert.IsType<BinaryPatternSyntax>(paren.Pattern);
+        Assert.Equal("or", or.OperatorToken.Text);
+    }
 }

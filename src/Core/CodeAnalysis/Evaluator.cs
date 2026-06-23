@@ -2838,6 +2838,23 @@ public sealed class Evaluator
                 var relational = (BoundRelationalPattern)pattern;
                 var rhs = EvaluateExpression(relational.Value);
                 return EvaluateRelationalPattern(relational.Op.Kind, value, rhs);
+            case BoundNodeKind.BinaryPattern:
+                var binaryPattern = (BoundBinaryPattern)pattern;
+                if (binaryPattern.IsConjunction)
+                {
+                    // `and`: both must match; right evaluated only if left matched.
+                    return TryMatchPattern(binaryPattern.Left, value, outBindings)
+                        && TryMatchPattern(binaryPattern.Right, value, outBindings);
+                }
+
+                // `or`: short-circuit; right evaluated only if left failed.
+                return TryMatchPattern(binaryPattern.Left, value, outBindings)
+                    || TryMatchPattern(binaryPattern.Right, value, outBindings);
+            case BoundNodeKind.NotPattern:
+                // `not P` matches when P does not. Sub-pattern bindings under
+                // `not` are forbidden by the binder, so a throwaway bindings
+                // dictionary is sufficient and never observed on a match.
+                return !TryMatchPattern(((BoundNotPattern)pattern).Pattern, value, new Dictionary<VariableSymbol, object>());
             case BoundNodeKind.ListPattern:
                 if (value is not System.Array array)
                 {

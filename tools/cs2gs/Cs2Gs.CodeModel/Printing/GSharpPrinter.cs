@@ -527,6 +527,15 @@ public static class GSharpPrinter
             case DiscardPattern _:
                 return "_";
 
+            case BinaryPattern binary:
+                return $"{RenderPattern(binary.Left, indent)} {(binary.IsConjunction ? "and" : "or")} {RenderPattern(binary.Right, indent)}";
+
+            case NotPattern not:
+                return $"not {RenderPattern(not.Pattern, indent)}";
+
+            case ParenthesizedPattern paren:
+                return $"({RenderPattern(paren.Pattern, indent)})";
+
             default:
                 throw new ArgumentException($"Unsupported pattern: {pattern?.GetType().Name}");
         }

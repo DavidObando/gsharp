@@ -175,6 +175,72 @@ let label = switch v { case > 0 when v: ""x"" default: ""y"" }
         Assert.Contains(diagnostics, d => d.Message.Contains("Cannot convert type", System.StringComparison.Ordinal) && d.Message.Contains("'bool'", System.StringComparison.Ordinal));
     }
 
+    // Issue #992: `and` / `or` / `not` pattern combinators on switch-expression arms.
+    [Theory]
+    [InlineData("5", "small-positive")]
+    [InlineData("-5", "extreme")]
+    [InlineData("200", "extreme")]
+    [InlineData("50", "other")]
+    public void SwitchExpression_AndOrPatterns_Evaluate(string input, string expected)
+    {
+        var result = Evaluate($@"
+let v = {input}
+let label = switch v {{ case > 0 and < 10: ""small-positive"" case < 0 or > 100: ""extreme"" default: ""other"" }}
+label
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(expected, result.Value);
+    }
+
+    [Theory]
+    [InlineData("0", "A")]   // == 0
+    [InlineData("7", "A")]   // > 5 and < 10
+    [InlineData("3", "C")]
+    [InlineData("100", "C")] // > 5 but not < 10
+    public void SwitchExpression_CombinatorPrecedence_Evaluates(string input, string expected)
+    {
+        // `== 0 or > 5 and < 10` == `(== 0) or ((> 5) and (< 10))`.
+        var result = Evaluate($@"
+let v = {input}
+let label = switch v {{ case == 0 or > 5 and < 10: ""A"" default: ""C"" }}
+label
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(expected, result.Value);
+    }
+
+    [Theory]
+    [InlineData("-2", "nonpositive")]
+    [InlineData("0", "nonpositive")]
+    [InlineData("5", "positive")]
+    public void SwitchExpression_NotPattern_Evaluates(string input, string expected)
+    {
+        var result = Evaluate($@"
+let v = {input}
+let label = switch v {{ case not > 0: ""nonpositive"" default: ""positive"" }}
+label
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(expected, result.Value);
+    }
+
+    [Fact]
+    public void SwitchExpression_CombinedArm_DoesNotSatisfyExhaustiveness()
+    {
+        // Issue #992: a combined (and/or/not) pattern is treated conservatively
+        // by the exhaustiveness analyzer — it never acts as a total arm, so a
+        // value switch with only combined arms is still missing a default.
+        var diagnostics = Bind(@"
+let v = 1
+let label = switch v { case > 0 and < 10: ""x"" case < 0 or > 100: ""y"" }
+");
+
+        Assert.Contains(diagnostics, d => d.Message == "Switch expression must have a 'default' arm.");
+    }
+
     private static ImmutableArray<Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

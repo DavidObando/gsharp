@@ -690,7 +690,9 @@ default: "many"
 
 Patterns include list-like patterns, property patterns, type tests with `is`, wildcard `_`, relational patterns, and expression patterns.
 
-A pattern in a `switch` arm — in both the expression form and the statement form — may be followed by an optional `when <bool-expr>` guard (issue #991), mirroring C#. `when` is a contextual keyword: it introduces a guard only in this position and remains usable as an ordinary identifier everywhere else. An arm with a guard is selected only when **both** the pattern matches **and** the guard expression evaluates to `true`; otherwise control falls through to the next arm. The guard sees any pattern narrowing / smart-cast in effect for the arm (so the guard of `case x is T when …` observes the discriminator as `T`). A non-`bool` guard is rejected with the standard conversion diagnostic. Because a guarded arm can fail at run time, it never contributes to exhaustiveness: a guarded discard (`case _ when …`) does **not** act as a total/`default` arm, so a value-returning `switch` whose only catch-all is guarded still requires a reachable `default` arm (`GS0176`).
+Patterns may be combined with the **combinators** `and`, `or`, and `not` (issue #992), mirroring C#. `not P` matches when `P` does not; `P and Q` matches when both match (left-to-right, with `Q` evaluated only if `P` matched); `P or Q` matches when either matches (short-circuit). The combinators are contextual keywords usable in pattern position only and remain ordinary identifiers everywhere else. Precedence — matching C# — is `not` (tightest), then `and`, then `or`, so `a or b and c` parses as `a or (b and c)` and `not a and b` as `(not a) and b`; parentheses `( … )` override the default grouping. Combinators compose with every pattern kind, e.g. `case > 0 and < 10:`, `case < 0 or > 100:`, `case _ is Dog and { Name: "Rex" }:`. A type pattern that introduces a binding variable is **not** permitted under `or`/`not` — the variable would not be definitely assigned — and is rejected with `GS0390`; use the discard `_` instead. Smart-cast narrowing of the discriminator is applied under `and` (the union of the sub-patterns' narrowings) and, soundly, only under `or` when **both** branches prove the same narrowing; `not` contributes no positive narrowing. A combined pattern is treated conservatively by exhaustiveness analysis: it never acts as a total/`default` arm, so it cannot by itself make a value-returning `switch` exhaustive.
+
+A pattern in a `switch` arm — in both the expression form and the statement form — may be followed by an optional `when <bool-expr>` guard (issue #991), mirroring C#. `when` is a contextual keyword: it introduces a guard only in this position and remains usable as an ordinary identifier everywhere else. An arm with a guard is selected only when **both** the pattern matches **and** the guard expression evaluates to `true`; otherwise control falls through to the next arm. The guard applies to the whole arm after the (possibly combined) pattern matches, and sees any pattern narrowing / smart-cast in effect for the arm (so the guard of `case x is T when …` observes the discriminator as `T`). A non-`bool` guard is rejected with the standard conversion diagnostic. Because a guarded arm can fail at run time, it never contributes to exhaustiveness: a guarded discard (`case _ when …`) does **not** act as a total/`default` arm, so a value-returning `switch` whose only catch-all is guarded still requires a reachable `default` arm (`GS0176`).
 
 ```gsharp
 let description = switch value {
@@ -1292,7 +1294,13 @@ SwitchExpr        ::= 'switch' Expression '{' SwitchArm* '}'
 SwitchArm         ::= 'case' Pattern ('when' Expression)? (':' | '->') Expression | 'default' (':' | '->') Expression
                       (* '->' is the legacy ADR-0009 form. Per ADR-0074 (#714) ':' is the preferred separator; the legacy '->' form is still accepted but emits warning GS0302. *)
                       (* The optional 'when' guard (#991) selects the arm only when the pattern matches AND the guard is true; 'when' is a contextual keyword. *)
-Pattern           ::= '[' Pattern (',' Pattern)* ']'
+Pattern           ::= OrPattern
+                      (* Combinators (#992): 'not' binds tightest, then 'and', then 'or'; 'and'/'or'/'not' are contextual keywords. *)
+OrPattern         ::= AndPattern ('or' AndPattern)*
+AndPattern        ::= UnaryPattern ('and' UnaryPattern)*
+UnaryPattern      ::= 'not' UnaryPattern | PrimaryPattern
+PrimaryPattern    ::= '(' Pattern ')'
+                    | '[' Pattern (',' Pattern)* ']'
                     | '{' identifier ':' Pattern (',' identifier ':' Pattern)* '}'
                     | identifier 'is' TypeClause
                     | '_'                                  (* discard: identifier '_' not followed by '(' or '.' *)

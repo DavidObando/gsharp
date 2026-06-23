@@ -27,6 +27,7 @@ BangEqualsToken
 BangToken
 BaseInterfaceCallExpression
 BinaryExpression
+BinaryPattern
 BlockExpression
 BlockStatement
 BreakKeyword
@@ -153,6 +154,7 @@ NamedArgumentExpression
 NamedDeconstructionField
 NamedDeconstructionStatement
 NilKeyword
+NotPattern
 NullCoalescingAssignmentStatement
 NumberToken
 ObjectCreationExpression
@@ -166,6 +168,7 @@ PackageDeclaration
 PackageKeyword
 Parameter
 ParenthesizedExpression
+ParenthesizedPattern
 PercentEqualsToken
 PercentToken
 PipeEqualsToken
@@ -259,6 +262,7 @@ AwaitYieldPoint
 BaseClassCallExpression
 BaseInterfaceCallExpression
 BinaryExpression
+BinaryPattern
 BlockExpression
 BlockStatement
 CallExpression
@@ -316,6 +320,7 @@ MakeChannelExpression
 MapDeleteExpression
 MapLiteralExpression
 MethodGroupExpression
+NotPattern
 NullConditionalAccessExpression
 PatternSwitchArm
 PatternSwitchStatement

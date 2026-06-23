@@ -53,6 +53,8 @@ public class BoundNodeKindExhaustivenessTests
         "PropertyPatternField",
         "RelationalPattern",
         "ListPattern",
+        "BinaryPattern",
+        "NotPattern",
 
         // Statement kinds — dispatched via EmitStatement, not EmitExpression.
         "BlockStatement",
@@ -171,6 +173,8 @@ public class BoundNodeKindExhaustivenessTests
         "PropertyPatternField",
         "RelationalPattern",
         "ListPattern",
+        "BinaryPattern",
+        "NotPattern",
 
         // Helper / annotation kinds.
         "PatternSwitchArm",
@@ -221,6 +225,8 @@ public class BoundNodeKindExhaustivenessTests
         "PropertyPatternField",
         "RelationalPattern",
         "ListPattern",
+        "BinaryPattern",
+        "NotPattern",
 
         // Helper / annotation kinds.
         "PatternSwitchArm",
@@ -316,6 +322,8 @@ public class BoundNodeKindExhaustivenessTests
         "PropertyPatternField",
         "RelationalPattern",
         "ListPattern",
+        "BinaryPattern",
+        "NotPattern",
 
         // Helper / annotation kinds.
         "PatternSwitchArm",

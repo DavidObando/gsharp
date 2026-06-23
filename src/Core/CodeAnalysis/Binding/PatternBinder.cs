@@ -43,7 +43,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// per-pattern binding so its surface area stays small.
 /// </para>
 /// <para>
-/// The discard-pattern case is inlined in <see cref="BindPattern"/>'s
+/// The discard-pattern case is inlined in the pattern-dispatch method's
 /// dispatch — it has no logic beyond constructing a
 /// <c>BoundDiscardPattern</c> with the discriminant type, so it
 /// leaves with the dispatch method rather than warranting a per-kind
@@ -112,6 +112,11 @@ internal sealed class PatternBinder
     /// <returns>The bound pattern.</returns>
     public BoundPattern BindPattern(PatternSyntax syntax, TypeSymbol discriminantType)
     {
+        return BindPattern(syntax, discriminantType, allowBindings: true);
+    }
+
+    private BoundPattern BindPattern(PatternSyntax syntax, TypeSymbol discriminantType, bool allowBindings)
+    {
         switch (syntax.Kind)
         {
             case SyntaxKind.ConstantPattern:
@@ -119,16 +124,42 @@ internal sealed class PatternBinder
             case SyntaxKind.DiscardPattern:
                 return new BoundDiscardPattern(syntax, discriminantType);
             case SyntaxKind.TypePattern:
-                return BindTypePattern((TypePatternSyntax)syntax, discriminantType);
+                return BindTypePattern((TypePatternSyntax)syntax, discriminantType, allowBindings);
             case SyntaxKind.PropertyPattern:
                 return BindPropertyPattern((PropertyPatternSyntax)syntax, discriminantType);
             case SyntaxKind.RelationalPattern:
                 return BindRelationalPattern((RelationalPatternSyntax)syntax, discriminantType);
             case SyntaxKind.ListPattern:
                 return BindListPattern((ListPatternSyntax)syntax, discriminantType);
+            case SyntaxKind.BinaryPattern:
+                return BindBinaryPattern((BinaryPatternSyntax)syntax, discriminantType, allowBindings);
+            case SyntaxKind.NotPattern:
+                return BindNotPattern((NotPatternSyntax)syntax, discriminantType);
+            case SyntaxKind.ParenthesizedPattern:
+                return BindPattern(((ParenthesizedPatternSyntax)syntax).Pattern, discriminantType, allowBindings);
             default:
                 throw new Exception($"Unexpected pattern syntax {syntax.Kind}");
         }
+    }
+
+    // Issue #992: a conjunction (`and`) keeps bindings (both sub-patterns must
+    // match, so a variable bound on either side is definitely assigned). A
+    // disjunction (`or`) forbids bindings on both sides.
+    private BoundPattern BindBinaryPattern(BinaryPatternSyntax syntax, TypeSymbol discriminantType, bool allowBindings)
+    {
+        var isConjunction = syntax.OperatorToken.Text == "and";
+        var childAllowBindings = allowBindings && isConjunction;
+        var left = BindPattern(syntax.Left, discriminantType, childAllowBindings);
+        var right = BindPattern(syntax.Right, discriminantType, childAllowBindings);
+        return new BoundBinaryPattern(syntax, discriminantType, isConjunction, left, right);
+    }
+
+    // Issue #992: `not` forbids bindings in its operand — a variable bound by a
+    // pattern that did NOT match cannot be definitely assigned.
+    private BoundPattern BindNotPattern(NotPatternSyntax syntax, TypeSymbol discriminantType)
+    {
+        var operand = BindPattern(syntax.Pattern, discriminantType, allowBindings: false);
+        return new BoundNotPattern(syntax, discriminantType, operand);
     }
 
     private BoundPattern BindConstantPattern(ConstantPatternSyntax syntax, TypeSymbol discriminantType)
@@ -162,13 +193,25 @@ internal sealed class PatternBinder
         return new BoundConstantPattern(syntax, discriminantType, value);
     }
 
-    private BoundPattern BindTypePattern(TypePatternSyntax syntax, TypeSymbol discriminantType)
+    private BoundPattern BindTypePattern(TypePatternSyntax syntax, TypeSymbol discriminantType, bool allowBindings)
     {
         var targetType = bindTypeClause(syntax.Type) ?? TypeSymbol.Error;
+        var isDiscard = syntax.Identifier.Text == "_";
         var variable = new LocalVariableSymbol(syntax.Identifier.Text, isReadOnly: true, targetType, declaringSyntax: syntax.Identifier);
-        if (!Scope.TryDeclareVariable(variable))
+
+        if (allowBindings)
         {
-            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.Text);
+            if (!Scope.TryDeclareVariable(variable))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.Text);
+            }
+        }
+        else if (!isDiscard)
+        {
+            // Issue #992: a type pattern that introduces a binding variable is
+            // not allowed under `or` / `not` — the variable would not be
+            // definitely assigned. The discard identifier `_` is permitted.
+            Diagnostics.ReportPatternVariableNotAllowedUnderOrNot(syntax.Identifier.Location, syntax.Identifier.Text);
         }
 
         return new BoundTypePattern(syntax, discriminantType, targetType, variable);
