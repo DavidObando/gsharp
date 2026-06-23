@@ -155,11 +155,11 @@ namespace Demo
     }
 
     /// <summary>
-    /// The null-forgiving operator <c>expr!</c> is dropped — G# has no
-    /// nullable-reference annotations (ADR-0115 §B).
+    /// The C# null-forgiving operator <c>expr!</c> maps to G#'s postfix non-null
+    /// assertion <c>expr!!</c> (ADR-0115 §B).
     /// </summary>
     [Fact]
-    public void SuppressNullableWarning_IsDropped()
+    public void SuppressNullableWarning_MapsToNonNullAssertion()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -170,8 +170,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("return s", printed);
-        Assert.DoesNotContain("s!", printed);
+        Assert.Contains("s!!", printed);
     }
 
     /// <summary>

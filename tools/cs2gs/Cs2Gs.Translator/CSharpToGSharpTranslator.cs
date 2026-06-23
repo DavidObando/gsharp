@@ -2874,10 +2874,11 @@ public sealed class CSharpToGSharpTranslator
 
                 case PostfixUnaryExpressionSyntax suppressNullable
                     when suppressNullable.IsKind(SyntaxKind.SuppressNullableWarningExpression):
-                    // The null-forgiving operator `expr!` has no G# analogue (G#
-                    // has no nullable-reference annotations); drop it and keep the
-                    // operand (ADR-0115 §B).
-                    return this.TranslateExpression(suppressNullable.Operand);
+                    // The C# null-forgiving operator `expr!` maps to G#'s postfix
+                    // non-null assertion `expr!!` (spec: "Postfix `!!` asserts
+                    // non-null"), preserving the assertion (ADR-0115 §B).
+                    return new NonNullAssertionExpression(
+                        this.TranslateExpression(suppressNullable.Operand));
 
                 case PostfixUnaryExpressionSyntax postfixValue
                     when postfixValue.IsKind(SyntaxKind.PostIncrementExpression)

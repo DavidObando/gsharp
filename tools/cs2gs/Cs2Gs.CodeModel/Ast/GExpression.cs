@@ -429,6 +429,26 @@ public sealed class UnaryExpression : GExpression
 }
 
 /// <summary>
+/// A postfix non-null assertion <c>operand!!</c> — the G# analogue of the C#
+/// null-forgiving operator <c>operand!</c> (spec: "Postfix <c>!!</c> asserts
+/// non-null").
+/// </summary>
+public sealed class NonNullAssertionExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="NonNullAssertionExpression"/> class.
+    /// </summary>
+    /// <param name="operand">The asserted operand.</param>
+    public NonNullAssertionExpression(GExpression operand)
+    {
+        Operand = operand;
+    }
+
+    /// <summary>Gets the asserted operand.</summary>
+    public GExpression Operand { get; }
+}
+
+/// <summary>
 /// A parenthesized expression <c>(inner)</c>.
 /// </summary>
 public sealed class ParenthesizedExpression : GExpression

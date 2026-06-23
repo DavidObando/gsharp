@@ -400,6 +400,9 @@ public static class GSharpPrinter
             case UnaryExpression unary:
                 return $"{unary.Operator}{RenderExpression(unary.Operand, indent)}";
 
+            case NonNullAssertionExpression nonNull:
+                return $"{RenderExpression(nonNull.Operand, indent)}!!";
+
             case ParenthesizedExpression parenthesized:
                 return $"({RenderExpression(parenthesized.Inner, indent)})";
 
