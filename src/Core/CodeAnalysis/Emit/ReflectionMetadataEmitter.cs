@@ -1554,6 +1554,34 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 }
             }
+
+            // Issue #985: a covariant-return interface bridge (e.g. the
+            // non-generic IEnumerable.GetEnumerator) explicitly implements an
+            // INHERITED base interface that is not itself named in the base
+            // clause. Emit an explicit InterfaceImpl row for that base
+            // interface so the metadata matches the C# shape (both
+            // `IEnumerable<T>` and `IEnumerable` appear) and the MethodImpl row
+            // resolves against a declared interface.
+            if (!c.Methods.IsDefaultOrEmpty)
+            {
+                System.Collections.Generic.HashSet<System.Type> bridgeInterfaces = null;
+                foreach (var method in c.Methods)
+                {
+                    var declaringIface = method.ExplicitInterfaceSlot?.DeclaringType;
+                    if (declaringIface == null)
+                    {
+                        continue;
+                    }
+
+                    bridgeInterfaces ??= new System.Collections.Generic.HashSet<System.Type>();
+                    if (bridgeInterfaces.Add(declaringIface))
+                    {
+                        this.emitCtx.Metadata.AddInterfaceImplementation(
+                            this.cache.StructTypeDefs[c],
+                            this.GetTypeHandleForMember(declaringIface));
+                    }
+                }
+            }
         }
 
         // Issue #242: the ECMA-335 methodList column must be monotonically
@@ -2211,6 +2239,10 @@ internal sealed class ReflectionMetadataEmitter
             // ADR-0089 / issue #755: emit MethodImpl rows for static-virtual
             // interface members. See structs path for the same call.
             this.EmitStaticVirtualMethodImpls(c);
+
+            // Issue #985: emit MethodImpl rows for covariant-return interface
+            // bridges (e.g. the non-generic IEnumerable.GetEnumerator).
+            this.EmitExplicitInterfaceMethodImpls(c);
         }
 
         foreach (var c in topClasses)
@@ -2290,6 +2322,10 @@ internal sealed class ReflectionMetadataEmitter
             // row points the interface slot's MethodDef at the implementer's
             // static MethodDef on the struct's TypeDef.
             this.EmitStaticVirtualMethodImpls(s);
+
+            // Issue #985: emit MethodImpl rows for covariant-return interface
+            // bridges declared on a struct that implements `IEnumerable[T]` &c.
+            this.EmitExplicitInterfaceMethodImpls(s);
         }
 
         foreach (var s in topStructs)
@@ -9037,6 +9073,47 @@ internal sealed class ReflectionMetadataEmitter
     // PR-E-11: BodyEmitter promoted to top-level MethodBodyEmitter
     // (src/Core/CodeAnalysis/Emit/MethodBodyEmitter.cs and partials).
     // PR-E-2: MethodSpecSymbolKey moved into MetadataTokenCache.
+
+    /// <summary>
+    /// Issue #985: emit MethodImpl rows for covariant-return interface bridges.
+    /// A method whose <see cref="FunctionSymbol.ExplicitInterfaceSlot"/> is set
+    /// explicitly implements a specific (typically inherited, non-generic) CLR
+    /// interface slot — e.g. the private non-generic
+    /// <c>IEnumerable.GetEnumerator()</c> alongside the public generic
+    /// <c>IEnumerable&lt;T&gt;.GetEnumerator()</c>. A private bridge method
+    /// cannot implicitly implement an interface slot, so the explicit row is
+    /// required for the resulting type to load.
+    /// </summary>
+    /// <param name="structSymbol">The implementing class or struct.</param>
+    private void EmitExplicitInterfaceMethodImpls(StructSymbol structSymbol)
+    {
+        if (structSymbol == null || structSymbol.Methods.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        if (!this.cache.StructTypeDefs.TryGetValue(structSymbol, out var implTypeDef))
+        {
+            return;
+        }
+
+        foreach (var method in structSymbol.Methods)
+        {
+            var slot = method.ExplicitInterfaceSlot;
+            if (slot == null)
+            {
+                continue;
+            }
+
+            if (!this.cache.MethodHandles.TryGetValue(method, out var implHandle))
+            {
+                continue;
+            }
+
+            var slotRef = this.GetMethodReference(slot);
+            this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, slotRef);
+        }
+    }
 
     /// <summary>
     /// ADR-0089 / issue #755: emit MethodImpl rows binding each declared

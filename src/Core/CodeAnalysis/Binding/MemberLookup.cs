@@ -1265,6 +1265,238 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Issue #985: enumerates every abstract instance method slot contributed by
+    /// a CLR interface listed in a type's base-type clause, INCLUDING the
+    /// methods of every interface it transitively inherits. The declared
+    /// interface's slots are reported with <see cref="ClrInterfaceSlot.IsInherited"/>
+    /// = <see langword="false"/>; inherited base-interface slots with
+    /// <see langword="true"/>. Generic-parameter positions in each slot's
+    /// signature resolve against the declared interface's symbolic type
+    /// arguments (the base interfaces obtained from the open definition carry
+    /// those same generic parameters position-aligned).
+    /// </summary>
+    /// <param name="ifaceSym">A CLR interface type symbol from the base clause.</param>
+    /// <returns>The slots, or an empty sequence when the symbol is not a CLR interface.</returns>
+    public static IEnumerable<ClrInterfaceSlot> EnumerateClrInterfaceSlots(TypeSymbol ifaceSym)
+    {
+        Type declared;
+        ImmutableArray<TypeSymbol> symbolicArgs;
+        if (TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var args))
+        {
+            declared = openDefinition;
+            symbolicArgs = args;
+        }
+        else if (ifaceSym?.ClrType is Type clr && clr.IsInterface)
+        {
+            declared = clr;
+            symbolicArgs = ImmutableArray<TypeSymbol>.Empty;
+        }
+        else
+        {
+            yield break;
+        }
+
+        foreach (var slot in MethodsOf(declared, symbolicArgs, isInherited: false))
+        {
+            yield return slot;
+        }
+
+        foreach (var baseIface in declared.GetInterfaces())
+        {
+            foreach (var slot in MethodsOf(baseIface, symbolicArgs, isInherited: true))
+            {
+                yield return slot;
+            }
+        }
+
+        static IEnumerable<ClrInterfaceSlot> MethodsOf(Type iface, ImmutableArray<TypeSymbol> symbolicArgs, bool isInherited)
+        {
+            foreach (var method in iface.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (method.IsSpecialName || !method.IsAbstract)
+                {
+                    continue;
+                }
+
+                yield return new ClrInterfaceSlot(method, symbolicArgs, isInherited);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #985: tests whether a single G# method satisfies a CLR interface
+    /// slot — same parameter count, matching ref-kinds, and return/parameter
+    /// types equal after substituting the interface's symbolic type arguments
+    /// into any generic-parameter positions.
+    /// </summary>
+    /// <param name="method">The candidate G# method.</param>
+    /// <param name="slot">The interface slot to satisfy.</param>
+    /// <returns><see langword="true"/> when the method satisfies the slot.</returns>
+    public static bool MethodSatisfiesClrSlot(FunctionSymbol method, in ClrInterfaceSlot slot)
+    {
+        var clrParams = slot.Method.GetParameters();
+        var callable = GetCallableParameters(method);
+        if (callable.Length != clrParams.Length)
+        {
+            return false;
+        }
+
+        if (!ReturnTypeMatchesSubstituted(method.Type, slot.Method.ReturnType, slot.SymbolicArgs))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < callable.Length; i++)
+        {
+            var clrParamType = clrParams[i].ParameterType;
+            var gsParam = callable[i];
+
+            if (clrParamType.IsByRef)
+            {
+                if (gsParam.RefKind == RefKind.None
+                    || !ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType.GetElementType(), slot.SymbolicArgs))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                if (gsParam.RefKind != RefKind.None
+                    || !ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType, slot.SymbolicArgs))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #985: recognises a covariant-return interface bridge — two
+    /// same-name, same-parameter methods that differ ONLY by return type and
+    /// satisfy two DIFFERENT CLR interface slots. The canonical case is a
+    /// generic collection implementing <c>IEnumerable[T]</c> with both the
+    /// generic <c>GetEnumerator() IEnumerator[T]</c> (satisfying
+    /// <c>IEnumerable&lt;T&gt;.GetEnumerator</c>) and the non-generic
+    /// <c>GetEnumerator() IEnumerator</c> (satisfying the inherited
+    /// <c>IEnumerable.GetEnumerator</c>). Such a pair is legal IL even though
+    /// G# overload rules (and C#) otherwise reject methods differing only by
+    /// return type.
+    ///
+    /// On success, <paramref name="bridgeMethod"/> is the method bound to an
+    /// inherited base-interface slot (the one that, being private or otherwise
+    /// non-implicitly-matchable, needs an explicit <c>MethodImpl</c> row) and
+    /// <paramref name="bridgeSlot"/> is that slot's CLR method.
+    /// </summary>
+    /// <param name="implementedClrInterfaces">The CLR interfaces from the type's base clause.</param>
+    /// <param name="first">The already-declared method.</param>
+    /// <param name="second">The new same-signature method.</param>
+    /// <param name="bridgeMethod">The method that explicitly bridges an inherited slot.</param>
+    /// <param name="bridgeSlot">The inherited CLR interface slot to bind via MethodImpl.</param>
+    /// <returns><see langword="true"/> when the pair forms a valid covariant interface bridge.</returns>
+    public static bool TryResolveCovariantInterfaceBridge(
+        ImmutableArray<TypeSymbol> implementedClrInterfaces,
+        FunctionSymbol first,
+        FunctionSymbol second,
+        out FunctionSymbol bridgeMethod,
+        out MethodInfo bridgeSlot)
+    {
+        bridgeMethod = null;
+        bridgeSlot = null;
+
+        if (first == null || second == null || implementedClrInterfaces.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        // Identical return types are a genuine duplicate, never a bridge.
+        if (ReturnTypeSignaturesEqual(first.Type, second.Type))
+        {
+            return false;
+        }
+
+        var slots = new List<ClrInterfaceSlot>();
+        foreach (var ifaceSym in implementedClrInterfaces)
+        {
+            slots.AddRange(EnumerateClrInterfaceSlots(ifaceSym));
+        }
+
+        if (slots.Count == 0)
+        {
+            return false;
+        }
+
+        // Find a distinct slot for each method: the pair is a valid bridge only
+        // when `first` satisfies a slot that `second` does not, and vice versa.
+        ClrInterfaceSlot? firstOnly = null;
+        ClrInterfaceSlot? secondOnly = null;
+        foreach (var slot in slots)
+        {
+            var firstOk = MethodSatisfiesClrSlot(first, slot);
+            var secondOk = MethodSatisfiesClrSlot(second, slot);
+            if (firstOk && !secondOk && firstOnly == null)
+            {
+                firstOnly = slot;
+            }
+            else if (secondOk && !firstOk && secondOnly == null)
+            {
+                secondOnly = slot;
+            }
+        }
+
+        if (firstOnly == null || secondOnly == null)
+        {
+            return false;
+        }
+
+        // The bridge method is the one bound to an inherited base-interface slot
+        // (e.g. the non-generic IEnumerable.GetEnumerator). That slot is the one
+        // a private/covariant method cannot implicitly implement, so it needs the
+        // explicit MethodImpl row. Prefer an inherited slot; if both are
+        // inherited, bridge whichever the second method covers.
+        if (secondOnly.Value.IsInherited)
+        {
+            bridgeMethod = second;
+            bridgeSlot = secondOnly.Value.Method;
+            return true;
+        }
+
+        if (firstOnly.Value.IsInherited)
+        {
+            bridgeMethod = first;
+            bridgeSlot = firstOnly.Value.Method;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #985: renders a short, human-readable signature for a CLR
+    /// interface slot method, used in GS0187 diagnostics for inherited
+    /// interface members.
+    /// </summary>
+    /// <param name="method">The interface slot method.</param>
+    /// <returns>A signature such as <c>GetEnumerator</c> or <c>CompareTo(T)</c>.</returns>
+    public static string FormatClrSlotSignature(MethodInfo method)
+    {
+        var ps = method.GetParameters();
+        if (ps.Length == 0)
+        {
+            return method.Name;
+        }
+
+        var names = new string[ps.Length];
+        for (var i = 0; i < ps.Length; i++)
+        {
+            names[i] = ps[i].ParameterType.Name;
+        }
+
+        return $"{method.Name}({string.Join(", ", names)})";
+    }
+
+    /// <summary>
     /// Issue #949: tests whether a candidate G# property satisfies an open
     /// CLR interface property whose type may be a generic parameter, with
     /// <paramref name="symbolicArgs"/> substituted in.
@@ -1599,6 +1831,40 @@ internal sealed class MemberLookup
             return SameTypeSymbol(candidate, symbolicArgs[position]);
         }
 
+        // Issue #985: the contract position may itself be a *constructed
+        // generic* that mentions the interface's generic parameters — e.g.
+        // `IEnumerable<T>.GetEnumerator()` returns `IEnumerator<T>`. The erased
+        // CLR-projection comparison below would demand `IEnumerator<object>`
+        // and wrongly reject a candidate returning `IEnumerator[T]`. Recurse
+        // structurally instead, substituting the interface's generic parameters
+        // with the symbolic arguments at each nested position (mirrors the
+        // #974 `InterfaceSymbol.SubstituteType` recursion on the G# path).
+        if (openType.IsConstructedGenericType
+            && candidate is ImportedTypeSymbol importedCandidate
+            && importedCandidate.OpenDefinition != null
+            && !importedCandidate.TypeArguments.IsDefaultOrEmpty)
+        {
+            var openDefinition = openType.GetGenericTypeDefinition();
+            if (importedCandidate.OpenDefinition.IsSameAs(openDefinition))
+            {
+                var openArgs = openType.GetGenericArguments();
+                if (openArgs.Length == importedCandidate.TypeArguments.Length)
+                {
+                    for (var i = 0; i < openArgs.Length; i++)
+                    {
+                        if (!ParameterTypeMatchesSubstituted(importedCandidate.TypeArguments[i], openArgs[i], symbolicArgs))
+                        {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         // Non-generic contract position — compare against the CLR-projected
         // effective type, exactly as the erased path does.
         return ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(candidate), openType);
@@ -1648,6 +1914,28 @@ internal sealed class MemberLookup
         }
 
         return false;
+    }
+
+    private static bool ReturnTypeSignaturesEqual(TypeSymbol a, TypeSymbol b)
+    {
+        if (ReferenceEquals(a, b))
+        {
+            return true;
+        }
+
+        if (a == null || b == null)
+        {
+            return false;
+        }
+
+        if (SameTypeSymbol(a, b))
+        {
+            return true;
+        }
+
+        var ca = NullableLifting.GetEffectiveClrType(a);
+        var cb = NullableLifting.GetEffectiveClrType(b);
+        return ca != null && cb != null && ClrTypeUtilities.AreSame(ca, cb);
     }
 
     /// <summary>
@@ -1977,5 +2265,30 @@ internal sealed class MemberLookup
             8 => typeof(Func<,,,,,,,,>).MakeGenericType(args),
             _ => null,
         };
+    }
+
+    /// <summary>
+    /// Issue #985: a single CLR interface method slot that an implementing type
+    /// must satisfy, paired with the symbolic type arguments needed to resolve
+    /// any generic-parameter positions in its signature. <see cref="IsInherited"/>
+    /// is <see langword="true"/> when the slot comes from a base interface that
+    /// the declared interface inherits (e.g. the non-generic
+    /// <c>IEnumerable.GetEnumerator()</c> reached through
+    /// <c>IEnumerable&lt;T&gt;</c>).
+    /// </summary>
+    public readonly struct ClrInterfaceSlot
+    {
+        public ClrInterfaceSlot(MethodInfo method, ImmutableArray<TypeSymbol> symbolicArgs, bool isInherited)
+        {
+            this.Method = method;
+            this.SymbolicArgs = symbolicArgs;
+            this.IsInherited = isInherited;
+        }
+
+        public MethodInfo Method { get; }
+
+        public ImmutableArray<TypeSymbol> SymbolicArgs { get; }
+
+        public bool IsInherited { get; }
     }
 }

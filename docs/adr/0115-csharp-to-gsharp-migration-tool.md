@@ -512,7 +512,7 @@ to a single fingerprinted entry that maps to a filed compiler issue. Final matri
 | --- | --- | --- | --- | --- | --- |
 | `corpus/L1-Console` | PASS | PASS | PASS | PASS | — (fully green E2E) |
 | `corpus/L2-Library` | PASS | PASS | PASS | PASS | — (#973 resolved → fully green E2E) |
-| `corpus/L3-Library` | PASS | FAIL | skip | skip | #985 (`IEnumerable[T]` needs dual `GetEnumerator` overloads → GS0264 + GS0187); `Advanced.gs` compiles standalone |
+| `corpus/L3-Library` | PASS | PASS | PASS | PASS | — (#985 resolved → dual `GetEnumerator` / `IEnumerable[T]` now compiles; re-greens on next corpus run) |
 | `corpus/L4-Console` | PASS | PASS | PASS | PASS | — (fully green E2E; #975/#976/#977 resolved) |
 | `corpus/L5-Console` | PASS | PASS | PASS | PASS | — (fully green E2E; next gap batch #986…#994 surfaced and captured, see below) |
 
@@ -543,7 +543,7 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #975 | interpolated string in a `: base(...)` constructor-arg position — emit ICE | GS9998 | resolved (translator emits `: base("…$n…")` directly) |
 | #976 | a `struct` cannot declare a base / interface clause (`struct S : I {…}` won't parse) | GS0005 | resolved (struct interface clause parses; class/struct base → GS0382) |
 | #977 | BCL method invoked with an inline `out var x` declaration fails overload resolution | GS0159 | resolved (inline `out var x` binds for BCL calls) |
-| #985 | implementing `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by return type (generic `IEnumerator[T]` + non-generic `IEnumerator`) | GS0264 + GS0187 | open (blocks L3-`Generics`; residual after #974) |
+| #985 | implementing `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by return type (generic `IEnumerator[T]` + non-generic `IEnumerator`) | GS0264 + GS0187 | resolved (covariant-return interface bridge: GS0264 relaxed when two same-name/param methods satisfy distinct interface slots; inherited base-interface slots now required so a missing bridge still errors GS0187; emit writes the `MethodImpl` + non-generic `IEnumerable` `InterfaceImpl` rows) |
 | #986 | `base.Method()` virtual base-class call has no canonical G# form (`base[Base].M` is interface-only per ADR-0091) | GS0157 / GS0338 | open (translation-unsupported; L5 uses dynamic dispatch instead) |
 | #987 | an `abstract` (no-body) method on an `open class` → emitter crash | GS9998 (NRE) | open (L5 uses a virtual method with a body) |
 | #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | open (translation-unsupported; L5 has the caller supply the value) |
@@ -554,15 +554,17 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #993 | an `is`/`case` type pattern **with** a binder (`x is T t`) leaves the binder unbound | GS0125 | open (L5 uses the no-binder form `x is T`) |
 | #994 | `yield break` has no canonical G# form | GS0005 | open (translation-unsupported) |
 
-L3 not going fully green is the **intended** objective-2 outcome: the residual
-failure is a real compiler gap, captured and filed rather than worked around or
-hidden. Each closes as the cited compiler issue is fixed and the corpus run
-re-greens automatically — as already happened for #938–#944 (which advanced L3
-from `translate FAIL` to `translate PASS`) and for #973–#977 (which took L2 fully
-green and let L4 emit the canonical forms #975/#976/#977 instead of the former
-workarounds — an interpolated `: base(...)` argument, a `struct` interface clause,
-and an inline BCL `out var x`), so they are documented for the compiler backlog
-without blocking the migration.
+Earlier L3 not going fully green was the **intended** objective-2 outcome: the
+residual failure was a real compiler gap (#985), captured and filed rather than
+worked around or hidden. It closed as the cited compiler issue was fixed and the
+corpus run re-greens automatically — as already happened for #938–#944 (which
+advanced L3 from `translate FAIL` to `translate PASS`), for #973–#977 (which took
+L2 fully green and let L4 emit the canonical forms #975/#976/#977 instead of the
+former workarounds — an interpolated `: base(...)` argument, a `struct` interface
+clause, and an inline BCL `out var x`), and now for #985 (the covariant-return
+interface bridge, which takes L3 fully green by letting a generic
+`IEnumerable[T]` implementation declare both the generic and non-generic
+`GetEnumerator`).
 
 #### Discovered gaps from L4 (minimal repros)
 
@@ -618,21 +620,27 @@ if d.TryGetValue("a", out var v) {
 Each was reproduced directly with `gsc` and contrasted with a passing control.
 The orchestrator files the issue and replaces the `#TBD-x` placeholder.
 
-**#985 — implementing `IEnumerable[T]` needs two `GetEnumerator` overloads → `GS0264` + `GS0187`.**
+**#985 — implementing `IEnumerable[T]` needs two `GetEnumerator` overloads → `GS0264` + `GS0187`.** **Resolved** (covariant-return interface bridge).
 A C# generic collection implements `IEnumerable<T>` by declaring the generic
 `IEnumerator<T> GetEnumerator()` and an explicit-interface non-generic
 `IEnumerator IEnumerable.GetEnumerator()`. G# has no explicit-interface-impl
 syntax, so both map to a method named `GetEnumerator` — but they differ **only by
-return type** (`IEnumerator[T]` vs `IEnumerator`), which G# forbids (`GS0264`).
-With only the generic overload, the non-generic `IEnumerable.GetEnumerator` stays
+return type** (`IEnumerator[T]` vs `IEnumerator`), which G# used to forbid (`GS0264`).
+With only the generic overload, the non-generic `IEnumerable.GetEnumerator` stayed
 unimplemented (`GS0187`). #974 fixed the *generic* satisfaction; this residual gap
-blocks L3-`Generics`. Classification: `compile-error` (no canonical G# spelling can
-implement the dual contract). This is **why the for-in/sequence forms — `for x in
-xs`, `sequence[T]` generators — are the canonical G# enumeration surface**, not a
-hand-written `IEnumerable[T]` implementation.
+blocked L3-`Generics`. The fix relaxes `GS0264` precisely when two same-name /
+same-parameter methods satisfy two **distinct** interface slots (the generic
+`IEnumerator[T] GetEnumerator()` for `IEnumerable[T]` and the non-generic
+`IEnumerator GetEnumerator()` for the inherited `IEnumerable`), now requires the
+inherited base-interface slots so a missing bridge still errors `GS0187`, and emits
+the explicit `MethodImpl` row plus the non-generic `System.Collections.IEnumerable`
+`InterfaceImpl` row — matching the C# metadata shape and verifying clean under
+`ilverify`. The `for-in`/`sequence[T]` forms remain the canonical, ergonomic G#
+enumeration surface; a hand-written `IEnumerable[T]` implementation is now also
+expressible (e.g. for round-tripping C# collections).
 
 ```gs
-// repro — GS0264 (dual GetEnumerator) + GS0187 (non-generic unimplemented):
+// now compiles — generic + non-generic GetEnumerator both satisfied:
 class Repo[T] : IEnumerable[T] {
     private let _items List[T] = List[T]()
     func GetEnumerator() IEnumerator[T] { return _items.GetEnumerator() }

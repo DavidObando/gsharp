@@ -1410,6 +1410,26 @@ internal sealed class DeclarationBinder
                     {
                         if (BoundScope.FunctionSignaturesEqual(existingMethod, methodSymbol))
                         {
+                            // Issue #985: permit two same-name/same-parameter
+                            // methods that differ only by return type when they
+                            // satisfy two DIFFERENT CLR interface slots (a
+                            // covariant-return interface bridge, e.g. the
+                            // generic `GetEnumerator() IEnumerator[T]` plus the
+                            // non-generic `GetEnumerator() IEnumerator` for
+                            // `IEnumerable[T]`). The bridge method is bound to
+                            // its inherited slot via an explicit MethodImpl row
+                            // at emit time.
+                            if (MemberLookup.TryResolveCovariantInterfaceBridge(
+                                    implementedClrInterfaces.ToImmutable(),
+                                    existingMethod,
+                                    methodSymbol,
+                                    out var bridgeMethod,
+                                    out var bridgeSlot))
+                            {
+                                bridgeMethod.ExplicitInterfaceSlot = bridgeSlot;
+                                continue;
+                            }
+
                             Diagnostics.ReportDuplicateOverloadSignature(
                                 methodSyntax.Identifier.Location,
                                 methodName,
@@ -2630,6 +2650,16 @@ internal sealed class DeclarationBinder
             // method or property. Diagnostic uses the same GS0187 channel.
             VerifyClrInterfaceImplementations(syntax, structSymbol);
 
+            // Issue #985: a CLR interface in the base clause may inherit other
+            // interfaces whose abstract members are NOT enumerated by the
+            // direct-interface walk above (e.g. `IEnumerable[T]` inherits the
+            // non-generic `IEnumerable.GetEnumerator()`). The resulting type
+            // must satisfy those inherited slots too — otherwise the runtime
+            // rejects it with a TypeLoadException. Verify them here so a missing
+            // bridge (the canonical "only the generic GetEnumerator present"
+            // case) surfaces as GS0187 instead of emitting an unloadable type.
+            VerifyInheritedClrInterfaceSlots(syntax, structSymbol);
+
             // ADR-0089 / issue #755: verify static-virtual interface members.
             // For each declared interface, walk its StaticMethods. The
             // implementer must either (a) declare a matching static method
@@ -2981,6 +3011,88 @@ internal sealed class DeclarationBinder
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Issue #985: verifies that the type satisfies every abstract method slot
+    /// contributed by interfaces that its declared CLR interfaces transitively
+    /// inherit. The direct-interface walks
+    /// (<see cref="VerifyClrInterfaceImplementations"/> /
+    /// <see cref="VerifySymbolicClrGenericInterface"/>) only enumerate the
+    /// declared interface's OWN members, so an inherited slot such as the
+    /// non-generic <c>IEnumerable.GetEnumerator()</c> reached through
+    /// <c>IEnumerable[T]</c> would otherwise go unverified and the emitter would
+    /// produce a type the runtime cannot load. A satisfying method may be the
+    /// covariant-return bridge accepted by
+    /// <see cref="MemberLookup.TryResolveCovariantInterfaceBridge"/>.
+    /// </summary>
+    private void VerifyInheritedClrInterfaceSlots(StructDeclarationSyntax syntax, StructSymbol structSymbol)
+    {
+        if (structSymbol.ImplementedClrInterfaces.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var reported = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (var ifaceSym in structSymbol.ImplementedClrInterfaces)
+        {
+            foreach (var slot in MemberLookup.EnumerateClrInterfaceSlots(ifaceSym))
+            {
+                if (!slot.IsInherited)
+                {
+                    // The declared interface's own members are checked by the
+                    // direct-interface walks; only inherited slots are new here.
+                    continue;
+                }
+
+                var declaringType = slot.Method.DeclaringType;
+                var slotKey = (declaringType?.FullName ?? declaringType?.Name ?? string.Empty)
+                    + "::" + MemberLookup.FormatClrSlotSignature(slot.Method);
+                if (reported.Contains(slotKey))
+                {
+                    continue;
+                }
+
+                if (StructSatisfiesClrSlot(structSymbol, slot))
+                {
+                    continue;
+                }
+
+                reported.Add(slotKey);
+                Diagnostics.ReportInterfaceMethodNotImplemented(
+                    syntax.Identifier.Location,
+                    structSymbol.Name,
+                    declaringType?.FullName ?? declaringType?.Name ?? "interface",
+                    MemberLookup.FormatClrSlotSignature(slot.Method));
+            }
+        }
+    }
+
+    private static bool StructSatisfiesClrSlot(StructSymbol structSymbol, in MemberLookup.ClrInterfaceSlot slot)
+    {
+        // Note: do NOT route through GetMethodsIncludingInherited here — it
+        // dedups same-name overloads by parameter signature (ignoring return
+        // type), which would hide the non-generic covariant bridge method that
+        // shares the generic method's name and (empty) parameter list. Walk the
+        // class and its base chain directly so both overloads are visible.
+        for (var c = structSymbol; c != null; c = c.BaseClass)
+        {
+            if (c.Methods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var candidate in c.Methods)
+            {
+                if (candidate.Name == slot.Method.Name
+                    && MemberLookup.MethodSatisfiesClrSlot(candidate, slot))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
