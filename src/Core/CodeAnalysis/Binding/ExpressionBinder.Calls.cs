@@ -2048,6 +2048,85 @@ internal sealed partial class ExpressionBinder
         }
     }
 
+    /// <summary>
+    /// Issue #977: detects whether the argument at <paramref name="index"/> of an
+    /// imported-method call is an inline <c>out var</c>/<c>out let</c>/<c>out _</c>
+    /// declaration whose type is omitted (and therefore must be inferred from the
+    /// resolved overload). An explicitly typed inline declaration is excluded
+    /// because its local is already declared with a known type in the eager pass.
+    /// </summary>
+    /// <param name="ce">The call expression syntax.</param>
+    /// <param name="index">The source argument index.</param>
+    /// <param name="refArg">The matched ref-argument syntax, when applicable.</param>
+    /// <returns><see langword="true"/> when the argument is a type-omitted inline out declaration.</returns>
+    private static bool TryGetInlineOutVarArgument(CallExpressionSyntax ce, int index, out RefArgumentExpressionSyntax refArg)
+    {
+        refArg = null;
+        if (index < 0 || index >= ce.Arguments.Count)
+        {
+            return false;
+        }
+
+        if (OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[index]) is RefArgumentExpressionSyntax candidate
+            && candidate.IsInlineDeclaration
+            && candidate.DeclaredType == null)
+        {
+            refArg = candidate;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #977: re-binds inline <c>out var</c>/<c>out let</c>/<c>out _</c>
+    /// placeholder arguments against the by-ref parameters of the resolved
+    /// imported method, declaring each new local with the parameter's pointee
+    /// type. Returns the (possibly rebuilt) argument vector.
+    /// </summary>
+    /// <param name="ce">The call expression syntax.</param>
+    /// <param name="arguments">The bound arguments (with placeholder out-var entries).</param>
+    /// <param name="resolvedMethod">The chosen imported method (constructed if generic).</param>
+    /// <param name="parameterMapping">The source-argument → parameter-position mapping; default for positional calls.</param>
+    /// <returns>The argument vector with inline out-var placeholders rebound.</returns>
+    private ImmutableArray<BoundExpression> RebindInlineOutVarArguments(
+        CallExpressionSyntax ce,
+        ImmutableArray<BoundExpression> arguments,
+        System.Reflection.MethodInfo resolvedMethod,
+        ImmutableArray<int> parameterMapping)
+    {
+        ImmutableArray<BoundExpression>.Builder rebuilt = null;
+        System.Reflection.ParameterInfo[] parameters = null;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            if (!TryGetInlineOutVarArgument(ce, i, out var refArg))
+            {
+                continue;
+            }
+
+            parameters ??= resolvedMethod.GetParameters();
+            var paramIndex = !parameterMapping.IsDefault && i < parameterMapping.Length ? parameterMapping[i] : i;
+            if (paramIndex < 0 || paramIndex >= parameters.Length)
+            {
+                continue;
+            }
+
+            var clrParameterType = parameters[paramIndex].ParameterType;
+            var pointeeClr = clrParameterType.IsByRef ? clrParameterType.GetElementType() : clrParameterType;
+            var pointeeType = TypeSymbol.FromClrType(pointeeClr);
+            var syntheticParameter = new ParameterSymbol(
+                parameters[paramIndex].Name ?? "value",
+                pointeeType,
+                refKind: RefKind.Out);
+
+            var rebound = BindRefArgumentExpression(refArg, syntheticParameter);
+            rebuilt ??= arguments.ToBuilder();
+            rebuilt[i] = rebound;
+        }
+
+        return rebuilt != null ? rebuilt.ToImmutable() : arguments;
+    }
+
     private BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)
     {
         var methodName = ce.Identifier.Text;
@@ -2451,6 +2530,17 @@ internal sealed partial class ExpressionBinder
             var hasUserClassArg = false;
             for (var i = 0; i < arguments.Length; i++)
             {
+                // Issue #977: an inline `out var`/`out let`/`out _` argument was
+                // bound to a placeholder address-of (Error pointee) in the eager
+                // pass because the parameter type was unknown. Feed a sentinel so
+                // overload resolution treats it as matching any by-ref parameter;
+                // the local's type is inferred from the chosen overload below.
+                if (TryGetInlineOutVarArgument(ce, i, out _))
+                {
+                    argTypes[i] = OverloadResolution.InlineOutVarArgumentType;
+                    continue;
+                }
+
                 // Issue #530: use GetEffectiveArgumentClrType so that a
                 // nullable value type argument (e.g. `int32?`) is matched
                 // as `Nullable<T>` in overload resolution.
@@ -2486,6 +2576,11 @@ internal sealed partial class ExpressionBinder
                     switch (resolution.Outcome)
                     {
                         case OverloadResolution.ResolutionOutcome.Resolved:
+                            // Issue #977: now that the overload is chosen, re-bind
+                            // any inline `out var`/`out let`/`out _` placeholders
+                            // against the resolved by-ref parameter so the new
+                            // local is declared with the inferred pointee type.
+                            arguments = RebindInlineOutVarArguments(ce, arguments, resolution.Best, resolution.ParameterMapping);
                             var instSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(receiver?.Type, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
                             var instSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(resolution.Best, typeArgSymbols, instSymbolicArgs);
                             var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : typeArgSymbols;
