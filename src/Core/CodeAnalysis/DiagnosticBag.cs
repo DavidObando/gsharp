@@ -4093,6 +4093,26 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Error);
     }
 
+    /// <summary>
+    /// Issue #988: GS0389 — a type parameter is constructed (<c>T()</c>) but it
+    /// carries no <c>new()</c> default-constructor constraint, so the compiler
+    /// cannot guarantee an accessible parameterless constructor exists. Mirrors
+    /// C#'s CS0304. The fix is to add a <c>new()</c> constraint to the type
+    /// parameter (e.g. <c>[T new()]</c>).
+    /// </summary>
+    /// <param name="location">The source location of the constructing identifier.</param>
+    /// <param name="typeParameterName">The name of the type parameter being constructed.</param>
+    public void ReportConstructedTypeParameterRequiresNewConstraint(
+        TextLocation location,
+        string typeParameterName)
+    {
+        Report(
+            location,
+            "GS0389",
+            $"Cannot construct '{typeParameterName}()' because type parameter '{typeParameterName}' has no 'new()' constraint; add a 'new()' constraint (e.g. '[{typeParameterName} new()]') to allow construction (issue #988).",
+            DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

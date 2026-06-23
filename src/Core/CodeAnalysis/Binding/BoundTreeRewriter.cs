@@ -446,6 +446,8 @@ public abstract class BoundTreeRewriter
                 return RewriteSpillSequenceExpression((BoundSpillSequenceExpression)node);
             case BoundNodeKind.DefaultExpression:
                 return RewriteDefaultExpression((BoundDefaultExpression)node);
+            case BoundNodeKind.TypeParameterConstructionExpression:
+                return RewriteTypeParameterConstructionExpression((BoundTypeParameterConstructionExpression)node);
             case BoundNodeKind.TypeOfExpression:
                 return node;
             case BoundNodeKind.IsExpression:
@@ -485,6 +487,14 @@ public abstract class BoundTreeRewriter
     /// <param name="node">The default expression to rewrite.</param>
     /// <returns>The rewritten default expression.</returns>
     protected virtual BoundExpression RewriteDefaultExpression(BoundDefaultExpression node)
+    {
+        return node;
+    }
+
+    /// <summary>Issue #988: rewrites a <see cref="BoundTypeParameterConstructionExpression"/> (a leaf).</summary>
+    /// <param name="node">The type-parameter construction expression to rewrite.</param>
+    /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteTypeParameterConstructionExpression(BoundTypeParameterConstructionExpression node)
     {
         return node;
     }

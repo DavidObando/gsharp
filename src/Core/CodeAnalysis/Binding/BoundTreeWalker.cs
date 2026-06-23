@@ -149,6 +149,7 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.LiteralExpression:
             case BoundNodeKind.VariableExpression:
             case BoundNodeKind.DefaultExpression:
+            case BoundNodeKind.TypeParameterConstructionExpression:
             case BoundNodeKind.TypeOfExpression:
             case BoundNodeKind.FunctionLiteralExpression:
             case BoundNodeKind.StateMachineAwaitOnCompleted:

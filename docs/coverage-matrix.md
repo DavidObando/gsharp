@@ -338,6 +338,7 @@ TryStatement
 TupleElementAccessExpression
 TupleLiteralExpression
 TypeOfExpression
+TypeParameterConstructionExpression
 TypePattern
 UnaryExpression
 UserInstanceCallExpression

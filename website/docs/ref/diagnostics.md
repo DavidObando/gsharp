@@ -1238,6 +1238,36 @@ Cross-references:
   (cs2gs migration mapping for C# `abstract`).
 
 
+## `new()` constraint construction diagnostic (GS0389)
+
+See issue #988 / ADR-0097 (`class` / `struct` / `new()` constraints) and
+ADR-0087 (reified generics). A type parameter that carries a `new()`
+default-constructor constraint (`[T new()]`) may be constructed inside the
+generic body with the call-like spelling `T()`. The construction lowers to a
+reified `System.Activator.CreateInstance<T>()`, which yields a real instance for
+both reference types with a public parameterless constructor and value types.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0389 | Error | `Cannot construct '<T>()' because type parameter '<T>' has no 'new()' constraint; add a 'new()' constraint (e.g. '[<T> new()]') to allow construction.` |
+
+Cause/fix:
+
+- **GS0389** — the body constructs a type parameter (`T()`) that does not
+  declare a `new()` constraint, so the compiler cannot guarantee an accessible
+  parameterless constructor exists for every instantiation. Add a `new()`
+  constraint to the type parameter (e.g. `class Factory[T new()]` or
+  `func make[T new()]()`). Mirrors C# CS0304. Note that a type **argument** that
+  cannot satisfy the `new()` constraint (e.g. a class whose only constructor
+  takes parameters) is reported separately as **GS0152** at the instantiation
+  site.
+
+Cross-references:
+
+- Issue #988 (this feature); ADR-0097 (`class`/`struct`/`new()` constraints),
+  ADR-0087 (reified generics and the `Activator.CreateInstance<T>()` lowering),
+  ADR-0115 §G (cs2gs migration mapping for C# `where T : new()` / `new T()`).
+
 
 ## `@LibraryImport` P/Invoke diagnostics (GS0342–GS0345)
 

@@ -696,6 +696,35 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadLocal(slot);
     }
 
+    /// <summary>
+    /// Issue #988: emits the construction of a type parameter `T` that carries a
+    /// `new()` constraint — the G# spelling `T()`. Lowered to a reified
+    /// `call !!0 [System.Runtime]System.Activator::CreateInstance&lt;!!T&gt;()`
+    /// (ADR-0087). `Activator.CreateInstance&lt;T&gt;()` is the standard C#
+    /// `new()`-constraint lowering and yields a real instance for both reference
+    /// types with a public parameterless ctor and value types.
+    /// </summary>
+    private void EmitTypeParameterConstruction(BoundTypeParameterConstructionExpression node)
+    {
+        var openCreateInstance = typeof(System.Activator)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .First(m => m.Name == "CreateInstance"
+                && m.IsGenericMethodDefinition
+                && m.GetGenericArguments().Length == 1
+                && m.GetParameters().Length == 0);
+
+        // Close the open definition with a placeholder; GetMethodEntityHandle
+        // re-encodes the real type argument (the in-scope type parameter, a
+        // VAR/MVAR) into the MethodSpec via the symbolic-argument path.
+        var closed = openCreateInstance.MakeGenericMethod(typeof(object));
+        var handle = this.outer.GetMethodEntityHandle(
+            closed,
+            ImmutableArray.Create<TypeSymbol>(node.TypeParameter));
+
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(handle);
+    }
+
     private void EmitClrConversionCall(BoundClrConversionCallExpression conv)
     {
         // Stream E emit parity: user-defined op_Implicit / op_Explicit is a

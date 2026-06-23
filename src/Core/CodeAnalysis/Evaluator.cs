@@ -660,6 +660,7 @@ public sealed class Evaluator
                 BoundNodeKind.AddressOfExpression => EvaluateAddressOfExpression((BoundAddressOfExpression)node),
                 BoundNodeKind.DereferenceExpression => EvaluateDereferenceExpression((BoundDereferenceExpression)node),
                 BoundNodeKind.DefaultExpression => EvaluateDefaultExpression((BoundDefaultExpression)node),
+                BoundNodeKind.TypeParameterConstructionExpression => EvaluateTypeParameterConstructionExpression((BoundTypeParameterConstructionExpression)node),
                 BoundNodeKind.InterpolatedStringExpression => EvaluateInterpolatedStringExpression((BoundInterpolatedStringExpression)node),
                 BoundNodeKind.IsExpression => EvaluateIsExpression((BoundIsExpression)node),
                 BoundNodeKind.AsExpression => EvaluateAsExpression((BoundAsExpression)node),
@@ -2994,6 +2995,25 @@ public sealed class Evaluator
         }
 
         return System.Activator.CreateInstance(clr);
+    }
+
+    private object EvaluateTypeParameterConstructionExpression(BoundTypeParameterConstructionExpression node)
+    {
+        // Issue #988: `T()` under a `new()` constraint. The compiled backend
+        // lowers this to a reified Activator.CreateInstance<T>(); the tree-walking
+        // interpreter has no reified type-parameter binding, so the best it can do
+        // is construct a concrete CLR type when the type parameter has already been
+        // resolved to one (e.g. a BCL value type). Otherwise the construction is
+        // not supported in interpreted mode.
+        var clr = node.TypeParameter.ClrType;
+        if (clr != null)
+        {
+            return System.Activator.CreateInstance(clr);
+        }
+
+        throw new EvaluatorException(
+            $"Construction of type parameter '{node.TypeParameter.Name}()' is only supported by the compiled backend (issue #988).",
+            node);
     }
 
     private object EvaluateMakeChannelExpression(BoundMakeChannelExpression node)

@@ -546,7 +546,7 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #985 | implementing `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by return type (generic `IEnumerator[T]` + non-generic `IEnumerator`) | GS0264 + GS0187 | resolved (covariant-return interface bridge: GS0264 relaxed when two same-name/param methods satisfy distinct interface slots; inherited base-interface slots now required so a missing bridge still errors GS0187; emit writes the `MethodImpl` + non-generic `IEnumerable` `InterfaceImpl` rows) |
 | #986 | `base.Method()` virtual base-class call has no canonical G# form (`base[Base].M` is interface-only per ADR-0091) | GS0157 / GS0338 | **resolved** (issue #986 — `base.M(...)` / `base[Base].M(...)` emit a non-virtual base-class call; ADR-0091 extended) |
 | #987 | an `abstract` (no-body) method on an `open class` → emitter crash | GS9998 (NRE) | **resolved** (issue #987 — no-body `open func F() R;` emits a CLR `abstract virtual` slot; the declaring type becomes `TypeAttributes.Abstract`; new diagnostics GS0386 not-instantiable / GS0387 missing-override / GS0388 abstract-requires-open) |
-| #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | open (translation-unsupported; L5 has the caller supply the value) |
+| #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | **resolved** (issue #988 — `[T new()]` declares a `new()` constraint and `T()` constructs the parameter, lowered to a reified `Activator.CreateInstance<T>()`; new diagnostic GS0389 when constructing without the constraint; GS0152 still guards bad type arguments) |
 | #989 | a generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | open (L5 uses a generic field instead) |
 | #990 | a user reference-type iterator (`sequence[UserClass]`) → emitter crash | GS9998 | open (L5 yields `string`; `sequence[int32]`/`sequence[string]` compile) |
 | #991 | a `when` guard on a `switch` statement/expression arm won't parse | GS0005 | open (translation-unsupported) |
@@ -729,20 +729,26 @@ open class Shape {
 }
 ```
 
-**#988 — `new T()` construction under a `new()` constraint has no canonical G# form.**
-A C# generic that constructs its type parameter (`where T : new()`, `new T()`) has
-no G# spelling: `T()` → `GS0130`, `T{}` → `GS0157`, `new T()` → `GS0125`.
-Classification: **translation-unsupported**. L5 has the caller supply the value
-(`Box[T](Value T)`) rather than construct it.
+**#988 — `new T()` construction under a `new()` constraint. RESOLVED (issue #988).**
+A C# generic that constructs its type parameter (`where T : new()`, `new T()`)
+now has a canonical G# spelling: declare the constraint with `[T new()]` and
+construct the parameter with the call-like form `T()`. The construction lowers
+to a reified `System.Activator.CreateInstance<T>()` (the standard C# `new()`
+lowering, ADR-0087), which produces a real instance for both reference types
+with a public parameterless constructor and value types. Constructing a type
+parameter without the `new()` constraint is a clean compile error (GS0389); a
+type argument that cannot satisfy `new()` is still rejected at the instantiation
+site (GS0152).
 
 ```gs
-// repro — none of these construct T:
+// now compiles, ilverifies, and runs:
 class Factory[T new()] {
-    func Make() T { return T() }     // GS0130
+    func Make() T { return T() }     // T() constructs T
 }
+func make[T new()]() T { return T() } // also on generic functions
 ```
 ```gs
-// control — the caller supplies the instance:
+// control — the caller supplies the instance (still compiles):
 class Box[T class](Value T) { }
 ```
 
