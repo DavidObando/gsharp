@@ -132,6 +132,49 @@ label
         Assert.Equal("maybe", result.Value);
     }
 
+    // Issue #991: `when` guards on switch-expression arms.
+    [Theory]
+    [InlineData("5", "small")]
+    [InlineData("50", "big")]
+    [InlineData("-1", "nonpositive")]
+    public void SwitchExpression_WhenGuard_Evaluates(string input, string expected)
+    {
+        var result = Evaluate($@"
+let v = {input}
+let label = switch v {{ case > 0 when v < 10: ""small"" case > 0: ""big"" default: ""nonpositive"" }}
+label
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(expected, result.Value);
+    }
+
+    [Fact]
+    public void SwitchExpression_GuardedDiscard_DoesNotSatisfyExhaustiveness()
+    {
+        // Issue #991: a guarded discard (`case _ when …`) can fail at runtime,
+        // so it does not act as a total/default arm — the value switch is
+        // still missing a default.
+        var diagnostics = Bind(@"
+let v = 1
+let label = switch v { case > 0: ""pos"" case _ when v < 0: ""neg"" }
+");
+
+        Assert.Contains(diagnostics, d => d.Message == "Switch expression must have a 'default' arm.");
+    }
+
+    [Fact]
+    public void SwitchExpression_NonBoolGuard_Diagnoses()
+    {
+        // Issue #991: a non-bool guard reports the standard conversion error.
+        var diagnostics = Bind(@"
+let v = 1
+let label = switch v { case > 0 when v: ""x"" default: ""y"" }
+");
+
+        Assert.Contains(diagnostics, d => d.Message.Contains("Cannot convert type", System.StringComparison.Ordinal) && d.Message.Contains("'bool'", System.StringComparison.Ordinal));
+    }
+
     private static ImmutableArray<Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

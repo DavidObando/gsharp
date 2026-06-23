@@ -54,7 +54,7 @@ internal sealed partial class ExpressionBinder
         }
 
         var hasDefault = false;
-        var boundArmBuilders = ImmutableArray.CreateBuilder<(SwitchExpressionArmSyntax Syntax, BoundPattern Pattern, BoundExpression Result)>();
+        var boundArmBuilders = ImmutableArray.CreateBuilder<(SwitchExpressionArmSyntax Syntax, BoundPattern Pattern, BoundExpression Guard, BoundExpression Result)>();
 
         foreach (var armSyntax in syntax.Arms)
         {
@@ -68,13 +68,19 @@ internal sealed partial class ExpressionBinder
 
                 hasDefault = true;
                 var result = BindExpression(armSyntax.Result);
-                boundArmBuilders.Add((armSyntax, pattern, result));
+                boundArmBuilders.Add((armSyntax, pattern, null, result));
                 continue;
             }
 
             scope = new BoundScope(scope);
             pattern = patterns.BindPattern(armSyntax.Value, switchType);
-            if (pattern is BoundDiscardPattern)
+
+            // Issue #991: a guarded arm (`when <bool>`) can always fail at
+            // runtime, so it never contributes to exhaustiveness — in
+            // particular a guarded discard `case _ when …` does NOT act as a
+            // default/total arm.
+            var hasGuard = armSyntax.Guard != null;
+            if (pattern is BoundDiscardPattern && !hasGuard)
             {
                 if (hasDefault)
                 {
@@ -85,9 +91,15 @@ internal sealed partial class ExpressionBinder
             }
 
             var frame = StatementBinder.TryClassifyPatternNarrowing(discriminant, pattern);
+            BoundExpression guard = null;
+            if (hasGuard)
+            {
+                guard = BindGuardExpression(armSyntax.Guard, frame);
+            }
+
             var armResult = BindExpressionWithNarrowing(armSyntax.Result, frame);
             scope = scope.Parent;
-            boundArmBuilders.Add((armSyntax, pattern, armResult));
+            boundArmBuilders.Add((armSyntax, pattern, guard, armResult));
         }
 
         if (!hasDefault && !ExhaustivenessAnalyzer.IsExhaustiveDiscriminant(switchType))
@@ -115,7 +127,7 @@ internal sealed partial class ExpressionBinder
                 result = new BoundConversionExpression(null, resultType, result);
             }
 
-            arms.Add(new BoundSwitchExpressionArm(null, arm.Pattern, result));
+            arms.Add(new BoundSwitchExpressionArm(null, arm.Pattern, arm.Guard, result));
         }
 
         var boundArms = arms.ToImmutable();

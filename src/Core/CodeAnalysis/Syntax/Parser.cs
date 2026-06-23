@@ -5101,13 +5101,31 @@ public class Parser
         {
             var defaultKeyword = MatchToken(SyntaxKind.DefaultKeyword);
             var body = ParseBlockStatement();
-            return new SwitchCaseSyntax(syntaxTree, defaultKeyword, value: null, body);
+            return new SwitchCaseSyntax(syntaxTree, defaultKeyword, value: null, whenKeyword: null, guard: null, body);
         }
 
         var caseKeyword = MatchToken(SyntaxKind.CaseKeyword);
         var value = ParsePattern();
+        var (whenKeyword, guard) = ParseOptionalWhenGuard();
         var caseBody = ParseBlockStatement();
-        return new SwitchCaseSyntax(syntaxTree, caseKeyword, value, caseBody);
+        return new SwitchCaseSyntax(syntaxTree, caseKeyword, value, whenKeyword, guard, caseBody);
+    }
+
+    // Issue #991: a contextual `when <bool-expr>` guard may follow the pattern
+    // in a switch arm. `when` is not a reserved keyword in G#, so it is matched
+    // contextually as an identifier whose text is "when"; this keeps existing
+    // identifiers named `when` usable everywhere else. Returns (null, null) when
+    // no guard is present.
+    private (SyntaxToken WhenKeyword, ExpressionSyntax Guard) ParseOptionalWhenGuard()
+    {
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "when")
+        {
+            var whenKeyword = NextToken();
+            var guard = ParseExpression();
+            return (whenKeyword, guard);
+        }
+
+        return (null, null);
     }
 
     private PatternSyntax ParsePattern()
@@ -6376,14 +6394,15 @@ public class Parser
             var defaultKeyword = MatchToken(SyntaxKind.DefaultKeyword);
             var defaultArrow = MatchSwitchExpressionArmSeparator();
             var defaultResult = ParseExpression();
-            return new SwitchExpressionArmSyntax(syntaxTree, defaultKeyword, value: null, defaultArrow, defaultResult);
+            return new SwitchExpressionArmSyntax(syntaxTree, defaultKeyword, value: null, whenKeyword: null, guard: null, defaultArrow, defaultResult);
         }
 
         var caseKeyword = MatchToken(SyntaxKind.CaseKeyword);
         var value = ParsePattern();
+        var (whenKeyword, guard) = ParseOptionalWhenGuard();
         var arrow = MatchSwitchExpressionArmSeparator();
         var result = ParseExpression();
-        return new SwitchExpressionArmSyntax(syntaxTree, caseKeyword, value, arrow, result);
+        return new SwitchExpressionArmSyntax(syntaxTree, caseKeyword, value, whenKeyword, guard, arrow, result);
     }
 
     // ADR-0074 / issue #714: switch-expression arms accept either `:` (new) or

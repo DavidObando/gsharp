@@ -253,6 +253,11 @@ internal sealed class SlotPlanner
                     VisitPattern(arm.Pattern);
                 }
 
+                if (arm.Guard != null)
+                {
+                    VisitExpression(arm.Guard);
+                }
+
                 VisitStatement(arm.Body);
             }
         }
@@ -365,6 +370,11 @@ internal sealed class SlotPlanner
                 {
                     AllocatePatternBindings(arm.Pattern, this.locals, this.localTypes, this.typePatternScratchSlots);
                     VisitPattern(arm.Pattern);
+                }
+
+                if (arm.Guard != null)
+                {
+                    VisitExpression(arm.Guard);
                 }
 
                 VisitExpression(arm.Result);

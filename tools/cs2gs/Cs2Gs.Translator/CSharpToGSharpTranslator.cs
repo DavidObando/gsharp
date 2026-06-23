@@ -2880,12 +2880,10 @@ public sealed class CSharpToGSharpTranslator
 
             foreach (SwitchExpressionArmSyntax arm in node.Arms)
             {
-                if (arm.WhenClause != null)
-                {
-                    this.context.ReportUnsupported(
-                        arm.WhenClause,
-                        "switch-arm 'when' guard has no canonical G# form yet (ADR-0115 §B).");
-                }
+                // Issue #991: C# `when` guards now have a canonical G# form.
+                GExpression guard = arm.WhenClause != null
+                    ? this.TranslateExpression(arm.WhenClause.Condition)
+                    : null;
 
                 var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                 GPattern pattern = this.TranslatePattern(arm.Pattern, bindings);
@@ -2908,7 +2906,7 @@ public sealed class CSharpToGSharpTranslator
                     }
                 }
 
-                arms.Add(new SwitchArm(pattern, body));
+                arms.Add(new SwitchArm(pattern, body, guard));
             }
 
             return new SwitchExpression(subject, arms);
@@ -2925,22 +2923,6 @@ public sealed class CSharpToGSharpTranslator
                 // that stacks multiple `case` labels (fall-through) has no canonical
                 // G# form, so each label is emitted as its own arm sharing the body.
                 var labels = section.Labels.ToList();
-                GExpression guard = null;
-                foreach (SwitchLabelSyntax label in labels)
-                {
-                    if (label is CasePatternSwitchLabelSyntax { WhenClause: { } when })
-                    {
-                        guard = this.TranslateExpression(when.Condition);
-                    }
-                }
-
-                if (guard != null)
-                {
-                    this.context.ReportUnsupported(
-                        node,
-                        "switch-statement 'when' guard has no canonical G# form yet (ADR-0115 §B).");
-                }
-
                 BlockStatement body = this.TranslateSwitchSectionBody(section);
 
                 foreach (SwitchLabelSyntax label in labels)
@@ -2950,7 +2932,12 @@ public sealed class CSharpToGSharpTranslator
                         case CasePatternSwitchLabelSyntax patternLabel:
                             var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                             GPattern pattern = this.TranslatePattern(patternLabel.Pattern, bindings);
-                            cases.Add(new SwitchStatementCase(pattern, body));
+
+                            // Issue #991: C# `when` guards now have a canonical G# form.
+                            GExpression guard = patternLabel.WhenClause != null
+                                ? this.TranslateExpression(patternLabel.WhenClause.Condition)
+                                : null;
+                            cases.Add(new SwitchStatementCase(pattern, body, guard));
                             break;
 
                         case CaseSwitchLabelSyntax valueLabel:

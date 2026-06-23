@@ -343,7 +343,7 @@ A C# local declaration with **no initializer** (`int existing;`, typically a pre
 
 #### B.33 `switch` statement over patterns → G# `switch` block — sample `PatternSwitch.gs`
 
-A C# `switch` **statement** maps to the canonical G# `switch subj { case <pat> { … } default { … } }` block form (sample `PatternSwitch.gs`): each `case` section's labels become a `case <pattern>` arm whose body is the section's statements wrapped in a block, a type pattern `case T x:` maps to `case x is T`, and the per-section `break;` (required in C#) is **dropped** (G# arms do not fall through). The `default:` section maps to a `default { … }` arm. A `when` guard on a case has **no** G# spelling (§G #991) and a value-returning `switch` statement is emitted as a `switch` **expression** instead (the statement form is not exhaustiveness-checked for value returns), so the translator reserves the block form for void-bodied dispatch. Reuses the same pattern set as the §B switch-expression mapping (type/relational patterns).
+A C# `switch` **statement** maps to the canonical G# `switch subj { case <pat> { … } default { … } }` block form (sample `PatternSwitch.gs`): each `case` section's labels become a `case <pattern>` arm whose body is the section's statements wrapped in a block, a type pattern `case T x:` maps to `case x is T`, and the per-section `break;` (required in C#) is **dropped** (G# arms do not fall through). The `default:` section maps to a `default { … }` arm. A `when` guard on a case maps to a G# `case <pattern> when <bool> { … }` guard (§G #991, resolved) and a value-returning `switch` statement is emitted as a `switch` **expression** instead (the statement form is not exhaustiveness-checked for value returns), so the translator reserves the block form for void-bodied dispatch. Reuses the same pattern set as the §B switch-expression mapping (type/relational patterns).
 
 #### B.34 Iterator (`yield return`) → `sequence[T]` generator — sample `TupleSequenceIterators.gs`
 
@@ -549,7 +549,7 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | **resolved** (issue #988 — `[T new()]` declares a `new()` constraint and `T()` constructs the parameter, lowered to a reified `Activator.CreateInstance<T>()`; new diagnostic GS0389 when constructing without the constraint; GS0152 still guards bad type arguments) |
 | #989 | a generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | **resolved** (issue #989 — `StructSymbol` construction now carries the property table across with the property/indexer type substituted, exactly like fields; the emitter parents the external accessor call at the constructed `TypeSpec` and routes the auto-accessor backing-field token through the self-`TypeSpec` MemberRef so read/write round-trips and IL-verifies) |
 | #990 | a user reference-type iterator (`sequence[UserClass]`) → emitter crash | GS9998 | **resolved** (user reference- and value-type element iterators emit, ilverify, and run) |
-| #991 | a `when` guard on a `switch` statement/expression arm won't parse | GS0005 | open (translation-unsupported) |
+| #991 | a `when` guard on a `switch` statement/expression arm won't parse | GS0005 | **resolved** (issue #991 — `case <pattern> when <bool>:` / `case <pattern> when <bool> { … }` parse a contextual `when` guard; an arm matches only when the pattern matches AND the guard is true; guarded arms never satisfy exhaustiveness; cs2gs now translates C# `when` guards to the new form) |
 | #992 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | open (translation-unsupported) |
 | #993 | an `is`/`case` type pattern **with** a binder (`x is T t`) leaves the binder unbound | GS0125 | open (L5 uses the no-binder form `x is T`) |
 | #994 | `yield break` has no canonical G# form | GS0005 | open (translation-unsupported) |
@@ -797,12 +797,15 @@ func shapes() sequence[Shape] { yield Shape() }
 func names() sequence[string] { yield "a" }
 ```
 
-**#991 — a `when` guard won't parse (`GS0005`).**
-A `when` guard on a `switch` statement or expression arm (`case > 0 when cond:`) →
-`GS0005` parse error. Classification: **translation-unsupported**. L5 omits guards.
+**#991 — a `when` guard (resolved).**
+A `when` guard on a `switch` statement or expression arm (`case > 0 when cond:`) is
+now supported end-to-end in G# (issue #991): the contextual `when` keyword
+introduces a boolean guard, an arm matches only when its pattern matches AND the
+guard is true, and guarded arms never satisfy exhaustiveness. cs2gs translates C#
+`when` guards directly to the new G# form.
 
 ```gs
-// repro — GS0005 on a when guard:
+// now compiles — when guard on a relational pattern:
 let r = switch n {
     case > 0 when n < 10: "small"
     default: "other"

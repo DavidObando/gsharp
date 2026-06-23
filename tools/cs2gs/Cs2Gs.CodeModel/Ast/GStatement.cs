@@ -438,10 +438,12 @@ public sealed class SwitchStatementCase : GNode
     /// </summary>
     /// <param name="pattern">The arm pattern, or <see langword="null"/> for the <c>default</c> arm.</param>
     /// <param name="body">The arm body block.</param>
-    public SwitchStatementCase(GPattern pattern, BlockStatement body)
+    /// <param name="guard">The optional <c>when</c> guard expression, or <see langword="null"/>.</param>
+    public SwitchStatementCase(GPattern pattern, BlockStatement body, GExpression guard = null)
     {
         Pattern = pattern;
         Body = body;
+        Guard = guard;
     }
 
     /// <summary>Gets the arm pattern, or <see langword="null"/> for the <c>default</c> arm.</summary>
@@ -449,6 +451,9 @@ public sealed class SwitchStatementCase : GNode
 
     /// <summary>Gets the arm body block.</summary>
     public BlockStatement Body { get; }
+
+    /// <summary>Gets the optional <c>when</c> guard expression, or <see langword="null"/> when the arm has no guard.</summary>
+    public GExpression Guard { get; }
 }
 
 /// <summary>

@@ -690,6 +690,16 @@ default: "many"
 
 Patterns include list-like patterns, property patterns, type tests with `is`, wildcard `_`, relational patterns, and expression patterns.
 
+A pattern in a `switch` arm — in both the expression form and the statement form — may be followed by an optional `when <bool-expr>` guard (issue #991), mirroring C#. `when` is a contextual keyword: it introduces a guard only in this position and remains usable as an ordinary identifier everywhere else. An arm with a guard is selected only when **both** the pattern matches **and** the guard expression evaluates to `true`; otherwise control falls through to the next arm. The guard sees any pattern narrowing / smart-cast in effect for the arm (so the guard of `case x is T when …` observes the discriminator as `T`). A non-`bool` guard is rejected with the standard conversion diagnostic. Because a guarded arm can fail at run time, it never contributes to exhaustiveness: a guarded discard (`case _ when …`) does **not** act as a total/`default` arm, so a value-returning `switch` whose only catch-all is guarded still requires a reachable `default` arm (`GS0176`).
+
+```gsharp
+let description = switch value {
+case > 0 when value < 10: "small"
+case > 0: "big"
+default: "nonpositive"
+}
+```
+
 ### Lambda expressions (ADR-0074, ADR-0076, ADR-0119)
 
 `->` introduces a lambda expression. The **canonical** form omits parameter and return types and lets them be **inferred** from the expected delegate type at the use site (ADR-0119): `(x) -> x + 1`, `(a, b) -> a + b`. A single-parameter lambda may drop the parentheses entirely: `x -> x + 1` (issue #932). Parameter types may also be spelled explicitly when desired (`(x int32) -> x + 1`). The body is either a single expression or a brace-delimited block whose trailing expression (or `return`) supplies the lambda value. Lambdas may capture outer locals; the closure machinery is shared with `func` literals.
@@ -862,7 +872,7 @@ Switch statement cases use block bodies and never fall through. The `fallthrough
 
 ```ebnf
 SwitchStmt = "switch" Expression "{" SwitchCase* "}" .
-SwitchCase = "case" Pattern Block | "default" Block .
+SwitchCase = "case" Pattern [ "when" Expression ] Block | "default" Block .
 ```
 
 When an arm pattern is a type-pattern `<ident> is T` (or any pattern that proves the discriminator's runtime type), the discriminator expression is flow-narrowed to `T` inside the arm body in addition to the bound arm variable — see *Smart casts (flow narrowing)* below.
@@ -1277,10 +1287,11 @@ ReturnStmt        ::= 'return' ('ref' Expression | Expression (',' Expression)*)
 YieldStmt         ::= 'yield' Expression
 
 SwitchStmt        ::= 'switch' Expression '{' SwitchCase* '}'
-SwitchCase        ::= 'case' Pattern Block | 'default' Block
+SwitchCase        ::= 'case' Pattern ('when' Expression)? Block | 'default' Block
 SwitchExpr        ::= 'switch' Expression '{' SwitchArm* '}'
-SwitchArm         ::= 'case' Pattern (':' | '->') Expression | 'default' (':' | '->') Expression
+SwitchArm         ::= 'case' Pattern ('when' Expression)? (':' | '->') Expression | 'default' (':' | '->') Expression
                       (* '->' is the legacy ADR-0009 form. Per ADR-0074 (#714) ':' is the preferred separator; the legacy '->' form is still accepted but emits warning GS0302. *)
+                      (* The optional 'when' guard (#991) selects the arm only when the pattern matches AND the guard is true; 'when' is a contextual keyword. *)
 Pattern           ::= '[' Pattern (',' Pattern)* ']'
                     | '{' identifier ':' Pattern (',' identifier ':' Pattern)* '}'
                     | identifier 'is' TypeClause

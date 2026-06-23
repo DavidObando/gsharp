@@ -516,10 +516,12 @@ public sealed class SwitchArm : GNode
     /// </summary>
     /// <param name="pattern">The arm pattern, or <see langword="null"/> for the <c>default</c> arm.</param>
     /// <param name="body">The result expression.</param>
-    public SwitchArm(GPattern pattern, GExpression body)
+    /// <param name="guard">The optional <c>when</c> guard expression, or <see langword="null"/>.</param>
+    public SwitchArm(GPattern pattern, GExpression body, GExpression guard = null)
     {
         Pattern = pattern;
         Body = body;
+        Guard = guard;
     }
 
     /// <summary>Gets the arm pattern, or <see langword="null"/> for the <c>default</c> arm.</summary>
@@ -527,6 +529,9 @@ public sealed class SwitchArm : GNode
 
     /// <summary>Gets the result expression.</summary>
     public GExpression Body { get; }
+
+    /// <summary>Gets the optional <c>when</c> guard expression, or <see langword="null"/> when the arm has no guard.</summary>
+    public GExpression Guard { get; }
 }
 
 /// <summary>

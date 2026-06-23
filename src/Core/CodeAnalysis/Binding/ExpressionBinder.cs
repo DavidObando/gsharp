@@ -133,6 +133,28 @@ internal sealed partial class ExpressionBinder
         }
     }
 
+    // Issue #991: bind a switch-arm `when` guard as a boolean expression. The
+    // guard sees the same pattern narrowing / smart-cast frame as the arm body
+    // (so `case x is T when …` observes `x` as `T`). A non-bool guard is
+    // reported through the standard conversion diagnostic (GS0017).
+    private BoundExpression BindGuardExpression(ExpressionSyntax syntax, Dictionary<VariableSymbol, TypeSymbol> frame)
+    {
+        if (frame == null)
+        {
+            return BindExpression(syntax, TypeSymbol.Bool);
+        }
+
+        binderCtx.NarrowedVariables.Add(frame);
+        try
+        {
+            return BindExpression(syntax, TypeSymbol.Bool);
+        }
+        finally
+        {
+            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+        }
+    }
+
     internal BoundExpression BindExpression(ExpressionSyntax syntax, TypeSymbol targetType)
     {
         return conversions.BindConversion(syntax, targetType);
