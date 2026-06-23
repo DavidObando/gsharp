@@ -679,3 +679,102 @@ public sealed class OutArgumentExpression : GExpression
     /// <summary>Gets the declared local name (or <c>_</c>).</summary>
     public string Name { get; }
 }
+
+/// <summary>
+/// A <c>typeof(T)</c> expression (spec §Primary expressions; ADR-0115 §B). The
+/// C# <c>typeof(T)</c> maps directly to the identically-spelled G# form, whose
+/// argument is a type clause rather than an expression.
+/// </summary>
+public sealed class TypeOfExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TypeOfExpression"/> class.
+    /// </summary>
+    /// <param name="type">The type whose runtime <c>System.Type</c> is taken.</param>
+    public TypeOfExpression(GTypeReference type)
+    {
+        Type = type;
+    }
+
+    /// <summary>Gets the type whose runtime token is taken.</summary>
+    public GTypeReference Type { get; }
+}
+
+/// <summary>
+/// A <c>default(T)</c> / bare <c>default</c> expression (ADR-0100; spec
+/// §Primary expressions). The C# <c>default(T)</c> maps to <c>default(T)</c>;
+/// the C# target-typed <c>default</c> literal maps to the bare <c>default</c>
+/// form, whose type is supplied by the surrounding context.
+/// </summary>
+public sealed class DefaultValueExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DefaultValueExpression"/> class.
+    /// </summary>
+    /// <param name="type">The explicit type, or <c>null</c> for the bare form.</param>
+    public DefaultValueExpression(GTypeReference type = null)
+    {
+        Type = type;
+    }
+
+    /// <summary>Gets the explicit target type, or <c>null</c> for bare <c>default</c>.</summary>
+    public GTypeReference Type { get; }
+}
+
+/// <summary>
+/// A type used in expression position — the right operand of an <c>as</c> or
+/// <c>is</c> type test (e.g. <c>o as []object</c>, <c>o is string</c>). Renders
+/// the canonical G# type clause (slices as <c>[]T</c>, generics as <c>T[U]</c>).
+/// </summary>
+public sealed class TypeExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TypeExpression"/> class.
+    /// </summary>
+    /// <param name="type">The referenced type.</param>
+    public TypeExpression(GTypeReference type)
+    {
+        Type = type;
+    }
+
+    /// <summary>Gets the referenced type.</summary>
+    public GTypeReference Type { get; }
+}
+
+/// <summary>
+/// The empty receiver placeholder at the head of a null-conditional
+/// continuation (<c>?.b</c>, <c>?[i]</c>, <c>?.M()</c>). It renders as the empty
+/// string so the enclosing member-access / index / invocation emits the bare
+/// <c>.b</c> / <c>[i]</c> / <c>.M()</c> tail that follows the <c>?</c>.
+/// </summary>
+public sealed class ConditionalReceiverExpression : GExpression
+{
+}
+
+/// <summary>
+/// A null-conditional access <c>target?{whenNotNull}</c> — the C#
+/// <c>a?.b</c>, <c>a?.b()</c>, <c>a?[i]</c> forms, which map directly to the
+/// identically-spelled G# null-conditional member / index / call (spec
+/// §Member access and indexing). The <see cref="WhenNotNull"/> continuation is
+/// rooted at a <see cref="ConditionalReceiverExpression"/> so it renders as the
+/// bare <c>.b</c> / <c>[i]</c> / <c>.b()</c> tail.
+/// </summary>
+public sealed class ConditionalAccessExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ConditionalAccessExpression"/> class.
+    /// </summary>
+    /// <param name="target">The receiver tested for null.</param>
+    /// <param name="whenNotNull">The continuation evaluated when the receiver is non-null.</param>
+    public ConditionalAccessExpression(GExpression target, GExpression whenNotNull)
+    {
+        Target = target;
+        WhenNotNull = whenNotNull;
+    }
+
+    /// <summary>Gets the receiver tested for null.</summary>
+    public GExpression Target { get; }
+
+    /// <summary>Gets the non-null continuation.</summary>
+    public GExpression WhenNotNull { get; }
+}

@@ -502,3 +502,102 @@ public sealed class YieldStatement : GStatement
     /// <summary>Gets the yielded value.</summary>
     public GExpression Expression { get; }
 }
+
+/// <summary>
+/// A <c>break</c> statement (spec §Statements; ADR-0070). Maps the C#
+/// <c>break;</c> directly, and is also the canonical end-of-generator form for
+/// C# <c>yield break;</c>.
+/// </summary>
+public sealed class BreakStatement : GStatement
+{
+}
+
+/// <summary>
+/// A <c>continue</c> statement (spec §Statements; ADR-0070). Maps the C#
+/// <c>continue;</c> directly.
+/// </summary>
+public sealed class ContinueStatement : GStatement
+{
+}
+
+/// <summary>
+/// A post-test <c>do { body } while cond</c> loop (spec §Statements; ADR-0070).
+/// Maps the C# <c>do … while (cond);</c> directly.
+/// </summary>
+public sealed class DoWhileStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DoWhileStatement"/> class.
+    /// </summary>
+    /// <param name="body">The loop body.</param>
+    /// <param name="condition">The post-test condition.</param>
+    public DoWhileStatement(BlockStatement body, GExpression condition)
+    {
+        Body = body;
+        Condition = condition;
+    }
+
+    /// <summary>Gets the loop body.</summary>
+    public BlockStatement Body { get; }
+
+    /// <summary>Gets the post-test condition.</summary>
+    public GExpression Condition { get; }
+}
+
+/// <summary>
+/// A tuple / named deconstruction binding <c>let (a, b) = expr</c> (spec
+/// §Bindings). Maps a C# deconstructing declaration
+/// (<c>var (a, b) = …</c> / <c>(T a, T b) = …</c>).
+/// </summary>
+public sealed class TupleDeconstructionStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TupleDeconstructionStatement"/> class.
+    /// </summary>
+    /// <param name="binding">The binding keyword (<c>let</c> / <c>var</c>).</param>
+    /// <param name="names">The deconstruction target names (<c>_</c> for a discard).</param>
+    /// <param name="initializer">The deconstructed value.</param>
+    public TupleDeconstructionStatement(
+        BindingKind binding,
+        IReadOnlyList<string> names,
+        GExpression initializer)
+    {
+        Binding = binding;
+        Names = names ?? new List<string>();
+        Initializer = initializer;
+    }
+
+    /// <summary>Gets the binding keyword.</summary>
+    public BindingKind Binding { get; }
+
+    /// <summary>Gets the deconstruction target names.</summary>
+    public IReadOnlyList<string> Names { get; }
+
+    /// <summary>Gets the deconstructed value.</summary>
+    public GExpression Initializer { get; }
+}
+
+/// <summary>
+/// A local function declaration mapped to a G# function-valued <c>let</c>
+/// binding (<c>let f = func(params) ret { body }</c>). The C# local function
+/// becomes an immutable local holding a function literal (ADR-0115 §B).
+/// </summary>
+public sealed class LocalFunctionStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="LocalFunctionStatement"/> class.
+    /// </summary>
+    /// <param name="name">The local function name.</param>
+    /// <param name="lambda">The function literal holding the parameters / body.</param>
+    public LocalFunctionStatement(string name, LambdaExpression lambda)
+    {
+        Name = name;
+        Lambda = lambda;
+    }
+
+    /// <summary>Gets the local function name.</summary>
+    public string Name { get; }
+
+    /// <summary>Gets the function literal.</summary>
+    public LambdaExpression Lambda { get; }
+}
