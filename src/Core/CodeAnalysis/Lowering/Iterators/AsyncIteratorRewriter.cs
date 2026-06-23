@@ -133,6 +133,28 @@ public static class AsyncIteratorRewriter
             return aseq.ElementType;
         }
 
+        // Issue #1002 (parallel to #990): `IAsyncEnumerable[Shape]` where
+        // `Shape` is a same-compilation user class is modelled as an
+        // ImportedTypeSymbol carrying `Shape` symbolically in
+        // `TypeArguments`. Its `ClrType` is the erased
+        // `IAsyncEnumerable<object>` (user types have no ClrType yet, so
+        // `MakeGenericType` falls back to `object`). If we go through the
+        // ClrType branch below we'd extract `typeof(object)` as the
+        // element type and the synthesized state machine would advertise
+        // `IAsyncEnumerable<object>` — invalid under generic invariance
+        // (ilverify StackUnexpected). Honour the symbolic argument so the
+        // SM emits the strongly-typed `IAsyncEnumerable<Shape>` /
+        // `IAsyncEnumerator<Shape>`.
+        if (type is ImportedTypeSymbol imported
+            && imported.OpenDefinition != null
+            && !imported.TypeArguments.IsDefaultOrEmpty
+            && imported.TypeArguments.Length == 1
+            && (imported.OpenDefinition.FullName == "System.Collections.Generic.IAsyncEnumerable`1"
+                || imported.OpenDefinition.FullName == "System.Collections.Generic.IAsyncEnumerator`1"))
+        {
+            return imported.TypeArguments[0];
+        }
+
         var clr = type?.ClrType;
         if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
         {

@@ -768,7 +768,23 @@ internal sealed class StateMachineEmitter
             FunctionSymbol getAsyncEnumerator = null;
             if (plan.IsEnumerable)
             {
-                var enumeratorType = TypeSymbol.FromClrType(typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementType.ClrType ?? typeof(object)));
+                // Issue #1002 (parallel to #990 sync iterators): a user-declared
+                // element type (`class` / `data struct`) has no ClrType, so the
+                // `MakeGenericType(elementType.ClrType ?? object)` path below
+                // would erase to `IAsyncEnumerator<object>`. That makes
+                // `shapes()` (signature `IAsyncEnumerable<Shape>`) return an SM
+                // whose `GetAsyncEnumerator` advertises `IAsyncEnumerator<object>`
+                // — invalid under generic invariance (ilverify StackUnexpected).
+                // Route such element types through the symbolic
+                // `ImportedTypeSymbol.GetConstructed` so the encoder emits a
+                // strongly-typed `IAsyncEnumerator<Shape>` GENERICINST blob
+                // referencing the user TypeDef.
+                TypeSymbol enumeratorType = elementType?.ClrType == null
+                    ? (TypeSymbol)ImportedTypeSymbol.GetConstructed(
+                        typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(typeof(object)),
+                        typeof(System.Collections.Generic.IAsyncEnumerator<>),
+                        ImmutableArray.Create<TypeSymbol>(elementType))
+                    : TypeSymbol.FromClrType(typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementType.ClrType));
                 var ctParam = new ParameterSymbol("cancellationToken", TypeSymbol.FromClrType(typeof(System.Threading.CancellationToken)));
                 getAsyncEnumerator = new FunctionSymbol("GetAsyncEnumerator", ImmutableArray.Create(ctParam), enumeratorType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
                 methods.Add(getAsyncEnumerator);

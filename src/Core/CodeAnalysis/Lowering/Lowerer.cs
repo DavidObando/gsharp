@@ -576,10 +576,40 @@ public sealed class Lowerer : BoundTreeRewriter
         var valueTaskClr = disposeAsync.ReturnType;
 
         var cancellationTokenType = TypeSymbol.FromClrType(cancellationTokenClr);
-        var enumeratorType = TypeSymbol.FromClrType(enumeratorClr);
         var valueTaskBoolType = TypeSymbol.FromClrType(valueTaskBoolClr);
         var valueTaskType = TypeSymbol.FromClrType(valueTaskClr);
-        var currentType = TypeSymbol.FromClrType(currentProperty.PropertyType);
+
+        // Issue #1002 (parallel to #774 for sync `for-in`): when the stream
+        // is a symbolic `ImportedTypeSymbol IAsyncEnumerable[Shape]` whose
+        // `Shape` is a same-compilation user type, the closed CLR shape is
+        // erased to `IAsyncEnumerable<object>` and the discovered
+        // `enumeratorClr` becomes `IAsyncEnumerator<object>`. Reading
+        // `Current` from that closed property yields `object`, which the
+        // verifier rejects when stored into the strongly-typed
+        // `valueVariable` (Shape) — even though the runtime tolerates the
+        // reference. Synthesize a symbolic `IAsyncEnumerator[Shape]` so
+        // the BoundClrPropertyAccessExpression carries the user's `Shape`,
+        // mirroring the synchronous symbolic-open path.
+        TypeSymbol enumeratorType;
+        TypeSymbol currentType;
+        if (stream.Type is ImportedTypeSymbol streamImp
+            && streamImp.HasSubstitutableTypeArgument
+            && streamImp.OpenDefinition != null
+            && streamImp.OpenDefinition.FullName == "System.Collections.Generic.IAsyncEnumerable`1"
+            && streamImp.TypeArguments.Length == 1)
+        {
+            var elementSym = streamImp.TypeArguments[0];
+            enumeratorType = ImportedTypeSymbol.GetConstructed(
+                enumeratorClr,
+                typeof(System.Collections.Generic.IAsyncEnumerator<>),
+                ImmutableArray.Create<TypeSymbol>(elementSym));
+            currentType = elementSym;
+        }
+        else
+        {
+            enumeratorType = TypeSymbol.FromClrType(enumeratorClr);
+            currentType = TypeSymbol.FromClrType(currentProperty.PropertyType);
+        }
 
         var enumeratorSymbol = new LocalVariableSymbol("$awaitEnum", isReadOnly: true, type: enumeratorType);
         var enumeratorExpr = new BoundVariableExpression(null, enumeratorSymbol);
