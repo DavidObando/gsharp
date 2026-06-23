@@ -73,6 +73,12 @@ internal sealed partial class MethodBodyEmitter
                 loadValue: () => this.il.LoadLocal(discriminantSlot),
                 valueType: node.Discriminant.Type,
                 failLabel: nextArm);
+            if (arm.Guard != null)
+            {
+                this.EmitExpression(arm.Guard);
+                this.il.Branch(ILOpCode.Brfalse, nextArm);
+            }
+
             this.EmitStatement(arm.Body);
             this.il.Branch(ILOpCode.Br, endLabel);
             this.il.MarkLabel(nextArm);
@@ -114,6 +120,12 @@ internal sealed partial class MethodBodyEmitter
                 loadValue: () => this.il.LoadLocal(discrSlot),
                 valueType: node.Discriminant.Type,
                 failLabel: nextArm);
+            if (arm.Guard != null)
+            {
+                this.EmitExpression(arm.Guard);
+                this.il.Branch(ILOpCode.Brfalse, nextArm);
+            }
+
             this.EmitExpression(arm.Result);
             this.il.StoreLocal(resultSlot);
             this.il.Branch(ILOpCode.Br, endLabel);

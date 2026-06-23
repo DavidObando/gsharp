@@ -1327,7 +1327,7 @@ public sealed class Lowerer : BoundTreeRewriter
                 var flatArms = ImmutableArray.CreateBuilder<BoundPatternSwitchArm>(ps.Arms.Length);
                 foreach (var arm in ps.Arms)
                 {
-                    flatArms.Add(new BoundPatternSwitchArm(null, arm.Pattern, Flatten(arm.Body)));
+                    flatArms.Add(new BoundPatternSwitchArm(null, arm.Pattern, arm.Guard, Flatten(arm.Body)));
                 }
 
                 builder.Add(new BoundPatternSwitchStatement(null, ps.Discriminant, flatArms.ToImmutable()));

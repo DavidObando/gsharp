@@ -40,7 +40,7 @@ public static class ExhaustivenessAnalyzer
         ImmutableArray<StructSymbol> structs,
         DiagnosticBag diagnostics)
     {
-        if (TryGetMissingVariants(discriminantType, arms.Select(a => a.Pattern), structs, out var discriminantDescription, out var missingNames))
+        if (TryGetMissingVariants(discriminantType, arms.Where(a => a.Guard == null).Select(a => a.Pattern), structs, out var discriminantDescription, out var missingNames))
         {
             diagnostics.ReportSwitchExpressionNotExhaustive(location, discriminantDescription, missingNames);
         }
@@ -61,7 +61,7 @@ public static class ExhaustivenessAnalyzer
         ImmutableArray<StructSymbol> structs,
         DiagnosticBag diagnostics)
     {
-        if (TryGetMissingVariants(discriminantType, arms.Select(a => a.Pattern), structs, out var discriminantDescription, out var missingNames))
+        if (TryGetMissingVariants(discriminantType, arms.Where(a => a.Guard == null).Select(a => a.Pattern), structs, out var discriminantDescription, out var missingNames))
         {
             diagnostics.ReportSwitchStatementNotExhaustive(location, discriminantDescription, missingNames);
         }

@@ -2733,6 +2733,12 @@ public sealed class Evaluator
             var bindings = new Dictionary<VariableSymbol, object>();
             if (TryMatchPattern(arm.Pattern, discriminant, bindings))
             {
+                if (arm.Guard != null
+                    && !(bool)EvaluateWithPatternBindings(bindings, () => EvaluateExpression(arm.Guard)))
+                {
+                    continue;
+                }
+
                 return EvaluateWithPatternBindings(bindings, () => EvaluateExpression(arm.Result));
             }
         }
@@ -2756,6 +2762,12 @@ public sealed class Evaluator
             var bindings = new Dictionary<VariableSymbol, object>();
             if (TryMatchPattern(arm.Pattern, discriminant, bindings))
             {
+                if (arm.Guard != null
+                    && !(bool)EvaluateWithPatternBindings(bindings, () => EvaluateExpression(arm.Guard)))
+                {
+                    continue;
+                }
+
                 EvaluateWithPatternBindings(bindings, () => EvaluateStatement((BoundBlockStatement)arm.Body));
                 return;
             }

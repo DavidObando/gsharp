@@ -482,7 +482,21 @@ public static class GSharpPrinter
         {
             sb.Append('\n');
             sb.Append(armPad);
-            sb.Append(arm.Pattern == null ? "default:" : $"case {RenderPattern(arm.Pattern, indent + 1)}:");
+            string marker;
+            if (arm.Pattern == null)
+            {
+                marker = "default:";
+            }
+            else if (arm.Guard != null)
+            {
+                marker = $"case {RenderPattern(arm.Pattern, indent + 1)} when {RenderExpression(arm.Guard, indent + 1)}:";
+            }
+            else
+            {
+                marker = $"case {RenderPattern(arm.Pattern, indent + 1)}:";
+            }
+
+            sb.Append(marker);
             sb.Append(' ');
             sb.Append(RenderExpression(arm.Body, indent + 1));
         }
@@ -640,7 +654,20 @@ public static class GSharpPrinter
         {
             sb.Append('\n');
             sb.Append(casePad);
-            var head = arm.Pattern == null ? "default" : $"case {RenderPattern(arm.Pattern, indent + 1)}";
+            string head;
+            if (arm.Pattern == null)
+            {
+                head = "default";
+            }
+            else if (arm.Guard != null)
+            {
+                head = $"case {RenderPattern(arm.Pattern, indent + 1)} when {RenderExpression(arm.Guard, indent + 1)}";
+            }
+            else
+            {
+                head = $"case {RenderPattern(arm.Pattern, indent + 1)}";
+            }
+
             sb.Append($"{head} {RenderBlock(arm.Body, indent + 1)}");
         }
 

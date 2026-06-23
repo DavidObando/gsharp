@@ -682,8 +682,9 @@ public abstract class BoundTreeRewriter
         {
             var arm = node.Arms[i];
             var pattern = arm.Pattern == null ? null : RewritePattern(arm.Pattern);
+            var guard = arm.Guard == null ? null : RewriteExpression(arm.Guard);
             var result = RewriteExpression(arm.Result);
-            if (builder == null && (pattern != arm.Pattern || result != arm.Result))
+            if (builder == null && (pattern != arm.Pattern || guard != arm.Guard || result != arm.Result))
             {
                 builder = ImmutableArray.CreateBuilder<BoundSwitchExpressionArm>(node.Arms.Length);
                 for (var j = 0; j < i; j++)
@@ -692,7 +693,7 @@ public abstract class BoundTreeRewriter
                 }
             }
 
-            builder?.Add(new BoundSwitchExpressionArm(null, pattern, result));
+            builder?.Add(new BoundSwitchExpressionArm(null, pattern, guard, result));
         }
 
         if (discriminant == node.Discriminant && builder == null)
@@ -714,8 +715,9 @@ public abstract class BoundTreeRewriter
         {
             var arm = node.Arms[i];
             var pattern = arm.Pattern == null ? null : RewritePattern(arm.Pattern);
+            var guard = arm.Guard == null ? null : RewriteExpression(arm.Guard);
             var body = RewriteStatement(arm.Body);
-            if (builder == null && (pattern != arm.Pattern || body != arm.Body))
+            if (builder == null && (pattern != arm.Pattern || guard != arm.Guard || body != arm.Body))
             {
                 builder = ImmutableArray.CreateBuilder<BoundPatternSwitchArm>(node.Arms.Length);
                 for (var j = 0; j < i; j++)
@@ -724,7 +726,7 @@ public abstract class BoundTreeRewriter
                 }
             }
 
-            builder?.Add(new BoundPatternSwitchArm(null, pattern, body));
+            builder?.Add(new BoundPatternSwitchArm(null, pattern, guard, body));
         }
 
         if (discriminant == node.Discriminant && builder == null)

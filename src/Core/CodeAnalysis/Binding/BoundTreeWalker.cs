@@ -460,6 +460,11 @@ public abstract class BoundTreeWalker
                 VisitPattern(arm.Pattern);
             }
 
+            if (arm.Guard != null)
+            {
+                VisitExpression(arm.Guard);
+            }
+
             VisitStatement(arm.Body);
         }
     }
@@ -839,6 +844,11 @@ public abstract class BoundTreeWalker
             if (arm.Pattern != null)
             {
                 VisitPattern(arm.Pattern);
+            }
+
+            if (arm.Guard != null)
+            {
+                VisitExpression(arm.Guard);
             }
 
             VisitExpression(arm.Result);

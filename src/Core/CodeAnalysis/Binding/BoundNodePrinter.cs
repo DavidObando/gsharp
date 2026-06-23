@@ -703,6 +703,14 @@ public static class BoundNodePrinter
                 WritePattern(arm.Pattern, writer);
             }
 
+            if (arm.Guard != null)
+            {
+                writer.WriteSpace();
+                writer.WriteKeyword("when");
+                writer.WriteSpace();
+                arm.Guard.WriteTo(writer);
+            }
+
             writer.WriteLine();
             writer.WriteNestedStatement(arm.Body);
         }
@@ -805,6 +813,14 @@ public static class BoundNodePrinter
             writer.WriteKeyword(SyntaxKind.CaseKeyword);
             writer.WriteSpace();
             WritePattern(arm.Pattern, writer);
+        }
+
+        if (arm.Guard != null)
+        {
+            writer.WriteSpace();
+            writer.WriteKeyword("when");
+            writer.WriteSpace();
+            arm.Guard.WriteTo(writer);
         }
 
         writer.WriteSpace();

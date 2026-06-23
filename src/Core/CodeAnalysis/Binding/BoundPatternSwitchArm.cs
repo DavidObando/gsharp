@@ -12,11 +12,13 @@ public sealed class BoundPatternSwitchArm : BoundNode
     /// <summary>Initializes a new instance of the <see cref="BoundPatternSwitchArm"/> class.</summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="pattern">The arm pattern, or null for default.</param>
+    /// <param name="guard">The optional boolean guard expression (<c>when</c> clause), or null.</param>
     /// <param name="body">The arm body.</param>
-    public BoundPatternSwitchArm(SyntaxNode syntax, BoundPattern pattern, BoundStatement body)
+    public BoundPatternSwitchArm(SyntaxNode syntax, BoundPattern pattern, BoundExpression guard, BoundStatement body)
         : base(syntax)
     {
         Pattern = pattern;
+        Guard = guard;
         Body = body;
     }
 
@@ -25,6 +27,9 @@ public sealed class BoundPatternSwitchArm : BoundNode
 
     /// <summary>Gets the pattern, or null for default.</summary>
     public BoundPattern Pattern { get; }
+
+    /// <summary>Gets the optional boolean guard expression (<c>when</c> clause), or null when the arm has no guard.</summary>
+    public BoundExpression Guard { get; }
 
     /// <summary>Gets the arm body.</summary>
     public BoundStatement Body { get; }

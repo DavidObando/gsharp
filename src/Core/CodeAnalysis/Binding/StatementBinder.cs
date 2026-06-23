@@ -1930,6 +1930,27 @@ internal sealed class StatementBinder
         }
     }
 
+    // Issue #991: bind a switch-arm `when` guard as a boolean expression under
+    // the arm's pattern-narrowing frame. A non-bool guard surfaces the standard
+    // conversion diagnostic.
+    private BoundExpression BindGuardExpressionWithNarrowing(ExpressionSyntax syntax, Dictionary<VariableSymbol, TypeSymbol> frame)
+    {
+        if (frame == null)
+        {
+            return bindExpressionWithTargetType(syntax, TypeSymbol.Bool);
+        }
+
+        binderCtx.NarrowedVariables.Add(frame);
+        try
+        {
+            return bindExpressionWithTargetType(syntax, TypeSymbol.Bool);
+        }
+        finally
+        {
+            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+        }
+    }
+
     private BoundStatement BindMultiAssignmentStatement(MultiAssignmentStatementSyntax syntax)
     {
         var targets = syntax.Targets.ToImmutableArray();
@@ -2030,7 +2051,7 @@ internal sealed class StatementBinder
 
                 hasDefault = true;
                 var defaultBody = BindBlockStatement(caseSyntax.Body);
-                arms.Add(new BoundPatternSwitchArm(null, pattern: null, defaultBody));
+                arms.Add(new BoundPatternSwitchArm(null, pattern: null, guard: null, defaultBody));
 
                 if (!EndsInUnconditionalExit(defaultBody))
                 {
@@ -2046,7 +2067,12 @@ internal sealed class StatementBinder
 
             scope = new BoundScope(scope);
             var pattern = patterns.BindPattern(caseSyntax.Value, switchType);
-            if (pattern is BoundDiscardPattern)
+
+            // Issue #991: a guarded arm (`when <bool>`) can always fail at
+            // runtime, so a guarded discard `case _ when …` does NOT act as a
+            // default/total arm.
+            var hasGuard = caseSyntax.Guard != null;
+            if (pattern is BoundDiscardPattern && !hasGuard)
             {
                 if (hasDefault)
                 {
@@ -2057,9 +2083,23 @@ internal sealed class StatementBinder
             }
 
             var frame = TryClassifyPatternNarrowing(discriminant, pattern);
+            BoundExpression guard = null;
+            if (hasGuard)
+            {
+                guard = BindGuardExpressionWithNarrowing(caseSyntax.Guard, frame);
+            }
+
             var body = BindStatementWithNarrowing(caseSyntax.Body, frame);
             scope = scope.Parent;
-            arms.Add(new BoundPatternSwitchArm(null, pattern, body));
+            arms.Add(new BoundPatternSwitchArm(null, pattern, guard, body));
+
+            // Issue #991: a guarded arm may not actually run even when its
+            // pattern matches, so it cannot contribute a reliable post-switch
+            // narrowing. Conservatively defeat the narrowing merge.
+            if (hasGuard)
+            {
+                mergeFailed = true;
+            }
 
             if (mergeFailed)
             {
@@ -2148,7 +2188,7 @@ internal sealed class StatementBinder
     {
         foreach (var arm in arms)
         {
-            if (arm.Pattern == null || arm.Pattern is BoundDiscardPattern)
+            if ((arm.Pattern == null || arm.Pattern is BoundDiscardPattern) && arm.Guard == null)
             {
                 return true;
             }

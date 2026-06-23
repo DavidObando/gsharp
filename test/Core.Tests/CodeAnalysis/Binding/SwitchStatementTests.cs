@@ -135,6 +135,37 @@ public class SwitchStatementTests
         Assert.Empty(Bind(src));
     }
 
+    // Issue #991: `when` guards on switch-statement arms.
+    [Fact]
+    public void Switch_WhenGuard_Binds()
+    {
+        var src = @"func F() {
+ var x = 5
+ switch x {
+ case > 0 when x < 10 { var a = ""small"" }
+ case > 0 { var b = ""big"" }
+ default { var c = ""nonpositive"" }
+ }
+}
+";
+        Assert.Empty(Bind(src));
+    }
+
+    [Fact]
+    public void Switch_NonBoolGuard_Diagnoses()
+    {
+        var src = @"func F() {
+ var x = 1
+ switch x {
+ case > 0 when x { var a = 1 }
+ default { var b = 2 }
+ }
+}
+";
+        var diagnostics = Bind(src);
+        Assert.Contains(diagnostics, d => d.Message.Contains("Cannot convert type", System.StringComparison.Ordinal) && d.Message.Contains("'bool'", System.StringComparison.Ordinal));
+    }
+
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

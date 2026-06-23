@@ -57,6 +57,61 @@ namespace Demo
     }
 
     /// <summary>
+    /// Issue #991: a C# <c>when</c> guard on a switch-statement case is now
+    /// translated to the canonical G# <c>case &lt;pattern&gt; when &lt;bool&gt; { … }</c>
+    /// form instead of being reported as unsupported.
+    /// </summary>
+    [Fact]
+    public void SwitchStatement_WhenGuard_EmittedAsGuardedCase()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public static class Shapes
+    {
+        public static string Kind(int n)
+        {
+            switch (n)
+            {
+                case > 0 when n < 10:
+                    return ""small"";
+                default:
+                    return ""other"";
+            }
+        }
+    }
+}");
+
+        Assert.Contains("case > 0 when n < 10 {", printed);
+        Assert.DoesNotContain("when' guard has no canonical", printed);
+    }
+
+    /// <summary>
+    /// Issue #991: a C# <c>when</c> guard on a switch-expression arm is now
+    /// translated to the canonical G# <c>case &lt;pattern&gt; when &lt;bool&gt;: …</c>
+    /// form.
+    /// </summary>
+    [Fact]
+    public void SwitchExpression_WhenGuard_EmittedAsGuardedArm()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public static class Shapes
+    {
+        public static string Kind(int n) => n switch
+        {
+            > 0 when n < 10 => ""small"",
+            > 0 => ""big"",
+            _ => ""other"",
+        };
+    }
+}");
+
+        Assert.Contains("case > 0 when n < 10:", printed);
+    }
+
+    /// <summary>
     /// A C# iterator method (<c>yield return</c>) returning
     /// <c>IEnumerable&lt;string&gt;</c> is emitted with the return type rewritten
     /// to <c>sequence[string]</c> and a bare <c>yield expr</c> body
