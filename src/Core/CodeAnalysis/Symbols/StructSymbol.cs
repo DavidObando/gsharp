@@ -193,6 +193,51 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets a value indicating whether this class was declared <c>open</c> (Phase 3.B.3 sub-step 3 / ADR-0017). Required for subclassing.</summary>
     public bool IsOpen { get; }
 
+    /// <summary>
+    /// Gets a value indicating whether this class is abstract — issue #987. A
+    /// class is abstract when its effective member set (own + inherited, after
+    /// override resolution) contains at least one abstract method (a no-body
+    /// <c>open func</c>). Such a type cannot be instantiated and is emitted with
+    /// <c>TypeAttributes.Abstract</c>. Always <c>false</c> for value-type structs.
+    /// </summary>
+    public bool IsAbstract
+    {
+        get
+        {
+            if (!IsClass)
+            {
+                return false;
+            }
+
+            var names = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
+            for (var c = this; c != null; c = c.BaseClass)
+            {
+                if (c.Methods.IsDefaultOrEmpty)
+                {
+                    continue;
+                }
+
+                foreach (var m in c.Methods)
+                {
+                    names.Add(m.Name);
+                }
+            }
+
+            foreach (var name in names)
+            {
+                foreach (var effective in GetMethodsIncludingInherited(name))
+                {
+                    if (effective.IsAbstract)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+    }
+
     /// <summary>Gets the immediate base class (Phase 3.B.3 sub-step 3), or <c>null</c> when this class derives directly from <c>System.Object</c>. Always null for structs.</summary>
     public StructSymbol BaseClass { get; private set; }
 
@@ -747,6 +792,51 @@ public sealed class StructSymbol : TypeSymbol
         return builder == null
             ? System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Empty
             : builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #987: enumerates the unimplemented abstract methods this class would
+    /// inherit — i.e. every method in the effective member set (own + inherited,
+    /// after override resolution) that is still <see cref="FunctionSymbol.IsAbstract"/>.
+    /// A concrete (non-<c>open</c>) class with a non-empty result fails to satisfy
+    /// its abstract base contract.
+    /// </summary>
+    /// <returns>The set of still-abstract effective methods; empty when none.</returns>
+    public ImmutableArray<FunctionSymbol> GetUnimplementedAbstractMethods()
+    {
+        if (!IsClass)
+        {
+            return ImmutableArray<FunctionSymbol>.Empty;
+        }
+
+        var names = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
+        for (var c = this; c != null; c = c.BaseClass)
+        {
+            if (c.Methods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var m in c.Methods)
+            {
+                names.Add(m.Name);
+            }
+        }
+
+        ImmutableArray<FunctionSymbol>.Builder builder = null;
+        foreach (var name in names)
+        {
+            foreach (var effective in GetMethodsIncludingInherited(name))
+            {
+                if (effective.IsAbstract)
+                {
+                    builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
+                    builder.Add(effective);
+                }
+            }
+        }
+
+        return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
     }
 
     /// <summary>

@@ -4132,7 +4132,12 @@ internal sealed class ReflectionMetadataEmitter
         IReadOnlyList<LocalConstantInfo> capturedConstants = null;
         int capturedCodeSize = 0;
         StandaloneSignatureHandle capturedLocalsSignature = default;
-        if (!this.emitCtx.MetadataOnly)
+
+        // Issue #987: an abstract method (a no-body `open func F() R;`) has no
+        // IL body — leave bodyOffset at -1 so AddMethodDefinition writes an
+        // abstract virtual slot. The MethodAttributes.Abstract bit is OR'd in
+        // below alongside Virtual/NewSlot.
+        if (!this.emitCtx.MetadataOnly && !function.IsAbstract)
         {
             if (asyncPlan != null)
             {
@@ -4418,6 +4423,15 @@ internal sealed class ReflectionMetadataEmitter
                 if (!function.IsOpen)
                 {
                     methodAttrs |= MethodAttributes.Final;
+                }
+
+                // Issue #987: an abstract method declares a virtual slot with no
+                // implementation. It is always `open` (so never Final above) and
+                // carries the Abstract bit; the body-emission block was skipped
+                // and bodyOffset stays -1.
+                if (function.IsAbstract)
+                {
+                    methodAttrs |= MethodAttributes.Abstract;
                 }
             }
         }

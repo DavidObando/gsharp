@@ -76,6 +76,13 @@ internal sealed class DeclarationBinder
     private readonly List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)> pendingInterfaceImplementationChecks
         = new List<(StructDeclarationSyntax, StructSymbol)>();
 
+    // Issue #987: classes whose abstract-member contract must be verified after
+    // every type body is bound (a concrete class must override all inherited
+    // abstract methods). Deferred because a base class' methods may not be bound
+    // yet when a derived class declaration is processed.
+    private readonly List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)> pendingAbstractImplementationChecks
+        = new List<(StructDeclarationSyntax, StructSymbol)>();
+
     public DeclarationBinder(
         BinderContext binderCtx,
         ConversionClassifier conversions,
@@ -1390,6 +1397,27 @@ internal sealed class DeclarationBinder
                     methodSymbol.TypeParameters = methodTypeParameters;
                     methodSymbol.ReturnRefKind = methodReturnRefKind;
                     methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
+
+                    // Issue #987: a no-body `open func F() R;` inside a class is
+                    // the canonical G# spelling of a C# abstract method. Mark the
+                    // method abstract so the body binder skips it (there is no
+                    // body to bind) and the emitter writes an abstract virtual
+                    // slot rather than crashing on a null body. The bodyless form
+                    // is only valid as an `open` member of an `open` class — any
+                    // other shape (a non-`open` bodyless method, or one inside a
+                    // non-`open` class) is reported with GS0388.
+                    if (methodSyntax.HasSemicolonBody)
+                    {
+                        methodSymbol.IsAbstract = true;
+                        if (!methodSyntax.IsOpen || !structSymbol.IsOpen)
+                        {
+                            Diagnostics.ReportAbstractMethodRequiresOpenClass(
+                                methodSyntax.Identifier.Location,
+                                methodName,
+                                structSymbol.Name);
+                        }
+                    }
+
                     Binder.AttachDocumentation(methodSymbol, methodSyntax);
 
                     if (!methodSyntax.Annotations.IsDefaultOrEmpty)
@@ -2409,6 +2437,14 @@ internal sealed class DeclarationBinder
         // interface / enum) declared inside this aggregate's body, recording the
         // enclosing type so the emitter materialises real CLR nested types.
         BindNestedTypeDeclarations(syntax, structSymbol, package);
+
+        // Issue #987: queue the abstract-member contract check for classes. A
+        // concrete (non-`open`) class with a base must override every inherited
+        // abstract method; deferred so base-class methods are bound first.
+        if (syntax.IsClass)
+        {
+            pendingAbstractImplementationChecks.Add((syntax, structSymbol));
+        }
     }
 
     /// <summary>
@@ -2464,6 +2500,43 @@ internal sealed class DeclarationBinder
                     }
 
                     break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #987: verifies that every concrete (non-<c>open</c>) class
+    /// overrides all abstract methods it inherits. Run after all type bodies are
+    /// bound so the base-class method sets are complete. An <c>open</c> class may
+    /// leave inherited abstract members unimplemented (it stays abstract itself).
+    /// </summary>
+    internal void VerifyAbstractMethodImplementations()
+    {
+        foreach (var (syntax, structSymbol) in pendingAbstractImplementationChecks)
+        {
+            // An `open` class is permitted to remain abstract — it need not
+            // override inherited abstract members.
+            if (structSymbol.IsOpen)
+            {
+                continue;
+            }
+
+            foreach (var abstractMethod in structSymbol.GetUnimplementedAbstractMethods())
+            {
+                // Skip abstract methods declared directly on this class — those
+                // are reported via GS0388 (abstract member in a non-open class).
+                // GS0387 is reserved for abstract members *inherited* from a base
+                // class and left unimplemented by a concrete subclass.
+                if (ReferenceEquals(abstractMethod.ReceiverType, structSymbol))
+                {
+                    continue;
+                }
+
+                Diagnostics.ReportAbstractMemberNotImplemented(
+                    syntax.Identifier.Location,
+                    structSymbol.Name,
+                    abstractMethod.ReceiverType?.Name ?? structSymbol.Name,
+                    abstractMethod.Name);
             }
         }
     }

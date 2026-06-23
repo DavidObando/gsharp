@@ -1189,6 +1189,56 @@ Cross-references:
 
 
 
+## Abstract member diagnostics (GS0386–GS0388)
+
+See issue #987. A no-body `open func F() R;` declared inside an `open class`
+is the canonical G# spelling of a C# **`abstract`** method: it declares a
+virtual slot with no implementation. A class that declares (or inherits
+without overriding) an abstract method is itself **abstract** — it is emitted
+with `TypeAttributes.Abstract` and cannot be instantiated. Concrete
+(non-`open`) subclasses must override every inherited abstract member; an
+`open` subclass may leave them abstract and remain abstract itself.
+
+```gsharp
+open class Shape {
+    open func Area() float64;          // abstract member — no body, just ';'
+}
+
+class Circle(R float64) : Shape {
+    override func Area() float64 { return 3.14159 * R * R }
+}
+
+let s Shape = Circle(2.0)              // OK — Circle is concrete
+Console.WriteLine(s.Area().ToString()) // 12.566… via virtual dispatch
+```
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0386 | Error | `Cannot create an instance of the abstract type '<T>'.` |
+| GS0387 | Error | `'<Derived>' does not implement inherited abstract member '<Base>.<Member>'.` |
+| GS0388 | Error | `Abstract method '<M>' must be declared 'open' inside an 'open class'; '<T>' is not open or the method omits 'open'.` |
+
+Cause/fix:
+
+- **GS0386** — an abstract class cannot be constructed (`Shape()` /
+  `new Shape()`). Construct a concrete subclass that overrides every abstract
+  member instead. Mirrors C# CS0144.
+- **GS0387** — a concrete (non-`open`) class derives from an abstract base
+  but does not override one of the inherited abstract members. Either provide
+  an `override func` for the member, or declare the subclass `open` (it then
+  stays abstract itself). Mirrors C# CS0534.
+- **GS0388** — a no-body (abstract) method appeared where it is not permitted.
+  An abstract member must be declared `open` and may only live inside an
+  `open class`. Add the `open` modifier and/or make the enclosing class
+  `open`, or give the method a `{ … }` body. Mirrors C# CS0513/CS0500.
+
+Cross-references:
+
+- Issue #987 (this feature); ADR-0017 (`open`/`override` model), ADR-0115 §G
+  (cs2gs migration mapping for C# `abstract`).
+
+
+
 ## `@LibraryImport` P/Invoke diagnostics (GS0342–GS0345)
 
 See ADR-0092 (issue #758). G# accepts the modern

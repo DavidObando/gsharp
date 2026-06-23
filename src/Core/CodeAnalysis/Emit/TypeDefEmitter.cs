@@ -402,6 +402,15 @@ internal sealed class TypeDefEmitter
                 classAttrs |= TypeAttributes.Sealed;
             }
 
+            // Issue #987: a class with an abstract method (own or inherited and
+            // not overridden) is itself abstract — emit TypeAttributes.Abstract
+            // so the runtime forbids `newobj` on it. Such a class is always
+            // `open`, so it is never also Sealed.
+            if (structSym.IsAbstract)
+            {
+                classAttrs |= TypeAttributes.Abstract;
+            }
+
             typeAttrs = classAttrs;
             if (structSym.IsAttributeClass)
             {
@@ -528,6 +537,12 @@ internal sealed class TypeDefEmitter
             if (!structSym.IsOpen && !structSym.IsSealedHierarchy)
             {
                 classAttrs |= TypeAttributes.Sealed;
+            }
+
+            // Issue #987: a nested class with an abstract method is abstract too.
+            if (structSym.IsAbstract)
+            {
+                classAttrs |= TypeAttributes.Abstract;
             }
 
             typeAttrs = classAttrs;

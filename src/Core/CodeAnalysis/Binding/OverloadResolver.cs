@@ -1147,6 +1147,18 @@ internal sealed class OverloadResolver
         // use of the class type itself.
         reportObsoleteUseIfApplicable(syntax.Identifier.Location, classType, classType.Name);
 
+        // Issue #987: an abstract class (one with a still-abstract method in its
+        // effective member set) cannot be instantiated. Report GS0386 and stop —
+        // this is the clean compile error C# gives for `new AbstractType()`
+        // (CS0144) rather than a runtime failure. Base-class construction by a
+        // derived ctor flows through BaseConstructorInitializer, not here, so the
+        // abstract base is still constructible as a base subobject.
+        if (classType.IsAbstract)
+        {
+            Diagnostics.ReportCannotInstantiateAbstractType(syntax.Identifier.Location, classType.Name);
+            return new BoundErrorExpression(syntax);
+        }
+
         // Issue #306: a class declaring an explicit `init(...)` constructor is
         // constructed against that constructor's parameter list rather than a
         // primary-constructor parameter list.
