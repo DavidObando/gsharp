@@ -25,6 +25,16 @@ namespace GSharp.Compiler.Tests.LanguageConformance;
 /// </remarks>
 public class SampleConformanceTests
 {
+    // Samples that DllImport Unix-style `libc` and therefore cannot run on
+    // Windows (issue #1010). They remain covered on Linux/macOS.
+    private static readonly HashSet<string> WindowsSkippedSamples = new(StringComparer.Ordinal)
+    {
+        "PInvoke.gs",
+        "PInvokeLibraryImport.gs",
+        "PInvokeRefOutIn.gs",
+        "PInvokeMarshalAs.gs",
+    };
+
     public static IEnumerable<object[]> Samples()
     {
         var samplesDir = LocateSamplesDirectory();
@@ -33,13 +43,22 @@ public class SampleConformanceTests
             yield break;
         }
 
+        var isWindows = OperatingSystem.IsWindows();
+
         // Single-file samples: <name>.gs paired with <name>.golden in samples/.
         foreach (var gs in Directory.EnumerateFiles(samplesDir, "*.gs", SearchOption.TopDirectoryOnly).OrderBy(p => p))
         {
             var golden = Path.ChangeExtension(gs, ".golden");
             if (File.Exists(golden))
             {
-                yield return new object[] { Path.GetFileName(gs) };
+                var fileName = Path.GetFileName(gs);
+                if (isWindows && WindowsSkippedSamples.Contains(fileName))
+                {
+                    // Skipped on Windows: see issue #1010.
+                    continue;
+                }
+
+                yield return new object[] { fileName };
             }
         }
 
