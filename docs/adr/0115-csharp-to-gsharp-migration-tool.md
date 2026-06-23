@@ -218,12 +218,12 @@ with a triage note.
 - **Constructors** → `init(params) { … }`, chaining via `: Base(args)` (ADR-0065). C# primary constructors / positional records map to the G# primary-constructor `Name(params)` head.
 - **Static members** → a `shared { … }` block (ADR-0053); except the program entry's static class, which is hoisted to top level (T3, above). Sibling static calls inside a non-entry `shared { }` block are emitted **qualified** (`Geometry.Round(...)`), since an unqualified sibling static call does not resolve there (`GS0130`).
 
-> **Static (`shared`) method overload resolution by arity — discovered compiler gap.**
+> **Static (`shared`) method overload resolution by arity — RESOLVED (#940).**
 > A user type whose `shared { }` block declares **overloaded** static methods
-> (same name, different arity/params) cannot be called on any overload but the
-> first-declared one: the binder resolves a single by-name match and arity-checks
-> it (`GS0144`), never forming an overload set. Instance-method overloads on the
-> same type resolve correctly. Minimal repro:
+> (same name, different arity/params) formerly could not be called on any overload
+> but the first-declared one: the binder resolved a single by-name match and
+> arity-checked it (`GS0144`), never forming an overload set. Instance-method
+> overloads on the same type always resolved correctly. Minimal repro:
 > ```gs
 > class Geometry {
 >     shared {
@@ -233,13 +233,12 @@ with a triage note.
 > }
 > Console.WriteLine(Geometry.Round(1.234))   // GS0144: 'Round' requires 1 arguments but was given 2
 > ```
-> Root cause: `ExpressionBinder.Access.cs` `BindUserTypeStaticCall` uses
+> Root cause was: `ExpressionBinder.Access.cs` `BindUserTypeStaticCall` used
 > `StructSymbol.TryGetStaticMethod(name, out method)` (single by-name) rather than
 > building a static method group + running `OverloadResolver` (as the instance
-> path does). Filed as **#940**; it is the sole blocker preventing the L2 corpus
-> app (overloaded `Geometry.TotalArea`/`Round`) from migrating green — every other
-> L2 construct translates and compiles cleanly. No translation workaround exists
-> without distorting the public API, since the spec permits static overloads.
+> path does). Fixed in #940; static overloads now resolve by arity, and the L2
+> corpus app (overloaded `Geometry.TotalArea`/`Round`) translates and compiles
+> through this construct.
 - **Enums** → `enum Name { A, B, C }` (`samples/Enum.gs`); payload-bearing C# unions (sealed hierarchy idioms) map to discriminated-union enums (ADR-0078 §5) only when the source is unambiguously that shape, else triaged.
 - **Attributes** → `@Name(args)`, one per line, order preserved (ADR-0047): C# `[Obsolete("x")]` → `@Obsolete("x")`. Explicit attribute targets (`[return: …]`, `[field: …]`, `[assembly: …]`) map to the `@target:Name(...)` form.
 - **`foreach`** → `for x in coll` (ADR-0031); LINQ/extension calls keep instance-call syntax (`xs.Where((x int32) -> x % 2 == 0)`, `samples/LinqExtensions.gs`).
@@ -327,20 +326,13 @@ A C# target-typed `new()` emits the **explicit constructed type** inferred from 
 > translator emits `value ?? fallback` verbatim. No longer surfaced as a
 > `translation-unsupported` record.
 >
-> **Member access on a bare-identifier element access — discovered compiler gap.**
+> **Member access on a bare-identifier element access — RESOLVED (#942).**
 > `values[i].Member` (a single **bare-identifier** index immediately followed by
-> `.`) hits a parser ambiguity — `ident[ident]` is parsed as a generic
-> instantiation expecting a `(` call, so the `.` is rejected (`GS0005`,
-> `Unexpected token <DotToken>`). Literal and compound indices parse fine
-> (`values[0].M`, `values[i + 1].M`), as does the index alone (`values[i]`), and
-> hoisting the element to a local (`let v = values[i]; v.M`) compiles. Minimal
-> repro:
-> ```gsharp
-> func First(values IReadOnlyList[int32]) int32 { var i = 0  return values[i].CompareTo(0) }   // GS0005 on .CompareTo
-> ```
-> Surfaced as a clean `translation-unsupported` record
-> (`SimpleMemberAccessExpression`); the translator does not auto-hoist (that would
-> risk the passing L1/L2 corpus). Filed as **#942**.
+> `.`) formerly hit a parser ambiguity — `ident[ident]` was parsed as a generic
+> instantiation expecting a `(` call, so the `.` was rejected (`GS0005`). Literal
+> and compound indices always parsed fine (`values[0].M`, `values[i + 1].M`).
+> Issue #942 fixed the parser, so the translator now emits `values[i].Member`
+> through the normal member-access path with no placeholder.
 
 
 
@@ -462,29 +454,34 @@ to a single fingerprinted entry that maps to a filed compiler issue. Final matri
 | App | translate | compile | ilverify | test-parity | Blocking gap |
 | --- | --- | --- | --- | --- | --- |
 | `corpus/L1-Console` | PASS | PASS | PASS | PASS | — (fully green E2E) |
-| `corpus/L2-Library` | PASS | FAIL | skip | skip | #940 (static-overload) |
-| `corpus/L3-Library` | FAIL | skip | skip | skip | #941–#944 (`Advanced.gs` compiles standalone; `Generics.cs` blocked) |
+| `corpus/L2-Library` | PASS | FAIL | skip | skip | #973 (class with a value-type field — emit ICE) |
+| `corpus/L3-Library` | PASS | FAIL | skip | skip | #974 (`Repository[T] : IEnumerable[T]` generic-interface impl); `Advanced.gs` compiles standalone |
 
 **Objective 1 (faithful migration)** is demonstrated by L1 reaching full
-stdout/test parity and by L2 + L3-`Advanced` translating to canonical G# that
-`gsc` accepts. **Objective 2 (gap discovery)** is demonstrated by seven
-structured, reproduced, and filed compiler gaps surfaced purely by migration
-friction:
+stdout/test parity and by L2 + L3 translating to canonical G# (L3 now translates
+in full; `Advanced.gs` also compiles standalone). **Objective 2 (gap discovery)**
+is demonstrated by nine structured, reproduced, and filed compiler gaps surfaced
+purely by migration friction — seven of which the compiler team has already
+fixed, re-greening earlier stages and surfacing the next layer of gaps:
 
-| Issue | Construct | Diagnostic |
-| --- | --- | --- |
-| #938 | owned-`struct` instance methods (no warning-free spelling) — **resolved**: in-body `func` now binds on value types | GS0314 |
-| #939 | `for…in List[userType]` element-type erasure | GS0158 |
-| #940 | static (`shared`) method overloads ignore arity | GS0144 |
-| #941 | binary `??` operator unsupported (only `??=` exists) | GS0005 |
-| #942 | `expr[i].Member` mis-parses `[i]` as type arguments | GS0005 |
-| #943 | generic-interface constraint `[T IComparable[T]]` won't parse | GS0005 |
-| #944 | user-indexer declaration form — **resolved** (ADR-0118): `prop this[i int32] T` emits a CLR default indexer | GS9998 |
+| Issue | Construct | Diagnostic | Status |
+| --- | --- | --- | --- |
+| #938 | owned-`struct` instance methods (no warning-free spelling) | GS0314 | resolved (in-body `func` binds on value types) |
+| #939 | `for…in List[userType]` element-type erasure | GS0158 | resolved |
+| #940 | static (`shared`) method overloads ignore arity | GS0144 | resolved |
+| #941 | binary `??` operator unsupported (only `??=` existed) | GS0005 | resolved (ADR-0116) |
+| #942 | `expr[i].Member` mis-parses `[i]` as type arguments | GS0005 | resolved |
+| #943 | generic-interface constraint `[T IComparable[T]]` won't parse | GS0005 | resolved |
+| #944 | user-indexer declaration form crashes | GS9998 | resolved (ADR-0118) |
+| #973 | a `class` with a user value-type (`struct`/`data struct`) field — emit ICE | GS9998 | open (blocks L2) |
+| #974 | generic-interface impl: method returning a constructed generic over `T` (e.g. `IEnumerator[T]`) fails satisfaction | GS0187 | open (blocks L3-`Generics`) |
 
 L2/L3 not going fully green is the **intended** objective-2 outcome: the residual
 failures are real compiler gaps, captured and filed rather than worked around or
-hidden. Each will close as the cited compiler issue is fixed and the corpus run
-re-greens automatically.
+hidden. Each closes as the cited compiler issue is fixed and the corpus run
+re-greens automatically — as already happened for #938–#944, which advanced L3
+from `translate FAIL` to `translate PASS` and pushed the frontier into the
+compile stage (#973/#974).
 
 ## Consequences
 

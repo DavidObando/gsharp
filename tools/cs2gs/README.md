@@ -136,24 +136,29 @@ details.
 | App | translate | compile | ilverify | test-parity |
 | --- | --- | --- | --- | --- |
 | `corpus/L1-Console` | PASS | PASS | PASS | PASS |
-| `corpus/L2-Library` | PASS | FAIL (#940) | skip | skip |
-| `corpus/L3-Library` | FAIL (#941–#944) | skip | skip | skip |
+| `corpus/L2-Library` | PASS | FAIL (#973) | skip | skip |
+| `corpus/L3-Library` | PASS | FAIL (#974) | skip | skip |
 
-L1 migrates fully green end-to-end. L2 translates and compiles every construct
-except overloaded static-method calls (#940). L3's `Advanced.cs` translates and
-compiles standalone; `Generics.cs` surfaces four real parser/compiler gaps.
+L1 migrates fully green end-to-end. L2 and L3 both translate to canonical G# in
+full; each is now blocked at the **compile** stage by a single open compiler gap
+(#973 a `class` with a value-type field; #974 generic-interface implementation).
+L3's `Advanced.cs` translates and compiles standalone. As gaps are fixed the
+frontier advances automatically — the seven gaps #938–#944 have already been
+fixed, which is what moved L3 from `translate FAIL` to `translate PASS`.
 
 ## Discovered compiler gaps (objective 2)
 
-| Issue | Construct | Diagnostic |
-| --- | --- | --- |
-| [#938](https://github.com/DavidObando/gsharp/issues/938) | Owned-`struct` methods (receiver-clause warning) | GS0314 |
-| [#939](https://github.com/DavidObando/gsharp/issues/939) | `for…in List[userType]` erases element type | GS0158 |
-| [#940](https://github.com/DavidObando/gsharp/issues/940) | Static (`shared`) method overloads don't resolve by arity | GS0144 |
-| [#941](https://github.com/DavidObando/gsharp/issues/941) | Binary `??` operator unsupported (only `??=` exists) | GS0005 |
-| [#942](https://github.com/DavidObando/gsharp/issues/942) | `expr[i].Member` mis-parses `[i]` as type arguments | GS0005 |
-| [#943](https://github.com/DavidObando/gsharp/issues/943) | Generic-interface constraint `[T IComparable[T]]` won't parse | GS0005 |
-| [#944](https://github.com/DavidObando/gsharp/issues/944) | No user-indexer declaration form; attempts crash | GS9998 |
+| Issue | Construct | Diagnostic | Status |
+| --- | --- | --- | --- |
+| [#938](https://github.com/DavidObando/gsharp/issues/938) | Owned-`struct` methods (receiver-clause warning) | GS0314 | resolved |
+| [#939](https://github.com/DavidObando/gsharp/issues/939) | `for…in List[userType]` erases element type | GS0158 | resolved |
+| [#940](https://github.com/DavidObando/gsharp/issues/940) | Static (`shared`) method overloads don't resolve by arity | GS0144 | resolved |
+| [#941](https://github.com/DavidObando/gsharp/issues/941) | Binary `??` operator unsupported (only `??=` existed) | GS0005 | resolved |
+| [#942](https://github.com/DavidObando/gsharp/issues/942) | `expr[i].Member` mis-parses `[i]` as type arguments | GS0005 | resolved |
+| [#943](https://github.com/DavidObando/gsharp/issues/943) | Generic-interface constraint `[T IComparable[T]]` won't parse | GS0005 | resolved |
+| [#944](https://github.com/DavidObando/gsharp/issues/944) | No user-indexer declaration form; attempts crash | GS9998 | resolved |
+| [#973](https://github.com/DavidObando/gsharp/issues/973) | A `class` with a user `struct`/`data struct` field — emit ICE | GS9998 | open |
+| [#974](https://github.com/DavidObando/gsharp/issues/974) | Generic-interface impl: method returning a constructed generic over `T` (e.g. `IEnumerator[T]`) fails satisfaction | GS0187 | open |
 
 ## Conventions
 

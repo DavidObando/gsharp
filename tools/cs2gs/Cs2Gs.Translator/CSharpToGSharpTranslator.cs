@@ -2035,22 +2035,9 @@ public sealed class CSharpToGSharpTranslator
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
         {
-            // A member access on a bare-identifier element access (`values[i].M`)
-            // hits a G# parser ambiguity: `ident[ident]` is parsed as a generic
-            // instantiation expecting a `(` call, so the following `.` is rejected
-            // (GS0005: Unexpected <DotToken>). Literal or compound indices
-            // (`values[0]`, `values[i + 1]`) parse fine. There is no faithful G#
-            // form, so surface it as a clean per-construct gap (ADR-0115 §B gap #TBD).
-            if (member.Expression is ElementAccessExpressionSyntax elementAccess &&
-                elementAccess.ArgumentList.Arguments.Count == 1 &&
-                elementAccess.ArgumentList.Arguments[0].Expression is IdentifierNameSyntax)
-            {
-                this.context.ReportUnsupported(
-                    member,
-                    "member access on a bare-identifier element access ('expr[i].Member') has no canonical G# form (GS0005: Unexpected <DotToken>); emitted a placeholder (ADR-0115 §B gap).");
-                return new IdentifierExpression("nil");
-            }
-
+            // Member access on a bare-identifier element access (`values[i].M`)
+            // previously hit a G# parser ambiguity (#942); that gap is now fixed,
+            // so the construct translates through the normal member-access path.
             GExpression target = this.TranslateExpression(member.Expression);
             string memberName = member.Name.Identifier.Text;
 

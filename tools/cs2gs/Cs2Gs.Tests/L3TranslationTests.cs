@@ -305,14 +305,15 @@ namespace Demo
     }
 
     /// <summary>
-    /// ADR-0115 §B gap: member access on a bare-identifier element access
-    /// (<c>values[i].M</c>) hits a G# parser ambiguity (GS0005, Unexpected
-    /// <c>&lt;DotToken&gt;</c>), so it surfaces as a clean unsupported diagnostic.
+    /// Issue #942 (was an ADR-0115 §B gap): member access on a bare-identifier
+    /// element access (<c>values[i].M</c>) used to hit a G# parser ambiguity;
+    /// that gap is now fixed, so the translator emits it through the normal
+    /// member-access path rather than a placeholder.
     /// </summary>
     [Fact]
-    public void BareIndexMemberAccess_SurfacesAsUnsupported()
+    public void BareIndexMemberAccess_TranslatesThroughNormalPath()
     {
-        TranslationContext context = TranslateForDiagnostics(@"
+        (string printed, TranslationContext context) = Translate(@"
 namespace Demo
 {
     using System.Collections.Generic;
@@ -326,7 +327,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains(
+        Assert.Contains("values[i].Length", printed);
+        Assert.DoesNotContain(
             context.Diagnostics,
             d => d.IsUnsupported && d.ConstructKind == "SimpleMemberAccessExpression");
     }
