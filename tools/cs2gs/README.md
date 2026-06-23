@@ -175,7 +175,7 @@ the frontier advances automatically — #938–#944 moved L3 to `translate PASS`
 | #986 | `base.Method()` virtual base-class call has no canonical G# form | GS0157 / GS0338 | open (translation-unsupported) |
 | #987 | An `abstract` (no-body) method on an `open class` crashes the emitter | GS9998 (NRE) | open |
 | #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | open (translation-unsupported) |
-| #989 | A generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | open |
+| #989 | A generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | resolved (construction substitutes the property table like fields) |
 | #990 | A user reference-type iterator (`sequence[UserClass]`) crashes the emitter | GS9998 | open |
 | #991 | A `when` guard on a `switch` arm won't parse | GS0005 | open (translation-unsupported) |
 | #992 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | open (translation-unsupported) |

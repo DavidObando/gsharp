@@ -506,6 +506,13 @@ receiver's type arguments. An indexer declared without index parameters reports
 indexers; multi-parameter and overloaded indexers are reserved for a future
 revision.
 
+A property declared on a **generic** type whose type mentions a class type
+parameter (`prop Value T`, or a constructed form such as `prop Items []T`) is
+substituted through the receiver's type arguments on member access, exactly like
+a generic field: reading or writing `box.Value` where `box : Box[int32]` binds
+as `int32` (issue #989). The accessor call on a constructed receiver is emitted
+against the constructed type so the substitution holds at run time.
+
 #### Init-only accessors (issue #946)
 
 A property may declare an **`init` accessor** in place of `set`, in either the

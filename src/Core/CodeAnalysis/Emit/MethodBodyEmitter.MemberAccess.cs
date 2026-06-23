@@ -604,7 +604,21 @@ internal sealed partial class MethodBodyEmitter
     // so this only fires for computed properties that still reference the accessor.
     private void EmitPropertyAccess(BoundPropertyAccessExpression access)
     {
-        if (!this.outer.cache.PropertyAccessorHandles.TryGetValue(access.Property, out var handles) || !handles.Getter.HasValue)
+        // Issue #989: when the receiver is a constructed generic user type the
+        // accessor must be reached through a MemberRef parented at the
+        // constructed TypeSpec so a property whose type mentions the class type
+        // parameter is read with the substitution applied. The non-generic case
+        // keeps using the plain accessor MethodDef.
+        EntityHandle getterHandle;
+        if (ReflectionMetadataEmitter.IsUserGenericTypeReference(access.StructType))
+        {
+            getterHandle = this.outer.ResolveUserPropertyAccessorToken(access.StructType, access.Property, wantSetter: false);
+        }
+        else if (this.outer.cache.PropertyAccessorHandles.TryGetValue(access.Property, out var handles) && handles.Getter.HasValue)
+        {
+            getterHandle = handles.Getter.Value;
+        }
+        else
         {
             throw new InvalidOperationException(
                 $"Property '{access.Property.Name}' has no emitted getter MethodDef.");
@@ -614,7 +628,7 @@ internal sealed partial class MethodBodyEmitter
         if (access.Receiver == null)
         {
             this.il.OpCode(ILOpCode.Call);
-            this.il.Token(handles.Getter.Value);
+            this.il.Token(getterHandle);
             return;
         }
 
@@ -627,13 +641,24 @@ internal sealed partial class MethodBodyEmitter
         this.EmitInstanceReceiver(access.Receiver);
 
         this.il.OpCode(receiverIsClass ? ILOpCode.Callvirt : ILOpCode.Call);
-        this.il.Token(handles.Getter.Value);
+        this.il.Token(getterHandle);
     }
 
     // ADR-0051 Phase 6: emit IL for BoundPropertyAssignmentExpression (computed properties).
     private void EmitPropertyAssignment(BoundPropertyAssignmentExpression assn)
     {
-        if (!this.outer.cache.PropertyAccessorHandles.TryGetValue(assn.Property, out var handles) || !handles.Setter.HasValue)
+        // Issue #989: route generic constructed receivers through the
+        // TypeSpec-parented MemberRef (mirrors EmitPropertyAccess).
+        EntityHandle setterHandle;
+        if (ReflectionMetadataEmitter.IsUserGenericTypeReference(assn.StructType))
+        {
+            setterHandle = this.outer.ResolveUserPropertyAccessorToken(assn.StructType, assn.Property, wantSetter: true);
+        }
+        else if (this.outer.cache.PropertyAccessorHandles.TryGetValue(assn.Property, out var handles) && handles.Setter.HasValue)
+        {
+            setterHandle = handles.Setter.Value;
+        }
+        else
         {
             throw new InvalidOperationException(
                 $"Property '{assn.Property.Name}' has no emitted setter MethodDef.");
@@ -659,7 +684,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.OpCode(ILOpCode.Dup);
             this.il.StoreLocal(valueSlot);
             this.il.OpCode(ILOpCode.Call);
-            this.il.Token(handles.Setter.Value);
+            this.il.Token(setterHandle);
             this.il.LoadLocal(valueSlot);
             return;
         }
@@ -675,7 +700,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Dup);
         this.il.StoreLocal(valueSlot);
         this.il.OpCode(receiverIsClass ? ILOpCode.Callvirt : ILOpCode.Call);
-        this.il.Token(handles.Setter.Value);
+        this.il.Token(setterHandle);
 
         // Expression result: the value we just stored — no second receiver
         // evaluation, no getter call.

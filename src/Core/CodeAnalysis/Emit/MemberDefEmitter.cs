@@ -76,6 +76,7 @@ internal sealed class MemberDefEmitter
     private readonly Func<ParameterHandle> nextParameterHandle;
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
     private readonly Func<Type, EntityHandle> getTypeHandleForMember;
+    private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken;
 
     public MemberDefEmitter(
         EmitContext emitCtx,
@@ -85,7 +86,8 @@ internal sealed class MemberDefEmitter
         Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol,
         Func<ParameterHandle> nextParameterHandle,
         Func<Type, TypeReferenceHandle> getTypeReference,
-        Func<Type, EntityHandle> getTypeHandleForMember)
+        Func<Type, EntityHandle> getTypeHandleForMember,
+        Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -95,6 +97,7 @@ internal sealed class MemberDefEmitter
         this.nextParameterHandle = nextParameterHandle ?? throw new ArgumentNullException(nameof(nextParameterHandle));
         this.getTypeReference = getTypeReference ?? throw new ArgumentNullException(nameof(getTypeReference));
         this.getTypeHandleForMember = getTypeHandleForMember ?? throw new ArgumentNullException(nameof(getTypeHandleForMember));
+        this.resolveFieldToken = resolveFieldToken ?? throw new ArgumentNullException(nameof(resolveFieldToken));
     }
 
     public void EmitPropertyAccessors(StructSymbol structSym)
@@ -201,10 +204,17 @@ internal sealed class MemberDefEmitter
             if (prop.IsAutoProperty && prop.BackingField != null
                 && this.cache.StructFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
             {
+                // Issue #989: inside a generic type's own accessor body the
+                // backing-field token must be a self-TypeSpec MemberRef
+                // (Box`1<!0>), not the bare FieldDef, or the verifier rejects
+                // the receiver type on the stack.
+                var backingToken = ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym)
+                    ? this.resolveFieldToken(structSym, prop.BackingField)
+                    : (EntityHandle)backingHandle;
                 var il = new InstructionEncoder(new BlobBuilder());
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Ldfld);
-                il.Token(backingHandle);
+                il.Token(backingToken);
                 il.OpCode(ILOpCode.Ret);
                 bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
@@ -267,11 +277,15 @@ internal sealed class MemberDefEmitter
             if (prop.IsAutoProperty && prop.BackingField != null
                 && this.cache.StructFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
             {
+                // Issue #989: self-TypeSpec field MemberRef for generic types.
+                var backingToken = ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym)
+                    ? this.resolveFieldToken(structSym, prop.BackingField)
+                    : (EntityHandle)backingHandle;
                 var il = new InstructionEncoder(new BlobBuilder());
                 il.LoadArgument(0);
                 il.LoadArgument(1);
                 il.OpCode(ILOpCode.Stfld);
-                il.Token(backingHandle);
+                il.Token(backingToken);
                 il.OpCode(ILOpCode.Ret);
                 bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
@@ -440,9 +454,13 @@ internal sealed class MemberDefEmitter
             if (prop.IsAutoProperty && prop.BackingField != null
                 && this.cache.StructFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
             {
+                // Issue #989: self-TypeSpec field MemberRef for generic types.
+                var backingToken = ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym)
+                    ? this.resolveFieldToken(structSym, prop.BackingField)
+                    : (EntityHandle)backingHandle;
                 var il = new InstructionEncoder(new BlobBuilder());
                 il.OpCode(ILOpCode.Ldsfld);
-                il.Token(backingHandle);
+                il.Token(backingToken);
                 il.OpCode(ILOpCode.Ret);
                 bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
@@ -488,10 +506,14 @@ internal sealed class MemberDefEmitter
             if (prop.IsAutoProperty && prop.BackingField != null
                 && this.cache.StructFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
             {
+                // Issue #989: self-TypeSpec field MemberRef for generic types.
+                var backingToken = ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym)
+                    ? this.resolveFieldToken(structSym, prop.BackingField)
+                    : (EntityHandle)backingHandle;
                 var il = new InstructionEncoder(new BlobBuilder());
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Stsfld);
-                il.Token(backingHandle);
+                il.Token(backingToken);
                 il.OpCode(ILOpCode.Ret);
                 bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }

@@ -576,7 +576,8 @@ internal sealed class ReflectionMetadataEmitter
             this.EncodeTypeSymbol,
             this.customAttrEncoder.NextParameterHandle,
             this.GetTypeReference,
-            this.GetTypeHandleForMember);
+            this.GetTypeHandleForMember,
+            this.ResolveFieldToken);
 
         // PR-E-8: TypeDefEmitter wires up after MemberDefEmitter. It depends
         // on the same EmitContext/MetadataTokenCache/WellKnownReferences
@@ -6528,6 +6529,111 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return this.GetUserStructMethodRef(containingType, openDef, method.Name, this.EncodeOpenMethodSignature(method));
+    }
+
+    /// <summary>
+    /// Issue #989: resolves the right token for a call to a user property's
+    /// get/set accessor. For a non-generic containing type returns the bare
+    /// accessor <c>MethodDef</c>; for a constructed generic containing type
+    /// returns a <c>MemberRef</c> parented at the constructed <c>TypeSpec</c>
+    /// so a property whose type mentions a class type parameter (e.g.
+    /// <c>prop Value T</c> on <c>Box[int32]</c>) is accessed with <c>T</c>
+    /// substituted by the runtime. The MemberRef signature mirrors the open
+    /// accessor MethodDef emitted by <c>MemberDefEmitter</c> (which encodes the
+    /// property type with <c>VAR(idx)</c> placeholders).
+    /// </summary>
+    internal EntityHandle ResolveUserPropertyAccessorToken(StructSymbol containingType, PropertySymbol property, bool wantSetter)
+    {
+        // Property accessor MethodDef rows are planned against the OPEN
+        // definition's property (the only type that is emitted), so map the
+        // possibly-substituted constructed property back to the definition's
+        // property by name before consulting PropertyAccessorHandles.
+        var defType = containingType.Definition ?? containingType;
+        var defProp = property;
+        if (!ReferenceEquals(defType, containingType))
+        {
+            foreach (var candidate in property.IsStatic ? defType.StaticProperties : defType.Properties)
+            {
+                if (candidate.Name == property.Name && candidate.IsIndexer == property.IsIndexer)
+                {
+                    defProp = candidate;
+                    break;
+                }
+            }
+        }
+
+        if (!this.cache.PropertyAccessorHandles.TryGetValue(defProp, out var handles))
+        {
+            throw new InvalidOperationException(
+                $"Property '{property.Name}' has no emitted accessor handles.");
+        }
+
+        var accessor = wantSetter ? handles.Setter : handles.Getter;
+        if (!accessor.HasValue)
+        {
+            throw new InvalidOperationException(
+                $"Property '{property.Name}' has no emitted {(wantSetter ? "setter" : "getter")} MethodDef.");
+        }
+
+        if (!IsUserGenericTypeReference(containingType))
+        {
+            return accessor.Value;
+        }
+
+        var accessorName = (wantSetter ? "set_" : "get_") + defProp.Name;
+        return this.GetUserStructMethodRef(
+            containingType,
+            accessor.Value,
+            accessorName,
+            this.EncodeOpenPropertyAccessorSignature(defProp, wantSetter));
+    }
+
+    /// <summary>
+    /// Issue #989: encodes the open accessor signature for a user property,
+    /// matching the MethodDef shape emitted by <c>MemberDefEmitter</c>: a
+    /// getter is <c>instance PropertyType get_Name(indexParams...)</c>; a setter
+    /// is <c>instance void set_Name(indexParams..., PropertyType)</c>. The open
+    /// definition's property type is used so type parameters encode as
+    /// <c>VAR(idx)</c>.
+    /// </summary>
+    private BlobBuilder EncodeOpenPropertyAccessorSignature(PropertySymbol property, bool wantSetter)
+    {
+        var sigBlob = new BlobBuilder();
+        var indexParams = property.Parameters.IsDefaultOrEmpty
+            ? ImmutableArray<ParameterSymbol>.Empty
+            : property.Parameters;
+        if (wantSetter)
+        {
+            new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+                .Parameters(
+                    indexParams.Length + 1,
+                    r => r.Void(),
+                    ps =>
+                    {
+                        foreach (var p in indexParams)
+                        {
+                            EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                        }
+
+                        EncodeTypeSymbol(ps.AddParameter().Type(), property.Type);
+                    });
+        }
+        else
+        {
+            new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+                .Parameters(
+                    indexParams.Length,
+                    r => EncodeTypeSymbol(r.Type(), property.Type),
+                    ps =>
+                    {
+                        foreach (var p in indexParams)
+                        {
+                            EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                        }
+                    });
+        }
+
+        return sigBlob;
     }
 
     /// <summary>
