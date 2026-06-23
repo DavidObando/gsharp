@@ -19,4 +19,13 @@ public enum Accessibility
 
     /// <summary>Visible only within the declaring container (CLR type).</summary>
     Private,
+
+    /// <summary>
+    /// Issue #950: visible within the declaring type and within types that
+    /// derive from it (their own bodies). Maps to CLR <c>family</c>
+    /// accessibility. Only valid on members of inheritable (<c>open</c>)
+    /// classes — a non-<c>open</c>/<c>struct</c>/sealed type cannot be derived
+    /// from, so <c>protected</c> there is reported as a clean diagnostic.
+    /// </summary>
+    Protected,
 }

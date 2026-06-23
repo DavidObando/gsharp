@@ -127,6 +127,7 @@ public enum SyntaxKind
     OverrideKeyword,
     PackageKeyword,
     PrivateKeyword,
+    ProtectedKeyword,
     PublicKeyword,
     RangeKeyword,
     ReturnKeyword,

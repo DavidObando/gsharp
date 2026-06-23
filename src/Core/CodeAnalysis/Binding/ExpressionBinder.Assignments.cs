@@ -495,12 +495,18 @@ internal sealed partial class ExpressionBinder
         if (!TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, syntax.FieldIdentifier.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
         {
             // ADR-0051: check if it's a property.
-            if (TypeMemberModel.TryGetProperty(structSymbol, syntax.FieldIdentifier.Text, out var prop))
+            if (TypeMemberModel.TryGetProperty(structSymbol, syntax.FieldIdentifier.Text, out var prop, out var propDeclaringType))
             {
                 if (!prop.HasSetter)
                 {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
                     return new BoundErrorExpression(null);
+                }
+
+                // Issue #950: enforce `protected` property assignment.
+                if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
+                {
+                    Diagnostics.ReportProtectedMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propDeclaringType.Name);
                 }
 
                 var propConverted = conversions.BindConversion(syntax.Value.Location, value, prop.Type);
@@ -544,6 +550,13 @@ internal sealed partial class ExpressionBinder
         }
 
         var receiverIsThisField = ReceiverVariableIsThis(variable);
+
+        // Issue #950: enforce `protected` field assignment — only the declaring
+        // type and its derived types may write it.
+        if (!AccessibilityChecker.IsAccessible(field.Accessibility, fieldDeclaringType, this.function))
+        {
+            Diagnostics.ReportProtectedMemberInaccessible(syntax.FieldIdentifier.Location, field.Name, fieldDeclaringType.Name);
+        }
 
         // Issue #947: a read-only field of `this` may be assigned inside the
         // declaring type's constructor; in that case the receiver being `this`

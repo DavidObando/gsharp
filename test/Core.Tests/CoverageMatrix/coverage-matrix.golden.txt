@@ -180,6 +180,7 @@ PropertyDeclaration
 PropertyInitializer
 PropertyPattern
 PropertyPatternField
+ProtectedKeyword
 PublicKeyword
 QuestionDotToken
 QuestionOpenBracketToken

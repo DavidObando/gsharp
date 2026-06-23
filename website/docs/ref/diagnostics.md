@@ -492,6 +492,19 @@ declaration order; `const` fields fold to compile-time literal fields; static
 | GS0377 | Error | A field initializer cannot reference the instance member or constructor parameter `{name}` (field initializers run before the constructor body, so `this` is not available). Assign it in an `init(...)` constructor instead. |
 
 
+## `protected` accessibility diagnostics (GS0379–GS0380)
+
+Issue #950 — the `protected` access modifier (CIL `family`) makes a member
+accessible within its declaring type and the bodies of derived types only.
+Because protection is only meaningful where a derived type can exist,
+`protected` is restricted to members of an inheritable `open class`.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0379 | Error | `'{Type}.{member}' is inaccessible due to its protection level: a 'protected' member is only accessible within '{Type}' and types derived from it.` |
+| GS0380 | Error | `'protected' is only allowed on members of an 'open class' (a type that can be inherited). Mark the enclosing class 'open', or use a different accessibility.` |
+
+
 ## `deinit` (finalizer) diagnostics (GS0289–GS0292)
 
 ADR-0068 / issue #698 — `deinit { … }` declares a CLR finalizer on a

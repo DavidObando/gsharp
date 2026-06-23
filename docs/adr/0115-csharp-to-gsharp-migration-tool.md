@@ -197,9 +197,19 @@ Defaults: top-level declarations default to `public` (ADR-0014); top-level `priv
 | `public` | omit (default) | emit `public` where member default is not public |
 | `internal` | `internal` | `internal` |
 | `private` | `private` (ADR-0109) | `private` |
-| `protected` / `protected internal` | nearest supported (`internal`) + triage note | as left |
+| `protected` | `internal` + triage note (no top-level `protected`) | `protected` (issue #950) |
+| `protected internal` / `private protected` | `internal` + triage note | `internal` + triage note |
 
-`protected` has no direct G# spelling today; it is mapped to the closest accessibility and flagged in triage rather than silently dropped.
+Since issue #950, G# has a first-class `protected` member modifier (CIL
+`family`), so the translator maps C# `protected` members directly to G#
+`protected`. Because `protected` is only valid on members of an inheritable
+`open class`, the translator forces any class that declares a `protected` member
+to be emitted as `open` (alongside the existing "subclassed within the
+compilation" rule). The blended forms `protected internal` and `private
+protected` have no single-keyword G# equivalent; they continue to map to the
+nearest supported accessibility (`internal`) with a triage note. There is no
+top-level `protected` in G#, so a `protected` *type* still maps to `internal`
+with a triage note.
 
 #### B.11 Members: fields, properties, constructors, statics, enums, attributes
 
@@ -490,7 +500,7 @@ re-greens automatically.
 - **Roslyn dependency in the toolset.** `Cs2Gs.Translator` carries `Microsoft.CodeAnalysis.CSharp` (and its transitive MSBuild/crypto pins already present in the scaffold). This is a tool-only cost, not a compiler cost, but it is real maintenance surface.
 - **Corpus curation is ongoing work.** The oracle's value scales with corpus breadth; building and maintaining green C# apps is a continuing investment.
 - **"Canonical" must track the language.** Every new G# surface ADR may add or change a section-B rule; the pretty-printer is a living contract, not a one-time write.
-- **Constructs without a canonical form are deferred, not translated.** `protected`, `inline struct` newtype promotion, some `using static` shapes, and any not-yet-mapped construct are triaged rather than guessed — correct, but it means some apps will not migrate until the language or the tool grows.
+- **Constructs without a canonical form are deferred, not translated.** `inline struct` newtype promotion, some `using static` shapes, and any not-yet-mapped construct are triaged rather than guessed — correct, but it means some apps will not migrate until the language or the tool grows. (C# member `protected` is now translated directly to G# `protected` since issue #950; the blended `protected internal` / `private protected` forms remain triaged to `internal`.)
 
 ### Neutral
 

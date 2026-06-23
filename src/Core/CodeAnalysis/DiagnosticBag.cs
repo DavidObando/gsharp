@@ -1234,6 +1234,39 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0180", message);
     }
 
+    /// <summary>
+    /// Issue #950: GS0379 — a <c>protected</c> member of <paramref name="declaringTypeName"/>
+    /// was accessed from code that is neither the declaring type nor a type
+    /// deriving from it. A <c>protected</c> member is only reachable from the
+    /// declaring type and the bodies of its derived types.
+    /// </summary>
+    /// <param name="location">The text location of the offending access.</param>
+    /// <param name="memberName">The protected member's name.</param>
+    /// <param name="declaringTypeName">The declaring type's name.</param>
+    public void ReportProtectedMemberInaccessible(TextLocation location, string memberName, string declaringTypeName)
+    {
+        Report(
+            location,
+            "GS0379",
+            $"'{declaringTypeName}.{memberName}' is inaccessible due to its protection level: a 'protected' member is only accessible within '{declaringTypeName}' and types derived from it.");
+    }
+
+    /// <summary>
+    /// Issue #950: GS0380 — the <c>protected</c> modifier appears on a member
+    /// (or nested type) whose enclosing type is not an inheritable
+    /// <c>open class</c>. Nothing can derive from a non-<c>open</c> class, a
+    /// <c>struct</c>, a sealed type, an interface, or a top-level declaration,
+    /// so <c>protected</c> there is meaningless.
+    /// </summary>
+    /// <param name="location">The text location of the <c>protected</c> modifier.</param>
+    public void ReportProtectedRequiresOpenType(TextLocation location)
+    {
+        Report(
+            location,
+            "GS0380",
+            "'protected' is only allowed on members of an 'open class' (a type that can be inherited). Mark the enclosing class 'open', or use a different accessibility.");
+    }
+
     /// <summary>Reports an attempt to subclass a sealed (non-<c>open</c>) class. Phase 3.B.3 sub-step 3 / ADR-0017.</summary>
     /// <param name="location">The text location of the base-type identifier.</param>
     /// <param name="baseTypeName">The base type name.</param>
