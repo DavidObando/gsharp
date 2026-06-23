@@ -898,6 +898,32 @@ public class Parser
         // The aggregate `interface` keyword is already consumed. Build the
         // body by hand (mirroring ParseInterfaceDeclaration but without the
         // up-front MatchToken on the keyword).
+        //
+        // Issue #1006: an interface may declare one or more base interfaces via
+        // a `: A, B` clause directly after the identifier / type-parameter list,
+        // mirroring `interface B : A` in C#. Reuse the same comma-separated
+        // type-clause parsing the class/struct path uses; the binder enforces
+        // that every entry resolves to an interface.
+        SyntaxToken baseColon = null;
+        var baseTypeClauseNodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        if (Current.Kind == SyntaxKind.ColonToken)
+        {
+            baseColon = MatchToken(SyntaxKind.ColonToken);
+            var firstBaseType = ParseTypeClause();
+            baseTypeClauseNodesAndSeparators.Add(firstBaseType);
+
+            while (Current.Kind == SyntaxKind.CommaToken)
+            {
+                var comma = MatchToken(SyntaxKind.CommaToken);
+                baseTypeClauseNodesAndSeparators.Add(comma);
+                var nextType = ParseTypeClause();
+                baseTypeClauseNodesAndSeparators.Add(nextType);
+            }
+
+            baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(baseTypeClauseNodesAndSeparators.ToImmutable());
+        }
+
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
 
         var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
@@ -939,7 +965,7 @@ public class Parser
         }
 
         var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
-        return new InterfaceDeclarationSyntax(
+        var interfaceDecl = new InterfaceDeclarationSyntax(
             syntaxTree,
             accessibilityModifier,
             typeKeyword: null,
@@ -952,6 +978,9 @@ public class Parser
             events.ToImmutable(),
             methods.ToImmutable(),
             closeBrace);
+        interfaceDecl.BaseColonToken = baseColon;
+        interfaceDecl.BaseTypeClauses = baseTypeClauses;
+        return interfaceDecl;
     }
 
     private MemberSyntax ParseTypeAliasDeclaration(SyntaxToken accessibilityModifier)

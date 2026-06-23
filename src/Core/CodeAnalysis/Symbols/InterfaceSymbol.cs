@@ -147,6 +147,23 @@ public sealed class InterfaceSymbol : TypeSymbol
     public ImmutableArray<EventSymbol> Events { get; private set; } = ImmutableArray<EventSymbol>.Empty;
 
     /// <summary>
+    /// Gets the directly-declared base interfaces (issue #1006), e.g. the
+    /// <c>A</c> in <c>interface B : A</c>. Populated by the binder via
+    /// <see cref="SetBaseInterfaces"/>. A base interface contributes its
+    /// members to this interface's member-lookup surface and is emitted as an
+    /// InterfaceImpl row on this interface's TypeDef.
+    /// </summary>
+    public ImmutableArray<InterfaceSymbol> BaseInterfaces { get; private set; } = ImmutableArray<InterfaceSymbol>.Empty;
+
+    /// <summary>
+    /// Gets the directly-declared base interfaces imported from metadata
+    /// (issue #1006), e.g. <c>System.IDisposable</c> in
+    /// <c>interface B : System.IDisposable</c>. These are CLR interface types
+    /// surfaced through their <see cref="TypeSymbol.ClrType"/>.
+    /// </summary>
+    public ImmutableArray<TypeSymbol> BaseClrInterfaces { get; private set; } = ImmutableArray<TypeSymbol>.Empty;
+
+    /// <summary>
     /// Gets the enclosing user-defined type when this interface is a nested
     /// type declaration (ADR-0110 / issue #910), or <c>null</c> when top-level.
     /// </summary>
@@ -176,6 +193,57 @@ public sealed class InterfaceSymbol : TypeSymbol
     public void SetMethods(ImmutableArray<FunctionSymbol> methods)
     {
         Methods = methods;
+    }
+
+    /// <summary>Sets <see cref="BaseInterfaces"/> (issue #1006). Intended to be called once by the binder.</summary>
+    /// <param name="baseInterfaces">The directly-declared user base interfaces.</param>
+    public void SetBaseInterfaces(ImmutableArray<InterfaceSymbol> baseInterfaces)
+    {
+        BaseInterfaces = baseInterfaces;
+    }
+
+    /// <summary>Sets <see cref="BaseClrInterfaces"/> (issue #1006). Intended to be called once by the binder.</summary>
+    /// <param name="baseClrInterfaces">The directly-declared imported CLR base interfaces.</param>
+    public void SetBaseClrInterfaces(ImmutableArray<TypeSymbol> baseClrInterfaces)
+    {
+        BaseClrInterfaces = baseClrInterfaces;
+    }
+
+    /// <summary>
+    /// Issue #1006: enumerates this interface together with the transitive
+    /// closure of its user base interfaces (<see cref="BaseInterfaces"/>),
+    /// each appearing once. <c>this</c> is yielded first, then bases in
+    /// declaration order, depth-first. Used by member lookup and by the
+    /// implementer-contract verification so an <c>interface B : A</c> surfaces
+    /// <c>A</c>'s members.
+    /// </summary>
+    /// <returns>The self-and-bases set, deduplicated by reference.</returns>
+    public IEnumerable<InterfaceSymbol> SelfAndAllBaseInterfaces()
+    {
+        var seen = new HashSet<InterfaceSymbol>();
+        var ordered = new List<InterfaceSymbol>();
+        var visiting = new Stack<InterfaceSymbol>();
+        visiting.Push(this);
+        while (visiting.Count > 0)
+        {
+            var current = visiting.Pop();
+            if (!seen.Add(current))
+            {
+                continue;
+            }
+
+            ordered.Add(current);
+            if (!current.BaseInterfaces.IsDefaultOrEmpty)
+            {
+                // Push in reverse so declaration order is preserved on pop.
+                for (var i = current.BaseInterfaces.Length - 1; i >= 0; i--)
+                {
+                    visiting.Push(current.BaseInterfaces[i]);
+                }
+            }
+        }
+
+        return ordered;
     }
 
     /// <summary>Sets <see cref="StaticMethods"/>. Intended to be called once by the binder (ADR-0089 / issue #755).</summary>

@@ -1321,6 +1321,19 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0382", $"Struct '{structName}' cannot declare base type '{baseTypeName}'; a struct may only implement interfaces.");
     }
 
+    /// <summary>
+    /// Issue #1006: GS0391 — an <c>interface</c> named a class or struct in its
+    /// base-interface clause (e.g. <c>interface B : SomeClass</c>). An
+    /// interface may only extend other interfaces.
+    /// </summary>
+    /// <param name="location">The text location of the offending base type.</param>
+    /// <param name="interfaceName">The declaring interface's name.</param>
+    /// <param name="baseTypeName">The illegal base type's name.</param>
+    public void ReportInterfaceCannotHaveClassBase(TextLocation location, string interfaceName, string baseTypeName)
+    {
+        Report(location, "GS0391", $"Interface '{interfaceName}' cannot declare base type '{baseTypeName}'; an interface may only extend other interfaces.");
+    }
+
     /// <summary>Reports base-constructor arguments (<c>: Base(args)</c>) on a class that declares no base class (issue #306).</summary>
     /// <param name="location">The text location of the base-constructor argument list.</param>
     public void ReportBaseConstructorArgumentsWithoutBase(TextLocation location)
