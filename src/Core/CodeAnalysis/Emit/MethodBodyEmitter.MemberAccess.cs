@@ -874,6 +874,23 @@ internal sealed partial class MethodBodyEmitter
         // getter MemberRef parent is the constructed symbolic type when the
         // target is a generic with G# user-defined type arguments.
         this.il.Token(this.outer.GetMethodEntityHandle(getter, idx.Target.Type));
+
+        // Issue #957: when the receiver is a symbolic open-generic container
+        // closed over a same-compilation user type (e.g. `List[Item]` where
+        // `Item` is a `data struct` still being compiled), the receiver-aware
+        // MemberRef above encodes the `get_Item` call against the constructed
+        // symbolic type, so the runtime stack value is the substituted element
+        // type (`Item`), NOT the type-erased CLR `object` that the open
+        // `get_Item` return (`T`) reports. Feeding that erased return into the
+        // widening would emit a spurious `unbox.any Item` against a stack slot
+        // that already holds a raw `Item` value — an ilverify StackUnexpected
+        // and a runtime SIGSEGV. Skip the widening, mirroring the property,
+        // instance-method, and imported-call variants.
+        if (this.outer.TryGetSymbolicSubstitutedPropertyReturn(idx.Target.Type, idx.Indexer, out _))
+        {
+            return;
+        }
+
         this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(getter.ReturnType), idx.Type);
     }
 
