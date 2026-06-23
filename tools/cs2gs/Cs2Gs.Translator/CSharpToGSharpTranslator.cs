@@ -281,6 +281,11 @@ public sealed class CSharpToGSharpTranslator
         // because a top-level receiver-clause `func` has no implicit receiver.
         private string currentReceiverName;
 
+        // The exception variable bound by the innermost enclosing `catch` clause,
+        // used to translate a C# re-throw (`throw;`) — which has no bare G# form —
+        // to `throw <caughtVar>` (ADR-0115 §B).
+        private string currentCatchVariable;
+
         public DeclarationVisitor(
             TranslationContext context,
             CSharpTypeMapper typeMapper,
@@ -572,6 +577,18 @@ public sealed class CSharpToGSharpTranslator
             {
                 foreach ((GMember translated, bool isStatic) in this.TranslateMember(member, kind.Value, lift))
                 {
+                    // A C# operator overload translates to a receiver-clause
+                    // `func (a T) operator <op>(...)`; like every receiver-clause
+                    // func it only binds at top level, so it is lifted out as a
+                    // sibling regardless of whether the owning type is a value or
+                    // reference aggregate (ADR-0035, sample Operators.gs; §B.5).
+                    if (translated is MethodDeclaration { Receiver: not null } opMethod &&
+                        opMethod.Name.StartsWith("operator ", System.StringComparison.Ordinal))
+                    {
+                        this.pendingTopLevelDeclarations.Add(translated);
+                        continue;
+                    }
+
                     // A lifted owned-value-aggregate instance method (it carries a
                     // receiver clause) cannot live in the struct body; collect it
                     // as a top-level sibling declaration (issue #938).
@@ -856,6 +873,10 @@ public sealed class CSharpToGSharpTranslator
                     yield return this.TranslateMethod(method, ownerKind);
                     break;
 
+                case OperatorDeclarationSyntax op:
+                    yield return this.TranslateOperator(op);
+                    break;
+
                 case PropertyDeclarationSyntax property:
                     if (lift.PropertiesAsPrimaryParameters.Contains(property.Identifier.Text))
                     {
@@ -1029,6 +1050,17 @@ public sealed class CSharpToGSharpTranslator
             bool inInterface = symbol?.ContainingType?.TypeKind == TypeKind.Interface;
             bool isOpen = symbol != null && (symbol.IsVirtual || symbol.IsAbstract) && !symbol.IsOverride && !inInterface;
 
+            // A method lifted to the top-level receiver-clause form (an owned-value
+            // aggregate method or an extension method) has no `open`/`override`:
+            // those modifiers are only valid on in-body class members, and the
+            // parser rejects `override func (...)` (GS0005). Drop them so the
+            // emitted G# round-trips (ADR-0115 §B.5/§B.14).
+            if (receiver != null)
+            {
+                isOpen = false;
+                isOverride = false;
+            }
+
             var method = new MethodDeclaration(
                 node.Identifier.Text,
                 parameters: parameters,
@@ -1043,6 +1075,64 @@ public sealed class CSharpToGSharpTranslator
                 attributes: this.MapAttributes(node.AttributeLists));
 
             return (method, isStatic);
+        }
+
+        /// <summary>
+        /// Translates a C# operator overload (<c>public static X operator +(X a, X b)</c>)
+        /// to the canonical G# receiver-clause operator form
+        /// <c>func (a X) operator +(b X) X</c> (ADR-0035, sample <c>Operators.gs</c>;
+        /// ADR-0115 §B.5). The first operand becomes the receiver; remaining
+        /// operands become parameters (a unary operator has no parameters). The
+        /// declaration is lifted to a top-level sibling because a receiver-clause
+        /// <c>func</c> only binds at top level.
+        /// </summary>
+        private (GMember Member, bool IsStatic) TranslateOperator(OperatorDeclarationSyntax node)
+        {
+            var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
+            string operatorToken = node.OperatorToken.Text;
+
+            List<Parameter> allParameters = this.MapParameters(symbol, node.ParameterList, skipFirst: false);
+            Receiver receiver;
+            List<Parameter> parameters;
+            if (allParameters.Count > 0)
+            {
+                Parameter first = allParameters[0];
+                receiver = new Receiver(first.Name, first.Type);
+                parameters = allParameters.Skip(1).ToList();
+            }
+            else
+            {
+                receiver = new Receiver(
+                    "self",
+                    new NamedTypeReference(symbol?.ContainingType?.Name ?? "object"));
+                parameters = new List<Parameter>();
+            }
+
+            GTypeReference returnType = symbol != null
+                ? this.typeMapper.Map(symbol.ReturnType, this.context, node.ReturnType.GetLocation())
+                : null;
+
+            BlockStatement body = (node.Body != null || node.ExpressionBody != null)
+                ? this.TranslateBody(node, $"operator '{operatorToken}'")
+                : null;
+
+            var method = new MethodDeclaration(
+                $"operator {operatorToken}",
+                parameters: parameters,
+                returnType: returnType,
+                body: body,
+                typeParameters: null,
+                receiver: receiver,
+                visibility: Visibility.Default,
+                isOpen: false,
+                isOverride: false,
+                isAsync: false,
+                attributes: this.MapAttributes(node.AttributeLists));
+
+            // Operators carry the receiver-clause form and are lifted to a top-level
+            // sibling; returning IsStatic=false routes them through the existing
+            // receiver-clause lift in VisitAggregate.
+            return (method, false);
         }
 
         private (GMember Member, bool IsStatic) TranslateProperty(PropertyDeclarationSyntax node)
@@ -1197,13 +1287,27 @@ public sealed class CSharpToGSharpTranslator
 
             List<Parameter> parameters = this.MapParameters(symbol, node.ParameterList, skipFirst: false);
 
+            List<GExpression> baseArguments = null;
             if (node.Initializer != null)
             {
-                this.context.Report(new TranslationDiagnostic(
-                    "ConstructorInitializer",
-                    $"constructor on '{node.Identifier.Text}' chains to '{node.Initializer.ThisOrBaseKeyword.Text}(...)'; the chained arguments are deferred to step 7 (issue #914).",
-                    node.Initializer.GetLocation(),
-                    TranslationSeverity.Info));
+                if (node.Initializer.ThisOrBaseKeyword.IsKind(SyntaxKind.BaseKeyword))
+                {
+                    // A `: base(args)` chain maps to the canonical G# explicit-base
+                    // form `init(params) : base(args) { ... }` (sample
+                    // ExplicitConstructor.gs; ADR-0115 §B.13). This is how a custom
+                    // exception forwards its message to System.Exception's ctor.
+                    baseArguments = node.Initializer.ArgumentList.Arguments
+                        .Select(a => this.TranslateArgument(a))
+                        .ToList();
+                }
+                else
+                {
+                    // `: this(args)` (constructor delegation) has no canonical G#
+                    // form yet.
+                    this.context.ReportUnsupported(
+                        node.Initializer,
+                        "a `: this(...)` constructor delegation has no canonical G# form yet (ADR-0115 §B.13).");
+                }
             }
 
             BlockStatement body = this.TranslateBody(node, $"constructor on '{node.Identifier.Text}'");
@@ -1211,7 +1315,7 @@ public sealed class CSharpToGSharpTranslator
             return new ConstructorDeclaration(
                 parameters,
                 body,
-                baseArguments: null,
+                baseArguments: baseArguments,
                 visibility: MapVisibility(symbol, this.context, node),
                 attributes: this.MapAttributes(node.AttributeLists));
         }
@@ -1579,7 +1683,21 @@ public sealed class CSharpToGSharpTranslator
 
                     break;
 
+                case OperatorDeclarationSyntax op:
+                    if (op.Body != null)
+                    {
+                        return this.TranslateBlock(op.Body);
+                    }
+
+                    if (op.ExpressionBody != null)
+                    {
+                        return this.WrapExpressionBody(op.ExpressionBody.Expression, isVoid: false);
+                    }
+
+                    break;
+
                 case ConstructorDeclarationSyntax ctor:
+
                     if (ctor.Body != null)
                     {
                         return this.TranslateBlock(ctor.Body);
@@ -1650,7 +1768,10 @@ public sealed class CSharpToGSharpTranslator
             switch (statement)
             {
                 case LocalDeclarationStatementSyntax local:
-                    return this.TranslateLocalDeclaration(local.Declaration, local.IsConst);
+                    return this.TranslateLocalDeclaration(
+                        local.Declaration,
+                        local.IsConst,
+                        isUsing: local.UsingKeyword != default);
 
                 case ExpressionStatementSyntax expressionStatement:
                     return new[] { this.TranslateExpressionStatement(expressionStatement.Expression) };
@@ -1686,13 +1807,13 @@ public sealed class CSharpToGSharpTranslator
                     };
 
                 case ThrowStatementSyntax throwStatement:
-                    return new[]
-                    {
-                        (GStatement)new ThrowStatement(
-                            throwStatement.Expression == null
-                                ? new IdentifierExpression("nil")
-                                : this.TranslateExpression(throwStatement.Expression)),
-                    };
+                    return new[] { this.TranslateThrow(throwStatement) };
+
+                case TryStatementSyntax tryStatement:
+                    return new[] { this.TranslateTry(tryStatement) };
+
+                case UsingStatementSyntax usingStatement:
+                    return new[] { this.TranslateUsingStatement(usingStatement) };
 
                 case BlockSyntax block:
                     return new[] { (GStatement)this.TranslateBlock(block) };
@@ -1708,7 +1829,7 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
-        private IEnumerable<GStatement> TranslateLocalDeclaration(VariableDeclarationSyntax declaration, bool isConst)
+        private IEnumerable<GStatement> TranslateLocalDeclaration(VariableDeclarationSyntax declaration, bool isConst, bool isUsing = false)
         {
             var results = new List<GStatement>();
             bool hasExplicitType = !declaration.Type.IsVar;
@@ -1724,12 +1845,27 @@ public sealed class CSharpToGSharpTranslator
                 {
                     binding = BindingKind.Const;
                 }
+                else if (isUsing)
+                {
+                    // A `using` resource is read-only after acquisition; it maps to
+                    // the immutable `using let` form (sample Defer.gs).
+                    binding = BindingKind.Let;
+                }
                 else
                 {
                     var local = this.context.GetDeclaredSymbol(declarator) as ILocalSymbol;
                     binding = local != null && this.IsLocalReassigned(local)
                         ? BindingKind.Var
                         : BindingKind.Let;
+                }
+
+                // An immutable `let` requires an initializer; a declaration with no
+                // initializer (e.g. a pre-declared `out` target, `int x;`) must bind
+                // as mutable `var <name> <type>` so the zero value is named and the
+                // subsequent assignment is legal (spec §Bindings, ADR-0115 §B.3).
+                if (declarator.Initializer == null && binding == BindingKind.Let)
+                {
+                    binding = BindingKind.Var;
                 }
 
                 // A type clause is required when there is no initializer (it names
@@ -1748,10 +1884,104 @@ public sealed class CSharpToGSharpTranslator
                     binding,
                     declarator.Identifier.Text,
                     type,
-                    initializer));
+                    initializer,
+                    isUsing: isUsing));
             }
 
             return results;
+        }
+
+        private GStatement TranslateThrow(ThrowStatementSyntax throwStatement)
+        {
+            // C# `throw;` (re-throw) has no bare G# form (`throw` alone is GS0005);
+            // re-emit the innermost caught exception variable, which reproduces the
+            // exception type and message (ADR-0115 §B).
+            if (throwStatement.Expression == null)
+            {
+                if (this.currentCatchVariable != null)
+                {
+                    return new ThrowStatement(new IdentifierExpression(this.currentCatchVariable));
+                }
+
+                this.context.ReportUnsupported(
+                    throwStatement,
+                    "a bare re-throw outside a named catch has no canonical G# form (G# has no bare 'throw'; ADR-0115 §B).");
+                return new ThrowStatement(new IdentifierExpression("nil"));
+            }
+
+            return new ThrowStatement(this.TranslateExpression(throwStatement.Expression));
+        }
+
+        private GStatement TranslateTry(TryStatementSyntax node)
+        {
+            BlockStatement tryBlock = this.TranslateBlock(node.Block);
+
+            var catches = new List<CatchClause>();
+            foreach (CatchClauseSyntax catchClause in node.Catches)
+            {
+                string variableName = null;
+                GTypeReference exceptionType = null;
+                if (catchClause.Declaration != null)
+                {
+                    ITypeSymbol typeSymbol = this.context.GetTypeInfo(catchClause.Declaration.Type).Type;
+                    exceptionType = typeSymbol != null
+                        ? this.typeMapper.Map(typeSymbol, this.context, catchClause.Declaration.Type.GetLocation())
+                        : new NamedTypeReference(catchClause.Declaration.Type.ToString());
+                    variableName = catchClause.Declaration.Identifier.Text;
+                    if (string.IsNullOrEmpty(variableName))
+                    {
+                        // `catch (Exception)` with no binding: synthesize one so the
+                        // G# typed-catch form (which requires a binder) is well-formed.
+                        variableName = "ex";
+                    }
+                }
+
+                string previousCatch = this.currentCatchVariable;
+                this.currentCatchVariable = variableName;
+                try
+                {
+                    catches.Add(new CatchClause(variableName, exceptionType, this.TranslateBlock(catchClause.Block)));
+                }
+                finally
+                {
+                    this.currentCatchVariable = previousCatch;
+                }
+            }
+
+            BlockStatement finallyBlock = node.Finally != null
+                ? this.TranslateBlock(node.Finally.Block)
+                : null;
+
+            return new TryStatement(tryBlock, catches, finallyBlock);
+        }
+
+        private GStatement TranslateUsingStatement(UsingStatementSyntax node)
+        {
+            // C# `using (var r = e) body` has no `using (...)` block form in G#
+            // (it is GS0005); it maps to a scoped block holding a `using let`
+            // resource declaration followed by the body, so the resource is
+            // disposed at the end of that block (sample Defer.gs; ADR-0115 §B).
+            var statements = new List<GStatement>();
+            if (node.Declaration != null)
+            {
+                statements.AddRange(this.TranslateLocalDeclaration(node.Declaration, isConst: false, isUsing: true));
+            }
+            else if (node.Expression != null)
+            {
+                // `using (expr) body` (no declaration): the resource is the
+                // expression value; bind it to a fresh `using let` so disposal
+                // is scoped to the block.
+                statements.Add(new LocalDeclarationStatement(
+                    BindingKind.Let,
+                    "__using",
+                    type: null,
+                    initializer: this.TranslateExpression(node.Expression),
+                    isUsing: true));
+            }
+
+            BlockStatement bodyBlock = this.TranslateStatementAsBlock(node.Statement);
+            statements.AddRange(bodyBlock.Statements);
+            return new BlockStatement(statements);
         }
 
         private GStatement TranslateExpressionStatement(ExpressionSyntax expression)
@@ -1947,6 +2177,15 @@ public sealed class CSharpToGSharpTranslator
                 case SwitchExpressionSyntax switchExpression:
                     return this.TranslateSwitchExpression(switchExpression);
 
+                case ConditionalExpressionSyntax conditional:
+                    // A C# ternary `cond ? a : b` maps to the canonical G#
+                    // value-position `if` expression `if cond { a } else { b }`
+                    // (ADR-0064, sample IfExpression.gs; ADR-0115 §B).
+                    return new IfExpression(
+                        this.TranslateExpression(conditional.Condition),
+                        this.TranslateExpression(conditional.WhenTrue),
+                        this.TranslateExpression(conditional.WhenFalse));
+
                 case QueryExpressionSyntax query:
                     return this.TranslateQuery(query);
 
@@ -2035,22 +2274,9 @@ public sealed class CSharpToGSharpTranslator
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
         {
-            // A member access on a bare-identifier element access (`values[i].M`)
-            // hits a G# parser ambiguity: `ident[ident]` is parsed as a generic
-            // instantiation expecting a `(` call, so the following `.` is rejected
-            // (GS0005: Unexpected <DotToken>). Literal or compound indices
-            // (`values[0]`, `values[i + 1]`) parse fine. There is no faithful G#
-            // form, so surface it as a clean per-construct gap (ADR-0115 §B gap #TBD).
-            if (member.Expression is ElementAccessExpressionSyntax elementAccess &&
-                elementAccess.ArgumentList.Arguments.Count == 1 &&
-                elementAccess.ArgumentList.Arguments[0].Expression is IdentifierNameSyntax)
-            {
-                this.context.ReportUnsupported(
-                    member,
-                    "member access on a bare-identifier element access ('expr[i].Member') has no canonical G# form (GS0005: Unexpected <DotToken>); emitted a placeholder (ADR-0115 §B gap).");
-                return new IdentifierExpression("nil");
-            }
-
+            // Member access on a bare-identifier element access (`values[i].M`)
+            // previously hit a G# parser ambiguity (#942); that gap is now fixed,
+            // so the construct translates through the normal member-access path.
             GExpression target = this.TranslateExpression(member.Expression);
             string memberName = member.Name.Identifier.Text;
 
@@ -2109,10 +2335,49 @@ public sealed class CSharpToGSharpTranslator
             }
 
             var arguments = invocation.ArgumentList.Arguments
-                .Select(a => this.TranslateExpression(a.Expression))
+                .Select(a => this.TranslateArgument(a))
                 .ToList();
 
             return new InvocationExpression(target, arguments, typeArguments);
+        }
+
+        /// <summary>
+        /// Translates a single C# call argument, honoring <c>out</c>/<c>ref</c>
+        /// argument forms (ADR-0115 §B; sample <c>TryParseOutVar.gs</c>): an
+        /// <c>out</c>/<c>ref</c> argument naming a pre-declared variable maps to
+        /// the address-of form <c>&amp;x</c>, an inline <c>out var x</c> maps to
+        /// <c>out var x</c>, and an <c>out _</c> discard maps to <c>out _</c>.
+        /// </summary>
+        private GExpression TranslateArgument(ArgumentSyntax argument)
+        {
+            SyntaxKind refKind = argument.RefKindKeyword.Kind();
+            if (refKind == SyntaxKind.OutKeyword)
+            {
+                if (argument.Expression is DeclarationExpressionSyntax declaration)
+                {
+                    return declaration.Designation switch
+                    {
+                        DiscardDesignationSyntax => new OutArgumentExpression("out", "_"),
+                        SingleVariableDesignationSyntax single => new OutArgumentExpression("out var", single.Identifier.Text),
+                        _ => new UnaryExpression("&", this.TranslateExpression(argument.Expression)),
+                    };
+                }
+
+                if (argument.Expression is IdentifierNameSyntax { Identifier.Text: "_" })
+                {
+                    return new OutArgumentExpression("out", "_");
+                }
+
+                // `out existingVar` (pre-declared): pass by address (legacy form).
+                return new UnaryExpression("&", this.TranslateExpression(argument.Expression));
+            }
+
+            if (refKind == SyntaxKind.RefKeyword)
+            {
+                return new UnaryExpression("&", this.TranslateExpression(argument.Expression));
+            }
+
+            return this.TranslateExpression(argument.Expression);
         }
 
         private GExpression TranslateObjectCreation(ObjectCreationExpressionSyntax creation)
@@ -2127,7 +2392,7 @@ public sealed class CSharpToGSharpTranslator
             var arguments = creation.ArgumentList == null
                 ? new List<GExpression>()
                 : creation.ArgumentList.Arguments
-                    .Select(a => this.TranslateExpression(a.Expression))
+                    .Select(a => this.TranslateArgument(a))
                     .ToList();
 
             // A C# collection initializer maps to the canonical G# collection
@@ -2477,7 +2742,7 @@ public sealed class CSharpToGSharpTranslator
             var arguments = creation.ArgumentList == null
                 ? new List<GExpression>()
                 : creation.ArgumentList.Arguments
-                    .Select(a => this.TranslateExpression(a.Expression))
+                    .Select(a => this.TranslateArgument(a))
                     .ToList();
 
             // A value aggregate is constructed with a composite literal; a reference

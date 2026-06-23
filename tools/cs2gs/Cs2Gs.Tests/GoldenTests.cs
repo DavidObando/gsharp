@@ -747,6 +747,146 @@ public class GoldenTests
         AssertGolden(expected, unit);
     }
 
+    /// <summary>B.5: a C# operator overload prints as the receiver-clause
+    /// <c>func (a T) operator +(b T) T</c> form, lifted to a top-level sibling
+    /// (sample <c>Operators.gs</c>, ADR-0035).</summary>
+    [Fact]
+    public void BOperator_ReceiverClauseForm()
+    {
+        var op = new MethodDeclaration(
+            "operator +",
+            parameters: List(new Parameter("b", Type("Money"))),
+            returnType: Type("Money"),
+            receiver: new Receiver("a", Type("Money")),
+            body: Block(new ReturnStatement(new BinaryExpression(
+                new MemberAccessExpression(new IdentifierExpression("a"), "Cents"),
+                "+",
+                new MemberAccessExpression(new IdentifierExpression("b"), "Cents")))));
+        var unit = new CompilationUnit("Demo", members: Nodes(op));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "func (a Money) operator +(b Money) Money {",
+            "    return a.Cents + b.Cents",
+            "}");
+
+        AssertGolden(expected, unit);
+    }
+
+    /// <summary>B.* ternary: an <see cref="IfExpression"/> prints as the
+    /// value-producing <c>if c { a } else { b }</c> form (sample
+    /// <c>IfExpression.gs</c>, ADR-0064).</summary>
+    [Fact]
+    public void BIfExpression_ValuePosition()
+    {
+        var method = new MethodDeclaration(
+            "Pick",
+            parameters: List(new Parameter("c", Type("bool"))),
+            returnType: Type("int32"),
+            body: Block(new ReturnStatement(new IfExpression(
+                new IdentifierExpression("c"),
+                LiteralExpression.Int("1"),
+                LiteralExpression.Int("2")))));
+        var unit = new CompilationUnit("Demo", members: Nodes(method));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "func Pick(c bool) int32 {",
+            "    return if c { 1 } else { 2 }",
+            "}");
+
+        AssertGolden(expected, unit);
+    }
+
+    /// <summary>B.* exceptions: a <see cref="TryStatement"/> prints as
+    /// <c>try { } catch (e T) { } finally { }</c> (sample
+    /// <c>Exceptions.gs</c>).</summary>
+    [Fact]
+    public void BTry_CatchFinally()
+    {
+        var tryStmt = new TryStatement(
+            Block(new ExpressionStatement(new InvocationExpression(
+                new MemberAccessExpression(new IdentifierExpression("Console"), "WriteLine"),
+                List<GExpression>(LiteralExpression.String("work"))))),
+            List(new CatchClause(
+                "e",
+                Type("Exception"),
+                Block(new ExpressionStatement(new InvocationExpression(
+                    new MemberAccessExpression(new IdentifierExpression("Console"), "WriteLine"),
+                    List<GExpression>(new MemberAccessExpression(new IdentifierExpression("e"), "Message"))))))),
+            Block(new ExpressionStatement(new InvocationExpression(
+                new MemberAccessExpression(new IdentifierExpression("Console"), "WriteLine"),
+                List<GExpression>(LiteralExpression.String("done"))))));
+        var method = new MethodDeclaration("Run", body: Block(tryStmt));
+        var unit = new CompilationUnit("Demo", List(new ImportDirective("System")), Nodes(method));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "import System",
+            string.Empty,
+            "func Run() {",
+            "    try {",
+            "        Console.WriteLine(\"work\")",
+            "    } catch (e Exception) {",
+            "        Console.WriteLine(e.Message)",
+            "    } finally {",
+            "        Console.WriteLine(\"done\")",
+            "    }",
+            "}");
+
+        AssertGolden(expected, unit);
+    }
+
+    /// <summary>B.* using: a <c>using let r = ...</c> resource declaration prints
+    /// with the <c>using</c> prefix (sample <c>Defer.gs</c>).</summary>
+    [Fact]
+    public void BUsing_LetResourceDeclaration()
+    {
+        var decl = new LocalDeclarationStatement(
+            BindingKind.Let,
+            "r",
+            initializer: new InvocationExpression(new IdentifierExpression("Acquire"), List<GExpression>()),
+            isUsing: true);
+        var method = new MethodDeclaration("Run", body: Block(decl));
+        var unit = new CompilationUnit("Demo", members: Nodes(method));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "func Run() {",
+            "    using let r = Acquire()",
+            "}");
+
+        AssertGolden(expected, unit);
+    }
+
+    /// <summary>B.13: an <c>init</c> constructor that chains to a base
+    /// constructor prints as <c>init(params) : base(args) { ... }</c> (sample
+    /// <c>ExplicitConstructor.gs</c>).</summary>
+    [Fact]
+    public void BConstructor_BaseChaining()
+    {
+        var ctor = new ConstructorDeclaration(
+            List(new Parameter("message", Type("string"))),
+            Block(),
+            baseArguments: List<GExpression>(new IdentifierExpression("message")));
+        var cls = new TypeDeclaration(
+            TypeDeclarationKind.Class,
+            "MyError",
+            baseType: Type("Exception"),
+            members: Members(ctor));
+        var unit = new CompilationUnit("Demo", List(new ImportDirective("System")), Nodes(cls));
+
+        var printed = GSharpPrinter.Print(unit);
+        Assert.Contains("init(message string) : base(message) {", printed);
+
+        var result = GSharpRoundTrip.Validate(printed);
+        Assert.True(result.Success, "Round-trip errors:\n" + string.Join("\n", result.Errors));
+    }
+
     private static void AssertGolden(string expected, CompilationUnit unit)
     {
         var printed = GSharpPrinter.Print(unit);

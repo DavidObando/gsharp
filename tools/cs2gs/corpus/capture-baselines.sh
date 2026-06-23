@@ -35,7 +35,7 @@ capture_console() {
     local proj="$2"
     local golden="${app_dir}/baseline.stdout.golden"
 
-    echo "-- L1 console: ${proj}"
+    echo "-- console: ${proj}"
     dotnet build "${app_dir}/${proj}" -c "${CONFIG}" --nologo -v quiet
     # Capture stdout exactly; the program is deterministic by construction.
     dotnet run --project "${app_dir}/${proj}" -c "${CONFIG}" --no-build > "${golden}"
@@ -65,6 +65,7 @@ capture_tests() {
 }
 
 capture_console "${CORPUS_DIR}/L1-Console" "L1-Console.csproj"
+capture_console "${CORPUS_DIR}/L4-Console" "L4-Console.csproj"
 capture_tests   "${CORPUS_DIR}/L2-Library.Tests" "L2-Library.Tests.csproj"
 capture_tests   "${CORPUS_DIR}/L3-Library.Tests" "L3-Library.Tests.csproj"
 

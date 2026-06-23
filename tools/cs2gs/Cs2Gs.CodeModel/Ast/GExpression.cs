@@ -616,3 +616,61 @@ public sealed class InterpolatedStringExpression : GExpression
     /// <summary>Gets the ordered segments.</summary>
     public IReadOnlyList<InterpolationPart> Parts { get; }
 }
+
+/// <summary>
+/// An <c>if</c> expression used in value position
+/// (<c>if cond { thenExpr } else { elseExpr }</c>; ADR-0064, issue #711,
+/// sample <c>IfExpression.gs</c>). The canonical G# form for a C# conditional
+/// (ternary) expression <c>cond ? a : b</c> (ADR-0115 §B).
+/// </summary>
+public sealed class IfExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="IfExpression"/> class.
+    /// </summary>
+    /// <param name="condition">The condition expression.</param>
+    /// <param name="thenExpression">The value of the then-branch.</param>
+    /// <param name="elseExpression">The value of the else-branch.</param>
+    public IfExpression(GExpression condition, GExpression thenExpression, GExpression elseExpression)
+    {
+        Condition = condition;
+        ThenExpression = thenExpression;
+        ElseExpression = elseExpression;
+    }
+
+    /// <summary>Gets the condition expression.</summary>
+    public GExpression Condition { get; }
+
+    /// <summary>Gets the then-branch value expression.</summary>
+    public GExpression ThenExpression { get; }
+
+    /// <summary>Gets the else-branch value expression.</summary>
+    public GExpression ElseExpression { get; }
+}
+
+/// <summary>
+/// An <c>out</c>-argument declaration passed to a method's <c>out</c> parameter
+/// (ADR-0115 §B; sample <c>TryParseOutVar.gs</c>). Renders the inline
+/// declaration forms <c>out var x</c>, <c>out let x</c>, or the discard
+/// <c>out _</c>. A C# <c>out</c> argument naming a pre-declared variable maps
+/// instead to the address-of form <c>&amp;x</c> (a <see cref="UnaryExpression"/>).
+/// </summary>
+public sealed class OutArgumentExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="OutArgumentExpression"/> class.
+    /// </summary>
+    /// <param name="keyword">The leading keyword (<c>out var</c>, <c>out let</c>, or <c>out</c>).</param>
+    /// <param name="name">The declared local name, or <c>_</c> for a discard.</param>
+    public OutArgumentExpression(string keyword, string name)
+    {
+        Keyword = keyword;
+        Name = name;
+    }
+
+    /// <summary>Gets the leading keyword.</summary>
+    public string Keyword { get; }
+
+    /// <summary>Gets the declared local name (or <c>_</c>).</summary>
+    public string Name { get; }
+}
