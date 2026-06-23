@@ -786,6 +786,16 @@ public sealed class CSharpToGSharpTranslator
                         return ConstructorLift.None;
                     }
 
+                    // G# supports a field member initializer (`var Name T = expr`)
+                    // but has no property member initializer (`prop Name T = expr`
+                    // is rejected). A constant assignment to a property therefore
+                    // cannot be lifted to a member initializer; keep the explicit
+                    // 'init' so its body faithfully assigns the property.
+                    if (targetIsProperty)
+                    {
+                        return ConstructorLift.None;
+                    }
+
                     fieldInitializers[targetName] = this.TranslateExpression(assignment.Right);
                 }
             }
@@ -1555,6 +1565,20 @@ public sealed class CSharpToGSharpTranslator
 
                 ITypeSymbol returnType = symbol.ReturnType;
 
+                // An iterator `func` (its body contains a `yield`) declares the G#
+                // `sequence[T]` element type, not the C# `IEnumerable[T]` envelope
+                // (spec §Iterators; sample TupleSequenceIterators.gs). The element
+                // type is the single type argument of the C# IEnumerable<T> /
+                // IEnumerator<T> return.
+                if (IsIteratorBody(node) &&
+                    returnType is INamedTypeSymbol { IsGenericType: true } enumerable &&
+                    enumerable.Name is "IEnumerable" or "IEnumerator")
+                {
+                    GTypeReference element = this.typeMapper.Map(
+                        enumerable.TypeArguments[0], this.context, node.ReturnType.GetLocation());
+                    return new NamedTypeReference("sequence", new[] { element });
+                }
+
                 // A G# `async func` declares the UNWRAPPED result type; the `async`
                 // modifier synthesizes the `Task`/`Task<T>` envelope (samples
                 // AsyncTask.gs, AsyncValueReturns.gs). C# `async Task` → no return
@@ -1575,6 +1599,22 @@ public sealed class CSharpToGSharpTranslator
                 predefined.Keyword.IsKind(SyntaxKind.VoidKeyword)
                     ? null
                     : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+        }
+
+        private static bool IsIteratorBody(MethodDeclarationSyntax node)
+        {
+            SyntaxNode body = (SyntaxNode)node.Body ?? node.ExpressionBody;
+            if (body == null)
+            {
+                return false;
+            }
+
+            // A `yield` inside a nested local function belongs to that function, not
+            // to this method, so descendants under a local-function boundary are
+            // excluded from the iterator test.
+            return body.DescendantNodes(n => n is not LocalFunctionStatementSyntax)
+                .OfType<YieldStatementSyntax>()
+                .Any();
         }
 
         private List<AttributeUse> MapAttributes(SyntaxList<AttributeListSyntax> attributeLists)
@@ -1817,6 +1857,12 @@ public sealed class CSharpToGSharpTranslator
 
                 case BlockSyntax block:
                     return new[] { (GStatement)this.TranslateBlock(block) };
+
+                case SwitchStatementSyntax switchStatement:
+                    return new[] { this.TranslateSwitchStatement(switchStatement) };
+
+                case YieldStatementSyntax yieldStatement:
+                    return this.TranslateYieldStatement(yieldStatement);
 
                 case EmptyStatementSyntax:
                     return System.Array.Empty<GStatement>();
@@ -2245,9 +2291,24 @@ public sealed class CSharpToGSharpTranslator
                     // `int32 * float64`); hex such as `0xFF0000` is likewise kept
                     // verbatim. The bound type still classifies the literal kind.
                     object value = literal.Token.Value;
-                    return value is float or double or decimal
-                        ? LiteralExpression.Float(literal.Token.Text)
-                        : LiteralExpression.Int(literal.Token.Text);
+                    if (value is float or double or decimal)
+                    {
+                        return LiteralExpression.Float(literal.Token.Text);
+                    }
+
+                    // C# applies an implicit int->double/float promotion at a
+                    // call site (e.g. `M(30)` where the parameter is `double`).
+                    // G# has no such implicit promotion, so the emitter would push
+                    // an int32 where a float64 is expected and produce invalid IL
+                    // (ilverify StackUnexpected). Honor the bound `ConvertedType`
+                    // and emit a float literal so the value matches its target
+                    // type (ADR-0115 §B.12).
+                    if (this.IsConvertedToFloatingPoint(literal))
+                    {
+                        return LiteralExpression.Float(this.ToFloatLiteralText(literal.Token.Text));
+                    }
+
+                    return LiteralExpression.Int(literal.Token.Text);
 
                 case SyntaxKind.StringLiteralExpression:
                     return LiteralExpression.String(literal.Token.ValueText);
@@ -2270,6 +2331,32 @@ public sealed class CSharpToGSharpTranslator
                         $"literal '{literal.Kind()}' has no canonical G# form yet; emitted nil (ADR-0115 §B.12).");
                     return LiteralExpression.Null();
             }
+        }
+
+        private bool IsConvertedToFloatingPoint(LiteralExpressionSyntax literal)
+        {
+            TypeInfo info = this.context.GetTypeInfo(literal);
+            ITypeSymbol original = info.Type;
+            ITypeSymbol converted = info.ConvertedType;
+            if (converted is null || SymbolEqualityComparer.Default.Equals(original, converted))
+            {
+                return false;
+            }
+
+            bool originalIsIntegral = original is { SpecialType: SpecialType.System_SByte
+                or SpecialType.System_Byte or SpecialType.System_Int16 or SpecialType.System_UInt16
+                or SpecialType.System_Int32 or SpecialType.System_UInt32 or SpecialType.System_Int64
+                or SpecialType.System_UInt64 };
+            bool convertedIsFloat = converted.SpecialType is SpecialType.System_Single
+                or SpecialType.System_Double;
+            return originalIsIntegral && convertedIsFloat;
+        }
+
+        private string ToFloatLiteralText(string text)
+        {
+            // A plain integer spelling (`30`) needs a fractional part so the G#
+            // lexer classifies it as float64; an already-float spelling is kept.
+            return text.IndexOfAny(new[] { '.', 'e', 'E' }) >= 0 ? text : text + ".0";
         }
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
@@ -2817,6 +2904,101 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return new SwitchExpression(subject, arms);
+        }
+
+        private GStatement TranslateSwitchStatement(SwitchStatementSyntax node)
+        {
+            GExpression subject = this.TranslateExpression(node.Expression);
+            var cases = new List<SwitchStatementCase>();
+
+            foreach (SwitchSectionSyntax section in node.Sections)
+            {
+                // A G# switch-statement arm carries a single pattern; a C# section
+                // that stacks multiple `case` labels (fall-through) has no canonical
+                // G# form, so each label is emitted as its own arm sharing the body.
+                var labels = section.Labels.ToList();
+                GExpression guard = null;
+                foreach (SwitchLabelSyntax label in labels)
+                {
+                    if (label is CasePatternSwitchLabelSyntax { WhenClause: { } when })
+                    {
+                        guard = this.TranslateExpression(when.Condition);
+                    }
+                }
+
+                if (guard != null)
+                {
+                    this.context.ReportUnsupported(
+                        node,
+                        "switch-statement 'when' guard has no canonical G# form yet (ADR-0115 §B).");
+                }
+
+                BlockStatement body = this.TranslateSwitchSectionBody(section);
+
+                foreach (SwitchLabelSyntax label in labels)
+                {
+                    switch (label)
+                    {
+                        case CasePatternSwitchLabelSyntax patternLabel:
+                            var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
+                            GPattern pattern = this.TranslatePattern(patternLabel.Pattern, bindings);
+                            cases.Add(new SwitchStatementCase(pattern, body));
+                            break;
+
+                        case CaseSwitchLabelSyntax valueLabel:
+                            cases.Add(new SwitchStatementCase(
+                                new ConstantPattern(this.TranslateExpression(valueLabel.Value)),
+                                body));
+                            break;
+
+                        case DefaultSwitchLabelSyntax:
+                            cases.Add(new SwitchStatementCase(null, body));
+                            break;
+
+                        default:
+                            this.context.ReportUnsupported(
+                                label,
+                                $"switch label '{label.Kind()}' has no canonical G# form yet (ADR-0115 §B).");
+                            break;
+                    }
+                }
+            }
+
+            return new SwitchStatement(subject, cases);
+        }
+
+        private BlockStatement TranslateSwitchSectionBody(SwitchSectionSyntax section)
+        {
+            var statements = new List<GStatement>();
+            foreach (StatementSyntax statement in section.Statements)
+            {
+                // A trailing `break;` only terminates the C# section; G# arms do not
+                // fall through, so the explicit break carries no meaning and is dropped.
+                if (statement is BreakStatementSyntax)
+                {
+                    continue;
+                }
+
+                statements.AddRange(this.TranslateStatement(statement));
+            }
+
+            return new BlockStatement(statements);
+        }
+
+        private IEnumerable<GStatement> TranslateYieldStatement(YieldStatementSyntax node)
+        {
+            // `yield return x` maps to the G# iterator `yield x` (sample
+            // TupleSequenceIterators.gs); the enclosing func's return type is
+            // rewritten to `sequence[T]`. `yield break` has no canonical G# form.
+            if (node.Expression == null)
+            {
+                this.context.ReportUnsupported(
+                    node,
+                    "'yield break' has no canonical G# form yet (ADR-0115 §B).");
+                return new[] { (GStatement)new RawStatement("// unsupported: yield break") };
+            }
+
+            return new[] { (GStatement)new YieldStatement(this.TranslateExpression(node.Expression)) };
         }
 
         private GPattern TranslatePattern(

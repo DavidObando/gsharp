@@ -66,6 +66,7 @@ capture_tests() {
 
 capture_console "${CORPUS_DIR}/L1-Console" "L1-Console.csproj"
 capture_console "${CORPUS_DIR}/L4-Console" "L4-Console.csproj"
+capture_console "${CORPUS_DIR}/L5-Console" "L5-Console.csproj"
 capture_tests   "${CORPUS_DIR}/L2-Library.Tests" "L2-Library.Tests.csproj"
 capture_tests   "${CORPUS_DIR}/L3-Library.Tests" "L3-Library.Tests.csproj"
 

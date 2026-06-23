@@ -619,9 +619,35 @@ public static class GSharpPrinter
             case RawStatement raw:
                 return $"{pad}{raw.Text}";
 
+            case YieldStatement yield:
+                return $"{pad}yield {RenderExpression(yield.Expression, indent)}";
+
+            case SwitchStatement switchStatement:
+                return RenderSwitchStatement(switchStatement, indent);
+
             default:
                 throw new ArgumentException($"Unsupported statement: {statement?.GetType().Name}");
         }
+    }
+
+    private static string RenderSwitchStatement(SwitchStatement switchStatement, int indent)
+    {
+        var pad = Indent(indent);
+        var casePad = Indent(indent + 1);
+        var sb = new StringBuilder();
+        sb.Append($"{pad}switch {RenderExpression(switchStatement.Subject, indent)} {{");
+        foreach (var arm in switchStatement.Cases)
+        {
+            sb.Append('\n');
+            sb.Append(casePad);
+            var head = arm.Pattern == null ? "default" : $"case {RenderPattern(arm.Pattern, indent + 1)}";
+            sb.Append($"{head} {RenderBlock(arm.Body, indent + 1)}");
+        }
+
+        sb.Append('\n');
+        sb.Append(pad);
+        sb.Append('}');
+        return sb.ToString();
     }
 
     private static string RenderForStatement(ForStatement forStatement, int indent)
