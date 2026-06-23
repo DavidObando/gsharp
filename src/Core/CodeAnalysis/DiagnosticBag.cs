@@ -3940,6 +3940,67 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #987: GS0386 — an attempt to construct (instantiate) an abstract
+    /// class. A class is abstract when it declares (or inherits without
+    /// overriding) an abstract method — a no-body <c>open func F() R;</c>. Like
+    /// C#'s CS0144, this is a clean compile-time error rather than a runtime
+    /// <c>MemberAccessException</c>.
+    /// </summary>
+    /// <param name="location">The source location of the construction expression.</param>
+    /// <param name="typeName">The display name of the abstract type.</param>
+    public void ReportCannotInstantiateAbstractType(TextLocation location, string typeName)
+    {
+        Report(
+            location,
+            "GS0386",
+            $"Cannot create an instance of the abstract type '{typeName}' (issue #987).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Issue #987: GS0387 — a concrete (non-<c>open</c>) class derives from an
+    /// abstract base but does not override every inherited abstract method. The
+    /// class must either override the member or be declared <c>open</c> (and so
+    /// remain abstract itself). Mirrors C#'s CS0534.
+    /// </summary>
+    /// <param name="location">The source location of the offending class identifier.</param>
+    /// <param name="className">The concrete class that fails to implement the member.</param>
+    /// <param name="declaringTypeName">The type that declares the abstract member.</param>
+    /// <param name="memberName">The abstract member's name.</param>
+    public void ReportAbstractMemberNotImplemented(
+        TextLocation location,
+        string className,
+        string declaringTypeName,
+        string memberName)
+    {
+        Report(
+            location,
+            "GS0387",
+            $"'{className}' does not implement inherited abstract member '{declaringTypeName}.{memberName}' (issue #987).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Issue #987: GS0388 — a no-body method (an abstract member) appears where
+    /// it is not permitted. An abstract method must be declared <c>open</c> and
+    /// may only live inside an <c>open class</c>. Mirrors C#'s CS0513/CS0500.
+    /// </summary>
+    /// <param name="location">The source location of the offending method identifier.</param>
+    /// <param name="methodName">The bodyless method's name.</param>
+    /// <param name="className">The enclosing class name.</param>
+    public void ReportAbstractMethodRequiresOpenClass(
+        TextLocation location,
+        string methodName,
+        string className)
+    {
+        Report(
+            location,
+            "GS0388",
+            $"Abstract method '{methodName}' must be declared 'open' inside an 'open class'; '{className}' is not open or the method omits 'open' (issue #987).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Reports GS0367 — issue #836: a <c>yield</c> statement appears
     /// lexically inside a <c>try</c> block that also has one or more
     /// <c>catch</c> clauses. The C# spec (§15.14) and ECMA-335 forbid

@@ -192,6 +192,18 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>Gets a value indicating whether this method is declared <c>override</c> — must shadow an open base method per ADR-0017.</summary>
     public bool IsOverride { get; }
 
+    /// <summary>
+    /// Gets or sets a value indicating whether this method is abstract — issue #987.
+    /// A no-body <c>open func F() R;</c> on an <c>open class</c> is the canonical
+    /// G# spelling of a C# <c>abstract</c> method: it declares a virtual slot with
+    /// no implementation that concrete derived classes must override. When true,
+    /// the binder skips body binding (there is no body) and the emitter writes a
+    /// <c>MethodAttributes.Abstract | Virtual | NewSlot</c> method with no IL body,
+    /// and the containing type is emitted with <c>TypeAttributes.Abstract</c>.
+    /// Defaults to <c>false</c>.
+    /// </summary>
+    public bool IsAbstract { get; set; }
+
     /// <summary>Gets or sets the base method this method overrides. Set by the binder when <see cref="IsOverride"/> is true and a matching open base method is found; <c>null</c> otherwise.</summary>
     public FunctionSymbol OverriddenMethod { get; set; }
 

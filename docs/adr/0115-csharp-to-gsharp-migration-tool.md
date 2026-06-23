@@ -545,7 +545,7 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #977 | BCL method invoked with an inline `out var x` declaration fails overload resolution | GS0159 | resolved (inline `out var x` binds for BCL calls) |
 | #985 | implementing `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by return type (generic `IEnumerator[T]` + non-generic `IEnumerator`) | GS0264 + GS0187 | resolved (covariant-return interface bridge: GS0264 relaxed when two same-name/param methods satisfy distinct interface slots; inherited base-interface slots now required so a missing bridge still errors GS0187; emit writes the `MethodImpl` + non-generic `IEnumerable` `InterfaceImpl` rows) |
 | #986 | `base.Method()` virtual base-class call has no canonical G# form (`base[Base].M` is interface-only per ADR-0091) | GS0157 / GS0338 | **resolved** (issue #986 — `base.M(...)` / `base[Base].M(...)` emit a non-virtual base-class call; ADR-0091 extended) |
-| #987 | an `abstract` (no-body) method on an `open class` → emitter crash | GS9998 (NRE) | open (L5 uses a virtual method with a body) |
+| #987 | an `abstract` (no-body) method on an `open class` → emitter crash | GS9998 (NRE) | **resolved** (issue #987 — no-body `open func F() R;` emits a CLR `abstract virtual` slot; the declaring type becomes `TypeAttributes.Abstract`; new diagnostics GS0386 not-instantiable / GS0387 missing-override / GS0388 abstract-requires-open) |
 | #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | open (translation-unsupported; L5 has the caller supply the value) |
 | #989 | a generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | open (L5 uses a generic field instead) |
 | #990 | a user reference-type iterator (`sequence[UserClass]`) → emitter crash | GS9998 | open (L5 yields `string`; `sequence[int32]`/`sequence[string]` compile) |
@@ -704,20 +704,26 @@ class Circle() : Shape {
 }
 ```
 
-**#987 — an `abstract` (no-body) method on an `open class` → emitter crash (`GS9998`).**
+**#987 — an `abstract` (no-body) method on an `open class` → abstract member (RESOLVED).**
 The translator lowers a C# `abstract` method to a no-body `open func F() T;`. The
-parser accepts it, but the emitter throws a `NullReferenceException` (`GS9998`).
-Classification: **compile-error / ICE**. L5 uses a `virtual` method with a default
-body instead.
+parser accepts it, and (since issue #987) the binder and emitter now produce a CLR
+`abstract virtual` method slot (`MethodAttributes.Abstract | Virtual | NewSlot`, no
+IL body); the declaring class is emitted with `TypeAttributes.Abstract`. Constructing
+the abstract type is a clean compile error (GS0386), a concrete subclass that does
+not override every inherited abstract member errors (GS0387), and an abstract method
+that is not an `open` member of an `open class` errors (GS0388). A derived
+`override func` makes the type constructible and dispatches virtually.
+Classification: **resolved**. The earlier L5 workaround (a `virtual` method with a
+default body) is no longer required.
 
 ```gs
-// repro — GS9998 NRE on a no-body open func:
+// now compiles — a no-body open func is an abstract member; Shape is an abstract type:
 open class Shape {
     open func Area() float64;
 }
 ```
 ```gs
-// control — same method WITH a body compiles:
+// control — same method WITH a body still compiles:
 open class Shape {
     open func Area() float64 { return 0.0 }
 }

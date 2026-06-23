@@ -705,6 +705,19 @@ rejected here.
 | --- | --- | --- |
 | GS0382 | Error | Struct `{structName}` cannot declare base type `{baseTypeName}`; a struct may only implement interfaces. |
 
+## Abstract member diagnostics (GS0386–GS0388)
+
+Issue #987: a no-body `open func F() R;` inside an `open class` is the
+canonical G# spelling of a C# `abstract` method. The declaring type is
+abstract (emitted with `TypeAttributes.Abstract`) and cannot be instantiated;
+a concrete (non-`open`) subclass must override every inherited abstract member.
+
+| ID | Severity | Summary |
+| --- | --- | --- |
+| GS0386 | Error | Cannot create an instance of the abstract type `{typeName}`. |
+| GS0387 | Error | `{className}` does not implement inherited abstract member `{declaringType}.{member}`. |
+| GS0388 | Error | Abstract method `{methodName}` must be declared `open` inside an `open class`; `{className}` is not open or the method omits `open`. |
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

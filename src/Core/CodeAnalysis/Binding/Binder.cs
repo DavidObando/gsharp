@@ -699,6 +699,10 @@ public sealed class Binder
 
         binder.declarations.VerifyInterfaceImplementations();
 
+        // Issue #987: verify the abstract-member contract — a concrete class
+        // must override every inherited abstract method.
+        binder.declarations.VerifyAbstractMethodImplementations();
+
         // ADR-0066 §2 (deferred decision D7): sort the contributing syntax
         // trees by source path before concatenating top-level statements
         // across files, so cross-file TLS ordering is identical regardless
@@ -968,6 +972,18 @@ public sealed class Binder
 
             foreach (var method in structSym.Methods)
             {
+                // Issue #987: abstract methods (a no-body `open func F() R;`)
+                // have no managed body — register an empty synthetic block so
+                // the emitter still mints a MethodDef handle (it writes an
+                // abstract virtual slot with no IL body) and skip body binding,
+                // which would otherwise dereference the null `Declaration.Body`
+                // and crash with GS9998 (the original ICE in issue #987).
+                if (method.IsAbstract)
+                {
+                    functionBodies.Add(method, new BoundBlockStatement(method.Declaration, ImmutableArray<BoundStatement>.Empty));
+                    continue;
+                }
+
                 var loweredBody = BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
                 {
                     var binder = new Binder(parentScope, method);
