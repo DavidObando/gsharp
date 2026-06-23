@@ -1307,6 +1307,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0381", $"Class '{typeName}' is part of an inheritance cycle.");
     }
 
+    /// <summary>
+    /// Issue #976: GS0382 — a <c>struct</c> (value type) named a class or
+    /// another struct in its <c>: …</c> clause. A CLR value type always derives
+    /// from <c>System.ValueType</c> and cannot declare a user base type; its
+    /// clause may list interfaces only.
+    /// </summary>
+    /// <param name="location">The text location of the offending base type.</param>
+    /// <param name="structName">The declaring struct's name.</param>
+    /// <param name="baseTypeName">The illegal base type's name.</param>
+    public void ReportStructCannotHaveBaseClass(TextLocation location, string structName, string baseTypeName)
+    {
+        Report(location, "GS0382", $"Struct '{structName}' cannot declare base type '{baseTypeName}'; a struct may only implement interfaces.");
+    }
+
     /// <summary>Reports base-constructor arguments (<c>: Base(args)</c>) on a class that declares no base class (issue #306).</summary>
     /// <param name="location">The text location of the base-constructor argument list.</param>
     public void ReportBaseConstructorArgumentsWithoutBase(TextLocation location)

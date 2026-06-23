@@ -1493,7 +1493,15 @@ internal sealed class ReflectionMetadataEmitter
         void EmitClassTypeDefRow(StructSymbol c)
         {
             this.typeDefEmitter.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
+            EmitInterfaceImplRows(c);
+        }
 
+        // Issue #976: emit the InterfaceImpl metadata rows for an aggregate
+        // (class OR struct) TypeDef. Value types (structs) declare interface
+        // implementation exactly like classes, so the rows are emitted from a
+        // shared helper rather than only on the class path.
+        void EmitInterfaceImplRows(StructSymbol c)
+        {
             if (!c.Interfaces.IsDefaultOrEmpty)
             {
                 foreach (var iface in c.Interfaces)
@@ -1517,7 +1525,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             // Issue #525: emit InterfaceImpl rows for imported CLR interfaces
-            // declared in the base-type clause so the resulting class is a
+            // declared in the base-type clause so the resulting type is a
             // real CLR implementer (`Type.GetInterfaces()` surfaces them and
             // dispatch through an interface receiver hits the G# method).
             if (!c.ImplementedClrInterfaces.IsDefaultOrEmpty)
@@ -1590,6 +1598,7 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var s in topStructs)
         {
             this.typeDefEmitter.EmitStructTypeDef(s, structFirstFieldRow[s], TopStructMethodListRow(s));
+            EmitInterfaceImplRows(s);
         }
 
         // Issue #193: emit enum TypeDefs between non-SM structs and the nested
@@ -1617,6 +1626,7 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case StructSymbol ns:
                     this.typeDefEmitter.EmitStructTypeDef(ns, structFirstFieldRow[ns], nestedMethodListRow[ns]);
+                    EmitInterfaceImplRows(ns);
                     break;
                 case EnumSymbol ne:
                     this.typeDefEmitter.EmitEnumTypeDef(ne, enumFirstFieldRow[ne], nestedMethodListRow[ne]);

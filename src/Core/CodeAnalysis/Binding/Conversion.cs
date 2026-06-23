@@ -696,6 +696,32 @@ public sealed class Conversion
             return false;
         }
 
+        // Issue #976: a user-declared value-type struct → imported CLR
+        // interface declared in its `: …` clause. The struct symbol has no
+        // ClrType during binding, so the general CLR-assignability path below
+        // cannot fire — match structurally against `ImplementedClrInterfaces`,
+        // mirroring the class reference-upcast rule. This covers both plain
+        // CLR interfaces (e.g. `IComparable`) and CLR generic interfaces closed
+        // over a user G# type (e.g. `IEquatable[Money]`).
+        if (from is StructSymbol fromValueStruct && !fromValueStruct.IsClass
+            && to?.ClrType != null && to.ClrType.IsInterface)
+        {
+            foreach (var iface in fromValueStruct.ImplementedClrInterfaces)
+            {
+                var ifaceClr = iface?.ClrType;
+                if (ifaceClr == null)
+                {
+                    continue;
+                }
+
+                if (ifaceClr == to.ClrType
+                    || ClrTypeUtilities.IsAssignableByName(to.ClrType, ifaceClr))
+                {
+                    return true;
+                }
+            }
+        }
+
         // Either side imported / CLR-typed: defer to the CLR's own
         // assignability check.
         var fromClr = from?.ClrType;

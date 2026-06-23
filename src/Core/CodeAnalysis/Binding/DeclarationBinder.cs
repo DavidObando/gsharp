@@ -895,11 +895,10 @@ internal sealed class DeclarationBinder
         var implementedClrInterfaces = ImmutableArray.CreateBuilder<TypeSymbol>();
         if (syntax.HasBaseType)
         {
-            if (!syntax.IsClass)
-            {
-                Diagnostics.ReportUnexpectedToken(syntax.BaseColonToken.Location, SyntaxKind.ColonToken, SyntaxKind.OpenBraceToken);
-            }
-            else
+            // Issue #976: the `: …` clause is bound for both classes and
+            // structs. A class may name a single base class plus interfaces; a
+            // struct (CLR value type) may name interfaces only — a base class
+            // or base struct is rejected below with GS0382.
             {
                 var allBaseTypes = ImmutableArray.CreateBuilder<TypeClauseSyntax>();
                 if (syntax.BaseTypeClauses.Count > 0)
@@ -947,6 +946,21 @@ internal sealed class DeclarationBinder
                     if (resolved == null || resolved == TypeSymbol.Error)
                     {
                         continue;
+                    }
+
+                    // Issue #976: a struct (value type) may only list
+                    // interfaces. Reject any resolved type that is not an
+                    // interface (a user/CLR class or another struct) with a
+                    // dedicated diagnostic instead of silently dropping it.
+                    if (!syntax.IsClass)
+                    {
+                        var resolvedIsInterface = resolved is InterfaceSymbol
+                            || (resolved.ClrType != null && resolved.ClrType.IsInterface);
+                        if (!resolvedIsInterface)
+                        {
+                            Diagnostics.ReportStructCannotHaveBaseClass(baseLocation, name, baseName);
+                            continue;
+                        }
                     }
 
                     if (resolved is InterfaceSymbol iface)
