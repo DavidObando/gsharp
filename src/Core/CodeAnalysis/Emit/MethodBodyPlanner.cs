@@ -791,9 +791,22 @@ internal sealed class MethodBodyPlanner
         // element types we keep the original CLR-erased path so existing
         // closed-iterator behaviour is unchanged.
         var elementContainsTp = ContainsTypeParameter(elementType);
+
+        // Issue #990: a user-declared element type (a `class` or `data
+        // struct` emitted in this same assembly) has no ClrType, so the
+        // CLR-erased `MakeGenericType(elementType.ClrType ?? object)` path
+        // below would record `IEnumerable<object>` / `IEnumerator<object>`
+        // on the SM class. That makes `shapes()` (signature
+        // `IEnumerable<Shape>`) return a value whose runtime type only
+        // implements `IEnumerable<object>` — invalid under generic
+        // invariance (ilverify StackUnexpected). Route such element types
+        // through the symbolic TypeSpec encoder (which emits a real
+        // reference to the user TypeDef) so the interface rows carry the
+        // strongly-typed `IEnumerable<Shape>` / `IEnumerator<Shape>`.
+        var elementNeedsSymbolic = elementContainsTp || elementType?.ClrType == null;
         EntityHandle enumerableHandle;
         EntityHandle enumeratorHandle;
-        if (elementContainsTp)
+        if (elementNeedsSymbolic)
         {
             enumerableHandle = this.BuildGenericInterfaceTypeSpec(typeof(System.Collections.Generic.IEnumerable<>), elementType);
             enumeratorHandle = this.BuildGenericInterfaceTypeSpec(typeof(System.Collections.Generic.IEnumerator<>), elementType);
