@@ -55,15 +55,35 @@ public sealed class CSharpTypeMapper
             return new NamedTypeReference(UnsupportedPlaceholderType);
         }
 
-        // G# has no unsafe pointer types: a C# `T*`, `void*`, or function pointer
-        // has no canonical managed G# form (ADR-0115 §B / G# language gap). Record
-        // a structured Unsupported diagnostic rather than emit a malformed
-        // type-less field/parameter.
-        if (type is IPointerTypeSymbol or IFunctionPointerTypeSymbol)
+        // A C# unsafe pointer type (`T*`, `void*`) maps to the canonical G#
+        // PREFIX managed-pointer form `*T` (spec §"Byref/pointer syntax exists
+        // as `*T`"; grammar `'*' TypeClause '?'?`). `void*` has no managed
+        // pointee, so it maps to `*uint8` (a raw byte pointer). The emitted
+        // form round-trips through the parser; the binder later steers callers
+        // to ref/out/in (GS0243) and rejects pointer fields (GS9006) — the
+        // excepted unsafe Win32-interop surface (ADR-0115 §G). A FUNCTION
+        // pointer has no canonical managed G# form and stays Unsupported.
+        if (type is IPointerTypeSymbol pointer)
+        {
+            ITypeSymbol pointee = pointer.PointedAtType;
+            GTypeReference element = pointee == null || pointee.SpecialType == SpecialType.System_Void
+                ? new NamedTypeReference("uint8")
+                : this.Map(pointee, context, location);
+            context.Report(new TranslationDiagnostic(
+                "PointerType",
+                $"unsafe pointer type '{type.ToDisplayString()}' maps to the canonical G# prefix-pointer form; the binder steers callers to ref/out/in (GS0243) on the excepted unsafe Win32-interop surface (ADR-0115 §G).",
+                location,
+                TranslationSeverity.Info));
+            return new PointerTypeReference(element);
+        }
+
+        // G# has no managed form for a C# function pointer; record a structured
+        // Unsupported diagnostic rather than emit a malformed type.
+        if (type is IFunctionPointerTypeSymbol)
         {
             context.Report(new TranslationDiagnostic(
                 "PointerType",
-                $"unsafe pointer type '{type.ToDisplayString()}' has no canonical G# form; G# does not support pointer/unsafe types.",
+                $"unsafe function-pointer type '{type.ToDisplayString()}' has no canonical G# form; G# does not support function-pointer types.",
                 location,
                 TranslationSeverity.Unsupported));
             return new NamedTypeReference(UnsupportedPlaceholderType);
@@ -91,6 +111,8 @@ public sealed class CSharpTypeMapper
                 return new NamedTypeReference(named.Name, named.TypeArguments) { IsNullable = isNullable };
             case ArrayTypeReference array:
                 return new ArrayTypeReference(array.ElementType) { IsNullable = isNullable };
+            case PointerTypeReference pointer:
+                return new PointerTypeReference(pointer.ElementType) { IsNullable = isNullable };
             case TupleTypeReference tuple:
                 return new TupleTypeReference(tuple.ElementTypes) { IsNullable = isNullable };
             case ArrowTypeReference arrow:

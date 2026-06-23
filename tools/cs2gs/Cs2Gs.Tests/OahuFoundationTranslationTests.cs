@@ -22,10 +22,11 @@ namespace Cs2Gs.Tests;
 /// and verbatim-identifier sanitization, width-bearing integer literals, the
 /// catch-all <c>catch</c>, and unbound-generic <c>typeof</c>. Each snippet uses a
 /// uniquely named user type and asserts a clean round-trip with the real G#
-/// parser. The remaining Oahu.Foundation gaps (interface inheritance, generic
-/// interface methods, unsafe pointers) are genuine G# language gaps and are
-/// asserted to emit a structured <see cref="TranslationSeverity.Unsupported"/>
-/// diagnostic rather than malformed G#.
+/// parser. The Oahu.Foundation interface-inheritance, generic-interface-method,
+/// and unsafe-pointer constructs now translate to canonical G# (interface
+/// inheritance and generic interface methods became legal G# via issues #1006
+/// and #1007; unsafe pointers map to the prefix <c>*T</c> form, the excepted
+/// unsafe Win32-interop surface).
 /// </summary>
 public class OahuFoundationTranslationTests
 {
@@ -326,15 +327,15 @@ namespace Demo
 
     /// <summary>
     /// ADR-0115 §G: an interface that extends another interface
-    /// (`interface IChild : IParent`) has no canonical G# form (the parser's
-    /// interface production accepts no base clause). The translator records a
-    /// structured Unsupported diagnostic and drops the base so the rest of the
-    /// file still round-trips.
+    /// (`interface IChild : IParent`) now translates to the canonical G# base
+    /// clause `interface IChildX : IParentX { ... }` (G# parser supports
+    /// interface inheritance since issue #1006). No Unsupported diagnostic is
+    /// raised and the emitted G# round-trips through the real parser.
     /// </summary>
     [Fact]
-    public void InterfaceInheritance_ReportsCompilerGap()
+    public void InterfaceInheritance_EmitsBaseClause()
     {
-        TranslationContext context = TranslateUnitWithContext(@"
+        (string printed, TranslationContext context) = TranslateUnitWithPrinted(@"
 namespace Demo
 {
     public interface IParentX
@@ -348,42 +349,69 @@ namespace Demo
     }
 }");
 
-        Assert.Contains(
+        Assert.Contains("interface IChildX : IParentX", printed);
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported &&
-                 d.Message.Contains("cannot declare base interfaces"));
+            d => d.Severity == TranslationSeverity.Unsupported);
     }
 
     /// <summary>
-    /// ADR-0115 §G: a generic interface method (`bool IsPrimitive&lt;T&gt;()`) has no
-    /// canonical G# form (the interface-method production accepts no `[T]`
-    /// clause). The translator records a structured Unsupported diagnostic and
-    /// drops the type-parameter list so the rest of the file still round-trips.
+    /// ADR-0115 §G: a generic interface method (`bool IsPrimitive&lt;T&gt;()`) now
+    /// translates to the canonical bodyless G# form `func IsPrimitive[T]() bool;`
+    /// (G# parser supports generic methods in interfaces since issue #1007). No
+    /// Unsupported diagnostic is raised and the emitted G# round-trips.
     /// </summary>
     [Fact]
-    public void GenericInterfaceMethod_ReportsCompilerGap()
+    public void GenericInterfaceMethod_EmitsTypeParameterList()
     {
-        TranslationContext context = TranslateUnitWithContext(@"
+        (string printed, TranslationContext context) = TranslateUnitWithPrinted(@"
 namespace Demo
 {
     public interface IGenX
     {
         bool IsPrimitive<T>();
+
+        string Format<T>(T value);
     }
 }");
 
-        Assert.Contains(
+        Assert.Contains("func IsPrimitive[T]() bool;", printed);
+        Assert.Contains("func Format[T](value T) string;", printed);
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported &&
-                 d.Message.Contains("cannot declare generic type parameters"));
+            d => d.Severity == TranslationSeverity.Unsupported);
     }
 
     /// <summary>
-    /// ADR-0115 §G: an unsafe pointer type (`void*`/`byte*`) has no canonical G#
-    /// form. The type mapper records a structured Unsupported diagnostic (kind
-    /// <c>PointerType</c>) rather than emitting a type-less field; this gap is
-    /// exercised end-to-end on the real <c>Win32FileIO.cs</c> in the corpus run.
+    /// ADR-0115 §G: an unsafe pointer type (C# postfix `T*`) now translates to
+    /// the canonical G# PREFIX managed-pointer form `*T`; a `void*` (no managed
+    /// pointee) maps to `*uint8`. The emitted G# round-trips through the parser.
+    /// No Unsupported diagnostic is raised — the binder later steers callers to
+    /// `ref`/`out`/`in` (GS0243) on the excepted unsafe Win32-interop surface,
+    /// which the corpus compile stage exercises on the real Win32FileIO.cs.
     /// </summary>
+    [Fact]
+    public void PointerType_EmitsCanonicalPrefixForm()
+    {
+        (string printed, TranslationContext context) = TranslateUnitWithPrinted(@"
+namespace Demo
+{
+    public static unsafe class PtrX
+    {
+        [System.Runtime.InteropServices.DllImport(""kernel32.dll"")]
+        public static extern bool ReadFile(void* pBuffer, int* pBytesRead, byte* pBuf);
+    }
+}");
+
+        Assert.Contains("pBuffer *uint8", printed);
+        Assert.Contains("pBytesRead *int32", printed);
+        Assert.Contains("pBuf *uint8", printed);
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+    }
+
+
     private static string TranslateUnit(string source)
     {
         (string printed, RoundTripResult result) = TranslateAndValidate(source);
@@ -394,22 +422,22 @@ namespace Demo
         return printed;
     }
 
-    private static TranslationContext TranslateUnitWithContext(string source)
+    private static (string Printed, TranslationContext Context) TranslateUnitWithPrinted(string source)
     {
         LoadedCSharpProject project = LoadProject(source);
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
-        // The printed output must still round-trip: a genuine compiler gap is
-        // reported as a diagnostic but never left as malformed, unparseable G#.
+        // The emitted G# must round-trip through the real parser even on the
+        // unsafe-interop surface (the binder, not the parser, flags GS0243).
         string printed = GSharpPrinter.Print(unit);
         RoundTripResult result = GSharpRoundTrip.Validate(printed);
         Assert.True(
             result.Success,
-            "Even with a reported gap the emitted G# must round-trip. Errors:\n" +
+            "Emitted G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
-        return context;
+        return (printed, context);
     }
 
     private static (string Printed, RoundTripResult Result) TranslateAndValidate(string source)

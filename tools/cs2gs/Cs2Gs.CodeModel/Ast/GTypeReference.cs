@@ -87,6 +87,32 @@ public sealed class TupleTypeReference : GTypeReference
 }
 
 /// <summary>
+/// A managed-pointer / byref type rendered in the canonical G# <b>prefix</b>
+/// form <c>*Element</c> (spec §"Byref/pointer syntax exists as <c>*T</c>",
+/// grammar <c>'*' TypeClause '?'?</c>). A C# postfix <c>T*</c> (e.g.
+/// <c>byte*</c>, <c>int*</c>, <c>void*</c>) maps to this node; <c>void*</c>
+/// has no managed pointee so it maps to <c>*uint8</c> (a raw byte pointer).
+/// These appear only on the unsafe Win32 P/Invoke interop surface: the form
+/// round-trips through the parser, though the binder later steers callers to
+/// <c>ref</c>/<c>out</c>/<c>in</c> (GS0243/GS9006) — the excepted unsafe-interop
+/// surface (ADR-0115 §G).
+/// </summary>
+public sealed class PointerTypeReference : GTypeReference
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="PointerTypeReference"/> class.
+    /// </summary>
+    /// <param name="elementType">The pointee (element) type.</param>
+    public PointerTypeReference(GTypeReference elementType)
+    {
+        ElementType = elementType;
+    }
+
+    /// <summary>Gets the pointee (element) type.</summary>
+    public GTypeReference ElementType { get; }
+}
+
+/// <summary>
 /// A delegate type in the canonical arrow form <c>(A, B) -&gt; R</c>
 /// (ADR-0075, ADR-0115 §B.8). A multi-value return spells <c>-&gt; (T1, T2)</c>;
 /// a void return spells <c>-&gt; void</c>; an async delegate spells

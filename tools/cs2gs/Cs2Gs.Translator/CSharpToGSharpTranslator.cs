@@ -1135,20 +1135,10 @@ public sealed class CSharpToGSharpTranslator
                 isOverride = false;
             }
 
-            // G# interface method signatures cannot declare generic type
-            // parameters: the parser's interface-method production accepts no
-            // `[T]` clause (a generic method is legal on a class or as a free
-            // func, but not in an interface). This is a genuine G# language gap;
-            // record it and drop the type-parameter list so the rest of the file
-            // still round-trips (the construct is already gated by the report).
-            if (inInterface && typeParameters.Count > 0)
-            {
-                this.context.ReportUnsupported(
-                    node,
-                    $"interface method '{node.Identifier.Text}' is generic ([{string.Join(", ", typeParameters.Select(t => t.Name))}]); G# interface method signatures cannot declare generic type parameters. G# language gap.");
-                typeParameters = new List<TypeParameter>();
-            }
-
+            // Generic interface methods are supported by the G# parser since
+            // issue #1007 (`func F[T](...) R;`); the printer emits the
+            // type-parameter list via the same path as a class method or free
+            // func, so the `[T]` clause is retained on interface methods.
             var method = new MethodDeclaration(
                 SanitizeIdentifier(node.Identifier.Text),
                 parameters: parameters,
@@ -1522,19 +1512,10 @@ public sealed class CSharpToGSharpTranslator
                     continue;
                 }
 
-                // G# interfaces cannot extend other interfaces: the parser's
-                // interface production (`ParseInterfaceDeclarationNew`) accepts no
-                // base-type clause, so `interface IChild : IParent` has no canonical
-                // G# form. This is a genuine G# language gap (not a translator gap);
-                // record it and drop the base so the rest of the file still emits.
-                if (kind == TypeDeclarationKind.Interface)
-                {
-                    this.context.ReportUnsupported(
-                        node,
-                        $"interface '{symbol.Name}' extends interface '{iface.Name}'; G# interfaces cannot declare base interfaces (no parser support for an interface base clause). G# language gap.");
-                    continue;
-                }
-
+                // Interface inheritance is supported by the G# parser since
+                // issue #1006 (`interface B : A, C { ... }`); the printer emits
+                // base interfaces via the same base-clause path as a class, so
+                // a base interface is added to the interface's base list.
                 interfaces.Add(this.typeMapper.Map(iface, this.context, location));
             }
 
