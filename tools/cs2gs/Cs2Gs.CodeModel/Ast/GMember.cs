@@ -334,3 +334,35 @@ public sealed class DestructorDeclaration : GMember
     /// <summary>Gets the finalizer body.</summary>
     public BlockStatement Body { get; }
 }
+
+/// <summary>
+/// A field-like event declaration <c>event Name Type</c> (spec §Members,
+/// <c>EventDecl</c>; ADR-0115 §B). The C# form
+/// <c>public event EventHandler&lt;T&gt;? X;</c> maps to the canonical G#
+/// name-then-type ordering with no accessor body; the nullable annotation on the
+/// delegate type is dropped because a field-like event is nil-initialized.
+/// </summary>
+public sealed class EventDeclaration : GMember
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="EventDeclaration"/> class.
+    /// </summary>
+    /// <param name="name">The event name.</param>
+    /// <param name="type">The handler/delegate type.</param>
+    /// <param name="visibility">The accessibility.</param>
+    public EventDeclaration(string name, GTypeReference type, Visibility visibility = Visibility.Default)
+    {
+        Name = name;
+        Type = type;
+        Visibility = visibility;
+    }
+
+    /// <summary>Gets the event name.</summary>
+    public string Name { get; }
+
+    /// <summary>Gets the handler/delegate type.</summary>
+    public GTypeReference Type { get; }
+
+    /// <summary>Gets the accessibility.</summary>
+    public Visibility Visibility { get; }
+}

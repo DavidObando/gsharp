@@ -475,6 +475,67 @@ empirically before adoption.
 > `catch Exception { }` all fail to parse. The translator synthesizes
 > `catch (ex Exception) { }` for a C# bare catch-all (extending §B.27).
 
+#### B.36 Oahu.Decrypt round — C# 12 collection/pattern/range surface
+
+Translating the external **`Oahu.Decrypt`** project (issue #914 continuation;
+**109** initial `translation-unsupported` diagnostics across **19** construct
+kinds) required the following additional canonical mappings. Each printed form
+round-trips through the real G# parser; gsc-accepted forms were verified
+empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
+
+- **Collection expression `[a, b, c]` → slice literal `[]T{ … }`.** A C# 12
+  `CollectionExpression` targeting an array/`Span`/`IEnumerable<T>` maps to the
+  canonical G# slice literal `[]T{ a, b, c }`, with the element type taken from
+  the converted target type. Bare numeric literals are coerced to the element
+  type (`byte[] = [0, 1]` → `[]uint8{ uint8(0), uint8(1) }`) since G# has no
+  implicit numeric promotion (§B.12).
+- **Throw-expression `x ?? throw e` / `c ? v : throw e` → value-position throw
+  lowering.** G# `throw` is **statement-only**; a C# `ThrowExpression` used in a
+  value position is lowered to the uniform form `if true { throw e\n default(T) }
+  else { default(T) }`, which is a valid expression in every position (`??`
+  right-hand side, conditional branch, switch arm). The result type `T` comes
+  from the converted type of the throw-expression. A bare arrow body
+  `=> throw e` maps directly to a G# `throw` **statement**.
+- **`is`-pattern combinators (constant / relational / not / and / or /
+  recursive) → boolean lowering.** G# `is` in **expression** position supports
+  only `expr is Type`; all other patterns are switch-only. So an `is`-pattern is
+  lowered to a boolean: `x is 0` → `x == 0`; `x is 1 or 2` → `x == 1 || x == 2`;
+  `x is not T` → `!(x is T)`; `x is >= 0 and < n` → `x >= 0 && x < n` (C#
+  precedence `not` > `and` > `or` preserved, parenthesized where needed); a
+  recursive/property pattern `x is { }` → `x != nil` (the property-binder local
+  is rewritten to a member access on the subject). The switch-context pattern set
+  (§B switch mapping) keeps the native `case` pattern forms.
+- **Range index `a[i..j]` / `a[i..]` / `a[..j]` → `.Slice(start, length)`.** G#
+  has **no range operator** (gsc gap, §G OD-1); a `RangeExpression` index over a
+  `Span`/`Memory`/`ReadOnlySpan` lowers to a `.Slice` call: `s[i..j]` →
+  `s.Slice(i, j - i)`, `s[i..]` → `s.Slice(i)`, `s[..j]` → `s.Slice(0, j)`.
+- **Null-forgiving `expr!` → `expr`.** G# has no nullable-reference annotations,
+  so the `SuppressNullableWarningExpression` operator is **dropped**.
+- **Post-increment/decrement as an expression → statement-seam hoisting.** G#
+  models `++`/`--` as **statements** on identifiers. A `PostIncrementExpression`/
+  `PostDecrementExpression` used as a **value** (`a[i++] = v`, `M(i--)`,
+  `x = y++`) is hoisted: the sub-expression reads the pre-increment value and the
+  mutation is appended as a trailing `i++` / `i--` statement after the enclosing
+  expression statement (in document order; nested-lambda bodies are not hoisted
+  into the outer seam).
+- **`yield break` → `break`.** Settled fact: G# has no `yield break`; it maps to
+  a plain loop-control `break` (supersedes the former §G #994 unsupported note).
+- **`foreach ((a, b) in xs)` tuple deconstruction → `for a, b in xs`.** A
+  `ForEachVariableStatement` maps to the G# two-name iteration form; element
+  names are collected from the tuple/declaration designation.
+- **Field-like event `public event EventHandler<T>? X;` → `event X <type>`.** An
+  `EventFieldDeclaration` maps to the canonical G# name-then-type event member;
+  the nullable annotation on the delegate type is dropped (a field-like event is
+  nil-initialized). `EventHandler<T>` renders through the type mapper as its
+  delegate signature (`event X (object?, T) -> void`).
+- **UTF-8 string literal `"…"u8` → byte slice `[]uint8{ … }`.** A
+  `Utf8StringLiteralExpression` maps to a G# byte-slice literal of the UTF-8
+  bytes (`"AB"u8` → `[]uint8{ 0x41, 0x42 }`).
+- **Control characters in string literals → `\uXXXX` escapes.** The printer now
+  re-escapes any character below `U+0020` (and `U+007F`) — e.g. C# `"\0\0\0"` —
+  as a `\uXXXX` escape so the emitted G# string stays terminated and round-trips
+  (previously a raw NUL produced `GS0003: Unterminated string literal`).
+
 `Cs2Gs.Pipeline` runs four ordered stages per corpus app. Each stage has an explicit pass/fail gate; a failure short-circuits the remaining stages for that app, emits a triage artifact (section D), and is recorded in the run report. **"Migration completed" ≡ all four stages green: clean compile + clean IL verification + test parity with the original C#.**
 
 | # | Stage | Action | Pass gate | On failure |
@@ -634,7 +695,7 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #991 | a `when` guard on a `switch` statement/expression arm won't parse | GS0005 | **resolved** (issue #991 — `case <pattern> when <bool>:` / `case <pattern> when <bool> { … }` parse a contextual `when` guard; an arm matches only when the pattern matches AND the guard is true; guarded arms never satisfy exhaustiveness; cs2gs now translates C# `when` guards to the new form) |
 | #992 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | **resolved** (issue #992 — `and`/`or`/`not` pattern combinators with C# precedence (`not` > `and` > `or`) and parentheses; compose with all pattern kinds; binding type patterns under `or`/`not` rejected with GS0390; smart-cast narrows under `and`, soundly under `or`, never under `not`; combined patterns never satisfy exhaustiveness; cs2gs now translates C# `and`/`or`/`not` patterns to the new form) |
 | #993 | an `is`/`case` type pattern **with** a binder (`x is T t`) leaves the binder unbound | GS0125 | open (L5 uses the no-binder form `x is T`) |
-| #994 | `yield break` has no canonical G# form | GS0005 | open (translation-unsupported) |
+| #994 | `yield break` has no canonical G# form | GS0005 | **resolved by design** (settled fact: G# has no `yield break`; the translator maps it to a plain `break` — §B.36, Oahu.Decrypt round) |
 | #1002 | a user reference-type async iterator (`IAsyncEnumerable[UserClass]`) → IL erases to `IAsyncEnumerable<object>` | ilverify `StackUnexpected` | **resolved** (user reference- and value-type element async iterators emit, ilverify, and run; `await for s in seq` recovers the user element type) |
 | #1006 | interface inheritance `interface B : A { … }` won't parse | GS0005 | **resolved** (parser/binder accept an interface base-interface clause; cs2gs now emits `interface B : A, C { … }` — Oahu.Foundation `Types/Interfaces.cs`) |
 | #1007 | a generic interface method signature `func F[T](…) R;` won't parse | GS0005 | **resolved** (parser/binder accept generic methods in interfaces; cs2gs now emits the `[T]` clause on interface methods — Oahu.Foundation `Diagnostics/Interfaces.cs`) |
@@ -1059,6 +1120,95 @@ than `int32` is emitted with the matching `UL`/`L`/`U` suffix so the round-trip
 parser infers the same width (§B.35); and every emitted identifier is sanitized
 against the G# reserved-word set with the C# verbatim `@` prefix stripped (§B.35),
 so corpus identifiers such as `@default`, `@In`, `type`, and `func` round-trip.
+
+#### Discovered gaps from the Oahu.Decrypt round (minimal repros)
+
+Translating the external **`Oahu.Decrypt`** project drove its
+`translation-unsupported` count from **109** (19 construct kinds) to **7
+diagnostics across 5 files** — every one of the 19 target construct kinds is now
+translated to canonical G# (§B.36). The 7 residual diagnostics are **3 genuine
+gsc gaps** (each reproduced directly with gsc **0.2.137+31ced6cfb7** and
+contrasted with a passing control) and **4 excepted unsafe-interop constructs**
+(issue #1014). None is a translator defect.
+
+**OD-1 — range operator `a[i..j]` has no canonical G# form (gsc gap).** G# has no
+range/`..` operator; an `a[i..j]` index does not parse. The translator therefore
+**lowers** every corpus range index over a `Span`/`Memory` to `.Slice(start,
+length)` (§B.36), so all 7 corpus range uses translate. Filed as a gap for a
+first-class range surface.
+
+```cs
+// repro (C#) — no G# `..` range operator; lowered to .Slice(...) by the translator:
+System.Span<byte> Middle(System.Span<byte> s) => s[1..3];
+```
+```gs
+// gsc 0.2.137+31ced6cfb7 rejects a literal `..` range index:
+package p
+class C { func F(s Span[uint8]) Span[uint8] { return s[1..3] } }
+// error GS0005: Unexpected token, the `..` range form is not in the grammar.
+```
+
+**OD-2 — user-defined conversion operator `implicit`/`explicit operator T` has no
+canonical G# form (gsc gap).** G#'s `operator` keyword is followed by an
+**operator token** only (spec §Functions grammar `OperatorName = "operator"
+OperatorToken`); there is no user-defined implicit/explicit conversion form. The
+translator reports the construct unsupported. Source:
+`Mpeg4/IAppleData.cs` → `public static implicit operator TrackNumber((int, int) tn)`.
+
+```gs
+// gsc 0.2.137+31ced6cfb7: `operator` cannot be followed by a type:
+package p
+class TrackNumber {
+    public static implicit operator TrackNumber(tn (int32, int32)) TrackNumber { return TrackNumber() }
+}
+// error GS0288 (field decl requires var/let/const) + GS0113 (Type 'implicit' doesn't exist)
+```
+
+**OD-3 — static-abstract **property** in an interface has no canonical G# form
+(gsc gap, ADR-0089).** An interface `shared { … }` block accepts only `func`
+members; static interface **state** (a `prop`/field) is not supported in this
+release (ADR-0089). C# `public static abstract int SizeInBytes { get; }` therefore
+has no G# spelling. Source: `Mpeg4/IAppleData.cs`.
+
+```gs
+// gsc 0.2.137+31ced6cfb7:
+package p
+interface IData { shared { prop SizeInBytes int32 { get } } func Write() }
+// error GS0330: Only 'func' members are allowed inside the 'shared' block of an interface;
+//               interface static state is not supported in this release (ADR-0089).
+```
+
+**Excepted unsafe-interop surface (issue #1014).** Four residual diagnostics are
+the excepted unsafe surface and are **not** forced to a managed G# form:
+`stackalloc T[n]` (`StackAllocArrayCreationExpression`, `Mpeg4/APICFrame.cs` and
+`Mpeg4/Stz2Box.cs`), `fixed (byte* p = …)` (`FixedStatement`, `Cryptography/
+AesCtr.cs`), and a `i--` post-decrement used inside the short-circuit condition of
+the `unsafe class AesCtr` do-while (`PostDecrementExpression`, `Cryptography/
+AesCtr.cs`). `AesCtr` is an `unsafe class` built on `byte*`/`fixed`/pointer
+arithmetic — the same pointer-deref/field surface documented as OF-3 — so these
+remain documented against issue #1014 rather than translated.
+
+**Two downstream `CompilationUnit` round-trip failures investigated.** Two files
+failed the round-trip parse gate for reasons unrelated to the 19 target kinds:
+`Mpeg4/ID3/EmptyFrame.cs` emitted a string literal containing raw NUL bytes
+(C# `"\0\0\0"`) → `GS0003: Unterminated string literal` — **fixed** by the
+control-character `\uXXXX` re-escaping (§B.36); and `Chunks/ChunkReader.cs` emits
+a C-style `for` loop whose increment ends in an indexer immediately followed by
+the body brace (`start += chunk.FrameSizes[f] {`), which gsc parses as a composite
+literal (`expr[i] { … }`) → `GS0005: Unexpected token <IfKeyword>, expected
+<CloseBraceToken>`. The latter is a pre-existing translator limitation
+(multi-declarator/multi-incrementor C-style `for` loops are not fully rendered)
+compounded by a gsc parse ambiguity; it is **not** one of the 19 target kinds and
+is left for a follow-up (lower such `for` loops to `while`, or disambiguate the
+`expr[i] {` parse).
+
+```gs
+// gsc 0.2.137+31ced6cfb7 — `expr[i] {` parses as a composite literal:
+package p
+class C { func F(arr []int32) { for var s = 0; s < arr.Length; s += arr[s] { var x = 1 } } }
+// error GS0005: Unexpected token <VarKeyword>, expected <CloseBraceToken>.
+```
+
 
 ## Consequences
 

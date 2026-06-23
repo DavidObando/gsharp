@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using Cs2Gs.CodeModel.Ast;
@@ -282,7 +283,15 @@ public static class GSharpPrinter
                     sb.Append("\\t");
                     break;
                 default:
-                    sb.Append(ch);
+                    if (ch < ' ' || ch == '\u007F')
+                    {
+                        sb.Append("\\u").Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture));
+                    }
+                    else
+                    {
+                        sb.Append(ch);
+                    }
+
                     break;
             }
         }
@@ -316,7 +325,15 @@ public static class GSharpPrinter
                     sb.Append("\\t");
                     break;
                 default:
-                    sb.Append(ch);
+                    if (ch < ' ' || ch == '\u007F')
+                    {
+                        sb.Append("\\u").Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture));
+                    }
+                    else
+                    {
+                        sb.Append(ch);
+                    }
+
                     break;
             }
         }
@@ -397,6 +414,16 @@ public static class GSharpPrinter
 
             case IfExpression ifExpression:
                 return $"if {RenderExpression(ifExpression.Condition, indent)} {{ {RenderExpression(ifExpression.ThenExpression, indent)} }} else {{ {RenderExpression(ifExpression.ElseExpression, indent)} }}";
+
+            case ThrowExpression throwExpression:
+                // G# has no throw-expression: lower to an if-expression whose
+                // then-branch block runs the `throw` statement and supplies an
+                // unreachable typed tail (spec §If expressions). The shape is a
+                // primary expression, so it is valid in every value position.
+                var throwTail = throwExpression.ResultType == null
+                    ? "default"
+                    : $"default({RenderType(throwExpression.ResultType)})";
+                return $"if true {{ throw {RenderExpression(throwExpression.Operand, indent)}\n{Indent(indent + 1)}{throwTail} }} else {{ {throwTail} }}";
 
             case OutArgumentExpression outArgument:
                 return $"{outArgument.Keyword} {outArgument.Name}";
@@ -941,6 +968,8 @@ public static class GSharpPrinter
                 return RenderConstructor(constructor, indent);
             case DestructorDeclaration destructor:
                 return $"{Indent(indent)}deinit {RenderBlock(destructor.Body, indent)}";
+            case EventDeclaration eventDeclaration:
+                return $"{Indent(indent)}{RenderVisibility(eventDeclaration.Visibility)}event {eventDeclaration.Name} {RenderType(eventDeclaration.Type)}";
             case SharedBlock sharedBlock:
                 return RenderSharedBlock(sharedBlock, indent);
             default:
