@@ -1982,6 +1982,13 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindIndexAgainstTarget(BoundExpression target, ExpressionSyntax indexSyntax, TextLocation targetLocation)
     {
+        // Issue #1016: a range operand (`a[lo..hi]`) slices the target rather
+        // than indexing a single element.
+        if (indexSyntax is RangeExpressionSyntax rangeSyntax)
+        {
+            return BindRangeSlice(target, rangeSyntax, targetLocation);
+        }
+
         // Phase 3.A.4: map indexing `m[k]` — key bound to K, result type V.
         // The Go convention "zero value if missing" applies at evaluation;
         // the bound representation reuses BoundIndexExpression with the
@@ -2614,6 +2621,272 @@ internal sealed partial class ExpressionBinder
         }
 
         return HasInModifier(getter.ReturnParameter.GetRequiredCustomModifiers());
+    }
+
+    // Issue #1016: bind a range/slice expression `target[lo..hi]` (and the
+    // open-ended forms). The bound representation reuses existing nodes wrapped
+    // in a BoundBlockExpression so emit and the interpreter both work without a
+    // new bound-node kind. Sliceable shapes mirror C#:
+    //   - arrays / slices (`[N]T`, `[]T`, CLR `T[]`) -> new T[len] + Array.Copy.
+    //   - `string` -> Substring(start, len).
+    //   - span-like types with `int Length`/`int Count` + `Slice(int, int)`.
+    //   - types with a `this[System.Range]` indexer -> call it directly.
+    private BoundExpression BindRangeSlice(BoundExpression target, RangeExpressionSyntax range, TextLocation targetLocation)
+    {
+        if (target is BoundErrorExpression || target.Type == TypeSymbol.Error || target.Type == null)
+        {
+            if (range.LowerBound != null)
+            {
+                _ = BindExpression(range.LowerBound);
+            }
+
+            if (range.UpperBound != null)
+            {
+                _ = BindExpression(range.UpperBound);
+            }
+
+            return new BoundErrorExpression(null);
+        }
+
+        var arrayElement = GetArraySliceElementType(target.Type);
+        if (arrayElement != null)
+        {
+            return BindArraySlice(target, range, arrayElement);
+        }
+
+        if (target.Type == TypeSymbol.String)
+        {
+            return BindStringSlice(target, range);
+        }
+
+        var clrType = target.Type.ClrType;
+        if (clrType != null)
+        {
+            if (TryFindRangeIndexer(clrType, out var rangeIndexer))
+            {
+                return BindRangeIndexerSlice(target, range, rangeIndexer);
+            }
+
+            if (TryFindSliceShape(clrType, out var lengthMember, out var sliceMethod))
+            {
+                return BindSpanLikeSlice(target, range, lengthMember, sliceMethod);
+            }
+        }
+
+        Diagnostics.ReportTypeNotSliceable(range.Location, target.Type);
+        return new BoundErrorExpression(null);
+    }
+
+    // Element type for the array/slice slicing path, or null if the target is
+    // not an array/slice. Result of slicing is always a `[]T` slice.
+    private static TypeSymbol GetArraySliceElementType(TypeSymbol type)
+    {
+        return type switch
+        {
+            ArrayTypeSymbol arr => arr.ElementType,
+            SliceTypeSymbol slice => slice.ElementType,
+            ImportedTypeSymbol imp when imp.ClrType is { IsArray: true } clr && clr.GetArrayRank() == 1
+                => TypeSymbol.FromClrType(clr.GetElementType()),
+            NullabilityAnnotatedTypeSymbol annot when annot.ClrType is { IsArray: true } clr && clr.GetArrayRank() == 1
+                => annot.GetTypeArgumentSymbolForClrType(clr.GetElementType()),
+            _ => null,
+        };
+    }
+
+    private LocalVariableSymbol DeclareRangeTemp(string role, TypeSymbol type, BoundExpression initializer, ImmutableArray<BoundStatement>.Builder statements)
+    {
+        var name = "$slice_" + role + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var local = new LocalVariableSymbol(name, isReadOnly: true, type: type);
+        scope.TryDeclareVariable(local);
+        statements.Add(new BoundVariableDeclaration(null, local, initializer));
+        return local;
+    }
+
+    // Binds the lower/upper bounds (each optional) as int32 expressions and
+    // emits the `src`, `start`, and `len` temporaries shared by the array,
+    // string, and span-like slicing paths. `len = (upper ?? lengthOf(src)) - start`.
+    private (BoundExpression Src, BoundExpression Start, BoundExpression Len) BuildSliceBounds(
+        BoundExpression target,
+        RangeExpressionSyntax range,
+        Func<BoundExpression, BoundExpression> lengthOf,
+        ImmutableArray<BoundStatement>.Builder statements)
+    {
+        var srcLocal = DeclareRangeTemp("src", target.Type, target, statements);
+        var srcRef = new BoundVariableExpression(null, srcLocal);
+
+        var lowerBound = range.LowerBound != null
+            ? conversions.BindConversion(range.LowerBound, TypeSymbol.Int32)
+            : new BoundLiteralExpression(null, 0);
+        var startLocal = DeclareRangeTemp("start", TypeSymbol.Int32, lowerBound, statements);
+        var startRef = new BoundVariableExpression(null, startLocal);
+
+        var upperBound = range.UpperBound != null
+            ? conversions.BindConversion(range.UpperBound, TypeSymbol.Int32)
+            : lengthOf(new BoundVariableExpression(null, srcLocal));
+
+        var subtractOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32, TypeSymbol.Int32);
+        var lengthExpr = new BoundBinaryExpression(null, upperBound, subtractOp, startRef);
+        var lenLocal = DeclareRangeTemp("len", TypeSymbol.Int32, lengthExpr, statements);
+
+        return (
+            new BoundVariableExpression(null, srcLocal),
+            new BoundVariableExpression(null, startLocal),
+            new BoundVariableExpression(null, lenLocal));
+    }
+
+    private BoundExpression BindArraySlice(BoundExpression target, RangeExpressionSyntax range, TypeSymbol elementType)
+    {
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var (srcRef, startRef, lenRef) = BuildSliceBounds(
+            target,
+            range,
+            src => new BoundLenExpression(null, src),
+            statements);
+
+        var resultType = SliceTypeSymbol.Get(elementType);
+
+        // dst = new T[len]
+        var dstLocal = DeclareRangeTemp("dst", resultType, new BoundArrayCreationExpression(null, resultType, lenRef), statements);
+        var dstRef = new BoundVariableExpression(null, dstLocal);
+
+        // Array.Copy(src, start, dst, 0, len)
+        var copyMethod = typeof(System.Array).GetMethod(
+            "Copy",
+            new[] { typeof(System.Array), typeof(int), typeof(System.Array), typeof(int), typeof(int) });
+        var copyCall = new BoundClrStaticCallExpression(
+            null,
+            copyMethod,
+            TypeSymbol.Void,
+            ImmutableArray.Create<BoundExpression>(
+                srcRef,
+                startRef,
+                dstRef,
+                new BoundLiteralExpression(null, 0),
+                lenRef));
+        statements.Add(new BoundExpressionStatement(null, copyCall));
+
+        return new BoundBlockExpression(range, statements.ToImmutable(), new BoundVariableExpression(null, dstLocal));
+    }
+
+    private BoundExpression BindStringSlice(BoundExpression target, RangeExpressionSyntax range)
+    {
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var (srcRef, startRef, lenRef) = BuildSliceBounds(
+            target,
+            range,
+            src => new BoundLenExpression(null, src),
+            statements);
+
+        var substring = typeof(string).GetMethod("Substring", new[] { typeof(int), typeof(int) });
+        var call = new BoundImportedInstanceCallExpression(
+            null,
+            srcRef,
+            substring,
+            TypeSymbol.String,
+            ImmutableArray.Create<BoundExpression>(startRef, lenRef));
+
+        return new BoundBlockExpression(range, statements.ToImmutable(), call);
+    }
+
+    private BoundExpression BindSpanLikeSlice(BoundExpression target, RangeExpressionSyntax range, MemberInfo lengthMember, MethodInfo sliceMethod)
+    {
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var (srcRef, startRef, lenRef) = BuildSliceBounds(
+            target,
+            range,
+            src => new BoundClrPropertyAccessExpression(null, src, lengthMember, TypeSymbol.Int32),
+            statements);
+
+        var returnType = TypeSymbol.FromClrType(sliceMethod.ReturnType);
+        var call = new BoundImportedInstanceCallExpression(
+            null,
+            srcRef,
+            sliceMethod,
+            returnType,
+            ImmutableArray.Create<BoundExpression>(startRef, lenRef));
+
+        return new BoundBlockExpression(range, statements.ToImmutable(), call);
+    }
+
+    private BoundExpression BindRangeIndexerSlice(BoundExpression target, RangeExpressionSyntax range, PropertyInfo indexer)
+    {
+        var indexCtor = typeof(System.Index).GetConstructor(new[] { typeof(int), typeof(bool) });
+        var rangeCtor = typeof(System.Range).GetConstructor(new[] { typeof(System.Index), typeof(System.Index) });
+        var indexSym = TypeSymbol.FromClrType(typeof(System.Index));
+        var rangeSym = TypeSymbol.FromClrType(typeof(System.Range));
+
+        BoundExpression MakeIndex(ExpressionSyntax boundSyntax, bool fromEnd)
+        {
+            var value = boundSyntax != null
+                ? conversions.BindConversion(boundSyntax, TypeSymbol.Int32)
+                : new BoundLiteralExpression(null, 0);
+            return new BoundClrConstructorCallExpression(
+                null,
+                typeof(System.Index),
+                indexCtor,
+                ImmutableArray.Create<BoundExpression>(value, new BoundLiteralExpression(null, fromEnd)),
+                indexSym);
+        }
+
+        // Open lower defaults to the start (0, from-start); open upper defaults
+        // to the end (^0, i.e. value 0 from-end).
+        var startIndex = MakeIndex(range.LowerBound, fromEnd: false);
+        var endIndex = range.UpperBound != null
+            ? MakeIndex(range.UpperBound, fromEnd: false)
+            : MakeIndex(null, fromEnd: true);
+
+        var rangeValue = new BoundClrConstructorCallExpression(
+            null,
+            typeof(System.Range),
+            rangeCtor,
+            ImmutableArray.Create<BoundExpression>(startIndex, endIndex),
+            rangeSym);
+
+        var resultType = TypeSymbol.FromClrType(indexer.PropertyType);
+        return new BoundClrIndexExpression(range, target, indexer, ImmutableArray.Create<BoundExpression>(rangeValue), resultType);
+    }
+
+    private static bool TryFindRangeIndexer(Type clrType, out PropertyInfo indexer)
+    {
+        foreach (var property in clrType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            var indexParams = property.GetIndexParameters();
+            if (indexParams.Length == 1 && indexParams[0].ParameterType == typeof(System.Range))
+            {
+                indexer = property;
+                return true;
+            }
+        }
+
+        indexer = null;
+        return false;
+    }
+
+    private static bool TryFindSliceShape(Type clrType, out MemberInfo lengthMember, out MethodInfo sliceMethod)
+    {
+        lengthMember = null;
+        sliceMethod = null;
+
+        var lengthProp = clrType.GetProperty("Length", BindingFlags.Public | BindingFlags.Instance);
+        if (lengthProp == null || lengthProp.PropertyType != typeof(int))
+        {
+            lengthProp = clrType.GetProperty("Count", BindingFlags.Public | BindingFlags.Instance);
+        }
+
+        if (lengthProp == null || lengthProp.PropertyType != typeof(int))
+        {
+            return false;
+        }
+
+        var slice = clrType.GetMethod("Slice", BindingFlags.Public | BindingFlags.Instance, binder: null, new[] { typeof(int), typeof(int) }, modifiers: null);
+        if (slice == null)
+        {
+            return false;
+        }
+
+        lengthMember = lengthProp;
+        sliceMethod = slice;
+        return true;
     }
 
     private static TypeSymbol GetIndexElementType(TypeSymbol type)

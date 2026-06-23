@@ -201,6 +201,14 @@ public sealed class Lexer
                     kind = SyntaxKind.EllipsisToken;
                     position += 3;
                 }
+                else if (Peek(1) == '.')
+                {
+                    // Issue #1016: the `..` range/slice operator. Recognised
+                    // before the leading-dot float case so `a[..5]` lexes as
+                    // `..` `5` rather than `.` `.5`.
+                    kind = SyntaxKind.DotDotToken;
+                    position += 2;
+                }
                 else if (IsDecimalDigit(Peek(1)))
                 {
                     // ADR-0044 leading-dot float literal (`.5`). ReadNumber

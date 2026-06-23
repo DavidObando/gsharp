@@ -663,6 +663,17 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitArrayCreation(BoundArrayCreationExpression arr)
     {
+        // Issue #1016: a runtime-length, zero-initialised array/slice (slice
+        // backing allocation). `newarr` already zero-inits every element, so no
+        // per-element store loop is required.
+        if (arr.LengthExpression != null)
+        {
+            this.EmitExpression(arr.LengthExpression);
+            this.il.OpCode(ILOpCode.Newarr);
+            this.il.Token(this.outer.GetElementTypeToken(arr.ElementType));
+            return;
+        }
+
         this.il.LoadConstantI4(arr.Elements.Length);
         this.il.OpCode(ILOpCode.Newarr);
         this.il.Token(this.outer.GetElementTypeToken(arr.ElementType));

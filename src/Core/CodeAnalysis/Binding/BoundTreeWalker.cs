@@ -568,6 +568,11 @@ public abstract class BoundTreeWalker
 
     protected virtual void VisitArrayCreationExpression(BoundArrayCreationExpression node)
     {
+        if (node.LengthExpression != null)
+        {
+            VisitExpression(node.LengthExpression);
+        }
+
         VisitList(node.Elements);
     }
 

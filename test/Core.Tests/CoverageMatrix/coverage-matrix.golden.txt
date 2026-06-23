@@ -68,6 +68,7 @@ DiscardPattern
 DoKeyword
 DoWhileStatement
 DocumentationCommentToken
+DotDotToken
 DotToken
 EllipsisToken
 ElseClause
@@ -190,6 +191,7 @@ QuestionOpenBracketToken
 QuestionQuestionEqualsToken
 QuestionQuestionToken
 QuestionToken
+RangeExpression
 RangeKeyword
 RefArgumentExpression
 RelationalPattern
