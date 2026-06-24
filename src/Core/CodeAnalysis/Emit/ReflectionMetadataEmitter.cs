@@ -8780,6 +8780,31 @@ internal sealed class ReflectionMetadataEmitter
         => type is StructSymbol or InterfaceSymbol or EnumSymbol;
 
     /// <summary>
+    /// ADR-0122 §9 / issue #1035: builds a standalone method signature for a
+    /// function-pointer type, used as the operand of the CIL <c>calli</c>
+    /// opcode. Managed function pointers use the default managed calling
+    /// convention; unmanaged ones carry their declared ABI.
+    /// </summary>
+    /// <param name="fnPtr">The function-pointer type to sign.</param>
+    /// <returns>A standalone signature handle for <c>calli</c>.</returns>
+    internal StandaloneSignatureHandle GetFunctionPointerCallSiteSignature(FunctionPointerTypeSymbol fnPtr)
+    {
+        var convention = fnPtr.IsManaged
+            ? System.Reflection.Metadata.SignatureCallingConvention.Default
+            : MapToSignatureCallingConvention(fnPtr.CallingConvention);
+        var sigBlob = new BlobBuilder();
+        var sig = new BlobEncoder(sigBlob).MethodSignature(convention, 0, isInstanceMethod: false);
+        sig.Parameters(fnPtr.ParameterTypes.Length, out var retEnc, out var paramsEnc);
+        this.EncodeReturnSymbol(retEnc, fnPtr.ReturnType);
+        for (var i = 0; i < fnPtr.ParameterTypes.Length; i++)
+        {
+            this.EncodeTypeSymbol(paramsEnc.AddParameter().Type(), fnPtr.ParameterTypes[i]);
+        }
+
+        return this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
     /// ADR-0095 / issue #761: maps the
     /// <see cref="System.Runtime.InteropServices.CallingConvention"/>
     /// enum (used by <c>@DllImport</c> / <c>@UnmanagedFunctionPointer</c>

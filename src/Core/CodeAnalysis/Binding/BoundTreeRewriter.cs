@@ -458,6 +458,10 @@ public abstract class BoundTreeRewriter
                 return node;
             case BoundNodeKind.SizeOfExpression:
                 return node;
+            case BoundNodeKind.FunctionPointerFromMethodExpression:
+                return node;
+            case BoundNodeKind.FunctionPointerInvocationExpression:
+                return RewriteFunctionPointerInvocationExpression((BoundFunctionPointerInvocationExpression)node);
             case BoundNodeKind.IsExpression:
                 return RewriteIsExpression((BoundIsExpression)node);
             case BoundNodeKind.AsExpression:
@@ -604,6 +608,33 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundCallExpression(null, node.Function, builder.MoveToImmutable());
+    }
+
+    /// <summary>
+    /// ADR-0122 §9 / issue #1035: rewrites a function-pointer `calli`
+    /// invocation by rewriting the pointer expression and each argument.
+    /// </summary>
+    /// <param name="node">The invocation to rewrite.</param>
+    /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteFunctionPointerInvocationExpression(BoundFunctionPointerInvocationExpression node)
+    {
+        var newPointer = RewriteExpression(node.Pointer);
+        var builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+        var changed = newPointer != node.Pointer;
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArgument = node.Arguments[i];
+            var newArgument = RewriteExpression(oldArgument);
+            changed |= newArgument != oldArgument;
+            builder.Add(newArgument);
+        }
+
+        if (!changed)
+        {
+            return node;
+        }
+
+        return new BoundFunctionPointerInvocationExpression(node.Syntax, newPointer, builder.MoveToImmutable(), node.FunctionPointerType);
     }
 
     /// <summary>

@@ -1942,6 +1942,21 @@ public sealed class Binder
                 return null;
             }
 
+            // ADR-0122 §9 / issue #1035: the managed function pointer
+            // `*func(T1, T2) R` is callable directly via `calli`. Like the
+            // `*T` raw pointer it is only legal inside an `unsafe` context.
+            if (syntax.IsManagedFunctionPointer)
+            {
+                if (!binderCtx.InUnsafeContext)
+                {
+                    Diagnostics.ReportUnmanagedPointerOutsideUnsafe(
+                        syntax.ManagedFunctionPointerStarToken.Location);
+                    return null;
+                }
+
+                return FunctionPointerTypeSymbol.GetManaged(paramTypes.MoveToImmutable(), fpRet);
+            }
+
             var convention = System.Runtime.InteropServices.CallingConvention.Cdecl;
             if (syntax.CallingConventionIdentifierToken != null)
             {

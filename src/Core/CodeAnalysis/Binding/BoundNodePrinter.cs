@@ -169,6 +169,12 @@ public static class BoundNodePrinter
             case BoundNodeKind.SizeOfExpression:
                 WriteSizeOfExpression((BoundSizeOfExpression)node, writer);
                 break;
+            case BoundNodeKind.FunctionPointerFromMethodExpression:
+                WriteFunctionPointerFromMethodExpression((BoundFunctionPointerFromMethodExpression)node, writer);
+                break;
+            case BoundNodeKind.FunctionPointerInvocationExpression:
+                WriteFunctionPointerInvocationExpression((BoundFunctionPointerInvocationExpression)node, writer);
+                break;
             case BoundNodeKind.CapExpression:
                 WriteIntrinsicCall("cap", ((BoundCapExpression)node).Operand, writer);
                 break;
@@ -1172,6 +1178,30 @@ public static class BoundNodePrinter
         writer.WriteIdentifier("sizeof");
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
         writer.WriteIdentifier(node.MeasuredType.Name);
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteFunctionPointerFromMethodExpression(BoundFunctionPointerFromMethodExpression node, IndentedTextWriter writer)
+    {
+        writer.WritePunctuation(SyntaxKind.AmpersandToken);
+        writer.WriteIdentifier(node.Method.Name);
+    }
+
+    private static void WriteFunctionPointerInvocationExpression(BoundFunctionPointerInvocationExpression node, IndentedTextWriter writer)
+    {
+        node.Pointer.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Arguments[i].WriteTo(writer);
+        }
+
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
     }
 

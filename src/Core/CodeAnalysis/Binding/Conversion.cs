@@ -155,6 +155,35 @@ public sealed class Conversion
             return Conversion.None;
         }
 
+        // ADR-0122 §9 / issue #1035: function-pointer conversions.
+        // * fnptr -> fnptr: explicit reinterpret.
+        // * fnptr <-> nint/nuint/IntPtr/integer: explicit round-trip (an
+        //   unmanaged function pointer is just an address-sized integer).
+        // * nil -> fnptr: implicit null pointer.
+        if (from is FunctionPointerTypeSymbol || to is FunctionPointerTypeSymbol)
+        {
+            if (from == TypeSymbol.Null && to is FunctionPointerTypeSymbol)
+            {
+                return Conversion.Implicit;
+            }
+
+            if (from is FunctionPointerTypeSymbol && to is FunctionPointerTypeSymbol)
+            {
+                return Conversion.Explicit;
+            }
+
+            var fpPartner = to is FunctionPointerTypeSymbol ? from : to;
+            if (fpPartner == TypeSymbol.NInt || fpPartner == TypeSymbol.NUInt
+                || fpPartner == TypeSymbol.Int32 || fpPartner == TypeSymbol.UInt32
+                || fpPartner == TypeSymbol.Int64 || fpPartner == TypeSymbol.UInt64
+                || fpPartner is PointerTypeSymbol)
+            {
+                return Conversion.Explicit;
+            }
+
+            return Conversion.None;
+        }
+
         // Issue #813: a G# `TupleTypeSymbol` and an imported CLR
         // `System.ValueTuple<…>` instantiation denote the same type when
         // their closed CLR backings agree. The former is produced by tuple

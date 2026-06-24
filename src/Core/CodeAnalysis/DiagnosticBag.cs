@@ -1604,6 +1604,31 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// GS0404: a managed function-pointer type clause <c>*func(T) R</c>
+    /// (ADR-0122 §9 / issue #1035) appears outside an <c>unsafe</c> context.
+    /// Like the raw pointer <c>*T</c>, a function pointer is only legal inside
+    /// an <c>unsafe</c> context.
+    /// </summary>
+    /// <param name="location">The text location of the leading <c>*</c>.</param>
+    public void ReportUnmanagedPointerOutsideUnsafe(TextLocation location)
+    {
+        Report(location, "GS0404", "A managed function-pointer type '*func(...) R' requires an 'unsafe' context; place it inside an 'unsafe func', 'unsafe { … }' block, or 'unsafe' type (ADR-0122 §9).");
+    }
+
+    /// <summary>
+    /// GS0405: <c>&amp;Method</c> (ADR-0122 §9 / issue #1035) produced a
+    /// function pointer whose signature does not match the target
+    /// function-pointer type, or the address-of operand was not a single
+    /// static method group.
+    /// </summary>
+    /// <param name="location">The text location of the address-of expression.</param>
+    /// <param name="detail">A short description of the mismatch.</param>
+    public void ReportFunctionPointerAddressOfMismatch(TextLocation location, string detail)
+    {
+        Report(location, "GS0405", $"Cannot take the address of this method as a function pointer: {detail} (ADR-0122 §9).");
+    }
+
+    /// <summary>
     /// Reports that an <c>async func(...)</c> type clause has an explicit
     /// <c>Task[…]</c> (or other Task-shaped) return type. The <c>async</c>
     /// modifier already implies a Task wrap, so the explicit wrap is

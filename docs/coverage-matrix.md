@@ -308,6 +308,8 @@ ForEllipsisStatement
 ForInfiniteStatement
 ForRangeStatement
 FunctionLiteralExpression
+FunctionPointerFromMethodExpression
+FunctionPointerInvocationExpression
 GoStatement
 GotoStatement
 IfStatement

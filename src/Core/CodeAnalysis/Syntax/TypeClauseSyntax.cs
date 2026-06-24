@@ -390,6 +390,27 @@ public sealed class TypeClauseSyntax : SyntaxNode
     }
 #pragma warning restore SA1642
 
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for the managed function-pointer type clause <c>*func(T1, T2, ...) R</c> (ADR-0122 §9 / issue #1035).</summary>
+#pragma warning disable SA1642
+    private TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken managedFunctionPointerStarToken,
+        SyntaxToken managedFunctionPointerFuncKeyword,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        SyntaxToken closeParenToken,
+        TypeClauseSyntax returnTypeClause)
+        : base(syntaxTree)
+    {
+        ManagedFunctionPointerStarToken = managedFunctionPointerStarToken;
+        ManagedFunctionPointerFuncKeyword = managedFunctionPointerFuncKeyword;
+        OpenParenToken = openParenToken;
+        FunctionParameterTypes = functionParameterTypes;
+        CloseParenToken = closeParenToken;
+        ReturnTypeClause = returnTypeClause;
+    }
+#pragma warning restore SA1642
+
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.TypeClause;
 
@@ -472,7 +493,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
     public SeparatedSyntaxList<TypeClauseSyntax> TupleElements { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes a tuple type <c>(T1, T2, ...)</c> (Phase 4.5).</summary>
-    public bool IsTuple => OpenParenToken != null && FuncKeyword == null && ArrowToken == null && UnmanagedKeyword == null;
+    public bool IsTuple => OpenParenToken != null && FuncKeyword == null && ArrowToken == null && UnmanagedKeyword == null && ManagedFunctionPointerFuncKeyword == null;
 
     /// <summary>Gets the <c>func</c> keyword for function-type clauses, or <c>null</c>.</summary>
     public SyntaxToken FuncKeyword { get; }
@@ -518,8 +539,17 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets the closing <c>]</c> of a raw function-pointer's calling-convention slot (ADR-0095), or <c>null</c>.</summary>
     public SyntaxToken CallingConventionCloseBracketToken { get; }
 
-    /// <summary>Gets a value indicating whether this clause denotes a raw function-pointer type <c>unmanaged[CC] (T) -&gt; R</c> (ADR-0095 / issue #761).</summary>
-    public bool IsFunctionPointer => UnmanagedKeyword != null;
+    /// <summary>Gets a value indicating whether this clause denotes a raw function-pointer type <c>unmanaged[CC] (T) -&gt; R</c> (ADR-0095 / issue #761) or the managed form <c>*func(T) R</c> (ADR-0122 §9 / issue #1035).</summary>
+    public bool IsFunctionPointer => UnmanagedKeyword != null || ManagedFunctionPointerFuncKeyword != null;
+
+    /// <summary>Gets the <c>*</c> token introducing a managed function-pointer type clause <c>*func(T) R</c> (ADR-0122 §9 / issue #1035), or <c>null</c>.</summary>
+    public SyntaxToken ManagedFunctionPointerStarToken { get; }
+
+    /// <summary>Gets the <c>func</c> keyword of a managed function-pointer type clause <c>*func(T) R</c> (ADR-0122 §9 / issue #1035), or <c>null</c>.</summary>
+    public SyntaxToken ManagedFunctionPointerFuncKeyword { get; }
+
+    /// <summary>Gets a value indicating whether this clause denotes a managed function-pointer type <c>*func(T) R</c> (ADR-0122 §9 / issue #1035).</summary>
+    public bool IsManagedFunctionPointer => ManagedFunctionPointerFuncKeyword != null;
 
     /// <summary>Gets the opening <c>[</c> of the type-argument list (Phase 4.3c), or <c>null</c>.</summary>
     public SyntaxToken TypeArgumentOpenBracketToken { get; }
@@ -880,5 +910,36 @@ public sealed class TypeClauseSyntax : SyntaxNode
             arrowToken,
             returnTypeClause,
             isFunctionPointer: true);
+    }
+
+    /// <summary>
+    /// Creates a managed function-pointer type clause <c>*func(T1, T2, ...) R</c>
+    /// (ADR-0122 §9 / issue #1035).
+    /// </summary>
+    /// <param name="syntaxTree">The owning syntax tree.</param>
+    /// <param name="managedFunctionPointerStarToken">The leading <c>*</c> token.</param>
+    /// <param name="managedFunctionPointerFuncKeyword">The <c>func</c> keyword.</param>
+    /// <param name="openParenToken">The opening <c>(</c>.</param>
+    /// <param name="functionParameterTypes">The parameter type clauses.</param>
+    /// <param name="closeParenToken">The closing <c>)</c>.</param>
+    /// <param name="returnTypeClause">The return type clause, or <c>null</c> for void.</param>
+    /// <returns>A managed function-pointer <see cref="TypeClauseSyntax"/>.</returns>
+    public static TypeClauseSyntax CreateManagedFunctionPointer(
+        SyntaxTree syntaxTree,
+        SyntaxToken managedFunctionPointerStarToken,
+        SyntaxToken managedFunctionPointerFuncKeyword,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        SyntaxToken closeParenToken,
+        TypeClauseSyntax returnTypeClause)
+    {
+        return new TypeClauseSyntax(
+            syntaxTree,
+            managedFunctionPointerStarToken,
+            managedFunctionPointerFuncKeyword,
+            openParenToken,
+            functionParameterTypes,
+            closeParenToken,
+            returnTypeClause);
     }
 }

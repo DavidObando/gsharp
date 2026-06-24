@@ -146,6 +146,55 @@ internal sealed partial class ExpressionBinder
             return operand;
         }
 
+        // ADR-0122 §9 / issue #1035: `&StaticMethod` produces a managed
+        // function-pointer value (CIL `ldftn`). The operand binds to a method
+        // group; we accept a single static, non-generic user function and
+        // synthesise its managed function-pointer type from the signature.
+        if (operand is BoundMethodGroupExpression methodGroup)
+        {
+            if (!binderCtx.InUnsafeContext)
+            {
+                Diagnostics.ReportFunctionPointerAddressOfMismatch(
+                    syntax.OperatorToken.Location,
+                    "taking the address of a method as a function pointer requires an 'unsafe' context");
+                return new BoundErrorExpression(null);
+            }
+
+            if (methodGroup.Candidates.Length != 1 || methodGroup.Function == null)
+            {
+                Diagnostics.ReportFunctionPointerAddressOfMismatch(
+                    syntax.OperatorToken.Location,
+                    "the method is overloaded; '&Method' requires a single, unambiguous method");
+                return new BoundErrorExpression(null);
+            }
+
+            var target = methodGroup.Function;
+            if (methodGroup.Receiver != null || target.IsInstanceMethod)
+            {
+                Diagnostics.ReportFunctionPointerAddressOfMismatch(
+                    syntax.OperatorToken.Location,
+                    "only a static or free function can be taken as a function pointer (instance methods are not supported)");
+                return new BoundErrorExpression(null);
+            }
+
+            if (target.IsGeneric)
+            {
+                Diagnostics.ReportFunctionPointerAddressOfMismatch(
+                    syntax.OperatorToken.Location,
+                    "a generic method cannot be taken as a function pointer");
+                return new BoundErrorExpression(null);
+            }
+
+            var fpParamTypes = ImmutableArray.CreateBuilder<TypeSymbol>(target.Parameters.Length);
+            foreach (var p in target.Parameters)
+            {
+                fpParamTypes.Add(p.Type);
+            }
+
+            var fpType = FunctionPointerTypeSymbol.GetManaged(fpParamTypes.MoveToImmutable(), target.Type ?? TypeSymbol.Void);
+            return new BoundFunctionPointerFromMethodExpression(null, target, fpType);
+        }
+
         // GS9005: cannot take address of a constant binding.
         if (operand is BoundVariableExpression bve && bve.Variable.IsReadOnly)
         {

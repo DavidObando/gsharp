@@ -155,6 +155,7 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.TypeParameterConstructionExpression:
             case BoundNodeKind.TypeOfExpression:
             case BoundNodeKind.SizeOfExpression:
+            case BoundNodeKind.FunctionPointerFromMethodExpression:
             case BoundNodeKind.FunctionLiteralExpression:
             case BoundNodeKind.StateMachineAwaitOnCompleted:
             case BoundNodeKind.StateMachineBuilderMoveNext:
@@ -176,6 +177,9 @@ public abstract class BoundTreeWalker
                 break;
             case BoundNodeKind.CallExpression:
                 VisitCallExpression((BoundCallExpression)node);
+                break;
+            case BoundNodeKind.FunctionPointerInvocationExpression:
+                VisitFunctionPointerInvocationExpression((BoundFunctionPointerInvocationExpression)node);
                 break;
             case BoundNodeKind.ConversionExpression:
                 VisitConversionExpression((BoundConversionExpression)node);
@@ -556,6 +560,14 @@ public abstract class BoundTreeWalker
 
     protected virtual void VisitCallExpression(BoundCallExpression node)
     {
+        VisitList(node.Arguments);
+    }
+
+    /// <summary>ADR-0122 §9 / issue #1035: visit a function-pointer `calli` invocation.</summary>
+    /// <param name="node">The bound node.</param>
+    protected virtual void VisitFunctionPointerInvocationExpression(BoundFunctionPointerInvocationExpression node)
+    {
+        VisitExpression(node.Pointer);
         VisitList(node.Arguments);
     }
 

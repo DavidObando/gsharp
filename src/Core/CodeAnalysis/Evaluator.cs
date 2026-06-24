@@ -658,6 +658,8 @@ public sealed class Evaluator
                 BoundNodeKind.LenExpression => EvaluateLenExpression((BoundLenExpression)node),
                 BoundNodeKind.TypeOfExpression => EvaluateTypeOfExpression((BoundTypeOfExpression)node),
                 BoundNodeKind.SizeOfExpression => throw new EvaluatorException("sizeof on an unmanaged-pointer struct pointee is not supported in the interpreter; it requires the CIL sizeof emit path.", node),
+                BoundNodeKind.FunctionPointerFromMethodExpression => throw new EvaluatorException("'&Method' function pointers are not supported in the interpreter; they require the CIL ldftn/calli emit path (ADR-0122 §9).", node),
+                BoundNodeKind.FunctionPointerInvocationExpression => throw new EvaluatorException("function-pointer invocation ('fp(args)') is not supported in the interpreter; it requires the CIL calli emit path (ADR-0122 §9).", node),
                 BoundNodeKind.CapExpression => EvaluateCapExpression((BoundCapExpression)node),
                 BoundNodeKind.AppendExpression => EvaluateAppendExpression((BoundAppendExpression)node),
                 BoundNodeKind.StructLiteralExpression => EvaluateStructLiteralExpression((BoundStructLiteralExpression)node),
