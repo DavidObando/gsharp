@@ -116,6 +116,12 @@ public enum BoundNodeKind
     // Issue #143: typeof operator
     TypeOfExpression,
 
+    // ADR-0122 §4 / issue #1034: a `sizeof(T)` expression. Emits the CIL
+    // `sizeof <T>` opcode (an int32 byte count). Produced by the unmanaged
+    // pointer-arithmetic lowering to scale offsets by a struct pointee size
+    // that is not known at G# compile time.
+    SizeOfExpression,
+
     // Patterns
     ConstantPattern,
     DiscardPattern,

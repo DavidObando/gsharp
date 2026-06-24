@@ -47,6 +47,14 @@ public class Parser
     // literals — e.g. `for v in Numbers{} { body }` is valid.
     private int suppressStructLiteral;
 
+    // ADR-0122 §4 / issue #1034: tracks the unsafe-context nesting depth while
+    // parsing. Inside an unsafe context (`unsafe func`/`unsafe {}`/unsafe
+    // type), a single-identifier `p->member` is parsed as pointer member
+    // access `(*p).member` rather than a single-identifier arrow lambda
+    // `p -> body`; outside unsafe, the lambda interpretation is unchanged. A
+    // parenthesised lambda `(x) -> body` remains available in unsafe contexts.
+    private int unsafeDepth;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="Parser"/> class.
     /// </summary>
@@ -269,7 +277,23 @@ public class Parser
         MemberSyntax member;
         if (Current.Kind == SyntaxKind.FuncKeyword)
         {
-            member = ParseFunctionDeclaration(accessibilityModifier, openModifier: null, overrideModifier: null, asyncModifier);
+            if (unsafeModifier != null)
+            {
+                this.unsafeDepth++;
+            }
+
+            try
+            {
+                member = ParseFunctionDeclaration(accessibilityModifier, openModifier: null, overrideModifier: null, asyncModifier);
+            }
+            finally
+            {
+                if (unsafeModifier != null)
+                {
+                    this.unsafeDepth--;
+                }
+            }
+
             if (unsafeModifier != null && member is FunctionDeclarationSyntax unsafeFunc)
             {
                 unsafeFunc.UnsafeModifier = unsafeModifier;
@@ -281,7 +305,23 @@ public class Parser
             //   [visibility]? [open|sealed]? [data]? [inline]? (class|struct|enum|interface) Name ...
             // The aggregate-kind keyword IS the declaration keyword — no leading
             // `type`. Drop into the new aggregate parser path.
-            member = ParseAggregateDeclaration(accessibilityModifier);
+            if (unsafeModifier != null)
+            {
+                this.unsafeDepth++;
+            }
+
+            try
+            {
+                member = ParseAggregateDeclaration(accessibilityModifier);
+            }
+            finally
+            {
+                if (unsafeModifier != null)
+                {
+                    this.unsafeDepth--;
+                }
+            }
+
             if (unsafeModifier != null && member is StructDeclarationSyntax unsafeAggregate)
             {
                 unsafeAggregate.UnsafeModifier = unsafeModifier;
@@ -1881,7 +1921,24 @@ public class Parser
                     // `struct`/`data struct` types. Both aggregate kinds accept
                     // the member here; the binder records it as an instance
                     // method on the receiver type (by-ref `this` for value types).
-                    var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier, memberAsyncModifier);
+                    FunctionDeclarationSyntax method;
+                    if (memberUnsafeModifier != null)
+                    {
+                        this.unsafeDepth++;
+                    }
+
+                    try
+                    {
+                        method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier, memberAsyncModifier);
+                    }
+                    finally
+                    {
+                        if (memberUnsafeModifier != null)
+                        {
+                            this.unsafeDepth--;
+                        }
+                    }
+
                     method.WithAnnotations(memberAnnotations);
                     if (memberUnsafeModifier != null)
                     {
@@ -4163,7 +4220,17 @@ public class Parser
             && Peek(1).Kind == SyntaxKind.OpenBraceToken)
         {
             var unsafeKeyword = NextToken();
-            var unsafeBlock = ParseBlockStatement();
+            this.unsafeDepth++;
+            BlockStatementSyntax unsafeBlock;
+            try
+            {
+                unsafeBlock = ParseBlockStatement();
+            }
+            finally
+            {
+                this.unsafeDepth--;
+            }
+
             unsafeBlock.UnsafeKeyword = unsafeKeyword;
             return unsafeBlock;
         }
@@ -6295,7 +6362,7 @@ public class Parser
                 // tokens match a lambda shape.
                 return ParseLambdaExpression();
 
-            case SyntaxKind.IdentifierToken when Peek(1).Kind == SyntaxKind.RightArrowToken:
+            case SyntaxKind.IdentifierToken when Peek(1).Kind == SyntaxKind.RightArrowToken && this.unsafeDepth == 0:
                 // Issue #932: a single-identifier arrow lambda `x -> body` is
                 // accepted as shorthand for the parenthesised single-parameter
                 // form `(x) -> body`. Disambiguation is unconditional here: in
@@ -6304,6 +6371,14 @@ public class Parser
                 // deprecated switch-arm `case v -> r` are parsed in their own
                 // type/pattern contexts, never via primary-expression
                 // dispatch), so committing to a lambda is always correct.
+                //
+                // ADR-0122 §4 / issue #1034: EXCEPT inside an unsafe context,
+                // where `p->member` is pointer member access `(*p).member`. The
+                // `unsafeDepth == 0` guard routes `IDENT ->` to the lambda only
+                // outside unsafe code; inside unsafe it falls through to the
+                // name/postfix path which desugars `->` to a dereference member
+                // access. A single-identifier lambda is still expressible inside
+                // unsafe code via the parenthesised form `(x) -> body`.
                 return ParseSingleIdentifierLambdaExpression();
 
             case SyntaxKind.SwitchKeyword:
@@ -6372,6 +6447,19 @@ public class Parser
                 var dotToken = NextToken();
                 var rightSide = ParseNameOrCallExpression();
                 current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
+            }
+            else if (Current.Kind == SyntaxKind.RightArrowToken)
+            {
+                // ADR-0122 §4 / issue #1034: the pointer member-access arrow
+                // `p->m` is sugar for `(*p).m`. Desugar at parse time into a
+                // dereference (`*p`) accessed by a member name, so the binder and
+                // emitter reuse the existing `(*p).field` / `(*p).method(...)`
+                // bound shape without any new bound-node kinds.
+                var arrowToken = NextToken();
+                var rightSide = ParseNameOrCallExpression();
+                var starToken = new SyntaxToken(syntaxTree, SyntaxKind.StarToken, arrowToken.Position, "*", null);
+                var deref = new UnaryExpressionSyntax(syntaxTree, starToken, current);
+                current = new AccessorExpressionSyntax(syntaxTree, deref, arrowToken, rightSide);
             }
             else if (Current.Kind == SyntaxKind.OpenSquareBracketToken
                 || Current.Kind == SyntaxKind.QuestionOpenBracketToken)

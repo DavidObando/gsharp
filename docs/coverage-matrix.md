@@ -339,6 +339,7 @@ RelationalPattern
 ReturnStatement
 ScopeStatement
 SelectStatement
+SizeOfExpression
 SpillSequenceExpression
 StackAllocExpression
 StateMachineAwaitOnCompleted

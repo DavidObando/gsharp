@@ -1532,7 +1532,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="pointeeName">The illegal pointee type name.</param>
     public void ReportUnmanagedPointerIllegalPointee(TextLocation location, string pointeeName)
     {
-        Report(location, "GS0398", $"Unmanaged pointer to '{pointeeName}' is not supported; the pointee must be a blittable primitive or another pointer (ADR-0122).");
+        Report(location, "GS0398", $"Unmanaged pointer to '{pointeeName}' is not supported; the pointee must be a blittable primitive, a blittable value struct, or another pointer (ADR-0122).");
     }
 
     /// <summary>

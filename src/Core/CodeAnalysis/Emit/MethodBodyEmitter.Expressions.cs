@@ -384,6 +384,9 @@ internal sealed partial class MethodBodyEmitter
             case BoundTypeOfExpression typeOf:
                 this.EmitTypeOf(typeOf);
                 break;
+            case BoundSizeOfExpression sizeOf:
+                this.EmitSizeOf(sizeOf);
+                break;
             case BoundCapExpression cap:
                 this.EmitExpression(cap.Operand);
                 this.il.OpCode(ILOpCode.Ldlen);
@@ -778,6 +781,16 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Ldtoken);
         this.il.Token(this.outer.GetTypeOfToken(typeOf.OperandType));
         this.il.Call(this.outer.wellKnown.GetTypeFromHandleReference());
+    }
+
+    private void EmitSizeOf(BoundSizeOfExpression sizeOf)
+    {
+        // ADR-0122 §4 / issue #1034: `sizeof(T)` -> CIL `sizeof <T>`, pushing
+        // the unmanaged byte size of the (struct) pointee as an int32. Used to
+        // scale unmanaged pointer arithmetic by a struct size that is not known
+        // at G# compile time.
+        this.il.OpCode(ILOpCode.Sizeof);
+        this.il.Token(this.outer.GetElementTypeToken(sizeOf.MeasuredType));
     }
 
     private void EmitAppend(BoundAppendExpression app)

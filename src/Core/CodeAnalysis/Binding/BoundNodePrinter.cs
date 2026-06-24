@@ -166,6 +166,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.TypeOfExpression:
                 WriteTypeOfExpression((BoundTypeOfExpression)node, writer);
                 break;
+            case BoundNodeKind.SizeOfExpression:
+                WriteSizeOfExpression((BoundSizeOfExpression)node, writer);
+                break;
             case BoundNodeKind.CapExpression:
                 WriteIntrinsicCall("cap", ((BoundCapExpression)node).Operand, writer);
                 break;
@@ -1161,6 +1164,14 @@ public static class BoundNodePrinter
         writer.WriteIdentifier("typeof");
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
         writer.WriteIdentifier(node.OperandType.Name);
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteSizeOfExpression(BoundSizeOfExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier("sizeof");
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        writer.WriteIdentifier(node.MeasuredType.Name);
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
     }
 

@@ -196,6 +196,32 @@ internal sealed partial class ExpressionBinder
             return conversions.BindConversion(voidCast.Arguments[0], PointerTypeSymbol.Get(TypeSymbol.Void), allowExplicit: true);
         }
 
+        // ADR-0122 §4 / issue #1034: `*Point(expr)` is the cast to a pointer to
+        // a blittable user struct `*Point` — the struct analogue of the
+        // primitive `*uint8(p)` cast and the `*void(p)` form. Because a struct
+        // type name binds as a construction/conversion call rather than a
+        // numeric conversion, recognise the syntactic shape `* IDENT ( expr )`
+        // where IDENT names a blittable value struct in scope, and reinterpret
+        // it as a cast to `*Struct`. Restricted to a pointer / native-int
+        // argument so an ordinary struct construction `Point(x)` is unaffected.
+        if (binderCtx.InUnsafeContext
+            && syntax.Operand is CallExpressionSyntax structCast
+            && structCast.Identifier.Kind == SyntaxKind.IdentifierToken
+            && structCast.TypeArgumentList == null
+            && structCast.NullableQuestionToken == null
+            && structCast.Arguments.Count == 1
+            && scope.TryLookupTypeAlias(structCast.Identifier.Text, out var castTarget)
+            && BlittableDetector.IsBlittableValueStructPointee(castTarget))
+        {
+            var castArg = BindExpression(structCast.Arguments[0]);
+            if (castArg.Type is PointerTypeSymbol
+                || castArg.Type == TypeSymbol.NInt || castArg.Type == TypeSymbol.NUInt
+                || castArg.Type == TypeSymbol.Int64 || castArg.Type == TypeSymbol.UInt64)
+            {
+                return new BoundConversionExpression(null, PointerTypeSymbol.Get(castTarget), castArg);
+            }
+        }
+
         var operand = BindExpression(syntax.Operand);
         if (operand is BoundErrorExpression)
         {
@@ -212,7 +238,7 @@ internal sealed partial class ExpressionBinder
         if (binderCtx.InUnsafeContext
             && operand is BoundConversionExpression conv
             && conv.Type is { } pointee
-            && TypeSymbol.IsLegalPointeeType(pointee))
+            && (TypeSymbol.IsLegalPointeeType(pointee) || BlittableDetector.IsBlittableValueStructPointee(pointee)))
         {
             return new BoundConversionExpression(null, PointerTypeSymbol.Get(pointee), conv.Expression);
         }
@@ -348,19 +374,50 @@ internal sealed partial class ExpressionBinder
         return System.IntPtr.Size;
     }
 
+    /// <summary>
+    /// ADR-0122 §4 / issue #1034. Returns whether <paramref name="pointee"/> is a
+    /// user/value struct pointee whose unmanaged size is not a known compile-time
+    /// constant — so pointer arithmetic must scale by the emitted CIL
+    /// <c>sizeof</c> opcode rather than a literal.
+    /// </summary>
+    private static bool IsStructPointee(TypeSymbol pointee) =>
+        pointee is StructSymbol { IsClass: false }
+        || (pointee is not StructSymbol and not PointerTypeSymbol
+            && pointee?.ClrType is { IsValueType: true }
+            && !TypeSymbol.IsLegalPointeeType(pointee));
+
+    /// <summary>
+    /// ADR-0122 §3-§4 / issues #1014, #1032, #1034. Builds an <c>nint</c>-typed
+    /// expression for the size of a pointee. For a blittable struct pointee it
+    /// emits the runtime <c>sizeof(T)</c> (size unknown at G# compile time); for
+    /// a primitive/pointer pointee it is the static compile-time byte size.
+    /// <paramref name="isOne"/> reports the static-size==1 fast path (no scaling).
+    /// </summary>
+    private static BoundExpression PointeeSizeAsNint(TypeSymbol pointee, out bool isOne)
+    {
+        if (IsStructPointee(pointee))
+        {
+            isOne = false;
+            return new BoundConversionExpression(null, TypeSymbol.NInt, new BoundSizeOfExpression(null, pointee));
+        }
+
+        var size = StaticPointeeSize(pointee);
+        isOne = size == 1;
+        return new BoundConversionExpression(null, TypeSymbol.NInt, new BoundLiteralExpression(null, size, TypeSymbol.Int32));
+    }
+
     private BoundExpression LowerPointerOffset(BoundExpression pointer, PointerTypeSymbol pointerType, BoundExpression offset, bool subtract)
     {
-        var size = StaticPointeeSize(pointerType.PointeeType);
+        var sizeExpr = PointeeSizeAsNint(pointerType.PointeeType, out var isOne);
         BoundExpression offsetNint = offset.Type == TypeSymbol.NInt
             ? offset
             : new BoundConversionExpression(null, TypeSymbol.NInt, offset);
 
         BoundExpression scaled = offsetNint;
-        if (size != 1)
+        if (!isOne)
         {
-            var sizeLit = new BoundConversionExpression(null, TypeSymbol.NInt, new BoundLiteralExpression(null, size, TypeSymbol.Int32));
             var mulOp = BoundBinaryOperator.Bind(SyntaxKind.StarToken, TypeSymbol.NInt, TypeSymbol.NInt);
-            scaled = new BoundBinaryExpression(null, offsetNint, mulOp, sizeLit);
+            scaled = new BoundBinaryExpression(null, offsetNint, mulOp, sizeExpr);
         }
 
         var pointerNint = new BoundConversionExpression(null, TypeSymbol.NInt, pointer);
@@ -390,15 +447,14 @@ internal sealed partial class ExpressionBinder
         var subOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.NInt, TypeSymbol.NInt);
         var byteDiff = new BoundBinaryExpression(null, leftNint, subOp, rightNint);
 
-        var size = StaticPointeeSize(pointerType.PointeeType);
-        if (size == 1)
+        var sizeExpr = PointeeSizeAsNint(pointerType.PointeeType, out var isOne);
+        if (isOne)
         {
             return byteDiff;
         }
 
-        var sizeLit = new BoundConversionExpression(null, TypeSymbol.NInt, new BoundLiteralExpression(null, size, TypeSymbol.Int32));
         var divOp = BoundBinaryOperator.Bind(SyntaxKind.SlashToken, TypeSymbol.NInt, TypeSymbol.NInt);
-        return new BoundBinaryExpression(null, byteDiff, divOp, sizeLit);
+        return new BoundBinaryExpression(null, byteDiff, divOp, sizeExpr);
     }
 
     private BoundExpression LowerPointerComparison(SyntaxKind operatorKind, BoundExpression left, BoundExpression right)

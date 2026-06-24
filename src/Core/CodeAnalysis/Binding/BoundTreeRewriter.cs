@@ -456,6 +456,8 @@ public abstract class BoundTreeRewriter
                 return RewriteTypeParameterConstructionExpression((BoundTypeParameterConstructionExpression)node);
             case BoundNodeKind.TypeOfExpression:
                 return node;
+            case BoundNodeKind.SizeOfExpression:
+                return node;
             case BoundNodeKind.IsExpression:
                 return RewriteIsExpression((BoundIsExpression)node);
             case BoundNodeKind.AsExpression:

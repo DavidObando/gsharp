@@ -61,6 +61,7 @@ internal static class SideEffectAnalyzer
             case BoundNodeKind.LiteralExpression:
             case BoundNodeKind.DefaultExpression:
             case BoundNodeKind.TypeOfExpression:
+            case BoundNodeKind.SizeOfExpression:
             case BoundNodeKind.MethodGroupExpression:
             case BoundNodeKind.ClrMethodGroupExpression:
             case BoundNodeKind.ErrorExpression:

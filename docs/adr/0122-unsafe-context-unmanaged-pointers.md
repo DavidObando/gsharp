@@ -110,11 +110,40 @@ The cs2gs translator maps C# `void*` to `*void` (and keeps `byte*`/`sbyte*`
 
 ### 4. Legal pointee subset
 
-Only **blittable primitives** (`int8…int64`, `uint8…uint64`, `nint`, `nuint`,
-`float32`, `float64`, `bool`, `char`) and pointers-to-pointers are legal
-pointees. A pointer to a managed reference type or non-blittable type is
-rejected with the new **GS0398** diagnostic. Pointers to user structs are
-**deferred** (follow-up).
+Legal pointees are **blittable primitives** (`int8…int64`, `uint8…uint64`,
+`nint`, `nuint`, `float32`, `float64`, `bool`, `char`), pointers-to-pointers,
+and — since issue #1034 — **pointers to blittable user/value structs** (`*S`).
+A struct pointee is legal iff `S` is a value type (not a class) and every field
+is itself blittable (reusing `BlittableDetector`, mirroring C#'s "unmanaged
+type" rule). A pointer to a managed reference type, a non-blittable struct (one
+that contains a string / class / other managed field), or a formatted class is
+rejected with the **GS0398** diagnostic.
+
+A blittable struct pointer `*S` (issue #1034) is a first-class typed pointer:
+
+- legal as a field, local, plain parameter, and P/Invoke parameter/return
+  (marshalled as a native pointer — `ELEMENT_TYPE_PTR` over the struct's
+  TypeDef/TypeRef);
+- dereferenceable (`*p` read/write) and indexable (`p[i]` read/write), emitted
+  as `ldobj`/`stobj <S>` (the typed-indirect-load path, extended from the
+  primitive `ldind`/`stind` forms to the struct's type token);
+- advanceable by arithmetic (`p + i`, `p - i`) and differenceable (`p - q`,
+  issue #1032), **scaled by `sizeof(S)`** — because a user struct's size is not
+  known at G# compile time, the scale is emitted as the CIL `sizeof S` opcode
+  (a new `BoundSizeOfExpression` lowered node) rather than a compile-time
+  constant;
+- member-accessible through the pointer in both the explicit `(*p).field` form
+  and the arrow sugar **`p->field`** (read and write, plus `p->method(...)` for
+  reachable instance methods). `p->member` is parsed as sugar for
+  `(*p).member` (no new bound-node kinds). The arrow reuses the existing
+  `RightArrowToken`; because G# also spells single-identifier lambdas with
+  `->` (`x -> body`), a bare `p->member` is disambiguated to pointer member
+  access **only inside an unsafe context** (the parser tracks an unsafe-nesting
+  depth). A single-identifier lambda inside unsafe code is still expressible
+  via the parenthesised form `(x) -> body`;
+- round-trippable through `nint`/`IntPtr` and castable to/from a typed pointer
+  via the `*S(expr)` form (the struct analogue of `*uint8(p)` / `*void(p)`).
+
 
 ### 5. Operations (unsafe context only)
 
@@ -171,8 +200,10 @@ verification regressions without weakening ilverify globally.
   pointer params, deref, indexing, arithmetic, `(byte*)`/`(void*)` casts, and
   `nint` round-trips all work inside an unsafe context.
 - The managed by-ref `*T` semantics outside unsafe are **completely unchanged**.
-- No new node/token kinds, so the coverage matrix and exhaustiveness tests are
-  untouched.
+- One new `BoundNodeKind` (`SizeOfExpression`) was added for the struct-pointer
+  `sizeof S` scale (issue #1034); the coverage matrix and exhaustiveness
+  allowlists are updated accordingly. No new `SyntaxKind` / token was added —
+  the `p->field` arrow reuses the existing `RightArrowToken`.
 - Genuinely-unsafe IL is unverifiable, as in C#; tests assert runtime behaviour.
 
 ## Deferrals (follow-up issues, all reference #1014)
@@ -181,7 +212,12 @@ verification regressions without weakening ilverify globally.
   spelled `*void`, emits `ELEMENT_TYPE_PTR ELEMENT_TYPE_VOID`, rejects
   deref/index/arithmetic (GS0403), and round-trips through `nint` / casts
   to/from typed pointers.
-- **Pointers to user structs / non-blittable pointees** (currently GS0398).
+- **Pointers to blittable user structs** (`*S`) — **implemented** (issue
+  #1034): legal field/local/param/P-Invoke pointee, deref/index via
+  `ldobj`/`stobj <S>`, arithmetic and difference scaled by the emitted
+  `sizeof S`, and member access through both `(*p).field` and the `p->field`
+  arrow sugar. Non-blittable structs (managed/reference fields) are still
+  rejected with **GS0398**.
 - **Function pointers** (`delegate*`-equivalent) and **fixed-size buffers**.
 - **`unsafe func` method signature binding inside a *safe* type** (today only a
   whole `unsafe class`/`unsafe struct`, or a free `unsafe func`/extern, binds

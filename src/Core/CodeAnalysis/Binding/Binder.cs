@@ -2177,8 +2177,15 @@ public sealed class Binder
                 // `nint`/`IntPtr` and casts to/from typed pointers `*T`.
                 if (pointeeType != TypeSymbol.Void
                     && !TypeSymbol.IsLegalPointeeType(pointeeType)
-                    && pointeeType is not PointerTypeSymbol)
+                    && pointeeType is not PointerTypeSymbol
+                    && !BlittableDetector.IsBlittableValueStructPointee(pointeeType))
                 {
+                    // ADR-0122 §4 / issue #1034: a pointer to a blittable user
+                    // struct (`*Point`) is legal — accepted by the
+                    // BlittableDetector check above. A pointer to a non-blittable
+                    // struct (one that contains a managed reference / string /
+                    // class field) or to any managed reference type is still
+                    // rejected here with GS0398, matching C#'s unmanaged-type rule.
                     Diagnostics.ReportUnmanagedPointerIllegalPointee(syntax.PointerPointeeType.Location, pointeeType.Name);
                     return PointerTypeSymbol.Get(pointeeType);
                 }
