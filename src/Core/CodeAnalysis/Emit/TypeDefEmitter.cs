@@ -1510,6 +1510,17 @@ internal sealed class TypeDefEmitter
         }
 
         var gsharpBase = init.GSharpBaseType;
+
+        // Issue #1060: when the base initializer resolved to a specific explicit
+        // `init(...)` constructor on the GSharp base class, target that exact
+        // constructor's metadata handle (pre-registered for every non-SM class
+        // before any body is emitted), not just the base's primary/first ctor.
+        if (init.GSharpConstructor != null
+            && this.cache.ExplicitCtorHandles.TryGetValue(init.GSharpConstructor, out var explicitHandle))
+        {
+            return explicitHandle;
+        }
+
         if (init.Arguments.Length > 0
             && gsharpBase.HasPrimaryConstructor
             && this.cache.ClassPrimaryCtorHandles.TryGetValue(gsharpBase, out var primaryHandle))

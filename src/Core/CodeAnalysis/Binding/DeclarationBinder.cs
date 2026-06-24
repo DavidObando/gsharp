@@ -5779,7 +5779,7 @@ internal sealed class DeclarationBinder
         return new BaseConstructorInitializer(convertedArgs.ToImmutable(), bestCtor, refKindsBuilder.ToImmutable());
     }
 
-    /// <summary>Resolves a base-constructor initializer against a GSharp base class's primary constructor (issue #306). Returns <c>null</c> (after reporting a diagnostic) when no match.</summary>
+    /// <summary>Resolves a base-constructor initializer against a GSharp base class's constructors (issue #306). Returns <c>null</c> (after reporting a diagnostic) when no match.</summary>
     private BaseConstructorInitializer ResolveGSharpBaseConstructor(
         System.Func<int, TextLocation> argLocation,
         string derivedNameForDiag,
@@ -5791,6 +5791,18 @@ internal sealed class DeclarationBinder
         {
             Diagnostics.ReportNoMatchingBaseConstructor(location, derivedNameForDiag, boundArguments.Count);
             return null;
+        }
+
+        // Issue #1060: when the base class declares explicit `init(...)`
+        // constructors, the `: base(args)` initializer must resolve against the
+        // full overload set — every explicit init plus (when present) the
+        // synthesized primary-constructor designated init — selecting the best
+        // overload by argument types, mirroring C# where a derived constructor
+        // may chain to any accessible base constructor. The primary-only fast
+        // path below covers classes that declare no explicit init bodies.
+        if (!baseClassSymbol.ExplicitConstructors.IsDefaultOrEmpty)
+        {
+            return ResolveGSharpExplicitBaseConstructor(argLocation, baseClassSymbol, boundArguments, location);
         }
 
         var baseParams = baseClassSymbol.PrimaryConstructorParameters;
@@ -5820,6 +5832,105 @@ internal sealed class DeclarationBinder
         }
 
         return new BaseConstructorInitializer(convertedArgs.ToImmutable(), baseClassSymbol);
+    }
+
+    /// <summary>
+    /// Issue #1060: resolves a <c>: base(args)</c> initializer against the explicit
+    /// <c>init(...)</c> constructors declared on a GSharp base class (which already
+    /// includes the synthesized primary-constructor designated init when present),
+    /// selecting the best overload by argument types. Returns <c>null</c> (after
+    /// reporting a diagnostic) when no accessible base constructor matches.
+    /// </summary>
+    private BaseConstructorInitializer ResolveGSharpExplicitBaseConstructor(
+        System.Func<int, TextLocation> argLocation,
+        StructSymbol baseClassSymbol,
+        ImmutableArray<BoundExpression>.Builder boundArguments,
+        TextLocation location)
+    {
+        ConstructorSymbol best = null;
+        var bestExactMatches = -1;
+        var ambiguous = false;
+        var anyArgIsError = false;
+
+        foreach (var arg in boundArguments)
+        {
+            if (arg.Type == TypeSymbol.Error)
+            {
+                anyArgIsError = true;
+            }
+        }
+
+        foreach (var candidate in baseClassSymbol.ExplicitConstructors)
+        {
+            var parameters = candidate.Parameters;
+            if (parameters.Length != boundArguments.Count)
+            {
+                continue;
+            }
+
+            var applicable = true;
+            var exactMatches = 0;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var argType = boundArguments[i].Type;
+                var paramType = parameters[i].Type;
+                if (argType == paramType)
+                {
+                    exactMatches++;
+                    continue;
+                }
+
+                // Error-typed arguments don't disqualify a candidate: a prior
+                // diagnostic already explains the bad argument.
+                if (argType == TypeSymbol.Error)
+                {
+                    continue;
+                }
+
+                if (!Conversion.Classify(argType, paramType).IsImplicit)
+                {
+                    applicable = false;
+                    break;
+                }
+            }
+
+            if (!applicable)
+            {
+                continue;
+            }
+
+            if (exactMatches > bestExactMatches)
+            {
+                best = candidate;
+                bestExactMatches = exactMatches;
+                ambiguous = false;
+            }
+            else if (exactMatches == bestExactMatches)
+            {
+                ambiguous = true;
+            }
+        }
+
+        if (best == null || ambiguous)
+        {
+            // Suppress the GS0214 cascade when an argument already failed to
+            // bind (an error type was produced upstream).
+            if (!anyArgIsError)
+            {
+                Diagnostics.ReportNoMatchingBaseConstructor(location, baseClassSymbol.Name, boundArguments.Count);
+            }
+
+            return null;
+        }
+
+        var bestParams = best.Parameters;
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(boundArguments.Count);
+        for (var i = 0; i < boundArguments.Count; i++)
+        {
+            convertedArgs.Add(conversions.BindConversion(argLocation(i), boundArguments[i], bestParams[i].Type));
+        }
+
+        return new BaseConstructorInitializer(convertedArgs.ToImmutable(), baseClassSymbol, best);
     }
 
     /// <summary>

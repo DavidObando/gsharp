@@ -41,10 +41,23 @@ public sealed class BaseConstructorInitializer
     /// <param name="arguments">The bound, conversion-applied argument expressions.</param>
     /// <param name="gsharpBaseType">The GSharp base class whose primary constructor is targeted.</param>
     public BaseConstructorInitializer(ImmutableArray<BoundExpression> arguments, StructSymbol gsharpBaseType)
+        : this(arguments, gsharpBaseType, gsharpConstructor: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BaseConstructorInitializer"/>
+    /// class targeting a specific explicit <c>init(...)</c> constructor declared on a GSharp base class (issue #1060).
+    /// </summary>
+    /// <param name="arguments">The bound, conversion-applied argument expressions.</param>
+    /// <param name="gsharpBaseType">The GSharp base class whose constructor is targeted.</param>
+    /// <param name="gsharpConstructor">The resolved explicit base-class constructor, or <see langword="null"/> to target the primary constructor.</param>
+    public BaseConstructorInitializer(ImmutableArray<BoundExpression> arguments, StructSymbol gsharpBaseType, ConstructorSymbol gsharpConstructor)
     {
         Arguments = arguments;
         ClrConstructor = null;
         GSharpBaseType = gsharpBaseType;
+        GSharpConstructor = gsharpConstructor;
         ArgumentRefKinds = ImmutableArray<RefKind>.Empty;
     }
 
@@ -59,6 +72,13 @@ public sealed class BaseConstructorInitializer
 
     /// <summary>Gets the GSharp base class whose constructor is targeted, or <c>null</c> when the base class is an imported CLR type.</summary>
     public StructSymbol GSharpBaseType { get; }
+
+    /// <summary>
+    /// Gets the resolved explicit <c>init(...)</c> constructor on the GSharp base class
+    /// that this initializer targets, or <see langword="null"/> when the target is the base class's
+    /// primary constructor (or the base is an imported CLR type) (issue #1060).
+    /// </summary>
+    public ConstructorSymbol GSharpConstructor { get; }
 
     /// <summary>Gets a value indicating whether the targeted base constructor lives on an imported CLR type.</summary>
     public bool IsClrBase => ClrConstructor != null;
@@ -75,6 +95,6 @@ public sealed class BaseConstructorInitializer
     {
         return IsClrBase
             ? new BaseConstructorInitializer(arguments, ClrConstructor, ArgumentRefKinds)
-            : new BaseConstructorInitializer(arguments, GSharpBaseType);
+            : new BaseConstructorInitializer(arguments, GSharpBaseType, GSharpConstructor);
     }
 }
