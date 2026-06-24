@@ -523,29 +523,113 @@ public sealed class BoundScope
             typeAliases = new Dictionary<string, TypeSymbol>();
         }
 
-        if (typeAliases.ContainsKey(name))
+        // Issue #1051: key by (simple name, generic arity) so that a type and a
+        // same-named generic of different arity coexist. A genuine duplicate —
+        // same name AND same arity — still collides and reports GS0102.
+        var key = MangleArity(name, GetTypeAliasArity(target));
+        if (typeAliases.ContainsKey(key))
         {
             return false;
         }
 
-        typeAliases.Add(name, target);
+        typeAliases.Add(key, target);
         return true;
     }
 
     /// <summary>
-    /// Tries to look up a type alias by name.
+    /// Issue #1051: re-declares a type alias under its already-computed storage
+    /// key (as returned by <see cref="GetDeclaredTypeAliases"/>) without
+    /// re-deriving the arity suffix. Used when threading aliases from a previous
+    /// submission's global scope into a fresh scope so generic keys are not
+    /// double-mangled.
+    /// </summary>
+    /// <param name="key">The composite storage key.</param>
+    /// <param name="target">The underlying type.</param>
+    /// <returns>Whether the alias was declared (false if the key was already taken).</returns>
+    public bool TryRedeclareTypeAlias(string key, TypeSymbol target)
+    {
+        if (key == null)
+        {
+            return false;
+        }
+
+        if (typeAliases == null)
+        {
+            typeAliases = new Dictionary<string, TypeSymbol>();
+        }
+
+        if (typeAliases.ContainsKey(key))
+        {
+            return false;
+        }
+
+        typeAliases.Add(key, target);
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to look up a type alias by name, preferring the arity-0 type.
     /// </summary>
     /// <param name="name">The alias name.</param>
     /// <param name="type">The aliased type, when found.</param>
     /// <returns>Whether an alias exists.</returns>
     public bool TryLookupTypeAlias(string name, out TypeSymbol type)
+        => TryLookupTypeAlias(name, preferredArity: -1, out type);
+
+    /// <summary>
+    /// Issue #1051: tries to look up a type alias by (name, arity). When
+    /// <paramref name="preferredArity"/> is non-negative, the type with exactly
+    /// that generic arity is returned if present; otherwise the lookup falls
+    /// back to the arity-0 type (plain name) and then to the lowest-arity
+    /// same-name variant. A negative <paramref name="preferredArity"/> means
+    /// "no arity preference" and resolves the arity-0 type first.
+    /// </summary>
+    /// <param name="name">The alias name.</param>
+    /// <param name="preferredArity">The preferred generic arity, or -1 for none.</param>
+    /// <param name="type">The aliased type, when found.</param>
+    /// <returns>Whether an alias exists.</returns>
+    public bool TryLookupTypeAlias(string name, int preferredArity, out TypeSymbol type)
     {
-        if (name != null && typeAliases != null && typeAliases.TryGetValue(name, out type))
+        type = null;
+        if (name == null || typeAliases == null)
+        {
+            return false;
+        }
+
+        if (preferredArity > 0)
+        {
+            var key = MangleArity(name, preferredArity);
+            if (typeAliases.TryGetValue(key, out type))
+            {
+                return true;
+            }
+        }
+
+        // Fall back to the arity-0 type (whose key is the plain simple name).
+        if (typeAliases.TryGetValue(name, out type))
         {
             return true;
         }
 
-        type = null;
+        // No arity-0 type: resolve the lowest-arity same-name generic variant
+        // so a lone generic definition keeps resolving by simple name.
+        TypeSymbol best = null;
+        var bestArity = int.MaxValue;
+        foreach (var pair in typeAliases)
+        {
+            if (TryParseAritySuffix(pair.Key, name, out var arity) && arity < bestArity)
+            {
+                best = pair.Value;
+                bestArity = arity;
+            }
+        }
+
+        if (best != null)
+        {
+            type = best;
+            return true;
+        }
+
         return false;
     }
 
@@ -591,6 +675,68 @@ public sealed class BoundScope
         => typeAliases == null
             ? ImmutableArray<DelegateTypeSymbol>.Empty
             : typeAliases.Values.OfType<DelegateTypeSymbol>().ToImmutableArray();
+
+    /// <summary>
+    /// Issue #1051: computes the generic arity (number of type parameters) of a
+    /// type used as the storage-key discriminator. C#/CLR allow two types that
+    /// share a simple name but differ by generic arity (e.g. <c>Foo</c> and
+    /// <c>Foo[T]</c>, mirroring <c>Task</c>/<c>Task&lt;T&gt;</c>) to coexist as
+    /// distinct types keyed by (name, arity). Only open generic DEFINITIONS
+    /// carry an arity; constructed instances and plain aliases are arity 0.
+    /// </summary>
+    /// <param name="target">The type whose arity is requested.</param>
+    /// <returns>The generic arity, or 0 for non-generic / constructed types.</returns>
+    private static int GetTypeAliasArity(TypeSymbol target)
+    {
+        return target switch
+        {
+            StructSymbol s when s.IsGenericDefinition => s.TypeParameters.Length,
+            InterfaceSymbol i when i.IsGenericDefinition => i.TypeParameters.Length,
+            _ => 0,
+        };
+    }
+
+    /// <summary>
+    /// Issue #1051: builds the storage key for a type alias keyed by
+    /// (simple name, generic arity). Arity-0 types keep their plain simple name
+    /// as the key (so existing simple-name lookups keep working), while generic
+    /// definitions are suffixed with the CLR backtick-arity convention
+    /// (e.g. <c>Foo`1</c>), letting <c>Foo</c> and <c>Foo[T]</c> coexist.
+    /// </summary>
+    /// <param name="name">The simple type name.</param>
+    /// <param name="arity">The generic arity.</param>
+    /// <returns>The composite storage key.</returns>
+    private static string MangleArity(string name, int arity)
+        => arity <= 0 ? name : name + "`" + arity.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Issue #1051: parses a composite storage key, reporting whether it names
+    /// the requested simple name as a generic-arity variant and, if so, the
+    /// arity it encodes.
+    /// </summary>
+    /// <param name="key">The composite storage key.</param>
+    /// <param name="name">The simple type name to match.</param>
+    /// <param name="arity">The parsed arity, when matched.</param>
+    /// <returns>Whether the key encodes a generic variant of <paramref name="name"/>.</returns>
+    private static bool TryParseAritySuffix(string key, string name, out int arity)
+    {
+        arity = 0;
+        if (key == null || name == null || key.Length <= name.Length + 1)
+        {
+            return false;
+        }
+
+        if (!key.StartsWith(name, StringComparison.Ordinal) || key[name.Length] != '`')
+        {
+            return false;
+        }
+
+        return int.TryParse(
+            key.Substring(name.Length + 1),
+            System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out arity);
+    }
 
     private static ImmutableArray<ParameterSymbol> SigCallableParameters(FunctionSymbol f)
         => f.ExplicitReceiverParameter == null ? f.Parameters : f.Parameters.RemoveAt(0);

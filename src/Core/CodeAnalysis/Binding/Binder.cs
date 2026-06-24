@@ -1676,7 +1676,7 @@ public sealed class Binder
 
             foreach (var alias in previous.TypeAliases)
             {
-                scope.TryDeclareTypeAlias(alias.Key, alias.Value);
+                scope.TryRedeclareTypeAlias(alias.Key, alias.Value);
             }
 
             foreach (var f in previous.Functions)
@@ -2179,7 +2179,12 @@ public sealed class Binder
         }
         else
         {
-            element = LookupType(syntax.Identifier.Text);
+            // Issue #1051: resolve by (name, arity) so that a same-named type
+            // and a generic of different arity coexist. With a type-argument
+            // list, prefer the matching generic definition; without one, prefer
+            // the arity-0 type.
+            var requestedArity = syntax.HasTypeArguments ? syntax.TypeArguments.Count : 0;
+            element = LookupType(syntax.Identifier.Text, requestedArity);
             if (element == null)
             {
                 Diagnostics.ReportUndefinedType(syntax.Identifier.Location, syntax.Identifier.Text);
@@ -3796,6 +3801,9 @@ public sealed class Binder
     }
 
     private TypeSymbol LookupType(string name)
+        => LookupType(name, preferredArity: -1);
+
+    private TypeSymbol LookupType(string name, int preferredArity)
     {
         // Issue #944: a parse-recovery artifact (e.g. a malformed type clause
         // with no identifier) can reach here with a null/empty name. Treat it
@@ -3873,7 +3881,7 @@ public sealed class Binder
                 return TypeSymbol.Void;
         }
 
-        if (scope.TryLookupTypeAlias(name, out var aliased))
+        if (scope.TryLookupTypeAlias(name, preferredArity, out var aliased))
         {
             return aliased;
         }
@@ -3889,7 +3897,7 @@ public sealed class Binder
     /// <summary>
     /// Issue #525: resolves a class declaration's base-type identifier to an
     /// imported CLR interface. Honors imports and aliases (via
-    /// <see cref="LookupType"/>) for simple names and falls back to direct
+    /// <see cref="LookupType(string)"/>) for simple names and falls back to direct
     /// fully-qualified resolution against the reference set. Only public
     /// CLR interface types are accepted; classes, value types, and other
     /// references are rejected so the regular "cannot find type" diagnostic
@@ -3938,7 +3946,7 @@ public sealed class Binder
 
     /// <summary>
     /// Issue #296: resolves a class declaration's base-type name to an imported
-    /// CLR base class. Honors imports and aliases (via <see cref="LookupType"/>)
+    /// CLR base class. Honors imports and aliases (via <see cref="LookupType(string)"/>)
     /// for simple names and falls back to direct fully-qualified resolution.
     /// Only non-sealed reference (class) types are accepted as a base; CLR
     /// interfaces, value types, and sealed classes are rejected so the regular

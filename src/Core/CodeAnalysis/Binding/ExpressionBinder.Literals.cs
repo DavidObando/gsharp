@@ -440,7 +440,13 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindStructLiteralExpression(StructLiteralExpressionSyntax syntax)
     {
         var typeName = syntax.TypeIdentifier.Text;
-        if (!scope.TryLookupTypeAlias(typeName, out var resolvedType) || !(resolvedType is StructSymbol structSymbol))
+
+        // Issue #1051: when the literal carries an explicit type-argument list,
+        // resolve the same-named generic definition of the matching arity so a
+        // non-generic `Foo` and a generic `Foo[T]` can coexist. Without one,
+        // prefer the arity-0 type (falling back to a lone generic for inference).
+        var preferredArity = syntax.TypeArgumentList != null ? syntax.TypeArgumentList.Arguments.Count : -1;
+        if (!scope.TryLookupTypeAlias(typeName, preferredArity, out var resolvedType) || !(resolvedType is StructSymbol structSymbol))
         {
             Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
             return new BoundErrorExpression(null);
