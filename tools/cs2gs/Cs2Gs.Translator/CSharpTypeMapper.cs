@@ -217,13 +217,37 @@ public sealed class CSharpTypeMapper
                 List<GTypeReference> args = named.TypeArguments
                     .Select(a => this.Map(a, context, location))
                     .ToList();
-                return new NamedTypeReference(named.Name, args);
+                return new NamedTypeReference(QualifiedTypeName(named), args);
             }
 
-            return new NamedTypeReference(named.Name);
+            return new NamedTypeReference(QualifiedTypeName(named));
         }
 
         return new NamedTypeReference(type.Name);
+    }
+
+    // A nested type is referenced through its containing type(s)
+    // (`ConfiguredTaskAwaitable.ConfiguredTaskAwaiter`); emitting the innermost
+    // name alone makes the reference unresolvable. Walk the containing-type chain
+    // and join with '.' so nested types stay qualified (ADR-0115 §B.12). Only
+    // metadata (BCL/external) nested types are qualified: a source-declared
+    // nested type is emitted by the translator as a directly-nested G# member and
+    // is referenced by its simple name within the package, so qualifying it would
+    // break round-trip parsing of generic-argument positions.
+    private static string QualifiedTypeName(INamedTypeSymbol named)
+    {
+        if (named.ContainingType == null || named.Locations.Any(l => l.IsInSource))
+        {
+            return named.Name;
+        }
+
+        var parts = new List<string>();
+        for (INamedTypeSymbol current = named; current != null; current = current.ContainingType)
+        {
+            parts.Insert(0, current.Name);
+        }
+
+        return string.Join(".", parts);
     }
 
     private ArrowTypeReference MapDelegate(IMethodSymbol invoke, TranslationContext context, Location location)

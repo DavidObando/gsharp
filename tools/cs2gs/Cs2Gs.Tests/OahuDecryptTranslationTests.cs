@@ -314,6 +314,89 @@ namespace Demo
         Assert.Contains("\\u0000", printed);
     }
 
+    /// <summary>
+    /// A generic call chained after a null-conditional <c>?.</c>
+    /// (<c>t.GetChild&lt;MdiaBox&gt;()?.GetChild&lt;HdlrBox&gt;()</c>) must keep
+    /// its type arguments on every link of the chain, not just the first
+    /// (ADR-0115 §B). The member-binding after <c>?.</c> carries a
+    /// <c>GenericNameSyntax</c> whose type-argument list must be lifted onto the
+    /// G# bracket form, otherwise the chained call loses <c>[T…]</c> and binds to
+    /// the wrong (or no) overload.
+    /// </summary>
+    [Fact]
+    public void NullConditionalChainedGenericCall_PreservesTypeArguments()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class HdlrBox { public string HandlerType => ""soun""; }
+    public class MdiaBox { public T GetChild<T>() => default; }
+    public class TrakBox { public T GetChild<T>() => default; }
+    public static class C
+    {
+        public static string Handler(TrakBox t) =>
+            t.GetChild<MdiaBox>()?.GetChild<HdlrBox>()?.HandlerType;
+    }
+}");
+
+        Assert.Contains("t.GetChild[MdiaBox]()?.GetChild[HdlrBox]()?.HandlerType", printed);
+        Assert.DoesNotContain("?.GetChild()", printed);
+    }
+
+    /// <summary>
+    /// A reference to a nested BCL type
+    /// (<c>ConfiguredTaskAwaitable.ConfiguredTaskAwaiter</c>) must be qualified
+    /// with its containing type (ADR-0115 §B.12). Emitting the innermost name
+    /// alone produces an unresolvable <c>ConfiguredTaskAwaiter</c> (GS0113).
+    /// </summary>
+    [Fact]
+    public void NestedBclType_QualifiedWithContainingType()
+    {
+        string printed = TranslateUnit(@"
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+namespace Demo
+{
+    public class C
+    {
+        public ConfiguredTaskAwaitable.ConfiguredTaskAwaiter Awaiter(Task t) =>
+            t.ConfigureAwait(false).GetAwaiter();
+    }
+}");
+
+        Assert.Contains("ConfiguredTaskAwaitable.ConfiguredTaskAwaiter", printed);
+    }
+
+    /// <summary>
+    /// A C# extension method whose <c>this</c> receiver is an enum cannot use the
+    /// G# receiver-clause form (ADR-0079; gsc rejects it with GS0103 "receiver
+    /// type must be a struct or class declared in the same package"). It must be
+    /// emitted as a plain static helper and its call sites rewritten to the
+    /// positional form <c>Owner.Method(receiver, …)</c>.
+    /// </summary>
+    [Fact]
+    public void EnumExtensionMethod_EmittedAsPlainFunc_AndCallSiteRewritten()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public enum ChannelGroups { Mono, Stereo }
+    public static class Ac4Extensions
+    {
+        public static int ChannelCount(this ChannelGroups channels) =>
+            channels == ChannelGroups.Stereo ? 2 : 1;
+    }
+    public class User
+    {
+        public int Use(ChannelGroups g) => g.ChannelCount();
+    }
+}");
+
+        Assert.Contains("func ChannelCount(channels ChannelGroups) int32", printed);
+        Assert.DoesNotContain("func (channels ChannelGroups) ChannelCount", printed);
+        Assert.Contains("Ac4Extensions.ChannelCount(g)", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
