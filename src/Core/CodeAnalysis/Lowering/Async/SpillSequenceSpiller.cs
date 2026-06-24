@@ -398,6 +398,8 @@ public static class SpillSequenceSpiller
                 case BoundTypeParameterConstructionExpression:
                 case BoundTypeOfExpression:
                 case BoundSizeOfExpression:
+                case BoundFunctionPointerFromMethodExpression:
+                case BoundFunctionPointerInvocationExpression:
                 case BoundMethodGroupExpression:
                 case BoundClrMethodGroupExpression:
                 case BoundFunctionLiteralExpression:

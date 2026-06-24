@@ -91,6 +91,9 @@ internal sealed class WellKnownReferences
     // consumers see them as extension methods at the call site rather than
     // as plain static helpers on `<Program>`.
     private MemberReferenceHandle? extensionAttributeCtorRef;
+    private MemberReferenceHandle? compilerGeneratedAttributeCtorRef;
+    private MemberReferenceHandle? unsafeValueTypeAttributeCtorRef;
+    private MemberReferenceHandle? fixedBufferAttributeCtorRef;
 
     // Issue #834: cached MemberRefs for the two
     // System.Runtime.CompilerServices.NullableAttribute ctors and the
@@ -446,6 +449,104 @@ internal sealed class WellKnownReferences
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
             this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
         return this.extensionAttributeCtorRef.Value;
+    }
+
+    /// <summary>
+    /// ADR-0122 §10 / issue #1035: returns the cached MemberRef for the
+    /// parameterless constructor of
+    /// <c>System.Runtime.CompilerServices.CompilerGeneratedAttribute</c>,
+    /// stamped on a fixed-size buffer backing struct.
+    /// </summary>
+    /// <returns>The cached <see cref="MemberReferenceHandle"/>.</returns>
+    public MemberReferenceHandle GetCompilerGeneratedAttributeCtorRef()
+    {
+        if (this.compilerGeneratedAttributeCtorRef.HasValue)
+        {
+            return this.compilerGeneratedAttributeCtorRef.Value;
+        }
+
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.CompilerGeneratedAttribute", out var resolved)
+            ? resolved
+            : typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute);
+        var attrTypeRef = this.getTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        this.compilerGeneratedAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.compilerGeneratedAttributeCtorRef.Value;
+    }
+
+    /// <summary>
+    /// ADR-0122 §10 / issue #1035: returns the cached MemberRef for the
+    /// parameterless constructor of
+    /// <c>System.Runtime.CompilerServices.UnsafeValueTypeAttribute</c>,
+    /// stamped on a fixed-size buffer backing struct.
+    /// </summary>
+    /// <returns>The cached <see cref="MemberReferenceHandle"/>.</returns>
+    public MemberReferenceHandle GetUnsafeValueTypeAttributeCtorRef()
+    {
+        if (this.unsafeValueTypeAttributeCtorRef.HasValue)
+        {
+            return this.unsafeValueTypeAttributeCtorRef.Value;
+        }
+
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.UnsafeValueTypeAttribute", out var resolved)
+            ? resolved
+            : typeof(System.Runtime.CompilerServices.UnsafeValueTypeAttribute);
+        var attrTypeRef = this.getTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        this.unsafeValueTypeAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.unsafeValueTypeAttributeCtorRef.Value;
+    }
+
+    /// <summary>
+    /// ADR-0122 §10 / issue #1035: returns the cached MemberRef for the
+    /// <c>FixedBufferAttribute(Type elementType, int length)</c> constructor,
+    /// stamped on a fixed-size buffer field.
+    /// </summary>
+    /// <returns>The cached <see cref="MemberReferenceHandle"/>.</returns>
+    public MemberReferenceHandle GetFixedBufferAttributeCtorRef()
+    {
+        if (this.fixedBufferAttributeCtorRef.HasValue)
+        {
+            return this.fixedBufferAttributeCtorRef.Value;
+        }
+
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.FixedBufferAttribute", out var resolved)
+            ? resolved
+            : typeof(System.Runtime.CompilerServices.FixedBufferAttribute);
+        var attrTypeRef = this.getTypeReference(attrType);
+
+        var systemTypeRef = this.getTypeReference(typeof(System.Type));
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                2,
+                r => r.Void(),
+                p =>
+                {
+                    p.AddParameter().Type().Type(systemTypeRef, isValueType: false);
+                    p.AddParameter().Type().Int32();
+                });
+
+        this.fixedBufferAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.fixedBufferAttributeCtorRef.Value;
     }
 
     /// <summary>

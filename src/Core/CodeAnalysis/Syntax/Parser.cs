@@ -2787,6 +2787,23 @@ public class Parser
             fieldAccessibility = NextToken();
         }
 
+        // ADR-0122 §10 / issue #1035: a fixed-size buffer field
+        // `fixed name [N]T` inside an (unsafe) struct. `fixed` is a contextual
+        // keyword here (it is also the `fixed` pinning statement keyword in a
+        // function body — disambiguated by the field position inside a struct
+        // body). The element type and count are captured as the `[N]T` array
+        // type clause; the field decays to a `*T` to the first element.
+        if (Current.Kind == SyntaxKind.IdentifierToken
+            && Current.Text == "fixed"
+            && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            var fixedKeyword = NextToken();
+            var fbIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+            var fbType = ParseTypeClause();
+            return new FieldDeclarationSyntax(syntaxTree, fieldAccessibility, varOrLetKeyword: null, fbIdentifier, fbType)
+                .WithFixedBuffer(fixedKeyword);
+        }
+
         // ADR-0067: field declarations must be introduced with `var` (mutable)
         // or `let` (read-only). Issue #948 adds `const` for compile-time
         // constant fields (implicitly static and read-only). The keyword is
@@ -3514,6 +3531,16 @@ public class Parser
         // ADR-0039: pointer type `*T` in type-annotation position.
         if (Current.Kind == SyntaxKind.StarToken)
         {
+            // ADR-0122 §9 / issue #1035: a *managed* function pointer is
+            // spelled `*func(T1, T2) R` — the `*` pointer prefix followed by
+            // the `func(...) R` signature. It is consistent with the `*T`
+            // pointer syntax and is callable directly via `calli`. We commit
+            // to this shape only when `*` is immediately followed by `func`.
+            if (Peek(1).Kind == SyntaxKind.FuncKeyword)
+            {
+                return ParseManagedFunctionPointerTypeClause();
+            }
+
             var star = NextToken();
             var pointee = ParseTypeClause();
             var ptrQuestion = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
@@ -4036,6 +4063,47 @@ public class Parser
             new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
             closeParen,
             arrow,
+            returnTypeClause);
+    }
+
+    /// <summary>
+    /// ADR-0122 §9 / issue #1035: parses the *managed* function-pointer type
+    /// clause <c>*func(T1, T2, ...) R</c>. The leading <c>*</c> mirrors the
+    /// <c>*T</c> pointer prefix and the <c>func(...) R</c> body mirrors the
+    /// named function-type spelling; the return type is optional (void when
+    /// absent). The result is a managed function pointer callable directly via
+    /// <c>calli</c> with the default managed calling convention.
+    /// </summary>
+    private TypeClauseSyntax ParseManagedFunctionPointerTypeClause()
+    {
+        var starToken = MatchToken(SyntaxKind.StarToken);
+        var funcKeyword = MatchToken(SyntaxKind.FuncKeyword);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        while (Current.Kind != SyntaxKind.CloseParenthesisToken
+            && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseTypeClause());
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var returnTypeClause = ParseOptionalTypeClause();
+
+        return TypeClauseSyntax.CreateManagedFunctionPointer(
+            syntaxTree,
+            starToken,
+            funcKeyword,
+            openParen,
+            new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
+            closeParen,
             returnTypeClause);
     }
 

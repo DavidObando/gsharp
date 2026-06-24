@@ -844,6 +844,47 @@ internal sealed class DeclarationBinder
 
             var fieldAccessibility = resolveAccessibility(fieldSyntax.AccessibilityModifier);
 
+            // ADR-0122 §10 / issue #1035: a fixed-size buffer field
+            // `fixed name [N]T` lays out N inline elements and decays to a
+            // `*T` to the first element. It is only legal inside an unsafe
+            // context, its element type must be a blittable primitive, and N
+            // must be a positive constant (captured by the `[N]T` array type).
+            if (fieldSyntax.IsFixedBuffer)
+            {
+                if (!binderCtx.InUnsafeContext)
+                {
+                    Diagnostics.ReportFixedBufferRequiresUnsafeContext(fieldSyntax.FixedKeyword.Location);
+                    continue;
+                }
+
+                if (fieldType is not ArrayTypeSymbol fbArray)
+                {
+                    Diagnostics.ReportFixedBufferInvalidShape(fieldSyntax.Identifier.Location, fieldName);
+                    continue;
+                }
+
+                var fbElement = fbArray.ElementType;
+                var fbLength = fbArray.Length;
+                if (fbLength <= 0)
+                {
+                    Diagnostics.ReportFixedBufferInvalidLength(fieldSyntax.Identifier.Location, fieldName, fbLength);
+                    continue;
+                }
+
+                if (!TryGetFixedBufferElementSize(fbElement, out var fbElemSize))
+                {
+                    Diagnostics.ReportFixedBufferElementTypeNotSupported(fieldSyntax.Identifier.Location, fbElement.Name);
+                    continue;
+                }
+
+                var fbBacking = SynthesizeFixedBufferBackingStruct(structSymbol, fieldName, fbElement, fbLength, fbElemSize, package);
+                var fbFieldSymbol = new FieldSymbol(fieldName, fbBacking, fieldAccessibility, isReadOnly: false);
+                fbFieldSymbol.SetFixedBuffer(fbElement, fbLength);
+                Binder.AttachDocumentation(fbFieldSymbol, fieldSyntax);
+                fields.Add(fbFieldSymbol);
+                continue;
+            }
+
             // Issue #948: a `const` field is a compile-time constant — it is
             // implicitly static and read-only and emitted as a literal field.
             if (fieldSyntax.IsConst)
@@ -2534,6 +2575,86 @@ internal sealed class DeclarationBinder
     /// compile-time constant, reporting GS-not-constant if the expression is not a
     /// constant. Shared by the class-body and <c>shared</c>-block const paths.
     /// </summary>
+    /// <summary>
+    /// ADR-0122 §10 / issue #1035: returns the unmanaged byte size of a fixed-size
+    /// buffer element type. Only the C#-compatible blittable primitives are
+    /// permitted (bool, the integer types, char, and the floating-point types).
+    /// </summary>
+    /// <param name="elementType">The buffer element type.</param>
+    /// <param name="size">The element size in bytes when supported.</param>
+    /// <returns><see langword="true"/> when the element type is a supported fixed-buffer element.</returns>
+    private static bool TryGetFixedBufferElementSize(TypeSymbol elementType, out int size)
+    {
+        size = 0;
+        if (elementType == TypeSymbol.Bool || elementType == TypeSymbol.Int8 || elementType == TypeSymbol.UInt8)
+        {
+            size = 1;
+        }
+        else if (elementType == TypeSymbol.Int16 || elementType == TypeSymbol.UInt16 || elementType == TypeSymbol.Char)
+        {
+            size = 2;
+        }
+        else if (elementType == TypeSymbol.Int32 || elementType == TypeSymbol.UInt32 || elementType == TypeSymbol.Float32)
+        {
+            size = 4;
+        }
+        else if (elementType == TypeSymbol.Int64 || elementType == TypeSymbol.UInt64 || elementType == TypeSymbol.Float64)
+        {
+            size = 8;
+        }
+
+        return size != 0;
+    }
+
+    /// <summary>
+    /// ADR-0122 §10 / issue #1035: synthesizes the compiler-generated nested
+    /// backing struct for a fixed-size buffer field. The struct carries a
+    /// single element field <c>FixedElementField</c> of type <c>T</c> and an
+    /// explicit sequential <c>ClassLayout</c> size of <c>N * sizeof(T)</c>,
+    /// mirroring how C# / Roslyn lowers a <c>fixed T name[N]</c> buffer. The
+    /// struct is registered in the root scope so it flows through the normal
+    /// nested-type emission pipeline.
+    /// </summary>
+    /// <param name="containingType">The struct that declares the fixed buffer.</param>
+    /// <param name="fieldName">The fixed-buffer field name.</param>
+    /// <param name="elementType">The buffer element type <c>T</c>.</param>
+    /// <param name="length">The element count <c>N</c>.</param>
+    /// <param name="elementSize">The element size in bytes.</param>
+    /// <param name="package">The owning package.</param>
+    /// <returns>The synthesized backing <see cref="StructSymbol"/>.</returns>
+    private StructSymbol SynthesizeFixedBufferBackingStruct(
+        StructSymbol containingType,
+        string fieldName,
+        TypeSymbol elementType,
+        int length,
+        int elementSize,
+        PackageSymbol package)
+    {
+        var bufferName = $"<{fieldName}>e__FixedBuffer";
+        var elementField = new FieldSymbol("FixedElementField", elementType, Accessibility.Public, isReadOnly: false);
+        var backing = new StructSymbol(
+            bufferName,
+            ImmutableArray.Create(elementField),
+            Accessibility.Public,
+            declaration: null,
+            packageName: package?.Name ?? string.Empty,
+            isData: false,
+            isInline: false,
+            isClass: false,
+            primaryConstructorParameters: ImmutableArray<ParameterSymbol>.Empty);
+        backing.SetContainingType(containingType);
+        backing.MarkFixedBufferBacking(elementType);
+        backing.SetLayoutMetadata(new StructLayoutMetadata(
+            System.Runtime.InteropServices.LayoutKind.Sequential,
+            pack: null,
+            size: length * elementSize));
+
+        // Register the backing struct so GetDeclaredStructs() surfaces it to the
+        // emitter, where it is emitted as a nested TypeDef of the containing type.
+        scope.TryDeclareTypeAlias(bufferName, backing);
+        return backing;
+    }
+
     private void BindAndFoldConstFieldInitializer(FieldSymbol constField, FieldDeclarationSyntax fieldSyntaxNode, TypeSymbol fieldType)
     {
         var boundInit = bindExpression(fieldSyntaxNode.Initializer);

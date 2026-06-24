@@ -1604,6 +1604,75 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// GS0404: a managed function-pointer type clause <c>*func(T) R</c>
+    /// (ADR-0122 §9 / issue #1035) appears outside an <c>unsafe</c> context.
+    /// Like the raw pointer <c>*T</c>, a function pointer is only legal inside
+    /// an <c>unsafe</c> context.
+    /// </summary>
+    /// <param name="location">The text location of the leading <c>*</c>.</param>
+    public void ReportUnmanagedPointerOutsideUnsafe(TextLocation location)
+    {
+        Report(location, "GS0404", "A managed function-pointer type '*func(...) R' requires an 'unsafe' context; place it inside an 'unsafe func', 'unsafe { … }' block, or 'unsafe' type (ADR-0122 §9).");
+    }
+
+    /// <summary>
+    /// GS0405: <c>&amp;Method</c> (ADR-0122 §9 / issue #1035) produced a
+    /// function pointer whose signature does not match the target
+    /// function-pointer type, or the address-of operand was not a single
+    /// static method group.
+    /// </summary>
+    /// <param name="location">The text location of the address-of expression.</param>
+    /// <param name="detail">A short description of the mismatch.</param>
+    public void ReportFunctionPointerAddressOfMismatch(TextLocation location, string detail)
+    {
+        Report(location, "GS0405", $"Cannot take the address of this method as a function pointer: {detail} (ADR-0122 §9).");
+    }
+
+    /// <summary>
+    /// GS0406: a fixed-size buffer field <c>fixed name [N]T</c> (ADR-0122 §10 /
+    /// issue #1035) appears outside an <c>unsafe</c> context.
+    /// </summary>
+    /// <param name="location">The text location of the <c>fixed</c> keyword.</param>
+    public void ReportFixedBufferRequiresUnsafeContext(TextLocation location)
+    {
+        Report(location, "GS0406", "A fixed-size buffer field 'fixed name [N]T' requires an 'unsafe' context; declare it inside an 'unsafe struct' (ADR-0122 §10).");
+    }
+
+    /// <summary>
+    /// GS0407: a fixed-size buffer field's type was not a fixed-length array
+    /// <c>[N]T</c> (ADR-0122 §10 / issue #1035).
+    /// </summary>
+    /// <param name="location">The text location of the field name.</param>
+    /// <param name="fieldName">The field name.</param>
+    public void ReportFixedBufferInvalidShape(TextLocation location, string fieldName)
+    {
+        Report(location, "GS0407", $"Fixed-size buffer field '{fieldName}' must have a fixed-length array element type '[N]T' (e.g. 'fixed {fieldName} [8]int32') (ADR-0122 §10).");
+    }
+
+    /// <summary>
+    /// GS0408: a fixed-size buffer field declared a non-positive length
+    /// (ADR-0122 §10 / issue #1035).
+    /// </summary>
+    /// <param name="location">The text location of the field name.</param>
+    /// <param name="fieldName">The field name.</param>
+    /// <param name="length">The invalid length.</param>
+    public void ReportFixedBufferInvalidLength(TextLocation location, string fieldName, int length)
+    {
+        Report(location, "GS0408", $"Fixed-size buffer field '{fieldName}' must have a positive length; '{length}' is not allowed (ADR-0122 §10).");
+    }
+
+    /// <summary>
+    /// GS0409: a fixed-size buffer element type is not a supported blittable
+    /// primitive (ADR-0122 §10 / issue #1035).
+    /// </summary>
+    /// <param name="location">The text location of the field name.</param>
+    /// <param name="typeName">The unsupported element type name.</param>
+    public void ReportFixedBufferElementTypeNotSupported(TextLocation location, string typeName)
+    {
+        Report(location, "GS0409", $"Fixed-size buffer element type '{typeName}' is not supported; use a blittable primitive (bool, int8…int64, uint8…uint64, char, float32, float64) (ADR-0122 §10).");
+    }
+
+    /// <summary>
     /// Reports that an <c>async func(...)</c> type clause has an explicit
     /// <c>Task[…]</c> (or other Task-shaped) return type. The <c>async</c>
     /// modifier already implies a Task wrap, so the explicit wrap is

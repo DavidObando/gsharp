@@ -2609,6 +2609,38 @@ internal sealed class OverloadResolver
             return new BoundErrorExpression(null);
         }
 
+        // ADR-0122 §9 / issue #1035: invoking a function-pointer-typed
+        // variable goes through the `calli` path. Sites like `fp(1, 2)` where
+        // `fp` is `let fp *func(int32, int32) int32 = &Add` reduce to a
+        // BoundFunctionPointerInvocationExpression.
+        if (symbol is VariableSymbol fpVar && fpVar.Type is FunctionPointerTypeSymbol fpSym)
+        {
+            if (!argumentNames.IsDefault)
+            {
+                Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, fpVar.Name, FirstNamedArgumentName(argumentNames));
+                return new BoundErrorExpression(null);
+            }
+
+            if (syntax.Arguments.Count != fpSym.Arity)
+            {
+                Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, fpVar.Name, fpSym.Arity, syntax.Arguments.Count);
+                return new BoundErrorExpression(null);
+            }
+
+            var fpConvertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(fpSym.Arity);
+            for (var i = 0; i < fpSym.Arity; i++)
+            {
+                var argLoc = i < syntax.Arguments.Count ? syntax.Arguments[i].Location : syntax.Identifier.Location;
+                fpConvertedArgs.Add(conversions.BindConversion(argLoc, boundArguments[i], fpSym.ParameterTypes[i]));
+            }
+
+            return new BoundFunctionPointerInvocationExpression(
+                null,
+                new BoundVariableExpression(null, fpVar),
+                fpConvertedArgs.MoveToImmutable(),
+                fpSym);
+        }
+
         // Phase 4.7: invoking a function-typed variable goes through the
         // indirect-call path. Sites like `add(1, 2)` where `add` is `let
         // add func(int, int) int = ...` reduce to BoundIndirectCallExpression.

@@ -326,6 +326,17 @@ public sealed class StructSymbol : TypeSymbol
     public StructLayoutMetadata LayoutMetadata { get; private set; }
 
     /// <summary>
+    /// Gets a value indicating whether this is a compiler-generated fixed-size
+    /// buffer backing struct (ADR-0122 §10 / issue #1035). The emitter stamps
+    /// such a struct with <c>[CompilerGenerated]</c> and <c>[UnsafeValueType]</c>
+    /// and an explicit <c>ClassLayout</c> size of <c>N * sizeof(T)</c>.
+    /// </summary>
+    public bool IsFixedBufferBacking { get; private set; }
+
+    /// <summary>Gets the fixed-size buffer element type for a fixed-buffer backing struct (ADR-0122 §10 / issue #1035), or <c>null</c>.</summary>
+    public TypeSymbol FixedBufferElementType { get; private set; }
+
+    /// <summary>
     /// Gets the standalone user-defined constructor (<c>init(...)</c>) declared on
     /// this class (issue #306), or <c>null</c> when the class has none. When non-null
     /// the emitter materializes exactly one <c>.ctor</c> (this constructor) and
@@ -649,6 +660,14 @@ public sealed class StructSymbol : TypeSymbol
     public void SetLayoutMetadata(StructLayoutMetadata metadata)
     {
         LayoutMetadata = metadata;
+    }
+
+    /// <summary>Marks this struct as a fixed-size buffer backing struct (ADR-0122 §10 / issue #1035).</summary>
+    /// <param name="elementType">The buffer element type <c>T</c>.</param>
+    public void MarkFixedBufferBacking(TypeSymbol elementType)
+    {
+        IsFixedBufferBacking = true;
+        FixedBufferElementType = elementType;
     }
 
     /// <summary>Walks the base chain looking for a method with the given name. Returns the most-derived overridable definition (the binder narrows further on overload match).</summary>

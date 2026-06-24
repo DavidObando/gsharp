@@ -387,6 +387,12 @@ internal sealed partial class MethodBodyEmitter
             case BoundSizeOfExpression sizeOf:
                 this.EmitSizeOf(sizeOf);
                 break;
+            case BoundFunctionPointerFromMethodExpression fnFromMethod:
+                this.EmitFunctionPointerFromMethod(fnFromMethod);
+                break;
+            case BoundFunctionPointerInvocationExpression fnInvoke:
+                this.EmitFunctionPointerInvocation(fnInvoke);
+                break;
             case BoundCapExpression cap:
                 this.EmitExpression(cap.Operand);
                 this.il.OpCode(ILOpCode.Ldlen);
@@ -791,6 +797,35 @@ internal sealed partial class MethodBodyEmitter
         // at G# compile time.
         this.il.OpCode(ILOpCode.Sizeof);
         this.il.Token(this.outer.GetElementTypeToken(sizeOf.MeasuredType));
+    }
+
+    private void EmitFunctionPointerFromMethod(BoundFunctionPointerFromMethodExpression node)
+    {
+        // ADR-0122 §9 / issue #1035: `&StaticMethod` -> CIL `ldftn <method>`,
+        // pushing the method's entry-point address as a managed function
+        // pointer value.
+        if (!this.outer.cache.FunctionHandles.TryGetValue(node.Method, out var methodHandle))
+        {
+            throw new InvalidOperationException(
+                $"Function '{node.Method.Name}' has no emitted MethodDef for '&{node.Method.Name}' (ldftn).");
+        }
+
+        this.il.OpCode(ILOpCode.Ldftn);
+        this.il.Token(methodHandle);
+    }
+
+    private void EmitFunctionPointerInvocation(BoundFunctionPointerInvocationExpression node)
+    {
+        // ADR-0122 §9 / issue #1035: `fp(args)` -> push arguments, push the
+        // function-pointer value, then CIL `calli <signature>`.
+        foreach (var arg in node.Arguments)
+        {
+            this.EmitExpression(arg);
+        }
+
+        this.EmitExpression(node.Pointer);
+        var sig = this.outer.GetFunctionPointerCallSiteSignature(node.FunctionPointerType);
+        this.il.CallIndirect(sig);
     }
 
     private void EmitAppend(BoundAppendExpression app)

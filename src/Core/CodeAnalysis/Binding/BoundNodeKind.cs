@@ -122,6 +122,12 @@ public enum BoundNodeKind
     // that is not known at G# compile time.
     SizeOfExpression,
 
+    // ADR-0122 §9 / issue #1035: `&StaticMethod` as a function-pointer value
+    // (emits CIL `ldftn <method>`), and `fp(args)` direct invocation through
+    // a function pointer (emits CIL `calli <signature>`).
+    FunctionPointerFromMethodExpression,
+    FunctionPointerInvocationExpression,
+
     // Patterns
     ConstantPattern,
     DiscardPattern,

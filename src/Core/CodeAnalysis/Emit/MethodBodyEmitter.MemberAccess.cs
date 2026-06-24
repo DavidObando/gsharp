@@ -1265,7 +1265,15 @@ internal sealed partial class MethodBodyEmitter
 
         // Load receiver address, then ldflda.
         var receiverIsClass = fa.Receiver.Type is StructSymbol rs && rs.IsClass;
-        if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
+        if (!receiverIsClass
+            && fa.Receiver is BoundDereferenceExpression deref
+            && Symbols.TypeSymbol.IsUnmanagedPointer(deref.Operand.Type))
+        {
+            // ADR-0122 §4/§10: `(*p).field` / `p->field`. The pointer value IS
+            // the struct's address, so load the pointer directly before ldflda.
+            this.EmitExpression(deref.Operand);
+        }
+        else if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
         {
             // address already on stack
         }
