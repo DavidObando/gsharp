@@ -318,6 +318,10 @@ public sealed class CSharpToGSharpTranslator
         // immutable (let) per ADR-0115 §B.3.
         private SyntaxNode currentBodyScope;
 
+        // Monotonic counter for synthesizing unique temporaries when lowering
+        // tuple-deconstruction assignments (`(a, b) = (x, y)`); ADR-0115 §B.
+        private int deconCounter;
+
         // When translating the body of a lifted owned-value-aggregate receiver
         // method (issue #938), the implicit `this.` of a bare instance-member
         // reference must be made explicit through the receiver name (`self.`),
@@ -731,7 +735,8 @@ public sealed class CSharpToGSharpTranslator
                 visibility: MapVisibility(symbol, this.context, node),
                 isOpen: isOpen || wasAbstract,
                 isAbstract: false,
-                attributes: this.MapAttributes(node.AttributeLists));
+                attributes: this.MapAttributes(node.AttributeLists),
+                isUnsafe: node.Modifiers.Any(SyntaxKind.UnsafeKeyword));
         }
 
         /// <summary>
@@ -749,7 +754,18 @@ public sealed class CSharpToGSharpTranslator
             INamedTypeSymbol symbol,
             TypeDeclarationKind kind)
         {
-            if (symbol == null || (kind != TypeDeclarationKind.Class && kind != TypeDeclarationKind.Struct))
+            // A C# `record struct` with an explicit (non-positional) constructor
+            // cannot keep an in-body `init` member: the G# parser only accepts a
+            // primary constructor on a `data struct`. Such a record-struct
+            // constructor is therefore lifted to the primary constructor just like
+            // a plain struct/class (ADR-0115 §B.3 / issue #1024 follow-up).
+            bool isRecordStructLift = kind == TypeDeclarationKind.DataStruct
+                && node is RecordDeclarationSyntax { ParameterList: null };
+
+            if (symbol == null ||
+                (kind != TypeDeclarationKind.Class
+                    && kind != TypeDeclarationKind.Struct
+                    && !isRecordStructLift))
             {
                 return ConstructorLift.None;
             }
@@ -761,7 +777,9 @@ public sealed class CSharpToGSharpTranslator
 
             // A record already owns a primary constructor, and zero or many
             // instance constructors are out of scope for the L1 canonicalization.
-            if (instanceCtors.Count != 1 || node is RecordDeclarationSyntax)
+            // The record-struct lift above is the sole exception: it has no
+            // positional primary constructor and exactly one explicit one.
+            if (instanceCtors.Count != 1 || (node is RecordDeclarationSyntax && !isRecordStructLift))
             {
                 return ConstructorLift.None;
             }
@@ -1000,13 +1018,14 @@ public sealed class CSharpToGSharpTranslator
                     break;
 
                 case ConversionOperatorDeclarationSyntax conversion:
-                    // G# `operator` is followed by an operator token only
-                    // (spec §Functions, `OperatorName = "operator" OperatorToken`);
-                    // there is no user-defined implicit/explicit conversion form.
-                    // Genuine gsc gap — reported for follow-up (ADR-0115 §G).
-                    this.context.ReportUnsupported(
-                        conversion,
-                        "user-defined conversion operators ('implicit'/'explicit operator T') have no canonical G# form (gsc gap; spec §Functions grammar 'operator' takes an operator token only).");
+                    // gsc issue #1017: a C# user-defined conversion operator
+                    // (`public static implicit/explicit operator T(U x)`) maps to
+                    // the canonical G# `func operator implicit/explicit (x U) T`
+                    // in-body member. `implicit`/`explicit` are contextual keywords
+                    // right after `operator`; the single C# parameter is the
+                    // conversion source and the C# target type becomes the return
+                    // type (ADR-0115 §B).
+                    yield return this.TranslateConversionOperator(conversion);
                     break;
 
                 default:
@@ -1167,6 +1186,22 @@ public sealed class CSharpToGSharpTranslator
                 this.currentReceiverName = previousReceiver;
             }
 
+            // ADR-0122 / issue #1014: a C# `unsafe` method body is an unsafe
+            // context. The G# member-level `unsafe func` modifier does not combine
+            // with an accessibility keyword in the grammar, so — unless the whole
+            // owning type is already `unsafe` — the body is wrapped in an
+            // `unsafe { … }` block, which round-trips with any visibility and gives
+            // the same unsafe context.
+            if (body != null &&
+                node.Modifiers.Any(SyntaxKind.UnsafeKeyword) &&
+                !node.Ancestors().OfType<TypeDeclarationSyntax>().Any(t => t.Modifiers.Any(SyntaxKind.UnsafeKeyword)))
+            {
+                body = new BlockStatement(new GStatement[]
+                {
+                    new BlockStatement(body.Statements, isUnsafe: true),
+                });
+            }
+
             bool isOverride = symbol != null && symbol.IsOverride;
 
             // Interface members are implicitly abstract in C#; in canonical G# the
@@ -1262,6 +1297,42 @@ public sealed class CSharpToGSharpTranslator
             // Operators carry the receiver-clause form and are lifted to a top-level
             // sibling; returning IsStatic=false routes them through the existing
             // receiver-clause lift in VisitAggregate.
+            return (method, false);
+        }
+
+        private (GMember Member, bool IsStatic) TranslateConversionOperator(ConversionOperatorDeclarationSyntax node)
+        {
+            // gsc issue #1017: `public static implicit operator T(U x)` →
+            // `func operator implicit (x U) T { ... }` (and `explicit` likewise).
+            // The single C# parameter is the conversion source; the C# target type
+            // (`node.Type`) becomes the G# return type. `implicit`/`explicit` is a
+            // contextual keyword that forms the operator name.
+            string kindKeyword = node.ImplicitOrExplicitKeyword.IsKind(SyntaxKind.ImplicitKeyword)
+                ? "implicit"
+                : "explicit";
+
+            var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
+            List<Parameter> parameters = this.MapParameters(symbol, node.ParameterList, skipFirst: false);
+
+            GTypeReference returnType = symbol != null
+                ? this.typeMapper.Map(symbol.ReturnType, this.context, node.Type.GetLocation())
+                : this.MapTypeSyntax(node.Type);
+
+            BlockStatement body = (node.Body != null || node.ExpressionBody != null)
+                ? this.TranslateBody(node, $"conversion operator '{kindKeyword}'")
+                : null;
+
+            var method = new MethodDeclaration(
+                $"operator {kindKeyword}",
+                parameters: parameters,
+                returnType: returnType,
+                body: body,
+                attributes: this.MapAttributes(node.AttributeLists));
+
+            // The conversion operator has no receiver clause, so it stays an
+            // in-body member of the owning type (returning IsStatic=false routes it
+            // to the instance-member list in VisitAggregate, which the parser
+            // accepts directly in the type body).
             return (method, false);
         }
 
@@ -2027,6 +2098,36 @@ public sealed class CSharpToGSharpTranslator
             return new BlockStatement(statements);
         }
 
+        private IEnumerable<GStatement> TranslateFixedStatement(FixedStatementSyntax node)
+        {
+            // Translate the innermost body once; multiple declarators nest as
+            // successive `fixed` blocks (`fixed a … { fixed b … { body } }`).
+            BlockStatement body = this.TranslateStatementAsBlock(node.Statement);
+
+            VariableDeclarationSyntax declaration = node.Declaration;
+            GTypeReference pointerType = this.MapTypeSyntax(declaration.Type);
+
+            for (int i = declaration.Variables.Count - 1; i >= 0; i--)
+            {
+                VariableDeclaratorSyntax declarator = declaration.Variables[i];
+                GExpression source = declarator.Initializer != null
+                    ? this.TranslateExpression(declarator.Initializer.Value)
+                    : new IdentifierExpression("nil");
+                body = new BlockStatement(new GStatement[]
+                {
+                    new FixedStatement(
+                        SanitizeIdentifier(declarator.Identifier.Text),
+                        pointerType,
+                        source,
+                        body),
+                });
+            }
+
+            // Unwrap the single outer wrapper block so the caller receives the
+            // `fixed` statement(s) directly.
+            return body.Statements;
+        }
+
         private BlockStatement TranslateStatementAsBlock(StatementSyntax statement)
         {
             if (statement is BlockSyntax block)
@@ -2074,6 +2175,22 @@ public sealed class CSharpToGSharpTranslator
                     // G# arithmetic is unchecked by default and has no
                     // `checked`/`unchecked` block keyword; emit the inner block.
                     return new[] { (GStatement)this.TranslateBlock(checkedStatement.Block) };
+
+                case UnsafeStatementSyntax unsafeStatement:
+                    // ADR-0122 / issue #1014: a C# `unsafe { … }` block maps to the
+                    // G# `unsafe { … }` block, introducing an unsafe context.
+                    return new[]
+                    {
+                        (GStatement)new BlockStatement(
+                            this.TranslateBlock(unsafeStatement.Block).Statements,
+                            isUnsafe: true),
+                    };
+
+                case FixedStatementSyntax fixedStatement:
+                    // gsc issue #1026: a C# `fixed (T* p = src) { … }` pins a managed
+                    // array/string and exposes a raw pointer, mapping to the G#
+                    // `fixed p *T = src { … }` form (only legal inside `unsafe`).
+                    return this.TranslateFixedStatement(fixedStatement);
 
                 case ReturnStatementSyntax ret:
                     return new[]
@@ -2356,6 +2473,19 @@ public sealed class CSharpToGSharpTranslator
                     };
                 }
 
+                // `(a, b) = (x, y)` deconstruction *assignment* to existing
+                // variables. G# has no tuple-assignment form, so lower to
+                // element-wise assignments. RHS elements are captured into temps
+                // first to preserve C#'s evaluate-all-then-assign semantics
+                // (handles aliasing such as `(a, b) = (b, a)`); ADR-0115 §B.
+                if (assignment.Left is TupleExpressionSyntax leftTuple &&
+                    assignment.Right is TupleExpressionSyntax rightTuple &&
+                    leftTuple.Arguments.Count == rightTuple.Arguments.Count &&
+                    leftTuple.Arguments.All(a => a.Expression is not DeclarationExpressionSyntax))
+                {
+                    return this.LowerTupleAssignment(leftTuple, rightTuple);
+                }
+
                 if (assignment.Right is AssignmentExpressionSyntax)
                 {
                     // `a = b = c` → `b = c` then `a = b`. G# assignment is a
@@ -2443,6 +2573,35 @@ public sealed class CSharpToGSharpTranslator
             {
                 statements.Add(new AssignmentStatement(lefts[i].Target, rhs, lefts[i].Op));
                 rhs = lefts[i].Target;
+            }
+
+            return statements;
+        }
+
+        private IEnumerable<GStatement> LowerTupleAssignment(
+            TupleExpressionSyntax leftTuple,
+            TupleExpressionSyntax rightTuple)
+        {
+            int count = leftTuple.Arguments.Count;
+            var temps = new List<string>(count);
+            var statements = new List<GStatement>();
+
+            for (int i = 0; i < count; i++)
+            {
+                string temp = $"__decon{this.deconCounter++}";
+                temps.Add(temp);
+                statements.Add(new LocalDeclarationStatement(
+                    BindingKind.Var,
+                    temp,
+                    type: null,
+                    initializer: this.TranslateExpression(rightTuple.Arguments[i].Expression)));
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                statements.Add(new AssignmentStatement(
+                    this.TranslateExpression(leftTuple.Arguments[i].Expression),
+                    new IdentifierExpression(temps[i])));
             }
 
             return statements;
@@ -2883,19 +3042,26 @@ public sealed class CSharpToGSharpTranslator
                 case PostfixUnaryExpressionSyntax postfixValue
                     when postfixValue.IsKind(SyntaxKind.PostIncrementExpression)
                         || postfixValue.IsKind(SyntaxKind.PostDecrementExpression):
-                    // A post-increment/decrement used in value position. G# has no
-                    // inc/dec expression; the enclosing statement seam hoists the
-                    // mutation into a trailing statement and suppresses the node
-                    // here so it reads as the pre-increment value (ADR-0115 §B).
+                    // A post-increment/decrement used in value position. When the
+                    // enclosing statement seam already hoisted the mutation into a
+                    // trailing statement, the node is suppressed here and reads as
+                    // its pre-increment value (ADR-0115 §B).
                     if (this.suppressedPostfix.Contains(postfixValue))
                     {
                         return this.TranslateExpression(postfixValue.Operand);
                     }
 
-                    this.context.ReportUnsupported(
-                        postfixValue,
-                        $"post-{(postfixValue.IsKind(SyntaxKind.PostIncrementExpression) ? "increment" : "decrement")} used in a position that has no canonical G# statement seam (ADR-0115 §B).");
-                    return this.TranslateExpression(postfixValue.Operand);
+                    // gsc issue #1027: G# now models inc/dec as value-producing
+                    // expressions, so a postfix in a position with no statement seam
+                    // (e.g. inside a short-circuit `&&` condition) emits the faithful
+                    // inline `x++` / `x--` form.
+                    return new IncrementDecrementExpression(
+                        this.TranslateExpression(postfixValue.Operand),
+                        postfixValue.OperatorToken.Text,
+                        isPrefix: false);
+
+                case StackAllocArrayCreationExpressionSyntax stackAlloc:
+                    return this.TranslateStackAlloc(stackAlloc);
 
                 case CollectionExpressionSyntax collectionExpression:
                     return this.TranslateCollectionExpression(collectionExpression);
@@ -3112,6 +3278,41 @@ public sealed class CSharpToGSharpTranslator
                 new List<GTypeReference> { elementType });
         }
 
+        private GExpression TranslateStackAlloc(StackAllocArrayCreationExpressionSyntax node)
+        {
+            // gsc issue #1024: C# `stackalloc T[n]` → G# `stackalloc gT[n]`. In a
+            // safe context this yields `Span[T]`; targeting a raw pointer inside an
+            // `unsafe` context yields `*T`. The element type is mapped through the
+            // standard C#→G# type mapper (`byte`→`uint8`).
+            GTypeReference elementType;
+            GExpression count;
+            if (node.Type is ArrayTypeSyntax arrayType)
+            {
+                elementType = this.MapTypeSyntax(arrayType.ElementType);
+                count = arrayType.RankSpecifiers.Count > 0 &&
+                    arrayType.RankSpecifiers[0].Sizes.Count > 0 &&
+                    arrayType.RankSpecifiers[0].Sizes[0] is { } sizeExpr &&
+                    !sizeExpr.IsKind(SyntaxKind.OmittedArraySizeExpression)
+                    ? this.TranslateExpression(sizeExpr)
+                    : null;
+            }
+            else
+            {
+                elementType = new NamedTypeReference("uint8");
+                count = null;
+            }
+
+            // An explicit initializer (`stackalloc byte[] { 1, 2 }`) supplies the
+            // length; fall back to the element count when no size is spelled.
+            if (count == null && node.Initializer != null)
+            {
+                count = LiteralExpression.Int(
+                    node.Initializer.Expressions.Count.ToString(CultureInfo.InvariantCulture));
+            }
+
+            return new StackAllocExpression(elementType, count ?? LiteralExpression.Int("0"));
+        }
+
         private GExpression TranslateImplicitArrayCreation(ImplicitArrayCreationExpressionSyntax creation)
         {
             GTypeReference elementType = this.GetArrayElementType(creation, null);
@@ -3183,6 +3384,24 @@ public sealed class CSharpToGSharpTranslator
 
         private GExpression TranslateCollectionExpression(CollectionExpressionSyntax collection)
         {
+            // An empty collection expression (`[]`) targeting a concrete
+            // constructible collection class (e.g. `Dictionary<,> d = []`,
+            // `List<T> l = []`) maps to a constructor call of that type. The slice
+            // literal `[]T{ … }` only models arrays/spans; a `Dictionary`'s element
+            // type is `KeyValuePair<,>`, whose generic `[...]` would otherwise be
+            // emitted into a malformed `[]KeyValuePair[…]{}` literal (ADR-0115 §B).
+            ITypeSymbol target = this.context.GetTypeInfo(collection).ConvertedType
+                ?? this.context.GetTypeInfo(collection).Type;
+            if (collection.Elements.Count == 0 &&
+                target is INamedTypeSymbol { TypeKind: TypeKind.Class } namedTarget &&
+                this.typeMapper.Map(namedTarget, this.context, collection.GetLocation()) is NamedTypeReference targetRef)
+            {
+                return new InvocationExpression(
+                    new IdentifierExpression(targetRef.Name),
+                    new List<GExpression>(),
+                    targetRef.TypeArguments.Count > 0 ? targetRef.TypeArguments : null);
+            }
+
             // C# 12 collection expression `[a, b, c]`. The target type (array,
             // span, or any IEnumerable<T>) supplies the element type, so it maps to
             // the canonical G# slice literal `[]T{ … }` (ADR-0115 §B). Spread

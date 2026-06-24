@@ -449,6 +449,62 @@ public sealed class NonNullAssertionExpression : GExpression
 }
 
 /// <summary>
+/// A value-producing increment/decrement expression — postfix <c>x++</c> /
+/// <c>x--</c> or prefix <c>++x</c> / <c>--x</c> (gsc issue #1027). G# now models
+/// inc/dec as expressions, so they may appear in value positions (e.g. inside a
+/// short-circuit condition) where no statement seam can hoist them.
+/// </summary>
+public sealed class IncrementDecrementExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="IncrementDecrementExpression"/> class.
+    /// </summary>
+    /// <param name="operand">The operand being mutated.</param>
+    /// <param name="op">The operator token (<c>++</c> or <c>--</c>).</param>
+    /// <param name="isPrefix">Whether the operator precedes the operand.</param>
+    public IncrementDecrementExpression(GExpression operand, string op, bool isPrefix)
+    {
+        Operand = operand;
+        Operator = op;
+        IsPrefix = isPrefix;
+    }
+
+    /// <summary>Gets the operand being mutated.</summary>
+    public GExpression Operand { get; }
+
+    /// <summary>Gets the operator token.</summary>
+    public string Operator { get; }
+
+    /// <summary>Gets a value indicating whether the operator precedes the operand.</summary>
+    public bool IsPrefix { get; }
+}
+
+/// <summary>
+/// A <c>stackalloc ElemType[count]</c> expression (gsc issue #1024). In a safe
+/// context this yields a <c>Span&lt;T&gt;</c>; targeting a raw pointer inside an
+/// <c>unsafe</c> context yields <c>T*</c>.
+/// </summary>
+public sealed class StackAllocExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StackAllocExpression"/> class.
+    /// </summary>
+    /// <param name="elementType">The element type.</param>
+    /// <param name="count">The element-count expression.</param>
+    public StackAllocExpression(GTypeReference elementType, GExpression count)
+    {
+        ElementType = elementType;
+        Count = count;
+    }
+
+    /// <summary>Gets the element type.</summary>
+    public GTypeReference ElementType { get; }
+
+    /// <summary>Gets the element-count expression.</summary>
+    public GExpression Count { get; }
+}
+
+/// <summary>
 /// A parenthesized expression <c>(inner)</c>.
 /// </summary>
 public sealed class ParenthesizedExpression : GExpression

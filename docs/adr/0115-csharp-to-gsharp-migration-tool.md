@@ -513,13 +513,44 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   asserts non-null (spec: "Postfix `!!` asserts non-null"), the direct analogue
   of the C# null-forgiving operator, so the `SuppressNullableWarningExpression`
   operand is preserved with `!!` rather than dropped.
-- **Post-increment/decrement as an expression → statement-seam hoisting.** G#
-  models `++`/`--` as **statements** on identifiers. A `PostIncrementExpression`/
-  `PostDecrementExpression` used as a **value** (`a[i++] = v`, `M(i--)`,
-  `x = y++`) is hoisted: the sub-expression reads the pre-increment value and the
-  mutation is appended as a trailing `i++` / `i--` statement after the enclosing
-  expression statement (in document order; nested-lambda bodies are not hoisted
-  into the outer seam).
+- **Post/pre-increment/decrement as an expression.** G# now models `++`/`--`
+  both as statements *and* as value-producing expressions (issue #1027). A
+  `PostIncrementExpression`/`PostDecrementExpression` used as a **value** in a
+  position that has a canonical statement seam (`a[i++] = v`, `M(i--)`,
+  `x = y++`) is still hoisted: the sub-expression reads the pre-increment value
+  and the mutation is appended as a trailing `i++` / `i--` statement after the
+  enclosing expression statement (in document order; nested-lambda bodies are
+  not hoisted into the outer seam). In a position with **no** statement seam —
+  e.g. inside the short-circuit `&&` condition of an `unsafe` do-while
+  (`while data[i] == 0 && i-- > 0`) — the faithful inline `i--` / `i++` / `--i`
+  / `++i` expression is emitted directly (formerly reported unsupported).
+- **User-defined conversion operator → `func operator implicit/explicit`** (issue
+  #1017). A C# `public static implicit operator T(U x)` maps to the in-body
+  member `func operator implicit(x U) T` (and `explicit` → `func operator
+  explicit(x U) T`); the single source parameter is preserved and the operator
+  target becomes the return type. `public static` is dropped. (Formerly reported
+  unsupported with a now-obsolete "gsc gap" note.)
+- **`stackalloc T[n]` → `stackalloc gT[n]`** (issue #1024). The element type is
+  mapped through the C#→G# type mapper (`byte` → `uint8`), so `stackalloc byte[2]`
+  → `stackalloc uint8[2]`. In a safe context this yields `Span<T>`; as an unsafe
+  pointer target it yields `T*`.
+- **`fixed (T* p = src) { … }` → `fixed p *gT = src { … }`** (issue #1026). The
+  paren-less G# `fixed` pins a managed array/string and is only legal inside an
+  `unsafe` context; multiple declarators emit nested `fixed` blocks. The required
+  `unsafe` context is supplied by the `unsafe`-modifier mapping below.
+- **`unsafe` modifier mapping** (issue #1026 / ADR-0122). A C# `unsafe class C`
+  → G# `unsafe class C` (the `unsafe` modifier precedes the visibility on a type
+  declaration). A C# `unsafe` *method* maps by wrapping its body in an
+  `unsafe { }` block (the parser does not combine a visibility modifier with
+  `unsafe func`). A C# `unsafe { }` block maps to a G# `unsafe { }` block. This
+  mapping is required for `fixed`, pointer-target `stackalloc`, and pointer code
+  to be legal.
+- **Tuple-deconstruction assignment `(a, b) = (x, y)` → element-wise
+  assignment.** G# has no tuple-assignment form, so an assignment whose left side
+  is a tuple of existing variables is lowered to element-wise assignments through
+  fresh temporaries (`var __decon0 = x; var __decon1 = y; a = __decon0; b =
+  __decon1`), preserving C#'s evaluate-all-then-assign order (and aliasing such as
+  `(a, b) = (b, a)`).
 - **`yield break` → `break`.** Settled fact: G# has no `yield break`; it maps to
   a plain loop-control `break` (supersedes the former §G #994 unsupported note).
 - **`foreach ((a, b) in xs)` tuple deconstruction → `for a, b in xs`.** A
@@ -1126,12 +1157,17 @@ so corpus identifiers such as `@default`, `@In`, `type`, and `func` round-trip.
 #### Discovered gaps from the Oahu.Decrypt round (minimal repros)
 
 Translating the external **`Oahu.Decrypt`** project drove its
-`translation-unsupported` count from **109** (19 construct kinds) to **7
-diagnostics across 5 files** — every one of the 19 target construct kinds is now
-translated to canonical G# (§B.36). The 7 residual diagnostics are **3 genuine
-gsc gaps** (each reproduced directly with gsc **0.2.137+31ced6cfb7** and
-contrasted with a passing control) and **4 excepted unsafe-interop constructs**
-(issue #1014). None is a translator defect.
+`translation-unsupported` count from **109** (19 construct kinds) to **0**: the
+app now reaches **translate = PASS** (every emitted `.gs` round-trips; zero
+Unsupported diagnostics). The conversion-operator (#1017), `stackalloc` (#1024),
+`fixed` (#1026), and inc/dec-as-expression (#1027) features are now translated to
+faithful canonical G# (§B), and the C# `unsafe` modifiers they require are mapped
+to G#. Two further pre-existing translator round-trip residuals surfaced once the
+former unsafe-interop diagnostics stopped masking them (a `data struct` with an
+explicit constructor needing a primary-constructor lift, and a tuple-deconstruction
+assignment `(a, b) = (x, y)`) and were also fixed (§B). The remaining `OD-1`/`OD-3`
+notes below record genuine gsc gaps the translator works around; the **compile**
+stage may still fail on the OF-3 managed pointer surface, which is expected.
 
 **OD-1 — range operator `a[i..j]` has no canonical G# form (gsc gap).** G# has no
 range/`..` operator; an `a[i..j]` index does not parse. The translator therefore
@@ -1150,20 +1186,18 @@ class C { func F(s Span[uint8]) Span[uint8] { return s[1..3] } }
 // error GS0005: Unexpected token, the `..` range form is not in the grammar.
 ```
 
-**OD-2 — user-defined conversion operator `implicit`/`explicit operator T` has no
-canonical G# form (gsc gap).** G#'s `operator` keyword is followed by an
-**operator token** only (spec §Functions grammar `OperatorName = "operator"
-OperatorToken`); there is no user-defined implicit/explicit conversion form. The
-translator reports the construct unsupported. Source:
-`Mpeg4/IAppleData.cs` → `public static implicit operator TrackNumber((int, int) tn)`.
+**OD-2 — user-defined conversion operator `implicit`/`explicit operator T`
+(RESOLVED, #1017).** G# now accepts a user-defined conversion member
+`func operator implicit(x U) T` / `func operator explicit(x U) T`. The translator
+emits the canonical in-body form (§B): `public static implicit operator
+TrackNumber((int, int) tn)` → `func operator implicit(tn (int32, int32))
+TrackNumber`. Source: `Mpeg4/IAppleData.cs`.
 
 ```gs
-// gsc 0.2.137+31ced6cfb7: `operator` cannot be followed by a type:
-package p
+// gsc accepts the in-body conversion member:
 class TrackNumber {
-    public static implicit operator TrackNumber(tn (int32, int32)) TrackNumber { return TrackNumber() }
+    func operator implicit(tn (int32, int32)) TrackNumber { return TrackNumber() }
 }
-// error GS0288 (field decl requires var/let/const) + GS0113 (Type 'implicit' doesn't exist)
 ```
 
 **OD-3 — static-abstract **property** in an interface has no canonical G# form
@@ -1180,15 +1214,19 @@ interface IData { shared { prop SizeInBytes int32 { get } } func Write() }
 //               interface static state is not supported in this release (ADR-0089).
 ```
 
-**Excepted unsafe-interop surface (issue #1014).** Four residual diagnostics are
-the excepted unsafe surface and are **not** forced to a managed G# form:
-`stackalloc T[n]` (`StackAllocArrayCreationExpression`, `Mpeg4/APICFrame.cs` and
-`Mpeg4/Stz2Box.cs`), `fixed (byte* p = …)` (`FixedStatement`, `Cryptography/
-AesCtr.cs`), and a `i--` post-decrement used inside the short-circuit condition of
-the `unsafe class AesCtr` do-while (`PostDecrementExpression`, `Cryptography/
-AesCtr.cs`). `AesCtr` is an `unsafe class` built on `byte*`/`fixed`/pointer
-arithmetic — the same pointer-deref/field surface documented as OF-3 — so these
-remain documented against issue #1014 rather than translated.
+**Unsafe-interop surface now translated to faithful forms (issues #1024/#1026/
+#1027).** What were formerly four excepted residual diagnostics now emit faithful
+canonical G# and pass the translate gate: `stackalloc T[n]`
+(`StackAllocArrayCreationExpression`, `Mpeg4/APICFrame.cs` and `Mpeg4/Stz2Box.cs`)
+→ `stackalloc gT[n]` (#1024); `fixed (byte* p = …) { … }` (`FixedStatement`,
+`Cryptography/AesCtr.cs`) → the paren-less `fixed p *uint8 = … { … }` inside an
+`unsafe { }` body (#1026); and the `i--` post-decrement used inside the
+short-circuit condition of the `unsafe class AesCtr` do-while
+(`PostDecrementExpression`, `Cryptography/AesCtr.cs`) → the inline value-producing
+`i--` expression (#1027). The C# `unsafe` modifiers required for these forms are
+mapped to G# (`unsafe class`, `unsafe { }` method body). These now round-trip;
+`AesCtr.gs` may still fail the **compile** stage on the same managed
+pointer-deref/field surface documented as OF-3, which is expected and accepted.
 
 **Two downstream `CompilationUnit` round-trip failures investigated.** Two files
 failed the round-trip parse gate for reasons unrelated to the 19 target kinds:

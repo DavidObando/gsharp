@@ -29,6 +29,7 @@ public sealed class TypeDeclaration : GMember
     /// <param name="isAbstract">Whether the type is <c>abstract</c>.</param>
     /// <param name="hasBody">Whether to render a body block (false emits the bodyless primary-ctor form).</param>
     /// <param name="attributes">The type attributes.</param>
+    /// <param name="isUnsafe">Whether the type is <c>unsafe</c> (its body is an unsafe context).</param>
     public TypeDeclaration(
         TypeDeclarationKind kind,
         string name,
@@ -42,7 +43,8 @@ public sealed class TypeDeclaration : GMember
         bool isSealed = false,
         bool isAbstract = false,
         bool hasBody = true,
-        IReadOnlyList<AttributeUse> attributes = null)
+        IReadOnlyList<AttributeUse> attributes = null,
+        bool isUnsafe = false)
     {
         Kind = kind;
         Name = name;
@@ -57,6 +59,7 @@ public sealed class TypeDeclaration : GMember
         IsAbstract = isAbstract;
         HasBody = hasBody;
         Attributes = attributes ?? new List<AttributeUse>();
+        IsUnsafe = isUnsafe;
     }
 
     /// <summary>Gets the aggregate kind.</summary>
@@ -97,6 +100,12 @@ public sealed class TypeDeclaration : GMember
 
     /// <summary>Gets the type attributes.</summary>
     public IReadOnlyList<AttributeUse> Attributes { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether the type is <c>unsafe</c> (ADR-0122 /
+    /// issue #1014); its whole body is an unsafe context.
+    /// </summary>
+    public bool IsUnsafe { get; }
 }
 
 /// <summary>
