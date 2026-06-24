@@ -299,6 +299,15 @@ internal sealed partial class MethodBodyEmitter
                 // ADR-0062: general two-arm conditional value expression.
                 this.EmitConditional(conditionalValue);
                 break;
+            case BoundThrowExpression throwExpr:
+                // Issue #1018: throw-expression in value position. Emit the
+                // operand then CIL `throw`, which never returns — no value is
+                // left on the evaluation stack and the code after is
+                // unreachable. The surrounding `??` / conditional merge point is
+                // verifiable because this branch never reaches it.
+                this.EmitExpression(throwExpr.Expression);
+                this.il.OpCode(ILOpCode.Throw);
+                break;
             case BoundDereferenceExpression deref:
                 this.EmitDereference(deref);
                 break;

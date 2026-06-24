@@ -98,6 +98,13 @@ public enum BoundNodeKind
     // stack. Both arms are already converted to the result type by the binder.
     ConditionalExpression,
 
+    // Issue #1018: a throw-expression `throw expr` in value position. Emits the
+    // operand then CIL `throw`, which never returns a value. Its static type is
+    // the bottom (`never`) type, so the surrounding `??` / conditional / return
+    // takes the sibling operand's type and the code after the throw is
+    // unreachable.
+    ThrowExpression,
+
     // ADR-0060 §13: indirect assignment `*p = expr` — stores a value
     // through a managed pointer. Lowered to `<load-address> <value>
     // stind.*` by the emitter. Used both for direct `*T`-local stores

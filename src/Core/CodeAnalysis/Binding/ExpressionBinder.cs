@@ -268,6 +268,8 @@ internal sealed partial class ExpressionBinder
                 return BindConditionalExpression((ConditionalExpressionSyntax)syntax);
             case SyntaxKind.IfExpression:
                 return BindIfExpression((IfExpressionSyntax)syntax);
+            case SyntaxKind.ThrowExpression:
+                return BindThrowExpression((ThrowExpressionSyntax)syntax);
             case SyntaxKind.IndirectAssignmentExpression:
                 return BindIndirectAssignmentExpression((IndirectAssignmentExpressionSyntax)syntax);
             case SyntaxKind.IsExpression:

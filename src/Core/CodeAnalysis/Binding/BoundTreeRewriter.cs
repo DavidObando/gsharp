@@ -434,6 +434,8 @@ public abstract class BoundTreeRewriter
                 return RewriteConditionalAddressExpression((BoundConditionalAddressExpression)node);
             case BoundNodeKind.ConditionalExpression:
                 return RewriteConditionalExpression((BoundConditionalExpression)node);
+            case BoundNodeKind.ThrowExpression:
+                return RewriteThrowExpression((BoundThrowExpression)node);
             case BoundNodeKind.DereferenceExpression:
                 return RewriteDereferenceExpression((BoundDereferenceExpression)node);
             case BoundNodeKind.IndirectAssignmentExpression:
@@ -1011,6 +1013,20 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundConditionalExpression(null, condition, whenTrue, whenFalse, node.Type);
+    }
+
+    /// <summary>Issue #1018: rewrites a throw-expression's operand.</summary>
+    /// <param name="node">The throw-expression to rewrite.</param>
+    /// <returns>The rewritten throw-expression, or <paramref name="node"/> if unchanged.</returns>
+    protected virtual BoundExpression RewriteThrowExpression(BoundThrowExpression node)
+    {
+        var expression = RewriteExpression(node.Expression);
+        if (expression == node.Expression)
+        {
+            return node;
+        }
+
+        return new BoundThrowExpression(null, expression);
     }
 
     /// <summary>

@@ -224,6 +224,7 @@ SwitchExpression
 SwitchExpressionArm
 SwitchKeyword
 SwitchStatement
+ThrowExpression
 ThrowKeyword
 ThrowStatement
 TrueKeyword
@@ -340,6 +341,7 @@ StateMachineBuilderMoveNext
 StructLiteralExpression
 SwitchExpression
 SwitchExpressionArm
+ThrowExpression
 ThrowStatement
 TryStatement
 TupleElementAccessExpression

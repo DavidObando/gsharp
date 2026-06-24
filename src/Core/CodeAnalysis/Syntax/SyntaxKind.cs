@@ -218,6 +218,7 @@ public enum SyntaxKind
     CatchClause,
     FinallyClause,
     ThrowStatement,
+    ThrowExpression,
     UsingStatement,
     DeferStatement,
     CatchKeyword,

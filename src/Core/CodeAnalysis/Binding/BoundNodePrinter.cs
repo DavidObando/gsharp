@@ -283,6 +283,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ConditionalExpression:
                 WriteConditionalExpression((BoundConditionalExpression)node, writer);
                 break;
+            case BoundNodeKind.ThrowExpression:
+                WriteThrowExpression((BoundThrowExpression)node, writer);
+                break;
             case BoundNodeKind.DereferenceExpression:
                 WriteDereferenceExpression((BoundDereferenceExpression)node, writer);
                 break;
@@ -1764,6 +1767,13 @@ public static class BoundNodePrinter
         writer.WritePunctuation(SyntaxKind.ColonToken);
         writer.WriteSpace();
         node.WhenFalse.WriteTo(writer);
+    }
+
+    private static void WriteThrowExpression(BoundThrowExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.ThrowKeyword);
+        writer.WriteSpace();
+        node.Expression.WriteTo(writer);
     }
 
     private static void WriteDereferenceExpression(BoundDereferenceExpression node, IndentedTextWriter writer)

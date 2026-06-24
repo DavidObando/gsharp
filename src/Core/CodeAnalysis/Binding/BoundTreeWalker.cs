@@ -314,6 +314,9 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.ConditionalExpression:
                 VisitConditionalExpression((BoundConditionalExpression)node);
                 break;
+            case BoundNodeKind.ThrowExpression:
+                VisitThrowExpression((BoundThrowExpression)node);
+                break;
             case BoundNodeKind.DereferenceExpression:
                 VisitDereferenceExpression((BoundDereferenceExpression)node);
                 break;
@@ -905,6 +908,13 @@ public abstract class BoundTreeWalker
         VisitExpression(node.Condition);
         VisitExpression(node.WhenTrue);
         VisitExpression(node.WhenFalse);
+    }
+
+    /// <summary>Issue #1018: visits a throw-expression's operand.</summary>
+    /// <param name="node">The throw-expression to visit.</param>
+    protected virtual void VisitThrowExpression(BoundThrowExpression node)
+    {
+        VisitExpression(node.Expression);
     }
 
     protected virtual void VisitDereferenceExpression(BoundDereferenceExpression node)

@@ -265,6 +265,15 @@ internal sealed class ConversionClassifier
     /// <returns>The shaped bound expression.</returns>
     public BoundExpression BindConversion(TextLocation diagnosticLocation, BoundExpression expression, TypeSymbol type, bool allowExplicit = false)
     {
+        // Issue #1018: a throw-expression has the bottom (`never`) type and is
+        // implicitly convertible to any target. Return it unwrapped — there is
+        // no value to convert, and wrapping it in a BoundConversionExpression
+        // would emit a bogus cast after the CIL `throw`.
+        if (expression.Type == TypeSymbol.Never)
+        {
+            return expression;
+        }
+
         // ADR-0100 / issue #795: a typeless bare-`default` placeholder
         // (produced by ExpressionBinder.BindDefaultExpression when the
         // syntax has no type-clause) takes its concrete type from the

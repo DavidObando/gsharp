@@ -574,6 +574,28 @@ public sealed class Evaluator
         throw new Exception(value?.ToString());
     }
 
+    /// <summary>
+    /// Issue #1018: evaluates a throw-expression in value position. Like the
+    /// throw statement it never returns — it always raises the exception — so
+    /// the declared return type (<c>object</c>) is never observed.
+    /// </summary>
+    private object EvaluateThrowExpression(BoundThrowExpression node)
+    {
+        var value = EvaluateExpression(node.Expression);
+
+        if (value is StructValue sv && sv.ClrBacking is Exception backingEx)
+        {
+            throw backingEx;
+        }
+
+        if (value is Exception ex)
+        {
+            throw ex;
+        }
+
+        throw new Exception(value?.ToString());
+    }
+
     private static bool TryFindCatchHandler(BoundTryStatement node, Exception ex, out BoundCatchClause matched)
     {
         var actualType = ex.GetType();
@@ -655,6 +677,7 @@ public sealed class Evaluator
                 BoundNodeKind.AwaitExpression => EvaluateAwaitExpression((BoundAwaitExpression)node),
                 BoundNodeKind.SwitchExpression => EvaluateSwitchExpression((BoundSwitchExpression)node),
                 BoundNodeKind.ConditionalExpression => EvaluateConditionalExpression((BoundConditionalExpression)node),
+                BoundNodeKind.ThrowExpression => EvaluateThrowExpression((BoundThrowExpression)node),
                 BoundNodeKind.MakeChannelExpression => EvaluateMakeChannelExpression((BoundMakeChannelExpression)node),
                 BoundNodeKind.ChannelReceiveExpression => EvaluateChannelReceiveExpression((BoundChannelReceiveExpression)node),
                 BoundNodeKind.ChannelCloseExpression => EvaluateChannelCloseExpression((BoundChannelCloseExpression)node),

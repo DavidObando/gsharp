@@ -5384,6 +5384,19 @@ public class Parser
         return new ThrowStatementSyntax(syntaxTree, keyword, expression);
     }
 
+    // Issue #1018: parses a throw-expression `throw <expr>` in value position.
+    // The operand is parsed at full-expression precedence (greedy), matching
+    // C#'s rule that `a ?? throw b ?? c` throws `(b ?? c)`. The throw-expression
+    // itself is produced as a primary expression so it composes as the RHS of
+    // `??`, a conditional branch, a returned operand, an argument, or an arrow
+    // body.
+    private ExpressionSyntax ParseThrowExpression()
+    {
+        var keyword = MatchToken(SyntaxKind.ThrowKeyword);
+        var expression = ParseExpression();
+        return new ThrowExpressionSyntax(syntaxTree, keyword, expression);
+    }
+
     private StatementSyntax ParseUsingStatement()
     {
         var keyword = MatchToken(SyntaxKind.UsingKeyword);
@@ -6009,6 +6022,14 @@ public class Parser
 
             case SyntaxKind.IfKeyword:
                 return ParsePostfixChain(ParseIfExpression());
+
+            case SyntaxKind.ThrowKeyword:
+                // Issue #1018: throw-expression in value position
+                // (`x ?? throw e`, `cond ? a : throw e`, `return throw e`,
+                // arrow bodies, arguments). A `throw` at statement start is
+                // intercepted earlier by ParseStatement → ParseThrowStatement,
+                // so reaching here always means an expression context.
+                return ParseThrowExpression();
 
             case SyntaxKind.IdentifierToken
                 when Current.Text == "base" && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken:

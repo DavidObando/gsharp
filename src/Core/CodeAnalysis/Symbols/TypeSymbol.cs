@@ -109,6 +109,16 @@ public class TypeSymbol : Symbol
     /// <summary>The static type of the <c>nil</c> literal (Phase 3.C.2 / ADR-0001). Implicitly convertible to any <see cref="NullableTypeSymbol"/>; not assignable to a non-nullable type.</summary>
     public static readonly TypeSymbol Null = new TypeSymbol("nil");
 
+    /// <summary>
+    /// Issue #1018: the bottom ("never") type of a <c>throw</c> expression. A
+    /// throw-expression never produces a value (it always transfers control via
+    /// CIL <c>throw</c>), so its static type is implicitly convertible to ANY
+    /// target type. <c>Conversion.Classify</c> treats it as an implicit
+    /// conversion source, and the conditional/null-coalesce common-type logic
+    /// resolves to the sibling operand's type.
+    /// </summary>
+    public static readonly TypeSymbol Never = new TypeSymbol("never");
+
     private protected TypeSymbol(string name)
         : base(name)
     {
