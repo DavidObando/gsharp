@@ -998,7 +998,7 @@ internal sealed partial class ExpressionBinder
         }
 
         TypeSymbol erasedReturn;
-        if (functionType.ReturnType == null || functionType.ReturnType == TypeSymbol.Void)
+        if (FunctionTypeSymbol.IsVoidReturn(functionType.ReturnType))
         {
             erasedReturn = TypeSymbol.Void;
         }

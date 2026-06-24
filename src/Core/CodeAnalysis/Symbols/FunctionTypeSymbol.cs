@@ -171,6 +171,30 @@ public sealed class FunctionTypeSymbol : TypeSymbol
     /// </summary>
     internal static void ClearCache() => Cache.Clear();
 
+    /// <summary>
+    /// Issue #1049: returns whether a function-type return slot denotes "no
+    /// value" for the purpose of selecting <c>System.Action&lt;...&gt;</c> over
+    /// <c>System.Func&lt;..., R&gt;</c>. A slot is void when it is
+    /// <see langword="null"/>, <see cref="TypeSymbol.Void"/>, or a
+    /// <see cref="NullableTypeSymbol"/> wrapping <see cref="TypeSymbol.Void"/>.
+    /// </summary>
+    /// <remarks>
+    /// A function type cannot be parenthesised in G# (<c>(() -> void)?</c> is a
+    /// parse error), so <c>(Args) -> void?</c> is the only spelling of a
+    /// nullable delegate and binds with a nullable-<c>void</c> return. Its
+    /// underlying return is still <c>void</c>, so it must map to
+    /// <c>System.Action&lt;...&gt;</c>; treating it as a non-void return built
+    /// the illegal <c>System.Func&lt;..., System.Void&gt;</c> instantiation and
+    /// crashed with GS9998.
+    /// </remarks>
+    /// <param name="returnType">The function-type return slot.</param>
+    /// <returns><see langword="true"/> when the (unwrapped) return type is void.</returns>
+    internal static bool IsVoidReturn(TypeSymbol returnType)
+    {
+        var underlying = returnType is NullableTypeSymbol nullable ? nullable.UnderlyingType : returnType;
+        return underlying == null || underlying == TypeSymbol.Void;
+    }
+
     private static void AppendIdentityKey(System.Text.StringBuilder builder, TypeSymbol type)
     {
         switch (type)
@@ -225,7 +249,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
             paramClr[i] = pt;
         }
 
-        bool isVoid = returnType == null || returnType == TypeSymbol.Void;
+        bool isVoid = IsVoidReturn(returnType);
         if (isVoid)
         {
             switch (paramClr.Length)

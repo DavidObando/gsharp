@@ -2215,7 +2215,7 @@ internal sealed class MemberLookup
             }
         }
 
-        var isVoid = functionType.ReturnType == null || functionType.ReturnType == TypeSymbol.Void;
+        var isVoid = FunctionTypeSymbol.IsVoidReturn(functionType.ReturnType);
         Type returnClr = null;
         if (!isVoid && !TryEraseDelegateComponentClrType(functionType.ReturnType, out returnClr))
         {

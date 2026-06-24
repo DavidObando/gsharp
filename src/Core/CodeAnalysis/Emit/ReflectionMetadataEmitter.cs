@@ -8956,7 +8956,7 @@ internal sealed class ReflectionMetadataEmitter
     // signature encoding stays consistent end-to-end.
     internal Type ResolveDelegateClrType(FunctionTypeSymbol fnType)
     {
-        bool isVoid = fnType.ReturnType == null || fnType.ReturnType == TypeSymbol.Void;
+        bool isVoid = FunctionTypeSymbol.IsVoidReturn(fnType.ReturnType);
         int arity = fnType.ParameterTypes.Length;
 
         if (isVoid && arity == 0)
@@ -9019,7 +9019,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     internal void EncodeFunctionTypeSymbol(SignatureTypeEncoder encoder, FunctionTypeSymbol fnType)
     {
-        bool isVoid = fnType.ReturnType == null || fnType.ReturnType == TypeSymbol.Void;
+        bool isVoid = FunctionTypeSymbol.IsVoidReturn(fnType.ReturnType);
         int arity = fnType.ParameterTypes.Length;
 
         if (isVoid && arity == 0)
@@ -9127,7 +9127,7 @@ internal sealed class ReflectionMetadataEmitter
 
         var parent = this.GetFunctionDelegateTypeSpec(fnType);
 
-        bool isVoid = fnType.ReturnType == null || fnType.ReturnType == TypeSymbol.Void;
+        bool isVoid = FunctionTypeSymbol.IsVoidReturn(fnType.ReturnType);
         int arity = fnType.ParameterTypes.Length;
 
         // The MemberRef signature for a method on a generic TypeSpec
