@@ -6200,7 +6200,7 @@ public class Parser
         if (Current.Kind != SyntaxKind.DotDotToken
             && Current.Kind != SyntaxKind.CloseSquareBracketToken)
         {
-            lower = ParseExpression();
+            lower = ParseIndexBound();
         }
 
         if (Current.Kind != SyntaxKind.DotDotToken)
@@ -6216,10 +6216,28 @@ public class Parser
         if (Current.Kind != SyntaxKind.CloseSquareBracketToken
             && Current.Kind != SyntaxKind.DotDotToken)
         {
-            upper = ParseExpression();
+            upper = ParseIndexBound();
         }
 
         return new RangeExpressionSyntax(syntaxTree, lower, dotDotToken, upper);
+    }
+
+    // Issue #1022: parse a single index/range bound, recognising a leading `^`
+    // as the C# "from-end" index marker (`a[^1]`, `a[1..^1]`) rather than the
+    // one's-complement unary operator. The disambiguation is intentionally
+    // scoped to this leading position: a `^` anywhere else (including inside the
+    // offset expression itself, e.g. `a[^(x ^ y)]`) keeps its ordinary
+    // one's-complement / bitwise-XOR meaning.
+    private ExpressionSyntax ParseIndexBound()
+    {
+        if (Current.Kind == SyntaxKind.HatToken)
+        {
+            var hatToken = NextToken();
+            var operand = ParseExpression();
+            return new FromEndIndexExpressionSyntax(syntaxTree, hatToken, operand);
+        }
+
+        return ParseExpression();
     }
 
     // be reused as the LHS of an indexer assignment. Returns true and yields a

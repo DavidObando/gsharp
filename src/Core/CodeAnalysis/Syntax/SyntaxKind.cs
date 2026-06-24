@@ -164,6 +164,7 @@ public enum SyntaxKind
     MapEntry,
     IndexExpression,
     RangeExpression,
+    FromEndIndexExpression,
     IndexAssignmentExpression,
     MemberIndexAssignmentExpression,
     CompoundIndexAssignmentExpression,

@@ -2007,6 +2007,13 @@ internal sealed partial class ExpressionBinder
             return BindRangeSlice(target, rangeSyntax, targetLocation);
         }
 
+        // Issue #1022: a from-end index (`a[^n]`) reads the single element
+        // `length - n`.
+        if (indexSyntax is FromEndIndexExpressionSyntax fromEndSyntax)
+        {
+            return BindFromEndIndex(target, fromEndSyntax, targetLocation);
+        }
+
         // Phase 3.A.4: map indexing `m[k]` — key bound to K, result type V.
         // The Go convention "zero value if missing" applies at evaluation;
         // the bound representation reuses BoundIndexExpression with the
@@ -2668,6 +2675,78 @@ internal sealed partial class ExpressionBinder
     //   - `string` -> Substring(start, len).
     //   - span-like types with `int Length`/`int Count` + `Slice(int, int)`.
     //   - types with a `this[System.Range]` indexer -> call it directly.
+    // Issue #1022: bind a single from-end index `target[^n]` to the element at
+    // `length - n`. The bound representation reuses existing nodes wrapped in a
+    // BoundBlockExpression (no new bound-node kind). Indexable shapes mirror C#:
+    //   - arrays / slices (`[N]T`, `[]T`, CLR `T[]`) -> `src[len(src) - n]`.
+    //   - types with a `this[System.Index]` indexer -> call it with `^n`.
+    //   - types with `int Length`/`int Count` + a `this[int]` indexer (string,
+    //     List<T>, span-like) -> `src[Length - n]`.
+    private BoundExpression BindFromEndIndex(BoundExpression target, FromEndIndexExpressionSyntax fromEnd, TextLocation targetLocation)
+    {
+        if (target is BoundErrorExpression || target.Type == TypeSymbol.Error || target.Type == null)
+        {
+            _ = BindExpression(fromEnd.Operand);
+            return new BoundErrorExpression(null);
+        }
+
+        var element = GetIndexElementType(target.Type);
+        if (element != null)
+        {
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            var srcLocal = DeclareRangeTemp("src", target.Type, target, statements);
+            var idx = MakeFromEndOffset(fromEnd, new BoundLenExpression(null, new BoundVariableExpression(null, srcLocal)));
+            var read = new BoundIndexExpression(null, new BoundVariableExpression(null, srcLocal), idx, element);
+            return new BoundBlockExpression(fromEnd, statements.ToImmutable(), read);
+        }
+
+        var clrType = target.Type.ClrType;
+        if (clrType != null)
+        {
+            if (TryFindIndexIndexer(clrType, out var indexIndexer))
+            {
+                var indexCtor = typeof(System.Index).GetConstructor(new[] { typeof(int), typeof(bool) });
+                var indexSym = TypeSymbol.FromClrType(typeof(System.Index));
+                var offset = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32);
+                var indexValue = new BoundClrConstructorCallExpression(
+                    null,
+                    typeof(System.Index),
+                    indexCtor,
+                    ImmutableArray.Create<BoundExpression>(offset, new BoundLiteralExpression(null, true)),
+                    indexSym);
+                var resultType = TypeSymbol.FromClrType(indexIndexer.PropertyType);
+                return new BoundClrIndexExpression(fromEnd, target, indexIndexer, ImmutableArray.Create<BoundExpression>(indexValue), resultType);
+            }
+
+            if (TryFindCountedIntIndexer(clrType, out var lengthMember, out var intIndexer))
+            {
+                var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+                var srcLocal = DeclareRangeTemp("src", target.Type, target, statements);
+                var lengthExpr = new BoundClrPropertyAccessExpression(null, new BoundVariableExpression(null, srcLocal), lengthMember, TypeSymbol.Int32);
+                var idx = MakeFromEndOffset(fromEnd, lengthExpr);
+                var resultType = TypeSymbol.FromClrType(intIndexer.PropertyType);
+                var read = new BoundClrIndexExpression(
+                    null,
+                    new BoundVariableExpression(null, srcLocal),
+                    intIndexer,
+                    ImmutableArray.Create<BoundExpression>(idx),
+                    resultType);
+                return new BoundBlockExpression(fromEnd, statements.ToImmutable(), read);
+            }
+        }
+
+        Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
+        return new BoundErrorExpression(null);
+    }
+
+    // `length - n` for a from-end index `^n`.
+    private BoundExpression MakeFromEndOffset(FromEndIndexExpressionSyntax fromEnd, BoundExpression lengthExpr)
+    {
+        var offset = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32);
+        var subtractOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32, TypeSymbol.Int32);
+        return new BoundBinaryExpression(null, lengthExpr, subtractOp, offset);
+    }
+
     private BoundExpression BindRangeSlice(BoundExpression target, RangeExpressionSyntax range, TextLocation targetLocation)
     {
         if (target is BoundErrorExpression || target.Type == TypeSymbol.Error || target.Type == null)
@@ -2739,9 +2818,12 @@ internal sealed partial class ExpressionBinder
         return local;
     }
 
-    // Binds the lower/upper bounds (each optional) as int32 expressions and
-    // emits the `src`, `start`, and `len` temporaries shared by the array,
-    // string, and span-like slicing paths. `len = (upper ?? lengthOf(src)) - start`.
+    // Binds the lower/upper bounds (each optional, each possibly a from-end
+    // `^n` marker — issue #1022) as int32 expressions and emits the `src`,
+    // source-length, `start`, and `len` temporaries shared by the array,
+    // string, and span-like slicing paths. A from-end bound `^n` lowers to
+    // `srcLen - n`; an open lower bound is `0` and an open upper bound is
+    // `srcLen`. `len = upper - start`.
     private (BoundExpression Src, BoundExpression Start, BoundExpression Len) BuildSliceBounds(
         BoundExpression target,
         RangeExpressionSyntax range,
@@ -2749,17 +2831,20 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<BoundStatement>.Builder statements)
     {
         var srcLocal = DeclareRangeTemp("src", target.Type, target, statements);
-        var srcRef = new BoundVariableExpression(null, srcLocal);
 
-        var lowerBound = range.LowerBound != null
-            ? conversions.BindConversion(range.LowerBound, TypeSymbol.Int32)
-            : new BoundLiteralExpression(null, 0);
+        BoundExpression SrcRef() => new BoundVariableExpression(null, srcLocal);
+
+        // Compute the source length once; required for open upper bounds and for
+        // any from-end (`^n`) bound, and harmless otherwise.
+        var srcLenLocal = DeclareRangeTemp("srclen", TypeSymbol.Int32, lengthOf(SrcRef()), statements);
+
+        BoundExpression SrcLenRef() => new BoundVariableExpression(null, srcLenLocal);
+
+        var lowerBound = BindRangeBoundValue(range.LowerBound, SrcLenRef, new BoundLiteralExpression(null, 0));
         var startLocal = DeclareRangeTemp("start", TypeSymbol.Int32, lowerBound, statements);
         var startRef = new BoundVariableExpression(null, startLocal);
 
-        var upperBound = range.UpperBound != null
-            ? conversions.BindConversion(range.UpperBound, TypeSymbol.Int32)
-            : lengthOf(new BoundVariableExpression(null, srcLocal));
+        var upperBound = BindRangeBoundValue(range.UpperBound, SrcLenRef, SrcLenRef());
 
         var subtractOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32, TypeSymbol.Int32);
         var lengthExpr = new BoundBinaryExpression(null, upperBound, subtractOp, startRef);
@@ -2769,6 +2854,26 @@ internal sealed partial class ExpressionBinder
             new BoundVariableExpression(null, srcLocal),
             new BoundVariableExpression(null, startLocal),
             new BoundVariableExpression(null, lenLocal));
+    }
+
+    // Issue #1022: bind a single range bound to an int32 offset. A from-end
+    // marker `^n` lowers to `srcLen - n`; a missing bound uses
+    // <paramref name="defaultValue"/>; otherwise the bound is the plain value.
+    private BoundExpression BindRangeBoundValue(ExpressionSyntax boundSyntax, Func<BoundExpression> srcLenRef, BoundExpression defaultValue)
+    {
+        if (boundSyntax == null)
+        {
+            return defaultValue;
+        }
+
+        if (boundSyntax is FromEndIndexExpressionSyntax fromEnd)
+        {
+            var offset = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32);
+            var subtractOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32, TypeSymbol.Int32);
+            return new BoundBinaryExpression(null, srcLenRef(), subtractOp, offset);
+        }
+
+        return conversions.BindConversion(boundSyntax, TypeSymbol.Int32);
     }
 
     private BoundExpression BindArraySlice(BoundExpression target, RangeExpressionSyntax range, TypeSymbol elementType)
@@ -2852,8 +2957,21 @@ internal sealed partial class ExpressionBinder
         var indexSym = TypeSymbol.FromClrType(typeof(System.Index));
         var rangeSym = TypeSymbol.FromClrType(typeof(System.Range));
 
-        BoundExpression MakeIndex(ExpressionSyntax boundSyntax, bool fromEnd)
+        BoundExpression MakeIndex(ExpressionSyntax boundSyntax, bool defaultFromEnd)
         {
+            // Issue #1022: a `^n` bound becomes System.Index(n, fromEnd: true);
+            // the System.Range indexer computes the concrete offset at runtime.
+            if (boundSyntax is FromEndIndexExpressionSyntax fromEnd)
+            {
+                var endValue = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32);
+                return new BoundClrConstructorCallExpression(
+                    null,
+                    typeof(System.Index),
+                    indexCtor,
+                    ImmutableArray.Create<BoundExpression>(endValue, new BoundLiteralExpression(null, true)),
+                    indexSym);
+            }
+
             var value = boundSyntax != null
                 ? conversions.BindConversion(boundSyntax, TypeSymbol.Int32)
                 : new BoundLiteralExpression(null, 0);
@@ -2861,16 +2979,16 @@ internal sealed partial class ExpressionBinder
                 null,
                 typeof(System.Index),
                 indexCtor,
-                ImmutableArray.Create<BoundExpression>(value, new BoundLiteralExpression(null, fromEnd)),
+                ImmutableArray.Create<BoundExpression>(value, new BoundLiteralExpression(null, defaultFromEnd)),
                 indexSym);
         }
 
         // Open lower defaults to the start (0, from-start); open upper defaults
         // to the end (^0, i.e. value 0 from-end).
-        var startIndex = MakeIndex(range.LowerBound, fromEnd: false);
+        var startIndex = MakeIndex(range.LowerBound, defaultFromEnd: false);
         var endIndex = range.UpperBound != null
-            ? MakeIndex(range.UpperBound, fromEnd: false)
-            : MakeIndex(null, fromEnd: true);
+            ? MakeIndex(range.UpperBound, defaultFromEnd: false)
+            : MakeIndex(null, defaultFromEnd: true);
 
         var rangeValue = new BoundClrConstructorCallExpression(
             null,
@@ -2896,6 +3014,57 @@ internal sealed partial class ExpressionBinder
         }
 
         indexer = null;
+        return false;
+    }
+
+    // Issue #1022: a type that exposes a `this[System.Index]` indexer can serve
+    // a from-end index directly (the indexer resolves `^n` at runtime).
+    private static bool TryFindIndexIndexer(Type clrType, out PropertyInfo indexer)
+    {
+        foreach (var property in clrType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            var indexParams = property.GetIndexParameters();
+            if (indexParams.Length == 1 && indexParams[0].ParameterType.IsSameAs(typeof(System.Index)))
+            {
+                indexer = property;
+                return true;
+            }
+        }
+
+        indexer = null;
+        return false;
+    }
+
+    // Issue #1022: a type with an `int Length`/`int Count` property and a
+    // `this[int]` indexer (string, List<T>, span-like) can serve a from-end
+    // index as `this[Length - n]`.
+    private static bool TryFindCountedIntIndexer(Type clrType, out MemberInfo lengthMember, out PropertyInfo intIndexer)
+    {
+        lengthMember = null;
+        intIndexer = null;
+
+        var lengthProp = clrType.GetProperty("Length", BindingFlags.Public | BindingFlags.Instance);
+        if (lengthProp == null || !lengthProp.PropertyType.IsSameAs(typeof(int)))
+        {
+            lengthProp = clrType.GetProperty("Count", BindingFlags.Public | BindingFlags.Instance);
+        }
+
+        if (lengthProp == null || !lengthProp.PropertyType.IsSameAs(typeof(int)))
+        {
+            return false;
+        }
+
+        foreach (var property in clrType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            var indexParams = property.GetIndexParameters();
+            if (indexParams.Length == 1 && indexParams[0].ParameterType.IsSameAs(typeof(int)))
+            {
+                lengthMember = lengthProp;
+                intIndexer = property;
+                return true;
+            }
+        }
+
         return false;
     }
 
