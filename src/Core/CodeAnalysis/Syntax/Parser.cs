@@ -4284,6 +4284,90 @@ public class Parser
         return new ExpressionStatementSyntax(syntaxTree, assignment);
     }
 
+    /// <summary>
+    /// ADR-0126 / issue #1027: desugars a prefix (<c>++x</c> / <c>--x</c>) or
+    /// postfix (<c>x++</c> / <c>x--</c>) increment/decrement <em>expression</em>
+    /// into existing value-producing assignment syntax, mirroring the
+    /// statement-level desugar in <see cref="ParseIncrementDecrementStatement"/>
+    /// and the compound-assignment desugar in
+    /// <see cref="ParseAssignmentExpression"/>.
+    /// <para>
+    /// The write reuses the read-modify-write nodes that already yield the
+    /// mutated (new) value: a bare variable lowers to
+    /// <c>operand = operand ± 1</c>, an array element / indexer lowers to the
+    /// single-evaluating <see cref="CompoundIndexAssignmentExpressionSyntax"/>
+    /// (<c>operand ±= 1</c>), and a field lowers to a
+    /// <see cref="MemberFieldAssignmentExpressionSyntax"/>.
+    /// </para>
+    /// <para>
+    /// A <em>prefix</em> form yields that new value directly. A <em>postfix</em>
+    /// form must yield the value <em>before</em> mutation, so it wraps the write
+    /// in <c>(write) ∓ 1</c> — exact for the integer operand types G# accepts
+    /// for <c>++</c>/<c>--</c> (the literal <c>1</c> is <c>int32</c>; floating
+    /// point operands are rejected by the binder, so no rounding gap exists).
+    /// </para>
+    /// </summary>
+    /// <param name="operand">The already-parsed lvalue operand.</param>
+    /// <param name="op">The <c>++</c> or <c>--</c> operator token.</param>
+    /// <param name="isPrefix"><see langword="true"/> for the prefix form.</param>
+    /// <returns>The desugared value-producing expression.</returns>
+    private ExpressionSyntax BuildIncrementDecrementExpression(ExpressionSyntax operand, SyntaxToken op, bool isPrefix)
+    {
+        var isIncrement = op.Kind == SyntaxKind.PlusPlusToken;
+        var baseOpKind = isIncrement ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
+        var inverseOpKind = isIncrement ? SyntaxKind.MinusToken : SyntaxKind.PlusToken;
+        var compoundOpKind = isIncrement ? SyntaxKind.PlusEqualsToken : SyntaxKind.MinusEqualsToken;
+        var pos = op.Position;
+
+        LiteralExpressionSyntax OneLiteral() =>
+            new LiteralExpressionSyntax(syntaxTree, new SyntaxToken(syntaxTree, SyntaxKind.NumberToken, pos, "1", 1), 1);
+
+        ExpressionSyntax write;
+        if (TryLiftTrailingIndexer(operand, out var indexed))
+        {
+            // Array element / indexer: route through the single-evaluating
+            // compound-index assignment so the receiver chain is computed once.
+            var compoundToken = new SyntaxToken(syntaxTree, compoundOpKind, pos, SyntaxFacts.GetText(compoundOpKind), null);
+            write = new CompoundIndexAssignmentExpressionSyntax(syntaxTree, indexed, compoundToken, OneLiteral());
+        }
+        else
+        {
+            var baseOpToken = new SyntaxToken(syntaxTree, baseOpKind, pos, SyntaxFacts.GetText(baseOpKind), null);
+            var newValue = new BinaryExpressionSyntax(syntaxTree, operand, baseOpToken, OneLiteral());
+            var equalsToken = new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, pos, SyntaxFacts.GetText(SyntaxKind.EqualsToken), null);
+
+            if (operand is NameExpressionSyntax name)
+            {
+                write = new AssignmentExpressionSyntax(syntaxTree, name.IdentifierToken, equalsToken, newValue);
+            }
+            else if (TryLiftTrailingMemberAccess(operand, out var receiver, out var dotToken, out var fieldIdentifier))
+            {
+                // Prefer the simple `id.field = value` form when the receiver is
+                // a bare name: it binds through the field-assignment path that
+                // correctly takes the address of a struct-local receiver in
+                // value position (the chained member form copies a value-type
+                // receiver by value, which would drop the mutation).
+                write = receiver is NameExpressionSyntax simpleReceiver
+                    ? new FieldAssignmentExpressionSyntax(syntaxTree, simpleReceiver.IdentifierToken, dotToken, fieldIdentifier, equalsToken, newValue)
+                    : new MemberFieldAssignmentExpressionSyntax(syntaxTree, receiver, dotToken, fieldIdentifier, equalsToken, newValue);
+            }
+            else
+            {
+                Diagnostics.ReportInvalidIncrementDecrementTarget(operand.Location, op.Text);
+                return operand;
+            }
+        }
+
+        if (isPrefix)
+        {
+            return write;
+        }
+
+        // Postfix yields the value before mutation: (write) ∓ 1.
+        var inverseOpToken = new SyntaxToken(syntaxTree, inverseOpKind, pos, SyntaxFacts.GetText(inverseOpKind), null);
+        return new BinaryExpressionSyntax(syntaxTree, write, inverseOpToken, OneLiteral());
+    }
+
     private bool LooksLikeMultiAssignment()
     {
         // Pattern: ident, ident (, ident)* (= | :=) ...
@@ -5932,7 +6016,16 @@ public class Parser
     {
         ExpressionSyntax left;
         var unaryOperatorPrecedence = Current.Kind.GetUnaryOperatorPrecedence();
-        if (unaryOperatorPrecedence != 0 && unaryOperatorPrecedence >= parentPrecedence)
+        if (Current.Kind == SyntaxKind.PlusPlusToken || Current.Kind == SyntaxKind.MinusMinusToken)
+        {
+            // ADR-0126 / issue #1027: prefix increment/decrement `++x` / `--x`.
+            // Binds at the unary precedence tier so `++a.b[c]` targets the whole
+            // lvalue and `++a + b` parses as `(++a) + b`.
+            var prefixOp = NextToken();
+            var prefixOperand = ParseBinaryExpression(6);
+            left = BuildIncrementDecrementExpression(prefixOperand, prefixOp, isPrefix: true);
+        }
+        else if (unaryOperatorPrecedence != 0 && unaryOperatorPrecedence >= parentPrecedence)
         {
             var operatorToken = NextToken();
             var operand = ParseBinaryExpression(unaryOperatorPrecedence);
@@ -5980,6 +6073,18 @@ public class Parser
             var bangBangToken = NextToken();
             left = new UnaryExpressionSyntax(syntaxTree, bangBangToken, left);
             left = ParsePostfixChain(left);
+        }
+
+        // ADR-0126 / issue #1027: postfix increment/decrement `x++` / `x--`.
+        // A bare `identifier ++` in statement position is intercepted earlier by
+        // ParseIncrementDecrementStatement, so this expression form fires for
+        // value positions (`var j = i--`, `while i-- > 0`) and complex targets
+        // (`a[i]++`, `obj.f--`). Only a single trailing operator is accepted
+        // (C# likewise rejects `i++++`).
+        if (Current.Kind == SyntaxKind.PlusPlusToken || Current.Kind == SyntaxKind.MinusMinusToken)
+        {
+            var postfixOp = NextToken();
+            left = BuildIncrementDecrementExpression(left, postfixOp, isPrefix: false);
         }
 
         while (true)
