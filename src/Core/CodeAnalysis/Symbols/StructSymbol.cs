@@ -359,6 +359,24 @@ public sealed class StructSymbol : TypeSymbol
     public ImmutableArray<ConstructorSymbol> ExplicitConstructors { get; private set; } = ImmutableArray<ConstructorSymbol>.Empty;
 
     /// <summary>
+    /// Gets the explicit <c>init(...)</c> constructors visible on
+    /// this symbol, looking through to the generic definition for a constructed
+    /// (closed) generic type (issue #1087). A constructed <see cref="StructSymbol"/> produced
+    /// by <see cref="CreateConstructed"/> does not carry its own explicit
+    /// constructor table (those are populated on the open definition after the
+    /// constructed shell already exists), so base-constructor resolution against
+    /// a constructed generic base must consult the definition's table. The
+    /// returned <see cref="ConstructorSymbol"/> instances are the definition's,
+    /// which is exactly what the emitter keys its constructor handles by; use
+    /// <see cref="GetConstructorParameterTypesForConstruction"/> to obtain the
+    /// type-argument-substituted parameter signatures for overload matching.
+    /// </summary>
+    public ImmutableArray<ConstructorSymbol> EffectiveExplicitConstructors =>
+        !ExplicitConstructors.IsDefaultOrEmpty || Definition == null
+            ? ExplicitConstructors
+            : Definition.ExplicitConstructors;
+
+    /// <summary>
     /// Gets the user-declared <c>deinit { … }</c> destructor on this class
     /// (ADR-0068 / issue #698), or <c>null</c> when the class has none.
     /// Populated by the binder; consumed by the emitter to materialise the
@@ -996,6 +1014,52 @@ public sealed class StructSymbol : TypeSymbol
 
         var key = BuildArgsKey(typeArguments);
         return ConstructedCache.GetOrAdd((definition, key), _ => CreateConstructed(definition, typeArguments));
+    }
+
+    /// <summary>
+    /// Issue #1087: gets the parameter types of <paramref name="constructor"/>
+    /// as observed on this (possibly constructed) symbol. For a constructed
+    /// closed generic type, the open-definition constructor's parameter types
+    /// have this symbol's type arguments substituted for the definition's type
+    /// parameters (e.g. <c>init(a T)</c> on <c>Base[T]</c> surfaces as
+    /// <c>init(a int32)</c> on <c>Base[int32]</c>); for a non-generic or open
+    /// symbol the declared parameter types are returned unchanged.
+    /// </summary>
+    /// <param name="constructor">A constructor drawn from <see cref="EffectiveExplicitConstructors"/>.</param>
+    /// <returns>The (substituted, when constructed) parameter types in declaration order.</returns>
+    public ImmutableArray<TypeSymbol> GetConstructorParameterTypesForConstruction(ConstructorSymbol constructor)
+    {
+        var parameters = constructor.Parameters;
+        if (Definition == null
+            || TypeArguments.IsDefaultOrEmpty
+            || Definition.TypeParameters.IsDefaultOrEmpty
+            || parameters.IsDefaultOrEmpty)
+        {
+            var asTypes = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.IsDefaultOrEmpty ? 0 : parameters.Length);
+            if (!parameters.IsDefaultOrEmpty)
+            {
+                foreach (var p in parameters)
+                {
+                    asTypes.Add(p.Type);
+                }
+            }
+
+            return asTypes.ToImmutable();
+        }
+
+        var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(Definition.TypeParameters.Length);
+        for (var i = 0; i < Definition.TypeParameters.Length && i < TypeArguments.Length; i++)
+        {
+            subst[Definition.TypeParameters[i]] = TypeArguments[i];
+        }
+
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.Length);
+        foreach (var p in parameters)
+        {
+            builder.Add(SubstituteTypeForConstruction(p.Type, subst));
+        }
+
+        return builder.MoveToImmutable();
     }
 
     /// <summary>
