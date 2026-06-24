@@ -20,6 +20,8 @@ The body of this ADR below has been updated to reflect the `shared`-block surfac
 
 **Further revision (issue #881):** an abstract (body-less) static slot inside the interface `shared { … }` block now requires a terminating `;` — the universal no-body marker for funcs (`func Add(a T, b T) T;`). A default slot with a `{ … }` body is unchanged. See ADR-0085's "Revision (issue #881)" section.
 
+**Further revision (issue #1019): static-virtual interface *properties*.** The original ADR deferred static-virtual properties on interfaces (see the "intentionally deferred" table). Issue #1019 lifts that deferral for the **abstract** form: an interface `shared { … }` block may now declare a `prop` member — `prop Name T { get; }`, `prop Name T { get; set }`, or the bare `prop Name T;` (get/set) — modelled as static-virtual `get_Name`/`set_Name` accessor *methods* (the exact `Static | Virtual | Abstract` slot shape used for static-virtual methods) plus a CLR `Property` row. The implementer satisfies the slot with a matching static property in its own `shared { … }` block, paired to the interface accessor slots via `MethodImpl` rows; a generic method constrained by the interface reads the property through `T.Name`, lowered to the same `constrained. !!T  call <iface>::get_Name()` sequence as a static-virtual method call. This is the missing piece for the .NET generic-data / `static abstract` property pattern (e.g. `static abstract int SizeInBytes { get; }`). Two narrower cases remain deferred: a **default-bodied** static interface property (accessor bodies) is rejected with **GS0396** (interface properties are abstract slots only in this release — expose a default via a static `func`), and interface static **state** (storage — `var` / `let` / `const` fields inside the interface `shared` block) is still rejected with **GS0330**. An implementer that omits a required static-virtual interface property is reported with **GS0397**.
+
 
 ## Context
 
@@ -76,7 +78,7 @@ The constraint syntax accepts a generic type-argument list after the interface n
 
 ### Why `func` only — not `let`
 
-A `let` (an interface-level constant exposed per-implementer) is not introduced. The CLR has no equivalent storage shape: a per-implementer constant must be expressed as a static-virtual *property* (or static-virtual method with no parameters) on the interface, and ADR-0051 has not yet landed static interface properties. Adding interface static state would require either an unused CLR mapping (rejected — see ADR-0085's "deferred work" entry on `private` interface helpers) or a much larger pull-in of static interface properties (rejected for scope). Implementer needs that today are covered by writing a zero-argument `func Zero() T` inside the interface `shared` block — exactly the shape used in the snippet above for `Int32Adder`. A follow-up issue can introduce interface static state once static interface properties land; the parser rejects any non-`func` member inside an interface `shared { … }` block with GS0330 (see "Diagnostics") to keep the door open.
+A `let` (an interface-level constant exposed per-implementer) is not introduced. The CLR has no equivalent storage shape: a per-implementer constant must be expressed as a static-virtual *property* (or static-virtual method with no parameters) on the interface. As of issue #1019, abstract static-virtual *properties* **have** landed — `prop Name T { get; }` inside an interface `shared` block — so a per-implementer constant can now be exposed as `prop X T { get; }` and implemented by each type's `shared { prop X T { get { … } } }`. True interface static *state* (storage — `var` / `let` / `const` fields) still has no CLR shape and would require either an unused CLR mapping (rejected — see ADR-0085's "deferred work" entry on `private` interface helpers) or imposed-on-implementer storage plumbing (deferred for scope). Implementer needs are covered today by a zero-argument `func Zero() T` or a static-virtual `prop` inside the interface `shared` block. The parser still rejects state-shaped members (`var` / `let` / `const` / `event`) inside an interface `shared { … }` block with GS0330 (see "Diagnostics").
 
 ### Constraint grammar
 
@@ -203,10 +205,12 @@ A new bound-tree shape, `BoundConstrainedStaticCallExpression`, is introduced.
 
 | ID | Severity | Trigger |
 | --- | --- | --- |
-| **GS0330** | Error | A non-`func` member (`var` / `let` / `const` / `prop` / `event`) appears inside an interface `shared { … }` block. Interface static state is deferred (it requires static interface properties; tracked as a follow-up). The diagnostic names the owning interface and points to this ADR. |
+| **GS0330** | Error | A non-`func`, non-`prop` member (`var` / `let` / `const` / `event`) appears inside an interface `shared { … }` block. Interface static **state** (storage) is deferred. The diagnostic names the owning interface and points to this ADR. (Issue #1019 lifted the rejection of `prop` — abstract static-virtual properties are now accepted.) |
 | **GS0331** | Error | A class/struct claims to implement an interface but does not declare a `shared { func … }` member that matches a required (abstract) static-virtual slot on the interface. Names the missing slot and the owning interface. |
 | **GS0332** | Error | A class/struct claims to implement an interface and declares an *instance* method whose name matches a static-virtual slot on the interface (the implementer's method must itself be static). |
 | **GS0333** | Error | A `T.M(args)` call references a member name that does not exist as a static-virtual on `T`'s interface constraint. Names the type parameter, the constraint interface, and the missing member. |
+| **GS0396** | Error | (Issue #1019) A static-virtual interface `prop` declares an accessor *body* (a default static slot). Default-bodied static interface properties are deferred — declare an abstract slot (`prop Name T;` / `{ get; }`) or expose a default via a static `func`. |
+| **GS0397** | Error | (Issue #1019) A class/struct claims to implement an interface but does not declare a matching static property (same name, type, and required accessors) for a static-virtual interface property slot. Names the missing slot and the owning interface. |
 
 GS0321 (ADR-0085's "deferred modifier on interface method" diagnostic) no longer references `static` in any form — `static` is no longer a modifier (issue #865). It continues to fire for `open` / `override` on interface methods. The removed `static func` interface form now produces the generic GS0005 ("unexpected token") parser error rather than a dedicated diagnostic.
 
@@ -223,18 +227,18 @@ GS0321 (ADR-0085's "deferred modifier on interface method" diagnostic) no longer
 | Private static helpers via `shared { private func … }` | ✅ | Landed via ADR-0090; declared inside the interface `shared` block (issue #865). |
 | Cross-language interop with C# producers | ✅ — emit side | A C# consumer can implement a G#-declared static-virtual interface (the emitted metadata is standard ECMA shape). |
 | Cross-language interop with C# consumers | ✅ — emit + import | A G# consumer can use a C#-defined interface with static abstracts as a constraint, dispatching `T.Method(args)` to a G# or imported implementer. |
+| Abstract static-virtual *property* in interface `shared` block (`prop X T { get; }` / `{ get; set }` / bare `prop X T;`) | ✅ (issue #1019) | Modelled as static-virtual `get_`/`set_` accessor methods plus a `Property` row; required for the .NET `static abstract … { get; }` generic-data pattern. |
 | Interpreter parity | ✅ | Required by the acceptance criteria. |
 
 ### What is intentionally **deferred**
 
 | Capability | Deferred? | Rationale |
 | --- | --- | --- |
-| Interface static state (`let` / `const` constants in the interface `shared` block) | Deferred | Requires static interface properties, which are themselves deferred (ADR-0051 covers instance interface properties only). A zero-argument `func` covers the use case today. |
-| Static-virtual *properties* on interfaces (`shared { prop X T { get } }` on interface) | Deferred | Requires lifting ADR-0051 into static-property territory. Out of scope; tracked as a follow-up. |
-| Interface static constant exposed per-implementer as a sugar for "expose this readonly static through the interface" | Deferred | Same reason — depends on the static-property work. |
+| Interface static state (`var` / `let` / `const` constants with storage in the interface `shared` block) | Deferred | The CLR has no per-implementer interface-state shape; this needs real static-field storage (or imposed-on-implementer plumbing). A zero-argument `func` or a static-virtual `prop` (issue #1019) covers the use case today. Rejected with GS0330; tracked as a follow-up. |
+| Default-bodied static-virtual interface property (`shared { prop X T { get { … } } }` on the interface) | Deferred | Interface properties are abstract slots only in this release (instance interface default properties don't exist either). Rejected with GS0396; expose a default through a static-virtual `func` instead. Tracked as a follow-up. |
 | Explicit-base call for a static-virtual default (`base[IFoo].M()` for statics) | Deferred (issue #757) | Same justification as ADR-0085: not required to ship the feature; symmetric with the instance-DIM deferral. |
 
-A member inside an interface `shared { … }` block that is anything other than a `func` (e.g. `let CONST = 1`, `prop X T`) is rejected at parse-time with GS0330 and remains rejected after this revision.
+A member inside an interface `shared { … }` block that is anything other than a `func` or a `prop` (e.g. `let CONST = 1`, `var Count int32`) is rejected at parse-time with GS0330. An abstract static-virtual `prop` is accepted (issue #1019); a default-bodied static-virtual `prop` is rejected with GS0396.
 
 ## CLR / ECMA references
 

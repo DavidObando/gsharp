@@ -3567,6 +3567,29 @@ public sealed class Evaluator
                     break;
                 }
             }
+
+            // ADR-0089 / issue #1019: the slot may be a static-virtual
+            // interface *property* accessor (get_Name / set_Name). The
+            // implementer satisfies it via a static property in its shared
+            // block, whose accessor FunctionSymbols live on
+            // StaticProperties, not StaticMethods.
+            if (target == null && !resolvedImpl.StaticProperties.IsDefaultOrEmpty)
+            {
+                foreach (var p in resolvedImpl.StaticProperties)
+                {
+                    if (p.GetterSymbol != null && p.GetterSymbol.Name == node.InterfaceMethod.Name)
+                    {
+                        target = p.GetterSymbol;
+                        break;
+                    }
+
+                    if (p.SetterSymbol != null && p.SetterSymbol.Name == node.InterfaceMethod.Name)
+                    {
+                        target = p.SetterSymbol;
+                        break;
+                    }
+                }
+            }
         }
 
         // Strategy 3: fall back to the interface's default body.

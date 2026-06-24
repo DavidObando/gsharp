@@ -1360,12 +1360,17 @@ internal sealed class MemberDefEmitter
             if (prop.HasGetter && accessorHandles.Getter.HasValue)
             {
                 var sigBlob = new BlobBuilder();
-                new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+                new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !prop.IsStatic)
                     .Parameters(0, r => this.encodeTypeSymbol(r.Type(), prop.Type), _ => { });
 
                 var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
                     | MethodAttributes.Virtual | MethodAttributes.Abstract
                     | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
+                if (prop.IsStatic)
+                {
+                    attrs |= MethodAttributes.Static;
+                }
+
                 emittedGetter = this.emitCtx.Metadata.AddMethodDefinition(
                     attributes: attrs,
                     implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
@@ -1380,7 +1385,7 @@ internal sealed class MemberDefEmitter
             if (prop.HasSetter && accessorHandles.Setter.HasValue)
             {
                 var sigBlob = new BlobBuilder();
-                new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+                new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !prop.IsStatic)
                     .Parameters(1, r => r.Void(), ps =>
                     {
                         this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type);
@@ -1389,6 +1394,11 @@ internal sealed class MemberDefEmitter
                 var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
                     | MethodAttributes.Virtual | MethodAttributes.Abstract
                     | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
+                if (prop.IsStatic)
+                {
+                    attrs |= MethodAttributes.Static;
+                }
+
                 emittedSetter = this.emitCtx.Metadata.AddMethodDefinition(
                     attributes: attrs,
                     implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
@@ -1401,7 +1411,7 @@ internal sealed class MemberDefEmitter
             // Emit PropertyDef row.
             var propertySignature = new BlobBuilder();
             new BlobEncoder(propertySignature)
-                .PropertySignature(isInstanceProperty: true)
+                .PropertySignature(isInstanceProperty: !prop.IsStatic)
                 .Parameters(0, returnType => this.encodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
 
             var propDef = this.emitCtx.Metadata.AddProperty(

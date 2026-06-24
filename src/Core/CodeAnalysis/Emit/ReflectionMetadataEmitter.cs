@@ -1096,6 +1096,24 @@ internal sealed class ReflectionMetadataEmitter
                 }
 
                 this.cache.PropertyAccessorHandles[prop] = (getterHandle, setterHandle);
+
+                // ADR-0089 / issue #1019: for a static-virtual interface
+                // property, register the accessor FunctionSymbols against
+                // their planned MethodDef rows so `constrained.` dispatch
+                // (`T.Prop` → get_Prop) resolves the slot handle, exactly as
+                // for static-virtual interface methods.
+                if (prop.IsStatic)
+                {
+                    if (prop.GetterSymbol != null && getterHandle.HasValue)
+                    {
+                        this.cache.MethodHandles[prop.GetterSymbol] = getterHandle.Value;
+                    }
+
+                    if (prop.SetterSymbol != null && setterHandle.HasValue)
+                    {
+                        this.cache.MethodHandles[prop.SetterSymbol] = setterHandle.Value;
+                    }
+                }
             }
 
             // ADR-0052: plan accessor method rows for interface events.
@@ -2291,6 +2309,10 @@ internal sealed class ReflectionMetadataEmitter
             // interface members. See structs path for the same call.
             this.EmitStaticVirtualMethodImpls(c);
 
+            // ADR-0089 / issue #1019: emit MethodImpl rows for static-virtual
+            // interface properties (accessor methods).
+            this.EmitStaticVirtualPropertyMethodImpls(c);
+
             // Issue #985: emit MethodImpl rows for covariant-return interface
             // bridges (e.g. the non-generic IEnumerable.GetEnumerator).
             this.EmitExplicitInterfaceMethodImpls(c);
@@ -2373,6 +2395,10 @@ internal sealed class ReflectionMetadataEmitter
             // row points the interface slot's MethodDef at the implementer's
             // static MethodDef on the struct's TypeDef.
             this.EmitStaticVirtualMethodImpls(s);
+
+            // ADR-0089 / issue #1019: emit MethodImpl rows for static-virtual
+            // interface properties (accessor methods).
+            this.EmitStaticVirtualPropertyMethodImpls(s);
 
             // Issue #985: emit MethodImpl rows for covariant-return interface
             // bridges declared on a struct that implements `IEnumerable[T]` &c.
@@ -9339,6 +9365,77 @@ internal sealed class ReflectionMetadataEmitter
                 }
 
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, slotHandle);
+            }
+        }
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #1019: emit <c>MethodImpl</c> rows pairing the
+    /// implementer's static property accessor methods (<c>get_Name</c> /
+    /// <c>set_Name</c>) to the matching static-virtual interface property
+    /// accessor slots. Mirrors <see cref="EmitStaticVirtualMethodImpls"/> but
+    /// resolves accessor MethodDef handles through
+    /// <c>PropertyAccessorHandles</c> (static properties are tracked on
+    /// <see cref="StructSymbol.StaticProperties"/>, not <c>StaticMethods</c>).
+    /// </summary>
+    /// <param name="structSymbol">The implementer struct/class.</param>
+    private void EmitStaticVirtualPropertyMethodImpls(StructSymbol structSymbol)
+    {
+        if (structSymbol == null || structSymbol.Interfaces.IsDefaultOrEmpty || structSymbol.StaticProperties.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        if (!this.cache.StructTypeDefs.TryGetValue(structSymbol, out var implTypeDef))
+        {
+            return;
+        }
+
+        foreach (var iface in structSymbol.Interfaces)
+        {
+            if (iface.Properties.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var slotProp in iface.Properties)
+            {
+                if (!slotProp.IsStatic)
+                {
+                    continue;
+                }
+
+                if (!this.cache.PropertyAccessorHandles.TryGetValue(slotProp, out var slotAccessors))
+                {
+                    continue;
+                }
+
+                PropertySymbol implProp = null;
+                foreach (var candidate in structSymbol.StaticProperties)
+                {
+                    if (candidate.Name == slotProp.Name
+                        && (ReferenceEquals(candidate.Type, slotProp.Type) || candidate.Type?.Name == slotProp.Type?.Name))
+                    {
+                        implProp = candidate;
+                        break;
+                    }
+                }
+
+                if (implProp == null
+                    || !this.cache.PropertyAccessorHandles.TryGetValue(implProp, out var implAccessors))
+                {
+                    continue;
+                }
+
+                if (slotProp.HasGetter && slotAccessors.Getter.HasValue && implAccessors.Getter.HasValue)
+                {
+                    this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Getter.Value, slotAccessors.Getter.Value);
+                }
+
+                if (slotProp.HasSetter && slotAccessors.Setter.HasValue && implAccessors.Setter.HasValue)
+                {
+                    this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Setter.Value, slotAccessors.Setter.Value);
+                }
             }
         }
     }

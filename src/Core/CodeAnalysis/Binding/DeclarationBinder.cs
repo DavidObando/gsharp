@@ -2759,6 +2759,15 @@ internal sealed class DeclarationBinder
                 // ADR-0051: verify property requirements.
                 foreach (var iprop in iface.Properties)
                 {
+                    // ADR-0089 / issue #1019: static-virtual interface
+                    // properties are verified separately (against the
+                    // implementer's static properties); skip them here so the
+                    // instance-property contract check doesn't misfire.
+                    if (iprop.IsStatic)
+                    {
+                        continue;
+                    }
+
                     var found = false;
                     foreach (var implProp in structSymbol.Properties)
                     {
@@ -2823,6 +2832,12 @@ internal sealed class DeclarationBinder
             // carries a body). If a same-named *instance* method exists but
             // no matching static method, GS0332 surfaces; otherwise GS0331.
             VerifyStaticVirtualInterfaceImplementations(syntax, structSymbol);
+
+            // ADR-0089 / issue #1019: verify static-virtual interface
+            // *properties*. The implementer must declare a matching static
+            // property (same name and type, with at least the required
+            // accessors) inside its `shared { ... }` block; otherwise GS0397.
+            VerifyStaticVirtualInterfacePropertyImplementations(syntax, structSymbol);
 
             // ADR-0090 / issue #756: verify that the implementer does not
             // attempt to override a `private` interface helper. Private
@@ -2959,6 +2974,73 @@ internal sealed class DeclarationBinder
                     structSymbol.Name,
                     iface.Name,
                     imethod.Name);
+            }
+        }
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #1019: enforces that every static-virtual interface
+    /// property (declared inside the interface <c>shared { … }</c> block) is
+    /// matched by a same-name, same-type static property on the implementer
+    /// providing at least the required accessors. Missing slots produce GS0397.
+    /// </summary>
+    private void VerifyStaticVirtualInterfacePropertyImplementations(StructDeclarationSyntax syntax, StructSymbol structSymbol)
+    {
+        foreach (var iface in structSymbol.Interfaces)
+        {
+            if (iface.Properties.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var iprop in iface.Properties)
+            {
+                if (!iprop.IsStatic)
+                {
+                    continue;
+                }
+
+                PropertySymbol match = null;
+                foreach (var candidate in structSymbol.StaticProperties)
+                {
+                    if (candidate.Name == iprop.Name
+                        && System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(candidate.Type, iprop.Type))
+                    {
+                        match = candidate;
+                        break;
+                    }
+                }
+
+                if (match == null)
+                {
+                    Diagnostics.ReportStaticVirtualInterfacePropertyNotImplemented(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        iface.Name,
+                        iprop.Name,
+                        "missing static property");
+                    continue;
+                }
+
+                if (iprop.HasGetter && !match.HasGetter)
+                {
+                    Diagnostics.ReportStaticVirtualInterfacePropertyNotImplemented(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        iface.Name,
+                        iprop.Name,
+                        "getter");
+                }
+
+                if (iprop.HasSetter && !match.HasSetter)
+                {
+                    Diagnostics.ReportStaticVirtualInterfacePropertyNotImplemented(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        iface.Name,
+                        iprop.Name,
+                        "setter");
+                }
             }
         }
     }
@@ -4015,6 +4097,8 @@ internal sealed class DeclarationBinder
                     hasSetter = true;
                 }
 
+                var isStaticInterfaceProperty = propSyntax.HasStaticModifier;
+
                 var propSymbol = new PropertySymbol(
                     propName,
                     propType,
@@ -4024,8 +4108,81 @@ internal sealed class DeclarationBinder
                     isAutoProperty: false,
                     isVirtual: false,
                     isOverride: false,
+                    isStatic: isStaticInterfaceProperty,
                     declaration: propSyntax,
                     isInitOnly: isInitOnly);
+
+                // ADR-0089 / issue #1019: a static-virtual interface property is
+                // modelled as get/set accessor *methods* that are static-virtual
+                // slots (IsStatic + StaticOwnerType = the interface), reusing the
+                // static-virtual method machinery for emit, MethodImpl pairing,
+                // and `T.Prop` constrained dispatch. A bodied accessor is a
+                // *default* static slot; a body-less accessor is an *abstract*
+                // slot the implementer must provide.
+                if (isStaticInterfaceProperty)
+                {
+                    var getAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsGetter);
+                    var setAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsSetterOrInit);
+
+                    if (hasGetter)
+                    {
+                        var getterSymbol = new FunctionSymbol(
+                            $"get_{propName}",
+                            ImmutableArray<ParameterSymbol>.Empty,
+                            propType,
+                            declaration: null,
+                            package,
+                            Accessibility.Public,
+                            receiverType: null);
+                        getterSymbol.IsStatic = true;
+                        getterSymbol.StaticOwnerType = interfaceSymbol;
+                        getterSymbol.IsSpecialName = true;
+                        if (getAccessor?.Body != null)
+                        {
+                            // Default-bodied static interface properties are
+                            // deferred (issue #1019 follow-up); treat as an
+                            // abstract slot after diagnosing.
+                            Diagnostics.ReportDefaultStaticInterfacePropertyNotSupported(
+                                getAccessor.AccessorKeyword.Location, interfaceSymbol.Name, propName);
+                            getterSymbol.IsAbstract = true;
+                        }
+                        else
+                        {
+                            getterSymbol.IsAbstract = true;
+                        }
+
+                        propSymbol.GetterSymbol = getterSymbol;
+                    }
+
+                    if (hasSetter)
+                    {
+                        var setterParam = new ParameterSymbol("value", propType);
+                        var setterSymbol = new FunctionSymbol(
+                            $"set_{propName}",
+                            ImmutableArray.Create(setterParam),
+                            TypeSymbol.Void,
+                            declaration: null,
+                            package,
+                            Accessibility.Public,
+                            receiverType: null);
+                        setterSymbol.IsStatic = true;
+                        setterSymbol.StaticOwnerType = interfaceSymbol;
+                        setterSymbol.IsSpecialName = true;
+                        setterSymbol.IsInitOnlySetter = isInitOnly;
+                        if (setAccessor?.Body != null)
+                        {
+                            Diagnostics.ReportDefaultStaticInterfacePropertyNotSupported(
+                                setAccessor.AccessorKeyword.Location, interfaceSymbol.Name, propName);
+                            setterSymbol.IsAbstract = true;
+                        }
+                        else
+                        {
+                            setterSymbol.IsAbstract = true;
+                        }
+
+                        propSymbol.SetterSymbol = setterSymbol;
+                    }
+                }
 
                 Binder.AttachDocumentation(propSymbol, propSyntax);
                 propertiesBuilder.Add(propSymbol);
