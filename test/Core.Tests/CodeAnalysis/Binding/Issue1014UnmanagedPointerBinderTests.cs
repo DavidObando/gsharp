@@ -185,7 +185,7 @@ unsafe func f(p *string) {
     }
 
     [Fact]
-    public void PointerDifference_NotSupported_ReportsGS0129()
+    public void PointerDifference_SameType_BindsToNint()
     {
         const string source = @"
 package P
@@ -196,6 +196,24 @@ unsafe func run() {
     var p *int32 = &arr[0]
     var q *int32 = &arr[1]
     var d = q - p
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void PointerDifference_MismatchedType_ReportsGS0129()
+    {
+        const string source = @"
+package P
+import System
+
+unsafe func run() {
+    var arr = []int32{1, 2}
+    var p *int32 = &arr[0]
+    var bp = *uint8(p)
+    var d = p - bp
 }
 ";
         var diagnostics = GetDiagnostics(source);

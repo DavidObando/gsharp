@@ -244,7 +244,16 @@ internal sealed partial class ExpressionBinder
                     return LowerPointerOffset(left, leftPtr, right, subtract: true);
                 }
 
-                // Pointer difference `p - q` is deferred to a follow-up issue.
+                // ADR-0122 / issue #1032: pointer difference `p - q` for two
+                // operands of the SAME pointer type `*T` yields the scaled
+                // element count as `nint`: ((nint)p - (nint)q) / sizeof(T).
+                // Mismatched pointer types `*T - *U` fall through to the
+                // normal error path (GS0129), matching C#.
+                if (leftPtr != null && rightPtr != null && leftPtr.PointeeType == rightPtr.PointeeType)
+                {
+                    return LowerPointerDifference(left, right, leftPtr);
+                }
+
                 return null;
 
             case SyntaxKind.EqualsEqualsToken:
@@ -314,6 +323,37 @@ internal sealed partial class ExpressionBinder
         var addOp = BoundBinaryOperator.Bind(addKind, TypeSymbol.NInt, TypeSymbol.NInt);
         var resultNint = new BoundBinaryExpression(null, pointerNint, addOp, scaled);
         return new BoundConversionExpression(null, pointerType, resultNint);
+    }
+
+    /// <summary>
+    /// ADR-0122 / issue #1032: lowers a pointer difference <c>p - q</c> (both
+    /// operands the same unmanaged pointer type <c>*T</c>) to the scaled
+    /// element count as <see cref="TypeSymbol.NInt"/>:
+    /// <c>((nint)p - (nint)q) / sizeof(T)</c>. Both pointers are native-int
+    /// sized, so the byte difference is a signed <c>nint</c> subtraction and
+    /// the divide by the static pointee size is a signed integer division,
+    /// matching the C# <c>T*</c> difference semantics.
+    /// </summary>
+    /// <param name="left">The bound left pointer operand.</param>
+    /// <param name="right">The bound right pointer operand.</param>
+    /// <param name="pointerType">The common pointer type <c>*T</c>.</param>
+    /// <returns>The lowered <c>nint</c> element-count expression.</returns>
+    private BoundExpression LowerPointerDifference(BoundExpression left, BoundExpression right, PointerTypeSymbol pointerType)
+    {
+        var leftNint = new BoundConversionExpression(null, TypeSymbol.NInt, left);
+        var rightNint = new BoundConversionExpression(null, TypeSymbol.NInt, right);
+        var subOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.NInt, TypeSymbol.NInt);
+        var byteDiff = new BoundBinaryExpression(null, leftNint, subOp, rightNint);
+
+        var size = StaticPointeeSize(pointerType.PointeeType);
+        if (size == 1)
+        {
+            return byteDiff;
+        }
+
+        var sizeLit = new BoundConversionExpression(null, TypeSymbol.NInt, new BoundLiteralExpression(null, size, TypeSymbol.Int32));
+        var divOp = BoundBinaryOperator.Bind(SyntaxKind.SlashToken, TypeSymbol.NInt, TypeSymbol.NInt);
+        return new BoundBinaryExpression(null, byteDiff, divOp, sizeLit);
     }
 
     private BoundExpression LowerPointerComparison(SyntaxKind operatorKind, BoundExpression left, BoundExpression right)

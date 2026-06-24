@@ -102,6 +102,71 @@ public class Issue1014UnmanagedPointerEmitTests
     }
 
     [Fact]
+    public void Pointer_Difference_Int32_CompilesAndRuns()
+    {
+        var source = """
+            package Probe
+            import System
+
+            unsafe func run() {
+                var arr = []int32{1, 2, 3, 4, 5}
+                var p = &arr[0]
+                var q = &arr[3]
+                var d = q - p
+                Console.WriteLine(d)
+                Console.WriteLine(p - q)
+            }
+
+            run()
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("3\n-3\n", output);
+    }
+
+    [Fact]
+    public void Pointer_Difference_Int64_CompilesAndRuns()
+    {
+        var source = """
+            package Probe
+            import System
+
+            unsafe func run() {
+                var arr = []int64{10, 20, 30, 40}
+                var p = &arr[0]
+                var q = &arr[2]
+                Console.WriteLine(q - p)
+            }
+
+            run()
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("2\n", output);
+    }
+
+    [Fact]
+    public void Pointer_Difference_Uint8_CompilesAndRuns()
+    {
+        var source = """
+            package Probe
+            import System
+
+            unsafe func run() {
+                var arr = []int32{0, 0}
+                var bp = *uint8(&arr[0])
+                var bq = bp + 5
+                Console.WriteLine(bq - bp)
+            }
+
+            run()
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("5\n", output);
+    }
+
+    [Fact]
     public void Pointer_CastBetweenPointerTypes_CompilesAndRuns()
     {
         var source = """
