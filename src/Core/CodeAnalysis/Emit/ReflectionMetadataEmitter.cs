@@ -8361,7 +8361,20 @@ internal sealed class ReflectionMetadataEmitter
         // and locals all flow through this branch uniformly.
         if (type is PointerTypeSymbol ptr)
         {
-            EncodeTypeSymbol(encoder.Pointer(), ptr.PointeeType);
+            var pointerEncoder = encoder.Pointer();
+
+            // ADR-0122 §3 / issue #1033: `*void` (C# `void*`) encodes as
+            // ELEMENT_TYPE_PTR over ELEMENT_TYPE_VOID. SignatureTypeEncoder has
+            // no `Void()` helper (void is only valid as a return or pointee), so
+            // write the raw ELEMENT_TYPE_VOID type-code byte after the pointer
+            // prefix that `encoder.Pointer()` already emitted.
+            if (ptr.PointeeType == TypeSymbol.Void)
+            {
+                pointerEncoder.Builder.WriteByte((byte)System.Reflection.Metadata.SignatureTypeCode.Void);
+                return;
+            }
+
+            EncodeTypeSymbol(pointerEncoder, ptr.PointeeType);
             return;
         }
 

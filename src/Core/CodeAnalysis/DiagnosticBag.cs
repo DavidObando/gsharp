@@ -1589,6 +1589,21 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// GS0403: a <c>void</c>-element pointer (<c>*void</c>, the faithful mapping
+    /// of C# <c>void*</c>; ADR-0122 §3 / issue #1033) was directly dereferenced
+    /// (<c>*p</c>), indexed (<c>p[i]</c>), or used in pointer arithmetic
+    /// (<c>p + i</c>, <c>p - i</c>, <c>p - q</c>). A <c>*void</c> carries no
+    /// element type, so it must first be cast to a typed pointer <c>*T</c>
+    /// (e.g. <c>*int32(p)</c>) before any of these operations.
+    /// </summary>
+    /// <param name="location">The text location of the offending operation.</param>
+    /// <param name="operation">A short description of the rejected operation (e.g. "dereference", "index", "perform arithmetic on").</param>
+    public void ReportVoidPointerOperationNotAllowed(TextLocation location, string operation)
+    {
+        Report(location, "GS0403", $"Cannot {operation} a void pointer '*void'; it has no element type. Cast it to a typed pointer first (e.g. '*int32(p)') (ADR-0122 §3).");
+    }
+
+    /// <summary>
     /// Reports that an <c>async func(...)</c> type clause has an explicit
     /// <c>Task[…]</c> (or other Task-shaped) return type. The <c>async</c>
     /// modifier already implies a Task wrap, so the explicit wrap is

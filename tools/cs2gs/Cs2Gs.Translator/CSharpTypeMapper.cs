@@ -56,18 +56,21 @@ public sealed class CSharpTypeMapper
         }
 
         // A C# unsafe pointer type (`T*`, `void*`) maps to the canonical G#
-        // PREFIX managed-pointer form `*T` (spec §"Byref/pointer syntax exists
-        // as `*T`"; grammar `'*' TypeClause '?'?`). `void*` has no managed
-        // pointee, so it maps to `*uint8` (a raw byte pointer). The emitted
-        // form round-trips through the parser; the binder later steers callers
-        // to ref/out/in (GS0243) and rejects pointer fields (GS9006) — the
+        // PREFIX pointer form `*T` (spec §"Byref/pointer syntax exists as
+        // `*T`"; grammar `'*' TypeClause '?'?`). A `void*` (no element type)
+        // maps to the faithful void-element pointer `*void` (ADR-0122 §3 /
+        // issue #1033) — distinct from a byte pointer `*uint8`: it round-trips
+        // through `nint`/`IntPtr` and casts to/from typed pointers, but cannot
+        // be dereferenced/indexed/advanced without a cast. The emitted form
+        // round-trips through the parser; the binder steers callers to
+        // ref/out/in (GS0243) and rejects pointer fields (GS9006) on the
         // excepted unsafe Win32-interop surface (ADR-0115 §G). A FUNCTION
         // pointer has no canonical managed G# form and stays Unsupported.
         if (type is IPointerTypeSymbol pointer)
         {
             ITypeSymbol pointee = pointer.PointedAtType;
             GTypeReference element = pointee == null || pointee.SpecialType == SpecialType.System_Void
-                ? new NamedTypeReference("uint8")
+                ? new NamedTypeReference("void")
                 : this.Map(pointee, context, location);
             context.Report(new TranslationDiagnostic(
                 "PointerType",

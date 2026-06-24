@@ -271,6 +271,20 @@ public class TypeSymbol : Symbol
     public static bool IsUnmanagedPointer(TypeSymbol type) => type is PointerTypeSymbol;
 
     /// <summary>
+    /// ADR-0122 §3 / issue #1033. Returns whether <paramref name="type"/> is a
+    /// true <c>void</c>-element unmanaged pointer (<c>*void</c>, CLR
+    /// <c>ELEMENT_TYPE_PTR</c> over <c>ELEMENT_TYPE_VOID</c>) — the faithful
+    /// mapping of C# <c>void*</c>, distinct from the byte pointer <c>*uint8</c>.
+    /// A <c>*void</c> carries no element type: it may be round-tripped through
+    /// <c>nint</c>/<c>IntPtr</c> and cast to/from a typed pointer <c>*T</c>, but
+    /// it may not be directly dereferenced, indexed, or used in pointer
+    /// arithmetic (those require a cast to a typed pointer first).
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> when the type is the void-element pointer <c>*void</c>.</returns>
+    public static bool IsVoidPointer(TypeSymbol type) => type is PointerTypeSymbol { PointeeType: var pointee } && pointee == Void;
+
+    /// <summary>
     /// ADR-0122 / issue #1014. Returns whether <paramref name="type"/> is a
     /// legal pointee for an unmanaged pointer in the supported core subset: a
     /// blittable primitive (<c>int8</c>…<c>int64</c>, <c>uint8</c>…<c>uint64</c>,
