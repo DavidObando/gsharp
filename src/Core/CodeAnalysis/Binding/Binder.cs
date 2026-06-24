@@ -1992,6 +1992,22 @@ public sealed class Binder
             return ChannelTypeSymbol.Get(elementType);
         }
 
+        // Issue #1046: an array/slice whose element is itself a (non-identifier)
+        // nested type clause — jagged arrays `[][]T`, arrays of pointers `[]*T`,
+        // arrays of maps `[]map[K,V]`, etc. The element is bound recursively and
+        // wrapped in the appropriate slice/array symbol, mirroring the flat
+        // identifier-element path below.
+        if (syntax.IsArray && syntax.HasNestedArrayElement)
+        {
+            var nestedElement = BindTypeClause(syntax.ArrayElementType);
+            if (nestedElement == null)
+            {
+                return null;
+            }
+
+            return ApplyArraySuffix(syntax, nestedElement);
+        }
+
         // ADR-0040: sequence type clause `sequence[T]`.
         // ADR-0042: `async sequence[T]` resolves to IAsyncEnumerable[T] in any
         // type-clause position; the unmodified `sequence[T]` stays IEnumerable[T]
@@ -2126,10 +2142,10 @@ public sealed class Binder
                     // the type-erased closed CLR shape so call-site inference,
                     // return-type substitution, and user-type emit can recover
                     // the real type argument.
-                    return ImportedTypeSymbol.GetConstructed(closed, clrOpenType, symbolicArgs.MoveToImmutable());
+                    return ApplyArraySuffix(syntax, ImportedTypeSymbol.GetConstructed(closed, clrOpenType, symbolicArgs.MoveToImmutable()));
                 }
 
-                return TypeSymbol.FromClrType(closed);
+                return ApplyArraySuffix(syntax, TypeSymbol.FromClrType(closed));
             }
             catch (System.ArgumentException)
             {
@@ -2242,7 +2258,22 @@ public sealed class Binder
             }
         }
 
-        if (!syntax.IsArray)
+        return ApplyArraySuffix(syntax, element);
+    }
+
+    /// <summary>
+    /// Wraps a resolved element type in the slice/array symbol implied by the
+    /// array prefix of <paramref name="syntax"/> (<c>[]T</c> → slice, <c>[N]T</c>
+    /// → fixed-length array), or returns the element unchanged when the clause
+    /// has no array prefix. Reports an invalid-array-length diagnostic and
+    /// returns <c>null</c> when a fixed-length prefix carries a malformed length.
+    /// </summary>
+    /// <param name="syntax">The (possibly array-prefixed) type clause.</param>
+    /// <param name="element">The already-resolved element type.</param>
+    /// <returns>The slice/array symbol, the element itself, or <c>null</c> on error.</returns>
+    private TypeSymbol ApplyArraySuffix(TypeClauseSyntax syntax, TypeSymbol element)
+    {
+        if (element == null || !syntax.IsArray)
         {
             return element;
         }

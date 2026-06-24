@@ -844,11 +844,25 @@ internal sealed partial class ExpressionBinder
 
     internal BoundExpression BindArrayCreationExpression(ArrayCreationExpressionSyntax syntax)
     {
-        var elementType = lookupType(syntax.ElementTypeIdentifier.Text);
-        if (elementType == null)
+        TypeSymbol elementType;
+        if (syntax.HasNestedElementTypeClause)
         {
-            Diagnostics.ReportUndefinedType(syntax.ElementTypeIdentifier.Location, syntax.ElementTypeIdentifier.Text);
-            return new BoundErrorExpression(null);
+            // Issue #1046: jagged-array literal — the element is a nested type
+            // clause (`[][]int32{ … }`), resolved recursively.
+            elementType = bindTypeClause(syntax.ElementTypeClause);
+            if (elementType == null)
+            {
+                return new BoundErrorExpression(null);
+            }
+        }
+        else
+        {
+            elementType = lookupType(syntax.ElementTypeIdentifier.Text);
+            if (elementType == null)
+            {
+                Diagnostics.ReportUndefinedType(syntax.ElementTypeIdentifier.Location, syntax.ElementTypeIdentifier.Text);
+                return new BoundErrorExpression(null);
+            }
         }
 
         var elements = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements.Count);
