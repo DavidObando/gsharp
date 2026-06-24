@@ -1522,6 +1522,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// GS0398: an unmanaged pointer (ADR-0122 / issue #1014) targets a
+    /// pointee type that is not blittable. Only <c>void</c>-equivalent
+    /// (<c>uint8</c>) and blittable primitive pointees (and pointers to
+    /// them) are supported; pointers to managed reference types or
+    /// non-blittable structs are rejected.
+    /// </summary>
+    /// <param name="location">The text location of the pointer type clause.</param>
+    /// <param name="pointeeName">The illegal pointee type name.</param>
+    public void ReportUnmanagedPointerIllegalPointee(TextLocation location, string pointeeName)
+    {
+        Report(location, "GS0398", $"Unmanaged pointer to '{pointeeName}' is not supported; the pointee must be a blittable primitive or another pointer (ADR-0122).");
+    }
+
+    /// <summary>
     /// Reports that an <c>async func(...)</c> type clause has an explicit
     /// <c>Task[…]</c> (or other Task-shaped) return type. The <c>async</c>
     /// modifier already implies a Task wrap, so the explicit wrap is

@@ -264,6 +264,16 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>Gets or sets a value indicating whether this function is declared <c>async</c> (Phase 5.1 / ADR-0023). When true, callers observe the function's return as <c>Task[T]</c> (or <c>Task</c> when no return type was declared) and the body may use <c>await</c>.</summary>
     public bool IsAsync { get; set; }
 
+    /// <summary>
+    /// Gets or sets a value indicating whether this (ADR-0122 / issue #1014)
+    /// function constitutes an <c>unsafe</c> context — either because the
+    /// declaration carried the <c>unsafe</c> modifier (<c>unsafe func</c>) or
+    /// because its containing type was declared <c>unsafe</c>. When true, the
+    /// signature and body may use unmanaged raw pointers
+    /// (<see cref="PointerTypeSymbol"/>) and raw-pointer operations.
+    /// </summary>
+    public bool IsUnsafe { get; set; }
+
     /// <summary>Gets or sets a value indicating whether this function is the synthesized
     /// top-level-statement entry point (<c>&lt;Main&gt;$</c>) introduced by ADR-0066.
     /// When true, variable declarations inside its body continue to be promoted to

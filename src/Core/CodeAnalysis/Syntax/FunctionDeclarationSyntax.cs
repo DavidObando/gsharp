@@ -284,6 +284,19 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     public bool IsRefReturn => ReturnRefModifier != null;
 
     /// <summary>
+    /// Gets or sets the optional <c>unsafe</c> contextual modifier (ADR-0122 / issue #1014)
+    /// contextual modifier preceding <c>func</c> (e.g. <c>unsafe func F(...)</c>).
+    /// When non-null the function body is an <c>unsafe</c> context: unmanaged
+    /// raw pointers (<c>*T</c> → CLR <c>ELEMENT_TYPE_PTR</c>) and raw-pointer
+    /// operations are permitted in its signature and body. Assigned by the
+    /// parser; <c>null</c> otherwise.
+    /// </summary>
+    public SyntaxToken UnsafeModifier { get; set; }
+
+    /// <summary>Gets a value indicating whether this function is marked <c>unsafe</c> (ADR-0122 / issue #1014).</summary>
+    public bool IsUnsafe => UnsafeModifier != null;
+
+    /// <summary>
     /// Gets or sets a value indicating whether this declaration is a user-defined
     /// conversion operator (issue #1017), declared as
     /// <c>func operator implicit (x T) U { … }</c> or the <c>explicit</c> variant.

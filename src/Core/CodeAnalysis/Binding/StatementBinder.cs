@@ -228,7 +228,16 @@ internal sealed class StatementBinder
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         scope = new BoundScope(scope);
 
-        BindBlockStatements(syntax.Statements, 0, statements);
+        // ADR-0122 / issue #1014: an `unsafe { … }` block enters an unsafe
+        // context for the duration of its statements. The body of an
+        // `unsafe func` (or any method of an `unsafe` type) is likewise an
+        // unsafe context — its top-level block carries no `unsafe` keyword, so
+        // consult the current function's unsafe flag as well.
+        var entersUnsafe = syntax.IsUnsafe || (function?.IsUnsafe ?? false);
+        using (binderCtx.PushUnsafeContext(entersUnsafe))
+        {
+            BindBlockStatements(syntax.Statements, 0, statements);
+        }
 
         scope = scope.Parent;
 

@@ -34,6 +34,18 @@ public sealed class BlockStatementSyntax : StatementSyntax
     public override SyntaxKind Kind => SyntaxKind.BlockStatement;
 
     /// <summary>
+    /// Gets or sets the optional <c>unsafe</c> contextual keyword (ADR-0122 / issue #1014) that introduces this block as an <c>unsafe { … }</c>
+    /// contextual keyword that introduces this block as an <c>unsafe { … }</c>
+    /// block. When non-null the statements in the block are bound in an
+    /// <c>unsafe</c> context (unmanaged raw pointers and raw-pointer operations
+    /// permitted). Assigned by the parser; <c>null</c> for ordinary blocks.
+    /// </summary>
+    public SyntaxToken UnsafeKeyword { get; set; }
+
+    /// <summary>Gets a value indicating whether this block is an <c>unsafe { … }</c> block (ADR-0122 / issue #1014).</summary>
+    public bool IsUnsafe => UnsafeKeyword != null;
+
+    /// <summary>
     /// Gets the open brace token.
     /// </summary>
     public SyntaxToken OpenBraceToken { get; }

@@ -1212,7 +1212,12 @@ internal sealed partial class MethodBodyEmitter
     private void EmitDereference(BoundDereferenceExpression node)
     {
         this.EmitExpression(node.Operand);
-        var pointeeType = ((ByRefTypeSymbol)node.Operand.Type).PointeeType;
+        if (!Symbols.TypeSymbol.TryGetPointeeType(node.Operand.Type, out var pointeeType))
+        {
+            throw new InvalidOperationException(
+                $"Cannot dereference non-pointer type '{node.Operand.Type}'.");
+        }
+
         this.EmitLoadIndirect(pointeeType);
     }
 

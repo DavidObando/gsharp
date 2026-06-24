@@ -654,6 +654,11 @@ internal sealed class DeclarationBinder
         PackageSymbol package,
         StructSymbol structSymbol)
     {
+        // ADR-0122 / issue #1014: an `unsafe class` / `unsafe struct` binds all
+        // of its members (field types, method signatures, …) within an unsafe
+        // context, so they may use unmanaged raw pointers (`*T`).
+        using var unsafeContext = binderCtx.PushUnsafeContext(syntax.IsUnsafe);
+
         var name = structSymbol.Name;
         var accessibility = structSymbol.Accessibility;
         var seenFieldNames = new HashSet<string>();
@@ -1397,6 +1402,7 @@ internal sealed class DeclarationBinder
                     methodSymbol.TypeParameters = methodTypeParameters;
                     methodSymbol.ReturnRefKind = methodReturnRefKind;
                     methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
+                    methodSymbol.IsUnsafe = methodSyntax.IsUnsafe || syntax.IsUnsafe;
 
                     // Issue #987: a no-body `open func F() R;` inside a class is
                     // the canonical G# spelling of a C# abstract method. Mark the
@@ -2075,6 +2081,7 @@ internal sealed class DeclarationBinder
                     methodSymbol.TypeParameters = methodTypeParameters;
                     methodSymbol.ReturnRefKind = methodReturnRefKind;
                     methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
+                    methodSymbol.IsUnsafe = methodSyntax.IsUnsafe || syntax.IsUnsafe;
 
                     if (!methodSyntax.Annotations.IsDefaultOrEmpty)
                     {
@@ -3958,6 +3965,7 @@ internal sealed class DeclarationBinder
                 receiverType: isStaticInterfaceMethod ? null : (TypeSymbol)interfaceSymbol);
             methodSymbol.ReturnRefKind = methodReturnRefKind;
             methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
+            methodSymbol.IsUnsafe = methodSyntax.IsUnsafe;
             methodSymbol.TypeParameters = methodTypeParameters;
             if (isStaticInterfaceMethod)
             {
@@ -4335,6 +4343,11 @@ internal sealed class DeclarationBinder
 
     internal void BindFunctionDeclaration(FunctionDeclarationSyntax syntax, PackageSymbol package)
     {
+        // ADR-0122 / issue #1014: an `unsafe func` is bound entirely within an
+        // unsafe context so its parameter / return types may be unmanaged raw
+        // pointers (`*T` → CLR ELEMENT_TYPE_PTR).
+        using var unsafeContext = binderCtx.PushUnsafeContext(syntax.IsUnsafe);
+
         var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
 
         var seenParameterNames = new HashSet<string>();
@@ -4592,6 +4605,7 @@ internal sealed class DeclarationBinder
                     explicitReceiverParameter);
                 function.TypeParameters = typeParameters;
                 function.IsAsync = syntax.IsAsync || isAsyncIteratorReturnType(type);
+                function.IsUnsafe = syntax.IsUnsafe;
                 function.ReturnRefKind = returnRefKind;
                 Binder.AttachDocumentation(function, syntax);
                 function.SetAttributes(functionAttributes);
@@ -4623,6 +4637,7 @@ internal sealed class DeclarationBinder
             function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
             function.TypeParameters = typeParameters;
             function.IsAsync = syntax.IsAsync || isAsyncIteratorReturnType(type);
+            function.IsUnsafe = syntax.IsUnsafe;
             function.ReturnRefKind = returnRefKind;
             Binder.AttachDocumentation(function, syntax);
             function.SetAttributes(functionAttributes);

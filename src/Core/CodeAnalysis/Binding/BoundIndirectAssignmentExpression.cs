@@ -25,7 +25,9 @@ public sealed class BoundIndirectAssignmentExpression : BoundExpression
     {
         Pointer = pointer;
         Value = value;
-        Type = ((ByRefTypeSymbol)pointer.Type).PointeeType;
+        Type = TypeSymbol.TryGetPointeeType(pointer.Type, out var pointee)
+            ? pointee
+            : TypeSymbol.Error;
     }
 
     /// <inheritdoc/>

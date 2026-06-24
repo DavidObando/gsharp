@@ -415,6 +415,19 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <summary>Gets a value indicating whether this struct was declared with the <c>ref</c> contextual keyword (issue #367 — a by-ref-like / <c>ref struct</c> type emitted with <c>System.Runtime.CompilerServices.IsByRefLikeAttribute</c>). Always false for <c>class</c>.</summary>
     public bool IsRef => RefModifier != null;
 
+    /// <summary>
+    /// Gets or sets the optional <c>unsafe</c> contextual modifier (ADR-0122 / issue #1014)
+    /// contextual modifier on the aggregate declaration (<c>unsafe class</c> /
+    /// <c>unsafe struct</c>). When non-null every member of the type is bound in
+    /// an <c>unsafe</c> context, so fields, methods, and properties may use
+    /// unmanaged raw pointers (<c>*T</c> → CLR <c>ELEMENT_TYPE_PTR</c>).
+    /// Assigned by the parser; <c>null</c> otherwise.
+    /// </summary>
+    public SyntaxToken UnsafeModifier { get; set; }
+
+    /// <summary>Gets a value indicating whether this aggregate was declared <c>unsafe</c> (ADR-0122 / issue #1014).</summary>
+    public bool IsUnsafe => UnsafeModifier != null;
+
     /// <summary>Gets a value indicating whether this aggregate was declared with the <c>class</c> keyword (Phase 3.B.3) rather than <c>struct</c>.</summary>
     public bool IsClass => StructKeyword?.Kind == SyntaxKind.ClassKeyword;
 

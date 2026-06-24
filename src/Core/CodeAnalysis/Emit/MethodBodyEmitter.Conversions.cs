@@ -39,6 +39,16 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitConversion(BoundConversionExpression conv)
     {
+        // ADR-0122 / issue #1014: `nil -> *T` materialises a null pointer as a
+        // zero native int. Emit it directly (the source `nil` would otherwise
+        // push an object `ldnull`, which is not a verifiable pointer value).
+        if (conv.Type is Symbols.PointerTypeSymbol && conv.Expression.Type == TypeSymbol.Null)
+        {
+            this.il.LoadConstantI4(0);
+            this.il.OpCode(ILOpCode.Conv_i);
+            return;
+        }
+
         // ADR-0059 / issue #255: GSharp function value → user-declared
         // named delegate type. The named delegate has no ClrType (its
         // TypeDef only exists in the assembly being emitted), so the
@@ -71,6 +81,36 @@ internal sealed partial class MethodBodyEmitter
         var to = conv.Type;
         if (from == to)
         {
+            return;
+        }
+
+        // ADR-0122 / issue #1014: unmanaged pointer conversions. Pointer and
+        // native-int (`nint`/`nuint`/pointer) share the CLR native-int
+        // representation, so pointer<->pointer and pointer<->nint are no-ops.
+        // A narrower integer source (`int32`/`uint32`/etc.) is widened to a
+        // native int via `conv.i`.
+        if (from is Symbols.PointerTypeSymbol || to is Symbols.PointerTypeSymbol)
+        {
+            var partner = to is Symbols.PointerTypeSymbol ? from : to;
+            if (partner == TypeSymbol.NInt || partner == TypeSymbol.NUInt
+                || partner is Symbols.PointerTypeSymbol)
+            {
+                return;
+            }
+
+            if (to is Symbols.PointerTypeSymbol)
+            {
+                this.il.OpCode(ILOpCode.Conv_i);
+            }
+            else if (to == TypeSymbol.Int64 || to == TypeSymbol.UInt64)
+            {
+                this.il.OpCode(ILOpCode.Conv_i8);
+            }
+            else
+            {
+                this.il.OpCode(ILOpCode.Conv_i4);
+            }
+
             return;
         }
 

@@ -290,6 +290,15 @@ internal static class PInvokeBinder
             return IsBlittablePrimitive(byRef.PointeeType);
         }
 
+        // ADR-0122 / issue #1014: an unmanaged raw pointer `*T` (CLR
+        // ELEMENT_TYPE_PTR) marshals as a native pointer when its pointee is a
+        // blittable primitive (or another pointer). This is the plain-`*T`
+        // P/Invoke parameter path (e.g. `void* pBuffer`, `int* pRead`).
+        if (type is PointerTypeSymbol pointer)
+        {
+            return IsBlittablePrimitive(pointer.PointeeType) || pointer.PointeeType is PointerTypeSymbol;
+        }
+
         if (type is SliceTypeSymbol slice)
         {
             return IsSupportedPrimitive(slice.ElementType);

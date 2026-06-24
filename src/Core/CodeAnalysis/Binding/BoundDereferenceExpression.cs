@@ -22,7 +22,9 @@ public sealed class BoundDereferenceExpression : BoundExpression
         : base(syntax)
     {
         Operand = operand;
-        Type = ((ByRefTypeSymbol)operand.Type).PointeeType;
+        Type = TypeSymbol.TryGetPointeeType(operand.Type, out var pointee)
+            ? pointee
+            : TypeSymbol.Error;
     }
 
     /// <inheritdoc/>
