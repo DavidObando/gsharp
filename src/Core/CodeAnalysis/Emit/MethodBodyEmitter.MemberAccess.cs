@@ -651,9 +651,14 @@ internal sealed partial class MethodBodyEmitter
         // spilled to a temp and addressed via `ldloca` rather than left as
         // a value on the stack (unverifiable / SIGSEGV).
         var receiverIsClass = access.Receiver.Type is StructSymbol rs && rs.IsClass;
+
+        // Issue #1068: an interface-typed receiver dispatches the property
+        // accessor virtually (`callvirt get_X`) against the abstract interface
+        // accessor MethodDef.
+        var receiverIsInterface = access.Receiver.Type is InterfaceSymbol;
         this.EmitInstanceReceiver(access.Receiver);
 
-        this.il.OpCode(receiverIsClass ? ILOpCode.Callvirt : ILOpCode.Call);
+        this.il.OpCode(receiverIsClass || receiverIsInterface ? ILOpCode.Callvirt : ILOpCode.Call);
         this.il.Token(getterHandle);
     }
 
@@ -707,12 +712,17 @@ internal sealed partial class MethodBodyEmitter
         // receivers spill to a temp and pass `ldloca` as `this` instead
         // of leaving a value on the stack.
         var receiverIsClass = assn.Receiver.Type is StructSymbol rs && rs.IsClass;
+
+        // Issue #1068: an interface-typed receiver dispatches the property
+        // setter virtually (`callvirt set_X`) against the abstract interface
+        // accessor MethodDef.
+        var receiverIsInterface = assn.Receiver.Type is InterfaceSymbol;
         this.EmitInstanceReceiver(assn.Receiver);
 
         this.EmitExpression(assn.Value);
         this.il.OpCode(ILOpCode.Dup);
         this.il.StoreLocal(valueSlot);
-        this.il.OpCode(receiverIsClass ? ILOpCode.Callvirt : ILOpCode.Call);
+        this.il.OpCode(receiverIsClass || receiverIsInterface ? ILOpCode.Callvirt : ILOpCode.Call);
         this.il.Token(setterHandle);
 
         // Expression result: the value we just stored — no second receiver

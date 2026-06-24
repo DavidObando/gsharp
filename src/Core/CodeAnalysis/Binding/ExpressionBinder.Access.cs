@@ -1855,6 +1855,30 @@ internal sealed partial class ExpressionBinder
 
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
                 }
+                else if (receiver != null && receiver.Type is InterfaceSymbol ifaceSym)
+                {
+                    // Issue #1068: read a property declared on the static
+                    // interface type (or any base interface) through an
+                    // interface-typed receiver. Interface methods already
+                    // dispatch via the InterfaceSymbol path in
+                    // ExpressionBinder.Calls.cs; this mirrors that for
+                    // properties so `b.H` (b : IBase) resolves the abstract
+                    // accessor and emits a verifiable `callvirt get_H`.
+                    // Inherited base-interface members are surfaced because
+                    // TypeMemberModel.TryGetProperty walks SelfAndAllBaseInterfaces.
+                    if (TypeMemberModel.TryGetProperty(ifaceSym, ne.IdentifierToken.Text, out var ifaceProp, out _))
+                    {
+                        if (!ifaceProp.HasGetter)
+                        {
+                            Diagnostics.ReportCannotAssign(ne.Location, ne.IdentifierToken.Text);
+                            return new BoundErrorExpression(null);
+                        }
+
+                        return new BoundPropertyAccessExpression(null, receiver, null, ifaceProp);
+                    }
+
+                    Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
+                }
                 else if (receiver != null && receiver.Type is TupleTypeSymbol tupleSym)
                 {
                     // Phase 4.5: tuple element access via Item1..ItemN.
