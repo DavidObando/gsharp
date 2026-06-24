@@ -3632,10 +3632,14 @@ public sealed class CSharpToGSharpTranslator
 
         private GExpression TranslateStackAlloc(StackAllocArrayCreationExpressionSyntax node)
         {
-            // gsc issue #1024: C# `stackalloc T[n]` → G# `stackalloc gT[n]`. In a
-            // safe context this yields `Span[T]`; targeting a raw pointer inside an
-            // `unsafe` context yields `*T`. The element type is mapped through the
-            // standard C#→G# type mapper (`byte`→`uint8`).
+            // gsc issues #1024, #1057, #1041: C# `stackalloc T[n]` → G#-style
+            // `stackalloc [n]gT` (the bracketed count first, then the element
+            // type). In a safe context this yields `Span[T]`; targeting a raw
+            // pointer inside an `unsafe` context yields `*T`. The element type
+            // is mapped through the standard C#→G# type mapper (`byte`→`uint8`).
+            // A C# initializer (`stackalloc byte[] { 1, 2 }`) maps to the
+            // faithful G# initializer (`stackalloc [2]uint8{1, 2}`); an omitted
+            // size is inferred from the initializer length.
             GTypeReference elementType;
             GExpression count;
             if (node.Type is ArrayTypeSyntax arrayType)
@@ -3654,15 +3658,21 @@ public sealed class CSharpToGSharpTranslator
                 count = null;
             }
 
-            // An explicit initializer (`stackalloc byte[] { 1, 2 }`) supplies the
-            // length; fall back to the element count when no size is spelled.
+            List<GExpression> elements = null;
+            if (node.Initializer != null)
+            {
+                elements = node.Initializer.Expressions.Select(this.TranslateExpression).ToList();
+            }
+
+            // An explicit initializer supplies the length; fall back to the
+            // element count when no size is spelled.
             if (count == null && node.Initializer != null)
             {
                 count = LiteralExpression.Int(
                     node.Initializer.Expressions.Count.ToString(CultureInfo.InvariantCulture));
             }
 
-            return new StackAllocExpression(elementType, count ?? LiteralExpression.Int("0"));
+            return new StackAllocExpression(elementType, count ?? LiteralExpression.Int("0"), elements);
         }
 
         private GExpression TranslateImplicitArrayCreation(ImplicitArrayCreationExpressionSyntax creation)

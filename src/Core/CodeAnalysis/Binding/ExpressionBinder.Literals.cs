@@ -897,13 +897,17 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// ADR-0124 / issue #1024: binds a stack-allocation expression
-    /// <c>stackalloc T[n]</c>. The default (safe) result is a
-    /// <c>System.Span&lt;T&gt;</c> over the <c>localloc</c>'d memory and needs
-    /// no <c>unsafe</c> context. When <paramref name="targetType"/> is an
-    /// unmanaged pointer <c>*T</c> (only spellable inside an <c>unsafe</c>
-    /// context, ADR-0122) whose pointee matches <c>T</c>, the raw <c>T*</c>
-    /// pointer is produced instead.
+    /// ADR-0124 / issues #1024, #1057, #1041: binds a stack-allocation
+    /// expression in G#-style array grammar <c>stackalloc [n]T</c>. The default
+    /// (safe) result is a <c>System.Span&lt;T&gt;</c> over the <c>localloc</c>'d
+    /// memory and needs no <c>unsafe</c> context. When
+    /// <paramref name="targetType"/> is an unmanaged pointer <c>*T</c> (only
+    /// spellable inside an <c>unsafe</c> context, ADR-0122) whose pointee
+    /// matches <c>T</c>, the raw <c>T*</c> pointer is produced instead. An
+    /// optional initializer (<c>stackalloc [n]T{a, b, …}</c> or the
+    /// count-inferred <c>stackalloc []T{a, b, …}</c>) supplies the element
+    /// values; each must be convertible to <c>T</c> and the buffer length is
+    /// the initializer length.
     /// </summary>
     /// <param name="syntax">The stackalloc syntax.</param>
     /// <param name="targetType">The contextual target type, or <see langword="null"/>.</param>
@@ -926,7 +930,51 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var count = conversions.BindConversion(syntax.CountExpression, TypeSymbol.Int32);
+        // Issue #1041: bind the optional brace-delimited initializer. Each
+        // element is converted to the element type T; the buffer length is the
+        // number of initializer elements.
+        var initializerElements = ImmutableArray<BoundExpression>.Empty;
+        if (syntax.HasInitializer)
+        {
+            var builder = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements.Count);
+            foreach (var elementSyntax in syntax.Elements)
+            {
+                builder.Add(conversions.BindConversion(elementSyntax, elementType));
+            }
+
+            initializerElements = builder.ToImmutable();
+        }
+
+        BoundExpression count;
+        if (syntax.IsCountInferred)
+        {
+            // Count-inferred `stackalloc []T{ … }`: the length comes from the
+            // initializer. Without an initializer the length is undeterminable.
+            if (!syntax.HasInitializer)
+            {
+                Diagnostics.ReportStackAllocCountInferredWithoutInitializer(syntax.Location);
+                return new BoundErrorExpression(null);
+            }
+
+            count = new BoundLiteralExpression(null, initializerElements.Length, TypeSymbol.Int32);
+        }
+        else if (syntax.HasInitializer)
+        {
+            // Explicit count with an initializer: the two must agree, as in C#.
+            var boundCount = conversions.BindConversion(syntax.CountExpression, TypeSymbol.Int32);
+            if (TryGetConstantInt32(boundCount, out var explicitCount) && explicitCount != initializerElements.Length)
+            {
+                Diagnostics.ReportStackAllocInitializerLengthMismatch(syntax.Location, explicitCount, initializerElements.Length);
+            }
+
+            // The allocated buffer holds exactly the initializer elements.
+            count = new BoundLiteralExpression(null, initializerElements.Length, TypeSymbol.Int32);
+        }
+        else
+        {
+            // Count-only `stackalloc [n]T`: a full (possibly runtime) expression.
+            count = conversions.BindConversion(syntax.CountExpression, TypeSymbol.Int32);
+        }
 
         // Unsafe pointer form: only when the declaration target is an unmanaged
         // pointer `*T`. A PointerTypeSymbol can only be produced inside an
@@ -934,12 +982,30 @@ internal sealed partial class ExpressionBinder
         if (targetType is PointerTypeSymbol)
         {
             var pointerType = PointerTypeSymbol.Get(elementType);
-            return new BoundStackAllocExpression(syntax, pointerType, elementType, count, isPointerForm: true);
+            return new BoundStackAllocExpression(syntax, pointerType, elementType, count, isPointerForm: true, initializerElements);
         }
 
         // Safe form: yield a Span<T> over the allocated memory.
         var spanType = TypeSymbol.FromClrType(typeof(System.Span<>).MakeGenericType(elementType.ClrType));
-        return new BoundStackAllocExpression(syntax, spanType, elementType, count, isPointerForm: false);
+        return new BoundStackAllocExpression(syntax, spanType, elementType, count, isPointerForm: false, initializerElements);
+    }
+
+    private static bool TryGetConstantInt32(BoundExpression expression, out int value)
+    {
+        var current = expression;
+        while (current is BoundConversionExpression conversion)
+        {
+            current = conversion.Expression;
+        }
+
+        if (current is BoundLiteralExpression { Value: int i })
+        {
+            value = i;
+            return true;
+        }
+
+        value = 0;
+        return false;
     }
 
     private BoundExpression BindMapCreationExpression(MapCreationExpressionSyntax syntax)

@@ -480,9 +480,11 @@ public sealed class IncrementDecrementExpression : GExpression
 }
 
 /// <summary>
-/// A <c>stackalloc ElemType[count]</c> expression (gsc issue #1024). In a safe
-/// context this yields a <c>Span&lt;T&gt;</c>; targeting a raw pointer inside an
-/// <c>unsafe</c> context yields <c>T*</c>.
+/// A <c>stackalloc [count]ElemType</c> expression (gsc issues #1024, #1057,
+/// #1041) in G#-style array grammar (the bracketed count first, then the
+/// element type). In a safe context this yields a <c>Span&lt;T&gt;</c>;
+/// targeting a raw pointer inside an <c>unsafe</c> context yields <c>T*</c>.
+/// An optional brace-delimited initializer supplies the element values.
 /// </summary>
 public sealed class StackAllocExpression : GExpression
 {
@@ -491,10 +493,12 @@ public sealed class StackAllocExpression : GExpression
     /// </summary>
     /// <param name="elementType">The element type.</param>
     /// <param name="count">The element-count expression.</param>
-    public StackAllocExpression(GTypeReference elementType, GExpression count)
+    /// <param name="elements">The optional initializer element values.</param>
+    public StackAllocExpression(GTypeReference elementType, GExpression count, IReadOnlyList<GExpression> elements = null)
     {
         ElementType = elementType;
         Count = count;
+        Elements = elements;
     }
 
     /// <summary>Gets the element type.</summary>
@@ -502,6 +506,9 @@ public sealed class StackAllocExpression : GExpression
 
     /// <summary>Gets the element-count expression.</summary>
     public GExpression Count { get; }
+
+    /// <summary>Gets the optional initializer element values, or <see langword="null"/> when there is no initializer.</summary>
+    public IReadOnlyList<GExpression> Elements { get; }
 }
 
 /// <summary>

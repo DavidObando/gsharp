@@ -708,15 +708,19 @@ internal sealed partial class MethodBodyEmitter
         }
     }
 
-    // ADR-0124 / issue #1024: emits a `stackalloc T[n]` expression as a CIL
-    // `localloc` over `n * sizeof(T)` bytes. The element count is evaluated
-    // once into a pre-allocated int32 scratch slot (receiverSpillSlots[node]),
-    // then read back for the byte-size computation and — for the safe Span<T>
-    // form — the `Span<T>(void*, int)` length argument. The localloc'd memory
-    // is zero-initialised because every emitted method body sets the
-    // `.locals init` (InitLocals) flag, matching C#'s safe-stackalloc
-    // guarantee. The pointer form simply leaves the raw `void*`/`T*` on the
-    // stack. localloc IL is unverifiable by design (see ADR-0124 / ADR-0122).
+    // ADR-0124 / issues #1024, #1057, #1041: emits a `stackalloc [n]T`
+    // expression as a CIL `localloc` over `n * sizeof(T)` bytes. The element
+    // count is evaluated once into a pre-allocated int32 scratch slot
+    // (receiverSpillSlots[node]), then read back for the byte-size computation
+    // and — for the safe Span<T> form — the `Span<T>(void*, int)` length
+    // argument. When an initializer is present, each element is stored into the
+    // block through the `localloc` pointer via a scaled indirect write
+    // (`dup` keeps the base pointer beneath each store so no extra local is
+    // needed). The localloc'd memory is zero-initialised because every emitted
+    // method body sets the `.locals init` (InitLocals) flag, matching C#'s
+    // safe-stackalloc guarantee. The pointer form simply leaves the raw
+    // `void*`/`T*` on the stack. localloc IL is unverifiable by design (see
+    // ADR-0124 / ADR-0122).
     private void EmitStackAlloc(BoundStackAllocExpression node)
     {
         if (!this.receiverSpillSlots.TryGetValue(node, out var countSlot))
@@ -740,6 +744,32 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Mul);
         this.il.OpCode(ILOpCode.Conv_u);
         this.il.OpCode(ILOpCode.Localloc);
+
+        // Issue #1041: store each initializer element into the block. The base
+        // pointer is kept on the bottom of the stack across the whole sequence:
+        // `dup` copies it for each element store (CIL has no swap and a scratch
+        // pointer local would otherwise be required), and the scaled
+        // `stind`/`stobj` consumes (addr, value) leaving the base pointer again.
+        if (node.HasInitializer)
+        {
+            for (var i = 0; i < node.InitializerElements.Length; i++)
+            {
+                this.il.OpCode(ILOpCode.Dup);
+                if (i > 0)
+                {
+                    // addr = base + i * sizeof(T).
+                    this.il.LoadConstantI4(i);
+                    this.il.OpCode(ILOpCode.Sizeof);
+                    this.il.Token(this.outer.GetTypeReference(elementClr));
+                    this.il.OpCode(ILOpCode.Mul);
+                    this.il.OpCode(ILOpCode.Conv_i);
+                    this.il.OpCode(ILOpCode.Add);
+                }
+
+                this.EmitExpression(node.InitializerElements[i]);
+                this.EmitStoreIndirect(node.ElementType);
+            }
+        }
 
         if (node.IsPointerForm)
         {

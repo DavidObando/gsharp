@@ -409,7 +409,17 @@ public static class GSharpPrinter
                     : $"{RenderExpression(incDec.Operand, indent)}{incDec.Operator}";
 
             case StackAllocExpression stackAlloc:
-                return $"stackalloc {RenderType(stackAlloc.ElementType)}[{RenderExpression(stackAlloc.Count, indent)}]";
+                {
+                    var count = stackAlloc.Count == null ? string.Empty : RenderExpression(stackAlloc.Count, indent);
+                    var head = $"stackalloc [{count}]{RenderType(stackAlloc.ElementType)}";
+                    if (stackAlloc.Elements == null)
+                    {
+                        return head;
+                    }
+
+                    var rendered = string.Join(", ", stackAlloc.Elements.Select(e => RenderExpression(e, indent)));
+                    return $"{head}{{{rendered}}}";
+                }
 
             case ParenthesizedExpression parenthesized:
                 return $"({RenderExpression(parenthesized.Inner, indent)})";

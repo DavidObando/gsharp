@@ -69,9 +69,9 @@ namespace Demo
     }
 
     /// <summary>
-    /// Issue #1024: a C# <c>stackalloc byte[2]</c> maps to the faithful G#
-    /// <c>stackalloc uint8[2]</c> expression with the element type mapped through
-    /// the C#-to-G# type mapper.
+    /// Issue #1024 / #1057: a C# <c>stackalloc byte[2]</c> maps to the faithful
+    /// G#-style <c>stackalloc [2]uint8</c> expression (bracketed count first,
+    /// then the element type mapped through the C#-to-G# type mapper).
     /// </summary>
     [Fact]
     public void StackAlloc_TranslatesToFaithfulStackAllocExpression()
@@ -90,7 +90,32 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("stackalloc uint8[2]", printed);
+        Assert.Contains("stackalloc [2]uint8", printed);
+    }
+
+    /// <summary>
+    /// Issue #1041: a C# <c>stackalloc int[] { 1, 2, 3 }</c> maps to the
+    /// faithful G#-style initializer form <c>stackalloc [3]int32{1, 2, 3}</c>,
+    /// with the length inferred from the initializer.
+    /// </summary>
+    [Fact]
+    public void StackAlloc_WithInitializer_TranslatesToFaithfulInitializerForm()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    using System;
+    public static class Buffers
+    {
+        public static int Sum()
+        {
+            Span<int> data = stackalloc int[] { 1, 2, 3 };
+            return data.Length;
+        }
+    }
+}");
+
+        Assert.Contains("stackalloc [3]int32{1, 2, 3}", printed);
     }
 
     /// <summary>

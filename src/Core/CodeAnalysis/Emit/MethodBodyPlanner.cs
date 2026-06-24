@@ -463,7 +463,7 @@ internal sealed class MethodBodyPlanner
             defaultExpressionSlots[def] = slot;
         }
 
-        // ADR-0124 / issue #1024: each `stackalloc T[n]` needs an int32 scratch
+        // ADR-0124 / issue #1024: each `stackalloc [n]T` needs an int32 scratch
         // local to hold the element count. The count is evaluated once into the
         // temp; the emitter then reads it for both the byte-size computation
         // (count * sizeof(T) feeding `localloc`) and, for the safe Span<T> form,
