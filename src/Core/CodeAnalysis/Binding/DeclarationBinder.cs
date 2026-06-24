@@ -799,6 +799,16 @@ internal sealed class DeclarationBinder
         var constFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
         var pendingConstInitializers = new List<(FieldSymbol Field, FieldDeclarationSyntax Syntax, TypeSymbol FieldType)>();
 
+        // Issue #1070: `shared`-block static field initializers and `shared`/const
+        // initializers are also deferred so that ALL of them are bound in a single
+        // pass once every static member symbol (static field, const, static
+        // property) of the enclosing type exists. Binding them in a scope that
+        // exposes those static members makes a field initializer able to reference
+        // a sibling `const` or `shared` field regardless of declaration order,
+        // matching the static-member visibility a method/constructor body already has.
+        var pendingStaticFieldInitializers = new List<(FieldSymbol Field, ExpressionSyntax InitSyntax, TypeSymbol FieldType)>();
+        var pendingSharedConstInitializers = new List<(FieldSymbol Field, FieldDeclarationSyntax Syntax, TypeSymbol FieldType)>();
+
         foreach (var fieldSyntax in syntax.Fields)
         {
             var fieldName = fieldSyntax.Identifier.Text;
@@ -1154,60 +1164,16 @@ internal sealed class DeclarationBinder
         // primary-constructor parameters so they can be forwarded to the base.
         BindBaseConstructorInitializer(syntax, structSymbol, baseClassSymbol, importedBaseType, primaryCtorParameters);
 
-        // Issue #640: now that the struct symbol exists, bind the deferred
-        // instance-field initializer expressions and install them on the symbol.
-        if (pendingInstanceInitializers.Count > 0)
-        {
-            // Issue #948: an instance field initializer runs before the
-            // constructor body, so it cannot reference `this`, other instance
-            // members, or constructor parameters (matching C#). Collect the
-            // forbidden names so we can report a precise diagnostic.
-            var instanceMemberNames = new HashSet<string>(System.StringComparer.Ordinal) { "this" };
-            foreach (var f in fields)
-            {
-                instanceMemberNames.Add(f.Name);
-            }
-
-            foreach (var p in primaryCtorParameters)
-            {
-                instanceMemberNames.Add(p.Name);
-            }
-
-            var instanceInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
-            foreach (var (fieldSym, initSyntax, fieldType) in pendingInstanceInitializers)
-            {
-                if (TryFindInstanceMemberReference(initSyntax, instanceMemberNames, out var offendingName, out var offendingLocation))
-                {
-                    Diagnostics.ReportFieldInitializerCannotReferenceInstanceMember(offendingLocation, offendingName);
-                    continue;
-                }
-
-                var boundInit = bindExpression(initSyntax);
-                var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
-                instanceInitBuilder[fieldSym] = convertedInit;
-            }
-
-            structSymbol.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable());
-        }
-
-        // Issue #948: bind and fold the deferred const-field initializers to a
-        // compile-time constant, then install the const fields on the symbol.
+        // Issue #640 / issue #1070: the deferred instance-field initializer
+        // expressions, const-field foldings, and `shared`-block initializers are
+        // all bound later in a single consolidated pass (see "Issue #1070:
+        // consolidated field-initializer binding" below), once every static
+        // member symbol of the enclosing type has been created. That ordering is
+        // what lets an initializer reference a sibling `const`/`shared` field
+        // regardless of declaration order. Here we only install the const-field
+        // SYMBOLS so downstream member signatures can reference them by name.
         if (constFieldsBuilder.Count > 0)
         {
-            foreach (var (constField, fieldSyntaxNode, fieldType) in pendingConstInitializers)
-            {
-                var boundInit = bindExpression(fieldSyntaxNode.Initializer);
-                var convertedInit = conversions.BindConversion(fieldSyntaxNode.Initializer.Location, boundInit, fieldType);
-                if (TryFoldConstantFieldValue(convertedInit, fieldType, out var constantValue))
-                {
-                    constField.SetConstantValue(constantValue);
-                }
-                else if (boundInit is not BoundErrorExpression && convertedInit is not BoundErrorExpression)
-                {
-                    Diagnostics.ReportConstFieldInitializerNotConstant(fieldSyntaxNode.Initializer.Location, constField.Name);
-                }
-            }
-
             structSymbol.SetConstFields(constFieldsBuilder.ToImmutable());
         }
 
@@ -1910,7 +1876,6 @@ internal sealed class DeclarationBinder
             // Static fields
             var staticFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
             var sharedConstFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
-            var initializersBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
             foreach (var fieldSyntax in syntax.SharedBlock.Fields)
             {
                 var fieldName = fieldSyntax.Identifier.Text;
@@ -1967,16 +1932,10 @@ internal sealed class DeclarationBinder
                     }
                     else
                     {
-                        var boundConst = bindExpression(fieldSyntax.Initializer);
-                        var convertedConst = conversions.BindConversion(fieldSyntax.Initializer.Location, boundConst, fieldType);
-                        if (TryFoldConstantFieldValue(convertedConst, fieldType, out var sharedConstValue))
-                        {
-                            sharedConstField.SetConstantValue(sharedConstValue);
-                        }
-                        else if (boundConst is not BoundErrorExpression && convertedConst is not BoundErrorExpression)
-                        {
-                            Diagnostics.ReportConstFieldInitializerNotConstant(fieldSyntax.Initializer.Location, fieldName);
-                        }
+                        // Issue #1070: defer folding to the consolidated pass so a
+                        // shared const can reference a sibling static/const member
+                        // regardless of declaration order.
+                        pendingSharedConstInitializers.Add((sharedConstField, fieldSyntax, fieldType));
                     }
 
                     sharedConstFieldsBuilder.Add(sharedConstField);
@@ -1997,22 +1956,17 @@ internal sealed class DeclarationBinder
 
                 Binder.AttachDocumentation(fieldSymbol, fieldSyntax);
 
-                // Issue #262: bind the initializer expression if present.
+                // Issue #262 / issue #1070: defer initializer binding to the
+                // consolidated pass so it can see all sibling static/const members.
                 if (fieldSyntax.Initializer != null)
                 {
-                    var boundInit = bindExpression(fieldSyntax.Initializer);
-                    var convertedInit = conversions.BindConversion(fieldSyntax.Initializer.Location, boundInit, fieldType);
-                    initializersBuilder[fieldSymbol] = convertedInit;
+                    pendingStaticFieldInitializers.Add((fieldSymbol, fieldSyntax.Initializer, fieldType));
                 }
 
                 staticFieldsBuilder.Add(fieldSymbol);
             }
 
             structSymbol.SetStaticFields(staticFieldsBuilder.ToImmutable());
-            if (initializersBuilder.Count > 0)
-            {
-                structSymbol.SetStaticFieldInitializers(initializersBuilder.ToImmutable());
-            }
 
             // Issue #948: merge any const fields declared inside the shared block
             // with the body-level const fields already installed on the symbol.
@@ -2435,6 +2389,80 @@ internal sealed class DeclarationBinder
             structSymbol.SetStaticEvents(staticEventsBuilder.ToImmutable());
         }
 
+        // Issue #1070: consolidated field-initializer binding. Every static member
+        // symbol of the enclosing type (class const fields, `shared` static fields,
+        // `shared` const fields, and static properties) now exists on the struct
+        // symbol, so bind ALL deferred initializers in a single scope that exposes
+        // those static members by bare name — exactly the visibility a
+        // method/constructor body already enjoys (see Binder.BindProgram). This
+        // makes a `const`/`shared` field referenced from a field initializer resolve
+        // regardless of declaration order, and clears the GS0125 / cascading GS0159
+        // diagnostics that previously fired because the static member was not in
+        // scope. Instance members remain out of scope (a field initializer has no
+        // `this`), so genuine instance-member references are still rejected below.
+        using (PushStaticMemberScope(structSymbol))
+        {
+            // Fold class const initializers first so a `shared` const that
+            // references a class const can read its already-folded value.
+            foreach (var (constField, fieldSyntaxNode, fieldType) in pendingConstInitializers)
+            {
+                BindAndFoldConstFieldInitializer(constField, fieldSyntaxNode, fieldType);
+            }
+
+            foreach (var (constField, fieldSyntaxNode, fieldType) in pendingSharedConstInitializers)
+            {
+                BindAndFoldConstFieldInitializer(constField, fieldSyntaxNode, fieldType);
+            }
+
+            // Bind `shared` static field initializers.
+            if (pendingStaticFieldInitializers.Count > 0)
+            {
+                var staticInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
+                foreach (var (fieldSym, initSyntax, fieldType) in pendingStaticFieldInitializers)
+                {
+                    var boundInit = bindExpression(initSyntax);
+                    var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
+                    staticInitBuilder[fieldSym] = convertedInit;
+                }
+
+                structSymbol.SetStaticFieldInitializers(staticInitBuilder.ToImmutable());
+            }
+
+            // Bind instance field initializers. These run before the constructor
+            // body, so they cannot reference `this`, other instance members, or
+            // constructor parameters (matching C#); a genuine instance-member
+            // reference is reported precisely rather than as a bare GS0125.
+            if (pendingInstanceInitializers.Count > 0)
+            {
+                var instanceMemberNames = new HashSet<string>(System.StringComparer.Ordinal) { "this" };
+                foreach (var f in fields)
+                {
+                    instanceMemberNames.Add(f.Name);
+                }
+
+                foreach (var p in primaryCtorParameters)
+                {
+                    instanceMemberNames.Add(p.Name);
+                }
+
+                var instanceInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
+                foreach (var (fieldSym, initSyntax, fieldType) in pendingInstanceInitializers)
+                {
+                    if (TryFindInstanceMemberReference(initSyntax, instanceMemberNames, out var offendingName, out var offendingLocation))
+                    {
+                        Diagnostics.ReportFieldInitializerCannotReferenceInstanceMember(offendingLocation, offendingName);
+                        continue;
+                    }
+
+                    var boundInit = bindExpression(initSyntax);
+                    var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
+                    instanceInitBuilder[fieldSym] = convertedInit;
+                }
+
+                structSymbol.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable());
+            }
+        }
+
         // Phase 3.B.4: validate interface implementation. Walks each
         // implemented interface and confirms the class (including inherited
         // methods) provides a same-name, same-signature method. The check
@@ -2494,6 +2522,86 @@ internal sealed class DeclarationBinder
         {
             pendingAbstractImplementationChecks.Add((syntax, structSymbol));
         }
+    }
+
+    /// <summary>
+    /// Issue #1070: binds and folds a deferred <c>const</c>-field initializer to a
+    /// compile-time constant, reporting GS-not-constant if the expression is not a
+    /// constant. Shared by the class-body and <c>shared</c>-block const paths.
+    /// </summary>
+    private void BindAndFoldConstFieldInitializer(FieldSymbol constField, FieldDeclarationSyntax fieldSyntaxNode, TypeSymbol fieldType)
+    {
+        var boundInit = bindExpression(fieldSyntaxNode.Initializer);
+        var convertedInit = conversions.BindConversion(fieldSyntaxNode.Initializer.Location, boundInit, fieldType);
+        if (TryFoldConstantFieldValue(convertedInit, fieldType, out var constantValue))
+        {
+            constField.SetConstantValue(constantValue);
+        }
+        else if (boundInit is not BoundErrorExpression && convertedInit is not BoundErrorExpression)
+        {
+            Diagnostics.ReportConstFieldInitializerNotConstant(fieldSyntaxNode.Initializer.Location, constField.Name);
+        }
+    }
+
+    /// <summary>
+    /// Issue #1070: pushes a child scope that exposes the enclosing type's static
+    /// members — static fields, const fields, and static properties — as bare
+    /// names, then makes it the active binding scope. This mirrors the
+    /// static-member visibility that method/constructor bodies already have (see
+    /// <c>Binder.BindProgram</c>), so a field initializer (instance
+    /// <c>let</c>/<c>var</c>, <c>shared</c> field, or <c>const</c>) can reference a
+    /// sibling <c>const</c> or <c>shared</c> field regardless of declaration order.
+    /// The returned token restores the previous scope when disposed.
+    /// </summary>
+    private StaticMemberScope PushStaticMemberScope(StructSymbol structSymbol)
+    {
+        var previous = binderCtx.RootScope;
+        var staticScope = new BoundScope(previous);
+
+        if (!structSymbol.StaticFields.IsDefaultOrEmpty)
+        {
+            foreach (var fld in structSymbol.StaticFields)
+            {
+                staticScope.TryDeclareVariable(new ImplicitStaticFieldVariableSymbol(structSymbol, fld));
+            }
+        }
+
+        if (!structSymbol.ConstFields.IsDefaultOrEmpty)
+        {
+            foreach (var fld in structSymbol.ConstFields)
+            {
+                staticScope.TryDeclareVariable(new ImplicitStaticFieldVariableSymbol(structSymbol, fld));
+            }
+        }
+
+        if (!structSymbol.StaticProperties.IsDefaultOrEmpty)
+        {
+            foreach (var prop in structSymbol.StaticProperties)
+            {
+                staticScope.TryDeclareVariable(new ImplicitStaticPropertyVariableSymbol(structSymbol, prop));
+            }
+        }
+
+        binderCtx.RootScope = staticScope;
+        return new StaticMemberScope(binderCtx, previous);
+    }
+
+    /// <summary>
+    /// Issue #1070: restores the binder's root scope to the value captured before
+    /// <see cref="PushStaticMemberScope"/> installed the static-member scope.
+    /// </summary>
+    private readonly struct StaticMemberScope : System.IDisposable
+    {
+        private readonly BinderContext binderCtx;
+        private readonly BoundScope previous;
+
+        public StaticMemberScope(BinderContext binderCtx, BoundScope previous)
+        {
+            this.binderCtx = binderCtx;
+            this.previous = previous;
+        }
+
+        public void Dispose() => binderCtx.RootScope = previous;
     }
 
     /// <summary>
