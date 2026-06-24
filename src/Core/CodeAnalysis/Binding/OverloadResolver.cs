@@ -2405,8 +2405,12 @@ internal sealed class OverloadResolver
             // or inline-struct type, treat it as a ctor call instead — even
             // when no explicit/primary constructor is declared, so the user
             // sees an actionable "wrong argument count" diagnostic rather
-            // than a misleading conversion error (issue #524).
-            if (!(type is StructSymbol singleArgStruct && (singleArgStruct.IsClass || singleArgStruct.IsInline)))
+            // than a misleading conversion error (issue #524). Issue #1069: a
+            // value struct (e.g. a `data struct`) declaring a primary
+            // constructor is likewise positionally constructible — `Entry(1)`
+            // builds the struct, not a conversion to it.
+            if (!(type is StructSymbol singleArgStruct
+                  && (singleArgStruct.IsClass || singleArgStruct.IsInline || singleArgStruct.HasPrimaryConstructor)))
             {
                 // ADR-0047 §6 / #175: `Type(x)` as an explicit conversion
                 // is still a use of the named type.
@@ -2423,7 +2427,11 @@ internal sealed class OverloadResolver
         // parameterless default constructor — the emitter already produces
         // a `.ctor()` for such classes (see EmitClassDefaultConstructor),
         // so we just need the binder to route `ClassName()` through here.
-        if (lookupType(syntax.Identifier.Text) is StructSymbol classType && (classType.IsClass || classType.IsInline))
+        // Issue #1069: a value struct (e.g. a `data struct`) declaring a
+        // primary constructor is also positionally constructible —
+        // `Entry(1, 2)` lowers to a struct literal initializing its fields.
+        if (lookupType(syntax.Identifier.Text) is StructSymbol classType
+            && (classType.IsClass || classType.IsInline || classType.HasPrimaryConstructor))
         {
             return BindConstructorCallExpression(syntax, classType);
         }

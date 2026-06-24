@@ -704,6 +704,12 @@ public sealed class Binder
             if (structSymbol != null)
             {
                 declaredStructs.Add((structSyntax, structSymbol));
+
+                // Issue #1069: declare the type-name shells of any nested types
+                // (recursively) right after the enclosing shell, so a sibling
+                // member signature can forward-reference a nested type by name.
+                // The bodies are bound later in phase 2 (BindNestedTypeBodies).
+                binder.declarations.DeclareNestedTypeShells(structSyntax, structSymbol, owningPackage);
             }
         }
 
@@ -2458,6 +2464,91 @@ public sealed class Binder
     /// working end-to-end.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Issue #1069: returns the enclosing type of a (possibly nested) user type
+    /// symbol — the value set via <c>SetContainingType</c> during declaration
+    /// binding — or <c>null</c> for a top-level type or a non-aggregate symbol.
+    /// </summary>
+    private static TypeSymbol SymbolContainingType(TypeSymbol type) => type switch
+    {
+        StructSymbol s => s.ContainingType,
+        EnumSymbol e => e.ContainingType,
+        InterfaceSymbol i => i.ContainingType,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Issue #1069: resolves a dotted type clause (<c>Outer.Entry</c>,
+    /// <c>Outer.Middle.Inner</c>) to a user-defined nested type declared in the
+    /// current compilation, by walking the enclosing-type chain. Each segment
+    /// after the first must name a type whose enclosing type is the symbol
+    /// resolved for the preceding segment. Returns <c>null</c> when the chain
+    /// does not resolve to such a user nested type, letting the caller fall back
+    /// to the reflection-based CLR nested-type walk. Type arguments on the
+    /// deepest segment construct the closed generic type; array suffixes are
+    /// applied by the caller.
+    /// </summary>
+    private TypeSymbol TryResolveUserNestedTypeChain(TypeClauseSyntax syntax, string[] segmentTexts)
+    {
+        if (segmentTexts.Length < 2)
+        {
+            return null;
+        }
+
+        var current = LookupType(segmentTexts[0]);
+        if (current == null)
+        {
+            return null;
+        }
+
+        for (var i = 1; i < segmentTexts.Length; i++)
+        {
+            var nested = LookupType(segmentTexts[i]);
+            if (nested == null || !ReferenceEquals(SymbolContainingType(nested), current))
+            {
+                return null;
+            }
+
+            current = nested;
+        }
+
+        if (!syntax.HasTypeArguments)
+        {
+            return current;
+        }
+
+        // Construct the closed generic for the deepest (named) segment.
+        var typeArgsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.TypeArguments.Count);
+        foreach (var taSyntax in syntax.TypeArguments)
+        {
+            var ta = BindTypeClause(taSyntax);
+            if (ta == null)
+            {
+                return null;
+            }
+
+            if (TypeSymbol.IsByRefLike(ta))
+            {
+                Diagnostics.ReportByRefLikeEscape(taSyntax.Identifier?.Location ?? syntax.Identifier.Location, ta, "be used as a generic type argument");
+                return null;
+            }
+
+            typeArgsBuilder.Add(ta);
+        }
+
+        var typeArgs = typeArgsBuilder.MoveToImmutable();
+        switch (current)
+        {
+            case StructSymbol genericStruct when genericStruct.IsGenericDefinition && genericStruct.TypeParameters.Length == typeArgs.Length:
+                return StructSymbol.Construct(genericStruct, typeArgs);
+            case InterfaceSymbol genericIface when genericIface.IsGenericDefinition && genericIface.TypeParameters.Length == typeArgs.Length:
+                return InterfaceSymbol.Construct(genericIface, typeArgs);
+            default:
+                Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.DottedName);
+                return null;
+        }
+    }
+
     private TypeSymbol BindQualifiedTypeName(TypeClauseSyntax syntax)
     {
         var totalSegments = 1 + syntax.QualifierIdentifierTokens.Length;
@@ -2469,6 +2560,17 @@ public sealed class Binder
         }
 
         var targetArity = syntax.HasTypeArguments ? syntax.TypeArguments.Count : 0;
+
+        // Issue #1069: a dotted name may reference a *user-defined* nested type
+        // declared in the current compilation (e.g. `Outer.Entry`,
+        // `Outer.Color`). Such types have no reflectable CLR `Type` while we are
+        // still binding, so the reflection-based prefix walk below cannot see
+        // them. Resolve them symbolically through the enclosing-type chain first.
+        var userNested = TryResolveUserNestedTypeChain(syntax, segmentTexts);
+        if (userNested != null)
+        {
+            return userNested;
+        }
 
         // Greedy: prefer the longest outer prefix that resolves to a real type,
         // then walk the remaining segments as nested types. Going longest-first

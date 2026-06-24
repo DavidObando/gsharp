@@ -507,6 +507,27 @@ internal sealed partial class ExpressionBinder
             return qualifiedCtorCall;
         }
 
+        // Issue #1069: a nested user type referenced by a qualified name from
+        // outside its enclosing type (`Outer.Entry(...)`, `Outer.Inner().M()`).
+        // Nested types are also visible by their simple name in the flat package
+        // scope, so an enclosing-type qualifier in front of a nested-type
+        // construction/member-access is redundant: peel it off and bind the
+        // remainder by simple name. This mirrors how the enclosing type's own
+        // members reference a sibling nested type. It only fires when the left
+        // segment is a user aggregate type and the next segment names one of its
+        // nested types, and never for a bare-name terminal segment (handled as a
+        // type receiver below), so it cannot shadow ordinary static-member access.
+        if (syntax.LeftPart is NameExpressionSyntax enclosingNameSyntax
+            && syntax.RightPart is not NameExpressionSyntax
+            && scope.TryLookupSymbol(enclosingNameSyntax.IdentifierToken.Text) is not VariableSymbol
+            && scope.TryLookupTypeAlias(enclosingNameSyntax.IdentifierToken.Text, out var enclosingAliasType)
+            && IsUserAggregateType(enclosingAliasType)
+            && TryGetHeadIdentifier(syntax.RightPart, out var headIdentifier)
+            && IsNestedTypeOf(headIdentifier, enclosingAliasType))
+        {
+            return BindExpression(syntax.RightPart);
+        }
+
         // Determine what the left side of the accessor is: either an imported
         // class (for static member access) or a value-producing expression (for
         // instance member access). Then apply the right side, which may itself
@@ -697,6 +718,29 @@ internal sealed partial class ExpressionBinder
             // construction's TypeSpec and the interpreter keys per construction.
             userInterfaceSymbol = constructedInterface;
         }
+        else if (leftPart is AccessorExpressionSyntax qualifiedNestedType
+            && !qualifiedNestedType.IsNullConditional
+            && TryResolveQualifiedUserNestedType(qualifiedNestedType, out var qualifiedNestedSymbol))
+        {
+            // Issue #1069: a qualified nested *type* used as the receiver of a
+            // further member access, e.g. `Outer.Color.Red` (the `Outer.Color`
+            // sub-chain names the nested enum) or `Outer.Inner.StaticMember`.
+            switch (qualifiedNestedSymbol)
+            {
+                case EnumSymbol qualifiedEnum:
+                    enumSymbol = qualifiedEnum;
+                    break;
+                case StructSymbol qualifiedStruct:
+                    userStructSymbol = qualifiedStruct;
+                    break;
+                case InterfaceSymbol qualifiedInterface:
+                    userInterfaceSymbol = qualifiedInterface;
+                    break;
+                default:
+                    receiver = BindExpression(leftPart);
+                    break;
+            }
+        }
         else
         {
             receiver = BindExpression(leftPart);
@@ -718,6 +762,110 @@ internal sealed partial class ExpressionBinder
         }
 
         return BindAccessorStep(receiver, classSymbol, rightPart);
+    }
+
+    /// <summary>
+    /// Issue #1069: returns the enclosing (containing) type of a user-defined
+    /// nested type symbol, or <see langword="null"/> for a top-level type or a
+    /// kind that cannot be nested.
+    /// </summary>
+    private static TypeSymbol GetSymbolContainingType(TypeSymbol type) => type switch
+    {
+        StructSymbol s => s.ContainingType,
+        EnumSymbol e => e.ContainingType,
+        InterfaceSymbol i => i.ContainingType,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Issue #1069: a user-defined aggregate type (class/struct, enum, or
+    /// interface) declared in the current compilation, as opposed to an imported
+    /// CLR type or a predefined primitive alias.
+    /// </summary>
+    private static bool IsUserAggregateType(TypeSymbol type) =>
+        type is StructSymbol or EnumSymbol or InterfaceSymbol;
+
+    /// <summary>
+    /// Issue #1069: whether <paramref name="name"/> resolves to a user-defined
+    /// type whose enclosing type is <paramref name="container"/>.
+    /// </summary>
+    private bool IsNestedTypeOf(string name, TypeSymbol container) =>
+        scope.TryLookupTypeAlias(name, out var candidate)
+        && IsUserAggregateType(candidate)
+        && ReferenceEquals(GetSymbolContainingType(candidate), container);
+
+    /// <summary>
+    /// Issue #1069: returns the leftmost identifier of an accessor-chain segment
+    /// (the head of a call, index, accessor, or bare name), used to detect when a
+    /// qualified reference targets a nested type by its simple name.
+    /// </summary>
+    private static bool TryGetHeadIdentifier(ExpressionSyntax expression, out string identifier)
+    {
+        switch (expression)
+        {
+            case NameExpressionSyntax name:
+                identifier = name.IdentifierToken.Text;
+                return true;
+            case CallExpressionSyntax call:
+                identifier = call.Identifier.Text;
+                return true;
+            case AccessorExpressionSyntax accessor:
+                return TryGetHeadIdentifier(accessor.LeftPart, out identifier);
+            case IndexExpressionSyntax index:
+                return TryGetHeadIdentifier(index.Target, out identifier);
+            case StructLiteralExpressionSyntax structLiteral:
+                identifier = structLiteral.TypeIdentifier.Text;
+                return true;
+            case ObjectCreationExpressionSyntax objectCreation:
+                return TryGetHeadIdentifier(objectCreation.Target, out identifier);
+            default:
+                identifier = null;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1069: resolves a dotted accessor of the form
+    /// <c>Outer.Nested</c> (optionally deeper, <c>A.B.C</c>) to the user-defined
+    /// nested type it names, by walking the enclosing-type chain. Each segment
+    /// after the first must name a user type whose enclosing type is the symbol
+    /// resolved for the preceding segment. Returns <see langword="false"/> when
+    /// the chain is not a pure user nested-type reference.
+    /// </summary>
+    private bool TryResolveQualifiedUserNestedType(AccessorExpressionSyntax accessor, out TypeSymbol nestedType)
+    {
+        nestedType = null;
+
+        if (accessor.RightPart is not NameExpressionSyntax rightName)
+        {
+            return false;
+        }
+
+        TypeSymbol container;
+        switch (accessor.LeftPart)
+        {
+            case NameExpressionSyntax leftName
+                when scope.TryLookupTypeAlias(leftName.IdentifierToken.Text, out var leftType)
+                    && IsUserAggregateType(leftType):
+                container = leftType;
+                break;
+            case AccessorExpressionSyntax leftAccessor
+                when TryResolveQualifiedUserNestedType(leftAccessor, out var leftNested):
+                container = leftNested;
+                break;
+            default:
+                return false;
+        }
+
+        if (!scope.TryLookupTypeAlias(rightName.IdentifierToken.Text, out var candidate)
+            || !IsUserAggregateType(candidate)
+            || !ReferenceEquals(GetSymbolContainingType(candidate), container))
+        {
+            return false;
+        }
+
+        nestedType = candidate;
+        return true;
     }
 
     /// <summary>
