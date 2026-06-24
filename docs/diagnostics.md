@@ -779,6 +779,22 @@ parameter; `GS0394` requires that at least one of the source or target type is a
 owned struct and that the two types differ; `GS0395` rejects a second conversion
 (implicit or explicit) with the same source/target pair.
 
+## Standalone range from-end marker diagnostic (GS0410)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0410 | Error | A from-end index marker `^` is only valid inside index brackets (e.g. `arr[^1]` or `arr[a..^b]`) or after `..` in a standalone range upper bound (`a..^b`); a standalone range cannot start with `^`. Use an indexer, or parenthesise a one's-complement bound (`(^a)..b`). |
+
+GS0410 fires for the standalone range/slice value added in issue #1038
+(`let r = 1..3`). The lower bound of a standalone range may not begin with `^`,
+because a leading `^` is genuinely ambiguous with the one's-complement unary
+operator (`^a` parses as `~a`). The from-end marker is therefore restricted to
+the unambiguous positions: inside index brackets (the #1022 path —
+`arr[^1]`, `arr[^2..]`, `arr[a..^b]`) and the upper bound of a standalone range
+(`..^b`, `a..^b`). To slice from the end of a value, index it directly
+(`arr[^a..]`); to use a one's-complement value as a from-start lower bound,
+parenthesise it (`(^a)..b`).
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

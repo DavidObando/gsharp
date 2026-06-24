@@ -1673,6 +1673,21 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// GS0410: a from-end index marker <c>^</c> appeared where it is not
+    /// allowed — at the very start of a standalone range expression
+    /// (<c>^a..b</c>) or as a bare expression. The leading <c>^</c> is
+    /// ambiguous with the one's-complement unary operator, so it is only
+    /// recognised as a from-end marker inside index brackets
+    /// (<c>arr[^1]</c>, <c>arr[a..^b]</c>) or after <c>..</c> in a standalone
+    /// range upper bound (<c>a..^b</c>) (issue #1038).
+    /// </summary>
+    /// <param name="location">The text location of the <c>^</c> marker.</param>
+    public void ReportFromEndMarkerNotAllowedInStandaloneRange(TextLocation location)
+    {
+        Report(location, "GS0410", "A from-end index marker '^' is only valid inside index brackets (e.g. 'arr[^1]' or 'arr[a..^b]') or after '..' in a standalone range upper bound ('a..^b'); a standalone range cannot start with '^'. Use an indexer, or parenthesise a one's-complement bound ('(^a)..b') (issue #1038).");
+    }
+
+    /// <summary>
     /// Reports that an <c>async func(...)</c> type clause has an explicit
     /// <c>Task[…]</c> (or other Task-shaped) return type. The <c>async</c>
     /// modifier already implies a Task wrap, so the explicit wrap is

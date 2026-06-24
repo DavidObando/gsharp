@@ -296,6 +296,18 @@ internal sealed partial class ExpressionBinder
                 // BoundBaseInterfaceCallExpression emits a non-virtual call
                 // into the interface's default body.
                 return BindBaseInterfaceCallExpression((BaseInterfaceCallExpressionSyntax)syntax);
+            case SyntaxKind.RangeExpression:
+                // Issue #1038: a standalone range `lo..hi` (and the open forms)
+                // binds to a constructed `System.Range` value.
+                return BindStandaloneRange((RangeExpressionSyntax)syntax);
+            case SyntaxKind.FromEndIndexExpression:
+                // Issue #1038: a bare `^n` from-end marker is only meaningful as
+                // an index/range bound (handled inside the index-argument and
+                // range binders); surfacing it standalone is rejected (GS0410).
+                var bareFromEnd = (FromEndIndexExpressionSyntax)syntax;
+                Diagnostics.ReportFromEndMarkerNotAllowedInStandaloneRange(bareFromEnd.HatToken.Location);
+                _ = BindExpression(bareFromEnd.Operand);
+                return new BoundErrorExpression(null);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
