@@ -298,9 +298,16 @@ internal static class PInvokeBinder
         // Win32 opaque-buffer parameter) likewise marshals as a native pointer.
         if (type is PointerTypeSymbol pointer)
         {
+            // ADR-0122 §4 / issue #1034: a pointer to a blittable user/value
+            // struct (`*Point`) marshals as a native pointer (ELEMENT_TYPE_PTR
+            // over the struct's TypeDef/TypeRef). Pointee legality is already
+            // gated at type-binding time (GS0398), so any surviving struct
+            // pointee here is a legal blittable value struct.
             return TypeSymbol.IsVoidPointer(type)
                 || IsBlittablePrimitive(pointer.PointeeType)
-                || pointer.PointeeType is PointerTypeSymbol;
+                || pointer.PointeeType is PointerTypeSymbol
+                || pointer.PointeeType is StructSymbol { IsClass: false }
+                || pointer.PointeeType?.ClrType is { IsValueType: true };
         }
 
         if (type is SliceTypeSymbol slice)

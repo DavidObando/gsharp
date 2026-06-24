@@ -440,7 +440,16 @@ internal sealed partial class MethodBodyEmitter
         // back to value form otherwise (CLI permits ldfld on a value-type
         // value on stack).
         var receiverIsClass = fa.Receiver.Type is StructSymbol rs && rs.IsClass;
-        if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
+        if (!receiverIsClass
+            && fa.Receiver is BoundDereferenceExpression deref
+            && Symbols.TypeSymbol.IsUnmanagedPointer(deref.Operand.Type))
+        {
+            // ADR-0122 §4 / issue #1034: `(*p).field` / `p->field` read. The
+            // pointer value IS the struct's address, so load the pointer and
+            // `ldfld` directly — avoiding a wasteful `ldobj` of the whole struct.
+            this.EmitExpression(deref.Operand);
+        }
+        else if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
         {
             // address is on the stack
         }
@@ -512,13 +521,27 @@ internal sealed partial class MethodBodyEmitter
         // instance reference on the stack.
         if (fas.ReceiverExpression != null)
         {
-            this.EmitExpression(fas.ReceiverExpression);
+            // ADR-0122 §4 / issue #1034: `(*p).field = v` / `p->field = v`. When
+            // the receiver is a dereference of an unmanaged pointer to a value
+            // struct, the pointer value IS the struct's address, so store the
+            // field through that address (`<p>; <v>; stfld`). Emitting the
+            // dereference itself (`ldobj`) would push a transient struct *copy*,
+            // and `stfld` against a value on the stack would be invalid / lose
+            // the write. The field is re-read through the address afterwards to
+            // leave the assigned value as the expression result.
+            var addressReceiver = fas.ReceiverExpression is BoundDereferenceExpression drefRecv
+                && !fas.StructType.IsClass
+                && Symbols.TypeSymbol.IsUnmanagedPointer(drefRecv.Operand.Type)
+                ? drefRecv.Operand
+                : null;
+
+            this.EmitExpression(addressReceiver ?? fas.ReceiverExpression);
             this.EmitExpression(fas.Value);
             this.il.OpCode(ILOpCode.Stfld);
             this.il.Token(fieldHandle);
 
             // Leave the assigned value on the stack as the expression result.
-            this.EmitExpression(fas.ReceiverExpression);
+            this.EmitExpression(addressReceiver ?? fas.ReceiverExpression);
             this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(fieldHandle);
             return;
@@ -1299,7 +1322,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.OpCode(ILOpCode.Ldind_i1);
         }
-        else if (clrType != null && clrType.IsValueType)
+        else if (pointeeType is StructSymbol { IsClass: false } || (clrType != null && clrType.IsValueType))
         {
             this.il.OpCode(ILOpCode.Ldobj);
             this.il.Token(this.outer.GetElementTypeToken(pointeeType));
@@ -1338,7 +1361,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.OpCode(ILOpCode.Stind_i1);
         }
-        else if (clrType != null && clrType.IsValueType)
+        else if (pointeeType is StructSymbol { IsClass: false } || (clrType != null && clrType.IsValueType))
         {
             this.il.OpCode(ILOpCode.Stobj);
             this.il.Token(this.outer.GetElementTypeToken(pointeeType));

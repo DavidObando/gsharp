@@ -47,6 +47,34 @@ internal sealed class BlittableDetector
         return type != null && IsBlittableImpl(type, new HashSet<StructSymbol>(ReferenceEqualityComparer.Instance));
     }
 
+    /// <summary>
+    /// ADR-0122 §4 / issue #1034. Returns <c>true</c> when <paramref name="type"/>
+    /// is a legal unmanaged-pointer pointee that is a <em>blittable user/value
+    /// struct</em> (e.g. <c>*Point</c>). A pointer to a struct is legal only when
+    /// the struct is a value type (not a class) and every field is itself
+    /// blittable — mirroring C#'s "unmanaged type" rule. Blittable formatted
+    /// classes are deliberately excluded because a pointer-to-class would point
+    /// at a managed reference, which is not a raw unmanaged pointer target.
+    /// </summary>
+    /// <param name="type">The candidate pointee type.</param>
+    /// <returns><c>true</c> when the type is a blittable value-type struct.</returns>
+    public static bool IsBlittableValueStructPointee(TypeSymbol type)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+
+        var isValueStruct = (type is StructSymbol { IsClass: false })
+            || (type is not StructSymbol && type.ClrType is { IsValueType: true });
+        if (!isValueStruct)
+        {
+            return false;
+        }
+
+        return new BlittableDetector().IsBlittable(type);
+    }
+
     private bool IsBlittableImpl(TypeSymbol type, HashSet<StructSymbol> visiting)
     {
         if (type == null || type == TypeSymbol.Error)
