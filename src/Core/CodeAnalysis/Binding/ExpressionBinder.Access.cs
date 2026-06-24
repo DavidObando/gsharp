@@ -3021,12 +3021,46 @@ internal sealed partial class ExpressionBinder
                 }
 
             case NameExpressionSyntax ne:
-                // ADR-0089: static-virtual properties / constants are
-                // deferred (v1 is static func only). Surface GS0333 so the
-                // user gets a clear diagnostic.
-                Diagnostics.ReportStaticVirtualMemberNotFoundOnTypeParameter(
-                    leftName.Location, tpSym.Name, ne.IdentifierToken.Text);
-                return new BoundErrorExpression(null);
+                {
+                    // ADR-0089 / issue #1019: a static-virtual interface
+                    // *property* read `T.Prop` dispatches through the
+                    // property's getter accessor (a static-virtual slot),
+                    // emitted as `constrained. !!T  call I::get_Prop()`.
+                    var propName = ne.IdentifierToken.Text;
+                    PropertySymbol slotProp = null;
+                    foreach (var iface in tpSym.InterfaceConstraint.SelfAndAllBaseInterfaces())
+                    {
+                        foreach (var candidate in iface.Properties)
+                        {
+                            if (candidate.IsStatic && candidate.Name == propName)
+                            {
+                                slotProp = candidate;
+                                break;
+                            }
+                        }
+
+                        if (slotProp != null)
+                        {
+                            break;
+                        }
+                    }
+
+                    if (slotProp == null || slotProp.GetterSymbol == null)
+                    {
+                        Diagnostics.ReportStaticVirtualMemberNotFoundOnTypeParameter(
+                            leftName.Location, tpSym.Name, propName);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    var propType = SubstituteThroughConstructedInterface(slotProp.Type, tpSym.InterfaceConstraint);
+
+                    return new BoundConstrainedStaticCallExpression(
+                        ne,
+                        tpSym,
+                        slotProp.GetterSymbol,
+                        ImmutableArray<BoundExpression>.Empty,
+                        propType);
+                }
 
             default:
                 return new BoundErrorExpression(null);

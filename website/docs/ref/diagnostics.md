@@ -975,7 +975,7 @@ See ADR-0086 for the worked example, the attribute-knob table
 `ThrowOnUnmappableChar`), and the deferred-features list.
 
 
-## Static-virtual interface-member diagnostics (GS0330–GS0333)
+## Static-virtual interface-member diagnostics (GS0330–GS0333, GS0396–GS0397)
 
 See ADR-0089 (issue #755) and its issue #865 revision. The DIM family
 lands in ADR-0085; ADR-0089 extends interfaces with C# 11-style
@@ -996,6 +996,8 @@ ECMA-335 II.15.4.2.4 and III.2.1).
 | GS0331 | Error | `<Kind> '<C>' does not implement static-virtual interface method '<I>.<Name>', and the interface provides no default body (ADR-0089).` |
 | GS0332 | Error | `<Kind> '<C>' declares instance method '<Name>' but interface '<I>.<Name>' is static-virtual; declare it inside a 'shared { … }' block (ADR-0089).` |
 | GS0333 | Error | `Type parameter '<T>' has no constraint that declares a static-virtual member '<Name>' (ADR-0089).` |
+| GS0396 | Error | `Static interface property '<I>.<Name>' may not have an accessor body; default-bodied static interface properties are not supported in this release — declare an abstract slot ('prop <Name> T;' or '{ get; }') instead (ADR-0089).` |
+| GS0397 | Error | `Type '<C>' does not implement static-virtual interface property '<I>.<Name>' (<detail>) (ADR-0089).` |
 
 Static-virtual interface members emit the standard CLR shape:
 the interface's MethodDef carries
@@ -1007,13 +1009,16 @@ interface slot via a `MethodImpl` row (ECMA-335 II.22.27).
 
 Cause/fix:
 
-- **GS0330** — only `func` members may appear inside an interface's
-  `shared { … }` block. Remove any `var` / `let` / `const` / `prop` /
-  `event` declarations from that block; per-implementer static state
-  on interfaces is a future extension and not yet supported. If you
-  want a per-implementer constant today, expose it through a
-  static-virtual property or function and have each implementer
-  return its value.
+- **GS0330** — only `func` members and `prop` (static-virtual
+  property) declarations may appear inside an interface's
+  `shared { … }` block. Remove any `var` / `let` / `const` /
+  `event` declarations from that block; per-implementer static
+  *state* (storage) on interfaces is a future extension and not yet
+  supported. A static-virtual `prop` (ADR-0089 / issue #1019) **is**
+  supported — declare it as an abstract slot
+  (`prop Name T { get; }` / `prop Name T;`). If you want a
+  per-implementer constant today, expose it through a static-virtual
+  property or function and have each implementer return its value.
 - **GS0331** — add the missing static override inside the
   implementer's `shared { … }` block:
   `class Adder : IAdd { shared { func Add(a int32, b int32) int32 { return a + b } } }`,
@@ -1028,6 +1033,15 @@ Cause/fix:
   `func Sum[T IAdd](xs sequence[T]) T { … T.Add(a, b) … }`
   requires `T` to be constrained by `IAdd` — the interface that
   declares the static-virtual `Add`.
+- **GS0396** — a static-virtual interface property must be an
+  *abstract* slot: remove the accessor body and declare
+  `prop Name T { get; }` (or `prop Name T;`). Default-bodied static
+  interface properties are deferred; expose a default through a
+  static-virtual `func` instead.
+- **GS0397** — add the missing static property inside the
+  implementer's `shared { … }` block with a matching name, type, and
+  accessor set:
+  `struct AppleData : IData { shared { prop Name string { get { return "apple" } } } }`.
 
 Cross-references:
 

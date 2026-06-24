@@ -3667,6 +3667,55 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports GS0396 — ADR-0089 / issue #1019: a static-virtual interface
+    /// property declared inside an interface <c>shared { … }</c> block carries
+    /// an accessor *body* (a default static slot). Default-bodied static
+    /// interface properties are deferred (interface properties are abstract
+    /// slots only in this release); declare an abstract slot
+    /// (<c>prop Name T { get; }</c> / <c>prop Name T;</c>) instead, or expose a
+    /// default via a static <c>func</c> in the interface shared block.
+    /// </summary>
+    /// <param name="location">The offending accessor location.</param>
+    /// <param name="interfaceName">The owning interface name.</param>
+    /// <param name="propertyName">The static interface property name.</param>
+    public void ReportDefaultStaticInterfacePropertyNotSupported(
+        TextLocation location,
+        string interfaceName,
+        string propertyName)
+    {
+        Report(
+            location,
+            "GS0396",
+            $"Static interface property '{interfaceName}.{propertyName}' may not have an accessor body; default-bodied static interface properties are not supported in this release — declare an abstract slot ('prop {propertyName} T;' or '{{ get; }}') instead (ADR-0089).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Reports GS0397 — ADR-0089 / issue #1019: a struct/class that declares it
+    /// implements an interface with one or more static-virtual abstract
+    /// *properties* does not provide a matching static property (in its own
+    /// <c>shared { … }</c> block) for some of those slots.
+    /// </summary>
+    /// <param name="location">The implementer declaration head location.</param>
+    /// <param name="structName">The implementer type name.</param>
+    /// <param name="interfaceName">The interface symbol display.</param>
+    /// <param name="propertyName">The unimplemented static-virtual property name.</param>
+    /// <param name="detail">A short clause describing what is missing (e.g. "getter").</param>
+    public void ReportStaticVirtualInterfacePropertyNotImplemented(
+        TextLocation location,
+        string structName,
+        string interfaceName,
+        string propertyName,
+        string detail)
+    {
+        Report(
+            location,
+            "GS0397",
+            $"Type '{structName}' does not implement static-virtual interface property '{interfaceName}.{propertyName}' ({detail}) (ADR-0089).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Reports GS0331 — ADR-0089 / issue #755: a struct that declares it
     /// implements an interface with one or more static-virtual abstract
     /// members does not provide the matching <c>shared { func … }</c>

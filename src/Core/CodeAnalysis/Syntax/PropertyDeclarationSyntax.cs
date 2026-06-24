@@ -68,6 +68,17 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <summary>Gets the optional <c>override</c> contextual keyword.</summary>
     public SyntaxToken OverrideModifier { get; }
 
+    /// <summary>
+    /// Gets or sets the <c>shared</c> contextual keyword token when this property
+    /// is a static-virtual interface member declared inside an interface
+    /// <c>shared { … }</c> block (ADR-0089 / issue #1019), or
+    /// <see langword="null"/> for an ordinary instance property.
+    /// </summary>
+    public SyntaxToken StaticModifier { get; set; }
+
+    /// <summary>Gets a value indicating whether this property carries a <c>shared</c> static modifier (ADR-0089 / issue #1019).</summary>
+    public bool HasStaticModifier => StaticModifier != null;
+
     /// <summary>Gets the identifier token whose text is <c>prop</c>.</summary>
     public SyntaxToken PropKeyword { get; }
 

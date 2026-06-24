@@ -938,7 +938,7 @@ public class Parser
             {
                 // Issue #865 revision: static-virtual members live in a
                 // `shared { … }` block (ADR-0089), consistent with classes/structs.
-                ParseInterfaceSharedBlock(methods, ref seenSharedBlock, identifier.Text);
+                ParseInterfaceSharedBlock(methods, properties, ref seenSharedBlock, identifier.Text);
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
@@ -2141,7 +2141,7 @@ public class Parser
             // modifiers are accepted on plain method signatures.
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "shared" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
             {
-                ParseInterfaceSharedBlock(methods, ref seenSharedBlock, identifier.Text);
+                ParseInterfaceSharedBlock(methods, properties, ref seenSharedBlock, identifier.Text);
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
@@ -2319,6 +2319,7 @@ public class Parser
     /// </summary>
     private void ParseInterfaceSharedBlock(
         ImmutableArray<FunctionDeclarationSyntax>.Builder methods,
+        ImmutableArray<PropertyDeclarationSyntax>.Builder properties,
         ref bool seenSharedBlock,
         string interfaceName)
     {
@@ -2345,11 +2346,29 @@ public class Parser
             {
                 methods.Add(ParseInterfaceMethodSignatureCore(accessibilityModifier, sharedKeyword));
             }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
+            {
+                // ADR-0089 / issue #1019: a `prop` inside an interface shared
+                // block is a static-virtual interface property. Mark it with
+                // the `shared` keyword as its static modifier so the binder
+                // routes it onto InterfaceSymbol static-property accessors.
+                var propDecl = ParsePropertyDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null);
+                propDecl.StaticModifier = sharedKeyword;
+                properties.Add(propDecl);
+
+                // A bare static abstract property (`prop Name T;`) terminates
+                // with a semicolon (the universal no-body marker); consume it.
+                if (Current.Kind == SyntaxKind.SemicolonToken)
+                {
+                    NextToken();
+                }
+            }
             else
             {
-                // Only `func` (static-virtual) members are allowed inside an
-                // interface shared block. `var` / `let` / `const` / `prop` /
-                // `event` (interface static state) are deferred — GS0330.
+                // Only `func` (static-virtual) members and `prop` (static-virtual
+                // properties, ADR-0089/issue #1019) are allowed inside an
+                // interface shared block. `var` / `let` / `const` / `event`
+                // (interface static *state* / storage) are deferred — GS0330.
                 // Report once at the member start, then skip the remainder of
                 // the offending declaration so the diagnostic isn't repeated
                 // per token.
@@ -2357,6 +2376,7 @@ public class Parser
                 while (Current.Kind != SyntaxKind.CloseBraceToken
                     && Current.Kind != SyntaxKind.EndOfFileToken
                     && Current.Kind != SyntaxKind.FuncKeyword
+                    && !(Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
                     && !(Current.Kind == SyntaxKind.PrivateKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword))
                 {
                     NextToken();
