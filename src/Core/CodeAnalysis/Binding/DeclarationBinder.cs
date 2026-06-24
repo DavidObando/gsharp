@@ -281,7 +281,7 @@ internal sealed class DeclarationBinder
         }
     }
 
-    internal EnumSymbol BindEnumDeclaration(EnumDeclarationSyntax syntax, PackageSymbol package)
+    internal EnumSymbol BindEnumDeclaration(EnumDeclarationSyntax syntax, PackageSymbol package, TypeSymbol containingType = null)
     {
         var name = syntax.Identifier.Text;
 
@@ -293,6 +293,16 @@ internal sealed class DeclarationBinder
 
         var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
         var enumSymbol = new EnumSymbol(name, accessibility, package.Name, syntax);
+
+        // Issue #1080: set the enclosing type BEFORE registering the name so the
+        // scope can scope name-uniqueness to the enclosing type (a nested type
+        // must not collide with a same-named package-level or differently-nested
+        // type).
+        if (containingType != null)
+        {
+            enumSymbol.SetContainingType(containingType);
+        }
+
         Binder.AttachDocumentation(enumSymbol, syntax);
         enumSymbol.SetAttributes(BindAttributes(
             syntax.Annotations,
@@ -471,7 +481,7 @@ internal sealed class DeclarationBinder
     /// with the base clause and all members — are bound and installed later by
     /// <see cref="BindStructDeclarationBody"/>.
     /// </summary>
-    internal StructSymbol DeclareStructShell(StructDeclarationSyntax syntax, PackageSymbol package)
+    internal StructSymbol DeclareStructShell(StructDeclarationSyntax syntax, PackageSymbol package, TypeSymbol containingType = null)
     {
         var name = syntax.Identifier.Text;
 
@@ -501,7 +511,7 @@ internal sealed class DeclarationBinder
                     syntax.TypeParameterList,
                     bareSymbols =>
                     {
-                        structSymbol = CreateAndRegisterStructShell(syntax, package, accessibility, name, bareSymbols);
+                        structSymbol = CreateAndRegisterStructShell(syntax, package, accessibility, name, bareSymbols, containingType);
                     });
             }
         }
@@ -512,7 +522,7 @@ internal sealed class DeclarationBinder
 
         // Non-generic types (or the defensive fallback when the callback did not
         // run) construct and register the shell here.
-        structSymbol ??= CreateAndRegisterStructShell(syntax, package, accessibility, name, typeParameters);
+        structSymbol ??= CreateAndRegisterStructShell(syntax, package, accessibility, name, typeParameters, containingType);
 
         return structSymbol;
     }
@@ -529,7 +539,8 @@ internal sealed class DeclarationBinder
         PackageSymbol package,
         Accessibility accessibility,
         string name,
-        ImmutableArray<TypeParameterSymbol> typeParameters)
+        ImmutableArray<TypeParameterSymbol> typeParameters,
+        TypeSymbol containingType = null)
     {
         // Issue #949 / #973: construct the struct symbol shell now and register
         // it in scope so that (a) the type may reference itself as a generic
@@ -554,6 +565,13 @@ internal sealed class DeclarationBinder
         if (!typeParameters.IsDefaultOrEmpty)
         {
             structSymbol.SetTypeParameters(typeParameters);
+        }
+
+        // Issue #1080: set the enclosing type BEFORE registering the name so the
+        // scope can scope name-uniqueness to the enclosing type.
+        if (containingType != null)
+        {
+            structSymbol.SetContainingType(containingType);
         }
 
         if (!scope.TryDeclareTypeAlias(name, structSymbol))
@@ -2825,10 +2843,9 @@ internal sealed class DeclarationBinder
             switch (nested)
             {
                 case StructDeclarationSyntax nestedStruct:
-                    var nestedStructSymbol = DeclareStructShell(nestedStruct, package);
+                    var nestedStructSymbol = DeclareStructShell(nestedStruct, package, containerSymbol);
                     if (nestedStructSymbol != null)
                     {
-                        nestedStructSymbol.SetContainingType(containerSymbol);
                         nestedStructShells[nestedStruct] = nestedStructSymbol;
                         DeclareNestedTypeShells(nestedStruct, nestedStructSymbol, package);
                     }
@@ -2836,15 +2853,13 @@ internal sealed class DeclarationBinder
                     break;
 
                 case EnumDeclarationSyntax nestedEnum:
-                    var nestedEnumSymbol = BindEnumDeclaration(nestedEnum, package);
-                    nestedEnumSymbol?.SetContainingType(containerSymbol);
+                    BindEnumDeclaration(nestedEnum, package, containerSymbol);
                     break;
 
                 case InterfaceDeclarationSyntax nestedInterface:
-                    var nestedInterfaceSymbol = DeclareInterfaceSymbol(nestedInterface, package);
+                    var nestedInterfaceSymbol = DeclareInterfaceSymbol(nestedInterface, package, containerSymbol);
                     if (nestedInterfaceSymbol != null)
                     {
-                        nestedInterfaceSymbol.SetContainingType(containerSymbol);
                         nestedInterfaceShells[nestedInterface] = nestedInterfaceSymbol;
                     }
 
@@ -4049,12 +4064,20 @@ internal sealed class DeclarationBinder
         return $"{dotted}[{string.Join(", ", args)}]";
     }
 
-    internal InterfaceSymbol DeclareInterfaceSymbol(InterfaceDeclarationSyntax syntax, PackageSymbol package)
+    internal InterfaceSymbol DeclareInterfaceSymbol(InterfaceDeclarationSyntax syntax, PackageSymbol package, TypeSymbol containingType = null)
     {
         var name = syntax.Identifier.Text;
         var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
         var interfaceSymbol = new InterfaceSymbol(name, accessibility, syntax, package.Name);
         Binder.AttachDocumentation(interfaceSymbol, syntax);
+
+        // Issue #1080: set the enclosing type BEFORE registering the name so the
+        // scope can scope name-uniqueness to the enclosing type.
+        if (containingType != null)
+        {
+            interfaceSymbol.SetContainingType(containingType);
+        }
+
         interfaceSymbol.SetAttributes(BindAttributes(
             syntax.Annotations,
             AttributeTargetKind.Type,

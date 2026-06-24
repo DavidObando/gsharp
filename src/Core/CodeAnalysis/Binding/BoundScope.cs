@@ -526,13 +526,60 @@ public sealed class BoundScope
         // Issue #1051: key by (simple name, generic arity) so that a type and a
         // same-named generic of different arity coexist. A genuine duplicate —
         // same name AND same arity — still collides and reports GS0102.
-        var key = MangleArity(name, GetTypeAliasArity(target));
-        if (typeAliases.ContainsKey(key))
+        var arity = GetTypeAliasArity(target);
+        var key = MangleArity(name, arity);
+        if (!typeAliases.ContainsKey(key))
+        {
+            typeAliases.Add(key, target);
+            return true;
+        }
+
+        // Issue #1080: a name clash on the simple (arity-bearing) key is only a
+        // genuine duplicate — GS0102 — when both types live in the SAME
+        // declaration scope (both top-level, or both nested in the SAME
+        // enclosing type). A nested type must NOT collide with a package-level
+        // type of the same simple name, nor with a nested type of a DIFFERENT
+        // enclosing type. Such non-conflicting types coexist: the package-level
+        // (top-level) type keeps the simple key so it stays resolvable by simple
+        // name, while the nested "loser" is retained under its containing-type-
+        // qualified key (so emit — which enumerates the stored values — still
+        // produces its TypeDef).
+        var existing = typeAliases[key];
+        var targetEnclosing = TypeContainingType(target);
+        var existingEnclosing = TypeContainingType(existing);
+        if (IsSameDeclarationScope(existingEnclosing, targetEnclosing))
         {
             return false;
         }
 
-        typeAliases.Add(key, target);
+        // Prefer the top-level type as the owner of the simple key. If a nested
+        // type currently occupies the simple key but the incoming type is
+        // top-level, evict the nested type to its qualified key and install the
+        // top-level type under the simple key.
+        if (targetEnclosing == null && existingEnclosing != null)
+        {
+            var existingQualifiedKey = MangleArity(QualifiedTypeName(existing), arity);
+            if (typeAliases.TryGetValue(existingQualifiedKey, out var occupant) && !ReferenceEquals(occupant, existing))
+            {
+                return false;
+            }
+
+            typeAliases[existingQualifiedKey] = existing;
+            typeAliases[key] = target;
+            return true;
+        }
+
+        // The incoming type is nested and clashes with a differently-scoped type
+        // already holding the simple key. Retain it under its qualified key. A
+        // clash on the qualified key means a genuine duplicate within the SAME
+        // enclosing type — report GS0102.
+        var qualifiedKey = MangleArity(QualifiedTypeName(target), arity);
+        if (typeAliases.ContainsKey(qualifiedKey))
+        {
+            return false;
+        }
+
+        typeAliases.Add(qualifiedKey, target);
         return true;
     }
 
@@ -708,6 +755,47 @@ public sealed class BoundScope
     /// <returns>The composite storage key.</returns>
     private static string MangleArity(string name, int arity)
         => arity <= 0 ? name : name + "`" + arity.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Issue #1080: returns the enclosing type of a (possibly nested) user type
+    /// symbol — the value set via <c>SetContainingType</c> during declaration
+    /// binding — or <c>null</c> for a top-level type or a non-aggregate symbol.
+    /// </summary>
+    private static TypeSymbol TypeContainingType(TypeSymbol type) => type switch
+    {
+        StructSymbol s => s.ContainingType,
+        EnumSymbol e => e.ContainingType,
+        InterfaceSymbol i => i.ContainingType,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Issue #1080: two type declarations share a declaration scope when both
+    /// are top-level (no enclosing type) or both are nested directly in the
+    /// SAME enclosing type. Only same-scope same-name types are duplicates.
+    /// </summary>
+    private static bool IsSameDeclarationScope(TypeSymbol a, TypeSymbol b)
+        => a == null ? b == null : ReferenceEquals(a, b);
+
+    /// <summary>
+    /// Issue #1080: builds the containing-type-qualified dotted name of a type
+    /// (e.g. <c>Outer.Middle.Inner</c> for a doubly-nested type, or the plain
+    /// simple name for a top-level type) by walking the enclosing-type chain.
+    /// Used as the fallback storage key for a nested type whose simple name is
+    /// already taken by a differently-scoped type, so it remains a distinct
+    /// stored value without colliding.
+    /// </summary>
+    private static string QualifiedTypeName(TypeSymbol type)
+    {
+        var parts = new List<string>();
+        for (var current = type; current != null; current = TypeContainingType(current))
+        {
+            parts.Add(current.Name);
+        }
+
+        parts.Reverse();
+        return string.Join(".", parts);
+    }
 
     /// <summary>
     /// Issue #1051: parses a composite storage key, reporting whether it names
