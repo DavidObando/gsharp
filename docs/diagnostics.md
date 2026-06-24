@@ -765,6 +765,20 @@ struct as a base type is rejected.
 GS0391 fires when an interface's base clause names a class or struct. Remove the
 offending entry (an interface may only extend interfaces).
 
+## User-defined conversion operator diagnostics (GS0393–GS0395)
+
+| ID | Severity | Summary |
+| --- | --- | --- |
+| GS0393 | Error | A user-defined `{implicit/explicit}` conversion operator must take exactly one by-value parameter (the source operand). |
+| GS0394 | Error | A user-defined conversion operator must convert to or from a user type declared in the same package, and its source and target types must differ. |
+| GS0395 | Error | Duplicate user-defined conversion operator: a conversion from `{source}` to `{target}` is already declared on this type. |
+
+These fire on conversion operators declared with `func operator implicit (x T) U`
+or `func operator explicit (x T) U` (issue #1017). `GS0393` requires exactly one
+parameter; `GS0394` requires that at least one of the source or target type is an
+owned struct and that the two types differ; `GS0395` rejects a second conversion
+(implicit or explicit) with the same source/target pair.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

@@ -378,12 +378,15 @@ Annotation   = "@" ( AnnotationTarget ":" )? identifier { "." identifier } ( "("
 
 Functions use `func`. Receiver clauses declare extension functions on types this package does not own (BCL primitives, imported CLR types, types from referenced packages); methods on owned classes **and owned structs** (issue #938) are declared inside the type body. Per [ADR-0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md), a receiver-clause method whose receiver type is owned by the current package emits the soft `GS0314` warning (for both owned classes and owned structs), steering authors to the in-body site. Operator overloads use `operator` followed by the operator token and map to CLR operator names downstream (operators continue to use the receiver-clause form and are exempt from `GS0314`). Parameters may carry a ref-kind modifier (`ref`, `out`, or `in`, ADR-0060) and may declare a compile-time-constant default value to become optional (ADR-0063). User functions may be overloaded as long as overloads differ by parameter types, arity, or ref-kinds; two declarations that differ only in return type are rejected as `GS0264`. One narrow exception (issue #985, the *covariant-return interface bridge*) admits two same-name, same-parameter methods that differ only by return type **when each one satisfies a distinct interface slot** — most commonly a generic collection that implements `IEnumerable[T]` by declaring both the generic `func GetEnumerator() IEnumerator[T]` (satisfying `IEnumerable[T]`) and a non-generic `func GetEnumerator() IEnumerator` (satisfying the inherited `System.Collections.IEnumerable`). Because G# has no explicit-interface-implementation syntax, the non-generic method is emitted with an explicit `MethodImpl` row binding it to `IEnumerable.GetEnumerator`. The inherited base-interface slot is required: omitting the non-generic bridge leaves `IEnumerable.GetEnumerator` unimplemented and is reported as `GS0187`.
 
+**User-defined conversion operators (issue #1017).** A package may declare implicit and explicit conversions on its own struct types using the spelling `func operator implicit (x T) U { … }` and `func operator explicit (x T) U { … }`. The contextual keywords `implicit` and `explicit` are recognized **only** immediately after `operator` (neither is a reserved keyword elsewhere). A conversion operator is implicitly **static**, takes **exactly one** by-value parameter (the source operand type `T`) and declares the target type `U` as its return type; it uses no receiver clause. At least one of `T` or `U` must be a struct owned by the current package, and `T` and `U` must differ. The declaration is emitted as a CLR `public static hidebysig specialname` method named `op_Implicit` or `op_Explicit` with signature `U (T)`, matching C#. Implicit conversions are applied automatically at assignment, at argument passing, and wherever a target type is expected; explicit conversions are applied at the type-call cast form `U(x)`. When a user conversion is applied the compiler emits a `call` to the operator. Conversions defined on imported/referenced CLR types (BCL `op_Implicit`/`op_Explicit`) are likewise recognized and applied. Malformed declarations are diagnosed: more or fewer than one parameter is `GS0393`; neither the source nor the target being an owned struct (or `T` equal to `U`) is `GS0394`; declaring two conversions with the same source/target pair (whether implicit or explicit) is `GS0395`.
+
 ```ebnf
-FunctionDecl      = "func" ReceiverClause? ( identifier | OperatorName ) TypeParamList? "(" Parameters? ")" RefReturnClause? FunctionBody .
+FunctionDecl      = "func" ReceiverClause? ( identifier | OperatorName | ConversionOperatorName ) TypeParamList? "(" Parameters? ")" RefReturnClause? FunctionBody .
 AsyncFunctionDecl = "async" FunctionDecl .
 FunctionBody      = Block | ";" .
 ReceiverClause    = "(" Parameter ")" .
 OperatorName      = "operator" OperatorToken .
+ConversionOperatorName = "operator" ( "implicit" | "explicit" ) .
 TypeParamList     = "[" TypeParameter { "," TypeParameter } "]" .
 TypeParameter     = ( "in" | "out" )? identifier ConstraintName? .
 Parameters        = Parameter { "," Parameter } .
@@ -1208,10 +1211,11 @@ Async             ::= 'async'
 Annotation        ::= '@' (AnnotationTarget ':')? identifier ('.' identifier)* ('(' Arguments? ')')?
 AnnotationTarget  ::= 'field' | 'param' | 'return' | 'type' | 'method' | 'property' | 'event' | 'module' | 'assembly' | 'genericparam'
 
-FunctionDecl      ::= 'func' ReceiverClause? (identifier | OperatorName) TypeParamList? '(' Parameters? ')' 'ref'? TypeClause? (Block | ';')
+FunctionDecl      ::= 'func' ReceiverClause? (identifier | OperatorName | ConversionOperatorName) TypeParamList? '(' Parameters? ')' 'ref'? TypeClause? (Block | ';')
                       (* ';' is the no-body marker: P/Invoke (ADR-0086) and abstract members (issue #881) *)
 ReceiverClause    ::= '(' Parameter ')'
 OperatorName      ::= 'operator' OperatorToken
+ConversionOperatorName ::= 'operator' ('implicit' | 'explicit')
 TypeParamList     ::= '[' TypeParameter (',' TypeParameter)* ']'
 TypeParameter     ::= ('in' | 'out')? identifier ConstraintRef? ConstraintFlag*
 ConstraintRef     ::= identifier TypeArgList?           (* legacy slot: any | comparable | interface name (G# or imported CLR); generic-instantiated e.g. [T IAdd[T]] (ADR-0089) or [T IComparable[T]] (issue #943) *)

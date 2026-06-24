@@ -284,6 +284,25 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     public bool IsRefReturn => ReturnRefModifier != null;
 
     /// <summary>
+    /// Gets or sets a value indicating whether this declaration is a user-defined
+    /// conversion operator (issue #1017), declared as
+    /// <c>func operator implicit (x T) U { … }</c> or the <c>explicit</c> variant.
+    /// When <see langword="true"/> the binder models the declaration as a static
+    /// <c>op_Implicit</c>/<c>op_Explicit</c> special-name method on the owning
+    /// user type. Assigned by the parser.
+    /// </summary>
+    public bool IsConversionOperator { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this conversion operator is an
+    /// <c>explicit</c> conversion (<c>op_Explicit</c>) rather than an
+    /// <c>implicit</c> one (<c>op_Implicit</c>). Only meaningful when
+    /// <see cref="IsConversionOperator"/> is <see langword="true"/>. Assigned by
+    /// the parser.
+    /// </summary>
+    public bool ConversionIsExplicit { get; set; }
+
+    /// <summary>
     /// Gets the func keyword.
     /// </summary>
     public SyntaxToken FunctionKeyword { get; }

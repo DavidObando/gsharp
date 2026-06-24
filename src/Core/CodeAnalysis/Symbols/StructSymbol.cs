@@ -627,6 +627,18 @@ public sealed class StructSymbol : TypeSymbol
         Methods = Methods.IsDefaultOrEmpty ? methods : Methods.AddRange(methods);
     }
 
+    /// <summary>Appends additional static methods after the initial declaration binding pass (issue #1017: user-defined conversion operators declared at top level).</summary>
+    /// <param name="methods">The static methods to append.</param>
+    public void AddStaticMethods(ImmutableArray<FunctionSymbol> methods)
+    {
+        if (methods.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        StaticMethods = StaticMethods.IsDefaultOrEmpty ? methods : StaticMethods.AddRange(methods);
+    }
+
     /// <summary>Sets <see cref="TypeParameters"/> on a generic definition (Phase 4.3 / ADR-0020). Intended to be called once by the binder during <c>BindStructDeclaration</c> before any constructed instance is materialized.</summary>
     /// <param name="typeParameters">The bound type parameters in declared order.</param>
     public void SetTypeParameters(ImmutableArray<TypeParameterSymbol> typeParameters)

@@ -13,7 +13,7 @@ After ADR-0024 / Phase 6.4, same-package receiver-form functions (`func (a T) Na
 
 ## Decision
 
-Ship receiver-form binary and unary `operator` overloads on GSharp `struct` / `data struct` / `class` types. The free-function form, conversions (`operator implicit` / `operator explicit`), `++` / `--`, and `true` / `false` are deferred to a follow-up.
+Ship receiver-form binary and unary `operator` overloads on GSharp `struct` / `data struct` / `class` types. The free-function form, conversions (`operator implicit` / `operator explicit` — landed in **ADR-0120** / issue #1017), `++` / `--`, and `true` / `false` are deferred to a follow-up.
 
 ### Syntax
 

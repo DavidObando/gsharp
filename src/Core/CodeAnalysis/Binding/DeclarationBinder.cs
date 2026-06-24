@@ -4373,6 +4373,19 @@ internal sealed class DeclarationBinder
             }
 
             FunctionSymbol function;
+
+            // Issue #1017: a user-defined conversion operator
+            // `func operator implicit (x T) U { … }` (or `explicit`) is modelled
+            // as a static `op_Implicit` / `op_Explicit` special-name method on
+            // the owning user type. It takes exactly one parameter (the source
+            // operand) and its return type is the conversion target; at least
+            // one of source/target must be a same-package user type.
+            if (syntax.IsConversionOperator)
+            {
+                BindConversionOperatorDeclaration(syntax, parameters.ToImmutable(), type, accessibility, package, functionAttributes);
+                return;
+            }
+
             if (methodReceiverStruct != null)
             {
                 var methodName = syntax.Identifier.Text;
@@ -4530,6 +4543,132 @@ internal sealed class DeclarationBinder
             methodName == "op_Equality" ||
             methodName == "op_Inequality" ||
             methodName == "Deconstruct";
+    }
+
+    /// <summary>
+    /// Issue #1017: binds a user-defined conversion operator declaration
+    /// (<c>func operator implicit (x T) U { … }</c> or the <c>explicit</c>
+    /// variant) into a static <c>op_Implicit</c> / <c>op_Explicit</c>
+    /// special-name method attached to the owning user type. Enforces the C#
+    /// conversion-operator constraints: exactly one parameter; source and
+    /// target differ; at least one of them is a same-package user type; and no
+    /// duplicate conversion exists for the same source/target pair.
+    /// </summary>
+    /// <param name="syntax">The conversion-operator declaration syntax.</param>
+    /// <param name="parameters">The already-bound parameter list.</param>
+    /// <param name="returnType">The already-bound return (target) type.</param>
+    /// <param name="accessibility">The declaration's resolved accessibility.</param>
+    /// <param name="package">The owning package.</param>
+    /// <param name="functionAttributes">Bound annotation attributes for the declaration.</param>
+    private void BindConversionOperatorDeclaration(
+        FunctionDeclarationSyntax syntax,
+        ImmutableArray<ParameterSymbol> parameters,
+        TypeSymbol returnType,
+        Accessibility accessibility,
+        PackageSymbol package,
+        ImmutableArray<BoundAttribute> functionAttributes)
+    {
+        var isExplicit = syntax.ConversionIsExplicit;
+        var opName = isExplicit ? "op_Explicit" : "op_Implicit";
+
+        // A conversion operator has exactly one parameter — the source operand.
+        if (parameters.Length != 1)
+        {
+            Diagnostics.ReportConversionOperatorRequiresSingleParameter(syntax.Identifier.Location, isExplicit);
+            return;
+        }
+
+        var sourceType = parameters[0].Type;
+        var targetType = returnType;
+
+        if (sourceType == TypeSymbol.Error || targetType == TypeSymbol.Error)
+        {
+            return;
+        }
+
+        // The source operand may not be passed by ref/out/in.
+        if (parameters[0].RefKind != RefKind.None)
+        {
+            Diagnostics.ReportConversionOperatorRequiresSingleParameter(syntax.Identifier.Location, isExplicit);
+            return;
+        }
+
+        // A conversion from a type to itself is never user-definable.
+        if (Conversion.Classify(sourceType, targetType).IsIdentity)
+        {
+            Diagnostics.ReportConversionOperatorMustInvolveEnclosingType(syntax.Identifier.Location);
+            return;
+        }
+
+        // At least one of source/target must be a same-package user type that
+        // owns (emits) the operator.
+        var owner = TryGetSamePackageOwner(sourceType, package) ?? TryGetSamePackageOwner(targetType, package);
+        if (owner == null)
+        {
+            Diagnostics.ReportConversionOperatorMustInvolveEnclosingType(syntax.Identifier.Location);
+            return;
+        }
+
+        var function = new FunctionSymbol(
+            opName,
+            parameters,
+            returnType,
+            syntax,
+            package,
+            accessibility,
+            receiverType: null);
+        function.IsStatic = true;
+        function.StaticOwnerType = owner;
+        function.IsSpecialName = true;
+        Binder.AttachDocumentation(function, syntax);
+        if (!functionAttributes.IsDefaultOrEmpty)
+        {
+            function.SetAttributes(functionAttributes);
+        }
+
+        // Reject a duplicate conversion (same source/target pair), whether the
+        // existing one is implicit or explicit — matching C# CS0557.
+        foreach (var existing in owner.StaticMethods)
+        {
+            if (existing.Name != "op_Implicit" && existing.Name != "op_Explicit")
+            {
+                continue;
+            }
+
+            if (existing.Parameters.Length != 1)
+            {
+                continue;
+            }
+
+            if (Conversion.Classify(existing.Parameters[0].Type, sourceType).IsIdentity
+                && Conversion.Classify(existing.Type, targetType).IsIdentity)
+            {
+                Diagnostics.ReportDuplicateConversionOperator(syntax.Identifier.Location, sourceType, targetType);
+                return;
+            }
+        }
+
+        owner.AddStaticMethods(ImmutableArray.Create(function));
+    }
+
+    /// <summary>
+    /// Issue #1017: returns the same-package <see cref="StructSymbol"/> (struct
+    /// or class) definition for <paramref name="type"/> when it is declared in
+    /// <paramref name="package"/>, or <see langword="null"/> otherwise.
+    /// </summary>
+    /// <param name="type">The candidate owner type.</param>
+    /// <param name="package">The owning package.</param>
+    /// <returns>The owning struct definition, or <see langword="null"/>.</returns>
+    private static StructSymbol TryGetSamePackageOwner(TypeSymbol type, PackageSymbol package)
+    {
+        if (type is StructSymbol structSymbol
+            && package != null
+            && string.Equals(structSymbol.PackageName, package.Name, StringComparison.Ordinal))
+        {
+            return structSymbol.Definition ?? structSymbol;
+        }
+
+        return null;
     }
 
     /// <summary>

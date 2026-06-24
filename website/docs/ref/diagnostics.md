@@ -1305,6 +1305,29 @@ Cause/fix:
   offending entry; an interface may only extend other interfaces.
 
 
+## User-defined conversion operator diagnostics (GS0393–GS0395)
+
+Issue #1017. Conversion operators are declared with `func operator implicit (x T) U`
+or `func operator explicit (x T) U` and emit CLR `op_Implicit`/`op_Explicit`.
+
+| ID | Severity | Message |
+| --- | --- | --- |
+| GS0393 | Error | `A user-defined '<implicit/explicit>' conversion operator must take exactly one by-value parameter (the source operand).` |
+| GS0394 | Error | `A user-defined conversion operator must convert to or from a user type declared in the same package, and its source and target types must differ.` |
+| GS0395 | Error | `Duplicate user-defined conversion operator: a conversion from '<source>' to '<target>' is already declared on this type.` |
+
+Cause/fix:
+
+- **GS0393** — the operator declared more or fewer than one parameter. Declare
+  exactly one by-value parameter (the source operand type).
+- **GS0394** — neither the source nor the target type is a struct owned by the
+  current package, or the source and target types are the same. Make at least one
+  side an owned struct and ensure the two types differ.
+- **GS0395** — a conversion with the same source/target pair already exists.
+  Remove the duplicate (a source/target pair may have only one conversion,
+  implicit *or* explicit).
+
+
 ## `@LibraryImport` P/Invoke diagnostics (GS0342–GS0345)
 
 See ADR-0092 (issue #758). G# accepts the modern
