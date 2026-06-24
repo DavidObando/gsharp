@@ -1538,9 +1538,16 @@ public static class BoundNodePrinter
         {
             node.Receiver.WriteTo(writer);
         }
-        else
+        else if (node.StructType != null)
         {
             writer.WriteIdentifier(node.StructType.Name);
+        }
+        else
+        {
+            // Issue #1030: an interface static field access carries no
+            // declaring struct; print the field name unqualified.
+            writer.WriteIdentifier(node.Field.Name);
+            return;
         }
 
         writer.WritePunctuation(SyntaxKind.DotToken);
@@ -1552,14 +1559,21 @@ public static class BoundNodePrinter
         if (node.Receiver != null)
         {
             writer.WriteIdentifier(node.Receiver.Name);
+            writer.WritePunctuation(SyntaxKind.DotToken);
+            writer.WriteIdentifier(node.Field.Name);
+        }
+        else if (node.StructType != null)
+        {
+            writer.WriteIdentifier(node.StructType.Name);
+            writer.WritePunctuation(SyntaxKind.DotToken);
+            writer.WriteIdentifier(node.Field.Name);
         }
         else
         {
-            writer.WriteIdentifier(node.StructType.Name);
+            // Issue #1030: interface static field — print unqualified.
+            writer.WriteIdentifier(node.Field.Name);
         }
 
-        writer.WritePunctuation(SyntaxKind.DotToken);
-        writer.WriteIdentifier(node.Field.Name);
         writer.WriteSpace();
         writer.WritePunctuation(SyntaxKind.EqualsToken);
         writer.WriteSpace();

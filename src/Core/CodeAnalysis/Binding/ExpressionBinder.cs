@@ -382,7 +382,7 @@ internal sealed partial class ExpressionBinder
             reportObsoleteUseIfApplicable(
                 syntax.IdentifierToken.Location,
                 implicitStaticField.Field,
-                $"{implicitStaticField.StructType.Name}.{implicitStaticField.Field.Name}");
+                $"{implicitStaticField.OwnerName}.{implicitStaticField.Field.Name}");
 
             return new BoundFieldAccessExpression(
                 null,

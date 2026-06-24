@@ -1359,53 +1359,81 @@ internal sealed class MemberDefEmitter
             MethodDefinitionHandle? emittedGetter = null;
             if (prop.HasGetter && accessorHandles.Getter.HasValue)
             {
-                var sigBlob = new BlobBuilder();
-                new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !prop.IsStatic)
-                    .Parameters(0, r => this.encodeTypeSymbol(r.Type(), prop.Type), _ => { });
-
-                var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
-                    | MethodAttributes.Virtual | MethodAttributes.Abstract
-                    | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
-                if (prop.IsStatic)
+                // Issue #1030: a default-bodied static-virtual interface
+                // property getter is a non-abstract Static|Virtual slot with a
+                // real IL body. Route it through the regular function-emit
+                // pipeline (signature + body + parameter rows), which stamps
+                // Static|Virtual|NewSlot|SpecialName for an interface-owned
+                // static accessor. The MethodDef row lands in the planned
+                // accessor position because this runs in accessor order.
+                if (prop.IsStatic
+                    && prop.GetterSymbol != null
+                    && !prop.GetterSymbol.IsAbstract
+                    && this.emitCtx.Program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
                 {
-                    attrs |= MethodAttributes.Static;
+                    emittedGetter = this.emitFunction(prop.GetterSymbol, getterBody, false);
                 }
+                else
+                {
+                    var sigBlob = new BlobBuilder();
+                    new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !prop.IsStatic)
+                        .Parameters(0, r => this.encodeTypeSymbol(r.Type(), prop.Type), _ => { });
 
-                emittedGetter = this.emitCtx.Metadata.AddMethodDefinition(
-                    attributes: attrs,
-                    implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-                    name: this.emitCtx.Metadata.GetOrAddString($"get_{prop.Name}"),
-                    signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
-                    bodyOffset: -1,
-                    parameterList: this.nextParameterHandle());
+                    var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
+                        | MethodAttributes.Virtual | MethodAttributes.Abstract
+                        | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
+                    if (prop.IsStatic)
+                    {
+                        attrs |= MethodAttributes.Static;
+                    }
+
+                    emittedGetter = this.emitCtx.Metadata.AddMethodDefinition(
+                        attributes: attrs,
+                        implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+                        name: this.emitCtx.Metadata.GetOrAddString($"get_{prop.Name}"),
+                        signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
+                        bodyOffset: -1,
+                        parameterList: this.nextParameterHandle());
+                }
             }
 
             // Emit abstract setter MethodDef.
             MethodDefinitionHandle? emittedSetter = null;
             if (prop.HasSetter && accessorHandles.Setter.HasValue)
             {
-                var sigBlob = new BlobBuilder();
-                new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !prop.IsStatic)
-                    .Parameters(1, r => r.Void(), ps =>
-                    {
-                        this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type);
-                    });
-
-                var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
-                    | MethodAttributes.Virtual | MethodAttributes.Abstract
-                    | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
-                if (prop.IsStatic)
+                // Issue #1030: default-bodied static-virtual interface setter.
+                if (prop.IsStatic
+                    && prop.SetterSymbol != null
+                    && !prop.SetterSymbol.IsAbstract
+                    && this.emitCtx.Program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
                 {
-                    attrs |= MethodAttributes.Static;
+                    emittedSetter = this.emitFunction(prop.SetterSymbol, setterBody, false);
                 }
+                else
+                {
+                    var sigBlob = new BlobBuilder();
+                    new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !prop.IsStatic)
+                        .Parameters(1, r => r.Void(), ps =>
+                        {
+                            this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type);
+                        });
 
-                emittedSetter = this.emitCtx.Metadata.AddMethodDefinition(
-                    attributes: attrs,
-                    implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-                    name: this.emitCtx.Metadata.GetOrAddString($"set_{prop.Name}"),
-                    signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
-                    bodyOffset: -1,
-                    parameterList: this.nextParameterHandle());
+                    var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
+                        | MethodAttributes.Virtual | MethodAttributes.Abstract
+                        | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
+                    if (prop.IsStatic)
+                    {
+                        attrs |= MethodAttributes.Static;
+                    }
+
+                    emittedSetter = this.emitCtx.Metadata.AddMethodDefinition(
+                        attributes: attrs,
+                        implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+                        name: this.emitCtx.Metadata.GetOrAddString($"set_{prop.Name}"),
+                        signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
+                        bodyOffset: -1,
+                        parameterList: this.nextParameterHandle());
+                }
             }
 
             // Emit PropertyDef row.

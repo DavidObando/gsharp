@@ -997,12 +997,12 @@ ECMA-335 II.15.4.2.4 and III.2.1).
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0330 | Error | `Only 'func' members are allowed inside the 'shared' block of interface '<Name>'; interface static state is not supported in this release (ADR-0089).` |
+| GS0330 | Error | `Only 'func' members are allowed inside the 'shared' block of interface '<Name>'; interface static state is not supported in this release (ADR-0089).` Raised for an `event` member in any interface `shared` block, or for a `var`/`let`/`const` field in a **generic** interface's `shared` block. Non-generic interface static `var`/`let`/`const` state is supported (issue #1030). |
 | GS0331 | Error | `<Kind> '<C>' does not implement static-virtual interface method '<I>.<Name>', and the interface provides no default body (ADR-0089).` |
 | GS0332 | Error | `<Kind> '<C>' declares instance method '<Name>' but interface '<I>.<Name>' is static-virtual; declare it inside a 'shared { … }' block (ADR-0089).` |
 | GS0333 | Error | `Type parameter '<T>' has no constraint that declares a static-virtual member '<Name>' (ADR-0089).` |
-| GS0396 | Error | `Static interface property '<I>.<Name>' may not have an accessor body; default-bodied static interface properties are not supported in this release — declare an abstract slot ('prop <Name> T;' or '{ get; }') instead (ADR-0089).` |
-| GS0397 | Error | `Type '<C>' does not implement static-virtual interface property '<I>.<Name>' (<detail>) (ADR-0089).` |
+| GS0396 | — | **Retired by issue #1030.** Default-bodied static-virtual interface properties (`prop Name T { get { … } }`) are now supported, so this diagnostic is no longer raised. |
+| GS0397 | Error | `Type '<C>' does not implement static-virtual interface property '<I>.<Name>' (<detail>) (ADR-0089).` Not raised for a fully default-bodied static property (the interface supplies the body). |
 
 Static-virtual interface members emit the standard CLR shape:
 the interface's MethodDef carries
@@ -1014,16 +1014,16 @@ interface slot via a `MethodImpl` row (ECMA-335 II.22.27).
 
 Cause/fix:
 
-- **GS0330** — only `func` members and `prop` (static-virtual
-  property) declarations may appear inside an interface's
-  `shared { … }` block. Remove any `var` / `let` / `const` /
-  `event` declarations from that block; per-implementer static
-  *state* (storage) on interfaces is a future extension and not yet
-  supported. A static-virtual `prop` (ADR-0089 / issue #1019) **is**
-  supported — declare it as an abstract slot
-  (`prop Name T { get; }` / `prop Name T;`). If you want a
-  per-implementer constant today, expose it through a static-virtual
-  property or function and have each implementer return its value.
+- **GS0330** — `func` members, `prop` (static-virtual property)
+  declarations, and — on a **non-generic** interface — `var` /
+  `let` / `const` static *state* fields (issue #1030) may appear
+  inside an interface's `shared { … }` block. The diagnostic still
+  fires for an `event` member, or for a `var` / `let` / `const`
+  field on a *generic* interface (generic interface static storage
+  would need per-construction field references and is out of scope).
+  Move an `event` out of the `shared` block; for generic
+  per-implementer constants, expose a static-virtual `prop` or
+  `func` instead.
 - **GS0331** — add the missing static override inside the
   implementer's `shared { … }` block:
   `class Adder : IAdd { shared { func Add(a int32, b int32) int32 { return a + b } } }`,
@@ -1038,11 +1038,10 @@ Cause/fix:
   `func Sum[T IAdd](xs sequence[T]) T { … T.Add(a, b) … }`
   requires `T` to be constrained by `IAdd` — the interface that
   declares the static-virtual `Add`.
-- **GS0396** — a static-virtual interface property must be an
-  *abstract* slot: remove the accessor body and declare
-  `prop Name T { get; }` (or `prop Name T;`). Default-bodied static
-  interface properties are deferred; expose a default through a
-  static-virtual `func` instead.
+- **GS0396** — retired by issue #1030. A static-virtual interface
+  property may now carry an accessor body
+  (`prop Name T { get { … } }`), declaring a non-abstract default
+  static slot; no diagnostic is raised.
 - **GS0397** — add the missing static property inside the
   implementer's `shared { … }` block with a matching name, type, and
   accessor set:

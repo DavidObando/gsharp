@@ -65,7 +65,7 @@ internal sealed partial class ExpressionBinder
             reportObsoleteUseIfApplicable(
                 syntax.IdentifierToken.Location,
                 implicitStaticField.Field,
-                $"{implicitStaticField.StructType.Name}.{implicitStaticField.Field.Name}");
+                $"{implicitStaticField.OwnerName}.{implicitStaticField.Field.Name}");
 
             var convertedValue = conversions.BindConversion(syntax.Expression.Location, boundExpression, implicitStaticField.Field.Type);
             return new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedValue);
@@ -422,6 +422,30 @@ internal sealed partial class ExpressionBinder
 
                 var propConverted = conversions.BindConversion(syntax.Value.Location, staticValue, prop.Type);
                 return new BoundPropertyAssignmentExpression(null, receiver: null, userStruct, prop, propConverted);
+            }
+
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
+            return new BoundErrorExpression(null);
+        }
+
+        // ADR-0089 / issue #1030: user-defined interface type → static field
+        // write (`IName.Field = value`). Interface static fields are plain CLR
+        // static fields; emit a static (null receiver / null declaring struct)
+        // BoundFieldAssignmentExpression resolved by symbol identity.
+        if (scope.TryLookupTypeAlias(receiverName, out var ifaceAlias) && ifaceAlias is InterfaceSymbol userInterface)
+        {
+            var staticValue = BindExpression(syntax.Value);
+            var fieldName = syntax.FieldIdentifier.Text;
+            var staticField = userInterface.GetStaticField(fieldName);
+            if (staticField != null)
+            {
+                if (staticField.IsReadOnly || staticField.IsConst)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                }
+
+                var staticConverted = conversions.BindConversion(syntax.Value.Location, staticValue, staticField.Type);
+                return new BoundFieldAssignmentExpression(null, null, structType: null, staticField, staticConverted);
             }
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);

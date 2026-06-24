@@ -951,6 +951,7 @@ public class Parser
         var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
         var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+        var staticFields = ImmutableArray.CreateBuilder<FieldDeclarationSyntax>();
         var seenSharedBlock = false;
         while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
         {
@@ -960,7 +961,7 @@ public class Parser
             {
                 // Issue #865 revision: static-virtual members live in a
                 // `shared { … }` block (ADR-0089), consistent with classes/structs.
-                ParseInterfaceSharedBlock(methods, properties, ref seenSharedBlock, identifier.Text);
+                ParseInterfaceSharedBlock(methods, properties, staticFields, ref seenSharedBlock, identifier.Text);
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
@@ -1002,6 +1003,7 @@ public class Parser
             closeBrace);
         interfaceDecl.BaseColonToken = baseColon;
         interfaceDecl.BaseTypeClauses = baseTypeClauses;
+        interfaceDecl.StaticFields = staticFields.ToImmutable();
         return interfaceDecl;
     }
 
@@ -2169,6 +2171,7 @@ public class Parser
         var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
         var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+        var staticFields = ImmutableArray.CreateBuilder<FieldDeclarationSyntax>();
         var seenSharedBlock = false;
         while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
         {
@@ -2182,7 +2185,7 @@ public class Parser
             // modifiers are accepted on plain method signatures.
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "shared" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
             {
-                ParseInterfaceSharedBlock(methods, properties, ref seenSharedBlock, identifier.Text);
+                ParseInterfaceSharedBlock(methods, properties, staticFields, ref seenSharedBlock, identifier.Text);
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
@@ -2209,7 +2212,7 @@ public class Parser
         }
 
         var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
-        return new InterfaceDeclarationSyntax(
+        var nestedInterfaceDecl = new InterfaceDeclarationSyntax(
             syntaxTree,
             accessibilityModifier,
             typeKeyword,
@@ -2222,6 +2225,8 @@ public class Parser
             events.ToImmutable(),
             methods.ToImmutable(),
             closeBrace);
+        nestedInterfaceDecl.StaticFields = staticFields.ToImmutable();
+        return nestedInterfaceDecl;
     }
 
     /// <summary>
@@ -2361,6 +2366,7 @@ public class Parser
     private void ParseInterfaceSharedBlock(
         ImmutableArray<FunctionDeclarationSyntax>.Builder methods,
         ImmutableArray<PropertyDeclarationSyntax>.Builder properties,
+        ImmutableArray<FieldDeclarationSyntax>.Builder fields,
         ref bool seenSharedBlock,
         string interfaceName)
     {
@@ -2404,19 +2410,38 @@ public class Parser
                     NextToken();
                 }
             }
+            else if (Current.Kind == SyntaxKind.VarKeyword
+                || Current.Kind == SyntaxKind.LetKeyword
+                || Current.Kind == SyntaxKind.ConstKeyword
+                || ((Current.Kind == SyntaxKind.PublicKeyword
+                        || Current.Kind == SyntaxKind.InternalKeyword
+                        || Current.Kind == SyntaxKind.PrivateKeyword
+                        || Current.Kind == SyntaxKind.ProtectedKeyword)
+                    && (Peek(1).Kind == SyntaxKind.VarKeyword
+                        || Peek(1).Kind == SyntaxKind.LetKeyword
+                        || Peek(1).Kind == SyntaxKind.ConstKeyword)))
+            {
+                // ADR-0089 / issue #1030: interface static *state*. A `var` /
+                // `let` / `const` member inside an interface `shared { … }`
+                // block declares a CLR static field on the interface TypeDef.
+                fields.Add(ParseFieldDeclaration());
+            }
             else
             {
-                // Only `func` (static-virtual) members and `prop` (static-virtual
-                // properties, ADR-0089/issue #1019) are allowed inside an
-                // interface shared block. `var` / `let` / `const` / `event`
-                // (interface static *state* / storage) are deferred — GS0330.
-                // Report once at the member start, then skip the remainder of
-                // the offending declaration so the diagnostic isn't repeated
-                // per token.
+                // Only `func` (static-virtual) members, `prop` (static-virtual
+                // properties, ADR-0089/issue #1019) and `var`/`let`/`const`
+                // (interface static state, issue #1030) are allowed inside an
+                // interface shared block. Anything else (e.g. `event`) is
+                // rejected with GS0330. Report once at the member start, then
+                // skip the remainder of the offending declaration so the
+                // diagnostic isn't repeated per token.
                 Diagnostics.ReportInterfaceSharedMemberMustBeFunc(Current.Location, interfaceName);
                 while (Current.Kind != SyntaxKind.CloseBraceToken
                     && Current.Kind != SyntaxKind.EndOfFileToken
                     && Current.Kind != SyntaxKind.FuncKeyword
+                    && Current.Kind != SyntaxKind.VarKeyword
+                    && Current.Kind != SyntaxKind.LetKeyword
+                    && Current.Kind != SyntaxKind.ConstKeyword
                     && !(Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
                     && !(Current.Kind == SyntaxKind.PrivateKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword))
                 {

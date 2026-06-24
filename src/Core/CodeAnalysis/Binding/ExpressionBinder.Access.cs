@@ -517,6 +517,7 @@ internal sealed partial class ExpressionBinder
         ImportedClassSymbol classSymbol = null;
         EnumSymbol enumSymbol = null;
         StructSymbol userStructSymbol = null;
+        InterfaceSymbol userInterfaceSymbol = null;
 
         if (leftPart is NameExpressionSyntax leftName)
         {
@@ -589,7 +590,7 @@ internal sealed partial class ExpressionBinder
                     reportObsoleteUseIfApplicable(
                         leftName.IdentifierToken.Location,
                         implicitStaticField.Field,
-                        $"{implicitStaticField.StructType.Name}.{implicitStaticField.Field.Name}");
+                        $"{implicitStaticField.OwnerName}.{implicitStaticField.Field.Name}");
 
                     receiver = new BoundFieldAccessExpression(
                         null,
@@ -643,6 +644,12 @@ internal sealed partial class ExpressionBinder
                 {
                     userStructSymbol = foundStruct;
                 }
+                else if (typeAlias is InterfaceSymbol foundInterface)
+                {
+                    // ADR-0089 / issue #1030: `IName.StaticField` — qualified
+                    // access to an interface static field (storage or const).
+                    userInterfaceSymbol = foundInterface;
+                }
                 else
                 {
                     Diagnostics.ReportUnableToFindType(leftName.Location, name);
@@ -688,6 +695,11 @@ internal sealed partial class ExpressionBinder
         if (userStructSymbol != null)
         {
             return BindUserTypeStaticAccessorStep(userStructSymbol, rightPart);
+        }
+
+        if (userInterfaceSymbol != null)
+        {
+            return BindInterfaceStaticAccessorStep(userInterfaceSymbol, rightPart);
         }
 
         return BindAccessorStep(receiver, classSymbol, rightPart);
@@ -1107,6 +1119,47 @@ internal sealed partial class ExpressionBinder
 
             case NameExpressionSyntax ne:
                 return BindUserTypeStaticMemberAccess(structSym, ne);
+
+            default:
+                return new BoundErrorExpression(null);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #1030: resolves <c>IName.StaticField</c> qualified
+    /// access against an interface's static *state* (storage or const fields).
+    /// Interface static fields have no per-implementer shape — they are plain
+    /// CLR static fields on the interface TypeDef — so a read/write binds to a
+    /// static (<c>receiver: null</c>) <see cref="BoundFieldAccessExpression"/>
+    /// with a <c>null</c> declaring struct (the emitter resolves the field by
+    /// symbol identity). Non-field members fall through to an error.
+    /// </summary>
+    /// <param name="interfaceSym">The interface receiver.</param>
+    /// <param name="rightPart">The member being accessed.</param>
+    /// <returns>The bound access, or a bound error expression.</returns>
+    private BoundExpression BindInterfaceStaticAccessorStep(InterfaceSymbol interfaceSym, ExpressionSyntax rightPart)
+    {
+        switch (rightPart)
+        {
+            case NameExpressionSyntax ne:
+                var memberName = ne.IdentifierToken.Text;
+                var field = interfaceSym.GetStaticField(memberName);
+                if (field != null)
+                {
+                    return new BoundFieldAccessExpression(null, receiver: null, structType: null, field);
+                }
+
+                Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
+                return new BoundErrorExpression(null);
+
+            case AccessorExpressionSyntax nested:
+                var head = BindInterfaceStaticAccessorStep(interfaceSym, nested.LeftPart);
+                if (head is BoundErrorExpression)
+                {
+                    return head;
+                }
+
+                return BindAccessorStep(head, null, nested.RightPart);
 
             default:
                 return new BoundErrorExpression(null);

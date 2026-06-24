@@ -1873,6 +1873,14 @@ public sealed class Evaluator
 
     private object EvaluateFieldAccessExpression(BoundFieldAccessExpression node)
     {
+        // Issue #948 / issue #1030: a const field has no runtime storage — its
+        // read returns the compile-time constant value (matches the emitter's
+        // inlining and covers interface const fields, whose StructType is null).
+        if (node.Field.IsConst)
+        {
+            return node.Field.ConstantValue;
+        }
+
         // ADR-0053: static field access — receiver is null; look up in the
         // static-field storage keyed by (StructType, Field).
         if (node.Receiver == null)

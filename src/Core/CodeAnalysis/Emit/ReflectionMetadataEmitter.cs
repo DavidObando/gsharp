@@ -911,6 +911,20 @@ internal sealed class ReflectionMetadataEmitter
         // Where M = total non-SM fields. <Program> owns 0 fields so its
         // fieldList equals the first SM type's fieldList.
         int nextFieldRow = 1;
+
+        // ADR-0089 / issue #1030: interface static fields occupy the FIRST
+        // FieldDef rows. Interface TypeDefs are emitted immediately after
+        // <Module> and before every class/struct/enum TypeDef, so their field
+        // rows must precede all aggregate field rows to keep the metadata
+        // fieldList column monotone non-decreasing. const fields are emitted as
+        // literal FieldDefs too, so both static and const fields are counted.
+        var interfaceFirstFieldRow = new Dictionary<InterfaceSymbol, int>();
+        foreach (var i in topInterfaces)
+        {
+            interfaceFirstFieldRow[i] = nextFieldRow;
+            nextFieldRow += i.StaticFields.Length + i.ConstFields.Length;
+        }
+
         var structFirstFieldRow = new Dictionary<StructSymbol, int>();
 
         // Issue #910 / ADR-0110: field-row planning for one aggregate (class or
@@ -1009,8 +1023,16 @@ internal sealed class ReflectionMetadataEmitter
                     PlanEnumFields(ne);
                     break;
 
-                // Interfaces own no fields; the boundary pointer above is what
-                // their nested TypeDef row will reference.
+                case InterfaceSymbol ni:
+                    // ADR-0089 / issue #1030: a nested interface may declare
+                    // static fields. Reserve its FieldDef rows in the nested
+                    // block (its TypeDef row is emitted in this same pass).
+                    interfaceFirstFieldRow[ni] = nextFieldRow;
+                    nextFieldRow += ni.StaticFields.Length + ni.ConstFields.Length;
+                    break;
+
+                // Other nested kinds own no fields; the boundary pointer above
+                // is what their nested TypeDef row will reference.
             }
         }
 
@@ -1046,6 +1068,7 @@ internal sealed class ReflectionMetadataEmitter
 
         int methodRow = 1;
         var interfaceFirstMethodRow = new Dictionary<InterfaceSymbol, int>();
+        var interfaceCctorRows = new Dictionary<InterfaceSymbol, int>();
         void PlanInterfaceMethods(InterfaceSymbol i)
         {
             interfaceFirstMethodRow[i] = methodRow;
@@ -1125,6 +1148,15 @@ internal sealed class ReflectionMetadataEmitter
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 MethodDefinitionHandle? raiseHandle = ev.RaiseMethodSymbol != null ? MetadataTokens.MethodDefinitionHandle(methodRow++) : null;
                 this.cache.EventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
+            }
+
+            // ADR-0089 / issue #1030: plan the .cctor row for an interface that
+            // declares static-field initializers. It is the LAST method in the
+            // interface's MethodList run (emitted after property/event accessors
+            // in EmitInterfaceMethodBodies), so reserve it here last.
+            if (!i.StaticFieldInitializers.IsEmpty)
+            {
+                interfaceCctorRows[i] = methodRow++;
             }
         }
 
@@ -1494,7 +1526,7 @@ internal sealed class ReflectionMetadataEmitter
         // the first of their reserved abstract method rows.
         foreach (var i in topInterfaces)
         {
-            this.typeDefEmitter.EmitInterfaceTypeDef(i, interfaceFirstMethodRow[i], 1);
+            this.typeDefEmitter.EmitInterfaceTypeDef(i, interfaceFirstMethodRow[i], interfaceFirstFieldRow[i]);
         }
 
         // Issue #1006: emit the InterfaceImpl rows recording each interface's
@@ -2165,6 +2197,14 @@ internal sealed class ReflectionMetadataEmitter
 
             // ADR-0052: emit abstract accessor MethodDefs + EventDef rows for interface events.
             this.memberDefEmitter.EmitInterfaceEventAccessors(i);
+
+            // ADR-0089 / issue #1030: emit the interface .cctor running static
+            // field initializers. Emitted LAST (after property/event accessors)
+            // to match the row reserved in PlanInterfaceMethods.
+            if (!i.StaticFieldInitializers.IsEmpty)
+            {
+                this.EmitInterfaceStaticConstructor(i);
+            }
         }
 
         foreach (var i in topInterfaces)
@@ -3205,7 +3245,74 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var body = new BoundBlockStatement(null, statements.ToImmutable());
+        return this.EmitStaticConstructorBodyFromBlock(body, typeSym.Declaration);
+    }
 
+    /// <summary>
+    /// ADR-0089 / issue #1030: emits the interface <c>.cctor</c> (type
+    /// initializer) running the interface's static-field initializers. Mirrors
+    /// <c>TypeDefEmitter.EmitStaticConstructor</c> but resolves the body via the
+    /// interface-specific body-bytes helper. The MethodDef lands in the row
+    /// reserved by PlanInterfaceMethods (last in the interface's method run).
+    /// </summary>
+    /// <param name="ifaceSym">The interface whose static constructor is emitted.</param>
+    private void EmitInterfaceStaticConstructor(InterfaceSymbol ifaceSym)
+    {
+        int bodyOffset = -1;
+        if (!this.emitCtx.MetadataOnly)
+        {
+            bodyOffset = this.EmitInterfaceStaticConstructorBodyBytes(ifaceSym);
+        }
+
+        var cctorSig = new BlobBuilder();
+        new BlobEncoder(cctorSig).MethodSignature(isInstanceMethod: false)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        this.emitCtx.Metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+                | MethodAttributes.RTSpecialName | MethodAttributes.Static,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.emitCtx.Metadata.GetOrAddString(".cctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(cctorSig),
+            bodyOffset: bodyOffset,
+            parameterList: this.customAttrEncoder.NextParameterHandle());
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #1030: builds the IL body for an interface
+    /// <c>.cctor</c> running each interface static-field initializer in
+    /// declaration order. Interface static fields are plain CLR static fields,
+    /// so the synthesized assignment carries a <c>null</c> declaring struct and
+    /// the emitter resolves the field handle by symbol identity.
+    /// </summary>
+    /// <param name="ifaceSym">The interface whose static initializers run.</param>
+    /// <returns>The resulting method body offset.</returns>
+    private int EmitInterfaceStaticConstructorBodyBytes(InterfaceSymbol ifaceSym)
+    {
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        foreach (var field in ifaceSym.StaticFields)
+        {
+            if (ifaceSym.StaticFieldInitializers.TryGetValue(field, out var initExpr))
+            {
+                var assignment = new BoundFieldAssignmentExpression(null, null, structType: null, field, initExpr);
+                statements.Add(new BoundExpressionStatement(null, assignment));
+            }
+        }
+
+        var body = new BoundBlockStatement(null, statements.ToImmutable());
+        return this.EmitStaticConstructorBodyFromBlock(body, ifaceSym.Declaration);
+    }
+
+    /// <summary>
+    /// Shared IL-emission core for a synthesized <c>.cctor</c> body (Issue #262
+    /// / issue #1030). Plans locals/labels, emits the block, appends
+    /// <c>ret</c>, and returns the resulting body offset.
+    /// </summary>
+    /// <param name="body">The synthesized static-constructor block.</param>
+    /// <param name="anchor">The declaring-type syntax used as the diagnostic anchor.</param>
+    /// <returns>The resulting method body offset.</returns>
+    private int EmitStaticConstructorBodyFromBlock(BoundBlockStatement body, SyntaxNode anchor)
+    {
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
         var locals = new Dictionary<VariableSymbol, int>();
         var labels = new Dictionary<BoundLabel, LabelHandle>();
@@ -3294,8 +3401,8 @@ internal sealed class ReflectionMetadataEmitter
         }
         catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
         {
-            var anchor = emitter.CurrentAnchor ?? typeSym.Declaration;
-            EmitDiagnosticException.Wrap(anchor, ex);
+            var fallbackAnchor = emitter.CurrentAnchor ?? anchor;
+            EmitDiagnosticException.Wrap(fallbackAnchor, ex);
         }
 
         il.OpCode(ILOpCode.Ret);

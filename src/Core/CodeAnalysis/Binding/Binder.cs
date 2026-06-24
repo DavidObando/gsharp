@@ -440,6 +440,47 @@ public sealed class Binder
                 }
             }
 
+            // ADR-0089 / issue #1030: expose interface static *state* by bare
+            // name inside the owning interface's static members (static
+            // methods, default-bodied static property accessors). The owner is
+            // an InterfaceSymbol, so `ownerStruct` is null above; resolve the
+            // interface owner separately and inject its static + const fields.
+            var ownerInterface = function.StaticOwnerType as InterfaceSymbol;
+            if (ownerInterface != null)
+            {
+                if (!ownerInterface.StaticFields.IsDefaultOrEmpty)
+                {
+                    foreach (var fld in ownerInterface.StaticFields)
+                    {
+                        if (paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name))
+                        {
+                            continue;
+                        }
+
+                        if (seenMembers.Add(fld.Name))
+                        {
+                            scope.TryDeclareVariable(new ImplicitStaticFieldVariableSymbol(ownerInterface, fld));
+                        }
+                    }
+                }
+
+                if (!ownerInterface.ConstFields.IsDefaultOrEmpty)
+                {
+                    foreach (var fld in ownerInterface.ConstFields)
+                    {
+                        if (paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name))
+                        {
+                            continue;
+                        }
+
+                        if (seenMembers.Add(fld.Name))
+                        {
+                            scope.TryDeclareVariable(new ImplicitStaticFieldVariableSymbol(ownerInterface, fld));
+                        }
+                    }
+                }
+            }
+
             foreach (var p in function.Parameters)
             {
                 if (ReferenceEquals(p, function.ThisParameter))
@@ -1051,6 +1092,38 @@ public sealed class Binder
             }
         }
 
+        // Issue #1030: bind default bodies on static-virtual interface
+        // *property* accessors (get_/set_). These mirror the static-virtual
+        // method default-body loop above: a default-bodied accessor is a
+        // non-abstract Static|Virtual slot whose lowered body is registered in
+        // functionBodies keyed by the accessor FunctionSymbol. Abstract
+        // accessors (no body) are skipped and remain abstract MethodDef rows.
+        foreach (var ifaceSym in globalScope.Interfaces)
+        {
+            if (ifaceSym.Properties.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var prop in ifaceSym.Properties)
+            {
+                if (!prop.IsStatic)
+                {
+                    continue;
+                }
+
+                if (prop.GetterSymbol != null && prop.GetterBodySyntax != null)
+                {
+                    BindInterfaceAccessorBody(cache, dirtyTrees, parentScope, prop.GetterSymbol, prop.GetterBodySyntax, functionBodies, diagnostics, requireAllPathsReturn: true);
+                }
+
+                if (prop.SetterSymbol != null && prop.SetterBodySyntax != null)
+                {
+                    BindInterfaceAccessorBody(cache, dirtyTrees, parentScope, prop.SetterSymbol, prop.SetterBodySyntax, functionBodies, diagnostics, requireAllPathsReturn: false);
+                }
+            }
+        }
+
         // ADR-0090 / issue #756: bind bodies on private interface helper
         // methods (both instance and static). Private helpers are required
         // to carry a body (GS0335 fires when the body is omitted), so a
@@ -1387,6 +1460,49 @@ public sealed class Binder
         });
 
         functionBodies.Add(method, loweredBody);
+    }
+
+    /// <summary>
+    /// Issue #1030: binds the default body of a static-virtual interface
+    /// property accessor (<c>get_Name</c> / <c>set_Name</c>). Like
+    /// <see cref="BindInterfaceMethodBody"/> the body is lowered without a
+    /// declaring-type context (a static accessor has no instance <c>this</c>),
+    /// the getter's value-returning paths are checked, and the lowered body is
+    /// registered in <paramref name="functionBodies"/> keyed by the accessor.
+    /// </summary>
+    /// <param name="cache">The optional bound-body cache.</param>
+    /// <param name="dirtyTrees">Freshly-parsed (edited) trees whose member bodies must be rebound rather than served from the cache.</param>
+    /// <param name="parentScope">The parent scope bodies are bound against.</param>
+    /// <param name="accessor">The static accessor FunctionSymbol whose body is being bound.</param>
+    /// <param name="bodySyntax">The accessor body block syntax.</param>
+    /// <param name="functionBodies">The function-body map to register the lowered body in.</param>
+    /// <param name="diagnostics">The program-level diagnostics accumulator.</param>
+    /// <param name="requireAllPathsReturn">When true (a getter), all code paths must return a value.</param>
+    private static void BindInterfaceAccessorBody(
+        BoundBodyCache cache,
+        ImmutableHashSet<SyntaxTree> dirtyTrees,
+        BoundScope parentScope,
+        FunctionSymbol accessor,
+        BlockStatementSyntax bodySyntax,
+        ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
+        ImmutableArray<Diagnostic>.Builder diagnostics,
+        bool requireAllPathsReturn)
+    {
+        var loweredBody = BindBodyWithCache(cache, dirtyTrees, accessor, bodySyntax, diagnostics, () =>
+        {
+            var binder = new Binder(parentScope, accessor);
+            var body = binder.statements.BindStatement(bodySyntax);
+            var lowered = Lowerer.Lower(body);
+
+            if (requireAllPathsReturn && !ControlFlowGraph.AllPathsReturn(lowered))
+            {
+                binder.Diagnostics.ReportAllPathsMustReturn(bodySyntax.OpenBraceToken.Location);
+            }
+
+            return (lowered, binder.Diagnostics.ToImmutableArray());
+        });
+
+        functionBodies.Add(accessor, loweredBody);
     }
 
     /// <summary>

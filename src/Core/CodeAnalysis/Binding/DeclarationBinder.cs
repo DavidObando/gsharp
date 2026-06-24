@@ -3036,6 +3036,21 @@ internal sealed class DeclarationBinder
                     continue;
                 }
 
+                // Issue #1030: a default-bodied static-virtual interface
+                // property accessor (non-abstract) supplies its own body, so
+                // an implementer is NOT required to provide it. Only abstract
+                // accessors must be satisfied. Compute per-accessor whether an
+                // abstract slot remains for the implementer to fill.
+                var getterIsAbstract = iprop.HasGetter && (iprop.GetterSymbol == null || iprop.GetterSymbol.IsAbstract);
+                var setterIsAbstract = iprop.HasSetter && (iprop.SetterSymbol == null || iprop.SetterSymbol.IsAbstract);
+
+                if (!getterIsAbstract && !setterIsAbstract)
+                {
+                    // Fully default-bodied property: nothing the implementer
+                    // must provide.
+                    continue;
+                }
+
                 PropertySymbol match = null;
                 foreach (var candidate in structSymbol.StaticProperties)
                 {
@@ -3058,7 +3073,7 @@ internal sealed class DeclarationBinder
                     continue;
                 }
 
-                if (iprop.HasGetter && !match.HasGetter)
+                if (getterIsAbstract && !match.HasGetter)
                 {
                     Diagnostics.ReportStaticVirtualInterfacePropertyNotImplemented(
                         syntax.Identifier.Location,
@@ -3068,7 +3083,7 @@ internal sealed class DeclarationBinder
                         "getter");
                 }
 
-                if (iprop.HasSetter && !match.HasSetter)
+                if (setterIsAbstract && !match.HasSetter)
                 {
                     Diagnostics.ReportStaticVirtualInterfacePropertyNotImplemented(
                         syntax.Identifier.Location,
@@ -4213,12 +4228,14 @@ internal sealed class DeclarationBinder
                         getterSymbol.IsSpecialName = true;
                         if (getAccessor?.Body != null)
                         {
-                            // Default-bodied static interface properties are
-                            // deferred (issue #1019 follow-up); treat as an
-                            // abstract slot after diagnosing.
-                            Diagnostics.ReportDefaultStaticInterfacePropertyNotSupported(
-                                getAccessor.AccessorKeyword.Location, interfaceSymbol.Name, propName);
-                            getterSymbol.IsAbstract = true;
+                            // Issue #1030: a default-bodied static-virtual
+                            // interface property accessor is a *default* slot
+                            // (Static | Virtual, non-abstract) emitting a real
+                            // method body. The body is bound in the Binder's
+                            // interface accessor-body pass and registered in
+                            // functionBodies keyed by this getter symbol.
+                            getterSymbol.IsAbstract = false;
+                            propSymbol.GetterBodySyntax = getAccessor.Body;
                         }
                         else
                         {
@@ -4245,9 +4262,11 @@ internal sealed class DeclarationBinder
                         setterSymbol.IsInitOnlySetter = isInitOnly;
                         if (setAccessor?.Body != null)
                         {
-                            Diagnostics.ReportDefaultStaticInterfacePropertyNotSupported(
-                                setAccessor.AccessorKeyword.Location, interfaceSymbol.Name, propName);
-                            setterSymbol.IsAbstract = true;
+                            // Issue #1030: default-bodied static-virtual
+                            // interface property setter — a non-abstract
+                            // default slot with a real method body.
+                            setterSymbol.IsAbstract = false;
+                            propSymbol.SetterBodySyntax = setAccessor.Body;
                         }
                         else
                         {
@@ -4298,6 +4317,110 @@ internal sealed class DeclarationBinder
             }
 
             interfaceSymbol.SetEvents(eventsBuilder.ToImmutable());
+        }
+
+        // ADR-0089 / issue #1030: bind interface static *state* — `var` / `let`
+        // / `const` fields declared inside the interface `shared { … }` block.
+        // CLR interfaces may own static fields; these become `Static` FieldDef
+        // rows on the interface TypeDef (const → `literal` + `Constant` row).
+        if (!syntax.StaticFields.IsDefaultOrEmpty)
+        {
+            // Generic interface static fields would require TypeSpec-parented
+            // field references at access sites (per-construction storage). That
+            // is out of scope for this release; reject with a refined GS0330.
+            if (!interfaceSymbol.TypeParameters.IsDefaultOrEmpty)
+            {
+                foreach (var fieldSyntax in syntax.StaticFields)
+                {
+                    Diagnostics.ReportInterfaceSharedMemberMustBeFunc(fieldSyntax.Identifier.Location, interfaceSymbol.Name);
+                }
+            }
+            else
+            {
+                var staticFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
+                var constFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
+                var initializersBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
+                foreach (var fieldSyntax in syntax.StaticFields)
+                {
+                    var fieldName = fieldSyntax.Identifier.Text;
+                    if (!seenNames.Add(fieldName))
+                    {
+                        Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName);
+                        continue;
+                    }
+
+                    var fieldType = bindTypeClause(fieldSyntax.Type);
+                    if (fieldType == null)
+                    {
+                        continue;
+                    }
+
+                    if (TypeSymbol.IsByRefLike(fieldType))
+                    {
+                        Diagnostics.ReportByRefLikeEscape(fieldSyntax.Identifier.Location, fieldType, $"be used as the type of field '{fieldName}'");
+                        continue;
+                    }
+
+                    if (fieldType is ByRefTypeSymbol byRefFieldType)
+                    {
+                        Diagnostics.ReportPointerTypeCannotBeFieldType(fieldSyntax.Identifier.Location, byRefFieldType.Name);
+                        continue;
+                    }
+
+                    var fieldAccessibility = resolveAccessibility(fieldSyntax.AccessibilityModifier);
+
+                    // const → compile-time literal field (reads inlined).
+                    if (fieldSyntax.IsConst)
+                    {
+                        var constField = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: true, isStatic: true, isConst: true);
+                        Binder.AttachDocumentation(constField, fieldSyntax);
+
+                        if (fieldSyntax.Initializer == null)
+                        {
+                            Diagnostics.ReportConstFieldRequiresInitializer(fieldSyntax.Identifier.Location, fieldName);
+                        }
+                        else
+                        {
+                            var boundConst = bindExpression(fieldSyntax.Initializer);
+                            var convertedConst = conversions.BindConversion(fieldSyntax.Initializer.Location, boundConst, fieldType);
+                            if (TryFoldConstantFieldValue(convertedConst, fieldType, out var constValue))
+                            {
+                                constField.SetConstantValue(constValue);
+                            }
+                            else if (boundConst is not BoundErrorExpression && convertedConst is not BoundErrorExpression)
+                            {
+                                Diagnostics.ReportConstFieldInitializerNotConstant(fieldSyntax.Initializer.Location, fieldName);
+                            }
+                        }
+
+                        constFieldsBuilder.Add(constField);
+                        continue;
+                    }
+
+                    var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: fieldSyntax.IsReadOnly, isStatic: true);
+                    Binder.AttachDocumentation(fieldSymbol, fieldSyntax);
+
+                    if (fieldSyntax.Initializer != null)
+                    {
+                        var boundInit = bindExpression(fieldSyntax.Initializer);
+                        var convertedInit = conversions.BindConversion(fieldSyntax.Initializer.Location, boundInit, fieldType);
+                        initializersBuilder[fieldSymbol] = convertedInit;
+                    }
+
+                    staticFieldsBuilder.Add(fieldSymbol);
+                }
+
+                interfaceSymbol.SetStaticFields(staticFieldsBuilder.ToImmutable());
+                if (constFieldsBuilder.Count > 0)
+                {
+                    interfaceSymbol.SetConstFields(constFieldsBuilder.ToImmutable());
+                }
+
+                if (initializersBuilder.Count > 0)
+                {
+                    interfaceSymbol.SetStaticFieldInitializers(initializersBuilder.ToImmutable());
+                }
+            }
         }
 
         // Phase 4.3c / ADR-0021: variance position checking. Walk each method's
