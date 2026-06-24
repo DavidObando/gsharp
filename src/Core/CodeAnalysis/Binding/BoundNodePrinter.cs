@@ -1545,7 +1545,14 @@ public static class BoundNodePrinter
         else
         {
             // Issue #1030: an interface static field access carries no
-            // declaring struct; print the field name unqualified.
+            // declaring struct. Print `IName.Field` when the owning interface
+            // is known, otherwise the field name unqualified.
+            if (node.InterfaceType != null)
+            {
+                writer.WriteIdentifier(node.InterfaceType.Name);
+                writer.WritePunctuation(SyntaxKind.DotToken);
+            }
+
             writer.WriteIdentifier(node.Field.Name);
             return;
         }
@@ -1570,7 +1577,14 @@ public static class BoundNodePrinter
         }
         else
         {
-            // Issue #1030: interface static field — print unqualified.
+            // Issue #1030: interface static field — print `IName.Field` when
+            // the owning interface is known, otherwise unqualified.
+            if (node.InterfaceType != null)
+            {
+                writer.WriteIdentifier(node.InterfaceType.Name);
+                writer.WritePunctuation(SyntaxKind.DotToken);
+            }
+
             writer.WriteIdentifier(node.Field.Name);
         }
 

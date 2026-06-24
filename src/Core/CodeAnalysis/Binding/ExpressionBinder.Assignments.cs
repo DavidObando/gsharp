@@ -68,7 +68,9 @@ internal sealed partial class ExpressionBinder
                 $"{implicitStaticField.OwnerName}.{implicitStaticField.Field.Name}");
 
             var convertedValue = conversions.BindConversion(syntax.Expression.Location, boundExpression, implicitStaticField.Field.Type);
-            return new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedValue);
+            return implicitStaticField.InterfaceType != null
+                ? new BoundFieldAssignmentExpression(null, implicitStaticField.Field, implicitStaticField.InterfaceType, convertedValue)
+                : new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedValue);
         }
 
         // ADR-0053: bare static property assignment inside a method body
@@ -445,7 +447,7 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var staticConverted = conversions.BindConversion(syntax.Value.Location, staticValue, staticField.Type);
-                return new BoundFieldAssignmentExpression(null, null, structType: null, staticField, staticConverted);
+                return new BoundFieldAssignmentExpression(null, staticField, userInterface, staticConverted);
             }
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
@@ -691,7 +693,9 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
             }
 
-            return new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedResult);
+            return implicitStaticField.InterfaceType != null
+                ? new BoundFieldAssignmentExpression(null, implicitStaticField.Field, implicitStaticField.InterfaceType, convertedResult)
+                : new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedResult);
         }
 
         // ADR-0053: bare static property compound assignment inside a method
@@ -808,6 +812,59 @@ internal sealed partial class ExpressionBinder
 
         result = null;
         return false;
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #1030: binds <c>IName.StaticField +=/-= rhs</c> for an
+    /// interface static field. <paramref name="interfaceSym"/> may be the open
+    /// definition (non-generic, or self-instantiation) or a constructed generic
+    /// interface (<c>IBox[int32]</c>); the field is resolved on the definition
+    /// and the carried interface symbol drives per-construction emit/storage.
+    /// Returns <c>true</c> when the named member was an interface static field;
+    /// <c>false</c> otherwise (caller reports "unable to find member").
+    /// </summary>
+    /// <param name="interfaceSym">The interface receiver (definition or constructed).</param>
+    /// <param name="memberNameSyntax">The member-name syntax.</param>
+    /// <param name="syntax">The originating compound-assignment syntax.</param>
+    /// <param name="isAdd">Whether the operator is <c>+=</c> (else <c>-=</c>).</param>
+    /// <param name="result">The bound compound assignment on success.</param>
+    /// <returns>Whether the member resolved to an interface static field.</returns>
+    private bool TryBindInterfaceStaticCompoundAssignment(
+        InterfaceSymbol interfaceSym,
+        NameExpressionSyntax memberNameSyntax,
+        EventSubscriptionExpressionSyntax syntax,
+        bool isAdd,
+        out BoundExpression result)
+    {
+        var memberName = memberNameSyntax.IdentifierToken.Text;
+        var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
+        var fieldOwner = interfaceSym.Definition ?? interfaceSym;
+        var staticField = fieldOwner.GetStaticField(memberName);
+        if (staticField == null)
+        {
+            result = null;
+            return false;
+        }
+
+        var boundRhs = BindExpression(syntax.Value);
+        var leftRead = new BoundFieldAccessExpression(null, staticField, interfaceSym);
+        var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, staticField.Type, boundRhs.Type);
+        if (op == null)
+        {
+            Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, staticField.Type, boundRhs.Type);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        if (staticField.IsReadOnly || staticField.IsConst)
+        {
+            Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
+        }
+
+        var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
+        var converted = conversions.BindConversion(syntax.Value.Location, binary, staticField.Type);
+        result = new BoundFieldAssignmentExpression(null, staticField, interfaceSym, converted);
+        return true;
     }
 
     /// <summary>
@@ -1170,6 +1227,33 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindMemberFieldAssignmentExpression(MemberFieldAssignmentExpressionSyntax syntax)
     {
+        // ADR-0089 / issue #1030: `IBox[int32].Field = value` — a write to a
+        // constructed generic interface's static field. The receiver
+        // `IBox[int32]` is a type, not a value, so it is resolved to the
+        // constructed interface symbol rather than bound as an index expression.
+        if (syntax.Receiver is IndexExpressionSyntax ifaceIndex
+            && !ifaceIndex.IsNullConditional
+            && TryResolveConstructedGenericInterfaceReceiver(ifaceIndex, out var ctorIface))
+        {
+            var ifaceFieldName = syntax.FieldIdentifier.Text;
+            var ownerDef = ctorIface.Definition ?? ctorIface;
+            var ifaceStaticField = ownerDef.GetStaticField(ifaceFieldName);
+            if (ifaceStaticField != null)
+            {
+                var ifaceValue = BindExpression(syntax.Value);
+                if (ifaceStaticField.IsReadOnly || ifaceStaticField.IsConst)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, ifaceFieldName);
+                }
+
+                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, ifaceValue, ifaceStaticField.Type);
+                return new BoundFieldAssignmentExpression(null, ifaceStaticField, ctorIface, ifaceConverted);
+            }
+
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, ifaceFieldName);
+            return new BoundErrorExpression(null);
+        }
+
         var receiver = BindExpression(syntax.Receiver);
         if (receiver is BoundErrorExpression)
         {

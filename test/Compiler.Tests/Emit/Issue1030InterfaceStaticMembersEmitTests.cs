@@ -263,6 +263,155 @@ public class Issue1030InterfaceStaticMembersEmitTests
         Assert.Equal("default-name\nbanana\n", output);
     }
 
+    [Fact]
+    public void GenericInterfaceStaticState_EmitsStaticAndLiteralFieldDefs()
+    {
+        // Issue #1030 (deferred work): a *generic* interface may own static
+        // state. The FieldDef rows live on the generic interface TypeDef just
+        // like the non-generic case.
+        var source = """
+            package Probe
+            import System
+
+            interface IBox[T] {
+                shared {
+                    var Count int32
+                    const Max int32 = 7
+                }
+            }
+            """;
+
+        var dllPath = CompileLibrary(source);
+        try
+        {
+            using var stream = File.OpenRead(dllPath);
+            using var peReader = new PEReader(stream);
+            var reader = peReader.GetMetadataReader();
+
+            var sawCount = false;
+            var sawMax = false;
+            foreach (var typeHandle in reader.TypeDefinitions)
+            {
+                var td = reader.GetTypeDefinition(typeHandle);
+                if (!reader.StringComparer.Equals(td.Name, "IBox`1"))
+                {
+                    continue;
+                }
+
+                foreach (var fh in td.GetFields())
+                {
+                    var fd = reader.GetFieldDefinition(fh);
+                    var name = reader.GetString(fd.Name);
+                    var attrs = fd.Attributes;
+                    if (name == "Count")
+                    {
+                        sawCount = (attrs & FieldAttributes.Static) != 0
+                            && (attrs & FieldAttributes.Literal) == 0;
+                    }
+
+                    if (name == "Max")
+                    {
+                        sawMax = (attrs & FieldAttributes.Static) != 0
+                            && (attrs & FieldAttributes.Literal) != 0;
+                    }
+                }
+            }
+
+            Assert.True(sawCount, "expected a Static (non-literal) Count FieldDef on IBox`1");
+            Assert.True(sawMax, "expected a Static | Literal Max FieldDef on IBox`1");
+        }
+        finally
+        {
+            TryCleanup(dllPath);
+        }
+    }
+
+    [Fact]
+    public void EndToEnd_GenericInterfaceStaticState_IndependentStoragePerConstruction_Runs()
+    {
+        // CLR semantics: a generic type owns one set of static fields per closed
+        // construction, so IBox[int32] and IBox[string] have independent storage.
+        var source = """
+            package Probe
+            import System
+
+            interface IBox[T] {
+                shared {
+                    var Count int32 = 10
+                    let Label string = "box"
+                    const Max int32 = 99
+                }
+            }
+
+            func Main() {
+                Console.WriteLine(IBox[int32].Count)
+                Console.WriteLine(IBox[int32].Label)
+                Console.WriteLine(IBox[int32].Max)
+                IBox[int32].Count = IBox[int32].Count + 5
+                IBox[string].Count = IBox[string].Count + 100
+                Console.WriteLine(IBox[int32].Count)
+                Console.WriteLine(IBox[string].Count)
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("10\nbox\n99\n15\n110\n", output);
+    }
+
+    [Fact]
+    public void EndToEnd_GenericInterfaceStaticState_CompoundAssignment_Runs()
+    {
+        // Issue #1030 (deferred work): compound assignment on a generic
+        // interface static field, per construction.
+        var source = """
+            package Probe
+            import System
+
+            interface IBox[T] {
+                shared {
+                    var Count int32 = 0
+                }
+            }
+
+            func Main() {
+                IBox[int32].Count += 7
+                IBox[int32].Count -= 2
+                IBox[string].Count += 1
+                Console.WriteLine(IBox[int32].Count)
+                Console.WriteLine(IBox[string].Count)
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("5\n1\n", output);
+    }
+
+    [Fact]
+    public void EndToEnd_InterfaceStaticField_CompoundAssignment_Runs()
+    {
+        // Issue #1030 (deferred work): compound assignment (`+=` / `-=`) on a
+        // non-generic interface static field.
+        var source = """
+            package Probe
+            import System
+
+            interface ICounter {
+                shared {
+                    var Count int32 = 10
+                }
+            }
+
+            func Main() {
+                ICounter.Count += 5
+                ICounter.Count -= 2
+                Console.WriteLine(ICounter.Count)
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("13\n", output);
+    }
+
     private static string CompileLibrary(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_1030_lib_").FullName;

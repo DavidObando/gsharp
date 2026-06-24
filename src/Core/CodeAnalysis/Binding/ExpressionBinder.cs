@@ -384,11 +384,13 @@ internal sealed partial class ExpressionBinder
                 implicitStaticField.Field,
                 $"{implicitStaticField.OwnerName}.{implicitStaticField.Field.Name}");
 
-            return new BoundFieldAccessExpression(
-                null,
-                receiver: null,
-                implicitStaticField.StructType,
-                implicitStaticField.Field);
+            return implicitStaticField.InterfaceType != null
+                ? new BoundFieldAccessExpression(null, implicitStaticField.Field, implicitStaticField.InterfaceType)
+                : new BoundFieldAccessExpression(
+                    null,
+                    receiver: null,
+                    implicitStaticField.StructType,
+                    implicitStaticField.Field);
         }
 
         // ADR-0053: bare static property name inside a method body (shared

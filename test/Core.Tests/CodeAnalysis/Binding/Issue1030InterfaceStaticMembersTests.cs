@@ -98,19 +98,50 @@ struct Apple : IData {
     }
 
     [Fact]
-    public void GenericInterfaceStaticState_StillReportsGS0330()
+    public void GenericInterfaceStaticState_Binds()
     {
-        // Generic interface static fields require per-construction storage and
-        // remain out of scope; rejected with a refined GS0330.
+        // Issue #1030 (deferred work): generic interface static state is now
+        // supported — fields bind and qualified per-construction access binds
+        // cleanly (no GS0330).
         var source = @"
 sealed interface IBox[T] {
   shared {
-    var Slot int32
+    var Slot int32 = 0
+    const Cap int32 = 8
   }
+}
+
+func Use() int32 {
+  IBox[int32].Slot = IBox[int32].Slot + 1
+  IBox[string].Slot = IBox[string].Slot + 2
+  return IBox[int32].Slot + IBox[string].Slot + IBox[int32].Cap
 }
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0330");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0330");
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void GenericInterfaceStaticField_CompoundAssignment_Binds()
+    {
+        // Issue #1030 (deferred work): compound assignment on a generic
+        // interface static field binds with no diagnostics.
+        var source = @"
+interface IBox[T] {
+  shared {
+    var Count int32 = 0
+  }
+}
+
+func Bump() int32 {
+  IBox[int32].Count += 3
+  IBox[int32].Count -= 1
+  return IBox[int32].Count
+}
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
     }
 
     private static EvaluationResult Evaluate(string source)

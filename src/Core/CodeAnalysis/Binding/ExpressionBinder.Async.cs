@@ -96,6 +96,35 @@ internal sealed partial class ExpressionBinder
             Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
             return new BoundErrorExpression(null);
         }
+        else if (accessor.LeftPart is NameExpressionSyntax ifaceLeftName
+            && scope.TryLookupTypeAlias(ifaceLeftName.IdentifierToken.Text, out var ifaceTypeAlias)
+            && ifaceTypeAlias is InterfaceSymbol staticInterface)
+        {
+            // ADR-0089 / issue #1030: `IName.StaticField += rhs` — compound
+            // assignment to a (non-generic) interface static field.
+            if (TryBindInterfaceStaticCompoundAssignment(staticInterface, eventNameSyntax, syntax, isAdd, out var ifaceCompound))
+            {
+                return ifaceCompound;
+            }
+
+            Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
+            return new BoundErrorExpression(null);
+        }
+        else if (accessor.LeftPart is IndexExpressionSyntax ifaceIndex
+            && !ifaceIndex.IsNullConditional
+            && TryResolveConstructedGenericInterfaceReceiver(ifaceIndex, out var ctorInterface))
+        {
+            // ADR-0089 / issue #1030: `IBox[int32].StaticField += rhs` —
+            // compound assignment to a constructed generic interface static
+            // field (per-construction storage).
+            if (TryBindInterfaceStaticCompoundAssignment(ctorInterface, eventNameSyntax, syntax, isAdd, out var ctorCompound))
+            {
+                return ctorCompound;
+            }
+
+            Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
+            return new BoundErrorExpression(null);
+        }
         else
         {
             boundReceiver = BindExpression(accessor.LeftPart);

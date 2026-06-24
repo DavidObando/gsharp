@@ -997,7 +997,7 @@ ECMA-335 II.15.4.2.4 and III.2.1).
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0330 | Error | `Only 'func' members are allowed inside the 'shared' block of interface '<Name>'; interface static state is not supported in this release (ADR-0089).` Raised for an `event` member in any interface `shared` block, or for a `var`/`let`/`const` field in a **generic** interface's `shared` block. Non-generic interface static `var`/`let`/`const` state is supported (issue #1030). |
+| GS0330 | Error | `Only 'func' members are allowed inside the 'shared' block of interface '<Name>'; interface static state is not supported in this release (ADR-0089).` Raised for an `event` member in any interface `shared` block. Interface static `var`/`let`/`const` state is supported on both non-generic and generic interfaces (issue #1030). |
 | GS0331 | Error | `<Kind> '<C>' does not implement static-virtual interface method '<I>.<Name>', and the interface provides no default body (ADR-0089).` |
 | GS0332 | Error | `<Kind> '<C>' declares instance method '<Name>' but interface '<I>.<Name>' is static-virtual; declare it inside a 'shared { … }' block (ADR-0089).` |
 | GS0333 | Error | `Type parameter '<T>' has no constraint that declares a static-virtual member '<Name>' (ADR-0089).` |
@@ -1015,15 +1015,11 @@ interface slot via a `MethodImpl` row (ECMA-335 II.22.27).
 Cause/fix:
 
 - **GS0330** — `func` members, `prop` (static-virtual property)
-  declarations, and — on a **non-generic** interface — `var` /
-  `let` / `const` static *state* fields (issue #1030) may appear
-  inside an interface's `shared { … }` block. The diagnostic still
-  fires for an `event` member, or for a `var` / `let` / `const`
-  field on a *generic* interface (generic interface static storage
-  would need per-construction field references and is out of scope).
-  Move an `event` out of the `shared` block; for generic
-  per-implementer constants, expose a static-virtual `prop` or
-  `func` instead.
+  declarations, and `var` / `let` / `const` static *state* fields
+  (issue #1030) — on both non-generic and generic interfaces — may
+  appear inside an interface's `shared { … }` block. The diagnostic
+  now fires only for an `event` member. Move an `event` out of the
+  `shared` block.
 - **GS0331** — add the missing static override inside the
   implementer's `shared { … }` block:
   `class Adder : IAdd { shared { func Add(a int32, b int32) int32 { return a + b } } }`,

@@ -4325,17 +4325,12 @@ internal sealed class DeclarationBinder
         // rows on the interface TypeDef (const → `literal` + `Constant` row).
         if (!syntax.StaticFields.IsDefaultOrEmpty)
         {
-            // Generic interface static fields would require TypeSpec-parented
-            // field references at access sites (per-construction storage). That
-            // is out of scope for this release; reject with a refined GS0330.
-            if (!interfaceSymbol.TypeParameters.IsDefaultOrEmpty)
-            {
-                foreach (var fieldSyntax in syntax.StaticFields)
-                {
-                    Diagnostics.ReportInterfaceSharedMemberMustBeFunc(fieldSyntax.Identifier.Location, interfaceSymbol.Name);
-                }
-            }
-            else
+            // ADR-0089 / issue #1030: interface static state is supported on
+            // both non-generic and generic interfaces. For a generic interface
+            // the FieldDef rows live on the interface TypeDef and access sites
+            // reference them through a TypeSpec for the closed construction, so
+            // each construction (`IBox[int32]` vs `IBox[string]`) owns
+            // independent storage — matching CLR static-field semantics.
             {
                 var staticFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
                 var constFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();

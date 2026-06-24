@@ -22,6 +22,28 @@ public sealed class BoundFieldAccessExpression : BoundExpression
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundFieldAccessExpression"/>
+    /// class for an interface static field read (ADR-0089 / issue #1030). The
+    /// declaring <see cref="StructType"/> is <c>null</c>; <see cref="InterfaceType"/>
+    /// records the owning interface (the open definition for a self-instantiation,
+    /// or a constructed <c>IBox[int32]</c> for a closed access) so the emitter can
+    /// route generic-interface field references through a <c>TypeSpec</c> and the
+    /// interpreter can key static storage per closed construction.
+    /// </summary>
+    /// <param name="syntax">The originating syntax, or <c>null</c> for synthesized nodes.</param>
+    /// <param name="field">The interface static field to read.</param>
+    /// <param name="interfaceType">The owning interface (definition or constructed).</param>
+    public BoundFieldAccessExpression(SyntaxNode syntax, FieldSymbol field, InterfaceSymbol interfaceType)
+        : base(syntax)
+    {
+        Receiver = null;
+        StructType = null;
+        Field = field;
+        NarrowedType = null;
+        InterfaceType = interfaceType;
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundFieldAccessExpression"/>
     /// class with a narrowed type. Issue #208: used by smart-cast flow analysis
     /// to surface a non-nullable view of a nullable field inside a block where
     /// a <c>[MemberNotNull]</c> call has been observed, without changing the
@@ -45,6 +67,15 @@ public sealed class BoundFieldAccessExpression : BoundExpression
     public BoundExpression Receiver { get; }
 
     public StructSymbol StructType { get; }
+
+    /// <summary>
+    /// Gets the owning interface for an interface static field read (ADR-0089 /
+    /// issue #1030), or <c>null</c> for a struct/class field. When non-null and
+    /// it is a generic-interface reference, the emitter resolves the field via a
+    /// <c>TypeSpec</c>-parented MemberRef; the interpreter keys static storage by
+    /// this symbol so each closed construction has independent storage.
+    /// </summary>
+    public InterfaceSymbol InterfaceType { get; }
 
     public FieldSymbol Field { get; }
 

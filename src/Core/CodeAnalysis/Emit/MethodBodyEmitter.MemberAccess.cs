@@ -405,7 +405,14 @@ internal sealed partial class MethodBodyEmitter
         bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(containing);
 
         EntityHandle fieldHandle;
-        if (isGeneric)
+        if (fa.InterfaceType != null)
+        {
+            // ADR-0089 / issue #1030: interface static field read. A generic
+            // interface routes through a TypeSpec-parented MemberRef (per
+            // construction); a non-generic interface uses the bare FieldDef.
+            fieldHandle = this.outer.ResolveInterfaceFieldToken(fa.InterfaceType, fa.Field);
+        }
+        else if (isGeneric)
         {
             fieldHandle = this.outer.ResolveFieldToken(containing, fa.Field);
         }
@@ -466,7 +473,13 @@ internal sealed partial class MethodBodyEmitter
         bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(containing);
 
         EntityHandle fieldHandle;
-        if (isGeneric)
+        if (fas.InterfaceType != null)
+        {
+            // ADR-0089 / issue #1030: interface static field write — generic
+            // interface via TypeSpec MemberRef, non-generic via bare FieldDef.
+            fieldHandle = this.outer.ResolveInterfaceFieldToken(fas.InterfaceType, fas.Field);
+        }
+        else if (isGeneric)
         {
             fieldHandle = this.outer.ResolveFieldToken(containing, fas.Field);
         }

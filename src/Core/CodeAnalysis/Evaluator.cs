@@ -28,6 +28,12 @@ public sealed class Evaluator
     private readonly Stack<System.Collections.IList> iteratorSinks = new Stack<System.Collections.IList>();
     private readonly Dictionary<Symbols.FunctionSymbol, bool> iteratorFunctionCache = new Dictionary<Symbols.FunctionSymbol, bool>();
     private readonly Dictionary<(Symbols.StructSymbol, Symbols.FieldSymbol), object> staticFields = new Dictionary<(Symbols.StructSymbol, Symbols.FieldSymbol), object>();
+
+    // ADR-0089 / issue #1030: interface static-field storage. Keyed by the
+    // owning interface symbol so each closed construction of a generic interface
+    // (`IBox[int32]` vs `IBox[string]`) owns independent storage, matching CLR
+    // static-field semantics. The non-generic case keys by the single interface.
+    private readonly Dictionary<(Symbols.InterfaceSymbol, Symbols.FieldSymbol), object> interfaceStaticFields = new Dictionary<(Symbols.InterfaceSymbol, Symbols.FieldSymbol), object>();
     private Random random;
 
     private object lastValue;
@@ -1885,6 +1891,18 @@ public sealed class Evaluator
         // static-field storage keyed by (StructType, Field).
         if (node.Receiver == null)
         {
+            // Issue #1030: interface static field — keyed per owning interface
+            // (per closed construction for a generic interface).
+            if (node.InterfaceType != null)
+            {
+                if (interfaceStaticFields.TryGetValue((node.InterfaceType, node.Field), out var ifaceValue))
+                {
+                    return ifaceValue;
+                }
+
+                return DefaultValue(node.Field.Type);
+            }
+
             if (staticFields.TryGetValue((node.StructType, node.Field), out var staticValue))
             {
                 return staticValue;
@@ -1909,6 +1927,15 @@ public sealed class Evaluator
         if (node.Receiver == null)
         {
             var value = EvaluateExpression(node.Value);
+
+            // Issue #1030: interface static field — keyed per owning interface
+            // (per closed construction for a generic interface).
+            if (node.InterfaceType != null)
+            {
+                interfaceStaticFields[(node.InterfaceType, node.Field)] = value;
+                return value;
+            }
+
             staticFields[(node.StructType, node.Field)] = value;
             return value;
         }
@@ -4005,6 +4032,13 @@ public sealed class Evaluator
         if (fa.Receiver == null)
         {
             // ADR-0053: static field write-back.
+            if (fa.InterfaceType != null)
+            {
+                // Issue #1030: interface static field write-back.
+                interfaceStaticFields[(fa.InterfaceType, fa.Field)] = value;
+                return;
+            }
+
             staticFields[(fa.StructType, fa.Field)] = value;
             return;
         }

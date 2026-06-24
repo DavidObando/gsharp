@@ -3294,7 +3294,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             if (ifaceSym.StaticFieldInitializers.TryGetValue(field, out var initExpr))
             {
-                var assignment = new BoundFieldAssignmentExpression(null, null, structType: null, field, initExpr);
+                var assignment = new BoundFieldAssignmentExpression(null, field, ifaceSym, initExpr);
                 statements.Add(new BoundExpressionStatement(null, assignment));
             }
         }
@@ -6443,6 +6443,7 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<(StructSymbol Containing, EntityHandle OpenMember), EntityHandle> userStructMethodRefCache = new();
     private readonly Dictionary<InterfaceSymbol, EntityHandle> userInterfaceTypeSpecCache = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<(InterfaceSymbol Containing, EntityHandle OpenMember), EntityHandle> userInterfaceMethodRefCache = new();
+    private readonly Dictionary<(InterfaceSymbol Containing, FieldSymbol DefField), EntityHandle> userInterfaceFieldRefCache = new();
 
     /// <summary>
     /// ADR-0087 §3 R3: returns <see langword="true"/> when
@@ -6590,6 +6591,59 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return this.cache.StructFieldDefs[field];
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #1030: returns the correct token for an interface
+    /// static field reference. A non-generic interface uses the bare
+    /// <c>FieldDef</c> row emitted on its TypeDef; a generic interface uses a
+    /// <c>MemberRef</c> parented at the constructed (or self-) <c>TypeSpec</c>
+    /// so each closed construction observes independent static storage.
+    /// </summary>
+    /// <param name="containingInterface">The owning interface (definition or constructed).</param>
+    /// <param name="field">The interface static field.</param>
+    /// <returns>The field reference token.</returns>
+    internal EntityHandle ResolveInterfaceFieldToken(InterfaceSymbol containingInterface, FieldSymbol field)
+    {
+        if (IsUserGenericInterfaceReference(containingInterface))
+        {
+            return this.GetUserInterfaceFieldRef(containingInterface, field);
+        }
+
+        return this.cache.StructFieldDefs[field];
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #1030: returns a <c>MemberRef</c> handle for a static
+    /// field on a user-declared generic interface, parented at the
+    /// <c>TypeSpec</c> for <paramref name="containingInterface"/>. Mirrors
+    /// <see cref="GetUserStructFieldRef"/>. The field signature is encoded from
+    /// the open definition's field type.
+    /// </summary>
+    /// <param name="containingInterface">The constructed (or open) interface reference.</param>
+    /// <param name="fieldOnContaining">The static field being referenced.</param>
+    /// <returns>The MemberRef token parented at the interface TypeSpec.</returns>
+    internal EntityHandle GetUserInterfaceFieldRef(InterfaceSymbol containingInterface, FieldSymbol fieldOnContaining)
+    {
+        var def = containingInterface.Definition ?? containingInterface;
+        var defField = def.GetStaticField(fieldOnContaining.Name) ?? fieldOnContaining;
+
+        var key = (containingInterface, defField);
+        if (this.userInterfaceFieldRefCache.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        var parent = this.GetUserInterfaceTypeSpec(containingInterface);
+        var sigBlob = new BlobBuilder();
+        this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), defField.Type);
+
+        var memberRef = (EntityHandle)this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(defField.Name),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.userInterfaceFieldRefCache[key] = memberRef;
+        return memberRef;
     }
 
     /// <summary>
