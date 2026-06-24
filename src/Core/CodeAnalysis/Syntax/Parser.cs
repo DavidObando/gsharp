@@ -2703,7 +2703,7 @@ public class Parser
             receiverCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         }
 
-        var identifier = MatchOperatorOrIdentifier(receiver != null);
+        var identifier = MatchOperatorOrIdentifier(receiver != null, out var isConversionOperator, out var conversionIsExplicit);
         var typeParameterList = ParseOptionalTypeParameterList();
         var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
         var parameters = ParseParameterList();
@@ -2741,6 +2741,8 @@ public class Parser
         var decl = new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, asyncModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, typeParameterList, openParenthesisToken, parameters, closeParenthesisToken, type, body);
         decl.ReturnRefModifier = returnRefModifier;
         decl.SemicolonBodyToken = semicolonBody;
+        decl.IsConversionOperator = isConversionOperator;
+        decl.ConversionIsExplicit = conversionIsExplicit;
         return decl;
     }
 
@@ -2751,11 +2753,33 @@ public class Parser
     // `op_Addition`). Downstream binding sees a regular extension function with
     // that name; the binder later hooks `BindBinaryExpression` /
     // `BindUnaryExpression` to look up `op_*` on the user type's symbol.
-    private SyntaxToken MatchOperatorOrIdentifier(bool hasReceiver)
+    private SyntaxToken MatchOperatorOrIdentifier(bool hasReceiver, out bool isConversionOperator, out bool conversionIsExplicit)
     {
+        isConversionOperator = false;
+        conversionIsExplicit = false;
+
         if (Current.Kind != SyntaxKind.OperatorKeyword)
         {
             return MatchToken(SyntaxKind.IdentifierToken);
+        }
+
+        // Issue #1017: user-defined conversion operators are spelled
+        // `func operator implicit (x T) U { … }` (or `explicit`). `implicit`
+        // and `explicit` are contextual keywords recognised only immediately
+        // after `operator`; elsewhere they remain ordinary identifiers. A
+        // conversion operator has no receiver clause — the single parameter is
+        // the source operand and the return type is the conversion target.
+        if (!hasReceiver
+            && Current.Kind == SyntaxKind.OperatorKeyword
+            && Peek(1).Kind == SyntaxKind.IdentifierToken
+            && (Peek(1).Text == "implicit" || Peek(1).Text == "explicit"))
+        {
+            var conversionOperatorKeyword = NextToken();
+            var conversionKindToken = NextToken();
+            isConversionOperator = true;
+            conversionIsExplicit = conversionKindToken.Text == "explicit";
+            var conversionName = conversionIsExplicit ? "op_Explicit" : "op_Implicit";
+            return new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, conversionOperatorKeyword.Position, conversionName, null);
         }
 
         var operatorKeyword = NextToken();

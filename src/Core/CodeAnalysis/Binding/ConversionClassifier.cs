@@ -336,6 +336,18 @@ internal sealed class ConversionClassifier
 
         if (!conversion.Exists)
         {
+            // Issue #1017: a user-defined conversion operator declared on a
+            // same-package struct/class is modelled as a static op_Implicit /
+            // op_Explicit FunctionSymbol — those types have no reflectible
+            // ClrType during binding, so resolve them symbolically first.
+            if (TryResolveUserDefinedSymbolConversion(expression.Type, type, allowExplicit, out var userConvOp))
+            {
+                var converted = userConvOp.Parameters.Length == 1
+                    ? BindConversion(diagnosticLocation, expression, userConvOp.Parameters[0].Type, allowExplicit)
+                    : expression;
+                return new BoundCallExpression(null, userConvOp, ImmutableArray.Create(converted));
+            }
+
             // Stream E: fall back to a user-defined op_Implicit (and
             // op_Explicit when allowed) on either source or target CLR type.
             if (expression.Type?.ClrType != null && type?.ClrType != null
@@ -544,6 +556,18 @@ internal sealed class ConversionClassifier
             && ClrOperatorResolution.TryResolveConversion(argument.Type.ClrType, expectedType.ClrType, allowExplicit: false, out var convMethod, out _))
         {
             converted = new BoundClrConversionCallExpression(null, argument, convMethod, expectedType);
+            return true;
+        }
+
+        // Issue #1017: same-package user-defined implicit conversion operators
+        // are modelled as static op_Implicit FunctionSymbols and have no
+        // reflectible ClrType during binding, so resolve them symbolically.
+        if (argument?.Type != null
+            && expectedType != null
+            && argument.Type != TypeSymbol.Error
+            && TryResolveUserDefinedSymbolConversion(argument.Type, expectedType, allowExplicit: false, out var userConvOp))
+        {
+            converted = new BoundCallExpression(null, userConvOp, ImmutableArray.Create(argument));
             return true;
         }
 
@@ -1192,6 +1216,73 @@ internal sealed class ConversionClassifier
     }
 
     // ----- Private helpers (kept here because they are only used by methods in this class) -----
+
+    /// <summary>
+    /// Issue #1017: resolves a user-defined conversion declared on a
+    /// same-package struct/class as a static <c>op_Implicit</c> /
+    /// <c>op_Explicit</c> method. Searches both the source and target type's
+    /// static methods, preferring implicit conversions over explicit ones, just
+    /// like C#. These symbols have no reflectible CLR type during binding, so
+    /// the lookup is symbolic.
+    /// </summary>
+    /// <param name="sourceType">The type of the value being converted.</param>
+    /// <param name="targetType">The type being converted to.</param>
+    /// <param name="allowExplicit">Whether <c>op_Explicit</c> is acceptable.</param>
+    /// <param name="method">The resolved conversion method on success.</param>
+    /// <returns><see langword="true"/> if a conversion was found.</returns>
+    private static bool TryResolveUserDefinedSymbolConversion(TypeSymbol sourceType, TypeSymbol targetType, bool allowExplicit, out FunctionSymbol method)
+    {
+        method = null;
+        if (sourceType == null || targetType == null
+            || sourceType == TypeSymbol.Error || targetType == TypeSymbol.Error)
+        {
+            return false;
+        }
+
+        // Pass 1: implicit conversions on the source then the target type.
+        if (TryFindUserConversion(sourceType, "op_Implicit", sourceType, targetType, out method)
+            || TryFindUserConversion(targetType, "op_Implicit", sourceType, targetType, out method))
+        {
+            return true;
+        }
+
+        if (!allowExplicit)
+        {
+            return false;
+        }
+
+        // Pass 2: explicit conversions on the source then the target type.
+        return TryFindUserConversion(sourceType, "op_Explicit", sourceType, targetType, out method)
+            || TryFindUserConversion(targetType, "op_Explicit", sourceType, targetType, out method);
+    }
+
+    private static bool TryFindUserConversion(TypeSymbol declaring, string opName, TypeSymbol source, TypeSymbol target, out FunctionSymbol method)
+    {
+        method = null;
+        var owner = (declaring as StructSymbol)?.Definition ?? declaring as StructSymbol;
+        if (owner == null || owner.StaticMethods.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var candidate in owner.StaticMethods)
+        {
+            if (!string.Equals(candidate.Name, opName, StringComparison.Ordinal)
+                || candidate.Parameters.Length != 1)
+            {
+                continue;
+            }
+
+            if (Conversion.Classify(candidate.Parameters[0].Type, source).IsIdentity
+                && Conversion.Classify(candidate.Type, target).IsIdentity)
+            {
+                method = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Issue #506 follow-up: returns <see langword="true"/> when the bound

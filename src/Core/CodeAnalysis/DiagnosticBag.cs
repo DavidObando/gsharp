@@ -4160,6 +4160,54 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Error);
     }
 
+    /// <summary>
+    /// Issue #1017: GS0393 — a user-defined conversion operator
+    /// (<c>func operator implicit/explicit (x T) U</c>) must declare exactly one
+    /// parameter (the source operand) passed by value.
+    /// </summary>
+    /// <param name="location">The source location of the operator name.</param>
+    /// <param name="isExplicit">Whether the operator is <c>explicit</c>.</param>
+    public void ReportConversionOperatorRequiresSingleParameter(TextLocation location, bool isExplicit)
+    {
+        var kind = isExplicit ? "explicit" : "implicit";
+        Report(
+            location,
+            "GS0393",
+            $"A user-defined '{kind}' conversion operator must take exactly one by-value parameter (the source operand).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Issue #1017: GS0394 — a user-defined conversion operator must convert to
+    /// or from the enclosing user type, and source and target must differ
+    /// (mirrors C# CS0555/CS0556).
+    /// </summary>
+    /// <param name="location">The source location of the operator name.</param>
+    public void ReportConversionOperatorMustInvolveEnclosingType(TextLocation location)
+    {
+        Report(
+            location,
+            "GS0394",
+            "A user-defined conversion operator must convert to or from a user type declared in the same package, and its source and target types must differ.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Issue #1017: GS0395 — two user-defined conversion operators on the same
+    /// type convert between the same source/target pair (mirrors C# CS0557).
+    /// </summary>
+    /// <param name="location">The source location of the operator name.</param>
+    /// <param name="sourceType">The conversion source type.</param>
+    /// <param name="targetType">The conversion target type.</param>
+    public void ReportDuplicateConversionOperator(TextLocation location, TypeSymbol sourceType, TypeSymbol targetType)
+    {
+        Report(
+            location,
+            "GS0395",
+            $"Duplicate user-defined conversion operator: a conversion from '{sourceType?.Name}' to '{targetType?.Name}' is already declared on this type.",
+            DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
