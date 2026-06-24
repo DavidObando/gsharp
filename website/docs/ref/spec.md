@@ -990,6 +990,18 @@ The optional `SimpleStmt` of the C-style three-part `for` accepts a `var`
 or `let` declaration (e.g. `for var i = 0; i < n; i++`), an assignment, an
 increment / decrement, or an expression statement.
 
+A controlling expression in a statement header — the `for` condition or
+post-statement, the condition-only `for`/`while` condition, the `if`
+condition, and the `switch`/`match` subject — never treats a trailing `{` as
+a composite-literal brace. As in Go, the `{` opens the statement body. This
+applies even when the controlling expression ends in an indexer
+(`for var s = 0; s < n; s += arr[s] { … }`) or a generic-composite shape
+(`name[args] { … }`): the brackets bind as an indexer / type-argument list and
+the following `{` opens the body. Composite literals are still parsed normally
+in ordinary expression position (`var b = Box[int32]{Value: 42}`,
+`Point{X: 1, Y: 2}`) and inside a nested parenthesized/bracketed/argument
+context within a header (issue #1023).
+
 `while` evaluates its condition first and runs the body while the condition is
 true. `do`-`while` always runs the body once before evaluating the condition;
 the body must be a block.

@@ -4910,7 +4910,19 @@ public class Parser
         StatementSyntax post = null;
         if (Current.Kind != SyntaxKind.OpenBraceToken)
         {
-            post = ParseSimpleStatement();
+            // Issue #1023: the post statement sits immediately before the body
+            // `{`. Suppress trailing object-initializer wrapping so an indexer-
+            // or call-tailed post (`s += arr[s] { … }`) does not consume the
+            // loop body's opening brace as a composite literal.
+            suppressTrailingObjectInitializer++;
+            try
+            {
+                post = ParseSimpleStatement();
+            }
+            finally
+            {
+                suppressTrailingObjectInitializer--;
+            }
         }
 
         var body = ParseStatement();
@@ -6946,9 +6958,28 @@ public class Parser
 
         // Follow-set per ADR-0020: '(' (call), '{' (composite literal), '.' (member access).
         var nextKind = Peek(pos).Kind;
-        if (nextKind == SyntaxKind.OpenParenthesisToken
-            || nextKind == SyntaxKind.OpenBraceToken)
+        if (nextKind == SyntaxKind.OpenParenthesisToken)
         {
+            return true;
+        }
+
+        if (nextKind == SyntaxKind.OpenBraceToken)
+        {
+            // Issue #1023: in a statement-header controlling expression
+            // (`if`/`while`/`for` clauses, `switch`/`match` subject, …) the
+            // trailing `{` opens the statement body, not a composite literal.
+            // The same Go-style suppression that blocks `Type { … }` /
+            // `Call() { … }` here must also block the generic-composite
+            // `name[args] { … }` shape, so an indexer-tailed header such as
+            // `for …; s += arr[s] { … }` binds `[s]` as an indexer and lets
+            // `{` open the loop body. Nested contexts (parens, brackets,
+            // argument lists) clear the counter, so `List[int]{…}` still
+            // parses inside those.
+            if (suppressTrailingObjectInitializer > 0)
+            {
+                return false;
+            }
+
             return true;
         }
 
