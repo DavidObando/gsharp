@@ -12,11 +12,14 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #1024 / ADR-0124: binder coverage for the <c>stackalloc T[n]</c>
-/// stack-allocation expression. The default (safe) form yields a
-/// <c>System.Span&lt;T&gt;</c> and needs no <c>unsafe</c> context; the
-/// pointer form (<c>var p *T = stackalloc T[n]</c>) yields the raw <c>T*</c>
-/// inside an unsafe context. The element type must be blittable/unmanaged.
+/// Issues #1024, #1057, #1041 / ADR-0124: binder coverage for the
+/// <c>stackalloc [n]T</c> stack-allocation expression in G#-style array
+/// grammar (the bracketed count first, then the element type). The default
+/// (safe) form yields a <c>System.Span&lt;T&gt;</c> and needs no
+/// <c>unsafe</c> context; the pointer form (<c>var p *T = stackalloc [n]T</c>)
+/// yields the raw <c>T*</c> inside an unsafe context. The element type must be
+/// blittable/unmanaged. An optional initializer (<c>stackalloc [n]T{…}</c> or
+/// the count-inferred <c>stackalloc []T{…}</c>) supplies the element values.
 /// </summary>
 public class Issue1024StackAllocBinderTests
 {
@@ -28,7 +31,7 @@ public class Issue1024StackAllocBinderTests
         // parsed as an identifier reference rather than an expression.
         const string source = @"
 package p
-func F() { var buf = stackalloc uint8[4] }
+func F() { var buf = stackalloc [4]uint8 }
 ";
         var diagnostics = GetDiagnostics(source).ToList();
         Assert.DoesNotContain(diagnostics, d => d.Id == "GS0125");
@@ -42,7 +45,7 @@ func F() { var buf = stackalloc uint8[4] }
 package p
 import System
 func F() {
-    var buf = stackalloc int32[3]
+    var buf = stackalloc [3]int32
     Console.WriteLine(buf.Length)
 }
 ";
@@ -56,7 +59,7 @@ func F() {
         const string source = @"
 package p
 func F() {
-    var buf = stackalloc uint8[8]
+    var buf = stackalloc [8]uint8
     buf[0] = uint8(1)
 }
 ";
@@ -69,7 +72,7 @@ func F() {
     {
         const string source = @"
 package p
-func F() { var buf = stackalloc string[4] }
+func F() { var buf = stackalloc [4]string }
 ";
         var diagnostics = GetDiagnostics(source).ToList();
         Assert.Contains(diagnostics, d => d.Id == "GS0399");
@@ -80,7 +83,7 @@ func F() { var buf = stackalloc string[4] }
     {
         const string source = @"
 package p
-func F() { var buf = stackalloc Nope[4] }
+func F() { var buf = stackalloc [4]Nope }
 ";
         var diagnostics = GetDiagnostics(source).ToList();
         Assert.Contains(diagnostics, d => d.Id == "GS0113");
@@ -93,7 +96,7 @@ func F() { var buf = stackalloc Nope[4] }
 package p
 import System
 unsafe func run() {
-    var p *int32 = stackalloc int32[3]
+    var p *int32 = stackalloc [3]int32
     p[0] = 1
     Console.WriteLine(p[0])
 }
@@ -108,7 +111,7 @@ unsafe func run() {
         const string source = @"
 package p
 func F(n int32) {
-    var buf = stackalloc uint8[n]
+    var buf = stackalloc [n]uint8
     buf[0] = uint8(0)
 }
 ";
@@ -119,8 +122,8 @@ func F(n int32) {
     [Fact]
     public void StackAllocIsContextualKeyword_PlainIdentifierStillWorks()
     {
-        // `stackalloc` is only a keyword in the exact `stackalloc IDENT [`
-        // shape; any other position keeps lexing it as a plain identifier.
+        // `stackalloc` is only a keyword in the exact `stackalloc [` shape; any
+        // other position keeps lexing it as a plain identifier.
         const string source = @"
 package p
 import System
@@ -131,6 +134,84 @@ func F() {
 ";
         var diagnostics = GetDiagnostics(source).ToList();
         Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void InitializerForm_ExplicitCount_Binds()
+    {
+        const string source = @"
+package p
+import System
+func F() {
+    var buf = stackalloc [3]int32{1, 2, 3}
+    Console.WriteLine(buf.Length)
+}
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void InitializerForm_CountInferred_Binds()
+    {
+        const string source = @"
+package p
+import System
+func F() {
+    var buf = stackalloc []int32{1, 2, 3}
+    Console.WriteLine(buf.Length)
+}
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void InitializerForm_PointerInsideUnsafe_Binds()
+    {
+        const string source = @"
+package p
+import System
+unsafe func run() {
+    var p *int32 = stackalloc [3]int32{4, 5, 6}
+    Console.WriteLine(p[0])
+}
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void CountInferredWithoutInitializer_ReportsGS0411()
+    {
+        const string source = @"
+package p
+func F() { var buf = stackalloc []int32 }
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.Contains(diagnostics, d => d.Id == "GS0411");
+    }
+
+    [Fact]
+    public void InitializerLengthMismatch_ReportsGS0412()
+    {
+        const string source = @"
+package p
+func F() { var buf = stackalloc [2]int32{1, 2, 3} }
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.Contains(diagnostics, d => d.Id == "GS0412");
+    }
+
+    [Fact]
+    public void InitializerForm_NonBlittableElement_ReportsGS0399()
+    {
+        const string source = @"
+package p
+func F() { var buf = stackalloc []string{""a"", ""b""} }
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.Contains(diagnostics, d => d.Id == "GS0399");
     }
 
     private static IEnumerable<Diagnostic> GetDiagnostics(string source)

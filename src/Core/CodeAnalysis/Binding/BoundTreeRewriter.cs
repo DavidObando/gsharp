@@ -1281,17 +1281,36 @@ public abstract class BoundTreeRewriter
     }
 
     /// <summary>
-    /// ADR-0124 / issue #1024: rewrites a <see cref="BoundStackAllocExpression"/>
-    /// by rewriting its element-count subexpression.
+    /// ADR-0124 / issues #1024, #1041: rewrites a <see cref="BoundStackAllocExpression"/>
+    /// by rewriting its element-count subexpression and any initializer elements.
     /// </summary>
     /// <param name="node">The stackalloc node to rewrite.</param>
     /// <returns>The rewritten node, or the original when unchanged.</returns>
     protected virtual BoundExpression RewriteStackAllocExpression(BoundStackAllocExpression node)
     {
         var newCount = RewriteExpression(node.Count);
-        return newCount == node.Count
+
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.InitializerElements.Length; i++)
+        {
+            var oldElement = node.InitializerElements[i];
+            var newElement = RewriteExpression(oldElement);
+            if (newElement != oldElement && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(node.InitializerElements.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.InitializerElements[j]);
+                }
+            }
+
+            builder?.Add(newElement);
+        }
+
+        var newElements = builder?.MoveToImmutable() ?? node.InitializerElements;
+        return newCount == node.Count && newElements == node.InitializerElements
             ? node
-            : new BoundStackAllocExpression(node.Syntax, node.ResultType, node.ElementType, newCount, node.IsPointerForm);
+            : new BoundStackAllocExpression(node.Syntax, node.ResultType, node.ElementType, newCount, node.IsPointerForm, newElements);
     }
 
     /// <summary>Rewrites a map literal expression.</summary>

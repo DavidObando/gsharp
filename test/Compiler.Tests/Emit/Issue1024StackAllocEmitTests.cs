@@ -10,13 +10,16 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #1024 / ADR-0124: end-to-end emit + execution tests for the
-/// <c>stackalloc T[n]</c> stack-allocation expression. The default (safe)
-/// form yields a <c>System.Span&lt;T&gt;</c> over <c>localloc</c>'d memory and
-/// requires no <c>unsafe</c> context; the pointer form yields the raw
-/// <c>T*</c> inside an unsafe context. Each test compiles via <c>gsc</c> and
-/// executes the produced assembly under <c>dotnet exec</c> to assert runtime
-/// behavior.
+/// Issues #1024, #1057, #1041 / ADR-0124: end-to-end emit + execution tests for
+/// the <c>stackalloc [n]T</c> stack-allocation expression in G#-style array
+/// grammar (the bracketed count first, then the element type). The default
+/// (safe) form yields a <c>System.Span&lt;T&gt;</c> over <c>localloc</c>'d
+/// memory and requires no <c>unsafe</c> context; the pointer form yields the
+/// raw <c>T*</c> inside an unsafe context. An optional initializer
+/// (<c>stackalloc [n]T{…}</c> or the count-inferred <c>stackalloc []T{…}</c>)
+/// stores element values through the <c>localloc</c> pointer. Each test
+/// compiles via <c>gsc</c> and executes the produced assembly under
+/// <c>dotnet exec</c> to assert runtime behavior.
 /// <para>
 /// Code containing <c>localloc</c> is <em>unverifiable by design</em>:
 /// ilverify reports <c>Unverifiable</c> at the <c>localloc</c> site (and the
@@ -43,6 +46,14 @@ public class Issue1024StackAllocEmitTests
         "StackUnexpectedArrayType",
     };
 
+    // The safe Span<T> form is normally unverifiable only because of the
+    // `localloc` itself. When an initializer is present, the element values are
+    // stored through the raw `localloc` pointer (the same indirect-store path as
+    // the unsafe pointer form), which trips the additional unmanaged-pointer
+    // verification codes — so the initializer safe-form tests ignore the same
+    // codes as the unsafe form while still asserting runtime behaviour.
+    private static readonly string[] SafeSpanInitializerIlVerifyIgnored = UnsafePointerIlVerifyIgnored;
+
     [Fact]
     public void SafeSpan_WriteReadLength_CompilesAndRuns()
     {
@@ -51,7 +62,7 @@ public class Issue1024StackAllocEmitTests
             import System
 
             func run() {
-                var buf = stackalloc uint8[4]
+                var buf = stackalloc [4]uint8
                 buf[0] = uint8(10)
                 buf[1] = uint8(20)
                 buf[2] = uint8(30)
@@ -80,7 +91,7 @@ public class Issue1024StackAllocEmitTests
             import System
 
             func run() {
-                var buf = stackalloc int32[4]
+                var buf = stackalloc [4]int32
                 Console.WriteLine(buf[0])
                 Console.WriteLine(buf[3])
             }
@@ -100,7 +111,7 @@ public class Issue1024StackAllocEmitTests
             import System
 
             func fill(n int32) int32 {
-                var buf = stackalloc int32[n]
+                var buf = stackalloc [n]int32
                 for var i = 0; i < buf.Length; i++ {
                     buf[i] = i * i
                 }
@@ -125,6 +136,75 @@ public class Issue1024StackAllocEmitTests
     }
 
     [Fact]
+    public void SafeSpan_InitializerExplicitCount_CompilesAndRuns()
+    {
+        var source = """
+            package Probe
+            import System
+
+            func run() {
+                var buf = stackalloc [3]int32{10, 20, 30}
+                Console.WriteLine(buf.Length)
+                Console.WriteLine(buf[0])
+                Console.WriteLine(buf[1])
+                Console.WriteLine(buf[2])
+            }
+
+            run()
+            """;
+
+        var output = CompileAndRun(source, SafeSpanInitializerIlVerifyIgnored);
+        Assert.Equal("3\n10\n20\n30\n", output);
+    }
+
+    [Fact]
+    public void SafeSpan_InitializerCountInferred_CompilesAndRuns()
+    {
+        var source = """
+            package Probe
+            import System
+
+            func run() {
+                var buf = stackalloc []int32{1, 2, 3}
+                Console.WriteLine(buf.Length)
+                var sum = 0
+                for var i = 0; i < buf.Length; i++ {
+                    sum = sum + buf[i]
+                }
+                Console.WriteLine(sum)
+            }
+
+            run()
+            """;
+
+        var output = CompileAndRun(source, SafeSpanInitializerIlVerifyIgnored);
+
+        // 1 + 2 + 3 = 6
+        Assert.Equal("3\n6\n", output);
+    }
+
+    [Fact]
+    public void SafeSpan_InitializerByteElements_CompilesAndRuns()
+    {
+        var source = """
+            package Probe
+            import System
+
+            func run() {
+                var buf = stackalloc []uint8{uint8(5), uint8(15), uint8(25)}
+                Console.WriteLine(buf.Length)
+                Console.WriteLine(int32(buf[0]))
+                Console.WriteLine(int32(buf[2]))
+            }
+
+            run()
+            """;
+
+        var output = CompileAndRun(source, SafeSpanInitializerIlVerifyIgnored);
+        Assert.Equal("3\n5\n25\n", output);
+    }
+
+    [Fact]
     public void UnsafePointer_WriteRead_CompilesAndRuns()
     {
         var source = """
@@ -132,7 +212,7 @@ public class Issue1024StackAllocEmitTests
             import System
 
             unsafe func run() {
-                var p *int32 = stackalloc int32[3]
+                var p *int32 = stackalloc [3]int32
                 p[0] = 5
                 p[1] = 6
                 p[2] = 7
@@ -156,7 +236,7 @@ public class Issue1024StackAllocEmitTests
             import System
 
             unsafe func run() {
-                var z *int32 = stackalloc int32[4]
+                var z *int32 = stackalloc [4]int32
                 Console.WriteLine(z[0])
                 Console.WriteLine(z[3])
             }
@@ -166,6 +246,52 @@ public class Issue1024StackAllocEmitTests
 
         var output = CompileAndRun(source, UnsafePointerIlVerifyIgnored);
         Assert.Equal("0\n0\n", output);
+    }
+
+    [Fact]
+    public void UnsafePointer_Initializer_CompilesAndRuns()
+    {
+        var source = """
+            package Probe
+            import System
+
+            unsafe func run() {
+                var p *int32 = stackalloc [3]int32{11, 22, 33}
+                Console.WriteLine(p[0])
+                Console.WriteLine(p[1])
+                Console.WriteLine(p[2])
+            }
+
+            run()
+            """;
+
+        var output = CompileAndRun(source, UnsafePointerIlVerifyIgnored);
+        Assert.Equal("11\n22\n33\n", output);
+    }
+
+    [Fact]
+    public void UnsafePointer_InitializerCountInferred_CompilesAndRuns()
+    {
+        var source = """
+            package Probe
+            import System
+
+            unsafe func run() {
+                var p *int32 = stackalloc []int32{7, 8, 9, 10}
+                var sum = 0
+                for var i = 0; i < 4; i++ {
+                    sum = sum + p[i]
+                }
+                Console.WriteLine(sum)
+            }
+
+            run()
+            """;
+
+        var output = CompileAndRun(source, UnsafePointerIlVerifyIgnored);
+
+        // 7 + 8 + 9 + 10 = 34
+        Assert.Equal("34\n", output);
     }
 
     private static string CompileAndRun(string source, string[] ilVerifyIgnored)

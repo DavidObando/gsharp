@@ -1077,10 +1077,30 @@ public static class BoundNodePrinter
     {
         writer.WriteKeyword("stackalloc");
         writer.WriteSpace();
-        writer.WriteIdentifier(node.ElementType.Name);
         writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
-        node.Count.WriteTo(writer);
+        if (!node.HasInitializer)
+        {
+            node.Count.WriteTo(writer);
+        }
+
         writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
+        writer.WriteIdentifier(node.ElementType.Name);
+        if (node.HasInitializer)
+        {
+            writer.WritePunctuation(SyntaxKind.OpenBraceToken);
+            for (var i = 0; i < node.InitializerElements.Length; i++)
+            {
+                if (i > 0)
+                {
+                    writer.WritePunctuation(SyntaxKind.CommaToken);
+                    writer.WriteSpace();
+                }
+
+                node.InitializerElements[i].WriteTo(writer);
+            }
+
+            writer.WritePunctuation(SyntaxKind.CloseBraceToken);
+        }
     }
 
     private static void WriteArrayCreationExpression(BoundArrayCreationExpression node, IndentedTextWriter writer)

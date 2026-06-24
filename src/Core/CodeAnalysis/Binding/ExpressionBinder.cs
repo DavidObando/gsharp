@@ -157,7 +157,7 @@ internal sealed partial class ExpressionBinder
 
     internal BoundExpression BindExpression(ExpressionSyntax syntax, TypeSymbol targetType)
     {
-        // ADR-0124 / issue #1024: a `stackalloc T[n]` initialising an
+        // ADR-0124 / issue #1024: a `stackalloc [n]T` initialising an
         // unmanaged-pointer target (`*T`, only spellable in an unsafe context)
         // yields the raw `T*` pointer rather than the default `Span<T>`. The
         // target type must reach the stackalloc binder, so intercept before

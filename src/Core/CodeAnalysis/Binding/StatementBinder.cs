@@ -689,7 +689,7 @@ internal sealed class StatementBinder
             }
             else if (type is PointerTypeSymbol && syntax.Initializer is StackAllocExpressionSyntax)
             {
-                // ADR-0124 / issue #1024: `var p *T = stackalloc T[n]` inside
+                // ADR-0124 / issue #1024: `var p *T = stackalloc [n]T` inside
                 // an unsafe context yields the raw `T*` pointer. The target
                 // pointer type must be threaded into the stackalloc binder so
                 // it selects the pointer form rather than the default Span<T>.

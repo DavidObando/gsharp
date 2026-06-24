@@ -1536,7 +1536,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// GS0399: a <c>stackalloc T[n]</c> expression (ADR-0124 / issue #1024)
+    /// GS0399: a <c>stackalloc [n]T</c> expression (ADR-0124 / issue #1024)
     /// names an element type <c>T</c> that is not unmanaged/blittable. Stack
     /// buffers are raw, GC-untracked memory, so only blittable primitives
     /// (<c>int8</c>…<c>int64</c>, <c>uint8</c>…<c>uint64</c>, <c>nint</c>,
@@ -1685,6 +1685,34 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportFromEndMarkerNotAllowedInStandaloneRange(TextLocation location)
     {
         Report(location, "GS0410", "A from-end index marker '^' is only valid inside index brackets (e.g. 'arr[^1]' or 'arr[a..^b]') or after '..' in a standalone range upper bound ('a..^b'); a standalone range cannot start with '^'. Use an indexer, or parenthesise a one's-complement bound ('(^a)..b') (issue #1038).");
+    }
+
+    /// <summary>
+    /// GS0411: a count-inferred <c>stackalloc []T</c> expression (ADR-0124 /
+    /// issue #1041) was written without a brace-delimited initializer, so the
+    /// element count cannot be determined. The count-inferred shape takes its
+    /// length from the initializer (<c>stackalloc []T{a, b, …}</c>); supply an
+    /// initializer or spell the count explicitly (<c>stackalloc [n]T</c>).
+    /// </summary>
+    /// <param name="location">The text location of the stackalloc expression.</param>
+    public void ReportStackAllocCountInferredWithoutInitializer(TextLocation location)
+    {
+        Report(location, "GS0411", "A count-inferred 'stackalloc []T' requires a brace-delimited initializer to determine its length (e.g. 'stackalloc []int32{1, 2, 3}'); supply an initializer or spell the count explicitly ('stackalloc [n]T') (ADR-0124 / issue #1041).");
+    }
+
+    /// <summary>
+    /// GS0412: a <c>stackalloc [n]T{…}</c> expression (ADR-0124 / issue #1041)
+    /// gave an explicit constant count <c>n</c> that disagrees with the number
+    /// of initializer elements. As in C#, the explicit length and the
+    /// initializer element count must match exactly; use the count-inferred
+    /// shape (<c>stackalloc []T{…}</c>) to avoid repeating the length.
+    /// </summary>
+    /// <param name="location">The text location of the stackalloc expression.</param>
+    /// <param name="expected">The explicit count <c>n</c>.</param>
+    /// <param name="actual">The number of initializer elements.</param>
+    public void ReportStackAllocInitializerLengthMismatch(TextLocation location, int expected, int actual)
+    {
+        Report(location, "GS0412", $"A 'stackalloc [{expected}]T{{…}}' initializer must supply exactly {expected} element(s), but {actual} were given; the explicit count and the initializer length must match (ADR-0124 / issue #1041).");
     }
 
     /// <summary>

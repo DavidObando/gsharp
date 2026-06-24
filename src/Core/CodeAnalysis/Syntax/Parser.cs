@@ -6602,13 +6602,14 @@ public class Parser
 
             case SyntaxKind.IdentifierToken
                 when Current.Text == "stackalloc"
-                     && Peek(1).Kind == SyntaxKind.IdentifierToken
-                     && Peek(2).Kind == SyntaxKind.OpenSquareBracketToken:
-                // ADR-0124 / issue #1024: `stackalloc T[n]` is a
-                // stack-allocation expression. `stackalloc` is a contextual
-                // keyword recognised only in the precise `stackalloc IDENT [`
-                // shape, so any existing identifier named `stackalloc` in any
-                // other position continues to lex as a plain identifier.
+                     && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken:
+                // ADR-0124 / issues #1024, #1057: `stackalloc [n]T` is a
+                // stack-allocation expression in G#-style array grammar (the
+                // bracketed count first, then the element type). `stackalloc`
+                // is a contextual keyword recognised only in the precise
+                // `stackalloc [` shape, so any existing identifier named
+                // `stackalloc` in any other position continues to lex as a
+                // plain identifier.
                 return ParsePostfixChain(ParseStackAllocExpression());
 
             case SyntaxKind.IdentifierToken
@@ -7310,27 +7311,55 @@ public class Parser
             closeBrace);
     }
 
-    // ADR-0124 / issue #1024: parses a stack-allocation expression
-    // `stackalloc T[n]`. The leading `stackalloc` is a contextual keyword and
-    // the dispatcher in ParsePrimaryExpression only routes here for the exact
-    // `stackalloc IDENT [` shape. The count is a full expression (so a runtime
-    // length such as `stackalloc uint8[count]` is accepted, mirroring the
-    // runtime-length array form). A stackalloc initializer
-    // (`stackalloc T[n]{ … }`) is deferred (follow-up referencing #1024).
+    // ADR-0124 / issues #1024, #1057, #1041: parses a stack-allocation
+    // expression in G#-style array grammar `stackalloc [n]T` (bracketed count
+    // first, then the element type). The leading `stackalloc` is a contextual
+    // keyword and the dispatcher in ParsePrimaryExpression only routes here for
+    // the exact `stackalloc [` shape. The count is a full expression (so a
+    // runtime length such as `stackalloc [count]uint8` is accepted, mirroring
+    // the runtime-length array form). An optional brace-delimited initializer
+    // (`stackalloc [n]T{ … }`) supplies the element values; the count-inferred
+    // shape (`stackalloc []T{ … }`, empty brackets) takes the count from the
+    // initializer length (issue #1041).
     private ExpressionSyntax ParseStackAllocExpression()
     {
         var stackAllocKeyword = MatchToken(SyntaxKind.IdentifierToken);
-        var elementType = MatchToken(SyntaxKind.IdentifierToken);
         var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
-        var count = ParseExpression();
+
+        // The count is optional: the `stackalloc []T{ … }` shape infers it from
+        // the initializer length, so an immediate `]` leaves CountExpression null.
+        ExpressionSyntax count = null;
+        if (Current.Kind != SyntaxKind.CloseSquareBracketToken)
+        {
+            count = ParseExpression();
+        }
+
         var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        var elementType = MatchToken(SyntaxKind.IdentifierToken);
+
+        // The brace-delimited initializer is optional for the count-only form
+        // (`stackalloc [n]T`) and required for the count-inferred form
+        // (`stackalloc []T{ … }`); the binder enforces that requirement.
+        SyntaxToken openBrace = null;
+        SeparatedSyntaxList<ExpressionSyntax> elements = null;
+        SyntaxToken closeBrace = null;
+        if (Current.Kind == SyntaxKind.OpenBraceToken)
+        {
+            openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+            elements = ParseArrayInitializerElements();
+            closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        }
+
         return new StackAllocExpressionSyntax(
             syntaxTree,
             stackAllocKeyword,
-            elementType,
             openBracket,
             count,
-            closeBracket);
+            closeBracket,
+            elementType,
+            openBrace,
+            elements,
+            closeBrace);
     }
 
     // ADR-0125 / issue #1026: `fixed name *T = source { … }`. The leading

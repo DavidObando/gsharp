@@ -795,6 +795,21 @@ the unambiguous positions: inside index brackets (the #1022 path —
 (`arr[^a..]`); to use a one's-complement value as a from-start lower bound,
 parenthesise it (`(^a)..b`).
 
+## Stackalloc initializer diagnostics (GS0411–GS0412)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0411 | Error | A count-inferred `stackalloc []T` requires a brace-delimited initializer to determine its length (e.g. `stackalloc []int32{1, 2, 3}`); supply an initializer or spell the count explicitly (`stackalloc [n]T`). |
+| GS0412 | Error | A `stackalloc [n]T{…}` initializer must supply exactly `n` element(s); the explicit count and the initializer length must match. |
+
+GS0411 and GS0412 cover the `stackalloc [n]T` initializer forms added in issue
+#1041 (G#-style array grammar, ADR-0124 / issue #1057). The count-inferred
+shape `stackalloc []T{…}` takes its length from the initializer, so an empty
+`[]` with no initializer (GS0411) cannot be sized. When an explicit count is
+spelled alongside an initializer (`stackalloc [n]T{…}`), the two must agree
+exactly, mirroring C# (GS0412); use the count-inferred shape to avoid repeating
+the length.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

@@ -535,10 +535,13 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   explicit(x U) T`); the single source parameter is preserved and the operator
   target becomes the return type. `public static` is dropped. (Formerly reported
   unsupported with a now-obsolete "gsc gap" note.)
-- **`stackalloc T[n]` → `stackalloc gT[n]`** (issue #1024). The element type is
-  mapped through the C#→G# type mapper (`byte` → `uint8`), so `stackalloc byte[2]`
-  → `stackalloc uint8[2]`. In a safe context this yields `Span<T>`; as an unsafe
-  pointer target it yields `T*`.
+- **`stackalloc T[n]` → `stackalloc [n]gT`** (issues #1024, #1057, #1041). The
+  element type is mapped through the C#→G# type mapper (`byte` → `uint8`), and
+  the grammar is G#-style (count first, then element type), so
+  `stackalloc byte[2]` → `stackalloc [2]uint8`. A C# initializer is emitted
+  faithfully (`stackalloc int[] { 1, 2, 3 }` → `stackalloc [3]int32{1, 2, 3}`,
+  the length inferred from the initializer). In a safe context this yields
+  `Span<T>`; as an unsafe pointer target it yields `T*`.
 - **`fixed (T* p = src) { … }` → `fixed p *gT = src { … }`** (issue #1026). The
   paren-less G# `fixed` pins a managed array/string and is only legal inside an
   `unsafe` context; multiple declarators emit nested `fixed` blocks. The required
@@ -1258,7 +1261,7 @@ interface IData { shared { prop SizeInBytes int32 { get } } func Write() }
 #1027).** What were formerly four excepted residual diagnostics now emit faithful
 canonical G# and pass the translate gate: `stackalloc T[n]`
 (`StackAllocArrayCreationExpression`, `Mpeg4/APICFrame.cs` and `Mpeg4/Stz2Box.cs`)
-→ `stackalloc gT[n]` (#1024); `fixed (byte* p = …) { … }` (`FixedStatement`,
+→ `stackalloc [n]gT` (#1024/#1057); `fixed (byte* p = …) { … }` (`FixedStatement`,
 `Cryptography/AesCtr.cs`) → the paren-less `fixed p *uint8 = … { … }` inside an
 `unsafe { }` body (#1026); and the `i--` post-decrement used inside the
 short-circuit condition of the `unsafe class AesCtr` do-while

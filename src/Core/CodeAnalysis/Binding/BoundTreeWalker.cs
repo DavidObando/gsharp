@@ -607,6 +607,10 @@ public abstract class BoundTreeWalker
     protected virtual void VisitStackAllocExpression(BoundStackAllocExpression node)
     {
         VisitExpression(node.Count);
+        foreach (var element in node.InitializerElements)
+        {
+            VisitExpression(element);
+        }
     }
 
     protected virtual void VisitMapLiteralExpression(BoundMapLiteralExpression node)
