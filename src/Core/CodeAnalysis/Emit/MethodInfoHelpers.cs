@@ -126,7 +126,19 @@ internal static class MethodInfoHelpers
                         continue;
                     }
 
-                    if (returnClr != null && !ClrTypeUtilities.AreSame(returnClr, clrMethod.ReturnType))
+                    // Issue #1071: an `async func` implementing a CLR interface
+                    // method declared with an explicit `Task` / `Task[T]` return
+                    // type has a declared (awaited) CLR return of void / T.
+                    // Compare the contract's unwrapped awaited result.
+                    if (method.IsAsync
+                        && AsyncReturnTypeNormalizer.TryUnwrapTaskClrType(clrMethod.ReturnType, out var awaitedClr))
+                    {
+                        if (returnClr != null && !ClrTypeUtilities.AreSame(returnClr, awaitedClr))
+                        {
+                            continue;
+                        }
+                    }
+                    else if (returnClr != null && !ClrTypeUtilities.AreSame(returnClr, clrMethod.ReturnType))
                     {
                         continue;
                     }
@@ -162,7 +174,7 @@ internal static class MethodInfoHelpers
     /// <returns>True if the signatures are equivalent.</returns>
     public static bool MethodSignaturesMatch(FunctionSymbol interfaceMethod, FunctionSymbol implementationMethod)
     {
-        if (interfaceMethod.Name != implementationMethod.Name || interfaceMethod.Type != implementationMethod.Type)
+        if (interfaceMethod.Name != implementationMethod.Name || !ReturnTypesMatch(interfaceMethod, implementationMethod))
         {
             return false;
         }
@@ -194,4 +206,47 @@ internal static class MethodInfoHelpers
     /// <returns>The "as-called" parameter list.</returns>
     public static ImmutableArray<ParameterSymbol> CallableParameters(FunctionSymbol method)
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
+
+    /// <summary>
+    /// Issue #1071: compares an interface method's declared return type against
+    /// the implementing method's <em>effective</em> return type, normalizing for
+    /// <c>async</c> so an <c>async func</c> (effective return <c>Task</c> /
+    /// <c>Task[T]</c>) is recognised as implementing an interface method declared
+    /// with the explicit <c>Task</c> / <c>Task[T]</c> return type. Required so
+    /// the implementing async method is promoted to a virtual interface slot at
+    /// emit time.
+    /// </summary>
+    private static bool ReturnTypesMatch(FunctionSymbol interfaceMethod, FunctionSymbol implementationMethod)
+    {
+        if (interfaceMethod.IsAsync == implementationMethod.IsAsync)
+        {
+            return ReferenceEquals(interfaceMethod.Type, implementationMethod.Type);
+        }
+
+        if (implementationMethod.IsAsync)
+        {
+            return AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(interfaceMethod.Type, out var awaited)
+                && AwaitedTypesMatch(awaited, implementationMethod.Type);
+        }
+
+        return AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(implementationMethod.Type, out var awaited2)
+            && AwaitedTypesMatch(interfaceMethod.Type, awaited2);
+    }
+
+    private static bool AwaitedTypesMatch(TypeSymbol a, TypeSymbol b)
+    {
+        if (ReferenceEquals(a, b))
+        {
+            return true;
+        }
+
+        if (a == null || b == null)
+        {
+            return false;
+        }
+
+        var ca = a.ClrType;
+        var cb = b.ClrType;
+        return ca != null && cb != null && ClrTypeUtilities.AreSame(ca, cb);
+    }
 }

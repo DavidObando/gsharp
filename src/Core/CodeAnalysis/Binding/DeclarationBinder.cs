@@ -1296,6 +1296,11 @@ internal sealed class DeclarationBinder
                     var methodParameters = parameters.ToImmutable();
                     var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
 
+                    // Issue #1071: the effective async flag (mirrors
+                    // FunctionSymbol.IsAsync below) so override / shadow matching
+                    // compares the async-normalized effective return type.
+                    var methodIsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
+
                     // Phase 3.B.3 sub-step 3: open/override validation against
                     // base class chain per ADR-0017.
                     FunctionSymbol overriddenMethod = null;
@@ -1312,7 +1317,7 @@ internal sealed class DeclarationBinder
                         foreach (var candidate in baseOverloads)
                         {
                             baseMethod ??= candidate;
-                            if (SignaturesMatch(candidate, methodParameters, returnType, methodReturnRefKind, baseTypeArgSubst))
+                            if (SignaturesMatch(candidate, methodParameters, returnType, methodReturnRefKind, baseTypeArgSubst, methodIsAsync))
                             {
                                 baseSignatureMatch = candidate;
                                 break;
@@ -1386,7 +1391,7 @@ internal sealed class DeclarationBinder
                                 continue;
                             }
 
-                            if (SignaturesMatch(shadowed, methodParameters, returnType, methodReturnRefKind, baseTypeArgSubst))
+                            if (SignaturesMatch(shadowed, methodParameters, returnType, methodReturnRefKind, baseTypeArgSubst, methodIsAsync))
                             {
                                 Diagnostics.ReportMissingOverride(methodSyntax.Identifier.Location, shadowed.ReceiverType.Name, methodName);
                                 break;
@@ -2872,7 +2877,7 @@ internal sealed class DeclarationBinder
                             continue;
                         }
 
-                        if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, methodTypeParamMap))
+                        if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, methodTypeParamMap, candidate.IsAsync))
                         {
                             signatureMatch = candidate;
                             break;
@@ -3093,7 +3098,7 @@ internal sealed class DeclarationBinder
                 {
                     foreach (var candidate in structSymbol.GetMethodsIncludingInherited(imethod.Name))
                     {
-                        if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind))
+                        if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, typeParamMap: null, candidate.IsAsync))
                         {
                             Diagnostics.ReportImplementerOverridesPrivateInterfaceMember(
                                 syntax.Identifier.Location,
@@ -5524,7 +5529,15 @@ internal sealed class DeclarationBinder
         => SignaturesMatch(baseMethod, derivedParams, derivedReturnType, RefKind.None);
 
     private static bool SignaturesMatch(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType, RefKind derivedReturnRefKind)
-        => SignaturesMatch(baseMethod, derivedParams, derivedReturnType, derivedReturnRefKind, typeParamMap: null);
+        => SignaturesMatch(baseMethod, derivedParams, derivedReturnType, derivedReturnRefKind, typeParamMap: null, derivedIsAsync: false);
+
+    private static bool SignaturesMatch(
+        FunctionSymbol baseMethod,
+        ImmutableArray<ParameterSymbol> derivedParams,
+        TypeSymbol derivedReturnType,
+        RefKind derivedReturnRefKind,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap)
+        => SignaturesMatch(baseMethod, derivedParams, derivedReturnType, derivedReturnRefKind, typeParamMap, derivedIsAsync: false);
 
     /// <summary>
     /// Issue #1007: signature matching for interface satisfaction / override
@@ -5541,9 +5554,10 @@ internal sealed class DeclarationBinder
         ImmutableArray<ParameterSymbol> derivedParams,
         TypeSymbol derivedReturnType,
         RefKind derivedReturnRefKind,
-        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap)
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap,
+        bool derivedIsAsync)
     {
-        if (!TypeSignaturesEquivalent(baseMethod.Type, derivedReturnType, typeParamMap))
+        if (!ReturnTypesMatch(baseMethod, derivedReturnType, derivedIsAsync, typeParamMap))
         {
             return false;
         }
@@ -5578,6 +5592,44 @@ internal sealed class DeclarationBinder
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #1071: compares the base / interface method's declared return type
+    /// against the derived (overriding / implementing) method's <em>effective</em>
+    /// return type, normalizing for <c>async</c>. An <c>async func</c> with no
+    /// annotation has effective return type <c>Task</c>; <c>async func ... T</c>
+    /// has effective return type <c>Task[T]</c>. When exactly one of the two
+    /// methods is async, the non-async side's declared <c>Task</c> / <c>Task[T]</c>
+    /// is unwrapped to its awaited result and compared against the async side's
+    /// declared (awaited) return type; otherwise the declared types are compared
+    /// directly. Genuine return-type mismatches (e.g. an async <c>Task</c> method
+    /// against a base declaring <c>Task[int32]</c>) are still rejected.
+    /// </summary>
+    private static bool ReturnTypesMatch(
+        FunctionSymbol baseMethod,
+        TypeSymbol derivedReturnType,
+        bool derivedIsAsync,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap)
+    {
+        var baseIsAsync = baseMethod.IsAsync;
+        if (baseIsAsync == derivedIsAsync)
+        {
+            return TypeSignaturesEquivalent(baseMethod.Type, derivedReturnType, typeParamMap);
+        }
+
+        if (derivedIsAsync)
+        {
+            // Derived is async (declared = awaited result); the base must declare
+            // the matching Task / Task[T] wrapper.
+            return AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(baseMethod.Type, out var baseAwaited)
+                && TypeSignaturesEquivalent(baseAwaited, derivedReturnType, typeParamMap);
+        }
+
+        // Base is async (declared = awaited result); the derived (non-async)
+        // method must declare the matching Task / Task[T] wrapper.
+        return AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(derivedReturnType, out var derivedAwaited)
+            && TypeSignaturesEquivalent(baseMethod.Type, derivedAwaited, typeParamMap);
     }
 
     /// <summary>
