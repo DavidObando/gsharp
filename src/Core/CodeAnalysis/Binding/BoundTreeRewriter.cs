@@ -57,6 +57,8 @@ public abstract class BoundTreeRewriter
                 return RewriteSelectStatement((BoundSelectStatement)node);
             case BoundNodeKind.ScopeStatement:
                 return RewriteScopeStatement((BoundScopeStatement)node);
+            case BoundNodeKind.FixedStatement:
+                return RewriteFixedStatement((BoundFixedStatement)node);
             case BoundNodeKind.AwaitForRangeStatement:
                 return RewriteAwaitForRangeStatement((BoundAwaitForRangeStatement)node);
             case BoundNodeKind.YieldStatement:
@@ -887,6 +889,31 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundScopeStatement(null, body);
+    }
+
+    /// <summary>
+    /// ADR-0125 / issue #1026: rewrites a <c>fixed</c> statement, rewriting its
+    /// pinned-source expression and body while preserving the pinned/pointer
+    /// locals and pin kind.
+    /// </summary>
+    /// <param name="node">The fixed statement to rewrite.</param>
+    /// <returns>The rewritten statement.</returns>
+    protected virtual BoundStatement RewriteFixedStatement(BoundFixedStatement node)
+    {
+        var source = RewriteExpression(node.PinnedSource);
+        var body = RewriteStatement(node.Body);
+        if (source == node.PinnedSource && body == node.Body)
+        {
+            return node;
+        }
+
+        return new BoundFixedStatement(
+            node.Syntax,
+            node.PinKind,
+            node.PinnedVariable,
+            node.PointerVariable,
+            source,
+            body);
     }
 
     /// <summary>Rewrites a bound <c>await for v := range stream</c> statement (Phase 5.8).</summary>

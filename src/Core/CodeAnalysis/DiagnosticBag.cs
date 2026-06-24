@@ -1551,6 +1551,31 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// GS0400: a <c>fixed</c> (pinning) statement (ADR-0125 / issue #1026)
+    /// appears outside an <c>unsafe</c> context. A <c>fixed</c> statement binds
+    /// a raw unmanaged pointer <c>*T</c> into the pinned buffer, which is only
+    /// legal inside an <c>unsafe</c> context (consistent with ADR-0122).
+    /// </summary>
+    /// <param name="location">The text location of the <c>fixed</c> keyword.</param>
+    public void ReportFixedRequiresUnsafeContext(TextLocation location)
+    {
+        Report(location, "GS0400", "A 'fixed' statement requires an 'unsafe' context (it binds a raw unmanaged pointer into the pinned buffer); place it inside an 'unsafe func', 'unsafe { … }' block, or 'unsafe' type (ADR-0125).");
+    }
+
+    /// <summary>
+    /// GS0401: the source of a <c>fixed</c> (pinning) statement (ADR-0125 /
+    /// issue #1026) is not a pinnable managed buffer. Only a managed array
+    /// (<c>[]T</c>) or a <c>string</c> can be pinned (a span-like
+    /// <c>GetPinnableReference</c> source is a tracked follow-up).
+    /// </summary>
+    /// <param name="location">The text location of the pinned source expression.</param>
+    /// <param name="typeName">The unpinnable source type name.</param>
+    public void ReportFixedSourceNotPinnable(TextLocation location, string typeName)
+    {
+        Report(location, "GS0401", $"A 'fixed' statement cannot pin a value of type '{typeName}'; the source must be a managed array ('[]T') or a 'string', and the pointer's element type must match the buffer's (ADR-0125).");
+    }
+
+    /// <summary>
     /// Reports that an <c>async func(...)</c> type clause has an explicit
     /// <c>Task[…]</c> (or other Task-shaped) return type. The <c>async</c>
     /// modifier already implies a Task wrap, so the explicit wrap is

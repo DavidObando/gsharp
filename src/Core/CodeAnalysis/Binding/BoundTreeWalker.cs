@@ -118,6 +118,9 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.ScopeStatement:
                 VisitScopeStatement((BoundScopeStatement)node);
                 break;
+            case BoundNodeKind.FixedStatement:
+                VisitFixedStatement((BoundFixedStatement)node);
+                break;
             case BoundNodeKind.AwaitForRangeStatement:
                 VisitAwaitForRangeStatement((BoundAwaitForRangeStatement)node);
                 break;
@@ -512,6 +515,12 @@ public abstract class BoundTreeWalker
 
     protected virtual void VisitScopeStatement(BoundScopeStatement node)
     {
+        VisitStatement(node.Body);
+    }
+
+    protected virtual void VisitFixedStatement(BoundFixedStatement node)
+    {
+        VisitExpression(node.PinnedSource);
         VisitStatement(node.Body);
     }
 

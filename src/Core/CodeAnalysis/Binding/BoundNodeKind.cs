@@ -133,6 +133,7 @@ public enum BoundNodeKind
     ChannelCloseExpression,
     SelectStatement,
     ScopeStatement,
+    FixedStatement,
     AwaitForRangeStatement,
     YieldStatement,
     AwaitYieldPoint,

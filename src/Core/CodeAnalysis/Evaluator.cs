@@ -193,6 +193,12 @@ public sealed class Evaluator
                     EvaluateScopeStatement((BoundScopeStatement)s);
                     index++;
                     break;
+                case BoundNodeKind.FixedStatement:
+                    // ADR-0125 / issue #1026: `fixed` pins a managed buffer and
+                    // yields a raw unmanaged pointer — it requires the CIL
+                    // pinned-local / pointer emit path and is not modelled by
+                    // the tree-walking interpreter.
+                    throw new EvaluatorException("'fixed' (pinning) statements are not supported in the interpreter; they require the CIL pinned-local emit path.", s);
                 case BoundNodeKind.AwaitForRangeStatement:
                     EvaluateAwaitForRangeStatement((BoundAwaitForRangeStatement)s);
                     index++;

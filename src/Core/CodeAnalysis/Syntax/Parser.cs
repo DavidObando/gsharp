@@ -4092,6 +4092,17 @@ public class Parser
             return unsafeBlock;
         }
 
+        // ADR-0125 / issue #1026: a `fixed name *T = source { … }` pinning
+        // statement. `fixed` is a contextual keyword — only the precise
+        // `fixed IDENT *` shape (the binding name followed by a pointer type)
+        // commits here, so existing identifiers named `fixed` are unaffected.
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "fixed"
+            && Peek(1).Kind == SyntaxKind.IdentifierToken
+            && Peek(2).Kind == SyntaxKind.StarToken)
+        {
+            return ParseFixedStatement();
+        }
+
         switch (Current.Kind)
         {
             case SyntaxKind.OpenBraceToken:
@@ -6809,6 +6820,45 @@ public class Parser
             openBracket,
             count,
             closeBracket);
+    }
+
+    // ADR-0125 / issue #1026: `fixed name *T = source { … }`. The leading
+    // `fixed` is a contextual keyword; the dispatcher in ParseStatement only
+    // routes here for the exact `fixed IDENT *` shape. The header mirrors G#'s
+    // other paren-less statement headers (`if`/`for`/`while`/`unsafe { }`).
+    private StatementSyntax ParseFixedStatement()
+    {
+        var fixedKeyword = MatchToken(SyntaxKind.IdentifierToken);
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var typeClause = ParseTypeClause();
+        var equalsToken = MatchToken(SyntaxKind.EqualsToken);
+
+        // Suppress bare struct literals (`Ident { }`) and trailing object
+        // initializers so the `{` after the source expression is parsed as the
+        // pinned body block, not as part of the source — mirroring the
+        // `if let` / `for` header treatment.
+        suppressTrailingObjectInitializer++;
+        suppressStructLiteral++;
+        ExpressionSyntax pinnedSource;
+        try
+        {
+            pinnedSource = ParseExpression();
+        }
+        finally
+        {
+            suppressStructLiteral--;
+            suppressTrailingObjectInitializer--;
+        }
+
+        var body = ParseBlockStatement();
+        return new FixedStatementSyntax(
+            syntaxTree,
+            fixedKeyword,
+            identifier,
+            typeClause,
+            equalsToken,
+            pinnedSource,
+            body);
     }
 
     private SeparatedSyntaxList<ExpressionSyntax> ParseArrayInitializerElements()

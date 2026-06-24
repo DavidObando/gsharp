@@ -8090,6 +8090,25 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private void EncodeLocalVariableType(LocalVariableTypeEncoder enc, TypeSymbol t)
     {
+        // ADR-0125 / issue #1026: a `fixed` statement's pinned local carries the
+        // CLR `pinned` flag so the GC cannot relocate the pinned buffer. The
+        // underlying storage is either a managed by-ref (`T& pinned`, string
+        // form) or an ordinary managed type such as the array (`T[] pinned`,
+        // array form).
+        if (t is PinnedTypeSymbol pinned)
+        {
+            if (pinned.UnderlyingType is ByRefTypeSymbol pinnedByRef)
+            {
+                EncodeTypeSymbol(enc.Type(isByRef: true, isPinned: true), pinnedByRef.PointeeType);
+            }
+            else
+            {
+                EncodeTypeSymbol(enc.Type(isByRef: false, isPinned: true), pinned.UnderlyingType);
+            }
+
+            return;
+        }
+
         if (t is ByRefTypeSymbol byRef)
         {
             EncodeTypeSymbol(enc.Type(isByRef: true), byRef.PointeeType);

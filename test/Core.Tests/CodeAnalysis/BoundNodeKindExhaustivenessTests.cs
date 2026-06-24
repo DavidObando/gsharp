@@ -75,6 +75,7 @@ public class BoundNodeKindExhaustivenessTests
         "ChannelSendStatement",
         "SelectStatement",
         "ScopeStatement",
+        "FixedStatement",
         "AwaitForRangeStatement",
         "YieldStatement",
 
@@ -216,6 +217,7 @@ public class BoundNodeKindExhaustivenessTests
         "ChannelSendStatement",
         "SelectStatement",
         "ScopeStatement",
+        "FixedStatement",
         "AwaitForRangeStatement",
         "YieldStatement",
 

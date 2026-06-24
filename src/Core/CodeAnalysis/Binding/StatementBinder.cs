@@ -206,6 +206,8 @@ internal sealed class StatementBinder
                 return BindSelectStatement((SelectStatementSyntax)syntax);
             case SyntaxKind.ScopeStatement:
                 return BindScopeStatement((ScopeStatementSyntax)syntax);
+            case SyntaxKind.FixedStatement:
+                return BindFixedStatement((FixedStatementSyntax)syntax);
             case SyntaxKind.AwaitForRangeStatement:
                 return BindAwaitForRangeStatement((AwaitForRangeStatementSyntax)syntax);
             case SyntaxKind.AwaitUsingStatement:
@@ -2657,6 +2659,118 @@ internal sealed class StatementBinder
         var body = BindStatement(syntax.Body);
         scope = scope.Parent;
         return new BoundScopeStatement(syntax, body);
+    }
+
+    // ADR-0125 / issue #1026: binds a `fixed name *T = source { … }` pinning
+    // statement. Pins a managed array (`[]T` → `&a[0]`) or string (→ char-data
+    // pointer) for the duration of the block and binds an unmanaged pointer
+    // `*T` into element 0. The pointer is a CLR pinned local at emit time.
+    private BoundStatement BindFixedStatement(FixedStatementSyntax syntax)
+    {
+        // A `fixed` statement yields a raw unmanaged pointer, so it is legal
+        // only inside an `unsafe` context — consistent with ADR-0122's gating
+        // (outside `unsafe`, `*T` would denote a *managed* by-ref, not a
+        // pinnable pointer). Reject up front with GS0400.
+        if (!binderCtx.InUnsafeContext)
+        {
+            Diagnostics.ReportFixedRequiresUnsafeContext(syntax.FixedKeyword.Location);
+        }
+
+        // Open a fresh lexical scope: the pointer binding (and any inner
+        // declarations) live only for the duration of the pinned block.
+        scope = new BoundScope(scope);
+        try
+        {
+            var pointerType = bindTypeClause(syntax.TypeClause);
+            var source = bindExpression(syntax.PinnedSource);
+
+            FixedPinKind pinKind;
+            TypeSymbol elementType;
+            TypeSymbol pinnedUnderlying;
+            if (source.Type is SliceTypeSymbol sliceType)
+            {
+                // Slice-pin form (`[]T`, the cs2gs mapping of C# `T[]`): the
+                // CLR backing is a single-dimensional array `T[]`, so we pin
+                // the array reference (`T[] pinned`) and derive `&a[0]` via
+                // `ldelema` — exactly as C# does for `fixed (T* p = arr)`.
+                pinKind = FixedPinKind.Array;
+                elementType = sliceType.ElementType;
+                pinnedUnderlying = sliceType;
+            }
+            else if (source.Type is ArrayTypeSymbol arrayType)
+            {
+                // Fixed-size array form (`[N]T`), also CLR-backed by `T[]`.
+                pinKind = FixedPinKind.Array;
+                elementType = arrayType.ElementType;
+                pinnedUnderlying = arrayType;
+            }
+            else if (source.Type == TypeSymbol.String)
+            {
+                // String-pin form: pin the `string` reference itself
+                // (`string pinned`) and derive the char-data pointer via
+                // `RuntimeHelpers.OffsetToStringData` (the classic lowering),
+                // which avoids a `modreq`-bearing `GetPinnableReference` ref.
+                pinKind = FixedPinKind.String;
+                elementType = TypeSymbol.Char;
+                pinnedUnderlying = TypeSymbol.String;
+            }
+            else
+            {
+                Diagnostics.ReportFixedSourceNotPinnable(
+                    syntax.PinnedSource.Location, source.Type?.Name ?? "?");
+
+                var errorPointerType = pointerType is PointerTypeSymbol
+                    ? pointerType
+                    : PointerTypeSymbol.Get(TypeSymbol.UInt8);
+                var errorPointer = bindLocalVariable(syntax.Identifier, isReadOnly: true, errorPointerType);
+                var errorBody = BindStatement(syntax.Body);
+                return new BoundFixedStatement(
+                    syntax,
+                    FixedPinKind.Array,
+                    new LocalVariableSymbol("$pin$error", isReadOnly: false, TypeSymbol.Error),
+                    errorPointer,
+                    source,
+                    errorBody);
+            }
+
+            // The declared pointer's pointee must match the buffer's element
+            // type. `char`/`uint16` are interchangeable for the string form
+            // (both are 16-bit), matching C#'s `char*`. On mismatch, fall back
+            // to the buffer's element type and report it as not pinnable.
+            var resolvedElementType = elementType;
+            if (pointerType is PointerTypeSymbol declaredPtr && declaredPtr.PointeeType?.ClrType != null)
+            {
+                var declaredPointee = declaredPtr.PointeeType;
+                var matches = elementType.ClrType != null
+                    && (declaredPointee.ClrType.IsSameAs(elementType.ClrType)
+                        || (pinKind == FixedPinKind.String && declaredPointee.ClrType.IsSameAs(typeof(ushort))));
+                if (matches)
+                {
+                    resolvedElementType = declaredPointee;
+                }
+                else
+                {
+                    Diagnostics.ReportFixedSourceNotPinnable(
+                        syntax.PinnedSource.Location, source.Type?.Name ?? "?");
+                }
+            }
+
+            var pointerVariable = bindLocalVariable(
+                syntax.Identifier, isReadOnly: true, PointerTypeSymbol.Get(resolvedElementType));
+
+            // Synthetic pinned local — wrapped in a PinnedTypeSymbol so the
+            // emitter sets the `pinned` flag on its local-signature slot.
+            var pinnedVariable = new LocalVariableSymbol(
+                $"$pin${pointerVariable.Name}", isReadOnly: false, new PinnedTypeSymbol(pinnedUnderlying));
+
+            var body = BindStatement(syntax.Body);
+
+            return new BoundFixedStatement(syntax, pinKind, pinnedVariable, pointerVariable, source, body);
+        }
+        finally
+        {
+            scope = scope.Parent;
+        }
     }
 
     private BoundStatement BindAwaitForRangeStatement(AwaitForRangeStatementSyntax syntax)

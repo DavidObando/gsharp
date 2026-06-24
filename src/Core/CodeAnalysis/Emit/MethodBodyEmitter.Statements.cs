@@ -37,6 +37,104 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 internal sealed partial class MethodBodyEmitter
 {
 
+    // ADR-0125 / issue #1026: emits a `fixed` (pinning) statement. Pins the
+    // managed buffer into a CLR pinned local, derives the unmanaged `*T`
+    // pointer to element 0, emits the body, then releases the pin (nulls the
+    // pinned local) on normal block exit — mirroring C#'s codegen. Pointer /
+    // pinned-local IL is unverifiable by design (see ADR-0125 / ADR-0122);
+    // the emit tests assert runtime behaviour and ignore the specific ilverify
+    // codes the pattern triggers.
+    private void EmitFixedStatement(BoundFixedStatement node)
+    {
+        var pinnedSlot = this.locals[node.PinnedVariable];
+        var pointerSlot = this.locals[node.PointerVariable];
+
+        if (node.PinKind == FixedPinKind.Array)
+        {
+            this.EmitFixedArrayPin(node, pinnedSlot, pointerSlot);
+        }
+        else
+        {
+            this.EmitFixedStringPin(node, pinnedSlot, pointerSlot);
+        }
+
+        // Body executes with the pin held.
+        this.EmitStatement(node.Body);
+
+        // Release the pin on normal exit: store null into the pinned local so
+        // the GC stops tracking the buffer (both `T[] pinned` and
+        // `string pinned` release with `ldnull`).
+        this.il.OpCode(ILOpCode.Ldnull);
+        this.il.StoreLocal(pinnedSlot);
+    }
+
+    // Array-pin form: pin the array reference (`T[] pinned`) and derive
+    // `&a[0]` via `ldelema`, guarding the null / zero-length array (→ null
+    // pointer), exactly as the C# compiler does.
+    private void EmitFixedArrayPin(BoundFixedStatement node, int pinnedSlot, int pointerSlot)
+    {
+        var elementType = ((Symbols.PointerTypeSymbol)node.PointerVariable.Type).PointeeType;
+
+        var nullLabel = this.il.DefineLabel();
+        var notEmptyLabel = this.il.DefineLabel();
+        var afterLabel = this.il.DefineLabel();
+
+        this.EmitExpression(node.PinnedSource); // array reference
+        this.il.OpCode(ILOpCode.Dup);
+        this.il.StoreLocal(pinnedSlot);          // pinned = arr
+        this.il.Branch(ILOpCode.Brfalse, nullLabel);
+
+        this.il.LoadLocal(pinnedSlot);
+        this.il.OpCode(ILOpCode.Ldlen);
+        this.il.OpCode(ILOpCode.Conv_i4);
+        this.il.Branch(ILOpCode.Brtrue, notEmptyLabel);
+
+        // Null or zero-length: pointer = null.
+        this.il.MarkLabel(nullLabel);
+        this.il.LoadConstantI4(0);
+        this.il.OpCode(ILOpCode.Conv_u);
+        this.il.StoreLocal(pointerSlot);
+        this.il.Branch(ILOpCode.Br, afterLabel);
+
+        // Non-empty: pointer = &arr[0].
+        this.il.MarkLabel(notEmptyLabel);
+        this.il.LoadLocal(pinnedSlot);
+        this.il.LoadConstantI4(0);
+        this.il.OpCode(ILOpCode.Ldelema);
+        this.il.Token(this.outer.GetElementTypeToken(elementType));
+        this.il.OpCode(ILOpCode.Conv_u);
+        this.il.StoreLocal(pointerSlot);
+
+        this.il.MarkLabel(afterLabel);
+    }
+
+    // String-pin form: pin the `string` reference (`string pinned`) and derive
+    // the char-data pointer via `RuntimeHelpers.OffsetToStringData`, guarding
+    // null (→ null pointer). This classic lowering avoids the `modreq`-bearing
+    // `string.GetPinnableReference()` ref-return that the member-ref encoder
+    // cannot reproduce.
+    private void EmitFixedStringPin(BoundFixedStatement node, int pinnedSlot, int pointerSlot)
+    {
+        var skipLabel = this.il.DefineLabel();
+
+        this.EmitExpression(node.PinnedSource); // string reference
+        this.il.OpCode(ILOpCode.Dup);
+        this.il.StoreLocal(pinnedSlot);          // pinned = s
+        this.il.OpCode(ILOpCode.Conv_i);         // (nint)s — address of the object
+        this.il.OpCode(ILOpCode.Dup);
+        this.il.Branch(ILOpCode.Brfalse, skipLabel); // null -> leave 0 as the pointer
+
+        var offsetGetter = typeof(System.Runtime.CompilerServices.RuntimeHelpers)
+            .GetProperty("OffsetToStringData")!
+            .GetGetMethod()!;
+        this.il.Call(this.outer.GetMethodReference(offsetGetter));
+        this.il.OpCode(ILOpCode.Add);            // address + OffsetToStringData = &s[0]
+
+        this.il.MarkLabel(skipLabel);
+        this.il.OpCode(ILOpCode.Conv_u);
+        this.il.StoreLocal(pointerSlot);         // p = (char*)result
+    }
+
     private void EmitTryStatement(BoundTryStatement node)
     {
         var endLabel = this.il.DefineLabel();
