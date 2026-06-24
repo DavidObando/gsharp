@@ -6410,7 +6410,10 @@ internal sealed class DeclarationBinder
         // overload by argument types, mirroring C# where a derived constructor
         // may chain to any accessible base constructor. The primary-only fast
         // path below covers classes that declare no explicit init bodies.
-        if (!baseClassSymbol.ExplicitConstructors.IsDefaultOrEmpty)
+        // Issue #1087: a constructed generic base (e.g. `Base[int32]`) does not
+        // carry its own explicit-constructor table — consult the open
+        // definition's via EffectiveExplicitConstructors.
+        if (!baseClassSymbol.EffectiveExplicitConstructors.IsDefaultOrEmpty)
         {
             return ResolveGSharpExplicitBaseConstructor(argLocation, baseClassSymbol, boundArguments, location);
         }
@@ -6458,6 +6461,7 @@ internal sealed class DeclarationBinder
         TextLocation location)
     {
         ConstructorSymbol best = null;
+        ImmutableArray<TypeSymbol> bestParamTypes = default;
         var bestExactMatches = -1;
         var ambiguous = false;
         var anyArgIsError = false;
@@ -6470,20 +6474,25 @@ internal sealed class DeclarationBinder
             }
         }
 
-        foreach (var candidate in baseClassSymbol.ExplicitConstructors)
+        // Issue #1087: iterate the effective explicit-constructor set (the open
+        // definition's, for a constructed generic base) and compare against each
+        // candidate's type-argument-substituted parameter signature so that a
+        // generic base ctor such as `init(a T)` matches `: base(value)` on a
+        // constructed `Base[int32]`.
+        foreach (var candidate in baseClassSymbol.EffectiveExplicitConstructors)
         {
-            var parameters = candidate.Parameters;
-            if (parameters.Length != boundArguments.Count)
+            var paramTypes = baseClassSymbol.GetConstructorParameterTypesForConstruction(candidate);
+            if (paramTypes.Length != boundArguments.Count)
             {
                 continue;
             }
 
             var applicable = true;
             var exactMatches = 0;
-            for (var i = 0; i < parameters.Length; i++)
+            for (var i = 0; i < paramTypes.Length; i++)
             {
                 var argType = boundArguments[i].Type;
-                var paramType = parameters[i].Type;
+                var paramType = paramTypes[i];
                 if (argType == paramType)
                 {
                     exactMatches++;
@@ -6512,6 +6521,7 @@ internal sealed class DeclarationBinder
             if (exactMatches > bestExactMatches)
             {
                 best = candidate;
+                bestParamTypes = paramTypes;
                 bestExactMatches = exactMatches;
                 ambiguous = false;
             }
@@ -6533,11 +6543,10 @@ internal sealed class DeclarationBinder
             return null;
         }
 
-        var bestParams = best.Parameters;
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(boundArguments.Count);
         for (var i = 0; i < boundArguments.Count; i++)
         {
-            convertedArgs.Add(conversions.BindConversion(argLocation(i), boundArguments[i], bestParams[i].Type));
+            convertedArgs.Add(conversions.BindConversion(argLocation(i), boundArguments[i], bestParamTypes[i]));
         }
 
         return new BaseConstructorInitializer(convertedArgs.ToImmutable(), baseClassSymbol, best);
