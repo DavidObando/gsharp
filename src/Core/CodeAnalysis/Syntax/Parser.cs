@@ -55,6 +55,17 @@ public class Parser
     // parenthesised lambda `(x) -> body` remains available in unsafe contexts.
     private int unsafeDepth;
 
+    // Issue #1038: depth counter that suppresses the standalone range operator
+    // (`lo..hi`) while parsing the bound of an index expression. Inside `[...]`
+    // the `..` token is owned by the index-argument parser
+    // (<see cref="ParseIndexArgument"/>), so the general-expression range layer
+    // (<see cref="ParseRangeExpression"/>) must stand down there to keep the
+    // #1016/#1022 index-range/from-end behaviour byte-for-byte unchanged.
+    // Nested grouping contexts (parentheses, argument lists) save+clear the
+    // counter so a parenthesised or argument-position range (`a[(1..3)]`,
+    // `a[f(1..3)]`) is still recognised as a standalone `System.Range` value.
+    private int suppressRangeOperator;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="Parser"/> class.
     /// </summary>
@@ -6151,7 +6162,7 @@ public class Parser
             return new AssignmentExpressionSyntax(syntaxTree, identifierToken2, equalsToken, binary);
         }
 
-        var expression = ParseNullCoalescingExpression();
+        var expression = ParseRangeExpression();
 
         // Issue #507: indexer assignment whose target is an arbitrary expression
         // (e.g. `obj.Member[k] = v`, `a.b.c[k] = v`, `(GetThing())[i] = v`). The
@@ -6238,6 +6249,94 @@ public class Parser
         }
 
         return expression;
+    }
+
+    // Issue #1038: parse a standalone range expression `lo..hi` (and the open
+    // forms `..hi`, `lo..`, `..`) producing a `System.Range` value. The `..`
+    // operator binds looser than every binary operator, so `1+2..3+4` parses as
+    // `(1+2)..(3+4)`: each bound is a full null-coalescing expression. A from-end
+    // `^n` marker is recognised only in the *upper* bound (immediately after
+    // `..`), where it is unambiguous with one's-complement; a leading `^` at the
+    // very start keeps its one's-complement meaning and the binder rejects such a
+    // standalone lower bound with GS0410 (use `arr[^a..]` or parenthesise).
+    //
+    // While parsing an index bound the range layer is suppressed (see
+    // <see cref="suppressRangeOperator"/>) so `a[lo..hi]` / `a[^2..]` stay owned
+    // by <see cref="ParseIndexArgument"/>.
+    private ExpressionSyntax ParseRangeExpression()
+    {
+        if (suppressRangeOperator > 0)
+        {
+            return ParseNullCoalescingExpression();
+        }
+
+        ExpressionSyntax lower = null;
+        if (Current.Kind != SyntaxKind.DotDotToken)
+        {
+            lower = ParseNullCoalescingExpression();
+        }
+
+        if (Current.Kind != SyntaxKind.DotDotToken)
+        {
+            // No `..` follows — an ordinary expression (`lower` is non-null here
+            // because the open-lower `..` form is handled by the branch above).
+            return lower;
+        }
+
+        var dotDotToken = NextToken();
+
+        ExpressionSyntax upper = null;
+        if (RangeUpperBoundFollows(dotDotToken))
+        {
+            upper = ParseRangeUpperBound();
+        }
+
+        return new RangeExpressionSyntax(syntaxTree, lower, dotDotToken, upper);
+    }
+
+    // Issue #1038: decide whether an upper bound follows a standalone `lo..`. The
+    // open-ended form `lo..` ends at a closing delimiter, a separator, or a
+    // newline (G# treats a line break after `..` as terminating the open range,
+    // so `let r = 1..\nfoo()` is `1..` followed by a fresh statement rather than
+    // `1..foo()`).
+    private bool RangeUpperBoundFollows(SyntaxToken dotDotToken)
+    {
+        if (IsCurrentOnNewLineAfter(dotDotToken))
+        {
+            return false;
+        }
+
+        switch (Current.Kind)
+        {
+            case SyntaxKind.CloseParenthesisToken:
+            case SyntaxKind.CloseBraceToken:
+            case SyntaxKind.CloseSquareBracketToken:
+            case SyntaxKind.CommaToken:
+            case SyntaxKind.SemicolonToken:
+            case SyntaxKind.ColonToken:
+            case SyntaxKind.EqualsToken:
+            case SyntaxKind.EndOfFileToken:
+            case SyntaxKind.DotDotToken:
+                return false;
+            default:
+                return true;
+        }
+    }
+
+    // Issue #1038: parse the upper bound of a standalone range. A leading `^`
+    // here (immediately after `..`) is the from-end marker (`lo..^hi`, `..^3`),
+    // reusing the #1022 `FromEndIndexExpressionSyntax`; otherwise the bound is an
+    // ordinary null-coalescing expression.
+    private ExpressionSyntax ParseRangeUpperBound()
+    {
+        if (Current.Kind == SyntaxKind.HatToken)
+        {
+            var hatToken = NextToken();
+            var operand = ParseNullCoalescingExpression();
+            return new FromEndIndexExpressionSyntax(syntaxTree, hatToken, operand);
+        }
+
+        return ParseNullCoalescingExpression();
     }
 
     // Issue #941: `a ?? b` binary null-coalescing operator. Parsed as its own
@@ -6637,16 +6736,31 @@ public class Parser
     // scoped to this leading position: a `^` anywhere else (including inside the
     // offset expression itself, e.g. `a[^(x ^ y)]`) keeps its ordinary
     // one's-complement / bitwise-XOR meaning.
+    //
+    // Issue #1038: the bound is parsed with the standalone range layer
+    // suppressed, so the `..` between bounds (and the trailing `..` of `a[^2..]`)
+    // is owned by <see cref="ParseIndexArgument"/> rather than being absorbed
+    // into the bound's own expression. A parenthesised or argument-position
+    // range nested inside the bound re-enables the layer at its grouping
+    // boundary (`a[(1..3)]`).
     private ExpressionSyntax ParseIndexBound()
     {
-        if (Current.Kind == SyntaxKind.HatToken)
+        suppressRangeOperator++;
+        try
         {
-            var hatToken = NextToken();
-            var operand = ParseExpression();
-            return new FromEndIndexExpressionSyntax(syntaxTree, hatToken, operand);
-        }
+            if (Current.Kind == SyntaxKind.HatToken)
+            {
+                var hatToken = NextToken();
+                var operand = ParseExpression();
+                return new FromEndIndexExpressionSyntax(syntaxTree, hatToken, operand);
+            }
 
-        return ParseExpression();
+            return ParseExpression();
+        }
+        finally
+        {
+            suppressRangeOperator--;
+        }
     }
 
     // be reused as the LHS of an indexer assignment. Returns true and yields a
@@ -8177,6 +8291,11 @@ public class Parser
         // trailing object initializer.
         var savedSuppress = suppressTrailingObjectInitializer;
         suppressTrailingObjectInitializer = 0;
+
+        // Issue #1038: an argument list is a fresh context, so a standalone
+        // range argument (`f(1..3)`) is recognised even inside an index bound.
+        var savedRange = suppressRangeOperator;
+        suppressRangeOperator = 0;
         try
         {
             return ParseArgumentsCore();
@@ -8184,6 +8303,7 @@ public class Parser
         finally
         {
             suppressTrailingObjectInitializer = savedSuppress;
+            suppressRangeOperator = savedRange;
         }
     }
 
@@ -8690,6 +8810,12 @@ public class Parser
         ExpressionSyntax expression;
         var savedSuppress = suppressTrailingObjectInitializer;
         suppressTrailingObjectInitializer = 0;
+
+        // Issue #1038: a parenthesised expression is a fresh context, so a
+        // parenthesised range (`a[(1..3)]`) is recognised as a standalone
+        // `System.Range` value even inside an index bound.
+        var savedRange = suppressRangeOperator;
+        suppressRangeOperator = 0;
         try
         {
             expression = ParseExpression();
@@ -8697,6 +8823,7 @@ public class Parser
         finally
         {
             suppressTrailingObjectInitializer = savedSuppress;
+            suppressRangeOperator = savedRange;
         }
 
         // ADR-0061: `(cond ? lvalue : lvalue)` parses as a conditional ref-arg

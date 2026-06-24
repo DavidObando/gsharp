@@ -59,7 +59,7 @@ Several words are contextual rather than reserved. `data`, `inline`, `prop`, `ev
 
 ### Operators and punctuation
 
-Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, and `>>=`. The parser rewrites these as assignment with the corresponding binary operator. `++` and `--` are statement forms on identifiers. The null-coalescing compound assignment `??=` (ADR-0072) writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment--adr-0072) under *Statements*. The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`), and a leading `^n` marks a from-end index (`a[^1]`, `a[1..^1]`); see [Range and slice expressions](#range-and-slice-expressions-issue-1016). `@` begins annotations on declarations.
+Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, and `>>=`. The parser rewrites these as assignment with the corresponding binary operator. `++` and `--` are statement forms on identifiers. The null-coalescing compound assignment `??=` (ADR-0072) writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment--adr-0072) under *Statements*. The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`) and also forms a standalone `System.Range` value (`let r = 1..3`; issue #1038), and a leading `^n` marks a from-end index (`a[^1]`, `a[1..^1]`); see [Range and slice expressions](#range-and-slice-expressions-issue-1016). `@` begins annotations on declarations.
 
 ### Integer literals
 
@@ -682,7 +682,7 @@ let c = xs[2..]    // open upper bound -> {30, 40, 50}
 let d = xs[..]     // full copy -> {10, 20, 30, 40, 50}
 ```
 
-The lower bound defaults to `0` and the upper bound defaults to the length of the target. Both bounds are `int32` offsets from the start; the result spans `[lower, upper)` (upper-exclusive), exactly like C#. The `..` operator is only recognized inside an index `[...]`; there is no standalone `System.Range`-producing expression yet.
+The lower bound defaults to `0` and the upper bound defaults to the length of the target. Both bounds are `int32` offsets from the start; the result spans `[lower, upper)` (upper-exclusive), exactly like C#. The same `..` operator also forms a **standalone `System.Range` value** outside an index (issue #1038, below).
 
 The binder resolves the target type to one of the following sliceable shapes and lowers the range to the corresponding BCL surface:
 
@@ -714,7 +714,25 @@ A bare `a[^n]` reads the single element `length - n` from an array/slice, a `str
 
 The `^n` marker is only recognized at the *start* of an index/range bound. Elsewhere — including inside the offset expression itself (e.g. `a[^(x ^ y)]`) — `^` keeps its ordinary prefix one's-complement and infix bitwise-XOR meanings unchanged. For example, `a[i ^ j]` is an XOR-computed single index, and `^5` outside brackets is one's-complement.
 
-Standalone `System.Range` values (`let r = 1..3`) are not yet supported and are tracked separately.
+#### Standalone range values (issue #1038)
+
+The `..` operator also forms a **standalone `System.Range` value** outside an index, in the general expression grammar:
+
+```gsharp
+let r = 1..3       // r : System.Range
+let s = a[r]       // index an array/slice/string/span by a Range value
+let full = ..      // Range.All
+let tail = 2..     // 2..end
+let head = ..^1    // start..^1 (drop the last)
+```
+
+All four open forms (`lo..hi`, `lo..`, `..hi`, `..`) are supported. A bound becomes a `System.Index`: a plain value `v` is `Index(v)` (from-start), a `^n` marker is `Index(n, fromEnd: true)`, an open lower defaults to the start, and an open upper defaults to the end. The value is constructed as `new System.Range(start, end)`, matching how C# lowers a range expression, and is typed `System.Range`.
+
+**Precedence.** The `..` operator binds *looser than every binary operator*, so each bound is a full expression: `1+2..3+4` parses as `(1+2)..(3+4)`. An open upper bound (`lo..`) ends at a closing delimiter, a separator, or a line break — so `let r = 1..` on its own line is the open range `1..end`, not a continuation onto the next statement.
+
+**Indexing by a range value.** A `System.Range`-typed value used as an index argument (`a[r]`, or the inline `a[(1..3)]`) slices the receiver using the *same* shapes as the syntactic `a[1..3]` form: arrays/slices copy via `Array.Copy`, `string` uses `Substring`, span-like values use `Slice`, and a `this[System.Range]` indexer is called with the value directly. The concrete `start`/`length` are resolved from the range value at runtime via `System.Index.GetOffset(length)`.
+
+**From-end restriction.** A from-end `^n` marker is allowed in the *upper* bound of a standalone range (`lo..^hi`, `..^hi`), where it is unambiguous because it follows `..`. A *leading* `^` at the very start of a standalone range is **not** allowed (`^a..b`), because it is genuinely ambiguous with the one's-complement unary operator (`^a` parses as `~a`); such a form reports `GS0410`. To slice from the end, index the value directly (`arr[^a..]`); to use a one's-complement value as a from-start lower bound, parenthesise it (`(^a)..b`).
 
 ### Composite literals
 
@@ -824,7 +842,8 @@ Assignment        = identifier "=" Assignment
                   | identifier "[" Expression "]" "=" Assignment
                   | identifier "." identifier "=" Assignment
                   | AccessorExpression ( "+=" | "-=" ) Assignment
-                  | BinaryExpression .
+                  | RangeExpression .
+RangeExpression   = BinaryExpression? ".." ( "^"? BinaryExpression )? | BinaryExpression .  (* standalone System.Range value, issue #1038; `..` binds looser than every binary operator, so `1+2..3+4` is `(1+2)..(3+4)`. A leading `^` is rejected (GS0410); a `^` upper bound is a from-end marker. Suppressed inside an index bound, where IndexArgument owns `..`. *)
 BinaryExpression  = PrefixExpression { BinaryOperator PrefixExpression } .
 PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" | "++" | "--" ) PrefixExpression | PostfixExpression .
 PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) IndexArgument "]" } ( "++" | "--" )? ( "with" "{" FieldEqualsList? "}" )? .
@@ -1441,7 +1460,8 @@ Assignment        ::= identifier '=' Assignment
                     | '*' PrefixExpression '=' Assignment                (* indirect (pointer) assignment, ADR-0060 *)
                     | (identifier | PostfixExpression) ('+=' | '-=') Assignment   (* event subscribe / unsubscribe *)
                     | ConditionalExpression
-ConditionalExpression ::= NullCoalescingExpression ('?' Assignment ':' Assignment)?   (* ternary, ADR-0062 *)
+ConditionalExpression ::= RangeExpression ('?' Assignment ':' Assignment)?   (* ternary, ADR-0062 *)
+RangeExpression   ::= NullCoalescingExpression? '..' ('^'? NullCoalescingExpression)? | NullCoalescingExpression   (* standalone System.Range value, issue #1038; `..` binds looser than all binary operators. A leading '^' is rejected (GS0410); a '^' upper bound is a from-end marker. Suppressed inside an index bound (IndexArgument owns '..'); re-enabled inside parens/argument lists. *)
 NullCoalescingExpression ::= WithExpression ('??' NullCoalescingExpression)?  (* right-assoc null-coalescing, Issue #941 *)
 WithExpression    ::= BinaryExpression ('with' '{' FieldEqualsList? '}')*    (* non-destructive record update *)
 CompoundAssign    ::= '+=' | '-=' | '*=' | '/=' | '%=' | '^=' | '&=' | '|=' | '&^=' | '<<=' | '>>=' | '??='

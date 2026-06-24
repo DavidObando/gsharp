@@ -2387,20 +2387,49 @@ internal sealed partial class ExpressionBinder
             return BindFromEndIndex(target, fromEndSyntax, targetLocation);
         }
 
+        // Issue #1038: an index whose value is a `System.Range` slices the
+        // target (`let r = 1..3; a[r]`, or the inline `a[(1..3)]`), dispatching
+        // to the same array/string/span/`this[System.Range]` shapes used by the
+        // syntactic `a[1..3]` form. Bind the index once here and reuse the bound
+        // expression in the ordinary index paths below to avoid re-binding.
+        // `default`/interpolated index syntaxes can never be a range value and
+        // keep their dedicated conversion handling, so they are not pre-bound.
+        BoundExpression boundIndex = null;
+        if (indexSyntax is not DefaultExpressionSyntax && indexSyntax is not InterpolatedStringExpressionSyntax)
+        {
+            boundIndex = BindExpression(indexSyntax);
+            if (boundIndex is BoundErrorExpression)
+            {
+                return boundIndex;
+            }
+
+            if (IsSystemRangeType(boundIndex.Type))
+            {
+                return BindRangeValueSlice(target, boundIndex, targetLocation);
+            }
+        }
+
+        BoundExpression ConvertIndex(TypeSymbol conversionTargetType) =>
+            boundIndex != null
+                ? conversions.BindConversion(indexSyntax.Location, boundIndex, conversionTargetType)
+                : conversions.BindConversion(indexSyntax, conversionTargetType);
+
+        BoundExpression BoundIndexArg() => boundIndex ?? BindExpression(indexSyntax);
+
         // Phase 3.A.4: map indexing `m[k]` — key bound to K, result type V.
         // The Go convention "zero value if missing" applies at evaluation;
         // the bound representation reuses BoundIndexExpression with the
         // element type set to V.
         if (target.Type is MapTypeSymbol mapType)
         {
-            var key = conversions.BindConversion(indexSyntax, mapType.KeyType);
+            var key = ConvertIndex(mapType.KeyType);
             return new BoundIndexExpression(null, target, key, mapType.ValueType);
         }
 
         var element = GetIndexElementType(target.Type);
         if (element != null)
         {
-            var index = conversions.BindConversion(indexSyntax, TypeSymbol.Int32);
+            var index = ConvertIndex(TypeSymbol.Int32);
             return new BoundIndexExpression(null, target, index, element);
         }
 
@@ -2412,7 +2441,7 @@ internal sealed partial class ExpressionBinder
         // use them to type the element correctly (e.g., `list[0]` on `List<string?>` → `string?`).
         if (target.Type is NullabilityAnnotatedTypeSymbol annotIdx && annotIdx.ClrType is System.Type clrAnnotIdx)
         {
-            var idxArgsAnnot = ImmutableArray.Create(BindExpression(indexSyntax));
+            var idxArgsAnnot = ImmutableArray.Create(BoundIndexArg());
             if (this.memberLookup.TryResolveClrIndexer(clrAnnotIdx, idxArgsAnnot, out var idxPropAnnot))
             {
                 var elemTypeAnnot = annotIdx.GetTypeArgumentSymbolForClrType(idxPropAnnot.PropertyType);
@@ -2421,7 +2450,7 @@ internal sealed partial class ExpressionBinder
         }
         else if (target.Type is ImportedTypeSymbol && target.Type.ClrType is System.Type clrTarget)
         {
-            var idxArgs = ImmutableArray.Create(BindExpression(indexSyntax));
+            var idxArgs = ImmutableArray.Create(BoundIndexArg());
             if (this.memberLookup.TryResolveClrIndexer(clrTarget, idxArgs, out var idxProp))
             {
                 var elementType = MapErasedIndexerElementType((ImportedTypeSymbol)target.Type, idxProp);
@@ -2445,7 +2474,7 @@ internal sealed partial class ExpressionBinder
             var paramType = readSubstitution != null
                 ? Binder.SubstituteType(readIndexer.Parameters[0].Type, readSubstitution)
                 : readIndexer.Parameters[0].Type;
-            var indexArg = conversions.BindConversion(indexSyntax, paramType);
+            var indexArg = ConvertIndex(paramType);
             var elementType = readSubstitution != null
                 ? Binder.SubstituteType(readIndexer.Type, readSubstitution)
                 : readIndexer.Type;
@@ -3334,6 +3363,20 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindRangeIndexerSlice(BoundExpression target, RangeExpressionSyntax range, PropertyInfo indexer)
     {
+        var rangeValue = BuildSystemRangeValue(range);
+        var resultType = TypeSymbol.FromClrType(indexer.PropertyType);
+        return new BoundClrIndexExpression(range, target, indexer, ImmutableArray.Create(rangeValue), resultType);
+    }
+
+    // Issue #1016/#1022/#1038: construct a `System.Range` value from a range
+    // expression's bounds. Each bound becomes a `System.Index`: an open lower
+    // defaults to the start (`Index(0, fromEnd: false)`), an open upper to the
+    // end (`Index(0, fromEnd: true)`), a `^n` marker to `Index(n, fromEnd:
+    // true)`, and a plain value `v` to `Index(v, fromEnd: false)`. Shared by the
+    // `this[System.Range]` indexer-slice path (#1016) and the standalone range
+    // value `let r = 1..3` (#1038).
+    private BoundExpression BuildSystemRangeValue(RangeExpressionSyntax range)
+    {
         var indexCtor = typeof(System.Index).GetConstructor(new[] { typeof(int), typeof(bool) });
         var rangeCtor = typeof(System.Range).GetConstructor(new[] { typeof(System.Index), typeof(System.Index) });
         var indexSym = TypeSymbol.FromClrType(typeof(System.Index));
@@ -3342,7 +3385,7 @@ internal sealed partial class ExpressionBinder
         BoundExpression MakeIndex(ExpressionSyntax boundSyntax, bool defaultFromEnd)
         {
             // Issue #1022: a `^n` bound becomes System.Index(n, fromEnd: true);
-            // the System.Range indexer computes the concrete offset at runtime.
+            // the System.Range value resolves the concrete offset at runtime.
             if (boundSyntax is FromEndIndexExpressionSyntax fromEnd)
             {
                 var endValue = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32);
@@ -3372,15 +3415,203 @@ internal sealed partial class ExpressionBinder
             ? MakeIndex(range.UpperBound, defaultFromEnd: false)
             : MakeIndex(null, defaultFromEnd: true);
 
-        var rangeValue = new BoundClrConstructorCallExpression(
+        return new BoundClrConstructorCallExpression(
             null,
             typeof(System.Range),
             rangeCtor,
             ImmutableArray.Create<BoundExpression>(startIndex, endIndex),
             rangeSym);
+    }
 
-        var resultType = TypeSymbol.FromClrType(indexer.PropertyType);
-        return new BoundClrIndexExpression(range, target, indexer, ImmutableArray.Create<BoundExpression>(rangeValue), resultType);
+    // Issue #1038: bind a standalone range expression (`let r = 1..3`) to a
+    // constructed `System.Range` value. A leading `^` at the very start is
+    // genuinely ambiguous with the one's-complement unary operator, so the
+    // parser reads `^a..` as `(~a)..`; reject that here (GS0410) so the from-end
+    // intent isn't silently misread — use an indexer (`arr[^a..]`) or
+    // parenthesise the complement (`(^a)..`).
+    private BoundExpression BindStandaloneRange(RangeExpressionSyntax range)
+    {
+        if (range.LowerBound is UnaryExpressionSyntax leadingUnary
+            && leadingUnary.OperatorToken.Kind == SyntaxKind.HatToken)
+        {
+            Diagnostics.ReportFromEndMarkerNotAllowedInStandaloneRange(leadingUnary.OperatorToken.Location);
+            _ = BindExpression(leadingUnary.Operand);
+            if (range.UpperBound != null)
+            {
+                _ = BindExpression(range.UpperBound is FromEndIndexExpressionSyntax fe ? fe.Operand : range.UpperBound);
+            }
+
+            return new BoundErrorExpression(range);
+        }
+
+        return BuildSystemRangeValue(range);
+    }
+
+    // Issue #1038: slice a target by a runtime `System.Range` value (`a[r]`,
+    // where `r : System.Range`). Mirrors the syntactic `a[1..3]` shapes from
+    // #1016 but reads the concrete `start`/`length` from the range value via
+    // `System.Index.GetOffset(length)` rather than from syntactic bounds:
+    //   - arrays / slices (`[N]T`, `[]T`, CLR `T[]`) -> new T[len] + Array.Copy.
+    //   - `string` -> Substring(start, len).
+    //   - span-like types (`int Length`/`Count` + `Slice(int, int)`).
+    //   - a type exposing `this[System.Range]` -> call it with the value directly.
+    private BoundExpression BindRangeValueSlice(BoundExpression target, BoundExpression rangeValue, TextLocation targetLocation)
+    {
+        var arrayElement = GetArraySliceElementType(target.Type);
+        if (arrayElement != null)
+        {
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            var (srcRef, startRef, lenRef) = BuildRangeValueBounds(
+                target,
+                rangeValue,
+                src => new BoundLenExpression(null, src),
+                statements);
+
+            var resultType = SliceTypeSymbol.Get(arrayElement);
+            var dstLocal = DeclareRangeTemp("dst", resultType, new BoundArrayCreationExpression(null, resultType, lenRef), statements);
+            var dstRef = new BoundVariableExpression(null, dstLocal);
+
+            var copyMethod = typeof(System.Array).GetMethod(
+                "Copy",
+                new[] { typeof(System.Array), typeof(int), typeof(System.Array), typeof(int), typeof(int) });
+            var copyCall = new BoundClrStaticCallExpression(
+                null,
+                copyMethod,
+                TypeSymbol.Void,
+                ImmutableArray.Create<BoundExpression>(srcRef, startRef, dstRef, new BoundLiteralExpression(null, 0), lenRef));
+            statements.Add(new BoundExpressionStatement(null, copyCall));
+
+            return new BoundBlockExpression(null, statements.ToImmutable(), new BoundVariableExpression(null, dstLocal));
+        }
+
+        if (target.Type == TypeSymbol.String)
+        {
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            var (srcRef, startRef, lenRef) = BuildRangeValueBounds(
+                target,
+                rangeValue,
+                src => new BoundLenExpression(null, src),
+                statements);
+
+            var substring = typeof(string).GetMethod("Substring", new[] { typeof(int), typeof(int) });
+            var call = new BoundImportedInstanceCallExpression(
+                null,
+                srcRef,
+                substring,
+                TypeSymbol.String,
+                ImmutableArray.Create<BoundExpression>(startRef, lenRef));
+            return new BoundBlockExpression(null, statements.ToImmutable(), call);
+        }
+
+        var clrType = target.Type.ClrType;
+        if (clrType != null)
+        {
+            if (TryFindRangeIndexer(clrType, out var rangeIndexer))
+            {
+                var resultType = TypeSymbol.FromClrType(rangeIndexer.PropertyType);
+                return new BoundClrIndexExpression(null, target, rangeIndexer, ImmutableArray.Create(rangeValue), resultType);
+            }
+
+            if (TryFindSliceShape(clrType, out var lengthMember, out var sliceMethod))
+            {
+                var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+                var (srcRef, startRef, lenRef) = BuildRangeValueBounds(
+                    target,
+                    rangeValue,
+                    src => new BoundClrPropertyAccessExpression(null, src, lengthMember, TypeSymbol.Int32),
+                    statements);
+
+                var returnType = TypeSymbol.FromClrType(sliceMethod.ReturnType);
+                var call = new BoundImportedInstanceCallExpression(
+                    null,
+                    srcRef,
+                    sliceMethod,
+                    returnType,
+                    ImmutableArray.Create<BoundExpression>(startRef, lenRef));
+                return new BoundBlockExpression(null, statements.ToImmutable(), call);
+            }
+        }
+
+        Diagnostics.ReportTypeNotSliceable(targetLocation, target.Type);
+        return new BoundErrorExpression(null);
+    }
+
+    // Issue #1038: emit the `src`/`start`/`len` temporaries for slicing by a
+    // runtime `System.Range` value. The source length is computed once; the
+    // range's `Start`/`End` indices are resolved to concrete offsets via
+    // `System.Index.GetOffset(length)`, and `len = end - start`.
+    private (BoundExpression Src, BoundExpression Start, BoundExpression Len) BuildRangeValueBounds(
+        BoundExpression target,
+        BoundExpression rangeValue,
+        Func<BoundExpression, BoundExpression> lengthOf,
+        ImmutableArray<BoundStatement>.Builder statements)
+    {
+        var indexSym = TypeSymbol.FromClrType(typeof(System.Index));
+        var startProp = typeof(System.Range).GetProperty("Start");
+        var endProp = typeof(System.Range).GetProperty("End");
+        var getOffset = typeof(System.Index).GetMethod("GetOffset", new[] { typeof(int) });
+
+        var srcLocal = DeclareRangeTemp("src", target.Type, target, statements);
+
+        BoundExpression SrcRef() => new BoundVariableExpression(null, srcLocal);
+
+        var srcLenLocal = DeclareRangeTemp("srclen", TypeSymbol.Int32, lengthOf(SrcRef()), statements);
+
+        BoundExpression SrcLenRef() => new BoundVariableExpression(null, srcLenLocal);
+
+        var rngLocal = DeclareRangeTemp("rng", rangeValue.Type, rangeValue, statements);
+
+        BoundExpression RngRef() => new BoundVariableExpression(null, rngLocal);
+
+        // Resolve Start/End (System.Index) into addressable locals so the
+        // struct-receiver GetOffset call has an address to load.
+        var startIdxLocal = DeclareRangeTemp(
+            "startidx",
+            indexSym,
+            new BoundClrPropertyAccessExpression(null, RngRef(), startProp, indexSym),
+            statements);
+        var endIdxLocal = DeclareRangeTemp(
+            "endidx",
+            indexSym,
+            new BoundClrPropertyAccessExpression(null, RngRef(), endProp, indexSym),
+            statements);
+
+        var startExpr = new BoundImportedInstanceCallExpression(
+            null,
+            new BoundVariableExpression(null, startIdxLocal),
+            getOffset,
+            TypeSymbol.Int32,
+            ImmutableArray.Create<BoundExpression>(SrcLenRef()));
+        var startLocal = DeclareRangeTemp("start", TypeSymbol.Int32, startExpr, statements);
+
+        var endExpr = new BoundImportedInstanceCallExpression(
+            null,
+            new BoundVariableExpression(null, endIdxLocal),
+            getOffset,
+            TypeSymbol.Int32,
+            ImmutableArray.Create<BoundExpression>(SrcLenRef()));
+        var endLocal = DeclareRangeTemp("end", TypeSymbol.Int32, endExpr, statements);
+
+        var subtractOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32, TypeSymbol.Int32);
+        var lengthExpr = new BoundBinaryExpression(
+            null,
+            new BoundVariableExpression(null, endLocal),
+            subtractOp,
+            new BoundVariableExpression(null, startLocal));
+        var lenLocal = DeclareRangeTemp("len", TypeSymbol.Int32, lengthExpr, statements);
+
+        return (
+            new BoundVariableExpression(null, srcLocal),
+            new BoundVariableExpression(null, startLocal),
+            new BoundVariableExpression(null, lenLocal));
+    }
+
+    // Issue #1038: a `System.Range`-typed value used as an index argument
+    // (`a[r]`) slices the target. Uses ClrTypeUtilities.IsSameAs per the issue
+    // #835 guard against reference-identity typeof comparisons.
+    private static bool IsSystemRangeType(TypeSymbol type)
+    {
+        return type?.ClrType != null && type.ClrType.IsSameAs(typeof(System.Range));
     }
 
     private static bool TryFindRangeIndexer(Type clrType, out PropertyInfo indexer)
