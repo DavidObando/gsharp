@@ -403,6 +403,14 @@ public static class GSharpPrinter
             case NonNullAssertionExpression nonNull:
                 return $"{RenderExpression(nonNull.Operand, indent)}!!";
 
+            case IncrementDecrementExpression incDec:
+                return incDec.IsPrefix
+                    ? $"{incDec.Operator}{RenderExpression(incDec.Operand, indent)}"
+                    : $"{RenderExpression(incDec.Operand, indent)}{incDec.Operator}";
+
+            case StackAllocExpression stackAlloc:
+                return $"stackalloc {RenderType(stackAlloc.ElementType)}[{RenderExpression(stackAlloc.Count, indent)}]";
+
             case ParenthesizedExpression parenthesized:
                 return $"({RenderExpression(parenthesized.Inner, indent)})";
 
@@ -416,7 +424,7 @@ public static class GSharpPrinter
                 return RenderSwitchExpression(switchExpression, indent);
 
             case IfExpression ifExpression:
-                return $"if {RenderExpression(ifExpression.Condition, indent)} {{ {RenderExpression(ifExpression.ThenExpression, indent)} }} else {{ {RenderExpression(ifExpression.ElseExpression, indent)} }}";
+                return $"if {RenderExpression(ifExpression.Condition, indent)} {{ {RenderBranchValue(ifExpression.ThenExpression, indent)} }} else {{ {RenderBranchValue(ifExpression.ElseExpression, indent)} }}";
 
             case ThrowExpression throwExpression:
                 // G# has no throw-expression: lower to an if-expression whose
@@ -454,6 +462,20 @@ public static class GSharpPrinter
             default:
                 throw new ArgumentException($"Unsupported expression: {expression?.GetType().Name}");
         }
+    }
+
+    private static string RenderBranchValue(GExpression expression, int indent)
+    {
+        // A switch expression rendered bare as the tail of an `if`-expression
+        // branch block (`else { switch … }`) is re-parsed as a switch STATEMENT
+        // (whose arms use `{ … }` bodies, not `case …:`), so it is parenthesized
+        // to keep it in expression position. Other expressions are unaffected.
+        if (expression is SwitchExpression)
+        {
+            return $"({RenderExpression(expression, indent)})";
+        }
+
+        return RenderExpression(expression, indent);
     }
 
     private static string RenderCollectionInitializer(CollectionInitializerExpression collection, int indent)
@@ -674,6 +696,9 @@ public static class GSharpPrinter
             case IncrementDecrementStatement incDec:
                 return $"{pad}{RenderExpression(incDec.Target, indent)}{incDec.Operator}";
 
+            case FixedStatement fixedStatement:
+                return $"{pad}fixed {fixedStatement.Name} {RenderType(fixedStatement.PointerType)} = {RenderExpression(fixedStatement.Source, indent)} {RenderBlock(fixedStatement.Body, indent)}";
+
             case ForInStatement forIn:
                 var loopVars = string.IsNullOrEmpty(forIn.ValueName)
                     ? forIn.VariableName
@@ -823,12 +848,14 @@ public static class GSharpPrinter
 
     private static string RenderBlock(BlockStatement block, int indent)
     {
+        var prefix = block.IsUnsafe ? "unsafe " : string.Empty;
         if (block.Statements.Count == 0)
         {
-            return "{\n" + Indent(indent) + "}";
+            return prefix + "{\n" + Indent(indent) + "}";
         }
 
         var sb = new StringBuilder();
+        sb.Append(prefix);
         sb.Append('{');
         foreach (var statement in block.Statements)
         {
@@ -1005,6 +1032,13 @@ public static class GSharpPrinter
         var sb = new StringBuilder();
         sb.Append(RenderAttributeBlock(declaration.Attributes, indent));
         sb.Append(pad);
+        if (declaration.IsUnsafe)
+        {
+            // ADR-0122 / issue #1014: the `unsafe` contextual modifier precedes
+            // the accessibility keyword (`unsafe public class …`).
+            sb.Append("unsafe ");
+        }
+
         sb.Append(RenderVisibility(declaration.Visibility));
         if (declaration.IsOpen)
         {

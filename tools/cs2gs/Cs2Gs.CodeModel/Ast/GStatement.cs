@@ -22,13 +22,21 @@ public sealed class BlockStatement : GStatement
     /// Initializes a new instance of the <see cref="BlockStatement"/> class.
     /// </summary>
     /// <param name="statements">The contained statements.</param>
-    public BlockStatement(IReadOnlyList<GStatement> statements = null)
+    /// <param name="isUnsafe">Whether this block is an <c>unsafe { … }</c> block (ADR-0122 / issue #1014).</param>
+    public BlockStatement(IReadOnlyList<GStatement> statements = null, bool isUnsafe = false)
     {
         Statements = statements ?? new List<GStatement>();
+        IsUnsafe = isUnsafe;
     }
 
     /// <summary>Gets the contained statements.</summary>
     public IReadOnlyList<GStatement> Statements { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this block is an <c>unsafe { … }</c> block
+    /// introducing an unsafe context (ADR-0122 / issue #1014).
+    /// </summary>
+    public bool IsUnsafe { get; }
 }
 
 /// <summary>
@@ -600,4 +608,39 @@ public sealed class LocalFunctionStatement : GStatement
 
     /// <summary>Gets the function literal.</summary>
     public LambdaExpression Lambda { get; }
+}
+
+/// <summary>
+/// A G# <c>fixed name *ElemType = source { body }</c> statement (ADR-0122 /
+/// issue #1026). Pins a managed array/string and exposes a raw pointer for the
+/// duration of <see cref="Body"/>. Only legal inside an <c>unsafe</c> context.
+/// </summary>
+public sealed class FixedStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="FixedStatement"/> class.
+    /// </summary>
+    /// <param name="name">The pinned pointer variable name.</param>
+    /// <param name="pointerType">The pointer type clause (<c>*ElemType</c>).</param>
+    /// <param name="source">The managed source expression being pinned.</param>
+    /// <param name="body">The fixed-region body.</param>
+    public FixedStatement(string name, GTypeReference pointerType, GExpression source, BlockStatement body)
+    {
+        Name = name;
+        PointerType = pointerType;
+        Source = source;
+        Body = body;
+    }
+
+    /// <summary>Gets the pinned pointer variable name.</summary>
+    public string Name { get; }
+
+    /// <summary>Gets the pointer type clause.</summary>
+    public GTypeReference PointerType { get; }
+
+    /// <summary>Gets the managed source expression being pinned.</summary>
+    public GExpression Source { get; }
+
+    /// <summary>Gets the fixed-region body.</summary>
+    public BlockStatement Body { get; }
 }
