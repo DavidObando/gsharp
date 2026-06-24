@@ -2366,9 +2366,12 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            // Phase 4.2b / ADR-0020: dispatch through a type parameter's
-            // sealed-interface constraint, just as if the receiver were
-            // typed as the interface itself.
+            // Issue #1052 (was Phase 4.2b / ADR-0020 sealed-only): dispatch
+            // through a type parameter's user-declared interface constraint,
+            // just as if the receiver were typed as the interface itself. The
+            // constrained type parameter is threaded into the bound call so the
+            // emitter produces a verifiable `constrained. !!T  callvirt` sequence
+            // rather than a bare `callvirt` on the unboxed value.
             if (receiver != null && receiver.Type is TypeParameterSymbol tpRecv && tpRecv.InterfaceConstraint != null)
             {
                 var tpOverloads = TypeMemberModel.GetMethods(tpRecv.InterfaceConstraint, methodName, MemberQuery.Instance(MemberKinds.Method));
@@ -2380,7 +2383,7 @@ internal sealed partial class ExpressionBinder
                         return new BoundErrorExpression(null);
                     }
 
-                    return overloads.BindUserInstanceCall(receiver, tpIfaceMethod, arguments, ce, argumentNames);
+                    return overloads.BindUserInstanceCall(receiver, tpIfaceMethod, arguments, ce, argumentNames, constrainedReceiverTypeParameter: tpRecv);
                 }
             }
 

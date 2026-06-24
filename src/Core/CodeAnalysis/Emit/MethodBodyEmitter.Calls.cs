@@ -123,6 +123,37 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitUserInstanceCall(BoundUserInstanceCallExpression call)
     {
+        // Issue #1052: a call dispatched through a type parameter's
+        // user-declared interface constraint (e.g. `x.Area()` with
+        // `T : IShape`) emits a verifiable
+        // `constrained. !!T  callvirt IShape::Area()` — mirroring the imported
+        // CLR-interface path (issue #943). Without the `constrained.` prefix a
+        // bare `callvirt` on the unboxed type parameter corrupts the stack and
+        // crashes at runtime.
+        if (call.IsConstrainedTypeParameterCall)
+        {
+            this.EmitConstrainedTypeParameterReceiver(call.Receiver);
+            for (var i = 0; i < call.Arguments.Length; i++)
+            {
+                this.EmitExpression(call.Arguments[i]);
+            }
+
+            var constraintInterface = (call.ConstrainedInterfaceType as InterfaceSymbol)
+                ?? (call.Method.ReceiverType as InterfaceSymbol);
+            var openMethod = constraintInterface != null
+                ? ResolveOpenInterfaceMethod(constraintInterface, call.Method)
+                : call.Method;
+            var constrainedMethodToken = constraintInterface != null
+                ? this.outer.ResolveUserInterfaceInstanceMethodToken(constraintInterface, openMethod)
+                : this.outer.cache.MethodHandles[call.Method];
+
+            this.il.OpCode(ILOpCode.Constrained);
+            this.il.Token(this.outer.GetElementTypeToken(call.ConstrainedReceiverTypeParameter));
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(constrainedMethodToken);
+            return;
+        }
+
         // ADR-0087 §3 R3+R4: when the receiver is a constructed
         // generic user type, the method must be referenced via a
         // MemberRef parented at the constructed TypeSpec (e.g.

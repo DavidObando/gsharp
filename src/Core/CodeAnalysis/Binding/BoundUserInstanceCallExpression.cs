@@ -27,12 +27,26 @@ public sealed class BoundUserInstanceCallExpression : BoundExpression
     }
 
     public BoundUserInstanceCallExpression(SyntaxNode syntax, BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, TypeSymbol returnTypeOverride)
+        : this(syntax, receiver, method, arguments, returnTypeOverride, constrainedReceiverTypeParameter: null, constrainedInterfaceType: null)
+    {
+    }
+
+    public BoundUserInstanceCallExpression(
+        SyntaxNode syntax,
+        BoundExpression receiver,
+        FunctionSymbol method,
+        ImmutableArray<BoundExpression> arguments,
+        TypeSymbol returnTypeOverride,
+        TypeParameterSymbol constrainedReceiverTypeParameter,
+        TypeSymbol constrainedInterfaceType)
         : base(syntax)
     {
         Receiver = receiver;
         Method = method;
         Arguments = arguments;
         this.returnTypeOverride = returnTypeOverride;
+        ConstrainedReceiverTypeParameter = constrainedReceiverTypeParameter;
+        ConstrainedInterfaceType = constrainedInterfaceType;
     }
 
     public BoundExpression Receiver { get; }
@@ -40,6 +54,25 @@ public sealed class BoundUserInstanceCallExpression : BoundExpression
     public FunctionSymbol Method { get; }
 
     public ImmutableArray<BoundExpression> Arguments { get; }
+
+    /// <summary>
+    /// Gets the type parameter whose user-declared interface constraint backs
+    /// this call when it dispatches through a constraint (issue #1052), e.g.
+    /// <c>x.Area()</c> where <c>x : T</c> and <c>T : IShape</c>. The emitter then
+    /// produces a verifiable <c>constrained. !!T  callvirt IShape::Area()</c>
+    /// sequence instead of a bare <c>callvirt</c> on the unboxed type parameter.
+    /// Null for ordinary user-instance calls.
+    /// </summary>
+    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+
+    /// <summary>
+    /// Gets the user-declared interface (possibly a constructed generic
+    /// interface) that backs <see cref="ConstrainedReceiverTypeParameter"/>
+    /// (issue #1052). Null for ordinary user-instance calls.
+    /// </summary>
+    public TypeSymbol ConstrainedInterfaceType { get; }
+
+    public bool IsConstrainedTypeParameterCall => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type => returnTypeOverride ?? Method.Type;
 

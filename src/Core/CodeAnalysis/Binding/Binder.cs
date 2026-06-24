@@ -3257,7 +3257,39 @@ public sealed class Binder
     {
         if (tp.InterfaceConstraint != null)
         {
-            if (!ImplementsInterface(typeArgument, tp.InterfaceConstraint))
+            var expectedIface = tp.InterfaceConstraint;
+
+            // Issue #1052: a self-referential generic user-interface constraint
+            // `[T IFace[T]]` carries the constrained parameter as its own type
+            // argument. Substitute it with the actual type argument before the
+            // implementation check, so `[T ICmp[T]]` validates that the argument
+            // implements `ICmp[argument]` (mirrors the CLR path below).
+            if (!expectedIface.TypeArguments.IsDefaultOrEmpty
+                && expectedIface.Definition != null
+                && !ReferenceEquals(expectedIface.Definition, expectedIface))
+            {
+                var substArgs = ImmutableArray.CreateBuilder<TypeSymbol>(expectedIface.TypeArguments.Length);
+                var changed = false;
+                foreach (var arg in expectedIface.TypeArguments)
+                {
+                    if (ReferenceEquals(arg, tp))
+                    {
+                        substArgs.Add(typeArgument);
+                        changed = true;
+                    }
+                    else
+                    {
+                        substArgs.Add(arg);
+                    }
+                }
+
+                if (changed)
+                {
+                    expectedIface = InterfaceSymbol.Construct(expectedIface.Definition, substArgs.MoveToImmutable());
+                }
+            }
+
+            if (!ImplementsInterface(typeArgument, expectedIface))
             {
                 return false;
             }
@@ -3469,14 +3501,14 @@ public sealed class Binder
         {
             foreach (var implemented in s.Interfaces)
             {
-                if (implemented == iface)
+                if (implemented == iface || SameConstructedInterface(implemented, iface))
                 {
                     return true;
                 }
             }
         }
 
-        if (typeArgument is InterfaceSymbol i && i == iface)
+        if (typeArgument is InterfaceSymbol i && (i == iface || SameConstructedInterface(i, iface)))
         {
             return true;
         }
@@ -3487,6 +3519,55 @@ public sealed class Binder
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issue #1052: structural equality for two constructed generic
+    /// <see cref="InterfaceSymbol"/> instances — same generic definition and
+    /// element-wise equal type arguments. The constructed-interface cache
+    /// usually makes reference equality sufficient, but symbols produced via
+    /// independent construction paths (e.g. a struct's declared interface vs a
+    /// self-substituted constraint) can differ by identity while denoting the
+    /// same closed type.
+    /// </summary>
+    private static bool SameConstructedInterface(InterfaceSymbol a, InterfaceSymbol b)
+    {
+        if (a == null || b == null)
+        {
+            return false;
+        }
+
+        var defA = a.Definition ?? a;
+        var defB = b.Definition ?? b;
+        if (!ReferenceEquals(defA, defB))
+        {
+            return false;
+        }
+
+        if (a.TypeArguments.IsDefaultOrEmpty || b.TypeArguments.IsDefaultOrEmpty
+            || a.TypeArguments.Length != b.TypeArguments.Length)
+        {
+            return false;
+        }
+
+        for (var k = 0; k < a.TypeArguments.Length; k++)
+        {
+            var ta = a.TypeArguments[k];
+            var tb = b.TypeArguments[k];
+            if (ta == tb || ReferenceEquals(ta, tb))
+            {
+                continue;
+            }
+
+            if (ta is InterfaceSymbol ia && tb is InterfaceSymbol ib && SameConstructedInterface(ia, ib))
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>

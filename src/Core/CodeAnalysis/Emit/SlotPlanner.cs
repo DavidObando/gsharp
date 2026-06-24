@@ -870,7 +870,19 @@ internal sealed class SlotPlanner
 
         protected override void VisitUserInstanceCallExpression(BoundUserInstanceCallExpression node)
         {
-            this.AddIfNeeded(node.Receiver);
+            // Issue #1052: a constrained type-parameter call needs the receiver's
+            // address for the `constrained.` prefix. Variable receivers
+            // (parameters/locals/globals) are addressable directly; any other shape
+            // (an rvalue) must be spilled to a local so its address can be taken.
+            if (node.IsConstrainedTypeParameterCall && node.Receiver is not BoundVariableExpression)
+            {
+                this.sink.Add(node.Receiver);
+            }
+            else
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
             base.VisitUserInstanceCallExpression(node);
         }
 

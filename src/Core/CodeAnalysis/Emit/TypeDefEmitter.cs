@@ -1606,12 +1606,16 @@ internal sealed class TypeDefEmitter
                 attrs |= GenericParameterAttributes.DefaultConstructorConstraint;
             }
 
+            // Issue #943 / #1052: the bound may be an imported CLR interface
+            // or a user-declared G# interface (sealed or not). Either way a
+            // GenericParamConstraint metadata row is emitted (when present) so
+            // the produced assembly verifies and `constrained.` dispatch is sound.
             emitCtx.PendingGenericParameters.Add(new PendingGenericParameter(
                 Owner: owner,
                 Attributes: attrs,
                 Name: tp.Name,
                 Index: (ushort)i,
-                InterfaceConstraintType: tp.ClrInterfaceConstraint));
+                InterfaceConstraintType: tp.ConstraintInterfaceType));
         }
     }
 

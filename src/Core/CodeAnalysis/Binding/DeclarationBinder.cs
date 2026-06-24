@@ -4989,12 +4989,14 @@ internal sealed class DeclarationBinder
     /// <c>any</c> / <c>comparable</c>) as an interface bound and records it on
     /// <paramref name="symbol"/>.
     /// <para>
-    /// Phase 4.2b / ADR-0020 accepts a G#-declared sealed interface. ADR-0089
-    /// accepts a constructed generic G# interface carrying static-virtual
-    /// members (e.g. <c>[T IAdd[T]]</c>). Issue #943 generalises this to any
-    /// imported CLR interface — generic or not — so the canonical C#
-    /// <c>where T : IComparable&lt;T&gt;</c> shape (<c>[T IComparable[T]]</c>)
-    /// binds, dispatches instance members, and emits verifiable IL. The
+    /// Phase 4.2b / ADR-0020 originally accepted only a G#-declared sealed
+    /// interface. ADR-0089 added constructed generic G# interfaces carrying
+    /// static-virtual members (e.g. <c>[T IAdd[T]]</c>). Issue #943 generalised
+    /// this to any imported CLR interface — generic or not. Issue #1052 removes
+    /// the last restriction: ANY user-declared interface (sealed or not, generic
+    /// or not, including the self-referential <c>[T IFace[T]]</c> shape) is a
+    /// legal constraint, so the canonical C# <c>where T : IComparable&lt;T&gt;</c>
+    /// shape binds, dispatches instance members, and emits verifiable IL. The
     /// constraint type clause is bound through the regular type binder, so a
     /// self-referential type argument (the type parameter appearing in its own
     /// constraint) resolves against the in-flight scope published by
@@ -5025,12 +5027,13 @@ internal sealed class DeclarationBinder
 
         if (resolved is InterfaceSymbol iface)
         {
-            var definition = iface.Definition ?? iface;
-            if (!definition.IsSealed && !definition.HasStaticVirtualMembers)
-            {
-                Diagnostics.ReportInterfaceConstraintNotSealed(p.Constraint.Location, definition.Name);
-            }
-
+            // Issue #1052: ANY user-declared interface — sealed or not, generic
+            // or not, including the self-referential `[T IFace[T]]` shape — is a
+            // legal constraint, matching imported CLR interfaces and C#'s
+            // `where T : IFoo`. The former `sealed`-only gate (Phase 4.2b /
+            // ADR-0020) was a stale restriction; instance members still bind on
+            // `T` via the constraint and a GenericParamConstraint metadata row is
+            // emitted pointing at the interface TypeDef so the IL verifies.
             symbol.InterfaceConstraint = iface;
             return;
         }
@@ -5046,7 +5049,7 @@ internal sealed class DeclarationBinder
 
         // Resolved to something that is not an interface (a class, struct, …) —
         // not a legal constraint.
-        Diagnostics.ReportInterfaceConstraintNotSealed(p.Constraint.Location, resolved.Name);
+        Diagnostics.ReportConstraintNotInterface(p.Constraint.Location, resolved.Name);
     }
 
     private static bool SignaturesMatch(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType)

@@ -187,18 +187,41 @@ AreaOf[NotAShape](NotAShape{})
     }
 
     [Fact]
-    public void GenericConstraint_OnNonSealedInterface_Diagnoses()
+    public void GenericConstraint_OnNonSealedInterface_IsAllowed()
     {
+        // Issue #1052: a non-sealed user-declared interface is now a legal
+        // generic constraint (matching imported CLR interfaces and C#'s
+        // `where T : IFoo`). Instance members of the constraint bind on `T`.
         var source = @"
 interface IShape {
     func Area() int32;
 }
 
+class Square : IShape {
+    func Area() int32 { return 9 }
+}
+
 func AreaOf[T IShape](x T) int32 { return x.Area() }
+AreaOf(Square{})
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(9, result.Value);
+    }
+
+    [Fact]
+    public void GenericConstraint_NonInterfaceType_Diagnoses()
+    {
+        // Issue #1052: only interfaces may be constraints. A class/struct used
+        // as a constraint is still rejected with GS0153 (repurposed message).
+        var source = @"
+class Base {}
+
+func F[T Base](x T) int32 { return 0 }
 ";
         var result = Evaluate(source);
         Assert.NotEmpty(result.Diagnostics);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("sealed"));
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0153");
     }
 
     private static EvaluationResult Evaluate(string source)
