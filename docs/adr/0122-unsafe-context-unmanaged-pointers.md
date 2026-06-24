@@ -104,6 +104,9 @@ native-int (`nint`) arithmetic and reinterpret conversions, so **no new
 - **indexing** `p[i]` read/write → `*(p + i)`;
 - **arithmetic** `p + i` / `p - i` → `*T((nint)p ± (nint)i * sizeof(T))`
   (scaled by the static pointee size);
+- **difference** `p - q` (both the same `*T`) → `((nint)p - (nint)q) / sizeof(T)`
+  as `nint`, the scaled element count (issue #1032; mismatched `*T - *U`
+  remains an error);
 - **comparison / equality** `==` `!=` `<` `<=` `>` `>=` → compare as `nint`;
 - **null** `nil` → a null pointer (`ldc.i4.0; conv.i`).
 
@@ -148,7 +151,6 @@ verification regressions without weakening ilverify globally.
 
 ## Deferrals (follow-up issues, all reference #1014)
 
-- **Pointer difference** `p - q` (currently GS0129).
 - **True `void*`** distinct from `*uint8`.
 - **Pointers to user structs / non-blittable pointees** (currently GS0398).
 - **Function pointers** (`delegate*`-equivalent) and **fixed-size buffers**.
