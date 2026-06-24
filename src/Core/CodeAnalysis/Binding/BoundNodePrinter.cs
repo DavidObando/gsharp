@@ -96,6 +96,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ScopeStatement:
                 WriteScopeStatement((BoundScopeStatement)node, writer);
                 break;
+            case BoundNodeKind.FixedStatement:
+                WriteFixedStatement((BoundFixedStatement)node, writer);
+                break;
             case BoundNodeKind.AwaitForRangeStatement:
                 WriteAwaitForRangeStatement((BoundAwaitForRangeStatement)node, writer);
                 break;
@@ -915,6 +918,21 @@ public static class BoundNodePrinter
     private static void WriteScopeStatement(BoundScopeStatement node, IndentedTextWriter writer)
     {
         writer.WriteKeyword(SyntaxKind.ScopeKeyword);
+        writer.WriteSpace();
+        node.Body.WriteTo(writer);
+    }
+
+    private static void WriteFixedStatement(BoundFixedStatement node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier("fixed");
+        writer.WriteSpace();
+        writer.WriteIdentifier(node.PointerVariable.Name);
+        writer.WriteSpace();
+        writer.WriteIdentifier(node.PointerVariable.Type.Name);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.EqualsToken);
+        writer.WriteSpace();
+        node.PinnedSource.WriteTo(writer);
         writer.WriteSpace();
         node.Body.WriteTo(writer);
     }

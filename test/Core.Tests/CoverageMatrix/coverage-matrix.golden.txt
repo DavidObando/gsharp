@@ -92,6 +92,7 @@ FieldDeclaration
 FieldInitializer
 FinallyClause
 FinallyKeyword
+FixedStatement
 ForClauseStatement
 ForConditionStatement
 ForEllipsisStatement
@@ -302,6 +303,7 @@ EventSubscriptionExpression
 ExpressionStatement
 FieldAccessExpression
 FieldAssignmentExpression
+FixedStatement
 ForEllipsisStatement
 ForInfiniteStatement
 ForRangeStatement

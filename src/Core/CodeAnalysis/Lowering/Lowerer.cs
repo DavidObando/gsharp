@@ -1352,6 +1352,20 @@ public sealed class Lowerer : BoundTreeRewriter
                 var flatScopeBody = Flatten(scope.Body);
                 builder.Add(new BoundScopeStatement(null, flatScopeBody));
             }
+            else if (current is BoundFixedStatement fixedStmt)
+            {
+                // ADR-0125 / issue #1026: flatten the fixed body so the emitter
+                // sees a flat statement list (lowered gotos/conditionals) inside
+                // the pinned region; the pin prologue/epilogue wrap it at emit.
+                var flatFixedBody = Flatten(fixedStmt.Body);
+                builder.Add(new BoundFixedStatement(
+                    fixedStmt.Syntax,
+                    fixedStmt.PinKind,
+                    fixedStmt.PinnedVariable,
+                    fixedStmt.PointerVariable,
+                    fixedStmt.PinnedSource,
+                    flatFixedBody));
+            }
             else if (current is BoundPatternSwitchStatement ps)
             {
                 var flatArms = ImmutableArray.CreateBuilder<BoundPatternSwitchArm>(ps.Arms.Length);

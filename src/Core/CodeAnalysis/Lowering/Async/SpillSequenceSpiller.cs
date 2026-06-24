@@ -106,6 +106,26 @@ public static class SpillSequenceSpiller
                     builder.Add(rewritten);
                     return rewritten != nested;
 
+                case BoundFixedStatement fixedStmt:
+                    // ADR-0125 / issue #1026: rewrite the pinned body (its
+                    // statements may carry await-spillable expressions) and
+                    // rebuild the fixed statement; the pin prologue/epilogue are
+                    // re-emitted around the rewritten body at emit time.
+                    var fixedBody = fixedStmt.Body is BoundBlockStatement fixedBlock
+                        ? RewriteBlock(fixedBlock)
+                        : fixedStmt.Body;
+                    var rebuilt = fixedBody == fixedStmt.Body
+                        ? fixedStmt
+                        : new BoundFixedStatement(
+                            fixedStmt.Syntax,
+                            fixedStmt.PinKind,
+                            fixedStmt.PinnedVariable,
+                            fixedStmt.PointerVariable,
+                            fixedStmt.PinnedSource,
+                            fixedBody);
+                    builder.Add(rebuilt);
+                    return rebuilt != fixedStmt;
+
                 // Statements that are await-free leaves at this point in the pipeline.
                 // Each is either structurally unable to contain a BoundExpression child,
                 // or its expressions have been pre-spilled / lowered away by an earlier pass

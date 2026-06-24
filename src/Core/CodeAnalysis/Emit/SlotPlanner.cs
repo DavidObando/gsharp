@@ -337,6 +337,28 @@ internal sealed class SlotPlanner
             }
         }
 
+        // ADR-0125 / issue #1026: allocate IL slots for a `fixed` statement's
+        // synthetic pinned local and its user-visible `*T` pointer local. The
+        // pinned local's slot type is a PinnedTypeSymbol so the local-signature
+        // encoder sets the `pinned` flag. Order matters only for readability;
+        // both are referenced by slot index from EmitFixedStatement.
+        protected override void VisitFixedStatement(BoundFixedStatement node)
+        {
+            if (!this.locals.ContainsKey(node.PinnedVariable))
+            {
+                this.locals[node.PinnedVariable] = this.localTypes.Count;
+                this.localTypes.Add(node.PinnedVariable.Type);
+            }
+
+            if (!this.locals.ContainsKey(node.PointerVariable))
+            {
+                this.locals[node.PointerVariable] = this.localTypes.Count;
+                this.localTypes.Add(node.PointerVariable.Type);
+            }
+
+            base.VisitFixedStatement(node);
+        }
+
         protected override void VisitSelectStatement(BoundSelectStatement node)
         {
             AllocateSelectSlots(node, this.locals, this.localTypes, this.selectStatementSlots);

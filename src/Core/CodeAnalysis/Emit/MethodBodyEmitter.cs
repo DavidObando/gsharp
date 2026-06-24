@@ -284,6 +284,9 @@ internal sealed partial class MethodBodyEmitter
             case BoundScopeStatement scope:
                 this.EmitScopeStatement(scope);
                 break;
+            case BoundFixedStatement fixedStmt:
+                this.EmitFixedStatement(fixedStmt);
+                break;
             case BoundChannelSendStatement cs:
                 this.EmitChannelSendStatement(cs);
                 break;
@@ -684,6 +687,9 @@ internal sealed partial class MethodBodyEmitter
                 return;
             case BoundScopeStatement sc:
                 this.CollectLabels(sc.Body, sink);
+                return;
+            case BoundFixedStatement fx:
+                this.CollectLabels(fx.Body, sink);
                 return;
             case BoundExpressionStatement es:
                 this.CollectLabelsInExpression(es.Expression, sink);

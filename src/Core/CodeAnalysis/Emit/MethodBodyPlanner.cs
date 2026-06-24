@@ -1048,6 +1048,9 @@ internal sealed class MethodBodyPlanner
                     case BoundScopeStatement sc when sc.Body is BoundBlockStatement scBlock:
                         this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         break;
+                    case BoundFixedStatement fx when fx.Body is BoundBlockStatement fxBlock:
+                        this.CollectStatements(fxBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        break;
                     case BoundSelectStatement sel:
                         foreach (var arm in sel.Cases)
                         {
@@ -1112,6 +1115,9 @@ internal sealed class MethodBodyPlanner
                         break;
                     case BoundScopeStatement sc when sc.Body is BoundBlockStatement scBlock:
                         this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        break;
+                    case BoundFixedStatement fx when fx.Body is BoundBlockStatement fxBlock:
+                        this.CollectStatements(fxBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         break;
                     case BoundSelectStatement sel:
                         foreach (var arm in sel.Cases)

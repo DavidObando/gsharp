@@ -247,6 +247,7 @@ public enum SyntaxKind
     SelectStatement,
     SelectCase,
     ScopeStatement,
+    FixedStatement,
     AwaitForRangeStatement,
     AwaitUsingStatement,
     EventSubscriptionExpression,
