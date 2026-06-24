@@ -486,6 +486,30 @@ internal sealed partial class ExpressionBinder
             return new BoundClrPropertyAssignmentExpression(null, instReceiver, instanceMember, instConverted, instTargetSymbol);
         }
 
+        // Issue #1068: an interface-typed variable receiver (`d.W = v` where
+        // d : IDerived) writes the interface property setter (walking base
+        // interfaces). Mirrors the read path and the expression-receiver write
+        // path; the emitter dispatches via `callvirt set_W`.
+        if (variable.Type is InterfaceSymbol ifaceVarType)
+        {
+            if (TypeMemberModel.TryGetProperty(ifaceVarType, syntax.FieldIdentifier.Text, out var ifaceProp, out _))
+            {
+                if (!ifaceProp.HasSetter)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+                    return new BoundErrorExpression(null);
+                }
+
+                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, value, ifaceProp.Type);
+                var ifaceReceiver = implicitFieldReceiverExpr ?? new BoundVariableExpression(null, variable);
+                EnforceInitOnlyAssignment(ifaceProp, ifaceReceiver, syntax.EqualsToken.Location);
+                return new BoundPropertyAssignmentExpression(null, ifaceReceiver, null, ifaceProp, ifaceConverted);
+            }
+
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
+            return new BoundErrorExpression(null);
+        }
+
         if (!(variable.Type is StructSymbol structSymbol))
         {
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
@@ -1215,6 +1239,29 @@ internal sealed partial class ExpressionBinder
                     var inhConverted = conversions.BindConversion(syntax.Value.Location, value, inhTargetSymbol);
                     return new BoundClrPropertyAssignmentExpression(null, receiver, clrMember, inhConverted, inhTargetSymbol);
                 }
+            }
+
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
+            return new BoundErrorExpression(null);
+        }
+
+        // Issue #1068: write a property declared on the static interface type
+        // (or any base interface) through an interface-typed receiver. Mirrors
+        // the property read path in ExpressionBinder.Access.cs so `b.H = v`
+        // (b : IBase) dispatches via a verifiable `callvirt set_H`.
+        if (receiverType is InterfaceSymbol ifaceSym)
+        {
+            if (TypeMemberModel.TryGetProperty(ifaceSym, fieldName, out var ifaceProp, out _))
+            {
+                if (!ifaceProp.HasSetter)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                    return new BoundErrorExpression(null);
+                }
+
+                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, value, ifaceProp.Type);
+                EnforceInitOnlyAssignment(ifaceProp, receiver, syntax.EqualsToken.Location);
+                return new BoundPropertyAssignmentExpression(null, receiver, null, ifaceProp, ifaceConverted);
             }
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
