@@ -154,11 +154,50 @@ public static class CSharpProjectLoader
         var documents = new List<LoadedDocument>();
         foreach (SyntaxTree tree in compilation.SyntaxTrees)
         {
+            // OD-T4: build-generated sources (Nerdbank.GitVersioning `ThisAssembly`,
+            // `*.AssemblyInfo.cs`, global usings, etc.) reference attributes the G#
+            // compiler cannot resolve (GS0198) and are not part of the app's hand-
+            // written source. Skip them for translation/emit; they stay in the C#
+            // compilation so semantic binding of the real sources is unaffected.
+            if (IsGeneratedSource(tree.FilePath))
+            {
+                continue;
+            }
+
             SemanticModel model = compilation.GetSemanticModel(tree, ignoreAccessibility: false);
             documents.Add(new LoadedDocument(tree.FilePath, tree, model));
         }
 
         return documents;
+    }
+
+    /// <summary>
+    /// Determines whether a C# file is a build-generated artifact that should not
+    /// be translated: anything under an <c>obj/</c> or <c>bin/</c> directory, or a
+    /// recognized generated file name (assembly-info, global usings, version, or
+    /// any <c>*.g.cs</c> / <c>*.g.i.cs</c> source generator output).
+    /// </summary>
+    private static bool IsGeneratedSource(string filePath)
+    {
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return false;
+        }
+
+        string normalized = filePath.Replace('\\', '/');
+        if (normalized.Contains("/obj/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        string name = Path.GetFileName(normalized);
+        return name.EndsWith(".AssemblyInfo.cs", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(".AssemblyAttributes.cs", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(".GlobalUsings.g.cs", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(".Version.cs", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(".g.i.cs", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyList<Diagnostic> SignificantDiagnostics(CSharpCompilation compilation) =>
