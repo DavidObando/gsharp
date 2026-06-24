@@ -474,18 +474,24 @@ internal sealed class DeclarationBinder
 
         // Phase 4.3 / ADR-0020: bind the optional type-parameter list FIRST so
         // field/parameter types in the body can reference T, U, etc.
+        // Issue #1056: construct and register the struct/class shell BETWEEN
+        // creating the bare type parameters and resolving their constraints, so a
+        // self-referential base-class constraint (CRTP `class Box[T Box[T]]` /
+        // `class Box[T Box]`) can resolve the type's own name and arity.
         var previousTypeParameters = binderCtx.CurrentTypeParameters;
+        StructSymbol structSymbol = null;
         ImmutableArray<TypeParameterSymbol> typeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
         try
         {
             if (syntax.TypeParameterList != null)
             {
                 binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
-                typeParameters = BindTypeParameterList(syntax.TypeParameterList);
-                foreach (var tp in typeParameters)
-                {
-                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
-                }
+                typeParameters = BindTypeParameterList(
+                    syntax.TypeParameterList,
+                    bareSymbols =>
+                    {
+                        structSymbol = CreateAndRegisterStructShell(syntax, package, accessibility, name, bareSymbols);
+                    });
             }
         }
         finally
@@ -493,6 +499,27 @@ internal sealed class DeclarationBinder
             binderCtx.CurrentTypeParameters = previousTypeParameters;
         }
 
+        // Non-generic types (or the defensive fallback when the callback did not
+        // run) construct and register the shell here.
+        structSymbol ??= CreateAndRegisterStructShell(syntax, package, accessibility, name, typeParameters);
+
+        return structSymbol;
+    }
+
+    /// <summary>
+    /// Issue #1056: constructs a struct/class type-name shell with the supplied
+    /// type parameters and registers it in scope. Factored out of
+    /// <see cref="DeclareStructShell"/> so the registration can run between
+    /// type-parameter creation and constraint resolution (enabling a
+    /// self-referential base-class constraint to resolve the declaring type).
+    /// </summary>
+    private StructSymbol CreateAndRegisterStructShell(
+        StructDeclarationSyntax syntax,
+        PackageSymbol package,
+        Accessibility accessibility,
+        string name,
+        ImmutableArray<TypeParameterSymbol> typeParameters)
+    {
         // Issue #949 / #973: construct the struct symbol shell now and register
         // it in scope so that (a) the type may reference itself as a generic
         // type argument in its own base/interface clause, and (b) any other
@@ -4877,9 +4904,28 @@ internal sealed class DeclarationBinder
     }
 
     private ImmutableArray<TypeParameterSymbol> BindTypeParameterList(TypeParameterListSyntax syntax)
+        => BindTypeParameterList(syntax, onBareSymbolsPublished: null);
+
+    /// <summary>
+    /// Binds a type-parameter list. The optional
+    /// <paramref name="onBareSymbolsPublished"/> callback runs after the bare
+    /// type-parameter symbols are created and published into the constraint
+    /// scope but BEFORE any constraint clause is resolved. Issue #1056 uses this
+    /// to register the declaring type's name shell (with its type parameters
+    /// already attached) so a self-referential base-class constraint such as the
+    /// CRTP-style <c>class Box[T Box[T]]</c> / <c>class Box[T Box]</c> resolves
+    /// the type's own name while its constraints are being bound.
+    /// </summary>
+    /// <param name="syntax">The type-parameter list syntax.</param>
+    /// <param name="onBareSymbolsPublished">Optional callback invoked with the bare type-parameter symbols between pass 1 (symbol creation) and pass 2 (constraint resolution).</param>
+    /// <returns>The bound type-parameter symbols.</returns>
+    private ImmutableArray<TypeParameterSymbol> BindTypeParameterList(
+        TypeParameterListSyntax syntax,
+        Action<ImmutableArray<TypeParameterSymbol>> onBareSymbolsPublished)
     {
         if (syntax == null)
         {
+            onBareSymbolsPublished?.Invoke(ImmutableArray<TypeParameterSymbol>.Empty);
             return ImmutableArray<TypeParameterSymbol>.Empty;
         }
 
@@ -4922,6 +4968,12 @@ internal sealed class DeclarationBinder
         {
             constraintScope[s.Name] = s;
         }
+
+        // Issue #1056: let the caller register the declaring type's name shell
+        // (with these bare type parameters attached) before constraints resolve,
+        // so a self-referential base-class constraint resolves the type's own
+        // name and arity.
+        onBareSymbolsPublished?.Invoke(ImmutableArray.Create(symbols));
 
         binderCtx.CurrentTypeParameters = constraintScope;
         try
@@ -5002,7 +5054,7 @@ internal sealed class DeclarationBinder
     /// constraint type clause is bound through the regular type binder, so a
     /// self-referential type argument (the type parameter appearing in its own
     /// constraint) resolves against the in-flight scope published by
-    /// <see cref="BindTypeParameterList"/>.
+    /// <see cref="BindTypeParameterList(TypeParameterListSyntax)"/>.
     /// </para>
     /// </summary>
     /// <param name="p">The type-parameter syntax carrying the constraint.</param>
@@ -5049,8 +5101,29 @@ internal sealed class DeclarationBinder
             return;
         }
 
-        // Resolved to something that is not an interface (a class, struct, …) —
-        // not a legal constraint.
+        // Issue #1056: a base-class (non-interface) constraint, mirroring C#'s
+        // `where T : BaseClass`. The single legacy constraint slot structurally
+        // enforces C#'s at-most-one-class rule. Accept a user-declared class
+        // (a `StructSymbol` with `IsClass`, open or sealed, generic or not —
+        // including the self-referential `[T Box]` / `[T Box[T]]` shapes) and an
+        // imported reference-type class. Instance members declared on the base
+        // class bind on values of `T` and a GenericParamConstraint metadata row
+        // is emitted pointing at the class so the IL verifies. A value type
+        // (struct/enum) is still rejected (C# forbids `where T : SomeStruct`).
+        if (resolved is StructSymbol { IsClass: true })
+        {
+            symbol.ClassConstraint = resolved;
+            return;
+        }
+
+        if (resolved.ClrType is { IsClass: true, IsValueType: false })
+        {
+            symbol.ClassConstraint = resolved;
+            return;
+        }
+
+        // Resolved to something that is not a legal constraint (a struct, enum,
+        // or other value type).
         Diagnostics.ReportConstraintNotInterface(p.Constraint.Location, resolved.Name);
     }
 

@@ -721,12 +721,12 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0152", $"Type argument '{typeArgument}' for type parameter '{typeParameterName}' does not satisfy the '{constraintDescription}' constraint.");
     }
 
-    /// <summary>Reports a type used as a type-parameter constraint that is not an interface (issue #1052 generalises the former sealed-interface restriction).</summary>
+    /// <summary>Reports a type used as a type-parameter constraint that is neither an interface nor a class (issue #1052 generalised the former sealed-interface restriction; issue #1056 additionally permits base-class constraints, so this now fires only for value types such as a struct or enum).</summary>
     /// <param name="location">The text location of the constraint reference.</param>
     /// <param name="typeName">The offending type name.</param>
     public void ReportConstraintNotInterface(TextLocation location, string typeName)
     {
-        Report(location, "GS0153", $"Type '{typeName}' cannot be used as a type-parameter constraint because it is not an interface.");
+        Report(location, "GS0153", $"Type '{typeName}' cannot be used as a type-parameter constraint because it is neither an interface nor a class.");
     }
 
     /// <summary>
