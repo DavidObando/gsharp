@@ -117,6 +117,14 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
+        // Issue #1018: the bottom (`never`) type of a throw-expression is
+        // implicitly convertible to ANY target type — a throw never yields a
+        // value, so it satisfies any target without a runtime conversion.
+        if (from == TypeSymbol.Never)
+        {
+            return Conversion.Implicit;
+        }
+
         // Issue #813: a G# `TupleTypeSymbol` and an imported CLR
         // `System.ValueTuple<…>` instantiation denote the same type when
         // their closed CLR backings agree. The former is produced by tuple

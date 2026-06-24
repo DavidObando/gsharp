@@ -629,6 +629,8 @@ The binary null-coalescing operator `a ?? b` evaluates `a`; if it is non-nil the
 
 `??` is **right-associative** and sits at a precedence below `||` (logical or) and above the ternary conditional, so `a ?? b ?? c` parses as `a ?? (b ?? c)` and `a ?? b ? c : d` parses as `(a ?? b) ? c : d`. The compound form `a ??= b` (ADR-0072) is the assignment analogue. (G# previously spelled this operator `?:`; that spelling was removed in favor of `??` — see ADR-0116.)
 
+The right operand may be a [throw-expression](#throw-expressions-issue-1018) — `a ?? throw e` (Issue #1018) — in which case the result type is `a`'s underlying type and the `throw` runs only when `a` reads as nil.
+
 ### Type-test and safe-cast operators
 
 `expr is T` evaluates to `bool` — `true` when the runtime type of `expr` is assignable to `T`, `false` otherwise (including when `expr` is `nil`). `expr as T` performs a safe downcast: it returns the value typed as `T` when the cast succeeds, or `nil` when it fails. For reference types the result type is `T`; for value types, the target must be written as the nullable form `T?` (e.g. `x as int32?`) and the result type is `T?`. Using `as` with a non-nullable value type target produces diagnostic `GS0269`. Both operators use the CLR `isinst` instruction and sit at precedence level 4 (same as equality and comparison), so `x is String == true` and `a is T && b is U` parse as expected without extra parentheses. The existing pattern-level `identifier is Type` syntax inside `switch`/`case` arms is unaffected.
@@ -769,7 +771,7 @@ BlockExpression = "{" Statement* ( Expression )? "}" .
 - `else if` chains nest right-associatively: `if c1 { a } else if c2 { b } else { c }` parses as `if c1 { a } else { if c2 { b } else { c } }`.
 - The result type is the common type of all branch tails, chosen by the same `ComputeConditionalCommonType` helper that ADR-0062 uses for the ternary (identity, one-way implicit conversion, numeric widening tie-break, nil/null compatibility). Branch tails are implicitly converted to that result type. Mismatched branch types report `GS0263` (shared with the ternary).
 - Only one arm is evaluated at runtime; the other arms are not executed. Lowers to the same `BoundConditionalExpression` that the ternary uses, so no new IL emit paths are involved.
-- `throw` is a statement in G# (the switch expression does not accept `throw` as an arm value either). To exit on the error path of an if-expression, place a `throw` statement in the prefix of the block and supply a tail expression of the chosen result type; the tail is unreachable at runtime but satisfies the binder's typing requirement. This matches the switch-expression treatment.
+- A throw-expression (`throw e`, Issue #1018) may be used as a ternary branch (`cond ? a : throw e`) or `??` right operand; its bottom (`never`) type takes the sibling operand's type. Inside an *if-expression* or *switch-expression* tail, the trailing position is a block-value/arm context: to exit on the error path you can still place a `throw` **statement** in the block prefix and supply a tail expression of the chosen result type (unreachable at runtime but satisfying the binder), which matches the switch-expression treatment.
 
 ```gsharp
 let label = if x > 0 { "positive" } else if x < 0 { "negative" } else { "zero" }
@@ -1029,6 +1031,37 @@ TryStmt       = "try" Block CatchClause* FinallyClause? .
 CatchClause   = "catch" "(" identifier TypeClause? ")" Block .
 FinallyClause = "finally" Block .
 ThrowStmt     = "throw" Expression .
+```
+
+#### Throw expressions (Issue #1018)
+
+`throw` is also usable as an **expression** (a *throw-expression*), mirroring C#.
+A throw-expression `throw e` has the bottom (`never`) type, which is implicitly
+convertible to **any** target type, and it never produces a value — it always
+transfers control by raising `e`. It is accepted in the common expression
+positions:
+
+- the right-hand side of `??` — `s ?? throw Exception("null")`;
+- a branch of the conditional operator — `cond ? a : throw Exception("nope")`;
+- a returned operand — `return throw Exception(...)`;
+- an arrow/lambda body — `(v string?) -> v ?? throw Exception("null")`;
+- an argument — `f(s ?? throw Exception(...))`.
+
+The surrounding `??` / conditional takes the **sibling** operand's type
+(`s ?? throw e` has the type of `s`'s underlying type; `cond ? a : throw e` has
+the type of `a`). The thrown operand must be a `System.Exception` (or derived),
+exactly as for the throw statement; otherwise `GS0155` ("cannot convert … to
+System.Exception") is reported. The emitter lowers a throw-expression to the
+operand followed by CIL `throw`; because that never returns, the code after it
+(the `??` / conditional merge point reached only from the other branch) is
+unreachable and the emitted IL is verifiable.
+
+A bare `throw e` at statement start is still the throw **statement** — the
+statement parser intercepts it before expression parsing — so existing code is
+unaffected.
+
+```ebnf
+ThrowExpr     = "throw" Expression .
 ```
 
 ### Await and async iteration
@@ -1390,6 +1423,7 @@ PrimaryExpression ::= Literal | identifier
                     | SwitchExpr | IfExpression
                     | '(' Expression ')' | TupleLiteral
                     | MakeChannel | TypeOf | NameOf | DefaultExpression | BaseInterfaceCall
+                    | ThrowExpr                                          (* throw-expression, issue #1018 *)
 Literal           ::= Number | String | InterpolatedString | 'true' | 'false' | 'nil' | char
 InterpolatedString ::= '"' ( InterpolationText | '$$' | '$' identifier | InterpolationHole )* '"'
 InterpolationHole ::= '${' Expression ( ',' SignedInteger )? ( ':' FormatText )? '}'

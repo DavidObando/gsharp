@@ -201,6 +201,66 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     /// <param name="syntax">The conditional expression syntax.</param>
     /// <returns>The bound conditional expression, or a <see cref="BoundErrorExpression"/> on failure.</returns>
+    /// <summary>
+    /// Issue #1018: binds a throw-expression `throw expr` in value position to a
+    /// <see cref="BoundThrowExpression"/> whose static type is the bottom
+    /// (<see cref="TypeSymbol.Never"/>) type. The thrown operand is validated to
+    /// be a <c>System.Exception</c> (or derived), mirroring the throw-statement's
+    /// existing rule (<see cref="StatementBinder"/>).
+    /// </summary>
+    private BoundExpression BindThrowExpression(ThrowExpressionSyntax syntax)
+    {
+        var expression = BindExpression(syntax.Expression);
+        if (expression is BoundErrorExpression)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var exceptionType = ResolveExceptionType();
+        if (exceptionType != null && expression.Type != TypeSymbol.Error)
+        {
+            var argClr = expression.Type?.ClrType;
+
+            // Issue #319: a GSharp class that inherits an imported CLR Exception
+            // type has no concrete ClrType until emit time; walk its
+            // ImportedBaseType transitively to determine assignability.
+            if (argClr == null && expression.Type is StructSymbol throwStruct)
+            {
+                for (var t = throwStruct; t != null; t = t.BaseClass)
+                {
+                    if (t.ImportedBaseType?.ClrType is System.Type clrBase)
+                    {
+                        argClr = clrBase;
+                        break;
+                    }
+                }
+            }
+
+            if (argClr == null || !ClrTypeUtilities.IsAssignableByName(exceptionType.ClrType, argClr))
+            {
+                Diagnostics.ReportCannotConvert(syntax.Expression.Location, expression.Type ?? TypeSymbol.Error, exceptionType);
+                return new BoundErrorExpression(null);
+            }
+        }
+
+        return new BoundThrowExpression(null, expression);
+    }
+
+    /// <summary>
+    /// Issue #1018: resolves the <c>System.Exception</c> type symbol used to
+    /// validate the operand of a throw-expression. Mirrors
+    /// <see cref="StatementBinder.ResolveExceptionType"/>.
+    /// </summary>
+    private TypeSymbol ResolveExceptionType()
+    {
+        if (scope.References.TryResolveType("System.Exception", out var t))
+        {
+            return TypeSymbol.FromClrType(t);
+        }
+
+        return null;
+    }
+
     private BoundExpression BindConditionalExpression(ConditionalExpressionSyntax syntax)
     {
         var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
@@ -461,6 +521,20 @@ internal sealed partial class ExpressionBinder
             return TypeSymbol.Error;
         }
 
+        // Issue #1018: a throw-expression branch has the bottom (`never`) type,
+        // which is convertible to any type. The conditional's result type is the
+        // sibling branch's type. When BOTH branches throw, the result is `never`
+        // too (e.g. `cond ? throw a : throw b`).
+        if (left == TypeSymbol.Never)
+        {
+            return right;
+        }
+
+        if (right == TypeSymbol.Never)
+        {
+            return left;
+        }
+
         // Identity.
         if (ReferenceEquals(left, right))
         {
@@ -570,6 +644,14 @@ internal sealed partial class ExpressionBinder
     private BoundExpression ConvertConditionalBranch(TextLocation location, BoundExpression branch, TypeSymbol target)
     {
         if (target == TypeSymbol.Error || branch.Type == TypeSymbol.Error)
+        {
+            return branch;
+        }
+
+        // Issue #1018: a throw-expression branch (bottom `never` type) is left
+        // as-is — it produces no value to convert, and the emitter leaves the
+        // merge point unreachable from this branch.
+        if (branch.Type == TypeSymbol.Never)
         {
             return branch;
         }

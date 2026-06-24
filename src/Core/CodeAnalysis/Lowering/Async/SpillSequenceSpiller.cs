@@ -386,6 +386,7 @@ public static class SpillSequenceSpiller
                 case BoundIndirectAssignmentExpression:
                 case BoundConditionalAddressExpression:
                 case BoundConditionalExpression:
+                case BoundThrowExpression:
                 case BoundClrStaticCallExpression:
                 case BoundClrConstructorCallExpression:
                 case BoundClrPropertyAccessExpression:

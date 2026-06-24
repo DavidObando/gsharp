@@ -159,6 +159,15 @@ public sealed class BoundBinaryOperator
         {
             TypeSymbol leftUnderlying = leftType is NullableTypeSymbol leftNullable ? leftNullable.UnderlyingType : leftType;
             TypeSymbol rightUnderlying = rightType is NullableTypeSymbol rightNullable ? rightNullable.UnderlyingType : rightType;
+
+            // Issue #1018: `x ?? throw e`. The RHS is a throw-expression whose
+            // bottom (`never`) type is convertible to anything, so the result is
+            // the left operand stripped of its nullability (the non-null value).
+            if (rightType == TypeSymbol.Never)
+            {
+                return new BoundBinaryOperator(syntaxKind, BoundBinaryOperatorKind.NullCoalesce, leftType, rightType, leftUnderlying);
+            }
+
             if (leftType == TypeSymbol.Null)
             {
                 return new BoundBinaryOperator(syntaxKind, BoundBinaryOperatorKind.NullCoalesce, leftType, rightType, rightType);
