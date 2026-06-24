@@ -83,6 +83,19 @@ internal sealed class DeclarationBinder
     private readonly List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)> pendingAbstractImplementationChecks
         = new List<(StructDeclarationSyntax, StructSymbol)>();
 
+    // Issue #1085: base-constructor-initializer (`: base(...)`) argument binding
+    // is deferred until every declared type's explicit constructors have been
+    // populated. The argument expressions may construct OTHER user types (e.g.
+    // `: base(H(1))`), and resolving such a constructor call requires the
+    // referenced type's ExplicitConstructor(s) to already exist. Because type
+    // bodies are bound one file at a time, a base-initializer in a file processed
+    // before the constructed type's file would otherwise resolve against an
+    // empty (not-yet-populated) constructor shell and wrongly report GS0144.
+    // Method bodies already see fully-populated constructors because they are
+    // bound in a later phase; deferring base-initializer argument binding to a
+    // post-pass gives it the same guarantee, regardless of source-file order.
+    private readonly List<Action> pendingBaseInitializerBindings = new List<Action>();
+
     // Issue #1069: nested struct/class and interface type-name shells declared in
     // phase 1 (DeclareNestedTypeShells) so a sibling member signature can
     // forward-reference a nested type by name. The recorded shells are reused in
@@ -2888,6 +2901,20 @@ internal sealed class DeclarationBinder
     /// bound so the base-class method sets are complete. An <c>open</c> class may
     /// leave inherited abstract members unimplemented (it stays abstract itself).
     /// </summary>
+    // Issue #1085: run all deferred base-constructor-initializer bindings. Must
+    // be called after every declared type body has been bound (so all explicit
+    // constructors exist) and before lowering/emit consume the resolved
+    // initializers.
+    internal void BindPendingBaseInitializers()
+    {
+        foreach (var bind in pendingBaseInitializerBindings)
+        {
+            bind();
+        }
+
+        pendingBaseInitializerBindings.Clear();
+    }
+
     internal void VerifyAbstractMethodImplementations()
     {
         foreach (var (syntax, structSymbol) in pendingAbstractImplementationChecks)
@@ -6138,6 +6165,31 @@ internal sealed class DeclarationBinder
             return;
         }
 
+        // Issue #1085: defer the actual argument binding and base-constructor
+        // resolution until all declared types' explicit constructors exist.
+        var capturedScope = scope;
+        pendingBaseInitializerBindings.Add(() =>
+        {
+            var outerScope = scope;
+            scope = capturedScope;
+            try
+            {
+                BindBaseConstructorInitializerCore(syntax, structSymbol, baseClassSymbol, importedBaseType, primaryCtorParameters);
+            }
+            finally
+            {
+                scope = outerScope;
+            }
+        });
+    }
+
+    private void BindBaseConstructorInitializerCore(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        StructSymbol baseClassSymbol,
+        TypeSymbol importedBaseType,
+        ImmutableArray<ParameterSymbol> primaryCtorParameters)
+    {
         var location = syntax.BaseConstructorOpenParenthesisToken.Location;
 
         if (baseClassSymbol == null && importedBaseType == null)
@@ -6555,7 +6607,10 @@ internal sealed class DeclarationBinder
             }
 
             // ADR-0065 §2: enforce constraints on convenience initializers.
-            if (ctor.IsConvenience && ctor.BaseInitializer != null)
+            // Issue #1085: base-initializer resolution is deferred, so detect the
+            // `: base(...)` presence from syntax rather than the (not-yet-set)
+            // resolved BaseInitializer symbol.
+            if (ctor.IsConvenience && ctorSyntax.HasBaseInitializer)
             {
                 Diagnostics.ReportConvenienceInitMayNotCallBase(ctorSyntax.BaseKeyword.Location, structSymbol.Name);
             }
@@ -6749,48 +6804,78 @@ internal sealed class DeclarationBinder
 
         // Resolve the optional `: base(args)` initializer, with the constructor
         // parameters in scope so they can be forwarded to the base.
+        //
+        // Issue #1085: the argument expressions may construct other user types
+        // whose explicit constructors are not yet populated when this type body
+        // is bound (the constructed type may live in a source file processed
+        // later). Defer the argument binding and base-constructor resolution to
+        // a post-pass that runs after every declared type's constructors exist.
         if (ctorSyntax.HasBaseInitializer)
         {
-            var location = ctorSyntax.BaseKeyword.Location;
-
-            var savedScope = scope;
-            scope = new BoundScope(savedScope);
-            foreach (var p in ctorFunction.Parameters)
+            var capturedScope = scope;
+            pendingBaseInitializerBindings.Add(() =>
             {
-                scope.TryDeclareVariable(p);
-            }
-
-            var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(ctorSyntax.BaseArguments.Count);
-            for (var i = 0; i < ctorSyntax.BaseArguments.Count; i++)
-            {
-                boundArguments.Add(bindExpression(ctorSyntax.BaseArguments[i]));
-            }
-
-            scope = savedScope;
-
-            if (baseClassSymbol == null && importedBaseType == null)
-            {
-                Diagnostics.ReportBaseConstructorArgumentsWithoutBase(location);
-            }
-            else if (importedBaseType?.ClrType is System.Type clrBase)
-            {
-                var init = ResolveClrBaseConstructor(i => ctorSyntax.BaseArguments[i].Location, clrBase, boundArguments, location);
-                if (init != null)
+                var outerScope = scope;
+                scope = capturedScope;
+                try
                 {
-                    constructorSymbol.SetBaseInitializer(init);
+                    BindConstructorBaseInitializerCore(ctorSyntax, constructorSymbol, ctorFunction, structSymbol, baseClassSymbol, importedBaseType);
                 }
-            }
-            else
-            {
-                var init = ResolveGSharpBaseConstructor(i => ctorSyntax.BaseArguments[i].Location, structSymbol.Name, baseClassSymbol, boundArguments, location);
-                if (init != null)
+                finally
                 {
-                    constructorSymbol.SetBaseInitializer(init);
+                    scope = outerScope;
                 }
-            }
+            });
         }
 
         return constructorSymbol;
+    }
+
+    private void BindConstructorBaseInitializerCore(
+        ConstructorDeclarationSyntax ctorSyntax,
+        ConstructorSymbol constructorSymbol,
+        FunctionSymbol ctorFunction,
+        StructSymbol structSymbol,
+        StructSymbol baseClassSymbol,
+        TypeSymbol importedBaseType)
+    {
+        var location = ctorSyntax.BaseKeyword.Location;
+
+        var savedScope = scope;
+        scope = new BoundScope(savedScope);
+        foreach (var p in ctorFunction.Parameters)
+        {
+            scope.TryDeclareVariable(p);
+        }
+
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(ctorSyntax.BaseArguments.Count);
+        for (var i = 0; i < ctorSyntax.BaseArguments.Count; i++)
+        {
+            boundArguments.Add(bindExpression(ctorSyntax.BaseArguments[i]));
+        }
+
+        scope = savedScope;
+
+        if (baseClassSymbol == null && importedBaseType == null)
+        {
+            Diagnostics.ReportBaseConstructorArgumentsWithoutBase(location);
+        }
+        else if (importedBaseType?.ClrType is System.Type clrBase)
+        {
+            var init = ResolveClrBaseConstructor(i => ctorSyntax.BaseArguments[i].Location, clrBase, boundArguments, location);
+            if (init != null)
+            {
+                constructorSymbol.SetBaseInitializer(init);
+            }
+        }
+        else
+        {
+            var init = ResolveGSharpBaseConstructor(i => ctorSyntax.BaseArguments[i].Location, structSymbol.Name, baseClassSymbol, boundArguments, location);
+            if (init != null)
+            {
+                constructorSymbol.SetBaseInitializer(init);
+            }
+        }
     }
 
     /// <summary>
