@@ -1576,6 +1576,19 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// GS0402: the operand of a prefix/postfix increment (<c>++</c>) or
+    /// decrement (<c>--</c>) expression is not a writable lvalue (ADR-0126 /
+    /// issue #1027). The operand must be a variable, field, array element, or
+    /// indexer — the same set of targets accepted by a compound assignment.
+    /// </summary>
+    /// <param name="location">The text location of the offending operand.</param>
+    /// <param name="operatorText">The increment/decrement operator text (<c>++</c> or <c>--</c>).</param>
+    public void ReportInvalidIncrementDecrementTarget(TextLocation location, string operatorText)
+    {
+        Report(location, "GS0402", $"The operand of '{operatorText}' must be a writable variable, field, array element, or indexer (ADR-0126).");
+    }
+
+    /// <summary>
     /// Reports that an <c>async func(...)</c> type clause has an explicit
     /// <c>Task[…]</c> (or other Task-shaped) return type. The <c>async</c>
     /// modifier already implies a Task wrap, so the explicit wrap is

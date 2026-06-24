@@ -824,8 +824,9 @@ Assignment        = identifier "=" Assignment
                   | AccessorExpression ( "+=" | "-=" ) Assignment
                   | BinaryExpression .
 BinaryExpression  = PrefixExpression { BinaryOperator PrefixExpression } .
-PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" ) PrefixExpression | PostfixExpression .
-PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) IndexArgument "]" } ( "with" "{" FieldEqualsList? "}" )? .
+PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" | "++" | "--" ) PrefixExpression | PostfixExpression .
+PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) IndexArgument "]" } ( "++" | "--" )? ( "with" "{" FieldEqualsList? "}" )? .
+(* Prefix `++x`/`--x` and postfix `x++`/`x--` are value-producing expressions (issue #1027). Prefix yields the value AFTER mutation; postfix yields the value BEFORE mutation. The operand must be an assignable variable, field, or indexed element; otherwise GS0402 is reported. They are also valid as standalone statements (`IncDecStmt`). See ADR-0126. *)
 IndexArgument     = Expression | Expression? ".." Expression? .  (* the range form slices; see "Range and slice expressions" *)
 PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | SwitchExpr | IfExpression | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
 (* Postfix chains apply to every PrimaryExpression except a bare numeric Literal: `42.Member` is not accepted; use `(42).Member`. See ADR-0054. *)
@@ -848,7 +849,7 @@ Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt
 
 ### Assignment and variable statements
 
-Bindings are introduced with `let` (immutable) or `var` (mutable); the legacy Go-style `name := expr` short declaration was removed by ADR-0077 / issue #717 and the parser now emits `GS0305` against any occurrence of `:=`. Multi-target assignment supports `a, b = x, y` for identifier target lists; the parallel `a, b := x, y` form is likewise removed (use one `let`/`var` declaration per name). Increment and decrement are statements, not expressions.
+Bindings are introduced with `let` (immutable) or `var` (mutable); the legacy Go-style `name := expr` short declaration was removed by ADR-0077 / issue #717 and the parser now emits `GS0305` against any occurrence of `:=`. Multi-target assignment supports `a, b = x, y` for identifier target lists; the parallel `a, b := x, y` form is likewise removed (use one `let`/`var` declaration per name). Increment and decrement are available both as statements and, since issue #1027, as value-producing expressions: prefix `++x`/`--x` yields the value after mutation, postfix `x++`/`x--` yields the value before mutation. The operand is evaluated once (the receiver of an indexed or member target is not re-evaluated), so they compose correctly inside short-circuit and branching expressions (e.g. `while i > 0 && i-- > 1 { }`). See ADR-0126.
 
 A `let` or `var` may carry a `ref` prefix to declare a **ref-aliasing local** (ADR-0060 follow-up): `let ref m = arr[i]` produces a local whose IL slot is a managed pointer (`T&`) that aliases the right-hand-side storage. The RHS must be an lvalue (`GS0256`); ref locals are illegal at top level, inside `async` / iterator bodies, and as `const` (`GS0258`). Reads and writes through the alias forward to the underlying storage.
 

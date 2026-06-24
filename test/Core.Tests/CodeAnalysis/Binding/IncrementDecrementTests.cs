@@ -12,8 +12,8 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 2.2: <c>i++</c> and <c>i--</c> are statement forms (not expressions).
-/// The parser lowers them to <c>i = i +/- 1</c>.
+/// <c>i++</c> and <c>i--</c> work both as statement forms and, since issue #1027,
+/// as value-producing expressions. The parser lowers them to assignments.
 /// </summary>
 public class IncrementDecrementTests
 {
@@ -39,11 +39,10 @@ public class IncrementDecrementTests
     }
 
     [Fact]
-    public void Increment_NotAllowed_As_Expression()
+    public void Increment_Allowed_As_Expression()
     {
-        // `let y = x++` should fail to parse `x++` as an expression.
-        var tree = SyntaxTree.Parse(SourceText.From("func F() {\n var x = 1\n let y = x++\n }\n"));
-        Assert.NotEmpty(tree.Diagnostics);
+        // Since issue #1027, `let y = x++` parses and binds: x++ yields x's old value.
+        Assert.Empty(Bind("func F() {\n var x = 1\n let y = x++\n }\n"));
     }
 
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
