@@ -1131,7 +1131,20 @@ internal sealed class MemberLookup
                 continue;
             }
 
-            if (!ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(candidate.Type), clrMethod.ReturnType))
+            // Issue #1071: an `async func` implementing a CLR interface method
+            // declared with an explicit `Task` / `Task[T]` return type has a
+            // declared (awaited) return of void / T. Compare the contract's
+            // unwrapped awaited result against the candidate's declared type.
+            var candidateReturnClr = NullableLifting.GetEffectiveClrType(candidate.Type);
+            if (candidate.IsAsync
+                && AsyncReturnTypeNormalizer.TryUnwrapTaskClrType(clrMethod.ReturnType, out var awaitedReturnClr))
+            {
+                if (!ClrTypeUtilities.AreSame(candidateReturnClr, awaitedReturnClr))
+                {
+                    continue;
+                }
+            }
+            else if (!ClrTypeUtilities.AreSame(candidateReturnClr, clrMethod.ReturnType))
             {
                 continue;
             }
