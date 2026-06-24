@@ -214,6 +214,14 @@ internal sealed class TypeDefEmitter
             // the field symbol onto the FieldDef row so attributes like
             // @Obsolete round-trip into CustomAttribute rows.
             this.emitUserAttributes(handle, field, AttributeTargetKind.Field);
+
+            // ADR-0122 §10 / issue #1035: a fixed-size buffer field carries a
+            // `[FixedBuffer(typeof(T), N)]` attribute pointing at the element
+            // type and count, mirroring C# / Roslyn's lowering.
+            if (field.IsFixedBuffer)
+            {
+                this.EmitFixedBufferFieldAttribute(handle, field);
+            }
         }
 
         // ADR-0051 Phase 6: emit backing FieldDefs for auto-properties.
@@ -480,6 +488,14 @@ internal sealed class TypeDefEmitter
         {
             // Issue #367: mark user-declared `ref struct` types as by-ref-like.
             this.EmitIsByRefLikeAttribute(handle2);
+        }
+
+        // ADR-0122 §10 / issue #1035: a fixed-size buffer backing struct is
+        // compiler-generated and stamped with [CompilerGenerated] and
+        // [UnsafeValueType], matching how C# / Roslyn lowers a fixed buffer.
+        if (structSym.IsFixedBufferBacking)
+        {
+            this.EmitFixedBufferBackingAttributes(handle2);
         }
 
         // ADR-0093 §5: when @StructLayout supplies Pack or Size, write the
@@ -1641,6 +1657,51 @@ internal sealed class TypeDefEmitter
             parent: typeHandle,
             constructor: obsoleteCtorRef,
             value: this.emitCtx.Metadata.GetOrAddBlob(obsoleteBlob));
+    }
+
+    /// <summary>
+    /// ADR-0122 §10 / issue #1035: emits the <c>[CompilerGenerated]</c> and
+    /// <c>[UnsafeValueType]</c> attributes on a fixed-size buffer backing
+    /// struct's TypeDef.
+    /// </summary>
+    /// <param name="typeHandle">The backing struct's TypeDef handle.</param>
+    private void EmitFixedBufferBackingAttributes(TypeDefinitionHandle typeHandle)
+    {
+        var emptyBlob = new BlobBuilder();
+        emptyBlob.WriteUInt16(0x0001);
+        emptyBlob.WriteUInt16(0);
+        var emptyValue = this.emitCtx.Metadata.GetOrAddBlob(emptyBlob);
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: typeHandle,
+            constructor: this.wellKnown.GetCompilerGeneratedAttributeCtorRef(),
+            value: emptyValue);
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: typeHandle,
+            constructor: this.wellKnown.GetUnsafeValueTypeAttributeCtorRef(),
+            value: emptyValue);
+    }
+
+    /// <summary>
+    /// ADR-0122 §10 / issue #1035: emits the
+    /// <c>[FixedBuffer(typeof(T), N)]</c> attribute on a fixed-size buffer
+    /// field's FieldDef.
+    /// </summary>
+    /// <param name="fieldHandle">The fixed-buffer field's FieldDef handle.</param>
+    /// <param name="field">The fixed-size buffer field symbol.</param>
+    private void EmitFixedBufferFieldAttribute(FieldDefinitionHandle fieldHandle, FieldSymbol field)
+    {
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteSerializedString(field.FixedBufferElementType.ClrType?.FullName ?? field.FixedBufferElementType.Name);
+        valueBlob.WriteInt32(field.FixedBufferLength);
+        valueBlob.WriteUInt16(0);
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: fieldHandle,
+            constructor: this.wellKnown.GetFixedBufferAttributeCtorRef(),
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>

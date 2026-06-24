@@ -1950,6 +1950,18 @@ internal sealed partial class ExpressionBinder
                             Diagnostics.ReportProtectedMemberInaccessible(ne.IdentifierToken.Location, field.Name, declaringType.Name);
                         }
 
+                        // ADR-0122 §10 / issue #1035: a fixed-size buffer field
+                        // decays to a `*T` to the first element. Lower
+                        // `recv.buf` to a reinterpret of `&recv.buf` (the
+                        // address of the inline backing struct, whose first
+                        // element sits at offset 0) to the element pointer
+                        // type. Indexing / passing then flows through the
+                        // existing unmanaged-pointer machinery.
+                        if (field.IsFixedBuffer)
+                        {
+                            return MakeFixedBufferPointer(receiver, declaringType, field);
+                        }
+
                         return new BoundFieldAccessExpression(null, receiver, declaringType, field);
                     }
 
@@ -3669,5 +3681,24 @@ internal sealed partial class ExpressionBinder
         }
 
         return type;
+    }
+
+    /// <summary>
+    /// ADR-0122 §10 / issue #1035: builds the <c>*T</c> value a fixed-size
+    /// buffer field decays to — the address of the inline backing struct
+    /// (whose first element sits at offset 0) reinterpreted to the element
+    /// pointer type. Reuses the existing address-of + pointer-reinterpret
+    /// machinery, so no new bound-node kind is required.
+    /// </summary>
+    /// <param name="receiver">The receiver expression the buffer field is read from.</param>
+    /// <param name="declaringType">The type that declares the buffer field.</param>
+    /// <param name="field">The fixed-size buffer field.</param>
+    /// <returns>A <c>*T</c>-typed bound expression to the first element.</returns>
+    private static BoundExpression MakeFixedBufferPointer(BoundExpression receiver, StructSymbol declaringType, FieldSymbol field)
+    {
+        var fieldAccess = new BoundFieldAccessExpression(null, receiver, declaringType, field);
+        var addressOf = new BoundAddressOfExpression(null, fieldAccess, unmanaged: true);
+        var elementPointer = PointerTypeSymbol.Get(field.FixedBufferElementType);
+        return new BoundConversionExpression(null, elementPointer, addressOf);
     }
 }

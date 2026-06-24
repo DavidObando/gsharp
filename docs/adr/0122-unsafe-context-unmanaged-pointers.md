@@ -218,7 +218,37 @@ verification regressions without weakening ilverify globally.
   `sizeof S`, and member access through both `(*p).field` and the `p->field`
   arrow sugar. Non-blittable structs (managed/reference fields) are still
   rejected with **GS0398**.
-- **Function pointers** (`delegate*`-equivalent) and **fixed-size buffers**.
+- **Function pointers** (`delegate*`-equivalent) — **implemented** (issue
+  #1035): a **managed** function pointer is spelled **`*func(T1, T2) R`**
+  (consistent with the `*T` pointer prefix and the `func name(params) Ret`
+  declaration form), only legal inside an `unsafe` context (GS0404). It is
+  modeled by a managed `FunctionPointerTypeSymbol` (the existing ADR-0095
+  symbol, now carrying an `IsManaged` flag; the unmanaged
+  `unmanaged[CC] (T) -> R` form of ADR-0095 is unchanged). `&StaticMethod`
+  yields a function-pointer value via CIL `ldftn`
+  (`BoundFunctionPointerFromMethodExpression`), type-checked against the target
+  (GS0405 rejects instance / overloaded / generic methods). A function-pointer
+  value is invoked directly with `fp(args)`, emitting CIL `calli` against a
+  standalone method signature (`BoundFunctionPointerInvocationExpression`).
+  Function pointers round-trip through `nint`/`IntPtr` and cast to/from other
+  function pointers (explicit). The two new bound-node kinds are threaded
+  through the walker/rewriter/printer/side-effect/spiller/evaluator and the
+  coverage matrix. (`calli` is genuinely unverifiable and is additionally not
+  implemented by `dotnet-ilverify`; emit tests assert runtime behaviour.)
+- **Fixed-size buffers** — **implemented** (issue #1035): an unsafe-struct
+  field is spelled **`fixed name [N]T`** (the `[N]T` array type clause carries
+  the element type and count; `fixed` is a contextual keyword in struct-field
+  position, disambiguated from the `fixed` pinning statement). It lowers exactly
+  as C# / Roslyn does: a compiler-generated nested backing struct
+  `<name>e__FixedBuffer` with an explicit sequential `ClassLayout` size of
+  `N * sizeof(T)`, a single `FixedElementField` of type `T`, marked
+  `[CompilerGenerated]` and `[UnsafeValueType]`; the containing field is typed
+  as that nested struct and carries `[FixedBuffer(typeof(T), N)]`. A reference
+  to the buffer field decays to a `*T` to the first element (reusing the
+  address-of + pointer-reinterpret machinery — no new bound-node kind), so it
+  is indexable as `name[i]` (read/write) and passable as a `*T`. The element
+  type must be a blittable primitive (GS0409) and `N` a positive constant
+  (GS0408); use outside an unsafe context is rejected (GS0406).
 - **`unsafe func` method signature binding inside a *safe* type** (today only a
   whole `unsafe class`/`unsafe struct`, or a free `unsafe func`/extern, binds
   *signature* param/return types in unsafe context; an `unsafe func` *method*

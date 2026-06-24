@@ -72,6 +72,21 @@ public sealed class FieldSymbol : Symbol
     public int? ExplicitOffset { get; private set; }
 
     /// <summary>
+    /// Gets a value indicating whether this field is a fixed-size buffer
+    /// (ADR-0122 §10 / issue #1035, spelled <c>fixed name [N]T</c>). When
+    /// true, <see cref="Type"/> is the compiler-generated nested buffer struct
+    /// (carrying the <c>[FixedBuffer]</c> attribute and explicit layout size),
+    /// and references to the field decay to a <c>*T</c> to the first element.
+    /// </summary>
+    public bool IsFixedBuffer { get; private set; }
+
+    /// <summary>Gets the fixed-size buffer element type <c>T</c> (ADR-0122 §10 / issue #1035), or <c>null</c> for non-buffer fields.</summary>
+    public TypeSymbol FixedBufferElementType { get; private set; }
+
+    /// <summary>Gets the fixed-size buffer element count <c>N</c> (ADR-0122 §10 / issue #1035), or 0 for non-buffer fields.</summary>
+    public int FixedBufferLength { get; private set; }
+
+    /// <summary>
     /// Sets the <see cref="ConstantValue"/> for a const field. Intended to be
     /// called once by the binder after folding the initializer to a literal.
     /// </summary>
@@ -90,5 +105,18 @@ public sealed class FieldSymbol : Symbol
     public void SetExplicitOffset(int offset)
     {
         ExplicitOffset = offset;
+    }
+
+    /// <summary>
+    /// Marks this field as a fixed-size buffer (ADR-0122 §10 / issue #1035),
+    /// recording the element type and count.
+    /// </summary>
+    /// <param name="elementType">The buffer element type <c>T</c>.</param>
+    /// <param name="length">The buffer element count <c>N</c>.</param>
+    public void SetFixedBuffer(TypeSymbol elementType, int length)
+    {
+        IsFixedBuffer = true;
+        FixedBufferElementType = elementType;
+        FixedBufferLength = length;
     }
 }
