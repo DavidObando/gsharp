@@ -719,6 +719,14 @@ public sealed class Binder
             binder.declarations.BindStructDeclarationBody(structSyntax, owningPackage, structSymbol);
         }
 
+        // Issue #1085: now that every type body is bound and every type's explicit
+        // constructors are populated, bind the deferred base-constructor-initializer
+        // (`: base(...)`) argument lists. Argument expressions may construct other
+        // user types whose constructors only exist after their (possibly later)
+        // source file was bound; deferring this resolution makes base-initializer
+        // argument binding independent of source-file order.
+        binder.declarations.BindPendingBaseInitializers();
+
         // Issue #973: now that every class shell has had its base clause bound
         // and its base class installed, screen the resolved base relation for
         // transitive inheritance cycles (e.g. `class B : C` / `class C : B`).
