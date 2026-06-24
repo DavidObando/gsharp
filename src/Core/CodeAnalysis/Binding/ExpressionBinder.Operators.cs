@@ -172,7 +172,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        return new BoundAddressOfExpression(null, operand);
+        return new BoundAddressOfExpression(null, operand, unmanaged: binderCtx.InUnsafeContext);
     }
 
     /// <summary>ADR-0039: Binds <c>*expr</c> — dereferences a managed pointer.</summary>
@@ -184,7 +184,22 @@ internal sealed partial class ExpressionBinder
             return operand;
         }
 
-        if (operand.Type is not ByRefTypeSymbol)
+        // ADR-0122 / issue #1014: inside an unsafe context, `*<type>(expr)`
+        // (e.g. `*uint8(p)`, the form cs2gs emits for a C# `(byte*)p` cast)
+        // parses as a dereference of a conversion-call. Reinterpret it as a
+        // *cast* to the unmanaged pointer type `*T`: reuse the inner operand of
+        // the conversion (so we do NOT truncate, e.g. an `nint` to a byte) and
+        // retarget it to `*T`. This never masks a real dereference — a value
+        // produced by a numeric conversion is never a pointer.
+        if (binderCtx.InUnsafeContext
+            && operand is BoundConversionExpression conv
+            && conv.Type is { } pointee
+            && TypeSymbol.IsLegalPointeeType(pointee))
+        {
+            return new BoundConversionExpression(null, PointerTypeSymbol.Get(pointee), conv.Expression);
+        }
+
+        if (!TypeSymbol.TryGetPointeeType(operand.Type, out _))
         {
             Diagnostics.ReportUndefinedUnaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, operand.Type);
             return new BoundErrorExpression(null);
@@ -194,13 +209,144 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// ADR-0062: binds a general two-arm conditional expression in value
-    /// context. Validates the condition is <c>bool</c>, computes a common
-    /// result type using identity / one-way implicit conversion / numeric
-    /// tie-break rules, and produces a <see cref="BoundConditionalExpression"/>.
+    /// ADR-0122 / issue #1014: lowers a pointer arithmetic or comparison
+    /// binary expression where at least one operand is an unmanaged pointer
+    /// (<see cref="PointerTypeSymbol"/>). Returns <see langword="null"/> when
+    /// the operator/operand shape is not a supported pointer operation, so the
+    /// caller falls back to the normal (error-reporting) path.
     /// </summary>
-    /// <param name="syntax">The conditional expression syntax.</param>
-    /// <returns>The bound conditional expression, or a <see cref="BoundErrorExpression"/> on failure.</returns>
+    /// <param name="syntax">The binary expression syntax.</param>
+    /// <param name="left">The bound left operand.</param>
+    /// <param name="right">The bound right operand.</param>
+    /// <returns>The lowered bound expression, or <see langword="null"/>.</returns>
+    private BoundExpression TryBindPointerBinaryExpression(BinaryExpressionSyntax syntax, BoundExpression left, BoundExpression right)
+    {
+        var leftPtr = left.Type as PointerTypeSymbol;
+        var rightPtr = right.Type as PointerTypeSymbol;
+        switch (syntax.OperatorToken.Kind)
+        {
+            case SyntaxKind.PlusToken:
+                if (leftPtr != null && rightPtr == null && IsPointerOffsetType(right.Type))
+                {
+                    return LowerPointerOffset(left, leftPtr, right, subtract: false);
+                }
+
+                if (rightPtr != null && leftPtr == null && IsPointerOffsetType(left.Type))
+                {
+                    return LowerPointerOffset(right, rightPtr, left, subtract: false);
+                }
+
+                return null;
+
+            case SyntaxKind.MinusToken:
+                if (leftPtr != null && rightPtr == null && IsPointerOffsetType(right.Type))
+                {
+                    return LowerPointerOffset(left, leftPtr, right, subtract: true);
+                }
+
+                // Pointer difference `p - q` is deferred to a follow-up issue.
+                return null;
+
+            case SyntaxKind.EqualsEqualsToken:
+            case SyntaxKind.BangEqualsToken:
+            case SyntaxKind.LessToken:
+            case SyntaxKind.LessOrEqualsToken:
+            case SyntaxKind.GreaterToken:
+            case SyntaxKind.GreaterOrEqualsToken:
+                return LowerPointerComparison(syntax.OperatorToken.Kind, left, right);
+
+            default:
+                return null;
+        }
+    }
+
+    private static bool IsPointerOffsetType(TypeSymbol type) =>
+        type == TypeSymbol.Int8 || type == TypeSymbol.UInt8
+        || type == TypeSymbol.Int16 || type == TypeSymbol.UInt16
+        || type == TypeSymbol.Int32 || type == TypeSymbol.UInt32
+        || type == TypeSymbol.Int64 || type == TypeSymbol.UInt64
+        || type == TypeSymbol.NInt || type == TypeSymbol.NUInt;
+
+    private static int StaticPointeeSize(TypeSymbol pointee)
+    {
+        if (pointee == TypeSymbol.Int8 || pointee == TypeSymbol.UInt8 || pointee == TypeSymbol.Bool)
+        {
+            return 1;
+        }
+
+        if (pointee == TypeSymbol.Int16 || pointee == TypeSymbol.UInt16 || pointee == TypeSymbol.Char)
+        {
+            return 2;
+        }
+
+        if (pointee == TypeSymbol.Int32 || pointee == TypeSymbol.UInt32 || pointee == TypeSymbol.Float32)
+        {
+            return 4;
+        }
+
+        if (pointee == TypeSymbol.Int64 || pointee == TypeSymbol.UInt64 || pointee == TypeSymbol.Float64)
+        {
+            return 8;
+        }
+
+        // nint/nuint and pointer-to-pointer are pointer-sized; the supported
+        // execution targets are 64-bit.
+        return System.IntPtr.Size;
+    }
+
+    private BoundExpression LowerPointerOffset(BoundExpression pointer, PointerTypeSymbol pointerType, BoundExpression offset, bool subtract)
+    {
+        var size = StaticPointeeSize(pointerType.PointeeType);
+        BoundExpression offsetNint = offset.Type == TypeSymbol.NInt
+            ? offset
+            : new BoundConversionExpression(null, TypeSymbol.NInt, offset);
+
+        BoundExpression scaled = offsetNint;
+        if (size != 1)
+        {
+            var sizeLit = new BoundConversionExpression(null, TypeSymbol.NInt, new BoundLiteralExpression(null, size, TypeSymbol.Int32));
+            var mulOp = BoundBinaryOperator.Bind(SyntaxKind.StarToken, TypeSymbol.NInt, TypeSymbol.NInt);
+            scaled = new BoundBinaryExpression(null, offsetNint, mulOp, sizeLit);
+        }
+
+        var pointerNint = new BoundConversionExpression(null, TypeSymbol.NInt, pointer);
+        var addKind = subtract ? SyntaxKind.MinusToken : SyntaxKind.PlusToken;
+        var addOp = BoundBinaryOperator.Bind(addKind, TypeSymbol.NInt, TypeSymbol.NInt);
+        var resultNint = new BoundBinaryExpression(null, pointerNint, addOp, scaled);
+        return new BoundConversionExpression(null, pointerType, resultNint);
+    }
+
+    private BoundExpression LowerPointerComparison(SyntaxKind operatorKind, BoundExpression left, BoundExpression right)
+    {
+        var pointerType = (left.Type as PointerTypeSymbol) ?? (right.Type as PointerTypeSymbol);
+        var leftNint = ToNativeIntForPointerComparison(left, pointerType);
+        var rightNint = ToNativeIntForPointerComparison(right, pointerType);
+        var op = BoundBinaryOperator.Bind(operatorKind, TypeSymbol.NInt, TypeSymbol.NInt);
+        if (op == null)
+        {
+            return null;
+        }
+
+        return new BoundBinaryExpression(null, leftNint, op, rightNint);
+    }
+
+    private BoundExpression ToNativeIntForPointerComparison(BoundExpression operand, PointerTypeSymbol pointerType)
+    {
+        if (operand.Type == TypeSymbol.NInt)
+        {
+            return operand;
+        }
+
+        // `nil` becomes a null pointer (zero native int) before the comparison.
+        if (operand.Type == TypeSymbol.Null && pointerType != null)
+        {
+            var nullPointer = new BoundConversionExpression(null, pointerType, operand);
+            return new BoundConversionExpression(null, TypeSymbol.NInt, nullPointer);
+        }
+
+        return new BoundConversionExpression(null, TypeSymbol.NInt, operand);
+    }
+
     /// <summary>
     /// Issue #1018: binds a throw-expression `throw expr` in value position to a
     /// <see cref="BoundThrowExpression"/> whose static type is the bottom
@@ -717,6 +863,19 @@ internal sealed partial class ExpressionBinder
         if (boundLeft.Type == TypeSymbol.Error || boundRight.Type == TypeSymbol.Error)
         {
             return new BoundErrorExpression(null);
+        }
+
+        // ADR-0122 / issue #1014: pointer arithmetic (`p + i`, `i + p`, `p - i`)
+        // and pointer comparison (`==`, `!=`, `<`, …) inside an unsafe context.
+        // Lowered to native-int (`nint`) arithmetic/comparison plus pointer
+        // reinterpret conversions — no dedicated bound node is required.
+        if (boundLeft.Type is PointerTypeSymbol || boundRight.Type is PointerTypeSymbol)
+        {
+            var pointerResult = TryBindPointerBinaryExpression(syntax, boundLeft, boundRight);
+            if (pointerResult != null)
+            {
+                return pointerResult;
+            }
         }
 
         var boundOperator = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type);

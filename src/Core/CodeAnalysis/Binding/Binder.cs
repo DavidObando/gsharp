@@ -2022,6 +2022,23 @@ public sealed class Binder
                 return null;
             }
 
+            // ADR-0122 / issue #1014: inside an `unsafe` context the prefix
+            // `*T` denotes an *unmanaged* raw pointer (CLR ELEMENT_TYPE_PTR),
+            // which — unlike the managed by-ref form — is legal as a field,
+            // local, and plain P/Invoke parameter type. Outside an unsafe
+            // context `*T` keeps its historical meaning of a managed by-ref
+            // pointer (ELEMENT_TYPE_BYREF, `T&`).
+            if (binderCtx.InUnsafeContext)
+            {
+                if (!TypeSymbol.IsLegalPointeeType(pointeeType) && pointeeType is not PointerTypeSymbol)
+                {
+                    Diagnostics.ReportUnmanagedPointerIllegalPointee(syntax.PointerPointeeType.Location, pointeeType.Name);
+                    return PointerTypeSymbol.Get(pointeeType);
+                }
+
+                return PointerTypeSymbol.Get(pointeeType);
+            }
+
             return ByRefTypeSymbol.Get(pointeeType);
         }
 

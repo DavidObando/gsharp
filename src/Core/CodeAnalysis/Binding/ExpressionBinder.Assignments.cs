@@ -920,7 +920,7 @@ internal sealed partial class ExpressionBinder
             return pointer;
         }
 
-        if (pointer.Type is not ByRefTypeSymbol byRef)
+        if (!TypeSymbol.TryGetPointeeType(pointer.Type, out var pointeeType))
         {
             Diagnostics.ReportUndefinedUnaryOperator(syntax.Target.OperatorToken.Location, syntax.Target.OperatorToken.Text, pointer.Type);
             return new BoundErrorExpression(null);
@@ -932,16 +932,16 @@ internal sealed partial class ExpressionBinder
             return value;
         }
 
-        if (value.Type != byRef.PointeeType && value.Type != TypeSymbol.Error)
+        if (value.Type != pointeeType && value.Type != TypeSymbol.Error)
         {
-            var converted = Conversion.Classify(value.Type, byRef.PointeeType);
+            var converted = Conversion.Classify(value.Type, pointeeType);
             if (!converted.IsImplicit)
             {
-                Diagnostics.ReportCannotConvert(syntax.Value.Location, value.Type, byRef.PointeeType);
+                Diagnostics.ReportCannotConvert(syntax.Value.Location, value.Type, pointeeType);
                 return new BoundErrorExpression(null);
             }
 
-            value = new BoundConversionExpression(null, byRef.PointeeType, value);
+            value = new BoundConversionExpression(null, pointeeType, value);
         }
 
         return new BoundIndirectAssignmentExpression(syntax, pointer, value);

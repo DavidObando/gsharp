@@ -234,6 +234,66 @@ public class TypeSymbol : Symbol
     }
 
     /// <summary>
+    /// ADR-0122 / issue #1014. Returns the pointee (element) type when
+    /// <paramref name="type"/> is either a managed by-ref pointer
+    /// (<see cref="ByRefTypeSymbol"/>, <c>T&amp;</c>) or an unmanaged raw pointer
+    /// (<see cref="PointerTypeSymbol"/>, <c>T*</c>). Several pointer operations
+    /// (dereference, indirect assignment, indexing, address-of) share an IL
+    /// shape across both pointer kinds; this helper lets them treat the two
+    /// uniformly while the type system keeps them distinct.
+    /// </summary>
+    /// <param name="type">The candidate pointer type.</param>
+    /// <param name="pointee">The pointee type when the method returns <c>true</c>.</param>
+    /// <returns><c>true</c> when <paramref name="type"/> is a managed or unmanaged pointer.</returns>
+    public static bool TryGetPointeeType(TypeSymbol type, out TypeSymbol pointee)
+    {
+        switch (type)
+        {
+            case ByRefTypeSymbol byRef:
+                pointee = byRef.PointeeType;
+                return true;
+            case PointerTypeSymbol ptr:
+                pointee = ptr.PointeeType;
+                return true;
+            default:
+                pointee = null;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// ADR-0122 / issue #1014. Returns whether <paramref name="type"/> is an
+    /// unmanaged raw pointer (<see cref="PointerTypeSymbol"/>, CLR
+    /// <c>ELEMENT_TYPE_PTR</c>).
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> when the type is an unmanaged pointer.</returns>
+    public static bool IsUnmanagedPointer(TypeSymbol type) => type is PointerTypeSymbol;
+
+    /// <summary>
+    /// ADR-0122 / issue #1014. Returns whether <paramref name="type"/> is a
+    /// legal pointee for an unmanaged pointer in the supported core subset: a
+    /// blittable primitive (<c>int8</c>…<c>int64</c>, <c>uint8</c>…<c>uint64</c>,
+    /// <c>nint</c>/<c>nuint</c>, <c>float32</c>/<c>float64</c>) or another
+    /// unmanaged pointer (pointer-to-pointer). Pointers to arbitrary managed
+    /// types are out of scope and rejected by the binder.
+    /// </summary>
+    /// <param name="type">The candidate pointee type.</param>
+    /// <returns><c>true</c> when the type is a legal unmanaged pointee.</returns>
+    public static bool IsLegalPointeeType(TypeSymbol type)
+    {
+        if (type is PointerTypeSymbol)
+        {
+            return true;
+        }
+
+        return type == Int8 || type == UInt8 || type == Int16 || type == UInt16
+            || type == Int32 || type == UInt32 || type == Int64 || type == UInt64
+            || type == NInt || type == NUInt || type == Float32 || type == Float64
+            || type == Bool || type == Char;
+    }
+
+    /// <summary>
     /// #313: returns <c>true</c> if <paramref name="type"/> is, or structurally
     /// contains, an in-scope generic <see cref="TypeParameterSymbol"/> (e.g.
     /// <c>T</c>, <c>T?</c>, <c>[]T</c>, or <c>List[T]</c>). Such a type is an

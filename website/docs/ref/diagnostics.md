@@ -267,7 +267,8 @@ ADR-0056 §1/§2 makes spans indexable: a `Span[T]` / `ReadOnlySpan[T]` indexer 
 | GS9003 | Error | Variable not definitely assigned before `ref` use. | `ref x` where `x` has not been assigned. |
 | GS9004 | Error | By-ref value cannot escape its declaration scope. | Returning a `*T` (managed-pointer) value from a function, capturing a `*T` local in a closure, hoisting a `*T` local into an `async`/iterator state machine, or using a `*T` return type in a function literal. Also raised when returning a `ref struct` parameter annotated as `scoped`. |
 | GS9005 | Error | Cannot take the address of a constant. | `&myConst` where `myConst` is declared `const`. |
-| GS9006 | Error | Pointer type cannot be a field type. | A struct or class field (including static `shared` fields and top-level globals) declared with a `*T` (managed-pointer) type. |
+| GS9006 | Error | Pointer type cannot be a field type. | A struct or class field (including static `shared` fields and top-level globals) declared with a `*T` (managed-pointer) type **outside an `unsafe` context**. Inside an `unsafe` context `*T` is an unmanaged pointer and IS legal as a field type (ADR-0122). |
+| GS0398 | Error | Unmanaged pointer to a non-blittable pointee. | An `unsafe`-context `*T` whose pointee `T` is a managed reference type or otherwise non-blittable (e.g. `*string`); only blittable primitives and pointers-to-pointers are legal pointees (ADR-0122 / issue #1014). |
 | GS9007 | Error | A type may contain at most one `shared` block. | A class or struct with two `shared { ... }` blocks; merge them into one. |
 
 ### Reference closure diagnostics (GS9100)

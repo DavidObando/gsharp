@@ -74,6 +74,19 @@ internal sealed class BinderContext
     /// <c>out</c> argument receivers. Mutated in place by callers.
     /// </summary>
     public int OutDiscardCounter;
+
+    /// <summary>
+    /// ADR-0122 / issue #1014. Nesting depth of the current <c>unsafe</c>
+    /// context. Greater than zero inside an <c>unsafe func</c>, the body of an
+    /// <c>unsafe class</c> / <c>unsafe struct</c>, or an <c>unsafe { … }</c>
+    /// block. When in an unsafe context the prefix <c>*T</c> type clause binds
+    /// to an <em>unmanaged</em> pointer (<see cref="Symbols.PointerTypeSymbol"/>,
+    /// <c>ELEMENT_TYPE_PTR</c>) rather than a managed by-ref
+    /// (<see cref="Symbols.ByRefTypeSymbol"/>), and raw-pointer operations
+    /// (dereference, indexing, pointer arithmetic, pointer casts) are permitted.
+    /// Mutated in place via <see cref="PushUnsafeContext"/>.
+    /// </summary>
+    public int UnsafeDepth;
 #pragma warning restore SA1401
 
     /// <summary>
@@ -97,6 +110,15 @@ internal sealed class BinderContext
     /// don't need to reach through <see cref="RootScope"/>.
     /// </summary>
     public ReferenceResolver References => RootScope.References;
+
+    /// <summary>
+    /// Gets a value indicating whether binding is currently inside an
+    /// <c>unsafe</c> context (ADR-0122 / issue #1014). When true the prefix
+    /// <c>*T</c> type clause binds to an unmanaged pointer
+    /// (<see cref="Symbols.PointerTypeSymbol"/>) and raw-pointer operations are
+    /// permitted.
+    /// </summary>
+    public bool InUnsafeContext => UnsafeDepth > 0;
 
     /// <summary>
     /// Gets or sets the scope the binder currently operates against. Starts
@@ -301,6 +323,50 @@ internal sealed class BinderContext
             default:
                 // cap / make / close have no clean .NET-idiomatic alternative.
                 return null;
+        }
+    }
+
+    /// <summary>
+    /// ADR-0122 / issue #1014. Enters an <c>unsafe</c> context for the lifetime
+    /// of the returned token (incrementing <see cref="UnsafeDepth"/>); disposing
+    /// the token leaves the context. When <paramref name="active"/> is
+    /// <see langword="false"/> the call is a no-op (the depth is unchanged), so
+    /// callers can unconditionally wrap a region with the modifier's truthiness.
+    /// </summary>
+    /// <param name="active">Whether to actually enter an unsafe context.</param>
+    /// <returns>A disposable token that leaves the unsafe context when disposed.</returns>
+    public UnsafeContextScope PushUnsafeContext(bool active = true)
+    {
+        if (active)
+        {
+            UnsafeDepth++;
+        }
+
+        return new UnsafeContextScope(this, active);
+    }
+
+    /// <summary>
+    /// Disposable token returned by <see cref="PushUnsafeContext"/> that
+    /// decrements <see cref="UnsafeDepth"/> on disposal (ADR-0122 / issue #1014).
+    /// </summary>
+    public readonly struct UnsafeContextScope : IDisposable
+    {
+        private readonly BinderContext owner;
+        private readonly bool active;
+
+        internal UnsafeContextScope(BinderContext owner, bool active)
+        {
+            this.owner = owner;
+            this.active = active;
+        }
+
+        /// <inheritdoc/>
+        public void Dispose()
+        {
+            if (active)
+            {
+                owner.UnsafeDepth--;
+            }
         }
     }
 }

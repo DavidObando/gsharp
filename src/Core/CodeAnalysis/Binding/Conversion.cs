@@ -125,6 +125,36 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // ADR-0122 / issue #1014: unmanaged pointer conversions.
+        // * pointer -> pointer: explicit reinterpret (e.g. `(byte*)p`).
+        // * pointer <-> nint/nuint: explicit round-trip (IntPtr.ToPointer()).
+        // * nil -> pointer: implicit null pointer.
+        // These share the native-int CLR representation, so emit is a no-op
+        // (or `conv.i` for narrower integer sources).
+        if (from is PointerTypeSymbol || to is PointerTypeSymbol)
+        {
+            if (from == TypeSymbol.Null && to is PointerTypeSymbol)
+            {
+                return Conversion.Implicit;
+            }
+
+            if (from is PointerTypeSymbol && to is PointerTypeSymbol)
+            {
+                return Conversion.Explicit;
+            }
+
+            var nativeIntPartner = to is PointerTypeSymbol ? from : to;
+            if (nativeIntPartner == TypeSymbol.NInt || nativeIntPartner == TypeSymbol.NUInt
+                || nativeIntPartner == TypeSymbol.Int32 || nativeIntPartner == TypeSymbol.UInt32
+                || nativeIntPartner == TypeSymbol.Int64 || nativeIntPartner == TypeSymbol.UInt64
+                || TypeSymbol.IsLegalPointeeType(nativeIntPartner))
+            {
+                return Conversion.Explicit;
+            }
+
+            return Conversion.None;
+        }
+
         // Issue #813: a G# `TupleTypeSymbol` and an imported CLR
         // `System.ValueTuple<…>` instantiation denote the same type when
         // their closed CLR backings agree. The former is produced by tuple

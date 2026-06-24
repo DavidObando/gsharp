@@ -1982,6 +1982,24 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindIndexAgainstTarget(BoundExpression target, ExpressionSyntax indexSyntax, TextLocation targetLocation)
     {
+        // ADR-0122 / issue #1014: pointer indexing `p[i]` == `*(p + i)`.
+        if (target.Type is PointerTypeSymbol pointerTarget)
+        {
+            var pointerIndex = BindExpression(indexSyntax);
+            if (pointerIndex is BoundErrorExpression)
+            {
+                return pointerIndex;
+            }
+
+            if (!IsPointerOffsetType(pointerIndex.Type))
+            {
+                pointerIndex = conversions.BindConversion(indexSyntax, TypeSymbol.NInt);
+            }
+
+            var elementPointer = LowerPointerOffset(target, pointerTarget, pointerIndex, subtract: false);
+            return new BoundDereferenceExpression(null, elementPointer);
+        }
+
         // Issue #1016: a range operand (`a[lo..hi]`) slices the target rather
         // than indexing a single element.
         if (indexSyntax is RangeExpressionSyntax rangeSyntax)
@@ -2301,6 +2319,25 @@ internal sealed partial class ExpressionBinder
             var index = conversions.BindConversion(indexSyntax, TypeSymbol.Int32);
             var value = BindValue(element);
             return new BoundIndexAssignmentExpression(null, variable, index, value, element);
+        }
+
+        // ADR-0122 / issue #1014: pointer indexed write `p[i] = v` == `*(p + i) = v`.
+        if (variable.Type is PointerTypeSymbol pointerType)
+        {
+            var pointerIndex = BindExpression(indexSyntax);
+            if (pointerIndex is BoundErrorExpression)
+            {
+                return pointerIndex;
+            }
+
+            if (!IsPointerOffsetType(pointerIndex.Type))
+            {
+                pointerIndex = conversions.BindConversion(indexSyntax, TypeSymbol.NInt);
+            }
+
+            var elementPointer = LowerPointerOffset(new BoundVariableExpression(null, variable), pointerType, pointerIndex, subtract: false);
+            var pointerValue = BindValue(pointerType.PointeeType);
+            return new BoundIndirectAssignmentExpression(null, elementPointer, pointerValue);
         }
 
         // Phase 3.A.4: map indexed assignment `m[k] = v` — key bound to K,

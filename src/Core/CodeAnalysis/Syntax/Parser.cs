@@ -244,6 +244,20 @@ public class Parser
             accessibilityModifier = NextToken();
         }
 
+        // ADR-0122 / issue #1014: an optional `unsafe` contextual modifier may
+        // precede `func`, `class`, or `struct` (with or without an
+        // accessibility modifier). It introduces an unsafe context in which
+        // unmanaged raw pointers (`*T`) and raw-pointer operations are legal.
+        SyntaxToken unsafeModifier = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
+            && (Peek(1).Kind == SyntaxKind.FuncKeyword
+                || Peek(1).Kind == SyntaxKind.AsyncKeyword
+                || Peek(1).Kind == SyntaxKind.ClassKeyword
+                || Peek(1).Kind == SyntaxKind.StructKeyword))
+        {
+            unsafeModifier = NextToken();
+        }
+
         // Phase 5.1 / ADR-0023: an optional `async` modifier may precede
         // `func` (with or without an accessibility modifier).
         SyntaxToken asyncModifier = null;
@@ -256,6 +270,10 @@ public class Parser
         if (Current.Kind == SyntaxKind.FuncKeyword)
         {
             member = ParseFunctionDeclaration(accessibilityModifier, openModifier: null, overrideModifier: null, asyncModifier);
+            if (unsafeModifier != null && member is FunctionDeclarationSyntax unsafeFunc)
+            {
+                unsafeFunc.UnsafeModifier = unsafeModifier;
+            }
         }
         else if (TryDetectAggregateDeclarationHead())
         {
@@ -264,6 +282,10 @@ public class Parser
             // The aggregate-kind keyword IS the declaration keyword — no leading
             // `type`. Drop into the new aggregate parser path.
             member = ParseAggregateDeclaration(accessibilityModifier);
+            if (unsafeModifier != null && member is StructDeclarationSyntax unsafeAggregate)
+            {
+                unsafeAggregate.UnsafeModifier = unsafeModifier;
+            }
         }
         else if (Current.Kind == SyntaxKind.TypeKeyword)
         {
@@ -1674,6 +1696,20 @@ public class Parser
                 memberAsyncModifier = NextToken();
             }
 
+            // ADR-0122 / issue #1014: optional `unsafe` contextual modifier on
+            // an in-body `func` method. Consumed only when immediately followed
+            // by `func` (or `async func`).
+            SyntaxToken memberUnsafeModifier = null;
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
+                && (Peek(1).Kind == SyntaxKind.FuncKeyword || Peek(1).Kind == SyntaxKind.AsyncKeyword))
+            {
+                memberUnsafeModifier = NextToken();
+                if (memberAsyncModifier == null && Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
+                {
+                    memberAsyncModifier = NextToken();
+                }
+            }
+
             // ADR-0065 §2: optional `convenience` contextual keyword may
             // precede `init` (or `func init`) on a class constructor.
             SyntaxToken memberConvenienceModifier = null;
@@ -1845,6 +1881,11 @@ public class Parser
                     // method on the receiver type (by-ref `this` for value types).
                     var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier, memberAsyncModifier);
                     method.WithAnnotations(memberAnnotations);
+                    if (memberUnsafeModifier != null)
+                    {
+                        method.UnsafeModifier = memberUnsafeModifier;
+                    }
+
                     methods.Add(method);
                 }
             }
@@ -4039,6 +4080,18 @@ public class Parser
             }
         }
 
+        // ADR-0122 / issue #1014: an `unsafe { … }` block introduces an unsafe
+        // context for its statements. `unsafe` is a contextual keyword — only
+        // an `unsafe` immediately followed by `{` is treated as the block form.
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
+            && Peek(1).Kind == SyntaxKind.OpenBraceToken)
+        {
+            var unsafeKeyword = NextToken();
+            var unsafeBlock = ParseBlockStatement();
+            unsafeBlock.UnsafeKeyword = unsafeKeyword;
+            return unsafeBlock;
+        }
+
         switch (Current.Kind)
         {
             case SyntaxKind.OpenBraceToken:
@@ -5908,6 +5961,18 @@ public class Parser
 
         while (true)
         {
+            // ADR-0122 / issue #1014: a `*` that begins a new source line is a
+            // pointer-dereference statement (`*p = v` / `*p`), not a
+            // continuation of the previous expression as multiplication. G#
+            // is otherwise newline-insensitive, but a leading-`*` continuation
+            // is never written (binary operators are placed at line end), so
+            // stopping the binary loop here is safe and lets deref-write
+            // statements parse after any preceding expression statement.
+            if (Current.Kind == SyntaxKind.StarToken && IsCurrentOnNewLineAfter(left))
+            {
+                break;
+            }
+
             var precedence = Current.Kind.GetBinaryOperatorPrecedence();
             if (precedence == 0 || precedence <= parentPrecedence)
             {
@@ -8363,6 +8428,27 @@ public class Parser
         var current = Current;
         position++;
         return current;
+    }
+
+    /// <summary>
+    /// ADR-0122 / issue #1014: returns whether <see cref="Current"/> begins on a
+    /// later source line than the end of <paramref name="node"/>. Used to treat a
+    /// leading-<c>*</c> token as a pointer-dereference statement boundary rather
+    /// than a multiplication continuation.
+    /// </summary>
+    /// <param name="node">The expression parsed so far on the current line.</param>
+    /// <returns><c>true</c> when the current token is on a new line.</returns>
+    private bool IsCurrentOnNewLineAfter(SyntaxNode node)
+    {
+        if (node == null)
+        {
+            return false;
+        }
+
+        var text = syntaxTree.Text;
+        var previousLine = text.GetLineIndex(System.Math.Max(0, node.Span.End - 1));
+        var currentLine = text.GetLineIndex(Current.Position);
+        return currentLine > previousLine;
     }
 
     private SyntaxToken MatchToken(SyntaxKind kind)

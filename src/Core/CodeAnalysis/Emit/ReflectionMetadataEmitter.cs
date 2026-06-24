@@ -8102,6 +8102,17 @@ internal sealed class ReflectionMetadataEmitter
 
     private void EncodeTypeSymbol(SignatureTypeEncoder encoder, TypeSymbol type)
     {
+        // ADR-0122 / issue #1014: an *unmanaged* pointer type (PointerTypeSymbol
+        // → CLR ELEMENT_TYPE_PTR) is encoded by emitting the `*` element-type
+        // prefix and recursing on the pointee. Unlike ELEMENT_TYPE_BYREF this is
+        // a valid SignatureTypeEncoder element, so fields, parameters, returns,
+        // and locals all flow through this branch uniformly.
+        if (type is PointerTypeSymbol ptr)
+        {
+            EncodeTypeSymbol(encoder.Pointer(), ptr.PointeeType);
+            return;
+        }
+
         // ADR-0060 §13 / migration: a managed-pointer type (ByRefTypeSymbol → T&) cannot
         // be encoded into a SignatureTypeEncoder slot because ELEMENT_TYPE_BYREF is a
         // parent-encoder concern. Callers in parameter / return / local positions must
@@ -8687,6 +8698,14 @@ internal sealed class ReflectionMetadataEmitter
             throw new InvalidOperationException(
                 $"Cannot encode CLR byref type '{type.FullName}' as a non-byref signature slot; "
                 + "use the parent encoder's Type(isByRef: true) overload and pass the element type to EncodeClrType.");
+        }
+
+        // ADR-0122 / issue #1014: a CLR unmanaged pointer (`T*`, Type.IsPointer)
+        // encodes with the `*` element-type prefix followed by the element type.
+        if (type != null && type.IsPointer)
+        {
+            EncodeClrType(encoder.Pointer(), type.GetElementType()!);
+            return;
         }
 
         // Compare by FullName so types from a MetadataLoadContext (carrying the target
