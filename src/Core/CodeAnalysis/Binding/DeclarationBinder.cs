@@ -83,6 +83,17 @@ internal sealed class DeclarationBinder
     private readonly List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)> pendingAbstractImplementationChecks
         = new List<(StructDeclarationSyntax, StructSymbol)>();
 
+    // Issue #1069: nested struct/class and interface type-name shells declared in
+    // phase 1 (DeclareNestedTypeShells) so a sibling member signature can
+    // forward-reference a nested type by name. The recorded shells are reused in
+    // phase 2 (BindNestedTypeBodies) to bind the bodies without re-declaring the
+    // type alias. Nested enums are fully bound during the shell phase (their
+    // members reference no user types) and so are not tracked here.
+    private readonly Dictionary<StructDeclarationSyntax, StructSymbol> nestedStructShells
+        = new Dictionary<StructDeclarationSyntax, StructSymbol>();
+    private readonly Dictionary<InterfaceDeclarationSyntax, InterfaceSymbol> nestedInterfaceShells
+        = new Dictionary<InterfaceDeclarationSyntax, InterfaceSymbol>();
+
     public DeclarationBinder(
         BinderContext binderCtx,
         ConversionClassifier conversions,
@@ -2469,10 +2480,12 @@ internal sealed class DeclarationBinder
         // ADR-0068 / issue #698: bind the optional class destructor (`deinit { … }`).
         BindDeinitDeclaration(syntax, structSymbol, package);
 
-        // Issue #910 / ADR-0110: bind nested type declarations (class / struct /
-        // interface / enum) declared inside this aggregate's body, recording the
-        // enclosing type so the emitter materialises real CLR nested types.
-        BindNestedTypeDeclarations(syntax, structSymbol, package);
+        // Issue #910 / ADR-0110 / issue #1069: bind the BODIES of the nested type
+        // declarations declared inside this aggregate's body. Their type-name
+        // shells were declared earlier (DeclareNestedTypeShells) so sibling
+        // member signatures could forward-reference them; here we fill in their
+        // members. The emitter materialises real CLR nested types.
+        BindNestedTypeBodies(syntax, package);
 
         // Issue #987: queue the abstract-member contract check for classes. A
         // concrete (non-`open`) class with a base must override every inherited
@@ -2484,21 +2497,26 @@ internal sealed class DeclarationBinder
     }
 
     /// <summary>
-    /// Issue #910 / ADR-0110: binds the nested type declarations declared in a
-    /// class or struct body. Each nested declaration is bound through the same
-    /// driver used for top-level types and tagged with its enclosing type via
-    /// <c>SetContainingType</c>. Nested-in-nested declarations are handled
-    /// recursively because the per-kind binders bind their own nested types.
+    /// Issue #910 / ADR-0110 / issue #1069: binds the BODIES of the nested type
+    /// declarations declared in a class or struct body, reusing the type-name
+    /// shells declared earlier by <see cref="DeclareNestedTypeShells"/> (phase 1).
+    /// Splitting shell declaration from body binding lets a sibling member
+    /// signature (a field/property/parameter/return type, a generic argument, an
+    /// array element type, …) forward-reference any nested type by simple name,
+    /// for every nested kind (<c>class</c>/<c>struct</c>/<c>data struct</c>/
+    /// <c>interface</c>/<c>enum</c>). Nested enums are fully bound in the shell
+    /// phase (their members reference no user types) and need no body pass here.
+    /// Nested-in-nested declarations are handled recursively because the
+    /// per-kind body binders bind their own nested types.
     /// <para>
-    /// All four nested kinds (<c>class</c>/<c>struct</c>/<c>interface</c>/
-    /// <c>enum</c>) inside either encloser (<c>class</c> or <c>struct</c>) are
-    /// emitted as real CLR nested types. The emitter materialises every
+    /// All nested kinds inside either encloser (<c>class</c> or <c>struct</c>)
+    /// are emitted as real CLR nested types. The emitter materialises every
     /// enclosing TypeDef row before its nested rows (ECMA-335 §II.22.32) via a
     /// unified pre-order emission pass (ADR-0110), so no kind/encloser
     /// combination needs to be deferred.
     /// </para>
     /// </summary>
-    private void BindNestedTypeDeclarations(StructDeclarationSyntax containerSyntax, TypeSymbol containerSymbol, PackageSymbol package)
+    private void BindNestedTypeBodies(StructDeclarationSyntax containerSyntax, PackageSymbol package)
     {
         if (containerSyntax.NestedTypes.IsDefaultOrEmpty)
         {
@@ -2518,8 +2536,69 @@ internal sealed class DeclarationBinder
             switch (nested)
             {
                 case StructDeclarationSyntax nestedStruct:
-                    var nestedStructSymbol = BindStructDeclaration(nestedStruct, package);
-                    nestedStructSymbol?.SetContainingType(containerSymbol);
+                    // The shell (and its own nested shells, recursively) was
+                    // declared in phase 1; bind its body now. Binding the body
+                    // recurses into BindNestedTypeBodies for nested-in-nested.
+                    if (nestedStructShells.TryGetValue(nestedStruct, out var nestedStructSymbol))
+                    {
+                        BindStructDeclarationBody(nestedStruct, package, nestedStructSymbol);
+                    }
+
+                    break;
+
+                case EnumDeclarationSyntax:
+                    // Nested enums are fully bound in the shell phase.
+                    break;
+
+                case InterfaceDeclarationSyntax nestedInterface:
+                    if (nestedInterfaceShells.TryGetValue(nestedInterface, out var nestedInterfaceSymbol))
+                    {
+                        BindInterfaceMembers(nestedInterface, nestedInterfaceSymbol, package);
+                    }
+
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #1069 (phase 1): declares the type-name shells of the nested types
+    /// declared in <paramref name="containerSyntax"/> and records the enclosing
+    /// type on each via <c>SetContainingType</c>, BEFORE any member body of the
+    /// enclosing type is bound. This makes every nested type resolvable by simple
+    /// name from within the enclosing type (and as a CLR nested type by qualified
+    /// name from outside) regardless of declaration order, mirroring the
+    /// two-phase scheme used for top-level types (#973).
+    /// <list type="bullet">
+    /// <item><c>struct</c>/<c>class</c>/<c>data struct</c>: a shell is declared
+    /// (fields/base bound later) and its own nested shells are declared
+    /// recursively.</item>
+    /// <item><c>enum</c>: fully bound now — enum members reference no user types,
+    /// so there is nothing to defer.</item>
+    /// <item><c>interface</c>: a shell is declared; its method signatures are
+    /// bound later by <see cref="BindNestedTypeBodies"/>.</item>
+    /// </list>
+    /// </summary>
+    internal void DeclareNestedTypeShells(StructDeclarationSyntax containerSyntax, TypeSymbol containerSymbol, PackageSymbol package)
+    {
+        if (containerSyntax.NestedTypes.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var nested in containerSyntax.NestedTypes)
+        {
+            switch (nested)
+            {
+                case StructDeclarationSyntax nestedStruct:
+                    var nestedStructSymbol = DeclareStructShell(nestedStruct, package);
+                    if (nestedStructSymbol != null)
+                    {
+                        nestedStructSymbol.SetContainingType(containerSymbol);
+                        nestedStructShells[nestedStruct] = nestedStructSymbol;
+                        DeclareNestedTypeShells(nestedStruct, nestedStructSymbol, package);
+                    }
+
                     break;
 
                 case EnumDeclarationSyntax nestedEnum:
@@ -2531,8 +2610,8 @@ internal sealed class DeclarationBinder
                     var nestedInterfaceSymbol = DeclareInterfaceSymbol(nestedInterface, package);
                     if (nestedInterfaceSymbol != null)
                     {
-                        BindInterfaceMembers(nestedInterface, nestedInterfaceSymbol, package);
                         nestedInterfaceSymbol.SetContainingType(containerSymbol);
+                        nestedInterfaceShells[nestedInterface] = nestedInterfaceSymbol;
                     }
 
                     break;
