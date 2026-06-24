@@ -161,11 +161,12 @@ Integral types are `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64
 
 ### Arrays and slices
 
-Fixed arrays are written `[N]T`, and slices are written `[]T`. Array and slice composite literals use the same bracketed prefix with an element type identifier:
+Fixed arrays are written `[N]T`, and slices are written `[]T`. The element type `T` is an arbitrary type clause, not just an identifier (issue #1046): it may itself be an array/slice, so jagged arrays such as `[][]uint8` (the G# spelling of C# `byte[][]`) and deeper nestings (`[][][]int32`) are allowed, as are arrays of pointers (`[]*int32`), maps (`[]map[K]V`), channels (`[]chan T`), and generic or qualified names (`[]List[int32]`, `[]Outer.Inner`). Array and slice composite literals use the same bracketed prefix with the element type, which likewise may be nested (`[][]int32{ []int32{1, 2}, []int32{3} }`):
 
 ```gsharp
 let xs = []int32{1, 2, 3}
 let ys = [3]int32{1, 2, 3}
+let grid = [][]int32{ []int32{1, 2}, []int32{3, 4, 5} }
 ```
 
 Slices are backed by CLR arrays. `len` and `cap` observe array length, and `append` allocates and copies into a new array in the current implementation. The `len`, `cap`, `append`, `delete`, and `make` built-ins are Go-style and require `import Gsharp.Extensions.Go` (ADR-0083); see [Go-style built-ins (`import Gsharp.Extensions.Go`)](#go-style-built-ins-import-gsharpextensionsgo) for the gate and the .NET-idiomatic alternatives (`.Length`, `.Count`, `.Remove(k)`, `List[T].Add`).
@@ -331,7 +332,8 @@ The implementation emits **reified CLR generic metadata** for user-declared and 
 
 ```ebnf
 TypeClause = identifier TypeArgList? "?"?
-           | "[" number? "]" identifier "?"?
+           | "[" number? "]" identifier TypeArgList? "?"?
+           | "[" number? "]" TypeClause "?"?
            | "(" TypeClause { "," TypeClause } ")" "?"?
            | "(" TypeClauseList? ")" "->" TypeClause "?"?
            | "async" "(" TypeClauseList? ")" "->" TypeClause "?"?

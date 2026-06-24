@@ -3448,10 +3448,61 @@ public class Parser
             }
 
             var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+
+            // Issue #1046: a jagged/nested array element — the element type is
+            // itself a non-identifier type clause (`[][]T`, `[]*T`, `[]map[K,V]`,
+            // `[]chan T`, `[]func(...) R`, `[](T1, T2)`, …). When the token after
+            // `]` does not begin a plain (possibly dotted/generic) identifier
+            // element, parse the element recursively and store it as a nested
+            // type clause via `TypeClauseSyntax.CreateArray`. The common
+            // `[]Identifier`/`[]Foo.Bar`/`[]List[int32]` forms keep the existing
+            // flat representation so nothing regresses.
+            if (Current.Kind != SyntaxKind.IdentifierToken)
+            {
+                var nestedElement = ParseTypeClause();
+                var nestedQuestion = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+                return TypeClauseSyntax.CreateArray(
+                    syntaxTree,
+                    openBracket,
+                    length,
+                    closeBracket,
+                    nestedElement,
+                    nestedQuestion);
+            }
+
             var elementIdentifier = MatchToken(SyntaxKind.IdentifierToken);
 
             // Issue #526: an array/slice of a nested CLR type — `[]Outer.Inner`.
             var (arrayDots, arrayQualifiers) = ParseQualifierSegments();
+
+            // Phase 4.3c: an array/slice of a constructed generic type —
+            // `[]List[int32]`. The optional type-argument list attaches to the
+            // (last) element identifier, mirroring the non-array path below.
+            SyntaxToken arrayTypeArgOpen = null;
+            SeparatedSyntaxList<TypeClauseSyntax> arrayTypeArgs = default;
+            SyntaxToken arrayTypeArgClose = null;
+            if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+            {
+                arrayTypeArgOpen = MatchToken(SyntaxKind.OpenSquareBracketToken);
+                var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+                while (Current.Kind != SyntaxKind.CloseSquareBracketToken &&
+                       Current.Kind != SyntaxKind.EndOfFileToken)
+                {
+                    nodesAndSeparators.Add(ParseTypeClause());
+                    if (Current.Kind == SyntaxKind.CommaToken)
+                    {
+                        nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+
+                arrayTypeArgs = new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable());
+                arrayTypeArgClose = MatchToken(SyntaxKind.CloseSquareBracketToken);
+            }
+
             var arrayQuestion = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
             return new TypeClauseSyntax(
                 syntaxTree,
@@ -3461,9 +3512,9 @@ public class Parser
                 elementIdentifier,
                 arrayDots,
                 arrayQualifiers,
-                typeArgumentOpenBracketToken: null,
-                typeArguments: default,
-                typeArgumentCloseBracketToken: null,
+                arrayTypeArgOpen,
+                arrayTypeArgs,
+                arrayTypeArgClose,
                 arrayQuestion);
         }
 
@@ -6889,6 +6940,28 @@ public class Parser
         }
 
         var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+
+        // Issue #1046: a jagged-array literal whose element is itself a
+        // non-identifier type clause (`[][]int32{ … }`, `[]*int32{ … }`, …).
+        // Parse the element recursively when the token after `]` does not begin
+        // a plain identifier element; otherwise keep the flat identifier form.
+        if (Current.Kind != SyntaxKind.IdentifierToken)
+        {
+            var nestedElementType = ParseTypeClause();
+            var nestedOpenBrace = MatchToken(SyntaxKind.OpenBraceToken);
+            var nestedElements = ParseArrayInitializerElements();
+            var nestedCloseBrace = MatchToken(SyntaxKind.CloseBraceToken);
+            return new ArrayCreationExpressionSyntax(
+                syntaxTree,
+                openBracket,
+                length,
+                closeBracket,
+                nestedElementType,
+                nestedOpenBrace,
+                nestedElements,
+                nestedCloseBrace);
+        }
+
         var elementType = MatchToken(SyntaxKind.IdentifierToken);
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
         var elements = ParseArrayInitializerElements();

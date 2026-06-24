@@ -232,6 +232,28 @@ public sealed class TypeClauseSyntax : SyntaxNode
     }
 #pragma warning restore SA1642
 
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for an array/slice whose element is itself a (non-identifier) nested type clause — e.g. a jagged array <c>[][]T</c>, an array of pointers <c>[]*T</c>, or an array of maps <c>[]map[K,V]</c> (issue #1046).</summary>
+#pragma warning disable SA1642
+    private TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken openBracketToken,
+        SyntaxToken lengthToken,
+        SyntaxToken closeBracketToken,
+        TypeClauseSyntax arrayElementType,
+        SyntaxToken questionToken,
+        bool isNestedArray)
+        : base(syntaxTree)
+    {
+        OpenBracketToken = openBracketToken;
+        LengthToken = lengthToken;
+        CloseBracketToken = closeBracketToken;
+        ArrayElementType = arrayElementType;
+        QuestionToken = questionToken;
+        QualifierDotTokens = ImmutableArray<SyntaxToken>.Empty;
+        QualifierIdentifierTokens = ImmutableArray<SyntaxToken>.Empty;
+    }
+#pragma warning restore SA1642
+
     /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a sequence type (ADR-0040) — optionally prefixed by the <c>async</c> modifier per ADR-0042.</summary>
 #pragma warning disable SA1642
     private TypeClauseSyntax(
@@ -425,6 +447,12 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this clause denotes an array-shaped type (fixed-length array or slice).</summary>
     public bool IsArray => OpenBracketToken != null;
 
+    /// <summary>Gets the nested element type clause for a jagged/nested array (issue #1046), or <c>null</c> when the array element is a plain identifier element carried via <see cref="Identifier"/>/<see cref="QualifierIdentifierTokens"/>/<see cref="TypeArguments"/>.</summary>
+    public TypeClauseSyntax ArrayElementType { get; }
+
+    /// <summary>Gets a value indicating whether this array/slice clause stores its element as a nested type clause (jagged array, array of pointers, array of maps, …) rather than a flat identifier element (issue #1046).</summary>
+    public bool HasNestedArrayElement => ArrayElementType != null;
+
     /// <summary>Gets a value indicating whether this clause denotes a variable-length slice type <c>[]T</c>.</summary>
     public bool IsSlice => OpenBracketToken != null && LengthToken == null;
 
@@ -592,6 +620,25 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, starToken, pointeeType, questionToken, isPointer: true);
+    }
+
+    /// <summary>Creates an array/slice type clause <c>[N]T</c>/<c>[]T</c> whose element <paramref name="elementType"/> is itself a nested type clause — enabling jagged arrays <c>[][]T</c>, arrays of pointers <c>[]*T</c>, arrays of maps <c>[]map[K,V]</c>, etc. (issue #1046).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="openBracketToken">The opening <c>[</c> token of the array/slice prefix.</param>
+    /// <param name="lengthToken">The numeric length token for a fixed-length array, or <c>null</c> for a slice.</param>
+    /// <param name="closeBracketToken">The closing <c>]</c> token of the array/slice prefix.</param>
+    /// <param name="elementType">The nested element type clause.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    /// <returns>An array/slice type clause carrying a nested element type clause.</returns>
+    public static TypeClauseSyntax CreateArray(
+        SyntaxTree syntaxTree,
+        SyntaxToken openBracketToken,
+        SyntaxToken lengthToken,
+        SyntaxToken closeBracketToken,
+        TypeClauseSyntax elementType,
+        SyntaxToken questionToken)
+    {
+        return new TypeClauseSyntax(syntaxTree, openBracketToken, lengthToken, closeBracketToken, elementType, questionToken, isNestedArray: true);
     }
 
     /// <summary>Creates a sequence type clause <c>sequence[T]</c> (ADR-0040).</summary>
