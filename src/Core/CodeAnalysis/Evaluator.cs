@@ -638,6 +638,7 @@ public sealed class Evaluator
                 BoundNodeKind.ImportedInstanceCallExpression => EvaluateImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node),
                 BoundNodeKind.ConstrainedStaticCallExpression => EvaluateConstrainedStaticCallExpression((BoundConstrainedStaticCallExpression)node),
                 BoundNodeKind.ArrayCreationExpression => EvaluateArrayCreationExpression((BoundArrayCreationExpression)node),
+                BoundNodeKind.StackAllocExpression => throw new EvaluatorException("stackalloc is not supported in the interpreter; it requires the CIL localloc emit path.", node),
                 BoundNodeKind.MapLiteralExpression => EvaluateMapLiteralExpression((BoundMapLiteralExpression)node),
                 BoundNodeKind.MapDeleteExpression => EvaluateMapDeleteExpression((BoundMapDeleteExpression)node),
                 BoundNodeKind.IndexExpression => EvaluateIndexExpression((BoundIndexExpression)node),

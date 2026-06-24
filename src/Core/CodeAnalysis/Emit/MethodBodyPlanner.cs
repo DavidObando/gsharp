@@ -463,6 +463,26 @@ internal sealed class MethodBodyPlanner
             defaultExpressionSlots[def] = slot;
         }
 
+        // ADR-0124 / issue #1024: each `stackalloc T[n]` needs an int32 scratch
+        // local to hold the element count. The count is evaluated once into the
+        // temp; the emitter then reads it for both the byte-size computation
+        // (count * sizeof(T) feeding `localloc`) and, for the safe Span<T> form,
+        // the `Span<T>(void*, int)` length argument (the pointer produced by
+        // `localloc` must sit beneath the length on the stack, and CIL has no
+        // swap). Reuse receiverSpillSlots — keyed by the stackalloc node it
+        // cannot collide with any receiver/assignment spill.
+        foreach (var sa in this.CollectStackAllocs(body))
+        {
+            if (receiverSpillSlots.ContainsKey(sa))
+            {
+                continue;
+            }
+
+            var slot = localTypes.Count;
+            localTypes.Add(TypeSymbol.Int32);
+            receiverSpillSlots[sa] = slot;
+        }
+
         foreach (var receiver in this.CollectReceiverSpills(body, function, locals))
         {
             if (receiverSpillSlots.ContainsKey(receiver))
@@ -1149,6 +1169,13 @@ internal sealed class MethodBodyPlanner
     {
         var sink = new List<BoundDefaultExpression>();
         this.slotPlanner.CollectDefaultExpressions((BoundStatement)root, sink);
+        return sink;
+    }
+
+    private IEnumerable<BoundStackAllocExpression> CollectStackAllocs(BoundNode root)
+    {
+        var sink = new List<BoundStackAllocExpression>();
+        this.slotPlanner.CollectStackAllocs((BoundStatement)root, sink);
         return sink;
     }
 

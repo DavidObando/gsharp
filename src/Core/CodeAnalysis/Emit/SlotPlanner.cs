@@ -141,6 +141,9 @@ internal sealed class SlotPlanner
     public void CollectDefaultExpressions(BoundStatement root, List<BoundDefaultExpression> sink)
         => new DefaultExpressionCollector(sink).Visit(root);
 
+    public void CollectStackAllocs(BoundStatement root, List<BoundStackAllocExpression> sink)
+        => new StackAllocCollector(sink).Visit(root);
+
     public void CollectReceiverSpills(
         BoundStatement root,
         FunctionSymbol function,
@@ -779,6 +782,26 @@ internal sealed class SlotPlanner
             {
                 this.sink.Add(de);
                 return;
+            }
+
+            base.VisitExpression(node);
+        }
+    }
+
+    private sealed class StackAllocCollector : BoundTreeWalker
+    {
+        private readonly List<BoundStackAllocExpression> sink;
+
+        public StackAllocCollector(List<BoundStackAllocExpression> sink)
+        {
+            this.sink = sink;
+        }
+
+        public override void VisitExpression(BoundExpression node)
+        {
+            if (node is BoundStackAllocExpression sa)
+            {
+                this.sink.Add(sa);
             }
 
             base.VisitExpression(node);

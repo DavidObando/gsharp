@@ -269,6 +269,7 @@ ADR-0056 §1/§2 makes spans indexable: a `Span[T]` / `ReadOnlySpan[T]` indexer 
 | GS9005 | Error | Cannot take the address of a constant. | `&myConst` where `myConst` is declared `const`. |
 | GS9006 | Error | Pointer type cannot be a field type. | A struct or class field (including static `shared` fields and top-level globals) declared with a `*T` (managed-pointer) type **outside an `unsafe` context**. Inside an `unsafe` context `*T` is an unmanaged pointer and IS legal as a field type (ADR-0122). |
 | GS0398 | Error | Unmanaged pointer to a non-blittable pointee. | An `unsafe`-context `*T` whose pointee `T` is a managed reference type or otherwise non-blittable (e.g. `*string`); only blittable primitives and pointers-to-pointers are legal pointees (ADR-0122 / issue #1014). |
+| GS0399 | Error | `stackalloc` element type must be a blittable (unmanaged) type. | A `stackalloc T[n]` whose element type `T` is a managed reference type or otherwise non-blittable (e.g. `stackalloc string[4]`); only blittable primitives and pointers are legal `stackalloc` element types (ADR-0124 / issue #1024). |
 | GS9007 | Error | A type may contain at most one `shared` block. | A class or struct with two `shared { ... }` blocks; merge them into one. |
 
 ### Reference closure diagnostics (GS9100)

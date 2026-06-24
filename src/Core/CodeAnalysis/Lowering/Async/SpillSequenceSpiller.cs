@@ -410,6 +410,7 @@ public static class SpillSequenceSpiller
                 case BoundInterpolatedStringExpression:
                 case BoundIndexExpression:
                 case BoundArrayCreationExpression:
+                case BoundStackAllocExpression:
                 case BoundLenExpression:
                 case BoundCapExpression:
                 case BoundAppendExpression:

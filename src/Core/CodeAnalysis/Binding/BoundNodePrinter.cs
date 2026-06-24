@@ -142,6 +142,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ArrayCreationExpression:
                 WriteArrayCreationExpression((BoundArrayCreationExpression)node, writer);
                 break;
+            case BoundNodeKind.StackAllocExpression:
+                WriteStackAllocExpression((BoundStackAllocExpression)node, writer);
+                break;
             case BoundNodeKind.MapLiteralExpression:
                 WriteMapLiteralExpression((BoundMapLiteralExpression)node, writer);
                 break;
@@ -1041,6 +1044,16 @@ public static class BoundNodePrinter
         }
 
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteStackAllocExpression(BoundStackAllocExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword("stackalloc");
+        writer.WriteSpace();
+        writer.WriteIdentifier(node.ElementType.Name);
+        writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
+        node.Count.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
     }
 
     private static void WriteArrayCreationExpression(BoundArrayCreationExpression node, IndentedTextWriter writer)
