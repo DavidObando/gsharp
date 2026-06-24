@@ -59,7 +59,7 @@ Several words are contextual rather than reserved. `data`, `inline`, `prop`, `ev
 
 ### Operators and punctuation
 
-Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, and `>>=`. The parser rewrites these as assignment with the corresponding binary operator. `++` and `--` are statement forms on identifiers. The null-coalescing compound assignment `??=` (ADR-0072) writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment--adr-0072) under *Statements*. The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`); see [Range and slice expressions](#range-and-slice-expressions-issue-1016). `@` begins annotations on declarations.
+Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, and `>>=`. The parser rewrites these as assignment with the corresponding binary operator. `++` and `--` are statement forms on identifiers. The null-coalescing compound assignment `??=` (ADR-0072) writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment--adr-0072) under *Statements*. The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`), and a leading `^n` marks a from-end index (`a[^1]`, `a[1..^1]`); see [Range and slice expressions](#range-and-slice-expressions-issue-1016). `@` begins annotations on declarations.
 
 ### Integer literals
 
@@ -687,7 +687,28 @@ The binder resolves the target type to one of the following sliceable shapes and
 | Span-like value (`int Length`/`int Count` + `Slice(int, int)`, e.g. `Span[T]`, `ReadOnlySpan[T]`, `Memory[T]`, `ArraySegment[T]`) | `value.Slice(start, length)` |
 | A type exposing an indexer accepting `System.Range` | the `this[System.Range]` indexer is called directly with a constructed `System.Range` |
 
-Slicing a target that matches none of these shapes reports `GS0392`. The from-end index operator (`^n`, as in `a[..^1]`) is **not** supported because `^` is already the one's-complement / bitwise-XOR operator in G#; from-end indices are tracked as a follow-up. Standalone `System.Range` values (`let r = 1..3`) are likewise not yet supported.
+Slicing a target that matches none of these shapes reports `GS0392`.
+
+#### From-end indices (`^n`, issue #1022)
+
+A **from-end index** marker `^n` (mirroring C# `System.Index` with `fromEnd: true`) is recognized in the *leading position* of an index or range bound. It measures the offset `n` from the end of the target, i.e. the concrete offset is `length - n`:
+
+```gsharp
+let xs = []int32{10, 20, 30, 40, 50}
+let last = xs[^1]    // last element -> 50
+let nth  = xs[^2]    // second from end -> 40
+let a = xs[1..^1]    // drop first and last -> {20, 30, 40}
+let b = xs[..^3]     // all but last 3 -> {10, 20}
+let c = xs[^2..]     // last 2 -> {40, 50}
+let s = "abcdef"
+let head = s[..^3]   // "abc"
+```
+
+A bare `a[^n]` reads the single element `length - n` from an array/slice, a `string`, or any value with an `int Length`/`int Count` property plus a `this[int]` or `this[System.Index]` indexer. Inside a range, a from-end bound computes `length - n` at lowering time for the array/string/span-like paths, and is passed through as `System.Index(n, fromEnd: true)` when the target exposes a `this[System.Range]` indexer.
+
+The `^n` marker is only recognized at the *start* of an index/range bound. Elsewhere — including inside the offset expression itself (e.g. `a[^(x ^ y)]`) — `^` keeps its ordinary prefix one's-complement and infix bitwise-XOR meanings unchanged. For example, `a[i ^ j]` is an XOR-computed single index, and `^5` outside brackets is one's-complement.
+
+Standalone `System.Range` values (`let r = 1..3`) are not yet supported and are tracked separately.
 
 ### Composite literals
 
@@ -1416,7 +1437,8 @@ BinaryOperator    ::= '*' | '/' | '%' | '<<' | '>>' | '&' | '&^'
 PrefixExpression  ::= ('+' | '-' | '!' | '^' | '*' | '&' | '<-' | 'await') PrefixExpression | PostfixExpression
 PostfixExpression ::= PrimaryExpression PostfixOp*
 PostfixOp         ::= '!!' | ('.' | '?.') NameOrCall | ('[' | '?[') IndexArgument ']'
-IndexArgument     ::= Expression | Expression? '..' Expression?   (* range/slice form, issue #1016 *)
+IndexArgument     ::= IndexBound | IndexBound? '..' IndexBound?   (* range/slice form, issue #1016; from-end via issue #1022 *)
+IndexBound        ::= '^'? Expression                            (* leading '^' marks a from-end index, issue #1022 *)
 NameOrCall        ::= identifier | Call | GenericCall
 PrimaryExpression ::= Literal | identifier
                     | Call | GenericCall | NullableTypeCall | ObjectCreation

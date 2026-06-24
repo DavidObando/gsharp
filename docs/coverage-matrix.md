@@ -98,6 +98,7 @@ ForEllipsisStatement
 ForInfiniteStatement
 ForKeyword
 ForRangeStatement
+FromEndIndexExpression
 FuncKeyword
 FunctionDeclaration
 FunctionLiteralExpression
