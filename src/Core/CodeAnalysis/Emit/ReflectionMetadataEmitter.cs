@@ -960,6 +960,18 @@ internal sealed class ReflectionMetadataEmitter
                 nextFieldRow += s.StaticFields.Length;
             }
 
+            // Issue #948 / issue #1070: const fields are emitted as CLR literal
+            // field rows (see TypeDefEmitter.EmitStructTypeDef), so they must be
+            // counted here too. Omitting them under-reserved the FieldDef range
+            // and shifted every following type's fieldList pointer by the const
+            // count, leaking the last field of a const-bearing type onto the next
+            // TypeDef (producing invalid IL such as `stsfld` of another type's
+            // initonly field in a `.cctor`).
+            if (!s.ConstFields.IsDefaultOrEmpty)
+            {
+                nextFieldRow += s.ConstFields.Length;
+            }
+
             // Issue #263: backing fields for static auto-properties.
             foreach (var p in s.StaticProperties)
             {
