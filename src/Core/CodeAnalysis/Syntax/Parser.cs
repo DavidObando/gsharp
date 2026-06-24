@@ -2159,6 +2159,22 @@ public class Parser
                 sharedMemberAsyncModifier = NextToken();
             }
 
+            // ADR-0122 / issue #1036: optional `unsafe` contextual modifier on a
+            // static `func` method inside a `shared` block, mirroring the
+            // instance-method path. Consumed only when immediately followed by
+            // `func` (or `async func`), so its SIGNATURE binds in an unsafe
+            // context too (the binder consults the per-method `IsUnsafe` flag).
+            SyntaxToken sharedMemberUnsafeModifier = null;
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
+                && (Peek(1).Kind == SyntaxKind.FuncKeyword || Peek(1).Kind == SyntaxKind.AsyncKeyword))
+            {
+                sharedMemberUnsafeModifier = NextToken();
+                if (sharedMemberAsyncModifier == null && Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
+                {
+                    sharedMemberAsyncModifier = NextToken();
+                }
+            }
+
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
                 if (sharedMemberAsyncModifier != null)
@@ -2183,8 +2199,30 @@ public class Parser
             }
             else if (Current.Kind == SyntaxKind.FuncKeyword)
             {
-                var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, openModifier: null, overrideModifier: null, sharedMemberAsyncModifier);
+                FunctionDeclarationSyntax method;
+                if (sharedMemberUnsafeModifier != null)
+                {
+                    this.unsafeDepth++;
+                }
+
+                try
+                {
+                    method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, openModifier: null, overrideModifier: null, sharedMemberAsyncModifier);
+                }
+                finally
+                {
+                    if (sharedMemberUnsafeModifier != null)
+                    {
+                        this.unsafeDepth--;
+                    }
+                }
+
                 method.WithAnnotations(memberAnnotations);
+                if (sharedMemberUnsafeModifier != null)
+                {
+                    method.UnsafeModifier = sharedMemberUnsafeModifier;
+                }
+
                 methods.Add(method);
             }
             else

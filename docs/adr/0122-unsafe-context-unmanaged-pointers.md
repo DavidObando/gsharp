@@ -43,8 +43,12 @@ parser positions, so existing identifiers named `unsafe` are unaffected
 elsewhere). It may appear as:
 
 - an **`unsafe` modifier on a function**: `unsafe func F(...) { ... }` — the
-  body, and (for free functions and externs) the signature, bind in an unsafe
-  context;
+  body and the signature bind in an unsafe context. This holds for a free
+  function, an extern, **and** (issue #1036) a *method* declared inside an
+  otherwise-*safe* type (instance, static/shared, or interface member): the
+  per-method `IsUnsafe` flag raises `UnsafeDepth` around that single method's
+  parameter/return-type binding, so one unsafe method may take/return unmanaged
+  pointers without marking the whole type `unsafe`;
 - an **`unsafe { ... }` block statement** inside an otherwise-safe function —
   the block's statements bind in an unsafe context (reuses
   `BlockStatementSyntax` with an `IsUnsafe` flag, no new node kind);
@@ -249,9 +253,16 @@ verification regressions without weakening ilverify globally.
   is indexable as `name[i]` (read/write) and passable as a `*T`. The element
   type must be a blittable primitive (GS0409) and `N` a positive constant
   (GS0408); use outside an unsafe context is rejected (GS0406).
-- **`unsafe func` method signature binding inside a *safe* type** (today only a
-  whole `unsafe class`/`unsafe struct`, or a free `unsafe func`/extern, binds
-  *signature* param/return types in unsafe context; an `unsafe func` *method*
-  in a safe type gets an unsafe *body* only).
+- **`unsafe func` method signature binding inside a *safe* type** —
+  **implemented** (issue #1036): an `unsafe func` *method* declared in an
+  otherwise-safe `class`/`struct` (instance, static/shared, or interface
+  member) now binds its **signature** (parameter + return types) in an unsafe
+  context too, not just its body. The per-method `IsUnsafe` flag raises
+  `BinderContext.UnsafeDepth` around member signature binding in
+  `DeclarationBinder`, mirroring the free-function / extern path; the
+  whole-type `unsafe class`/`unsafe struct` and free `unsafe func` behaviour is
+  unchanged, and a non-`unsafe` method's `*T` keeps its managed by-ref meaning
+  (GS0243). The `shared {}` static-method parser now also accepts the `unsafe`
+  modifier, matching the instance-method surface.
 - **`stackalloc`** (issue #1024) and **`fixed`** statement / pinning (issue
   #1026) are tracked separately and out of scope here.
