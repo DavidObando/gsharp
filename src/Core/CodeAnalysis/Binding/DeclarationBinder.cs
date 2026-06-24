@@ -1309,6 +1309,14 @@ internal sealed class DeclarationBinder
 
                 try
                 {
+                    // ADR-0122 / issue #1036: an `unsafe func` method binds its
+                    // SIGNATURE (parameter + return types) in an unsafe context
+                    // too — not just its body — so a single unsafe method in an
+                    // otherwise-safe type may take/return unmanaged raw pointers
+                    // (`*T` → CLR ELEMENT_TYPE_PTR). When the method is not
+                    // `unsafe` (and the enclosing type is safe) this is a no-op.
+                    using var sigUnsafeContext = binderCtx.PushUnsafeContext(methodSyntax.IsUnsafe);
+
                     var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
                     var seenParameterNames = new HashSet<string>();
                     for (var pIndex = 0; pIndex < methodSyntax.Parameters.Count; pIndex++)
@@ -2083,6 +2091,12 @@ internal sealed class DeclarationBinder
 
                 try
                 {
+                    // ADR-0122 / issue #1036: bind an `unsafe func` static/shared
+                    // method's signature (params + return) in an unsafe context
+                    // too, so it may use unmanaged raw pointers even when the
+                    // enclosing type is safe. No-op for a non-`unsafe` method.
+                    using var sigUnsafeContext = binderCtx.PushUnsafeContext(methodSyntax.IsUnsafe);
+
                     var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
                     var seenParameterNames = new HashSet<string>();
                     foreach (var parameterSyntax in methodSyntax.Parameters)
@@ -4305,6 +4319,11 @@ internal sealed class DeclarationBinder
 
             try
             {
+            // ADR-0122 / issue #1036: an `unsafe func` interface method binds its
+            // signature (params + return) in an unsafe context too, mirroring the
+            // class/struct member path. No-op for a non-`unsafe` method.
+            using var sigUnsafeContext = binderCtx.PushUnsafeContext(methodSyntax.IsUnsafe);
+
             // ADR-0063: overloads are allowed on interfaces; the post-bind signature
             // check below detects duplicate signatures. Name collision with a
             // property/event member of the same name is still rejected (handled later
