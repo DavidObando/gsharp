@@ -721,12 +721,12 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0152", $"Type argument '{typeArgument}' for type parameter '{typeParameterName}' does not satisfy the '{constraintDescription}' constraint.");
     }
 
-    /// <summary>Reports an interface used as a type-parameter constraint that is not <c>sealed</c> (Phase 4.2b / ADR-0020).</summary>
-    /// <param name="location">The text location of the interface reference.</param>
-    /// <param name="interfaceName">The interface name.</param>
-    public void ReportInterfaceConstraintNotSealed(TextLocation location, string interfaceName)
+    /// <summary>Reports a type used as a type-parameter constraint that is not an interface (issue #1052 generalises the former sealed-interface restriction).</summary>
+    /// <param name="location">The text location of the constraint reference.</param>
+    /// <param name="typeName">The offending type name.</param>
+    public void ReportConstraintNotInterface(TextLocation location, string typeName)
     {
-        Report(location, "GS0153", $"Interface '{interfaceName}' cannot be used as a type-parameter constraint because it is not declared 'sealed'.");
+        Report(location, "GS0153", $"Type '{typeName}' cannot be used as a type-parameter constraint because it is not an interface.");
     }
 
     /// <summary>

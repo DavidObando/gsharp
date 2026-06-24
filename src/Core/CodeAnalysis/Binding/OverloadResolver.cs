@@ -3543,7 +3543,7 @@ internal sealed class OverloadResolver
         return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable());
     }
 
-    public BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, ImmutableArray<string> argumentNames = default)
+    public BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, ImmutableArray<string> argumentNames = default, TypeParameterSymbol constrainedReceiverTypeParameter = null)
     {
         // Issue #950: enforce `protected` method access — only the declaring
         // type and its derived types may call it. The emitted IL also carries
@@ -3857,12 +3857,12 @@ internal sealed class OverloadResolver
             if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
             {
                 substitutedReturn = wrapAsTask(substitutedReturn);
-                return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), substitutedReturn);
+                return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), substitutedReturn, constrainedReceiverTypeParameter, constrainedReceiverTypeParameter?.InterfaceConstraint);
             }
 
             if (!ReferenceEquals(substitutedReturn, method.Type))
             {
-                return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), substitutedReturn);
+                return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), substitutedReturn, constrainedReceiverTypeParameter, constrainedReceiverTypeParameter?.InterfaceConstraint);
             }
         }
 
@@ -3872,10 +3872,10 @@ internal sealed class OverloadResolver
         if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
         {
             var asyncReturn = wrapAsTask(method.Type);
-            return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), asyncReturn);
+            return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), asyncReturn, constrainedReceiverTypeParameter, constrainedReceiverTypeParameter?.InterfaceConstraint);
         }
 
-        return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable());
+        return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), returnTypeOverride: null, constrainedReceiverTypeParameter, constrainedReceiverTypeParameter?.InterfaceConstraint);
     }
 
     private static Dictionary<TypeParameterSymbol, TypeSymbol> TryBuildReceiverSubstitution(TypeSymbol receiverType)

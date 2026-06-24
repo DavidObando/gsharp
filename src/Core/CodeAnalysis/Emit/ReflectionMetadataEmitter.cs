@@ -5634,6 +5634,27 @@ internal sealed class ReflectionMetadataEmitter
             return etd;
         }
 
+        // Issue #1052: a user-declared interface used as a generic-parameter
+        // constraint tokenises to its emitted TypeDef (non-generic) or a
+        // TypeSpec naming the constructed instantiation (generic, e.g. the
+        // self-referential `[T IFace[T]]`). This feeds the
+        // GenericParamConstraint metadata row so the assembly verifies.
+        if (element is InterfaceSymbol ifaceSym)
+        {
+            if (IsUserGenericInterfaceReference(ifaceSym))
+            {
+                var sigBlob = new BlobBuilder();
+                this.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), ifaceSym);
+                return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+            }
+
+            var ifaceDef = ifaceSym.Definition ?? ifaceSym;
+            if (this.cache.InterfaceTypeDefs.TryGetValue(ifaceDef, out var itd))
+            {
+                return itd;
+            }
+        }
+
         throw new NotSupportedException($"Cannot resolve element type token for '{element.Name}'.");
     }
 

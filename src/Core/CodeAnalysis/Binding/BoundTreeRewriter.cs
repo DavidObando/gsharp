@@ -1764,7 +1764,7 @@ public abstract class BoundTreeRewriter
         // produced an invalid box at the call boundary — leading to a hang
         // because the inner async member's task never visibly completed from
         // the caller's perspective.
-        return new BoundUserInstanceCallExpression(null, receiver, node.Method, builder?.ToImmutable() ?? node.Arguments, node.Type);
+        return new BoundUserInstanceCallExpression(null, receiver, node.Method, builder?.ToImmutable() ?? node.Arguments, node.Type, node.ConstrainedReceiverTypeParameter, node.ConstrainedInterfaceType);
     }
 
     /// <summary>Rewrites an explicit-base interface call (ADR-0091).</summary>
