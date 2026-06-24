@@ -2804,31 +2804,32 @@ internal sealed class DeclarationBinder
                         continue;
                     }
 
-                    var found = false;
-                    foreach (var implProp in structSymbol.Properties)
+                    // Issue #1066: an interface property may be satisfied by a
+                    // property implemented (or inherited) ANYWHERE in the base
+                    // chain, not only one declared directly on this class.
+                    // TypeMemberModel.TryGetProperty walks BaseClass this-first,
+                    // mirroring C# semantics where a base class's accessible
+                    // instance member satisfies an interface listed on a
+                    // derived class.
+                    var found = TypeMemberModel.TryGetProperty(structSymbol, iprop.Name, out var implProp);
+                    if (found)
                     {
-                        if (implProp.Name == iprop.Name)
+                        if (iprop.HasGetter && !implProp.HasGetter)
                         {
-                            if (iprop.HasGetter && !implProp.HasGetter)
-                            {
-                                Diagnostics.ReportInterfaceMethodNotImplemented(
-                                    syntax.Identifier.Location,
-                                    structSymbol.Name,
-                                    iface.Name,
-                                    iprop.Name + " (getter)");
-                            }
+                            Diagnostics.ReportInterfaceMethodNotImplemented(
+                                syntax.Identifier.Location,
+                                structSymbol.Name,
+                                iface.Name,
+                                iprop.Name + " (getter)");
+                        }
 
-                            if (iprop.HasSetter && !implProp.HasSetter)
-                            {
-                                Diagnostics.ReportInterfaceMethodNotImplemented(
-                                    syntax.Identifier.Location,
-                                    structSymbol.Name,
-                                    iface.Name,
-                                    iprop.Name + " (setter)");
-                            }
-
-                            found = true;
-                            break;
+                        if (iprop.HasSetter && !implProp.HasSetter)
+                        {
+                            Diagnostics.ReportInterfaceMethodNotImplemented(
+                                syntax.Identifier.Location,
+                                structSymbol.Name,
+                                iface.Name,
+                                iprop.Name + " (setter)");
                         }
                     }
 
