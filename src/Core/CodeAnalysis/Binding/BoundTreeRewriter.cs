@@ -346,6 +346,8 @@ public abstract class BoundTreeRewriter
                 return RewriteConstrainedStaticCallExpression((BoundConstrainedStaticCallExpression)node);
             case BoundNodeKind.ArrayCreationExpression:
                 return RewriteArrayCreationExpression((BoundArrayCreationExpression)node);
+            case BoundNodeKind.StackAllocExpression:
+                return RewriteStackAllocExpression((BoundStackAllocExpression)node);
             case BoundNodeKind.MapLiteralExpression:
                 return RewriteMapLiteralExpression((BoundMapLiteralExpression)node);
             case BoundNodeKind.MapDeleteExpression:
@@ -1216,6 +1218,20 @@ public abstract class BoundTreeRewriter
         }
 
         return builder == null ? node : new BoundArrayCreationExpression(null, node.ContainerType, builder.MoveToImmutable());
+    }
+
+    /// <summary>
+    /// ADR-0124 / issue #1024: rewrites a <see cref="BoundStackAllocExpression"/>
+    /// by rewriting its element-count subexpression.
+    /// </summary>
+    /// <param name="node">The stackalloc node to rewrite.</param>
+    /// <returns>The rewritten node, or the original when unchanged.</returns>
+    protected virtual BoundExpression RewriteStackAllocExpression(BoundStackAllocExpression node)
+    {
+        var newCount = RewriteExpression(node.Count);
+        return newCount == node.Count
+            ? node
+            : new BoundStackAllocExpression(node.Syntax, node.ResultType, node.ElementType, newCount, node.IsPointerForm);
     }
 
     /// <summary>Rewrites a map literal expression.</summary>

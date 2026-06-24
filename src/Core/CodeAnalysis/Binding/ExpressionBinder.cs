@@ -157,6 +157,17 @@ internal sealed partial class ExpressionBinder
 
     internal BoundExpression BindExpression(ExpressionSyntax syntax, TypeSymbol targetType)
     {
+        // ADR-0124 / issue #1024: a `stackalloc T[n]` initialising an
+        // unmanaged-pointer target (`*T`, only spellable in an unsafe context)
+        // yields the raw `T*` pointer rather than the default `Span<T>`. The
+        // target type must reach the stackalloc binder, so intercept before
+        // the generic conversion path (which would bind the safe Span<T> form
+        // and then fail to convert it to a pointer).
+        if (syntax is StackAllocExpressionSyntax stackAlloc && targetType is PointerTypeSymbol)
+        {
+            return BindStackAllocExpression(stackAlloc, targetType);
+        }
+
         return conversions.BindConversion(syntax, targetType);
     }
 
@@ -200,6 +211,8 @@ internal sealed partial class ExpressionBinder
                 return BindAccessorExpression((AccessorExpressionSyntax)syntax);
             case SyntaxKind.ArrayCreationExpression:
                 return BindArrayCreationExpression((ArrayCreationExpressionSyntax)syntax);
+            case SyntaxKind.StackAllocExpression:
+                return BindStackAllocExpression((StackAllocExpressionSyntax)syntax);
             case SyntaxKind.MapCreationExpression:
                 return BindMapCreationExpression((MapCreationExpressionSyntax)syntax);
             case SyntaxKind.IndexExpression:

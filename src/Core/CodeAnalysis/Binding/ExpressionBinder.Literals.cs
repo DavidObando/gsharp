@@ -876,6 +876,52 @@ internal sealed partial class ExpressionBinder
         return new BoundArrayCreationExpression(null, ArrayTypeSymbol.Get(elementType, length), elements.ToImmutable());
     }
 
+    /// <summary>
+    /// ADR-0124 / issue #1024: binds a stack-allocation expression
+    /// <c>stackalloc T[n]</c>. The default (safe) result is a
+    /// <c>System.Span&lt;T&gt;</c> over the <c>localloc</c>'d memory and needs
+    /// no <c>unsafe</c> context. When <paramref name="targetType"/> is an
+    /// unmanaged pointer <c>*T</c> (only spellable inside an <c>unsafe</c>
+    /// context, ADR-0122) whose pointee matches <c>T</c>, the raw <c>T*</c>
+    /// pointer is produced instead.
+    /// </summary>
+    /// <param name="syntax">The stackalloc syntax.</param>
+    /// <param name="targetType">The contextual target type, or <see langword="null"/>.</param>
+    /// <returns>The bound stackalloc expression.</returns>
+    internal BoundExpression BindStackAllocExpression(StackAllocExpressionSyntax syntax, TypeSymbol targetType = null)
+    {
+        var elementType = lookupType(syntax.ElementTypeIdentifier.Text);
+        if (elementType == null)
+        {
+            Diagnostics.ReportUndefinedType(syntax.ElementTypeIdentifier.Location, syntax.ElementTypeIdentifier.Text);
+            return new BoundErrorExpression(null);
+        }
+
+        // The element type must be unmanaged/blittable: the buffer is raw,
+        // contiguous, GC-untracked stack memory, so a managed reference (or a
+        // type structurally containing one) cannot live in it.
+        if (!TypeSymbol.IsLegalPointeeType(elementType) || elementType.ClrType == null)
+        {
+            Diagnostics.ReportStackAllocElementTypeNotBlittable(syntax.ElementTypeIdentifier.Location, elementType.Name);
+            return new BoundErrorExpression(null);
+        }
+
+        var count = conversions.BindConversion(syntax.CountExpression, TypeSymbol.Int32);
+
+        // Unsafe pointer form: only when the declaration target is an unmanaged
+        // pointer `*T`. A PointerTypeSymbol can only be produced inside an
+        // unsafe context (ADR-0122), so the unsafe gating is intrinsic.
+        if (targetType is PointerTypeSymbol)
+        {
+            var pointerType = PointerTypeSymbol.Get(elementType);
+            return new BoundStackAllocExpression(syntax, pointerType, elementType, count, isPointerForm: true);
+        }
+
+        // Safe form: yield a Span<T> over the allocated memory.
+        var spanType = TypeSymbol.FromClrType(typeof(System.Span<>).MakeGenericType(elementType.ClrType));
+        return new BoundStackAllocExpression(syntax, spanType, elementType, count, isPointerForm: false);
+    }
+
     private BoundExpression BindMapCreationExpression(MapCreationExpressionSyntax syntax)
     {
         // ADR-0104: bind `map[K,V]{k1: v1, k2: v2, …}`.

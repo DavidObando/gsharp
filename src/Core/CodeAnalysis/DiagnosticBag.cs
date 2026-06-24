@@ -1536,6 +1536,21 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// GS0399: a <c>stackalloc T[n]</c> expression (ADR-0124 / issue #1024)
+    /// names an element type <c>T</c> that is not unmanaged/blittable. Stack
+    /// buffers are raw, GC-untracked memory, so only blittable primitives
+    /// (<c>int8</c>…<c>int64</c>, <c>uint8</c>…<c>uint64</c>, <c>nint</c>,
+    /// <c>nuint</c>, <c>float32</c>, <c>float64</c>, <c>bool</c>, <c>char</c>)
+    /// and pointers are permitted as the element type.
+    /// </summary>
+    /// <param name="location">The text location of the element-type identifier.</param>
+    /// <param name="typeName">The illegal element type name.</param>
+    public void ReportStackAllocElementTypeNotBlittable(TextLocation location, string typeName)
+    {
+        Report(location, "GS0399", $"'stackalloc' element type '{typeName}' must be a blittable/unmanaged type (a primitive or pointer); managed types are not supported (ADR-0124).");
+    }
+
+    /// <summary>
     /// Reports that an <c>async func(...)</c> type clause has an explicit
     /// <c>Task[…]</c> (or other Task-shaped) return type. The <c>async</c>
     /// modifier already implies a Task wrap, so the explicit wrap is

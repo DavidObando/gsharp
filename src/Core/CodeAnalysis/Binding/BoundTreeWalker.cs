@@ -188,6 +188,9 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.ArrayCreationExpression:
                 VisitArrayCreationExpression((BoundArrayCreationExpression)node);
                 break;
+            case BoundNodeKind.StackAllocExpression:
+                VisitStackAllocExpression((BoundStackAllocExpression)node);
+                break;
             case BoundNodeKind.MapLiteralExpression:
                 VisitMapLiteralExpression((BoundMapLiteralExpression)node);
                 break;
@@ -577,6 +580,11 @@ public abstract class BoundTreeWalker
         }
 
         VisitList(node.Elements);
+    }
+
+    protected virtual void VisitStackAllocExpression(BoundStackAllocExpression node)
+    {
+        VisitExpression(node.Count);
     }
 
     protected virtual void VisitMapLiteralExpression(BoundMapLiteralExpression node)

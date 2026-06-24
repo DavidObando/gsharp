@@ -214,6 +214,7 @@ ShiftRightEqualsToken
 ShiftRightToken
 SlashEqualsToken
 SlashToken
+StackAllocExpression
 StarEqualsToken
 StarToken
 StringToken
@@ -337,6 +338,7 @@ ReturnStatement
 ScopeStatement
 SelectStatement
 SpillSequenceExpression
+StackAllocExpression
 StateMachineAwaitOnCompleted
 StateMachineBuilderMoveNext
 StructLiteralExpression

@@ -6129,6 +6129,17 @@ public class Parser
                 return ParseThrowExpression();
 
             case SyntaxKind.IdentifierToken
+                when Current.Text == "stackalloc"
+                     && Peek(1).Kind == SyntaxKind.IdentifierToken
+                     && Peek(2).Kind == SyntaxKind.OpenSquareBracketToken:
+                // ADR-0124 / issue #1024: `stackalloc T[n]` is a
+                // stack-allocation expression. `stackalloc` is a contextual
+                // keyword recognised only in the precise `stackalloc IDENT [`
+                // shape, so any existing identifier named `stackalloc` in any
+                // other position continues to lex as a plain identifier.
+                return ParsePostfixChain(ParseStackAllocExpression());
+
+            case SyntaxKind.IdentifierToken
                 when Current.Text == "base" && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken:
                 // ADR-0091 / issue #757: explicit-base interface call
                 // `base[IFoo].M(args)`. `base` is recognized as a contextual
@@ -6775,6 +6786,29 @@ public class Parser
             openBrace,
             elements,
             closeBrace);
+    }
+
+    // ADR-0124 / issue #1024: parses a stack-allocation expression
+    // `stackalloc T[n]`. The leading `stackalloc` is a contextual keyword and
+    // the dispatcher in ParsePrimaryExpression only routes here for the exact
+    // `stackalloc IDENT [` shape. The count is a full expression (so a runtime
+    // length such as `stackalloc uint8[count]` is accepted, mirroring the
+    // runtime-length array form). A stackalloc initializer
+    // (`stackalloc T[n]{ … }`) is deferred (follow-up referencing #1024).
+    private ExpressionSyntax ParseStackAllocExpression()
+    {
+        var stackAllocKeyword = MatchToken(SyntaxKind.IdentifierToken);
+        var elementType = MatchToken(SyntaxKind.IdentifierToken);
+        var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+        var count = ParseExpression();
+        var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        return new StackAllocExpressionSyntax(
+            syntaxTree,
+            stackAllocKeyword,
+            elementType,
+            openBracket,
+            count,
+            closeBracket);
     }
 
     private SeparatedSyntaxList<ExpressionSyntax> ParseArrayInitializerElements()

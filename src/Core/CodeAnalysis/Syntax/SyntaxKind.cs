@@ -160,6 +160,7 @@ public enum SyntaxKind
     CallExpression,
     AccessorExpression,
     ArrayCreationExpression,
+    StackAllocExpression,
     MapCreationExpression,
     MapEntry,
     IndexExpression,

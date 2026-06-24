@@ -323,6 +323,9 @@ internal sealed partial class MethodBodyEmitter
             case BoundArrayCreationExpression arr:
                 this.EmitArrayCreation(arr);
                 break;
+            case BoundStackAllocExpression stackAlloc:
+                this.EmitStackAlloc(stackAlloc);
+                break;
             case BoundIndexExpression idx:
                 if (idx.Target.Type is MapTypeSymbol)
                 {
@@ -694,6 +697,55 @@ internal sealed partial class MethodBodyEmitter
             this.EmitExpression(arr.Elements[i]);
             this.EmitStoreElement(arr.ElementType);
         }
+    }
+
+    // ADR-0124 / issue #1024: emits a `stackalloc T[n]` expression as a CIL
+    // `localloc` over `n * sizeof(T)` bytes. The element count is evaluated
+    // once into a pre-allocated int32 scratch slot (receiverSpillSlots[node]),
+    // then read back for the byte-size computation and — for the safe Span<T>
+    // form — the `Span<T>(void*, int)` length argument. The localloc'd memory
+    // is zero-initialised because every emitted method body sets the
+    // `.locals init` (InitLocals) flag, matching C#'s safe-stackalloc
+    // guarantee. The pointer form simply leaves the raw `void*`/`T*` on the
+    // stack. localloc IL is unverifiable by design (see ADR-0124 / ADR-0122).
+    private void EmitStackAlloc(BoundStackAllocExpression node)
+    {
+        if (!this.receiverSpillSlots.TryGetValue(node, out var countSlot))
+        {
+            throw new InvalidOperationException(
+                "stackalloc count scratch slot was not pre-allocated by the method-body planner.");
+        }
+
+        var elementClr = node.ElementType.ClrType
+            ?? throw new InvalidOperationException(
+                $"stackalloc element type '{node.ElementType.Name}' has no CLR type.");
+
+        // count -> scratch slot (single evaluation).
+        this.EmitExpression(node.Count);
+        this.il.StoreLocal(countSlot);
+
+        // bytes = count * sizeof(T); localloc -> void* (native int).
+        this.il.LoadLocal(countSlot);
+        this.il.OpCode(ILOpCode.Sizeof);
+        this.il.Token(this.outer.GetTypeReference(elementClr));
+        this.il.OpCode(ILOpCode.Mul);
+        this.il.OpCode(ILOpCode.Conv_u);
+        this.il.OpCode(ILOpCode.Localloc);
+
+        if (node.IsPointerForm)
+        {
+            // The raw localloc pointer IS the result (`T*`).
+            return;
+        }
+
+        // Safe form: construct a Span<T> over [ptr, count].
+        this.il.LoadLocal(countSlot);
+        var spanClr = typeof(System.Span<>).MakeGenericType(elementClr);
+        var spanCtor = spanClr.GetConstructor(new[] { typeof(void).MakePointerType(), typeof(int) })
+            ?? throw new InvalidOperationException(
+                $"System.Span<{elementClr.Name}> has no (void*, int) constructor.");
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(this.outer.GetCtorReference(spanCtor));
     }
 
     private void EmitLen(BoundLenExpression len)

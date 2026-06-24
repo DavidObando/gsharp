@@ -8761,6 +8761,16 @@ internal sealed class ReflectionMetadataEmitter
             case "System.UIntPtr":
                 encoder.UIntPtr();
                 break;
+            case "System.Void":
+                // ADR-0124 / issue #1024: `void*` (the first parameter of
+                // `Span<T>(void* pointer, int length)`) encodes as PTR VOID.
+                // The pointer prefix is written by the parent `encoder.Pointer()`
+                // call (see the IsPointer branch above); here we emit the raw
+                // ELEMENT_TYPE_VOID for the pointee. SignatureTypeEncoder has no
+                // Void() helper (void is only valid as a return or pointee), so
+                // write the type-code byte directly.
+                encoder.Builder.WriteByte((byte)System.Reflection.Metadata.SignatureTypeCode.Void);
+                break;
             default:
                 if (type == null)
                 {
