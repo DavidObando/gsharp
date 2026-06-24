@@ -409,6 +409,8 @@ internal sealed class StateMachineEmitter
                         HasReferenceTypeConstraint = outerTP.HasReferenceTypeConstraint,
                         HasValueTypeConstraint = outerTP.HasValueTypeConstraint,
                         HasDefaultConstructorConstraint = outerTP.HasDefaultConstructorConstraint,
+                        ClrInterfaceConstraint = outerTP.ClrInterfaceConstraint,
+                        ClassConstraint = outerTP.ClassConstraint,
                         IsMethodTypeParameter = false,
                     };
                     b.Add(classTP);

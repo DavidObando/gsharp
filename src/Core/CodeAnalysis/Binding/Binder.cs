@@ -3304,6 +3304,15 @@ public sealed class Binder
             return false;
         }
 
+        // Issue #1056: enforce a base-class constraint, e.g. `[T Animal]`. The
+        // type argument must be the constraint class itself or derive from it
+        // (mirrors C#'s `where T : BaseClass`).
+        if (tp.ClassConstraint != null
+            && !SatisfiesClassConstraint(typeArgument, tp.ClassConstraint))
+        {
+            return false;
+        }
+
         if (tp.Constraint == TypeParameterConstraint.Comparable && !IsComparable(typeArgument))
         {
             return false;
@@ -3327,6 +3336,61 @@ public sealed class Binder
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #1056: returns <see langword="true"/> when <paramref name="typeArgument"/>
+    /// satisfies a base-class constraint <paramref name="classConstraint"/> — it
+    /// is the constraint class itself (by definition identity, so a constructed
+    /// instantiation of the same generic class counts) or transitively derives
+    /// from it. A constraining type parameter whose own class constraint already
+    /// derives from the target is accepted (constraint propagation). For an
+    /// imported reference class the CLR assignability relation is used.
+    /// </summary>
+    /// <param name="typeArgument">The candidate type argument.</param>
+    /// <param name="classConstraint">The required base class.</param>
+    /// <returns><see langword="true"/> when the argument is or derives from the constraint class.</returns>
+    internal static bool SatisfiesClassConstraint(TypeSymbol typeArgument, TypeSymbol classConstraint)
+    {
+        if (typeArgument is null || classConstraint is null)
+        {
+            return false;
+        }
+
+        // Constraint propagation: a type parameter constrained to a class that
+        // is or derives from the target satisfies the bound.
+        if (typeArgument is TypeParameterSymbol tpArg)
+        {
+            return tpArg.ClassConstraint != null
+                && SatisfiesClassConstraint(tpArg.ClassConstraint, classConstraint);
+        }
+
+        if (classConstraint is StructSymbol classDef)
+        {
+            var constraintDef = classDef.Definition ?? classDef;
+            if (typeArgument is StructSymbol argClass)
+            {
+                for (var current = argClass; current != null; current = current.BaseClass)
+                {
+                    var currentDef = current.Definition ?? current;
+                    if (ReferenceEquals(currentDef, constraintDef) || ReferenceEquals(current, classConstraint))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        // Imported reference class: use CLR assignability when both project to a
+        // CLR type.
+        if (classConstraint.ClrType is { } constraintClr && typeArgument.ClrType is { } argClr)
+        {
+            return constraintClr.IsAssignableFrom(argClr);
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -3712,6 +3776,11 @@ public sealed class Binder
         if (tp.ClrInterfaceConstraint != null)
         {
             flags.Add(tp.ClrInterfaceConstraint.Name);
+        }
+
+        if (tp.ClassConstraint != null)
+        {
+            flags.Add(tp.ClassConstraint.Name);
         }
 
         if (tp.Constraint == TypeParameterConstraint.Comparable)

@@ -212,16 +212,31 @@ AreaOf(Square{})
     [Fact]
     public void GenericConstraint_NonInterfaceType_Diagnoses()
     {
-        // Issue #1052: only interfaces may be constraints. A class/struct used
-        // as a constraint is still rejected with GS0153 (repurposed message).
+        // Issue #1056: a base CLASS is now a legal constraint, but a value type
+        // (a non-class struct) is still rejected with GS0153 (repurposed
+        // message) — C# forbids `where T : SomeStruct`.
+        var source = @"
+struct Val { var X int32 }
+
+func F[T Val](x T) int32 { return 0 }
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0153");
+    }
+
+    [Fact]
+    public void GenericConstraint_BaseClassType_Binds()
+    {
+        // Issue #1056: a base class is a legal constraint (mirrors C#'s
+        // `where T : BaseClass`); the former GS0153 rejection is removed.
         var source = @"
 class Base {}
 
 func F[T Base](x T) int32 { return 0 }
 ";
         var result = Evaluate(source);
-        Assert.NotEmpty(result.Diagnostics);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0153");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0153");
     }
 
     private static EvaluationResult Evaluate(string source)

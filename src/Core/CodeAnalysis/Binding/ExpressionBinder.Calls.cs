@@ -2387,6 +2387,34 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
+            // Issue #1056: dispatch through a type parameter's base-class
+            // constraint, just as if the receiver were typed as the base class
+            // itself (e.g. `x.Speak()` where `x : T` and `T : Animal`). The
+            // constrained type parameter is threaded into the bound call so the
+            // emitter produces a verifiable `constrained. !!T  callvirt
+            // Animal::Speak()` sequence. The `constrained.` prefix is required
+            // even though `T` is a reference type: a bare `callvirt` on the
+            // unboxed `!!T` value is rejected by the verifier (StackUnexpected),
+            // because the static stack type is `!!T`, not the base class. Unlike
+            // the interface paths the method token is the class's own MethodDef
+            // (resolved by EmitUserInstanceCall when the constraint type is not
+            // an interface), so no interface MemberRef is produced.
+            if (receiver != null && receiver.Type is TypeParameterSymbol tpClassRecv
+                && tpClassRecv.ClassConstraint is StructSymbol tpClassConstraint)
+            {
+                var tpClassOverloads = TypeMemberModel.GetMethods(tpClassConstraint, methodName, MemberQuery.Instance(MemberKinds.Method));
+                if (tpClassOverloads.Length > 0)
+                {
+                    var tpClassMethod = overloads.SelectInstanceOverloadOrReport(tpClassOverloads, arguments, ce, methodName, argumentNames);
+                    if (tpClassMethod == null)
+                    {
+                        return new BoundErrorExpression(null);
+                    }
+
+                    return overloads.BindUserInstanceCall(receiver, tpClassMethod, arguments, ce, argumentNames, constrainedReceiverTypeParameter: tpClassRecv);
+                }
+            }
+
             // Issue #943: dispatch through a type parameter's *imported CLR*
             // interface constraint (generic or not), e.g. `a.CompareTo(b)` where
             // `a : T` and `T : IComparable[T]`. Emitted as a verifiable

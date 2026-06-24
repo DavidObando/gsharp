@@ -54,6 +54,22 @@ public sealed class TypeParameterSymbol : TypeSymbol
     public TypeSymbol ClrInterfaceConstraint { get; set; }
 
     /// <summary>
+    /// Gets or sets the base-class (non-interface) constraint, if any (issue
+    /// #1056). Holds the user-declared class (a <see cref="StructSymbol"/> with
+    /// <see cref="StructSymbol.IsClass"/>, possibly a constructed generic such
+    /// as the self-referential <c>[T Box[T]]</c>) or an imported reference-type
+    /// class that a type argument must derive from (or equal). Mirrors C#'s
+    /// <c>where T : BaseClass</c>. C# permits at most one class constraint; G#'s
+    /// single legacy constraint slot enforces this structurally. The emitter
+    /// projects this onto a <c>GenericParamConstraint</c> metadata row and
+    /// dispatches instance members declared on the base class through a normal
+    /// <c>callvirt</c> on the (reference-typed) type parameter — no
+    /// <c>constrained.</c> prefix is required because the bound proves <c>T</c>
+    /// is a reference type.
+    /// </summary>
+    public TypeSymbol ClassConstraint { get; set; }
+
+    /// <summary>
     /// Gets the single interface bound carried by this type parameter, if any —
     /// either the G# <see cref="InterfaceConstraint"/> or the imported
     /// <see cref="ClrInterfaceConstraint"/> (issue #943). Used by the emitter to
@@ -61,6 +77,15 @@ public sealed class TypeParameterSymbol : TypeSymbol
     /// constraint satisfaction at call sites.
     /// </summary>
     public TypeSymbol ConstraintInterfaceType => (TypeSymbol)InterfaceConstraint ?? ClrInterfaceConstraint;
+
+    /// <summary>
+    /// Gets the single TypeDefOrRefOrSpec bound this type parameter projects onto
+    /// a <c>GenericParamConstraint</c> metadata row — the interface bound
+    /// (<see cref="ConstraintInterfaceType"/>) or the base-class bound
+    /// (<see cref="ClassConstraint"/>, issue #1056). At most one of these is set
+    /// for a given type parameter.
+    /// </summary>
+    public TypeSymbol ConstraintReferenceType => ConstraintInterfaceType ?? ClassConstraint;
 
     /// <summary>
     /// Gets or sets a value indicating whether this type parameter carries a

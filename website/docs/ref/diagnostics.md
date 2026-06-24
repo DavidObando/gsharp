@@ -110,7 +110,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0150 | Error | Type-parameter variance position violation. | A covariant type parameter used in a contravariant position. |
 | GS0151 | Error | Type argument inference failed. | The compiler could not infer a type argument from the call arguments. |
 | GS0152 | Error | Type argument does not satisfy constraint. | `f[MyStruct]()` where `MyStruct` does not implement the required interface constraint. |
-| GS0153 | Error | Constraint is not an interface. | A generic type-parameter constraint must be an interface (any interface — sealed or not, generic or not); a class, struct, or other type is rejected (issue #1052). |
+| GS0153 | Error | Constraint is neither an interface nor a class. | A generic type-parameter constraint must be an interface (any interface — sealed or not, generic or not; issue #1052) or a base class (issue #1056); a value type such as a struct or enum is rejected. |
 | GS0154 | Error | Wrong argument type. | A positional argument's type does not match the parameter type. |
 | GS0155 | Error | Cannot convert type. | An explicit cast between incompatible types. |
 | GS0156 | Error | Cannot convert implicitly; explicit conversion exists. | `int x = 3.14` — an explicit cast is available but was not written. |

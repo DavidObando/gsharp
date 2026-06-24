@@ -83,17 +83,32 @@ Describe[NotAShape](NotAShape{X: 1})
     }
 
     [Fact]
-    public void NonInterfaceConstraint_ReportsGS0153()
+    public void NonInterfaceValueTypeConstraint_ReportsGS0153()
     {
-        // Only interfaces are legal constraints; a class is rejected.
+        // Issue #1056: a base CLASS is now a legal constraint, but a value type
+        // (a non-class struct) is still rejected — C# forbids
+        // `where T : SomeStruct`.
+        var source = @"
+struct Val { var X int32 }
+
+func F[T Val](x T) int32 { return 0 }
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0153");
+    }
+
+    [Fact]
+    public void BaseClassConstraint_NoLongerReportsGS0153()
+    {
+        // Issue #1056: a base class is now a legal constraint (was GS0153).
         var source = @"
 class Base {}
 
 func F[T Base](x T) int32 { return 0 }
 ";
         var result = Evaluate(source);
-        Assert.NotEmpty(result.Diagnostics);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0153");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0153");
     }
 
     [Fact]
