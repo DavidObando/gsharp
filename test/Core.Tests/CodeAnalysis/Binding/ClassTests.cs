@@ -439,6 +439,82 @@ class B : A {
     }
 
     [Fact]
+    public void Override_ConstructedGenericBase_UsingTypeParams_Binds()
+    {
+        // Issue #1055: the base member signature USES the base's type
+        // parameters and the base is inherited as a constructed generic, so the
+        // matcher must substitute TIn->int32, TOut->int32 before comparing.
+        var source = @"
+open class Base[TIn, TOut] {
+    open func Transform(x TIn) TOut;
+}
+class Derived : Base[int32, int32] {
+    override func Transform(x int32) int32 { return x + 1 }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void Override_ConstructedGenericBase_Property_UsingTypeParam_Binds()
+    {
+        // Issue #1055: property whose type is the base's type parameter.
+        var source = @"
+open class Holder[T] {
+    open prop Value T { get; }
+}
+class IntHolder : Holder[int32] {
+    override prop Value int32 { get { return 7 } }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void Override_ConstructedGenericBase_TwoLevels_Binds()
+    {
+        // Issue #1055: substitution must compose across each inheritance hop
+        // (Leaf : Mid[int32] : Base[T]).
+        var source = @"
+open class Base[T] {
+    open prop Size int32 { get; }
+}
+open class Mid[T] : Base[T] {
+    open func Do(x T) T;
+}
+open class Leaf : Mid[int32] {
+    override prop Size int32 { get { return 1 } }
+    override func Do(x int32) int32 { return x + 100 }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void Override_ConstructedGenericBase_RealMismatch_Diagnoses()
+    {
+        // Issue #1055: after substituting TIn->int32, TOut->int32 the override's
+        // parameter type (string) genuinely mismatches and must still report.
+        var source = @"
+open class Base[TIn, TOut] {
+    open func Transform(x TIn) TOut;
+}
+class Derived : Base[int32, int32] {
+    override func Transform(x string) int32 { return 1 }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("match the base method"));
+    }
+
+    [Fact]
     public void Inheritance_InheritedFieldAccessibleByBareName()
     {
         var source = @"

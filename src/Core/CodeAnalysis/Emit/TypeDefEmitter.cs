@@ -91,6 +91,8 @@ internal sealed class TypeDefEmitter
     private readonly Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol;
     private readonly Action<ReturnTypeEncoder, TypeSymbol, RefKind> encodeReturnSymbol;
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
+    private readonly Func<StructSymbol, EntityHandle> getUserStructTypeSpec;
+    private readonly Func<StructSymbol, EntityHandle> resolveConstructedBaseCtorToken;
     private readonly Func<ParameterHandle> nextParameterHandle;
     private readonly Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes;
     private readonly Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter;
@@ -110,6 +112,8 @@ internal sealed class TypeDefEmitter
         Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol,
         Action<ReturnTypeEncoder, TypeSymbol, RefKind> encodeReturnSymbol,
         Func<Type, TypeReferenceHandle> getTypeReference,
+        Func<StructSymbol, EntityHandle> getUserStructTypeSpec,
+        Func<StructSymbol, EntityHandle> resolveConstructedBaseCtorToken,
         Func<ParameterHandle> nextParameterHandle,
         Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes,
         Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter,
@@ -128,6 +132,8 @@ internal sealed class TypeDefEmitter
         this.encodeTypeSymbol = encodeTypeSymbol ?? throw new ArgumentNullException(nameof(encodeTypeSymbol));
         this.encodeReturnSymbol = encodeReturnSymbol ?? throw new ArgumentNullException(nameof(encodeReturnSymbol));
         this.getTypeReference = getTypeReference ?? throw new ArgumentNullException(nameof(getTypeReference));
+        this.getUserStructTypeSpec = getUserStructTypeSpec ?? throw new ArgumentNullException(nameof(getUserStructTypeSpec));
+        this.resolveConstructedBaseCtorToken = resolveConstructedBaseCtorToken ?? throw new ArgumentNullException(nameof(resolveConstructedBaseCtorToken));
         this.nextParameterHandle = nextParameterHandle ?? throw new ArgumentNullException(nameof(nextParameterHandle));
         this.emitUserAttributes = emitUserAttributes ?? throw new ArgumentNullException(nameof(emitUserAttributes));
         this.emitIsReadOnlyAttributeOnParameter = emitIsReadOnlyAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitIsReadOnlyAttributeOnParameter));
@@ -418,6 +424,14 @@ internal sealed class TypeDefEmitter
                 // System.Attribute, regardless of any other resolution.
                 baseType = this.wellKnown.GetSystemAttributeTypeRef();
             }
+            else if (structSym.BaseClass != null && !structSym.BaseClass.TypeArguments.IsDefaultOrEmpty)
+            {
+                // Issue #1055: the base is a CONSTRUCTED generic user class
+                // (e.g. `Derived : Base[int32]`). Reference it via a TypeSpec
+                // naming the generic instantiation so the runtime sees the
+                // correct base subobject layout, vtable slots and type identity.
+                baseType = this.getUserStructTypeSpec(structSym.BaseClass);
+            }
             else if (structSym.BaseClass != null && this.cache.StructTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
             {
                 baseType = baseHandle;
@@ -546,7 +560,12 @@ internal sealed class TypeDefEmitter
             }
 
             typeAttrs = classAttrs;
-            if (structSym.BaseClass != null && this.cache.StructTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
+            if (structSym.BaseClass != null && !structSym.BaseClass.TypeArguments.IsDefaultOrEmpty)
+            {
+                // Issue #1055: nested class extending a constructed generic base.
+                baseType = this.getUserStructTypeSpec(structSym.BaseClass);
+            }
+            else if (structSym.BaseClass != null && this.cache.StructTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
             {
                 baseType = baseHandle;
             }
@@ -1409,6 +1428,15 @@ internal sealed class TypeDefEmitter
     /// <summary>Resolves the <c>.ctor()</c> token a derived class's ctor should chain to: either the base class's default ctor (already emitted) or <see cref="WellKnownReferences.ObjectCtorRef"/>.</summary>
     private EntityHandle GetBaseCtorToken(StructSymbol classSym)
     {
+        // Issue #1055: the base is a CONSTRUCTED generic user class. Its ctor
+        // MethodDef is keyed by the open definition, so resolve a MemberRef
+        // parented at the constructed base's TypeSpec instead of falling back to
+        // System.Object (which would chain past the real base subobject).
+        if (classSym.BaseClass != null && !classSym.BaseClass.TypeArguments.IsDefaultOrEmpty)
+        {
+            return this.resolveConstructedBaseCtorToken(classSym.BaseClass);
+        }
+
         if (classSym.BaseClass != null && this.cache.ClassCtorHandles.TryGetValue(classSym.BaseClass, out var baseCtor))
         {
             return baseCtor;
