@@ -736,6 +736,63 @@ internal sealed class TypeDefEmitter
         this.cache.InterfaceTypeDefs[ifaceSym] = handle;
         EmitGenericParamRows(this.emitCtx, handle, ifaceSym.TypeParameters);
 
+        // ADR-0089 / issue #1030: emit interface static *state* — `var`/`let`
+        // storage fields (Static) and `const` literal fields (Static | Literal
+        // | HasDefault + Constant row) — as FieldDef rows on the interface
+        // TypeDef. Handles are cached in StructFieldDefs (keyed by FieldSymbol),
+        // which the method-body emitter consults for ldsfld/stsfld; non-generic
+        // interface field access needs no per-construction TypeSpec ref.
+        FieldDefinitionHandle firstInterfaceField = default;
+        if (!ifaceSym.StaticFields.IsDefaultOrEmpty)
+        {
+            foreach (var staticField in ifaceSym.StaticFields)
+            {
+                var sigBlob = new BlobBuilder();
+                this.encodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), staticField.Type);
+                var attrs = AccessibilityMap.MapFieldAccessibility(staticField.Accessibility) | FieldAttributes.Static;
+                if (staticField.IsReadOnly)
+                {
+                    attrs |= FieldAttributes.InitOnly;
+                }
+
+                var fieldHandle = this.emitCtx.Metadata.AddFieldDefinition(
+                    attributes: attrs,
+                    name: this.emitCtx.Metadata.GetOrAddString(staticField.Name),
+                    signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+                if (firstInterfaceField.IsNil)
+                {
+                    firstInterfaceField = fieldHandle;
+                }
+
+                this.cache.StructFieldDefs[staticField] = fieldHandle;
+                this.emitUserAttributes(fieldHandle, staticField, AttributeTargetKind.Field);
+            }
+        }
+
+        if (!ifaceSym.ConstFields.IsDefaultOrEmpty)
+        {
+            foreach (var constField in ifaceSym.ConstFields)
+            {
+                var sigBlob = new BlobBuilder();
+                this.encodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), constField.Type);
+                var attrs = AccessibilityMap.MapFieldAccessibility(constField.Accessibility)
+                    | FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.HasDefault;
+
+                var fieldHandle = this.emitCtx.Metadata.AddFieldDefinition(
+                    attributes: attrs,
+                    name: this.emitCtx.Metadata.GetOrAddString(constField.Name),
+                    signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+                if (firstInterfaceField.IsNil)
+                {
+                    firstInterfaceField = fieldHandle;
+                }
+
+                this.emitCtx.Metadata.AddConstant(fieldHandle, constField.ConstantValue);
+                this.cache.StructFieldDefs[constField] = fieldHandle;
+                this.emitUserAttributes(fieldHandle, constField, AttributeTargetKind.Field);
+            }
+        }
+
         // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
         this.emitUserAttributes(handle, ifaceSym, AttributeTargetKind.Type);
     }

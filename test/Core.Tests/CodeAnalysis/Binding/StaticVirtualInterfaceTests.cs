@@ -196,14 +196,13 @@ func Wrong[T IAdd](a int32, b int32) int32 {
     [Fact]
     public void InterfaceSharedBlock_NonFuncMember_ReportsGS0330()
     {
-        // Issue #865 revision: interface static state (`var` / `let` / `const`
-        // / `prop` / `event`) is deferred; only `func` members are allowed in
-        // an interface `shared { … }` block. The parser rejects the others
-        // with GS0330.
+        // Issue #1030: `var` / `let` / `const` interface static state and
+        // `prop` static-virtual properties are now supported. Other member
+        // kinds (e.g. `event`) remain rejected with GS0330.
         var source = @"
 interface IBad {
     shared {
-        let Zero int32 = 0
+        event Changed System.Action
     }
 }
 ";

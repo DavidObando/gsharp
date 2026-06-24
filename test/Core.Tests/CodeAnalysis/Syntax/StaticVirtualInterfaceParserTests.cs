@@ -121,16 +121,41 @@ public class StaticVirtualInterfaceParserTests
     [Fact]
     public void NonFunc_InInterfaceSharedBlock_ReportsGS0330()
     {
+        // Issue #1030: `var`/`let`/`const` interface static state and `prop`
+        // static-virtual properties parse cleanly inside a shared block. A
+        // non-field, non-func, non-prop member (e.g. `event`) is still
+        // rejected with GS0330.
         const string source = """
             package P
             interface IFoo {
                 shared {
-                    let Zero int32 = 0
+                    event Changed System.Action
                 }
             }
             """;
         var tree = SyntaxTree.Parse(source);
         Assert.Contains(tree.Diagnostics, d => d.Id == "GS0330");
+    }
+
+    [Fact]
+    public void StaticFieldVarLetConst_InInterfaceSharedBlock_ParsesCleanly()
+    {
+        // Issue #1030: interface static *state* — `var`/`let`/`const` fields
+        // in an interface shared block parse without diagnostics.
+        const string source = """
+            package P
+            interface ICounter {
+                shared {
+                    var Count int32
+                    let Label string = "c"
+                    const Max int32 = 100
+                }
+            }
+            """;
+        var tree = SyntaxTree.Parse(source);
+        Assert.DoesNotContain(tree.Diagnostics, d => d.Id == "GS0330");
+        var iface = FindInterface(tree, "ICounter");
+        Assert.Equal(3, iface.StaticFields.Length);
     }
 
     private static InterfaceDeclarationSyntax FindInterface(SyntaxTree tree, string name)

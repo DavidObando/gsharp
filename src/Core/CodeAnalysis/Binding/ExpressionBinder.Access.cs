@@ -517,6 +517,7 @@ internal sealed partial class ExpressionBinder
         ImportedClassSymbol classSymbol = null;
         EnumSymbol enumSymbol = null;
         StructSymbol userStructSymbol = null;
+        InterfaceSymbol userInterfaceSymbol = null;
 
         if (leftPart is NameExpressionSyntax leftName)
         {
@@ -589,13 +590,18 @@ internal sealed partial class ExpressionBinder
                     reportObsoleteUseIfApplicable(
                         leftName.IdentifierToken.Location,
                         implicitStaticField.Field,
-                        $"{implicitStaticField.StructType.Name}.{implicitStaticField.Field.Name}");
+                        $"{implicitStaticField.OwnerName}.{implicitStaticField.Field.Name}");
 
-                    receiver = new BoundFieldAccessExpression(
-                        null,
-                        receiver: null,
-                        implicitStaticField.StructType,
-                        implicitStaticField.Field);
+                    // Issue #1030: an interface-owned static field carries its
+                    // owning interface (self-instantiation for a generic
+                    // interface) so emit/interpreter resolve it correctly.
+                    receiver = implicitStaticField.InterfaceType != null
+                        ? new BoundFieldAccessExpression(null, implicitStaticField.Field, implicitStaticField.InterfaceType)
+                        : new BoundFieldAccessExpression(
+                            null,
+                            receiver: null,
+                            implicitStaticField.StructType,
+                            implicitStaticField.Field);
                 }
                 else if (variable is ImplicitStaticPropertyVariableSymbol implicitStaticProp)
                 {
@@ -643,6 +649,12 @@ internal sealed partial class ExpressionBinder
                 {
                     userStructSymbol = foundStruct;
                 }
+                else if (typeAlias is InterfaceSymbol foundInterface)
+                {
+                    // ADR-0089 / issue #1030: `IName.StaticField` — qualified
+                    // access to an interface static field (storage or const).
+                    userInterfaceSymbol = foundInterface;
+                }
                 else
                 {
                     Diagnostics.ReportUnableToFindType(leftName.Location, name);
@@ -675,6 +687,16 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
         }
+        else if (leftPart is IndexExpressionSyntax genericIfaceIndex
+            && !genericIfaceIndex.IsNullConditional
+            && TryResolveConstructedGenericInterfaceReceiver(genericIfaceIndex, out var constructedInterface))
+        {
+            // ADR-0089 / issue #1030: `IBox[int32].StaticField` — qualified
+            // access to a *constructed generic* interface's static field. The
+            // closed construction is carried so emit parents the field at the
+            // construction's TypeSpec and the interpreter keys per construction.
+            userInterfaceSymbol = constructedInterface;
+        }
         else
         {
             receiver = BindExpression(leftPart);
@@ -688,6 +710,11 @@ internal sealed partial class ExpressionBinder
         if (userStructSymbol != null)
         {
             return BindUserTypeStaticAccessorStep(userStructSymbol, rightPart);
+        }
+
+        if (userInterfaceSymbol != null)
+        {
+            return BindInterfaceStaticAccessorStep(userInterfaceSymbol, rightPart);
         }
 
         return BindAccessorStep(receiver, classSymbol, rightPart);
@@ -1111,6 +1138,159 @@ internal sealed partial class ExpressionBinder
             default:
                 return new BoundErrorExpression(null);
         }
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #1030: resolves <c>IName.StaticField</c> qualified
+    /// access against an interface's static *state* (storage or const fields).
+    /// Interface static fields have no per-implementer shape — they are plain
+    /// CLR static fields on the interface TypeDef — so a read/write binds to a
+    /// static (<c>receiver: null</c>) <see cref="BoundFieldAccessExpression"/>
+    /// with a <c>null</c> declaring struct (the emitter resolves the field by
+    /// symbol identity). Non-field members fall through to an error.
+    /// </summary>
+    /// <param name="interfaceSym">The interface receiver.</param>
+    /// <param name="rightPart">The member being accessed.</param>
+    /// <returns>The bound access, or a bound error expression.</returns>
+    private BoundExpression BindInterfaceStaticAccessorStep(InterfaceSymbol interfaceSym, ExpressionSyntax rightPart)
+    {
+        // Issue #1030: a constructed generic interface (`IBox[int32]`) does not
+        // re-declare its static fields — they live on the open definition. Look
+        // the field up there, but keep `interfaceSym` (the constructed or open
+        // symbol) as the carried owner so the emitter parents the field
+        // reference at the correct TypeSpec and the interpreter keys storage per
+        // construction.
+        var fieldOwner = interfaceSym.Definition ?? interfaceSym;
+        switch (rightPart)
+        {
+            case NameExpressionSyntax ne:
+                var memberName = ne.IdentifierToken.Text;
+                var field = fieldOwner.GetStaticField(memberName);
+                if (field != null)
+                {
+                    return new BoundFieldAccessExpression(null, field, interfaceSym);
+                }
+
+                Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
+                return new BoundErrorExpression(null);
+
+            case AccessorExpressionSyntax nested:
+                var head = BindInterfaceStaticAccessorStep(interfaceSym, nested.LeftPart);
+                if (head is BoundErrorExpression)
+                {
+                    return head;
+                }
+
+                return BindAccessorStep(head, null, nested.RightPart);
+
+            default:
+                return new BoundErrorExpression(null);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #1030: resolves an index-expression receiver of the
+    /// form <c>IBox[int32]</c> to the constructed generic interface symbol when
+    /// the indexed target names a generic interface definition and the index
+    /// resolves to a type. Returns <c>false</c> for anything else (so the caller
+    /// falls back to ordinary index/expression binding).
+    /// </summary>
+    /// <param name="index">The candidate <c>Target[Index]</c> receiver.</param>
+    /// <param name="constructed">The constructed generic interface on success.</param>
+    /// <returns>Whether a constructed generic interface receiver was resolved.</returns>
+    private bool TryResolveConstructedGenericInterfaceReceiver(IndexExpressionSyntax index, out InterfaceSymbol constructed)
+    {
+        constructed = null;
+        if (index.Target is not NameExpressionSyntax targetName)
+        {
+            return false;
+        }
+
+        if (!scope.TryLookupTypeAlias(targetName.IdentifierToken.Text, out var alias)
+            || alias is not InterfaceSymbol ifaceDef
+            || !ifaceDef.IsGenericDefinition)
+        {
+            return false;
+        }
+
+        if (!TryBindTypeArgumentExpressions(index.Index, out var typeArgs)
+            || typeArgs.Length != ifaceDef.TypeParameters.Length)
+        {
+            return false;
+        }
+
+        constructed = InterfaceSymbol.Construct(ifaceDef, typeArgs);
+        return true;
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #1030: binds the type-argument expression(s) of a
+    /// generic-interface index receiver (<c>int32</c> in <c>IBox[int32]</c>) to
+    /// <see cref="TypeSymbol"/>s. Supports a single argument or a comma list
+    /// (<c>IPair[int32, string]</c>). Each argument must be a simple/qualified
+    /// name or a nested generic; non-type expressions cause a <c>false</c>
+    /// result.
+    /// </summary>
+    /// <param name="argsSyntax">The index expression's argument syntax.</param>
+    /// <param name="typeArgs">The bound type arguments on success.</param>
+    /// <returns>Whether every argument resolved to a type.</returns>
+    private bool TryBindTypeArgumentExpressions(ExpressionSyntax argsSyntax, out ImmutableArray<TypeSymbol> typeArgs)
+    {
+        typeArgs = default;
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>();
+        foreach (var argExpr in FlattenCommaList(argsSyntax))
+        {
+            if (!TryBuildTypeClauseFromExpression(argExpr, out var typeClause))
+            {
+                return false;
+            }
+
+            var bound = bindTypeClause(typeClause);
+            if (bound == null)
+            {
+                return false;
+            }
+
+            builder.Add(bound);
+        }
+
+        if (builder.Count == 0)
+        {
+            return false;
+        }
+
+        typeArgs = builder.ToImmutable();
+        return true;
+    }
+
+    private static IEnumerable<ExpressionSyntax> FlattenCommaList(ExpressionSyntax expr)
+    {
+        // The parser models `a, b` inside `[...]` as a right-leaning
+        // BinaryExpression over comma tokens in some positions; most generic
+        // arities used here are single-argument. Yield a single element unless
+        // a comma-separated shape is recognised.
+        yield return expr;
+    }
+
+    /// <summary>
+    /// ADR-0089 / issue #1030: reshapes a type-name expression (a simple name
+    /// such as <c>int32</c> or a nested generic such as <c>IBox[int32]</c>) into
+    /// a <see cref="TypeClauseSyntax"/> so it can be bound by the shared
+    /// type-clause binder. Returns <c>false</c> for non-type shapes.
+    /// </summary>
+    /// <param name="expr">The candidate type expression.</param>
+    /// <param name="typeClause">The synthesized type clause on success.</param>
+    /// <returns>Whether the expression names a type.</returns>
+    private static bool TryBuildTypeClauseFromExpression(ExpressionSyntax expr, out TypeClauseSyntax typeClause)
+    {
+        typeClause = null;
+        if (expr is NameExpressionSyntax ne && !ne.IdentifierToken.IsMissing)
+        {
+            typeClause = new TypeClauseSyntax(ne.SyntaxTree, ne.IdentifierToken);
+            return true;
+        }
+
+        return false;
     }
 
     private BoundExpression BindUserTypeStaticMemberAccess(StructSymbol structSym, NameExpressionSyntax ne)

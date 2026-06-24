@@ -5,6 +5,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -145,6 +146,31 @@ public sealed class InterfaceSymbol : TypeSymbol
 
     /// <summary>Gets the event signatures declared on this interface (ADR-0052). Populated by the binder via <see cref="SetEvents"/>.</summary>
     public ImmutableArray<EventSymbol> Events { get; private set; } = ImmutableArray<EventSymbol>.Empty;
+
+    /// <summary>
+    /// Gets the static fields declared inside the interface <c>shared { … }</c>
+    /// block (ADR-0089 / issue #1030). CLR interfaces may own static fields;
+    /// these are emitted as <c>Static</c> FieldDef rows on the interface
+    /// TypeDef. Populated by the binder via <see cref="SetStaticFields"/>.
+    /// </summary>
+    public ImmutableArray<FieldSymbol> StaticFields { get; private set; } = ImmutableArray<FieldSymbol>.Empty;
+
+    /// <summary>
+    /// Gets the compile-time <c>const</c> fields declared inside the interface
+    /// <c>shared { … }</c> block (issue #1030). Emitted as CLR <c>literal</c>
+    /// fields with a <c>Constant</c> row; their reads are inlined. Held
+    /// separately from <see cref="StaticFields"/> so no <c>.cctor</c> assignment
+    /// is generated for them.
+    /// </summary>
+    public ImmutableArray<FieldSymbol> ConstFields { get; private set; } = ImmutableArray<FieldSymbol>.Empty;
+
+    /// <summary>
+    /// Gets the bound initializer expressions for interface static fields with
+    /// non-default values (issue #1030). Keyed by field symbol; run in the
+    /// interface's synthesized <c>.cctor</c> in <see cref="StaticFields"/>
+    /// source order.
+    /// </summary>
+    public ImmutableDictionary<FieldSymbol, BoundExpression> StaticFieldInitializers { get; private set; } = ImmutableDictionary<FieldSymbol, BoundExpression>.Empty;
 
     /// <summary>
     /// Gets the directly-declared base interfaces (issue #1006), e.g. the
@@ -377,6 +403,60 @@ public sealed class InterfaceSymbol : TypeSymbol
     public void SetEvents(ImmutableArray<EventSymbol> events)
     {
         Events = events;
+    }
+
+    /// <summary>Sets <see cref="StaticFields"/> after binding interface shared-block field declarations (issue #1030).</summary>
+    /// <param name="fields">The bound static fields in declared order.</param>
+    public void SetStaticFields(ImmutableArray<FieldSymbol> fields)
+    {
+        StaticFields = fields;
+    }
+
+    /// <summary>Sets <see cref="ConstFields"/> after binding interface <c>const</c> field declarations (issue #1030).</summary>
+    /// <param name="fields">The bound const fields in declared order.</param>
+    public void SetConstFields(ImmutableArray<FieldSymbol> fields)
+    {
+        ConstFields = fields;
+    }
+
+    /// <summary>Sets <see cref="StaticFieldInitializers"/> after binding interface shared-block field initializers (issue #1030).</summary>
+    /// <param name="initializers">The bound initializer expressions keyed by field.</param>
+    public void SetStaticFieldInitializers(ImmutableDictionary<FieldSymbol, BoundExpression> initializers)
+    {
+        StaticFieldInitializers = initializers;
+    }
+
+    /// <summary>
+    /// Looks up an interface static field (storage or const) by name (issue
+    /// #1030). Returns <c>null</c> when no such field exists.
+    /// </summary>
+    /// <param name="name">The field name.</param>
+    /// <returns>The matching <see cref="FieldSymbol"/>, or <c>null</c>.</returns>
+    public FieldSymbol GetStaticField(string name)
+    {
+        if (!StaticFields.IsDefaultOrEmpty)
+        {
+            foreach (var f in StaticFields)
+            {
+                if (f.Name == name)
+                {
+                    return f;
+                }
+            }
+        }
+
+        if (!ConstFields.IsDefaultOrEmpty)
+        {
+            foreach (var f in ConstFields)
+            {
+                if (f.Name == name)
+                {
+                    return f;
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Sets <see cref="TypeParameters"/> on a generic definition (Phase 4.3c). Intended to be called once by the binder.</summary>

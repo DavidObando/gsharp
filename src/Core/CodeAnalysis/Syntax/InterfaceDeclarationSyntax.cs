@@ -209,4 +209,13 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets a value indicating whether this interface declares one or more base interfaces (issue #1006).</summary>
     public bool HasBaseInterfaces => BaseColonToken != null;
+
+    /// <summary>
+    /// Gets or sets the static field declarations (<c>var</c> / <c>let</c> /
+    /// <c>const</c>) declared inside the interface <c>shared { … }</c> block
+    /// (ADR-0089 / issue #1030). Empty when none. These bind to CLR static
+    /// fields on the interface TypeDef. Populated post-construction by the
+    /// parser (mirrors <see cref="BaseTypeClauses"/>).
+    /// </summary>
+    public ImmutableArray<FieldDeclarationSyntax> StaticFields { get; set; } = ImmutableArray<FieldDeclarationSyntax>.Empty;
 }

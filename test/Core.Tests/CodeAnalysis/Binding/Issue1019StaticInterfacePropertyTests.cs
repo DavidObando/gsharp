@@ -124,10 +124,12 @@ struct AppleData : IData {
     }
 
     [Fact]
-    public void DefaultBodiedStaticInterfaceProperty_ReportsGS0396()
+    public void DefaultBodiedStaticInterfaceProperty_Binds()
     {
-        // Default-bodied (with accessor bodies) static interface properties
-        // are deferred; declare an abstract slot instead.
+        // Issue #1030: default-bodied (with accessor bodies) static-virtual
+        // interface properties are now supported — they emit non-abstract
+        // Static|Virtual accessor slots with bodies. The implementer is not
+        // required to provide them.
         var source = @"
 sealed interface IData {
   shared {
@@ -136,7 +138,7 @@ sealed interface IData {
 }
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0396");
+        Assert.Empty(result.Diagnostics);
     }
 
     [Fact]
@@ -164,9 +166,11 @@ func Describe[T IData](witness T) string {
     }
 
     [Fact]
-    public void InterfaceStaticState_Var_StillReportsGS0330()
+    public void InterfaceStaticState_Var_Binds()
     {
-        // Genuine interface static *state* (storage) remains unsupported.
+        // Issue #1030: genuine interface static *state* (storage) is now
+        // supported — a `var` field in an interface shared block emits a real
+        // CLR static field on the interface TypeDef.
         var source = @"
 sealed interface IData {
   shared {
@@ -175,11 +179,11 @@ sealed interface IData {
 }
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0330");
+        Assert.Empty(result.Diagnostics);
     }
 
     [Fact]
-    public void InterfaceStaticState_Let_StillReportsGS0330()
+    public void InterfaceStaticState_Let_Binds()
     {
         var source = @"
 sealed interface IData {
@@ -189,7 +193,7 @@ sealed interface IData {
 }
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0330");
+        Assert.Empty(result.Diagnostics);
     }
 
     private static EvaluationResult Evaluate(string source)
