@@ -1434,9 +1434,13 @@ public sealed class CSharpToGSharpTranslator
             if (symbol != null && symbol.IsExtensionMethod)
             {
                 // C# extension methods translate to the receiver-clause form on a
-                // non-owned type (ADR-0115 §B.5).
+                // non-owned type (ADR-0115 §B.5). A receiver clause is only valid
+                // on a struct/class (ADR-0079); an extension on an enum receiver
+                // is rejected by gsc (GS0103 "must be a struct or class"), so it
+                // stays a plain static helper and its call sites are rewritten to
+                // the positional form `Owner.Method(receiver, …)`.
                 IParameterSymbol self = symbol.Parameters.FirstOrDefault();
-                if (self != null)
+                if (self != null && self.Type.TypeKind != TypeKind.Enum)
                 {
                     receiver = new Receiver(
                         SanitizeIdentifier(self.Name),
@@ -4075,6 +4079,28 @@ public sealed class CSharpToGSharpTranslator
             GExpression target;
             IReadOnlyList<GTypeReference> typeArguments = null;
 
+            // A C# extension method whose receiver is an enum is emitted as a
+            // plain static helper (a receiver clause is rejected on enums,
+            // GS0103). Rewrite the call `x.M(args)` to the positional form
+            // `Owner.M(x, args)` so it binds to that helper.
+            if (invocation.Expression is MemberAccessExpressionSyntax extMember
+                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol extMethod
+                && TryGetEnumExtension(extMethod, out string extOwner, out string extName))
+            {
+                var extArgs = new List<GExpression>
+                {
+                    this.TranslateExpression(extMember.Expression),
+                };
+                extArgs.AddRange(invocation.ArgumentList.Arguments.Select(a => this.TranslateArgument(a)));
+                IReadOnlyList<GTypeReference> extTypeArgs = extMember.Name is GenericNameSyntax extGeneric
+                    ? this.MapTypeArguments(extGeneric)
+                    : null;
+                return new InvocationExpression(
+                    new MemberAccessExpression(new IdentifierExpression(extOwner), extName),
+                    extArgs,
+                    extTypeArgs);
+            }
+
             // A generic call `Foo<T>(...)` carries its type arguments on the name;
             // lift them onto the G# bracket-type-argument form `Foo[T](...)`.
             if (invocation.Expression is GenericNameSyntax generic)
@@ -4089,6 +4115,18 @@ public sealed class CSharpToGSharpTranslator
                     this.TranslateExpression(member.Expression),
                     memberGeneric.Identifier.Text);
                 typeArguments = this.MapTypeArguments(memberGeneric);
+            }
+            else if (invocation.Expression is MemberBindingExpressionSyntax memberBinding
+                && memberBinding.Name is GenericNameSyntax memberBindingGeneric)
+            {
+                // A generic call chained after a null-conditional `?.`
+                // (`x?.GetChild<HdlrBox>()`) reaches here as a member-binding
+                // whose name carries the type arguments. Preserve them on the
+                // bracket-type-argument form so the chained call keeps `[T...]`.
+                target = new MemberAccessExpression(
+                    new ConditionalReceiverExpression(),
+                    memberBindingGeneric.Identifier.Text);
+                typeArguments = this.MapTypeArguments(memberBindingGeneric);
             }
             else if (invocation.Expression is IdentifierNameSyntax bareName &&
                 this.context.GetSymbolInfo(bareName).Symbol is IMethodSymbol { IsStatic: true } staticMethod &&
@@ -4114,6 +4152,39 @@ public sealed class CSharpToGSharpTranslator
                 .ToList();
 
             return new InvocationExpression(target, arguments, typeArguments);
+        }
+
+        /// <summary>
+        /// Determines whether <paramref name="method"/> is a C# extension method
+        /// whose receiver (<c>this</c>) parameter is an enum. Such an extension
+        /// cannot carry a G# receiver clause (ADR-0079; gsc reports GS0103), so it
+        /// is emitted as a plain static helper and its call sites are rewritten to
+        /// the positional form <c>Owner.Method(receiver, …)</c>.
+        /// </summary>
+        /// <param name="method">The bound (possibly reduced) call symbol.</param>
+        /// <param name="ownerName">The declaring static class name when matched.</param>
+        /// <param name="methodName">The helper method name when matched.</param>
+        /// <returns><see langword="true"/> when the call targets an enum extension.</returns>
+        private static bool TryGetEnumExtension(IMethodSymbol method, out string ownerName, out string methodName)
+        {
+            ownerName = null;
+            methodName = null;
+            if (method == null || !method.IsExtensionMethod)
+            {
+                return false;
+            }
+
+            ITypeSymbol receiverType = method.ReceiverType
+                ?? method.Parameters.FirstOrDefault()?.Type;
+            if (receiverType?.TypeKind != TypeKind.Enum)
+            {
+                return false;
+            }
+
+            IMethodSymbol original = method.ReducedFrom ?? method;
+            ownerName = original.ContainingType?.Name;
+            methodName = original.Name;
+            return ownerName != null;
         }
 
         /// <summary>

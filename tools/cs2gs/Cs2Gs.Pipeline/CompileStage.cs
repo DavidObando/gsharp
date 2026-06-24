@@ -47,7 +47,7 @@ public sealed class CompileStage : IMigrationStage
             gsFiles,
             outputPath,
             context.App.TargetKind,
-            context.App.ReferencedAssemblies);
+            BuildReferenceSet(context.App.ReferencedAssemblies));
 
         File.WriteAllText(
             Path.Combine(context.AppRunDir, "gsc.compile.log"),
@@ -84,6 +84,66 @@ public sealed class CompileStage : IMigrationStage
         }
 
         return Task.FromResult(StageOutcome.Failed(artifacts));
+    }
+
+    /// <summary>
+    /// Builds the full <c>/reference:</c> set passed to <c>gsc</c>. gsc's
+    /// <c>WithReferences</c> resolver projects every referenced CLR type through
+    /// an isolated <c>MetadataLoadContext</c> seeded from the supplied paths, so
+    /// a partial BCL set leaves core types (even <c>System.Int32</c>)
+    /// unresolvable. The emitted G# also imports namespaces such as
+    /// <c>System.Threading.Channels</c> and <c>System.Memory</c> that the gsc
+    /// host does not load by default. Passing the complete shared-framework
+    /// assembly set makes every framework type (including <c>Channel</c> /
+    /// <c>Span</c>) resolvable while keeping the app's own sibling references.
+    /// </summary>
+    /// <param name="appReferences">The app's sibling assembly references.</param>
+    /// <returns>The deduplicated reference path set.</returns>
+    private static IReadOnlyList<string> BuildReferenceSet(IReadOnlyList<string> appReferences)
+    {
+        var references = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (appReferences is not null)
+        {
+            foreach (string reference in appReferences)
+            {
+                if (!string.IsNullOrWhiteSpace(reference) && seen.Add(reference))
+                {
+                    references.Add(reference);
+                }
+            }
+        }
+
+        foreach (string frameworkReference in FrameworkReferencePaths())
+        {
+            if (seen.Add(frameworkReference))
+            {
+                references.Add(frameworkReference);
+            }
+        }
+
+        return references;
+    }
+
+    /// <summary>
+    /// Enumerates the shared-framework assemblies for the running runtime (the
+    /// <c>Microsoft.NETCore.App</c> directory). This is the same shared framework
+    /// the out-of-process <c>gsc</c> resolves against, so the paths are valid for
+    /// the compiler subprocess.
+    /// </summary>
+    /// <returns>The absolute paths of the shared-framework assemblies.</returns>
+    private static IReadOnlyList<string> FrameworkReferencePaths()
+    {
+        string runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
+        if (string.IsNullOrEmpty(runtimeDir) || !Directory.Exists(runtimeDir))
+        {
+            return Array.Empty<string>();
+        }
+
+        return Directory.EnumerateFiles(runtimeDir, "*.dll", SearchOption.TopDirectoryOnly)
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToList();
     }
 
     /// <summary>
