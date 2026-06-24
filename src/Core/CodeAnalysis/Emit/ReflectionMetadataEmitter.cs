@@ -595,6 +595,8 @@ internal sealed class ReflectionMetadataEmitter
             this.EncodeTypeSymbol,
             this.EncodeReturnSymbol,
             this.GetTypeReference,
+            this.GetUserStructTypeSpec,
+            this.ResolveConstructedBaseParameterlessCtorToken,
             this.customAttrEncoder.NextParameterHandle,
             this.customAttrEncoder.EmitUserAttributes,
             this.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter,
@@ -6874,6 +6876,55 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 });
         return this.GetUserStructMethodRef(structType, primaryDef, ".ctor", sigBlob);
+    }
+
+    /// <summary>
+    /// Issue #1055: resolves the parameter-less base constructor token for a
+    /// class whose base is a CONSTRUCTED generic user class (e.g.
+    /// <c>Derived : Base[int32]</c>). The base ctor's MethodDef is keyed by the
+    /// open definition, so the token is emitted as a MemberRef parented at the
+    /// constructed base's TypeSpec via <see cref="GetUserStructMethodRef"/> so
+    /// the chained <c>call</c> targets the correct instantiated base subobject
+    /// and the assembly verifies.
+    /// </summary>
+    internal EntityHandle ResolveConstructedBaseParameterlessCtorToken(StructSymbol constructedBase)
+    {
+        var def = constructedBase.Definition ?? constructedBase;
+
+        if (this.cache.ClassPrimaryCtorHandles.TryGetValue(def, out var primaryDef))
+        {
+            var defParams = def.PrimaryConstructorParameters;
+            var primarySig = new BlobBuilder();
+            new BlobEncoder(primarySig)
+                .MethodSignature(isInstanceMethod: true)
+                .Parameters(
+                    defParams.IsDefaultOrEmpty ? 0 : defParams.Length,
+                    r => r.Void(),
+                    ps =>
+                    {
+                        if (defParams.IsDefaultOrEmpty)
+                        {
+                            return;
+                        }
+
+                        foreach (var p in defParams)
+                        {
+                            EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                        }
+                    });
+            return this.GetUserStructMethodRef(constructedBase, primaryDef, ".ctor", primarySig);
+        }
+
+        if (this.cache.ClassCtorHandles.TryGetValue(def, out var defaultDef))
+        {
+            var defaultSig = new BlobBuilder();
+            new BlobEncoder(defaultSig)
+                .MethodSignature(isInstanceMethod: true)
+                .Parameters(0, r => r.Void(), _ => { });
+            return this.GetUserStructMethodRef(constructedBase, defaultDef, ".ctor", defaultSig);
+        }
+
+        return this.wellKnown.ObjectCtorRef;
     }
 
     /// <summary>

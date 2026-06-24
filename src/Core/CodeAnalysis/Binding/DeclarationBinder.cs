@@ -1302,12 +1302,13 @@ internal sealed class DeclarationBinder
                         // an unrelated same-name overload no longer steals the slot.
                         var baseOverloads = structSymbol.BaseClass?.GetMethodsIncludingInherited(methodName)
                             ?? System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Empty;
+                        var baseTypeArgSubst = BuildBaseTypeArgumentSubstitution(structSymbol);
                         FunctionSymbol baseMethod = null;
                         FunctionSymbol baseSignatureMatch = null;
                         foreach (var candidate in baseOverloads)
                         {
                             baseMethod ??= candidate;
-                            if (SignaturesMatch(candidate, methodParameters, returnType, methodReturnRefKind))
+                            if (SignaturesMatch(candidate, methodParameters, returnType, methodReturnRefKind, baseTypeArgSubst))
                             {
                                 baseSignatureMatch = candidate;
                                 break;
@@ -1373,6 +1374,7 @@ internal sealed class DeclarationBinder
                         // A new same-name overload that does not match any base entry
                         // is a brand-new overload, not an accidental shadow.
                         var baseOverloads = structSymbol.BaseClass.GetMethodsIncludingInherited(methodName);
+                        var baseTypeArgSubst = BuildBaseTypeArgumentSubstitution(structSymbol);
                         foreach (var shadowed in baseOverloads)
                         {
                             if (!shadowed.IsOpen)
@@ -1380,7 +1382,7 @@ internal sealed class DeclarationBinder
                                 continue;
                             }
 
-                            if (SignaturesMatch(shadowed, methodParameters, returnType, methodReturnRefKind))
+                            if (SignaturesMatch(shadowed, methodParameters, returnType, methodReturnRefKind, baseTypeArgSubst))
                             {
                                 Diagnostics.ReportMissingOverride(methodSyntax.Identifier.Location, shadowed.ReceiverType.Name, methodName);
                                 break;
@@ -5052,6 +5054,56 @@ internal sealed class DeclarationBinder
         Diagnostics.ReportConstraintNotInterface(p.Constraint.Location, resolved.Name);
     }
 
+    /// <summary>
+    /// Issue #1055: builds the substitution mapping each base class's generic
+    /// type parameters onto the concrete type arguments supplied where that base
+    /// is inherited as a constructed generic. Walking the <see cref="StructSymbol.BaseClass"/>
+    /// chain closest-first lets a deeper base's type arguments (which are expressed
+    /// in terms of a shallower base's type parameters) resolve transitively, so a
+    /// multi-level chain such as <c>Leaf : Mid[int32] : Base[T]</c> maps
+    /// <c>Base.T -&gt; int32</c>. The resulting map is consumed by
+    /// <see cref="SignaturesMatch(FunctionSymbol, ImmutableArray{ParameterSymbol}, TypeSymbol, RefKind, IReadOnlyDictionary{TypeParameterSymbol, TypeSymbol})"/>
+    /// so an override whose concrete signature mentions the substituted types is
+    /// matched against the base member's un-substituted (open) signature. Returns
+    /// <c>null</c> when no constructed base contributes a substitution.
+    /// </summary>
+    private static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> BuildBaseTypeArgumentSubstitution(StructSymbol derived)
+    {
+        Dictionary<TypeParameterSymbol, TypeSymbol> subst = null;
+        for (var b = derived?.BaseClass; b != null; b = b.BaseClass)
+        {
+            if (b.Definition == null || b.TypeArguments.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            var defParams = b.Definition.TypeParameters;
+            if (defParams.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            var count = System.Math.Min(defParams.Length, b.TypeArguments.Length);
+            for (var i = 0; i < count; i++)
+            {
+                var arg = b.TypeArguments[i];
+
+                // A deeper base's type argument may itself be a type parameter of
+                // a shallower (already-processed) base; resolve it transitively so
+                // the map always lands on the concrete type in the derived context.
+                if (arg is TypeParameterSymbol tpArg && subst != null && subst.TryGetValue(tpArg, out var resolved))
+                {
+                    arg = resolved;
+                }
+
+                subst ??= new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                subst[defParams[i]] = arg;
+            }
+        }
+
+        return subst;
+    }
+
     private static bool SignaturesMatch(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType)
         => SignaturesMatch(baseMethod, derivedParams, derivedReturnType, RefKind.None);
 
@@ -5205,7 +5257,7 @@ internal sealed class DeclarationBinder
     /// <c>IEnumerator[T]</c>) are not equated — so genuinely mismatched
     /// signatures are still rejected with GS0187.
     /// </summary>
-    private static bool TypeSignaturesEquivalent(TypeSymbol a, TypeSymbol b)
+    internal static bool TypeSignaturesEquivalent(TypeSymbol a, TypeSymbol b)
         => TypeSignaturesEquivalent(a, b, typeParamMap: null);
 
     private static bool TypeSignaturesEquivalent(

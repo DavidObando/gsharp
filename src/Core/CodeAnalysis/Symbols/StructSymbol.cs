@@ -209,32 +209,13 @@ public sealed class StructSymbol : TypeSymbol
                 return false;
             }
 
-            var names = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
-            for (var c = this; c != null; c = c.BaseClass)
-            {
-                if (c.Methods.IsDefaultOrEmpty)
-                {
-                    continue;
-                }
-
-                foreach (var m in c.Methods)
-                {
-                    names.Add(m.Name);
-                }
-            }
-
-            foreach (var name in names)
-            {
-                foreach (var effective in GetMethodsIncludingInherited(name))
-                {
-                    if (effective.IsAbstract)
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
+            // Issue #1055: an abstract base method whose signature uses the base's
+            // generic type parameters is implemented by an override whose concrete
+            // signature matches the substituted base signature. Route through the
+            // substitution-aware unimplemented-method computation so a class that
+            // inherits a constructed generic base (e.g. `Derived : Base[int32]`)
+            // and overrides every abstract member is correctly treated as concrete.
+            return !GetUnimplementedAbstractMethods().IsDefaultOrEmpty;
         }
     }
 
@@ -812,6 +793,14 @@ public sealed class StructSymbol : TypeSymbol
     /// after override resolution) that is still <see cref="FunctionSymbol.IsAbstract"/>.
     /// A concrete (non-<c>open</c>) class with a non-empty result fails to satisfy
     /// its abstract base contract.
+    /// <para>
+    /// Issue #1055: when a base is inherited as a CONSTRUCTED generic (e.g.
+    /// <c>Derived : Base[int32]</c>), an abstract base method whose signature uses
+    /// the base's type parameters is satisfied by an override whose CONCRETE
+    /// signature matches the substituted base signature. The substitution is
+    /// composed across every hop of the inheritance chain so multi-level
+    /// constructions (<c>Leaf : Mid[int32] : Base[T]</c>) resolve correctly.
+    /// </para>
     /// </summary>
     /// <returns>The set of still-abstract effective methods; empty when none.</returns>
     public ImmutableArray<FunctionSymbol> GetUnimplementedAbstractMethods()
@@ -821,29 +810,84 @@ public sealed class StructSymbol : TypeSymbol
             return ImmutableArray<FunctionSymbol>.Empty;
         }
 
-        var names = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
+        // Capture each class along the chain (most-derived first) together with the
+        // substitution that maps its declaration's type parameters onto the concrete
+        // type arguments seen in THIS class's context. A deeper base's type arguments
+        // are expressed in terms of a shallower base's type parameters, so resolving
+        // each argument through the running map composes the substitution across hops.
+        var levels = new List<(StructSymbol Cls, Dictionary<TypeParameterSymbol, TypeSymbol> Subst)>();
+        Dictionary<TypeParameterSymbol, TypeSymbol> running = null;
         for (var c = this; c != null; c = c.BaseClass)
         {
-            if (c.Methods.IsDefaultOrEmpty)
+            if (c.Definition != null
+                && !c.TypeArguments.IsDefaultOrEmpty
+                && !c.Definition.TypeParameters.IsDefaultOrEmpty)
+            {
+                var defParams = c.Definition.TypeParameters;
+                var count = System.Math.Min(defParams.Length, c.TypeArguments.Length);
+                for (var i = 0; i < count; i++)
+                {
+                    var arg = c.TypeArguments[i];
+                    if (arg is TypeParameterSymbol tpArg && running != null && running.TryGetValue(tpArg, out var resolved))
+                    {
+                        arg = resolved;
+                    }
+
+                    running ??= new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                    running[defParams[i]] = arg;
+                }
+            }
+
+            levels.Add((c, running == null ? null : new Dictionary<TypeParameterSymbol, TypeSymbol>(running)));
+        }
+
+        ImmutableArray<FunctionSymbol>.Builder builder = null;
+        for (var k = 0; k < levels.Count; k++)
+        {
+            var (cls, subst) = levels[k];
+            if (cls.Methods.IsDefaultOrEmpty)
             {
                 continue;
             }
 
-            foreach (var m in c.Methods)
+            foreach (var abstractMethod in cls.Methods)
             {
-                names.Add(m.Name);
-            }
-        }
+                if (!abstractMethod.IsAbstract)
+                {
+                    continue;
+                }
 
-        ImmutableArray<FunctionSymbol>.Builder builder = null;
-        foreach (var name in names)
-        {
-            foreach (var effective in GetMethodsIncludingInherited(name))
-            {
-                if (effective.IsAbstract)
+                // Implemented when a strictly more-derived class declares a
+                // non-abstract method whose concrete signature matches the
+                // abstract base method's signature after substitution.
+                var implemented = false;
+                for (var kk = 0; kk < k && !implemented; kk++)
+                {
+                    var derivedCls = levels[kk].Cls;
+                    if (derivedCls.Methods.IsDefaultOrEmpty)
+                    {
+                        continue;
+                    }
+
+                    foreach (var candidate in derivedCls.Methods)
+                    {
+                        if (candidate.IsAbstract)
+                        {
+                            continue;
+                        }
+
+                        if (AbstractMethodSatisfiedBy(abstractMethod, subst, candidate))
+                        {
+                            implemented = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!implemented)
                 {
                     builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
-                    builder.Add(effective);
+                    builder.Add(abstractMethod);
                 }
             }
         }
@@ -1114,6 +1158,59 @@ public sealed class StructSymbol : TypeSymbol
 
         return builder.MoveToImmutable();
     }
+
+    /// <summary>
+    /// Issue #1055: decides whether <paramref name="candidate"/> (a more-derived,
+    /// non-abstract method) implements <paramref name="abstractMethod"/> once the
+    /// abstract method's signature is substituted with <paramref name="subst"/>
+    /// (the constructed-base type arguments). Compares name, arity, parameter
+    /// count, ref-kinds and parameter types — mirroring CLR override matching.
+    /// </summary>
+    private static bool AbstractMethodSatisfiedBy(
+        FunctionSymbol abstractMethod,
+        Dictionary<TypeParameterSymbol, TypeSymbol> subst,
+        FunctionSymbol candidate)
+    {
+        if (!string.Equals(abstractMethod.Name, candidate.Name, System.StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var baseParams = CallableParametersOf(abstractMethod);
+        var derivedParams = CallableParametersOf(candidate);
+        if (baseParams.Length != derivedParams.Length)
+        {
+            return false;
+        }
+
+        var baseArity = abstractMethod.TypeParameters.IsDefaultOrEmpty ? 0 : abstractMethod.TypeParameters.Length;
+        var derivedArity = candidate.TypeParameters.IsDefaultOrEmpty ? 0 : candidate.TypeParameters.Length;
+        if (baseArity != derivedArity)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < baseParams.Length; i++)
+        {
+            if (baseParams[i].RefKind != derivedParams[i].RefKind)
+            {
+                return false;
+            }
+
+            var baseType = subst != null
+                ? SubstituteTypeForConstruction(baseParams[i].Type, subst)
+                : baseParams[i].Type;
+            if (!DeclarationBinder.TypeSignaturesEquivalent(baseType, derivedParams[i].Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static ImmutableArray<ParameterSymbol> CallableParametersOf(FunctionSymbol method)
+        => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
 
     private static TypeSymbol SubstituteTypeForConstruction(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> subst)
     {
