@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-06-27
 - **Phase**: Phase 9 — low-level / interop depth
-- **Related**: ADR-0039 (managed by-ref pointers / address-of / dereference), ADR-0122 (unsafe context and unmanaged raw pointers `*T`, issue [#1014](https://github.com/DavidObando/gsharp/issues/1014)), ADR-0124 (`stackalloc`/`localloc`, issue [#1024](https://github.com/DavidObando/gsharp/issues/1024)), issue [#1026](https://github.com/DavidObando/gsharp/issues/1026)
+- **Related**: ADR-0039 (managed by-ref pointers / address-of / dereference), ADR-0056 (ref-returning members / `modreq(InAttribute)` ref-returns), ADR-0122 (unsafe context and unmanaged raw pointers `*T`, issue [#1014](https://github.com/DavidObando/gsharp/issues/1014)), ADR-0124 (`stackalloc`/`localloc`, issue [#1024](https://github.com/DavidObando/gsharp/issues/1024)), issue [#1026](https://github.com/DavidObando/gsharp/issues/1026), issue [#1043](https://github.com/DavidObando/gsharp/issues/1043)
 
 ## Context
 
@@ -64,7 +64,7 @@ managed by-ref). Consistent with ADR-0122's pointer gating, `fixed` is therefore
 `unsafe { … }` if needed. (This is stricter than, but compatible with, C#, where
 `fixed` already requires `/unsafe`.)
 
-### 3. Pin sources — array/slice and string
+### 3. Pin sources — array/slice, string, and span-like (`GetPinnableReference`)
 
 The **source** must be a pinnable managed buffer:
 
@@ -73,14 +73,18 @@ The **source** must be a pinnable managed buffer:
   This is the Oahu case `fixed (byte* pD = destination)` where `destination` is
   a `byte[]` ⇒ G# `[]uint8`.
 - A `string`.
+- A **span-like** source whose type exposes a public instance
+  `ref T GetPinnableReference()` — canonically `System.Span[T]` /
+  `System.ReadOnlySpan[T]` (issue [#1043](https://github.com/DavidObando/gsharp/issues/1043)).
+  The pin yields a `*T` over the span's data, matching C#
+  `fixed (T* p = span)`. `ReadOnlySpan[T].GetPinnableReference()` returns
+  `ref readonly T` — a `modreq(System.Runtime.InteropServices.InAttribute)`
+  ref-return — which the method-reference encoder now reproduces (see §4).
 
 The bound pointer's pointee type must match the buffer's element type;
 `uint16`/`char` are accepted interchangeably for `string` (a `string`'s
 characters are UTF-16 code units). Any other source — or a pointee/element-type
-mismatch — is rejected with **`GS0401`**. Pinning a span-like source via
-`GetPinnableReference` is a **deferred follow-up** (it requires reproducing the
-`modreq(InAttribute)` ref-return signature, which the current method-reference
-encoder does not emit).
+mismatch — is rejected with **`GS0401`**.
 
 ### 4. Lowering — pinned local + element-0 pointer derivation
 
@@ -121,6 +125,30 @@ classic `OffsetToStringData` lowering is used deliberately instead of
 `string.GetPinnableReference()` to avoid the `modreq(InAttribute)` ref-return
 signature noted above.
 
+**Span-like / `GetPinnableReference`** (`T& pinned`, issue #1043):
+
+```
+EmitExpr(span); stloc src                    // spill the source for addressing
+ldloca src; call instance T& GetPinnableReference()
+stloc pinned                                 // T& pinned = ref
+ldloc pinned; conv.u; stloc ptr
+<body>
+ldc.i4.0; conv.u; stloc pinned               // release (null the pinned ref)
+```
+
+The source value is spilled to a synthetic local so its address can feed the
+`GetPinnableReference()` instance call (the `this` of a value-type method is a
+managed pointer). `GetPinnableReference()` already returns the data pointer for
+an empty span, so — unlike the array form — no null/empty guard is needed. The
+pinned local is a managed by-ref (`T& pinned`), released by storing a null
+managed pointer (`ldc.i4.0; conv.u`), matching the C# compiler's codegen. The
+emitted MemberRef carries the real BCL signature, including
+`modreq(System.Runtime.InteropServices.InAttribute)` on
+`ReadOnlySpan[T].GetPinnableReference()`'s `ref readonly T` return; the
+return-signature encoder reproduces required custom modifiers on by-ref returns
+(the same mechanism used for `ref readonly` indexers in ADR-0056), so the call
+binds at runtime instead of throwing `MissingMethodException`.
+
 ### 5. New node kinds, exhaustiveness, coverage matrix
 
 One new `SyntaxKind.FixedStatement` and one new `BoundNodeKind.FixedStatement`
@@ -140,7 +168,7 @@ kind: it gets a real `case` in `MethodBodyEmitter.EmitStatement` and in
   (`Unverifiable`, `UnmanagedPointer`, `StackUnexpected`, `StackByRef`,
   `ExpectedPtr`, …) to `ignoredErrorCodes` and assert runtime output, rather
   than disabling ilverify globally.
-- Deferred: span-like / `GetPinnableReference` pin sources; fixed-size buffers.
+- Deferred: fixed-size buffers.
 
 ## Diagnostics
 

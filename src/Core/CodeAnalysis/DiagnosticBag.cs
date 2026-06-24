@@ -1564,15 +1564,17 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
 
     /// <summary>
     /// GS0401: the source of a <c>fixed</c> (pinning) statement (ADR-0125 /
-    /// issue #1026) is not a pinnable managed buffer. Only a managed array
-    /// (<c>[]T</c>) or a <c>string</c> can be pinned (a span-like
-    /// <c>GetPinnableReference</c> source is a tracked follow-up).
+    /// issues #1026, #1043) is not a pinnable managed buffer. A managed array
+    /// (<c>[]T</c>), a <c>string</c>, or a span-like type exposing a public
+    /// instance <c>ref T GetPinnableReference()</c> (e.g. <c>System.Span[T]</c> /
+    /// <c>System.ReadOnlySpan[T]</c>) can be pinned; the pointer's element type
+    /// must also match the buffer's.
     /// </summary>
     /// <param name="location">The text location of the pinned source expression.</param>
     /// <param name="typeName">The unpinnable source type name.</param>
     public void ReportFixedSourceNotPinnable(TextLocation location, string typeName)
     {
-        Report(location, "GS0401", $"A 'fixed' statement cannot pin a value of type '{typeName}'; the source must be a managed array ('[]T') or a 'string', and the pointer's element type must match the buffer's (ADR-0125).");
+        Report(location, "GS0401", $"A 'fixed' statement cannot pin a value of type '{typeName}'; the source must be a managed array ('[]T'), a 'string', or a span-like type with a public 'ref T GetPinnableReference()' (e.g. 'System.Span[T]'/'System.ReadOnlySpan[T]'), and the pointer's element type must match the buffer's (ADR-0125).");
     }
 
     /// <summary>

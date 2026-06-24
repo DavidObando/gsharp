@@ -1364,7 +1364,8 @@ public sealed class Lowerer : BoundTreeRewriter
                     fixedStmt.PinnedVariable,
                     fixedStmt.PointerVariable,
                     fixedStmt.PinnedSource,
-                    flatFixedBody));
+                    flatFixedBody,
+                    fixedStmt.SourceVariable));
             }
             else if (current is BoundPatternSwitchStatement ps)
             {

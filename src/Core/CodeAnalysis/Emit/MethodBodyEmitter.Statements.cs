@@ -53,6 +53,10 @@ internal sealed partial class MethodBodyEmitter
         {
             this.EmitFixedArrayPin(node, pinnedSlot, pointerSlot);
         }
+        else if (node.PinKind == FixedPinKind.PinnableReference)
+        {
+            this.EmitFixedPinnableReferencePin(node, pinnedSlot, pointerSlot);
+        }
         else
         {
             this.EmitFixedStringPin(node, pinnedSlot, pointerSlot);
@@ -61,11 +65,22 @@ internal sealed partial class MethodBodyEmitter
         // Body executes with the pin held.
         this.EmitStatement(node.Body);
 
-        // Release the pin on normal exit: store null into the pinned local so
-        // the GC stops tracking the buffer (both `T[] pinned` and
-        // `string pinned` release with `ldnull`).
-        this.il.OpCode(ILOpCode.Ldnull);
-        this.il.StoreLocal(pinnedSlot);
+        // Release the pin on normal exit so the GC stops tracking the buffer.
+        if (node.PinKind == FixedPinKind.PinnableReference)
+        {
+            // The pinned local is a managed by-ref (`T& pinned`); release it by
+            // storing a null managed pointer (`ldc.i4.0; conv.u`), exactly as the
+            // C# compiler does for `fixed (T* p = span)`.
+            this.il.LoadConstantI4(0);
+            this.il.OpCode(ILOpCode.Conv_u);
+            this.il.StoreLocal(pinnedSlot);
+        }
+        else
+        {
+            // Array (`T[] pinned`) / string (`string pinned`) release with `ldnull`.
+            this.il.OpCode(ILOpCode.Ldnull);
+            this.il.StoreLocal(pinnedSlot);
+        }
     }
 
     // Array-pin form: pin the array reference (`T[] pinned`) and derive
@@ -133,6 +148,41 @@ internal sealed partial class MethodBodyEmitter
         this.il.MarkLabel(skipLabel);
         this.il.OpCode(ILOpCode.Conv_u);
         this.il.StoreLocal(pointerSlot);         // p = (char*)result
+    }
+
+    // Span-like pin form (ADR-0125 / issue #1043): pin the `T&` returned by a
+    // public instance `ref T GetPinnableReference()` (e.g. `System.Span[T]` /
+    // `System.ReadOnlySpan[T]`) into a `T& pinned` local, then derive `*T` via
+    // `conv.u`. Mirrors C# `fixed (T* p = span)`. `GetPinnableReference()` already
+    // returns the data pointer for an empty span (a ref to where element 0 would
+    // be), so no null/empty guard is required — matching C#'s codegen.
+    private void EmitFixedPinnableReferencePin(BoundFixedStatement node, int pinnedSlot, int pointerSlot)
+    {
+        var sourceSlot = this.locals[node.SourceVariable];
+
+        var sourceClr = node.PinnedSource.Type?.ClrType
+            ?? throw new InvalidOperationException(
+                $"Span-like fixed source '{node.PinnedSource.Type?.Name}' has no CLR type.");
+        var getPinnableReference = sourceClr.GetMethod(
+            "GetPinnableReference",
+            BindingFlags.Public | BindingFlags.Instance,
+            binder: null,
+            types: Type.EmptyTypes,
+            modifiers: null)
+            ?? throw new InvalidOperationException(
+                $"Type '{sourceClr.FullName}' has no public instance GetPinnableReference() method.");
+
+        // Spill the source value to a local so its address can feed the
+        // instance call (`this` of a value-type method is a managed pointer).
+        this.EmitExpression(node.PinnedSource);
+        this.il.StoreLocal(sourceSlot);
+        this.il.LoadLocalAddress(sourceSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(this.outer.GetMethodReference(getPinnableReference)); // -> T&
+        this.il.StoreLocal(pinnedSlot);          // T& pinned = ref
+        this.il.LoadLocal(pinnedSlot);
+        this.il.OpCode(ILOpCode.Conv_u);
+        this.il.StoreLocal(pointerSlot);         // p = (T*)ref
     }
 
     private void EmitTryStatement(BoundTryStatement node)
