@@ -3735,13 +3735,50 @@ internal sealed class DeclarationBinder
 
         // Phase 4.3c / ADR-0020: bind type parameters at declaration time so
         // method-signature binding (which happens later) can resolve them.
-        var typeParameters = BindTypeParameterList(syntax.TypeParameterList);
+        //
+        // Issue #1061: register the interface's name shell BETWEEN creating the
+        // bare type parameters and resolving their constraints (mirroring the
+        // class/struct path from #1056). This puts the declaring interface's own
+        // name and arity in scope while its type-parameter constraints are bound,
+        // so a self-referential / CRTP constraint such as
+        // `interface IData[T IData]` or `interface IData[TData IAppleData[TData]]`
+        // resolves the interface being declared instead of failing with GS0113.
+        var registered = false;
+        var registrationFailed = false;
+        var typeParameters = BindTypeParameterList(
+            syntax.TypeParameterList,
+            bareSymbols =>
+            {
+                if (!bareSymbols.IsDefaultOrEmpty)
+                {
+                    interfaceSymbol.SetTypeParameters(bareSymbols);
+                }
+
+                if (!scope.TryDeclareTypeAlias(name, interfaceSymbol))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+                    registrationFailed = true;
+                    return;
+                }
+
+                registered = true;
+            });
+
+        if (registrationFailed)
+        {
+            return null;
+        }
+
+        // Bind the fully-resolved type parameters (with constraints) onto the
+        // interface symbol; the callback only attached the bare symbols.
         if (!typeParameters.IsDefaultOrEmpty)
         {
             interfaceSymbol.SetTypeParameters(typeParameters);
         }
 
-        if (!scope.TryDeclareTypeAlias(name, interfaceSymbol))
+        // Non-generic interfaces (or the defensive fallback when the callback did
+        // not run) register the name shell here.
+        if (!registered && !scope.TryDeclareTypeAlias(name, interfaceSymbol))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
             return null;
