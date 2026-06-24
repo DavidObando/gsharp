@@ -178,6 +178,24 @@ internal sealed partial class ExpressionBinder
     /// <summary>ADR-0039: Binds <c>*expr</c> — dereferences a managed pointer.</summary>
     private BoundExpression BindDereferenceExpression(UnaryExpressionSyntax syntax)
     {
+        // ADR-0122 §3 / issue #1033: `*void(expr)` is the cast to the
+        // void-element pointer `*void` (the form cs2gs emits for a C#
+        // `(void*)expr`, mirroring the `*uint8(p)` ≡ `(byte*)p` form). Because
+        // `void` cannot bind as a value-producing conversion call, recognise
+        // the syntactic shape `* void ( expr )` directly and reinterpret it as
+        // a cast to `*void`. Handled before binding the operand so it is never
+        // mistaken for a (rejected) dereference of a `*void` value.
+        if (binderCtx.InUnsafeContext
+            && syntax.Operand is CallExpressionSyntax voidCast
+            && voidCast.Identifier.Kind == SyntaxKind.IdentifierToken
+            && voidCast.Identifier.Text == "void"
+            && voidCast.TypeArgumentList == null
+            && voidCast.NullableQuestionToken == null
+            && voidCast.Arguments.Count == 1)
+        {
+            return conversions.BindConversion(voidCast.Arguments[0], PointerTypeSymbol.Get(TypeSymbol.Void), allowExplicit: true);
+        }
+
         var operand = BindExpression(syntax.Operand);
         if (operand is BoundErrorExpression)
         {
@@ -197,6 +215,15 @@ internal sealed partial class ExpressionBinder
             && TypeSymbol.IsLegalPointeeType(pointee))
         {
             return new BoundConversionExpression(null, PointerTypeSymbol.Get(pointee), conv.Expression);
+        }
+
+        // ADR-0122 §3 / issue #1033: a true `*void` pointer carries no element
+        // type and cannot be dereferenced directly; it must first be cast to a
+        // typed pointer `*T` (e.g. `*int32(p)`).
+        if (TypeSymbol.IsVoidPointer(operand.Type))
+        {
+            Diagnostics.ReportVoidPointerOperationNotAllowed(syntax.OperatorToken.Location, "dereference");
+            return new BoundErrorExpression(null);
         }
 
         if (!TypeSymbol.TryGetPointeeType(operand.Type, out _))
@@ -226,6 +253,15 @@ internal sealed partial class ExpressionBinder
         switch (syntax.OperatorToken.Kind)
         {
             case SyntaxKind.PlusToken:
+                // ADR-0122 §3 / issue #1033: a `*void` pointer has no element
+                // size, so it cannot be advanced by arithmetic. Reject with
+                // GS0403 (cast to a typed pointer `*T` first).
+                if (TypeSymbol.IsVoidPointer(left.Type) || TypeSymbol.IsVoidPointer(right.Type))
+                {
+                    Diagnostics.ReportVoidPointerOperationNotAllowed(syntax.OperatorToken.Location, "perform arithmetic on");
+                    return new BoundErrorExpression(null);
+                }
+
                 if (leftPtr != null && rightPtr == null && IsPointerOffsetType(right.Type))
                 {
                     return LowerPointerOffset(left, leftPtr, right, subtract: false);
@@ -239,6 +275,15 @@ internal sealed partial class ExpressionBinder
                 return null;
 
             case SyntaxKind.MinusToken:
+                // ADR-0122 §3 / issue #1033: pointer offset (`p - i`) and
+                // pointer difference (`p - q`) both require a known element
+                // size, so a `*void` operand is rejected (GS0403).
+                if (TypeSymbol.IsVoidPointer(left.Type) || TypeSymbol.IsVoidPointer(right.Type))
+                {
+                    Diagnostics.ReportVoidPointerOperationNotAllowed(syntax.OperatorToken.Location, "perform arithmetic on");
+                    return new BoundErrorExpression(null);
+                }
+
                 if (leftPtr != null && rightPtr == null && IsPointerOffsetType(right.Type))
                 {
                     return LowerPointerOffset(left, leftPtr, right, subtract: true);

@@ -2189,6 +2189,15 @@ internal sealed partial class ExpressionBinder
         // ADR-0122 / issue #1014: pointer indexing `p[i]` == `*(p + i)`.
         if (target.Type is PointerTypeSymbol pointerTarget)
         {
+            // ADR-0122 §3 / issue #1033: a `*void` pointer has no element type,
+            // so `p[i]` (which lowers to `*(p + i)`) is rejected (GS0403); cast
+            // to a typed pointer `*T` first.
+            if (TypeSymbol.IsVoidPointer(target.Type))
+            {
+                Diagnostics.ReportVoidPointerOperationNotAllowed(targetLocation, "index");
+                return new BoundErrorExpression(null);
+            }
+
             var pointerIndex = BindExpression(indexSyntax);
             if (pointerIndex is BoundErrorExpression)
             {
@@ -2535,6 +2544,15 @@ internal sealed partial class ExpressionBinder
         // ADR-0122 / issue #1014: pointer indexed write `p[i] = v` == `*(p + i) = v`.
         if (variable.Type is PointerTypeSymbol pointerType)
         {
+            // ADR-0122 §3 / issue #1033: a `*void` pointer has no element type,
+            // so an indexed write `p[i] = v` is rejected (GS0403); cast to a
+            // typed pointer `*T` first.
+            if (TypeSymbol.IsVoidPointer(variable.Type))
+            {
+                Diagnostics.ReportVoidPointerOperationNotAllowed(diagnosticLocation, "index");
+                return new BoundErrorExpression(null);
+            }
+
             var pointerIndex = BindExpression(indexSyntax);
             if (pointerIndex is BoundErrorExpression)
             {

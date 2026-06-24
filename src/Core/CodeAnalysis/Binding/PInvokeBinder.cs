@@ -294,9 +294,13 @@ internal static class PInvokeBinder
         // ELEMENT_TYPE_PTR) marshals as a native pointer when its pointee is a
         // blittable primitive (or another pointer). This is the plain-`*T`
         // P/Invoke parameter path (e.g. `void* pBuffer`, `int* pRead`).
+        // ADR-0122 §3 / issue #1033: a true `*void` (C# `void*`, the canonical
+        // Win32 opaque-buffer parameter) likewise marshals as a native pointer.
         if (type is PointerTypeSymbol pointer)
         {
-            return IsBlittablePrimitive(pointer.PointeeType) || pointer.PointeeType is PointerTypeSymbol;
+            return TypeSymbol.IsVoidPointer(type)
+                || IsBlittablePrimitive(pointer.PointeeType)
+                || pointer.PointeeType is PointerTypeSymbol;
         }
 
         if (type is SliceTypeSymbol slice)

@@ -91,7 +91,8 @@ public sealed class TupleTypeReference : GTypeReference
 /// form <c>*Element</c> (spec §"Byref/pointer syntax exists as <c>*T</c>",
 /// grammar <c>'*' TypeClause '?'?</c>). A C# postfix <c>T*</c> (e.g.
 /// <c>byte*</c>, <c>int*</c>, <c>void*</c>) maps to this node; <c>void*</c>
-/// has no managed pointee so it maps to <c>*uint8</c> (a raw byte pointer).
+/// (no element type) maps to the faithful void-element pointer <c>*void</c>
+/// (ADR-0122 §3 / issue #1033), distinct from the byte pointer <c>*uint8</c>.
 /// These appear only on the unsafe Win32 P/Invoke interop surface: the form
 /// round-trips through the parser, though the binder later steers callers to
 /// <c>ref</c>/<c>out</c>/<c>in</c> (GS0243/GS9006) — the excepted unsafe-interop

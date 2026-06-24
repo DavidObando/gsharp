@@ -384,11 +384,13 @@ namespace Demo
 
     /// <summary>
     /// ADR-0115 §G: an unsafe pointer type (C# postfix `T*`) now translates to
-    /// the canonical G# PREFIX managed-pointer form `*T`; a `void*` (no managed
-    /// pointee) maps to `*uint8`. The emitted G# round-trips through the parser.
-    /// No Unsupported diagnostic is raised — the binder later steers callers to
-    /// `ref`/`out`/`in` (GS0243) on the excepted unsafe Win32-interop surface,
-    /// which the corpus compile stage exercises on the real Win32FileIO.cs.
+    /// the canonical G# PREFIX pointer form `*T`; a `void*` (no element type)
+    /// maps to the faithful void-element pointer `*void` (ADR-0122 §3 / issue
+    /// #1033), distinct from the byte pointer `*uint8`. The emitted G#
+    /// round-trips through the parser. No Unsupported diagnostic is raised — the
+    /// binder later steers callers to `ref`/`out`/`in` (GS0243) on the excepted
+    /// unsafe Win32-interop surface, which the corpus compile stage exercises
+    /// on the real Win32FileIO.cs.
     /// </summary>
     [Fact]
     public void PointerType_EmitsCanonicalPrefixForm()
@@ -403,7 +405,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("pBuffer *uint8", printed);
+        Assert.Contains("pBuffer *void", printed);
         Assert.Contains("pBytesRead *int32", printed);
         Assert.Contains("pBuf *uint8", printed);
         Assert.DoesNotContain(

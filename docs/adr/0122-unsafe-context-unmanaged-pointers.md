@@ -77,10 +77,36 @@ and a managed by-ref (`ByRefTypeSymbol`) otherwise; `*p` dereferences either.
 
 ### 3. `void*` spelling
 
-Following the cs2gs translator's existing mapping, the opaque byte pointer is
-spelled **`*uint8`** (C# `void*`/`byte*` both lower to `*uint8`). A true
-distinct `void`-element pointer is **deferred** (follow-up) — `*uint8` covers
-the blittable Win32 surface and round-trips through `nint` identically.
+The opaque byte pointer is spelled **`*uint8`** (a dereferenceable 1-byte
+pointer). A true, distinct **void-element pointer** is spelled **`*void`**
+(issue #1033): a `PointerTypeSymbol` whose pointee is the `void`
+`TypeSymbol`, emitting **`ELEMENT_TYPE_PTR` over `ELEMENT_TYPE_VOID`** — the
+faithful mapping of C# `void*`.
+
+`*void` is a first-class unmanaged pointer type. It is an explicitly legal
+pointer even though `void` is not a blittable pointee
+(`Binder.BindTypeClause` special-cases it past the GS0398 blittable-pointee
+check). Unlike `*uint8`, a `*void` carries **no element type**, so following
+C# `void*` semantics it may **not** be:
+
+- directly dereferenced — `*p` (read) or `*p = v` (write);
+- indexed — `p[i]` (read) or `p[i] = v` (write);
+- advanced by arithmetic — `p + i`, `p - i`, or `p - q`.
+
+Each of those is rejected with the new **GS0403** diagnostic, which directs
+the user to first cast to a typed pointer `*T`. What **is** allowed:
+
+- **casts** to/from typed pointers — `*int32(vp)` (to `*int32`) and
+  `*void(p)` (from any `*T`); the latter is the deref-of-conversion-call form
+  cs2gs emits for a C# `(void*)p`, recognised syntactically in
+  `BindDereferenceExpression` because `void(p)` cannot bind as a value
+  conversion;
+- **round-trip** through `nint`/`IntPtr` — `nint(vp)` and `*void(addr)`;
+- **comparison / equality** — `==`, `!=`, `<`, … (compared as `nint`),
+  matching C# (only deref/index/arithmetic need a typed-pointer cast).
+
+The cs2gs translator maps C# `void*` to `*void` (and keeps `byte*`/`sbyte*`
+→ their element pointers `*uint8`/`*int8`).
 
 ### 4. Legal pointee subset
 
@@ -151,7 +177,10 @@ verification regressions without weakening ilverify globally.
 
 ## Deferrals (follow-up issues, all reference #1014)
 
-- **True `void*`** distinct from `*uint8`.
+- **True `void*`** distinct from `*uint8` — **implemented** (issue #1033):
+  spelled `*void`, emits `ELEMENT_TYPE_PTR ELEMENT_TYPE_VOID`, rejects
+  deref/index/arithmetic (GS0403), and round-trips through `nint` / casts
+  to/from typed pointers.
 - **Pointers to user structs / non-blittable pointees** (currently GS0398).
 - **Function pointers** (`delegate*`-equivalent) and **fixed-size buffers**.
 - **`unsafe func` method signature binding inside a *safe* type** (today only a

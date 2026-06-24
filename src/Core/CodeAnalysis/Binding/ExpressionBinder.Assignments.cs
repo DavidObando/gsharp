@@ -1031,6 +1031,15 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        // ADR-0122 §3 / issue #1033: a true `*void` pointer carries no element
+        // type and cannot be written through directly; cast to a typed pointer
+        // `*T` (e.g. `*int32(p)`) first.
+        if (TypeSymbol.IsVoidPointer(pointer.Type))
+        {
+            Diagnostics.ReportVoidPointerOperationNotAllowed(syntax.Target.OperatorToken.Location, "dereference");
+            return new BoundErrorExpression(null);
+        }
+
         var value = BindExpression(syntax.Value);
         if (value is BoundErrorExpression)
         {

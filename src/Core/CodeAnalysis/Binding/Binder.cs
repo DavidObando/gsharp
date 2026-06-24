@@ -2162,7 +2162,16 @@ public sealed class Binder
             // pointer (ELEMENT_TYPE_BYREF, `T&`).
             if (binderCtx.InUnsafeContext)
             {
-                if (!TypeSymbol.IsLegalPointeeType(pointeeType) && pointeeType is not PointerTypeSymbol)
+                // ADR-0122 §3 / issue #1033: `*void` is the true void-element
+                // pointer (CLR ELEMENT_TYPE_PTR over ELEMENT_TYPE_VOID), the
+                // faithful mapping of C# `void*`. It is an explicitly legal
+                // pointer type even though `void` is not a blittable pointee:
+                // it may not be dereferenced/indexed/advanced (the binder
+                // rejects those — GS0403) but it round-trips through
+                // `nint`/`IntPtr` and casts to/from typed pointers `*T`.
+                if (pointeeType != TypeSymbol.Void
+                    && !TypeSymbol.IsLegalPointeeType(pointeeType)
+                    && pointeeType is not PointerTypeSymbol)
                 {
                     Diagnostics.ReportUnmanagedPointerIllegalPointee(syntax.PointerPointeeType.Location, pointeeType.Name);
                     return PointerTypeSymbol.Get(pointeeType);
