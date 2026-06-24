@@ -148,6 +148,11 @@ C# **extension methods** (`static R M(this T self, …)`) translate to the recei
 #### B.6 Inheritance and the `:` clause — ADR-0017, spec §Type declarations
 
 - C# classes are sealed-by-default in G#; a base class that is subclassed must be emitted `open class`, and the overriding member must carry `override` (ADR-0017). The translator uses Roslyn's `INamedTypeSymbol.IsSealed`/`IsAbstract`/inheritance graph to decide: a class that any other corpus type derives from → `open`; a C# `abstract`/`virtual` member that is overridden → `open`/`override` on the pair. C# `sealed class` → plain `class` (already the default) or `sealed class` when it participates in a closed hierarchy switched on exhaustively (ADR-0078).
+- **Member `open`/`override` openness (Oahu.Decrypt round).** G# only treats a member as overridable when it is explicitly `open`, and unlike C# this does **not** extend automatically to framework/metadata virtuals or to existing `override`s. Three rules keep an inheritance chain compiling:
+  - **External-base overrides drop `override`.** G# does not treat a virtual declared in *referenced metadata* (e.g. `Object.ToString`, `Stream.Read`, `IDisposable.Dispose`) as `open`, so emitting `override` for a method/property that overrides such an external base member fails (`GS0183`). The translator detects this (`OverridesExternalBaseMethod`/`OverridesExternalBaseProperty`: the overridden root is declared outside the compilation) and emits a plain `func`/`prop` — which still binds as the override — instead of `override`.
+  - **A non-sealed override is re-emitted `open`.** A C# `override` member is itself overridable unless `sealed`, so a further subclass can override it again; G# requires the base member to be `open` for that (`GS0184`). A kept (non-external, non-`sealed`) override is therefore emitted as `override open`.
+  - **Member `open` is gated on class openness.** G# rejects `open` on a member whose enclosing class is not itself `open` (`GS0190`). The translator only marks a member `open` when the containing type *will be* emitted `open class` (`IsTypeEmittedOpen` mirrors the class-declaration openness logic: abstract, has a `protected` member, or subclassed-and-not-sealed), so an override in a leaf/sealed class stays a plain `override func`.
+- **Get-only auto-property + explicit constructor (Oahu.Decrypt OD-T1).** When a single-instance-constructor `class` assigns its parameters to a property that is a **contract member** (implements an interface property, or is `virtual`/`abstract`/`override` — `IsContractProperty`), the translator does **not** lift to a primary constructor (G# primary-ctor parameters are fields, not properties, and would fail the interface property contract — `GS0187`, cascading to `GS0214`/`GS0183`). Instead it keeps the explicit `init(...)` and emits each affected C# get-only auto-property (`{ get; }`) as a G# **init-only** property `prop X T { get; init; }` (a bare `{ get; }` is read-only and the kept `init` assignment would be `GS0127`). An inline get-only-auto-property initializer (`{ get; } = new();`) — which G# cannot express as a property member initializer — is moved into the explicit constructor body. Plain `struct`s (which admit no explicit `init`) and non-contract class properties still lift to the primary-constructor form.
 - The base clause lists the **base class first, then interfaces**: `class Dog : Animal, IBark { … }` (spec `BaseClause = ":" QualifiedTypeName … { "," QualifiedTypeName }`; `samples/Class.gs`). Constructor chaining renders as `: Base(args)` on the base clause or `init(...) : Base(args) { … }` (ADR-0065, `samples/ExplicitConstructor.gs`).
 
 #### B.7 Generics — ADR-0020, ADR-0097, ADR-0098/ADR-0049
@@ -568,6 +573,41 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   re-escapes any character below `U+0020` (and `U+007F`) — e.g. C# `"\0\0\0"` —
   as a `\uXXXX` escape so the emitted G# string stays terminated and round-trips
   (previously a raw NUL produced `GS0003: Unterminated string literal`).
+- **Unsigned literal coercion at an unsigned target (OD-T2).** A C# integer
+  literal implicitly converted to an unsigned field/parameter (`uint samplesPerChunk = 0`,
+  a `: base(4)` argument whose parameter is `uint8`) is emitted with an explicit
+  width cast (`uint32(0)`, `uint8(4)`) because G# has no implicit numeric
+  promotion (`GS0156`). The coercion (`CoerceConstantToUnsigned`) fires on field
+  initializers, assignments, and call/`base(...)` arguments whose Roslyn-converted
+  target type is `uint8`/`uint16`/`uint32`/`uint64`.
+- **`new object()` / target-typed `new()` to `object` → `System.Object()` (OD-T3).**
+  A construction of `System.Object` has no bare `object()` spelling (`GS0130`,
+  "function `object` doesn't exist"); the translator emits the fully-qualified
+  `System.Object()` callee.
+- **Build-generated source exclusion (OD-T4).** The project loader
+  (`CSharpProjectLoader.IsGeneratedSource`) excludes build artifacts from the
+  corpus so they cannot inject undefined attributes (`GS0198`): anything under an
+  `obj/` or `bin/` directory, plus generated files (`*.AssemblyInfo.cs`,
+  `*.AssemblyAttributes.cs`, `*.GlobalUsings.g.cs`, `*.Version.cs`, `*.g.cs`,
+  `*.g.i.cs`) — e.g. the Nerdbank.GitVersioning `ThisAssembly` file.
+- **Record → plain `class`/`struct` downgrade (OD-T5).** A C# `record`/`record struct`
+  whose data members are auto-properties that cannot become primary-constructor
+  data fields (`RecordHasAutoPropertyDataMember`) is downgraded so it does not
+  emit an invalid `data` type: a `record` **class** always downgrades to a plain
+  `class`; a `record struct` downgrades to a plain `struct` only when it has **no**
+  explicit instance constructor (a `record struct` *with* an explicit ctor must
+  still lift to a `data struct`, since a plain `struct` admits no explicit `init`).
+  This (with the existing fieldless-record rule, §B T4) clears `GS0104`
+  (fieldless `data struct`), `GS0189` (auto-property in a `data struct`), and
+  `GS0232` (explicit `ToString` colliding with a `data` type's synthesized one).
+- **Whole-app compile ordering.** `CompileStage.OrderForCompilation` topologically
+  sorts the emitted `.gs` files so each type's base classes and interfaces are
+  passed to `gsc` **before** it (Kahn's algorithm, stable on original order; a
+  file declares its dependency through `EmittedGsFile.BaseClassNames`, which now
+  includes implemented interfaces as well as the base class). This works around a
+  `gsc` order-sensitivity in `: base(...)`/interface-satisfaction binding (§G).
+  Ordering affects only the compiler command line, never file content, so golden
+  `.gs` outputs are unchanged.
 
 `Cs2Gs.Pipeline` runs four ordered stages per corpus app. Each stage has an explicit pass/fail gate; a failure short-circuits the remaining stages for that app, emits a triage artifact (section D), and is recorded in the run report. **"Migration completed" ≡ all four stages green: clean compile + clean IL verification + test parity with the original C#.**
 

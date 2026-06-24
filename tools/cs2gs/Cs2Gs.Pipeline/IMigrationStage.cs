@@ -100,11 +100,34 @@ public sealed class EmittedGsFile
     /// <param name="csFilePath">The originating C# file path.</param>
     /// <param name="gsharpSource">The emitted G# source text.</param>
     public EmittedGsFile(string gsPath, string relativeGsPath, string csFilePath, string gsharpSource)
+        : this(gsPath, relativeGsPath, csFilePath, gsharpSource, null, null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="EmittedGsFile"/> class with
+    /// type-graph metadata used to order files for whole-app compilation.
+    /// </summary>
+    /// <param name="gsPath">The absolute path of the written <c>.gs</c> file.</param>
+    /// <param name="relativeGsPath">The run-relative path of the <c>.gs</c> file (for artifacts).</param>
+    /// <param name="csFilePath">The originating C# file path.</param>
+    /// <param name="gsharpSource">The emitted G# source text.</param>
+    /// <param name="declaredTypeNames">Simple names of the types declared in this file.</param>
+    /// <param name="baseClassNames">Simple names of the base classes those types extend.</param>
+    public EmittedGsFile(
+        string gsPath,
+        string relativeGsPath,
+        string csFilePath,
+        string gsharpSource,
+        IReadOnlyList<string> declaredTypeNames,
+        IReadOnlyList<string> baseClassNames)
     {
         this.GsPath = gsPath;
         this.RelativeGsPath = relativeGsPath;
         this.CsFilePath = csFilePath;
         this.GSharpSource = gsharpSource;
+        this.DeclaredTypeNames = declaredTypeNames ?? System.Array.Empty<string>();
+        this.BaseClassNames = baseClassNames ?? System.Array.Empty<string>();
     }
 
     /// <summary>Gets the absolute path of the written <c>.gs</c> file.</summary>
@@ -118,6 +141,17 @@ public sealed class EmittedGsFile
 
     /// <summary>Gets the emitted G# source text.</summary>
     public string GSharpSource { get; }
+
+    /// <summary>Gets the simple names of the types declared in this file.</summary>
+    public IReadOnlyList<string> DeclaredTypeNames { get; }
+
+    /// <summary>
+    /// Gets the simple names of the base classes extended by the types in this
+    /// file. Used to order files so a base class is compiled before its
+    /// subclasses (works around an order-dependent <c>: base(...)</c> resolution
+    /// limitation in gsc).
+    /// </summary>
+    public IReadOnlyList<string> BaseClassNames { get; }
 }
 
 /// <summary>

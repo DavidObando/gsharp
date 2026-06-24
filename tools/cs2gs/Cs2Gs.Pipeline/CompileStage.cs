@@ -40,7 +40,9 @@ public sealed class CompileStage : IMigrationStage
         string outputName = Path.GetFileNameWithoutExtension(context.App.ProjectPath) + ".dll";
         string outputPath = Path.Combine(context.AppRunDir, outputName);
 
-        IReadOnlyList<string> gsFiles = context.EmittedFiles.Select(f => f.GsPath).ToList();
+        IReadOnlyList<string> gsFiles = OrderForCompilation(context.EmittedFiles)
+            .Select(f => f.GsPath)
+            .ToList();
         GscResult result = context.Gsc.Compile(
             gsFiles,
             outputPath,
@@ -82,6 +84,103 @@ public sealed class CompileStage : IMigrationStage
         }
 
         return Task.FromResult(StageOutcome.Failed(artifacts));
+    }
+
+    /// <summary>
+    /// Orders emitted files so that a file declaring a base class is compiled
+    /// before any file declaring its subclasses. gsc currently resolves a
+    /// <c>: base(...)</c> constructor chain against the base class's explicit
+    /// <c>init</c> only when the base type has already been bound, so a derived
+    /// class that appears before its base reports a spurious GS0214 "no
+    /// accessible constructor" (and cascading GS0183/GS0187). A stable
+    /// topological sort on the class-inheritance graph avoids that; cycles (which
+    /// the inheritance graph cannot contain, but file-level grouping might) fall
+    /// back to the original order.
+    /// </summary>
+    private static IReadOnlyList<EmittedGsFile> OrderForCompilation(IReadOnlyList<EmittedGsFile> files)
+    {
+        if (files.Count <= 1)
+        {
+            return files;
+        }
+
+        // Map each declared type's simple name to the file that declares it.
+        var typeToFile = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (int i = 0; i < files.Count; i++)
+        {
+            foreach (string typeName in files[i].DeclaredTypeNames)
+            {
+                typeToFile.TryAdd(typeName, i);
+            }
+        }
+
+        // Edges: a file depends on (must come after) every file that declares one
+        // of its base classes.
+        var dependencies = new List<HashSet<int>>(files.Count);
+        var dependentCount = new int[files.Count];
+        for (int i = 0; i < files.Count; i++)
+        {
+            dependencies.Add(new HashSet<int>());
+        }
+
+        for (int i = 0; i < files.Count; i++)
+        {
+            foreach (string baseName in files[i].BaseClassNames)
+            {
+                if (typeToFile.TryGetValue(baseName, out int baseFile) &&
+                    baseFile != i &&
+                    dependencies[i].Add(baseFile))
+                {
+                    dependentCount[i]++;
+                }
+            }
+        }
+
+        // Kahn's algorithm with stable tie-breaking by original index.
+        var ordered = new List<EmittedGsFile>(files.Count);
+        var emitted = new bool[files.Count];
+        int remaining = files.Count;
+        while (remaining > 0)
+        {
+            int picked = -1;
+            for (int i = 0; i < files.Count; i++)
+            {
+                if (!emitted[i] && dependentCount[i] == 0)
+                {
+                    picked = i;
+                    break;
+                }
+            }
+
+            if (picked < 0)
+            {
+                // Cycle in the file-level graph: emit the remaining files in their
+                // original order to make progress.
+                for (int i = 0; i < files.Count; i++)
+                {
+                    if (!emitted[i])
+                    {
+                        ordered.Add(files[i]);
+                        emitted[i] = true;
+                    }
+                }
+
+                break;
+            }
+
+            ordered.Add(files[picked]);
+            emitted[picked] = true;
+            remaining--;
+            for (int i = 0; i < files.Count; i++)
+            {
+                if (!emitted[i] && dependencies[i].Remove(picked))
+                {
+                    dependentCount[i]--;
+                }
+            }
+        }
+
+        return ordered;
     }
 
     private static EmittedGsFile MatchEmittedFile(IReadOnlyList<EmittedGsFile> files, string diagnosticFile)

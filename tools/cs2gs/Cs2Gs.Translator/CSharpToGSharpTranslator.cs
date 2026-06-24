@@ -510,6 +510,27 @@ public sealed class CSharpToGSharpTranslator
             return false;
         }
 
+        /// <summary>
+        /// Determines whether <paramref name="type"/> will be emitted as an
+        /// <c>open class</c> in G#. Mirrors the class-declaration openness logic in
+        /// <see cref="VisitAggregate"/> so member-level <c>open</c> is only emitted
+        /// when the enclosing class is itself open (otherwise GS0190).
+        /// </summary>
+        private bool IsTypeEmittedOpen(INamedTypeSymbol type)
+        {
+            if (type == null || type.TypeKind != TypeKind.Class || type.IsStatic)
+            {
+                return false;
+            }
+
+            if (type.IsAbstract || HasProtectedMember(type))
+            {
+                return true;
+            }
+
+            return !type.IsSealed && this.subclassedBases.Contains(type.OriginalDefinition);
+        }
+
         private static TypeDeclarationKind? MapAggregateKind(BaseTypeDeclarationSyntax node)
         {
             switch (node)
@@ -541,8 +562,135 @@ public sealed class CSharpToGSharpTranslator
             return !hasPositional && !hasDataMember;
         }
 
+        /// <summary>
+        /// Determines whether a C# record declares an instance auto-property data
+        /// member in its body (e.g. <c>public string Title { get; }</c> or
+        /// <c>{ get; init; }</c>). A G# <c>data</c> type's fields come exclusively
+        /// from its positional primary-constructor parameters; auto-properties are
+        /// rejected (GS0189) and a body-only record has no <c>data</c> fields at all
+        /// (GS0104). Such records therefore map to a plain <c>class</c>/<c>struct</c>
+        /// (OD-T5).
+        /// </summary>
+        private static bool RecordHasAutoPropertyDataMember(RecordDeclarationSyntax record)
+        {
+            return record.Members.OfType<PropertyDeclarationSyntax>().Any(p =>
+                !p.Modifiers.Any(SyntaxKind.StaticKeyword) &&
+                p.ExpressionBody == null &&
+                p.AccessorList != null &&
+                p.AccessorList.Accessors.All(a => a.Body == null && a.ExpressionBody == null) &&
+                p.AccessorList.Accessors.Any(a => a.IsKind(SyntaxKind.GetAccessorDeclaration)));
+        }
+
+        /// <summary>
+        /// Determines whether a property participates in a contract that requires it
+        /// to remain a real property in G# — it implements an interface property or
+        /// is part of an override chain (virtual/abstract/override). Such a property
+        /// cannot be lifted into a primary-constructor parameter (G# primary-ctor
+        /// parameters are not properties), or the contract breaks (GS0187). OD-T1.
+        /// </summary>
+        private static bool IsContractProperty(IPropertySymbol property)
+        {
+            if (property.IsVirtual || property.IsAbstract || property.IsOverride)
+            {
+                return true;
+            }
+
+            INamedTypeSymbol containing = property.ContainingType;
+            if (containing == null)
+            {
+                return false;
+            }
+
+            foreach (INamedTypeSymbol iface in containing.AllInterfaces)
+            {
+                foreach (IPropertySymbol ifaceProperty in iface.GetMembers().OfType<IPropertySymbol>())
+                {
+                    ISymbol implementation = containing.FindImplementationForInterfaceMember(ifaceProperty);
+                    if (SymbolEqualityComparer.Default.Equals(implementation, property))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         private static bool IsIntegral(object value) =>
             value is byte or sbyte or short or ushort or int or uint or long or ulong;
+
+        /// <summary>
+        /// Determines whether a C# property is a get-only auto-property
+        /// (<c>{ get; }</c>, body-less, no <c>set</c>/<c>init</c> accessor). Such a
+        /// property has a backing field and is settable in the declaring type's
+        /// constructor; it maps to an init-only G# auto-property (OD-T1).
+        /// </summary>
+        private static bool IsGetOnlyAutoProperty(PropertyDeclarationSyntax prop)
+        {
+            if (prop.ExpressionBody != null || prop.AccessorList == null)
+            {
+                return false;
+            }
+
+            IReadOnlyList<AccessorDeclarationSyntax> accessors = prop.AccessorList.Accessors;
+            if (accessors.Any(a => a.Body != null || a.ExpressionBody != null))
+            {
+                return false;
+            }
+
+            bool hasGet = accessors.Any(a => a.IsKind(SyntaxKind.GetAccessorDeclaration));
+            bool hasSet = accessors.Any(a => a.IsKind(SyntaxKind.SetAccessorDeclaration));
+            bool hasInit = accessors.Any(a => a.IsKind(SyntaxKind.InitAccessorDeclaration));
+            return hasGet && !hasSet && !hasInit;
+        }
+
+        /// <summary>
+        /// Collects the inline initializers of get-only auto-properties
+        /// (<c>public List&lt;T&gt; Items { get; } = new();</c>). G# has no property
+        /// member initializer, so the initialization is moved into the type's
+        /// <c>init(...)</c> constructor body (OD-T1). Only meaningful for a plain
+        /// class/struct that keeps an explicit constructor (not a lifted primary
+        /// constructor, not a record).
+        /// </summary>
+        private List<(string Name, GExpression Value)> CollectGetOnlyAutoPropertyInitializers(
+            TypeDeclarationSyntax node)
+        {
+            var result = new List<(string Name, GExpression Value)>();
+            foreach (PropertyDeclarationSyntax prop in node.Members.OfType<PropertyDeclarationSyntax>())
+            {
+                if (prop.Modifiers.Any(SyntaxKind.StaticKeyword) ||
+                    prop.Initializer == null ||
+                    !IsGetOnlyAutoProperty(prop))
+                {
+                    continue;
+                }
+
+                var symbol = this.context.GetDeclaredSymbol(prop) as IPropertySymbol;
+                if (symbol != null &&
+                    (symbol.IsAbstract || symbol.ContainingType?.TypeKind == TypeKind.Interface))
+                {
+                    continue;
+                }
+
+                result.Add((SanitizeIdentifier(prop.Identifier.Text), this.TranslateExpression(prop.Initializer.Value)));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Determines whether a type declares a designated instance constructor —
+        /// one that is non-static and does not delegate to another constructor of
+        /// the same type via <c>: this(...)</c>. Such a constructor is the place
+        /// into which get-only auto-property initializers are injected (OD-T1).
+        /// </summary>
+        private static bool HasDesignatedInstanceConstructor(TypeDeclarationSyntax node)
+        {
+            return node.Members
+                .OfType<ConstructorDeclarationSyntax>()
+                .Any(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword) &&
+                    (c.Initializer == null || c.Initializer.ThisOrBaseKeyword.IsKind(SyntaxKind.BaseKeyword)));
+        }
 
         private static GExpression MapConstantDefault(IParameterSymbol symbol)
         {
@@ -579,22 +727,42 @@ public sealed class CSharpToGSharpTranslator
 
             var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
 
-            // A `data class`/`data struct` requires at least one field (GS0104). A
-            // C# fieldless record — typically an `abstract record Shape;` base of a
-            // closed hierarchy — therefore maps to a plain `class`/`struct` (open
-            // when subclassed), not a `data` type (ADR-0115 §B.4).
+            // A `data class`/`data struct` requires at least one field (GS0104) and
+            // derives those fields from positional/primary-constructor parameters,
+            // not from auto-properties (GS0189). A fieldless record, or a record
+            // whose data lives in body auto-properties that cannot be lifted to a
+            // primary constructor, therefore maps to a plain `class`/`struct`
+            // (ADR-0115 §B.4 / OD-T5). A record *struct* with an explicit
+            // parameter-copy constructor is the exception: it lifts to a primary
+            // `data struct` (handled by AnalyzeConstructorLift), so it is left alone
+            // — a plain G# `struct` cannot carry an explicit `init` constructor.
             if ((kind == TypeDeclarationKind.DataClass || kind == TypeDeclarationKind.DataStruct) &&
-                node is RecordDeclarationSyntax record &&
-                IsFieldlessRecord(record))
+                node is RecordDeclarationSyntax record)
             {
-                kind = kind == TypeDeclarationKind.DataStruct
-                    ? TypeDeclarationKind.Struct
-                    : TypeDeclarationKind.Class;
-                this.context.Report(new TranslationDiagnostic(
-                    nameof(SyntaxKind.RecordDeclaration),
-                    $"fieldless record '{node.Identifier.Text}' maps to a plain '{(kind == TypeDeclarationKind.Struct ? "struct" : "class")}' because a G# 'data' type requires at least one field (GS0104, ADR-0115 §B.4).",
-                    node.GetLocation(),
-                    TranslationSeverity.Info));
+                bool fieldless = IsFieldlessRecord(record);
+                bool hasAutoPropData = RecordHasAutoPropertyDataMember(record);
+                bool hasExplicitInstanceCtor = record.Members
+                    .OfType<ConstructorDeclarationSyntax>()
+                    .Any(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword));
+
+                bool downgrade = kind == TypeDeclarationKind.DataClass
+                    ? fieldless || hasAutoPropData
+                    : fieldless || (hasAutoPropData && !hasExplicitInstanceCtor);
+
+                if (downgrade)
+                {
+                    kind = kind == TypeDeclarationKind.DataStruct
+                        ? TypeDeclarationKind.Struct
+                        : TypeDeclarationKind.Class;
+                    string reason = fieldless
+                        ? "a G# 'data' type requires at least one field (GS0104, ADR-0115 §B.4)"
+                        : "a G# 'data' type derives its fields from positional parameters and rejects auto-property members (GS0104/GS0189, ADR-0115 §B.4)";
+                    this.context.Report(new TranslationDiagnostic(
+                        nameof(SyntaxKind.RecordDeclaration),
+                        $"record '{node.Identifier.Text}' maps to a plain '{(kind == TypeDeclarationKind.Struct ? "struct" : "class")}' because {reason}.",
+                        node.GetLocation(),
+                        TranslationSeverity.Info));
+                }
             }
 
             bool isStaticClass = symbol != null && symbol.IsStatic && kind == TypeDeclarationKind.Class;
@@ -618,13 +786,23 @@ public sealed class CSharpToGSharpTranslator
             // fields directly, which is now valid G#.
             ConstructorLift lift = this.AnalyzeConstructorLift(node, symbol, kind.Value);
 
+            // OD-T1: when the explicit constructor is kept (not lifted to a primary
+            // constructor) and the type is a plain class/struct, get-only
+            // auto-property inline initializers (`{ get; } = new();`) must move into
+            // the constructor body — G# has no property member initializer.
+            List<(string Name, GExpression Value)> propertyCtorInits =
+                !lift.DropConstructor &&
+                    (kind == TypeDeclarationKind.Class || kind == TypeDeclarationKind.Struct)
+                    ? this.CollectGetOnlyAutoPropertyInitializers(node)
+                    : new List<(string Name, GExpression Value)>();
+
             this.CollectStaticFieldInitializers(node);
 
             var instanceMembers = new List<GMember>();
             var sharedMembers = new List<GMember>();
             foreach (MemberDeclarationSyntax member in node.Members)
             {
-                foreach ((GMember translated, bool isStatic) in this.TranslateMember(member, kind.Value, lift))
+                foreach ((GMember translated, bool isStatic) in this.TranslateMember(member, kind.Value, lift, propertyCtorInits))
                 {
                     // A C# operator overload translates to a receiver-clause
                     // `func (a T) operator <op>(...)`; like every receiver-clause
@@ -683,6 +861,23 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
+            // OD-T1: if get-only auto-property initializers needed to move into a
+            // constructor but the type declares no designated instance constructor,
+            // synthesize a parameterless `init()` to carry them (G# has no property
+            // member initializer). Reference types only — a class is the case that
+            // arises in practice.
+            if (propertyCtorInits.Count > 0 &&
+                kind == TypeDeclarationKind.Class &&
+                !HasDesignatedInstanceConstructor(node))
+            {
+                var initStatements = propertyCtorInits
+                    .Select(p => (GStatement)new AssignmentStatement(new IdentifierExpression(p.Name), p.Value))
+                    .ToList();
+                instanceMembers.Insert(0, new ConstructorDeclaration(
+                    new List<Parameter>(),
+                    new BlockStatement(initStatements)));
+            }
+
             var members = new List<GMember>(instanceMembers);
             if (sharedMembers.Count > 0)
             {
@@ -704,11 +899,16 @@ public sealed class CSharpToGSharpTranslator
                 ? lift.PrimaryParameters
                 : this.MapPrimaryConstructor(node);
 
+            // A class with `protected` members must be an `open class` in G#
+            // (GS0380) — `protected` is meaningless on a non-inheritable type. A C#
+            // `sealed` class that carries `protected override` members (it overrides
+            // an abstract/virtual protected base) therefore still maps to `open`;
+            // G# has no `sealed` modifier so the sealedness is dropped (ADR-0115 §B.4).
             bool isOpen = symbol != null &&
                 kind == TypeDeclarationKind.Class &&
-                !symbol.IsSealed &&
                 !symbol.IsStatic &&
-                (this.subclassedBases.Contains(symbol.OriginalDefinition) || HasProtectedMember(symbol));
+                ((!symbol.IsSealed && this.subclassedBases.Contains(symbol.OriginalDefinition))
+                    || HasProtectedMember(symbol));
 
             // G# has no `abstract` class modifier (the keyword is not recognized by
             // the parser); a C# `abstract class`/`abstract record` therefore maps to
@@ -834,6 +1034,24 @@ public sealed class CSharpToGSharpTranslator
                         targetName = propertySymbol.Name;
                         targetType = propertySymbol.Type;
                         targetIsProperty = true;
+
+                        // OD-T1: G# primary-constructor parameters are NOT
+                        // properties, so a *class* that copies a constructor
+                        // parameter into a property which satisfies an interface or
+                        // overridden-member contract cannot lift — dropping the
+                        // property member would break the contract (GS0187) and
+                        // cascade to GS0214/GS0183 on derived/override members. Keep
+                        // the explicit `init(...)` so the get-only auto-property
+                        // survives (emitted as init-only `{ get; init; }`). A
+                        // property that is *not* a contract member is still lifted to
+                        // the primary constructor (the L1 canonical form). Value
+                        // types always lift: a G# `struct`/`data struct` cannot carry
+                        // an in-body `init` (ADR-0115 §B.3 / B.6 / T2).
+                        if (kind == TypeDeclarationKind.Class &&
+                            IsContractProperty(propertySymbol))
+                        {
+                            return ConstructorLift.None;
+                        }
                     }
                     else
                     {
@@ -942,7 +1160,8 @@ public sealed class CSharpToGSharpTranslator
         private IEnumerable<(GMember Member, bool IsStatic)> TranslateMember(
             MemberDeclarationSyntax member,
             TypeDeclarationKind ownerKind,
-            ConstructorLift lift)
+            ConstructorLift lift,
+            IReadOnlyList<(string Name, GExpression Value)> propertyCtorInits)
         {
             switch (member)
             {
@@ -992,7 +1211,7 @@ public sealed class CSharpToGSharpTranslator
                         break;
                     }
 
-                    GMember built = this.TranslateConstructor(ctor);
+                    GMember built = this.TranslateConstructor(ctor, propertyCtorInits);
                     if (built != null)
                     {
                         yield return (built, ctor.Modifiers.Any(SyntaxKind.StaticKeyword));
@@ -1062,6 +1281,85 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
+        /// <summary>
+        /// Wraps a translated constant expression in an explicit G# cast when the
+        /// C# semantic model implicitly converts a signed-integer constant to an
+        /// unsigned-integer target (<c>uint x = 0</c>, <c>const byte b = 31</c>).
+        /// G# requires the conversion to be explicit (OD-T2, otherwise GS0156
+        /// "Cannot convert int32 to uintN").
+        /// </summary>
+        private GExpression CoerceConstantToUnsigned(ExpressionSyntax expression, GExpression translated)
+        {
+            TypeInfo info = this.context.GetTypeInfo(expression);
+            ITypeSymbol source = info.Type;
+            ITypeSymbol target = info.ConvertedType;
+            if (source != null &&
+                target != null &&
+                !SymbolEqualityComparer.Default.Equals(source, target) &&
+                IsSignedIntegerSpecialType(source.SpecialType) &&
+                IsUnsignedIntegerSpecialType(target.SpecialType))
+            {
+                GTypeReference targetRef = this.typeMapper.Map(target, this.context, expression.GetLocation());
+                return new ConversionExpression(targetRef, translated);
+            }
+
+            return translated;
+        }
+
+        private static bool IsSignedIntegerSpecialType(SpecialType type) =>
+            type is SpecialType.System_SByte or SpecialType.System_Int16
+                or SpecialType.System_Int32 or SpecialType.System_Int64;
+
+        private static bool IsUnsignedIntegerSpecialType(SpecialType type) =>
+            type is SpecialType.System_Byte or SpecialType.System_UInt16
+                or SpecialType.System_UInt32 or SpecialType.System_UInt64;
+
+        /// <summary>
+        /// Determines whether a C# method override ultimately overrides a base
+        /// method that is defined outside the translated source (e.g. an
+        /// <see cref="object"/> virtual such as <c>ToString</c>, or a framework
+        /// base like <c>System.IO.Stream.Read</c>). G# does not treat the virtual
+        /// members of metadata (non-source) types as <c>open</c>, so re-declaring
+        /// them must omit the <c>override</c> modifier (OD-T5; otherwise
+        /// GS0183/GS0184). The plain <c>func</c> form binds as the override.
+        /// </summary>
+        private static bool OverridesExternalBaseMethod(IMethodSymbol method)
+        {
+            IMethodSymbol baseMethod = method.OverriddenMethod;
+            if (baseMethod == null)
+            {
+                return false;
+            }
+
+            while (baseMethod.OverriddenMethod != null)
+            {
+                baseMethod = baseMethod.OverriddenMethod;
+            }
+
+            return baseMethod.DeclaringSyntaxReferences.IsEmpty;
+        }
+
+        /// <summary>
+        /// Property counterpart of <see cref="OverridesExternalBaseMethod"/>: a C#
+        /// property override (e.g. <c>Stream.CanRead</c>) whose root base property
+        /// is defined outside the translated source must drop <c>override</c>.
+        /// </summary>
+        private static bool OverridesExternalBaseProperty(IPropertySymbol property)
+        {
+            IPropertySymbol baseProperty = property.OverriddenProperty;
+            if (baseProperty == null)
+            {
+                return false;
+            }
+
+            while (baseProperty.OverriddenProperty != null)
+            {
+                baseProperty = baseProperty.OverriddenProperty;
+            }
+
+            return baseProperty.DeclaringSyntaxReferences.IsEmpty;
+        }
+
         private IEnumerable<(GMember Member, bool IsStatic)> TranslateField(
             FieldDeclarationSyntax field,
             ConstructorLift lift)
@@ -1098,7 +1396,9 @@ public sealed class CSharpToGSharpTranslator
                 }
                 else if (declarator.Initializer != null)
                 {
-                    initializer = this.TranslateExpression(declarator.Initializer.Value);
+                    initializer = this.CoerceConstantToUnsigned(
+                        declarator.Initializer.Value,
+                        this.TranslateExpression(declarator.Initializer.Value));
                 }
                 else if (symbol != null &&
                     this.staticFieldInitializers.TryGetValue(symbol, out GExpression staticLifted))
@@ -1202,14 +1502,16 @@ public sealed class CSharpToGSharpTranslator
                 });
             }
 
-            bool isOverride = symbol != null && symbol.IsOverride;
+            bool isOverride = symbol != null && symbol.IsOverride && !OverridesExternalBaseMethod(symbol);
 
             // Interface members are implicitly abstract in C#; in canonical G# the
             // members of an `interface` carry no modifier (the `open` keyword is for
             // virtual/abstract members of a class). Suppress `open` for them so the
             // emitted G# round-trips (ADR-0115 §B.6).
             bool inInterface = symbol?.ContainingType?.TypeKind == TypeKind.Interface;
-            bool isOpen = symbol != null && (symbol.IsVirtual || symbol.IsAbstract) && !symbol.IsOverride && !inInterface;
+            bool isOpen = symbol != null && !inInterface && !symbol.IsSealed &&
+                (symbol.IsVirtual || symbol.IsAbstract || isOverride) &&
+                this.IsTypeEmittedOpen(symbol.ContainingType);
 
             // A method lifted to the top-level receiver-clause form (an owned-value
             // aggregate method or an extension method) has no `open`/`override`:
@@ -1347,12 +1649,14 @@ public sealed class CSharpToGSharpTranslator
 
             List<PropertyAccessor> accessors = this.MapAccessors(node);
 
-            bool isOverride = symbol != null && symbol.IsOverride;
+            bool isOverride = symbol != null && symbol.IsOverride && !OverridesExternalBaseProperty(symbol);
 
             // Interface members are implicitly abstract; canonical G# interface
             // members carry no `open` modifier (ADR-0115 §B.6).
             bool inInterface = symbol?.ContainingType?.TypeKind == TypeKind.Interface;
-            bool isOpen = symbol != null && (symbol.IsVirtual || symbol.IsAbstract) && !symbol.IsOverride && !inInterface;
+            bool isOpen = symbol != null && !inInterface && !symbol.IsSealed &&
+                (symbol.IsVirtual || symbol.IsAbstract || isOverride) &&
+                this.IsTypeEmittedOpen(symbol.ContainingType);
 
             var property = new PropertyDeclaration(
                 SanitizeIdentifier(node.Identifier.Text),
@@ -1388,9 +1692,11 @@ public sealed class CSharpToGSharpTranslator
 
             List<PropertyAccessor> accessors = this.MapAccessors(node, "indexer 'this[]'");
 
-            bool isOverride = symbol != null && symbol.IsOverride;
+            bool isOverride = symbol != null && symbol.IsOverride && !OverridesExternalBaseProperty(symbol);
             bool inInterface = symbol?.ContainingType?.TypeKind == TypeKind.Interface;
-            bool isOpen = symbol != null && (symbol.IsVirtual || symbol.IsAbstract) && !symbol.IsOverride && !inInterface;
+            bool isOpen = symbol != null && !inInterface && !symbol.IsSealed &&
+                (symbol.IsVirtual || symbol.IsAbstract || isOverride) &&
+                this.IsTypeEmittedOpen(symbol.ContainingType);
 
             var property = new PropertyDeclaration(
                 "this",
@@ -1435,6 +1741,7 @@ public sealed class CSharpToGSharpTranslator
             bool anyBodied = declared.Any(a => a.Body != null || a.ExpressionBody != null);
             bool hasSet = declared.Any(a => a.IsKind(SyntaxKind.SetAccessorDeclaration));
             bool hasGet = declared.Any(a => a.IsKind(SyntaxKind.GetAccessorDeclaration));
+            bool hasInit = declared.Any(a => a.IsKind(SyntaxKind.InitAccessorDeclaration));
 
             // A read-write auto-property (all accessors body-less, has get + set)
             // maps to the canonical auto form `prop Name T` (ADR-0115 §B.11). An
@@ -1443,6 +1750,27 @@ public sealed class CSharpToGSharpTranslator
             if (!anyBodied && hasGet && hasSet)
             {
                 return new List<PropertyAccessor>();
+            }
+
+            // OD-T1: a C# get-only auto-property (`{ get; }`, body-less, no set/init)
+            // is settable in the declaring type's constructor. G# `{ get; }` alone
+            // is read-only (assigning it gives GS0127), so emit it as an init-only
+            // auto-property `{ get; init; }`. Interface/abstract contract members
+            // carry no backing field and remain read-only contracts.
+            if (!anyBodied && hasGet && !hasSet && !hasInit)
+            {
+                var propSymbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
+                bool isContract = propSymbol != null &&
+                    (propSymbol.IsAbstract ||
+                        propSymbol.ContainingType?.TypeKind == TypeKind.Interface);
+                if (!isContract)
+                {
+                    return new List<PropertyAccessor>
+                    {
+                        new PropertyAccessor(AccessorKind.Get, null),
+                        new PropertyAccessor(AccessorKind.Init, null),
+                    };
+                }
             }
 
             var accessors = new List<PropertyAccessor>();
@@ -1475,7 +1803,9 @@ public sealed class CSharpToGSharpTranslator
             return accessors;
         }
 
-        private GMember TranslateConstructor(ConstructorDeclarationSyntax node)
+        private GMember TranslateConstructor(
+            ConstructorDeclarationSyntax node,
+            IReadOnlyList<(string Name, GExpression Value)> propertyCtorInits)
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
             if (node.Modifiers.Any(SyntaxKind.StaticKeyword))
@@ -1529,6 +1859,20 @@ public sealed class CSharpToGSharpTranslator
                     new IdentifierExpression("init"),
                     node.Initializer.ArgumentList.Arguments.Select(a => this.TranslateArgument(a)).ToList()));
                 var statements = new List<GStatement> { delegated };
+                statements.AddRange(body.Statements);
+                body = new BlockStatement(statements);
+            }
+            else if (propertyCtorInits != null && propertyCtorInits.Count > 0)
+            {
+                // OD-T1: move get-only auto-property inline initializers into the
+                // designated constructor body (G# has no property member
+                // initializer). Prepend them so the property is initialized before
+                // the original constructor body runs, matching C# member-initializer
+                // ordering. Delegating (`: this(...)`) constructors are skipped — the
+                // designated target already runs the initializers.
+                var statements = propertyCtorInits
+                    .Select(p => (GStatement)new AssignmentStatement(new IdentifierExpression(p.Name), p.Value))
+                    .ToList();
                 statements.AddRange(body.Statements);
                 body = new BlockStatement(statements);
             }
@@ -2263,7 +2607,9 @@ public sealed class CSharpToGSharpTranslator
             {
                 GExpression initializer = declarator.Initializer == null
                     ? null
-                    : this.TranslateExpression(declarator.Initializer.Value);
+                    : this.CoerceConstantToUnsigned(
+                        declarator.Initializer.Value,
+                        this.TranslateExpression(declarator.Initializer.Value));
 
                 BindingKind binding;
                 if (isConst)
@@ -2426,7 +2772,9 @@ public sealed class CSharpToGSharpTranslator
                     string op = assignment.OperatorToken.Text;
                     return new AssignmentStatement(
                         this.TranslateExpression(assignment.Left),
-                        this.TranslateExpression(assignment.Right),
+                        this.CoerceConstantToUnsigned(
+                            assignment.Right,
+                            this.TranslateExpression(assignment.Right)),
                         op);
 
                 case PostfixUnaryExpressionSyntax postfix
@@ -3804,7 +4152,13 @@ public sealed class CSharpToGSharpTranslator
                 return new UnaryExpression("&", this.TranslateExpression(argument.Expression));
             }
 
-            return this.TranslateExpression(argument.Expression);
+            // OD-T2: a C# integer literal implicitly converted to an unsigned
+            // parameter (e.g. `base(4)` where the parameter is `byte`) must be
+            // emitted as a typed G# literal (`uint8(4)`); G# performs no implicit
+            // signed→unsigned constant conversion at the call site (GS0214/GS0156).
+            return this.CoerceConstantToUnsigned(
+                argument.Expression,
+                this.TranslateExpression(argument.Expression));
         }
 
         private GExpression TranslateObjectCreation(ObjectCreationExpressionSyntax creation)
@@ -3901,13 +4255,23 @@ public sealed class CSharpToGSharpTranslator
                     ? named.TypeArguments
                     : null;
                 return new InvocationExpression(
-                    new IdentifierExpression(named.Name),
+                    new IdentifierExpression(ConstructionCalleeName(named.Name)),
                     arguments,
                     typeArguments);
             }
 
             return new InvocationExpression(new IdentifierExpression(creation.Type.ToString()), arguments);
         }
+
+        /// <summary>
+        /// Maps a constructed type's G# name to a callable construction callee.
+        /// The G# alias <c>object</c> is a keyword, not a function, so constructing
+        /// a <see cref="object"/> (<c>new object()</c> / target-typed <c>new()</c>)
+        /// must spell the qualified type name <c>System.Object</c> instead (OD-T3,
+        /// otherwise GS0130 "Function 'object' doesn't exist").
+        /// </summary>
+        private static string ConstructionCalleeName(string typeName) =>
+            typeName == "object" ? "System.Object" : typeName;
 
         /// <summary>
         /// Attempts to translate a C# collection initializer into a canonical G#
@@ -4264,7 +4628,7 @@ public sealed class CSharpToGSharpTranslator
                     ? named.TypeArguments
                     : null;
                 return new InvocationExpression(
-                    new IdentifierExpression(named.Name),
+                    new IdentifierExpression(ConstructionCalleeName(named.Name)),
                     arguments,
                     typeArguments);
             }
