@@ -1145,6 +1145,48 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// ADR-0060 / issue #1133: re-binds a single inline <c>out var n</c> /
+    /// <c>out let n</c> / <c>out _</c> argument whose declared type was omitted,
+    /// once the resolved by-ref parameter type is known. In the eager argument
+    /// pass such an argument is bound to a placeholder
+    /// <see cref="BoundAddressOfExpression"/> over an <see cref="BoundErrorExpression"/>
+    /// (Error pointee) without declaring a local, because the parameter — and
+    /// therefore the local's pointee type — was not yet known. This re-binds the
+    /// declaration against a synthesized <see cref="RefKind.Out"/> parameter so
+    /// the local is declared into the enclosing block scope with the correct
+    /// type. Shared by the user instance-call, free-function, and qualified
+    /// static-call paths so the inline-out-var scoping is identical everywhere.
+    /// </summary>
+    /// <param name="boundArgument">The already-bound argument (possibly a placeholder).</param>
+    /// <param name="argumentSyntax">The source argument syntax (named-argument wrappers are unwrapped).</param>
+    /// <param name="parameterName">The resolved parameter's name (used for the synthesized parameter symbol).</param>
+    /// <param name="parameterType">The resolved parameter's (pointee) type, used as the local's type.</param>
+    /// <param name="rebound">The rebound address-of expression, when applicable.</param>
+    /// <returns><see langword="true"/> when the argument was a type-omitted inline out declaration and was rebound.</returns>
+    internal bool TryRebindInlineOutVarUserArgument(
+        BoundExpression boundArgument,
+        ExpressionSyntax argumentSyntax,
+        string parameterName,
+        TypeSymbol parameterType,
+        out BoundExpression rebound)
+    {
+        rebound = null;
+        if (argumentSyntax == null
+            || boundArgument is not BoundAddressOfExpression placeholder
+            || placeholder.Operand?.Type != TypeSymbol.Error
+            || OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax) is not RefArgumentExpressionSyntax refArg
+            || !refArg.IsInlineDeclaration
+            || refArg.DeclaredType != null)
+        {
+            return false;
+        }
+
+        var syntheticParameter = new ParameterSymbol(parameterName, parameterType, refKind: RefKind.Out);
+        rebound = BindRefArgumentExpression(refArg, syntheticParameter);
+        return true;
+    }
+
+    /// <summary>
     /// ADR-0060: binds a <c>ref</c>/<c>out</c>/<c>in</c> argument-position expression.
     /// For the lvalue form (e.g. <c>ref x</c>, <c>out result</c>, <c>in rect</c>) the
     /// inner expression is bound to a <see cref="BoundAddressOfExpression"/>. For the
