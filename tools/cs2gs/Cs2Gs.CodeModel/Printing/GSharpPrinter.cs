@@ -537,8 +537,16 @@ public static class GSharpPrinter
 
         if (lambda.BlockBody != null)
         {
+            // A block body is a STATEMENT block, so it must render as the G#
+            // function-literal form `func (params) RetType { … }` rather than the
+            // arrow form `(params) -> { … }` (whose body is an expression-block).
+            // The explicit return type is required for value-returning literals so
+            // they are not inferred as void; a void block omits it.
+            var retClause = lambda.ReturnType != null
+                ? " " + RenderTypeReference(lambda.ReturnType)
+                : string.Empty;
             var sb = new StringBuilder();
-            sb.Append($"{asyncPrefix}({parameters}) -> {{");
+            sb.Append($"{asyncPrefix}func ({parameters}){retClause} {{");
             foreach (var statement in lambda.BlockBody.Statements)
             {
                 sb.Append('\n');

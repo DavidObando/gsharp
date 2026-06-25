@@ -3578,21 +3578,30 @@ public sealed class CSharpToGSharpTranslator
 
             bool isAsync = localFunction.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword));
 
+            // A local function renders as a `func` literal too, so a value-returning
+            // one needs an explicit return type (else the literal is inferred void
+            // and `return expr` is rejected). The declared symbol carries the real
+            // return type / void-ness; the async unwrap mirrors method `func`s.
+            GTypeReference returnType = this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol localSymbol
+                ? this.MapDelegateLikeReturnType(localSymbol, isAsync, localFunction.ReturnType.GetLocation())
+                : null;
+
             LambdaExpression lambda;
             if (localFunction.Body != null)
             {
-                lambda = new LambdaExpression(parameters, blockBody: this.WithParameterShadows(localFunction, this.TranslateBlock(localFunction.Body)), isAsync: isAsync);
+                lambda = new LambdaExpression(parameters, blockBody: this.WithParameterShadows(localFunction, this.TranslateBlock(localFunction.Body)), isAsync: isAsync, returnType: returnType);
             }
             else if (localFunction.ExpressionBody != null)
             {
                 lambda = new LambdaExpression(
                     parameters,
                     blockBody: new BlockStatement(this.TranslateExpressionStatements(localFunction.ExpressionBody.Expression).ToList()),
-                    isAsync: isAsync);
+                    isAsync: isAsync,
+                    returnType: returnType);
             }
             else
             {
-                lambda = new LambdaExpression(parameters, blockBody: new BlockStatement(new List<GStatement>()), isAsync: isAsync);
+                lambda = new LambdaExpression(parameters, blockBody: new BlockStatement(new List<GStatement>()), isAsync: isAsync, returnType: returnType);
             }
 
             return new LocalFunctionStatement(localFunction.Identifier.Text, lambda);
@@ -5748,23 +5757,71 @@ public sealed class CSharpToGSharpTranslator
 
             if (lambda.Body is BlockSyntax block)
             {
-                return new LambdaExpression(parameters, blockBody: this.TranslateBlock(block), isAsync: isAsync);
+                return new LambdaExpression(
+                    parameters,
+                    blockBody: this.TranslateBlock(block),
+                    isAsync: isAsync,
+                    returnType: this.MapLambdaReturnType(lambda));
             }
 
             if (lambda.Body is AssignmentExpressionSyntax)
             {
                 // An assignment is statement-only in G#; an assignment-bodied lambda
-                // (`o => x = f()`) becomes a block-bodied lambda `o -> { x = f() }`.
+                // (`o => x = f()`) becomes a block-bodied lambda. An assignment has no
+                // value, so the resulting func literal is void (no return type).
                 return new LambdaExpression(
                     parameters,
                     blockBody: new BlockStatement(this.TranslateExpressionStatements((ExpressionSyntax)lambda.Body).ToList()),
-                    isAsync: isAsync);
+                    isAsync: isAsync,
+                    returnType: null);
             }
 
             return new LambdaExpression(
                 parameters,
                 expressionBody: this.TranslateExpression((ExpressionSyntax)lambda.Body),
                 isAsync: isAsync);
+        }
+
+        // Computes the explicit return type for a block-bodied lambda's G#
+        // function-literal form. Returns null when the lambda yields no value (a
+        // C# statement/Action lambda, or an `async` lambda returning a bare
+        // `Task`), in which case the literal is rendered void; otherwise maps the
+        // inferred result type (unwrapping `Task<T>` for `async`, mirroring
+        // MapReturnType for methods). A null result also covers the case where the
+        // symbol is unavailable, leaving the literal void (the conservative form).
+        private GTypeReference MapLambdaReturnType(AnonymousFunctionExpressionSyntax lambda)
+        {
+            if (this.context.GetSymbolInfo(lambda).Symbol is not IMethodSymbol symbol)
+            {
+                return null;
+            }
+
+            Location location = lambda.GetLocation();
+            return this.MapDelegateLikeReturnType(symbol, symbol.IsAsync, location);
+        }
+
+        // Shared mapping of a method/lambda result type into a G# func return type,
+        // applying the `async` unwrap rule: a G# `async func` declares the UNWRAPPED
+        // result, so C# `async Task` → null (void) and `async Task<T>` → `T`.
+        private GTypeReference MapDelegateLikeReturnType(IMethodSymbol symbol, bool isAsync, Location location)
+        {
+            if (symbol.ReturnsVoid)
+            {
+                return null;
+            }
+
+            ITypeSymbol returnType = symbol.ReturnType;
+
+            if (isAsync &&
+                returnType is INamedTypeSymbol { Name: "Task" } task &&
+                task.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks")
+            {
+                return task.IsGenericType
+                    ? this.typeMapper.Map(task.TypeArguments[0], this.context, location)
+                    : null;
+            }
+
+            return this.typeMapper.Map(returnType, this.context, location);
         }
 
         private Parameter MapLambdaParameter(ParameterSyntax parameter)
