@@ -107,6 +107,33 @@ let f = (x int32) -> { if x > 0 { ""pos"" } else if x < 0 { ""neg"" } else { ""z
     }
 
     [Fact]
+    public void ElseIfChainWithoutFinalElse_VoidStatement_NoGS0276()
+    {
+        // An `if`/`else if` chain WITHOUT a terminating plain `else` has a path
+        // that yields no value, so it is a void if-STATEMENT (parity with func
+        // literals) — not a value-position if-expression rejected with GS0276.
+        var result = Evaluate(@"
+let g = (y int32) -> { if y > 0 { Console.WriteLine(""p"") } else if y < 0 { Console.WriteLine(""n"") } }
+");
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0276");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0124");
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void ElseIfChainTerminatingPlainElse_AsValue_StillBindsCleanly()
+    {
+        // An `if`/`else if` chain that DOES terminate in a plain `else` is a
+        // value-producing if-expression and must still bind cleanly.
+        var result = Evaluate(@"
+let g = (y int32) -> { if y > 0 { 1 } else if y < 0 { 2 } else { 3 } }
+");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void TrailingExpressionValueBlock_StillBindsCleanly()
     {
         var result = Evaluate(@"

@@ -88,19 +88,26 @@ A block-bodied arrow lambda `(p) -> { … }` is a **statement block with an opti
 trailing value expression**. This gives full func-literal parity **plus** the
 concise trailing-value form.
 
-1. **`if` classification (parser).** Inside a block expression, an `if` is parsed as
-   a value-producing **if-expression** *only* when it has a matching `else`; an `if`
-   **without** `else` is parsed as a void **if-statement**. `LooksLikeIfExpression()`
-   now performs a bounded, **non-consuming** look-ahead: it scans from the `if`
-   keyword to the then-block's opening brace (the first `{` at paren/bracket depth
-   zero), then to that block's **matching** close brace (tracking brace depth, which
-   correctly skips nested blocks and `else if` chains), and returns `true` iff the
-   token immediately after the close brace is `else`. This makes:
+1. **`if` classification (parser).** Inside a block expression, an `if`/`else if`
+   chain is parsed as a value-producing **if-expression** *only* when it terminates
+   in a plain final `else` (every path then yields a value); a chain that ends
+   without a plain `else` — no `else` at all, or a trailing `else if` with nothing
+   after — is parsed as a void **if-statement**. `LooksLikeIfExpression()`
+   now performs a bounded, **non-consuming** look-ahead: for each link of the
+   `if`/`else if` chain it scans from the `if` keyword to the then-block's opening
+   brace (the first `{` at paren/bracket depth zero), then to that block's
+   **matching** close brace (tracking brace depth, which correctly skips nested
+   blocks). After the matching close brace it inspects the next token: not `else`
+   → void if-statement; `else if` → continue walking from that inner `if`; plain
+   `else { … }` → value-producing if-expression. This makes:
 
    - non-trailing `if`-without-`else` → void if-statement;
+   - an `if`/`else if` chain WITHOUT a final plain `else` → void if-statement
+     (matching `func`-literal and method-body semantics, issue #1172);
    - trailing `if`-without-`else` → void if-statement → block has no trailing value
      → **void** (Action) lambda (the #1160 case);
-   - `if`-with-`else` in trailing position → if-expression → the lambda's value;
+   - `if`-with-`else` (chain terminating in a plain `else`) in trailing position →
+     if-expression → the lambda's value;
    - explicit `return` anywhere → unchanged.
 
    This is **strictly more permissive**: every previously-rejected GS0276 case

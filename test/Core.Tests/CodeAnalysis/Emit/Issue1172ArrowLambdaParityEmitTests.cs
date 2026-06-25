@@ -171,6 +171,62 @@ func main() string {
     }
 
     [Fact]
+    public void ElseIfChainWithoutFinalElse_VoidActionLambda_ExecutesSideEffect()
+    {
+        // An `if`/`else if` chain WITHOUT a terminating plain `else` is a void
+        // statement, so the lambda is a void Action — parity with func literals.
+        // Observe the side effect via a captured local.
+        const string Source = @"package P10
+import System
+
+func main() int32 {
+    var seen = 0
+    let act = (x int32) -> { if x > 0 { seen = 1 } else if x < 0 { seen = 2 } }
+    act(-5)
+    return seen
+}
+";
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ElseIfChainWithoutFinalElse_VoidActionLambda_ExecutesSideEffect));
+        try
+        {
+            Assert.Equal(2, GetProgramMethod(asm, "main").Invoke(null, null));
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
+    [Fact]
+    public void ElseIfChainTerminatingPlainElse_AsValue_Runs()
+    {
+        // An `if`/`else if` chain terminating in a plain `else` is a
+        // value-producing if-expression: verify each path returns its value.
+        const string Source = @"package P11
+import System
+
+func classify(x int32) int32 {
+    let g = (y int32) -> { if y > 0 { 1 } else if y < 0 { 2 } else { 3 } }
+    return g(x)
+}
+
+func main() int32 {
+    return classify(5) * 100 + classify(-5) * 10 + classify(0)
+}
+";
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ElseIfChainTerminatingPlainElse_AsValue_Runs));
+        try
+        {
+            // classify(5) -> 1, classify(-5) -> 2, classify(0) -> 3 => 123.
+            Assert.Equal(123, GetProgramMethod(asm, "main").Invoke(null, null));
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
+    [Fact]
     public void AsyncBlockLambda_WithVoidIf_AwaitsAndReturns()
     {
         const string Source = @"package P7
