@@ -1742,6 +1742,33 @@ internal sealed partial class ExpressionBinder
             for (var i = 0; i < permutedArgs.Length; i++)
             {
                 var paramType = method.Parameters[i].Type;
+
+                // ADR-0060 / issue #1139: an inline-decl `out var n` /
+                // `out let n` / `out _` at a qualified static (`C.G(...)`) call
+                // site was bound with TypeSymbol.Error in the first pass
+                // (before the static overload was resolved) and never declared
+                // a local — the same gap #1137 fixed for user instance calls.
+                // Now that the method is selected (and any generic substitution
+                // is known) re-bind it so the synthesized local is typed from
+                // the resolved (substituted) out-parameter pointee type and
+                // leaks into the enclosing block scope. Must run BEFORE the
+                // open-type-parameter shortcut below so generic out-parameters
+                // (`func G[T](out result T)`) are handled too.
+                if (permutedArgs[i] is BoundAddressOfExpression inlineOutAddr
+                    && inlineOutAddr.Operand.Type == TypeSymbol.Error
+                    && i < ce.Arguments.Count
+                    && OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[i]) is RefArgumentExpressionSyntax inlineOutRefArg
+                    && inlineOutRefArg.IsInlineDeclaration
+                    && inlineOutRefArg.DeclaredType == null)
+                {
+                    var pointeeType = substitution != null ? Binder.SubstituteType(paramType, substitution) : paramType;
+                    var rebindParameter = ReferenceEquals(pointeeType, method.Parameters[i].Type)
+                        ? method.Parameters[i]
+                        : new ParameterSymbol(method.Parameters[i].Name, pointeeType, refKind: RefKind.Out);
+                    convertedArgs.Add(BindRefArgumentExpression(inlineOutRefArg, rebindParameter));
+                    continue;
+                }
+
                 if (paramType is TypeParameterSymbol)
                 {
                     convertedArgs.Add(permutedArgs[i]);

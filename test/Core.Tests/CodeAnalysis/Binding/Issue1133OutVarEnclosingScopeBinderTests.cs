@@ -170,6 +170,130 @@ class C {
         Assert.Empty(diagnostics);
     }
 
+    [Fact]
+    public void QualifiedStatic_OutVar_DeclaresLocalInEnclosingScope_NoGS0125()
+    {
+        // Issue #1139: the qualified static (`C.G(...)`) path was missed by
+        // #1137. The exact repro from the issue must declare `y` and read it.
+        const string source = @"
+package p
+class C {
+    shared {
+        func G(out x int32) { x = 5 }
+        func F() int32 {
+            C.G(out var y)
+            return y
+        }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0125");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void QualifiedStatic_OutLet_ReadIsFine()
+    {
+        const string source = @"
+package p
+class C {
+    shared {
+        func G(out x int32) { x = 5 }
+        func F() int32 {
+            C.G(out let y)
+            return y
+        }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void QualifiedStatic_OutLet_AssigningAfterwards_ReportsReadOnly()
+    {
+        const string source = @"
+package p
+class C {
+    shared {
+        func G(out x int32) { x = 5 }
+        func F() int32 {
+            C.G(out let y)
+            y = 7
+            return y
+        }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.Contains(diagnostics, d => d.Id == "GS0127");
+    }
+
+    [Fact]
+    public void QualifiedStatic_OutDiscard_DoesNotLeakName()
+    {
+        const string source = @"
+package p
+class C {
+    shared {
+        func G(out x int32) { x = 5 }
+        func F() int32 {
+            C.G(out _)
+            return _
+        }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.Contains(diagnostics, d => d.Id == "GS0125");
+    }
+
+    [Fact]
+    public void QualifiedStatic_OutVar_ReassignedLater_Compiles()
+    {
+        const string source = @"
+package p
+class C {
+    shared {
+        func G(out x int32) { x = 5 }
+        func F() int32 {
+            C.G(out var y)
+            y = 9
+            return y
+        }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void CrossClassQualifiedStatic_OutVar_DeclaresLocal_NoGS0125()
+    {
+        const string source = @"
+package p
+class Other {
+    shared {
+        func G(out x int32) { x = 5 }
+    }
+}
+class C {
+    shared {
+        func F() int32 {
+            Other.G(out var y)
+            return y
+        }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0125");
+        Assert.Empty(diagnostics);
+    }
+
     private static IEnumerable<Diagnostic> GetDiagnostics(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

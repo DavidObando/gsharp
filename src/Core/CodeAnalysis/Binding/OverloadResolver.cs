@@ -2652,6 +2652,17 @@ internal sealed class OverloadResolver
                     var implicitReceiver = new BoundVariableExpression(null, getCurrentFunction().ThisParameter);
                     return BindUserInstanceCall(implicitReceiver, implicitMethod, boundArguments.ToImmutable(), syntax, argumentNames);
                 }
+
+                // Issue #1136: a bare implicit-`this` call to an inherited
+                // System.Object member (GetType/ToString/GetHashCode/Equals)
+                // that the receiver type does not declare itself resolves as
+                // `this.<member>(args)` against System.Object, mirroring the
+                // qualified-receiver fallback in ExpressionBinder.Calls.cs.
+                var implicitObjectReceiver = new BoundVariableExpression(null, getCurrentFunction().ThisParameter);
+                if (tryBindInheritedClrInstanceCall(implicitObjectReceiver, typeof(object), syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitObjectCall, null, default, argumentNames))
+                {
+                    return implicitObjectCall;
+                }
             }
 
             // ADR-0085 / ADR-0090 implicit `this` inside an interface default

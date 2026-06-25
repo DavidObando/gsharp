@@ -142,6 +142,31 @@ public class Issue1133OutVarUserInstanceEmitTests
         Assert.Equal("9\n", CompileAndRun(source));
     }
 
+    [Fact]
+    public void QualifiedStatic_OutVar_Compiles_And_Runs()
+    {
+        // Issue #1139: the qualified static (`C.G(out var y)`) path was missed
+        // by #1137. The leaked local must both bind and carry the runtime value.
+        var source = """
+            package P
+            import System
+
+            class C {
+                shared {
+                    func G(out x int32) { x = 13 }
+                    func F() int32 {
+                        C.G(out var y)
+                        return y
+                    }
+                }
+            }
+
+            Console.WriteLine(C.F())
+            """;
+
+        Assert.Equal("13\n", CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1133_emit_").FullName;

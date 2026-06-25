@@ -2573,6 +2573,21 @@ internal sealed partial class ExpressionBinder
                 return userPathExt;
             }
 
+            // Issue #1136: every user class/struct inherits the System.Object
+            // instance members (GetType/ToString/GetHashCode/Equals) — value
+            // types via System.ValueType → System.Object. When the user type
+            // does not declare its own override of one of these, resolve the
+            // call against System.Object so the inherited member is callable
+            // on any user-type instance. The bound call is emitted as a
+            // (virtual) callvirt, so a user-declared override — which is found
+            // earlier via TypeMemberModel.GetMethods — still wins at runtime,
+            // and value-type receivers are boxed by the emitter.
+            if (receiver != null && receiver.Type is StructSymbol
+                && TryBindInheritedClrInstanceCall(receiver, typeof(object), methodName, arguments, ce, out var objectMemberCall, explicitTypeArgs, typeArgSymbols, argumentNames))
+            {
+                return objectMemberCall;
+            }
+
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             return new BoundErrorExpression(null);
         }

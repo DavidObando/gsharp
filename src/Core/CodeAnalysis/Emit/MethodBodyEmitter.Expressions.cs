@@ -242,10 +242,34 @@ internal sealed partial class MethodBodyEmitter
                         // Load the receiver value (not its address) and box it so
                         // the inherited reference-type method receives a proper
                         // object reference.
-                        this.EmitExpression(instCall.Receiver);
+                        var receiverIsStructThis = instCall.Receiver is BoundVariableExpression structThisBve
+                            && this.structThisParameter != null
+                            && ReferenceEquals(structThisBve.Variable, this.structThisParameter);
+
                         if (receiverIsManagedPointer)
                         {
+                            // An explicit `ref TStruct` receiver: the expression
+                            // yields the managed pointer; dereference to the
+                            // value before boxing.
+                            this.EmitExpression(instCall.Receiver);
                             this.EmitLoadIndirect(receiverType);
+                        }
+                        else if (receiverIsStructThis)
+                        {
+                            // Issue #1136: the struct `this` parameter — arg0
+                            // holds `ref TStruct`, so emitting it as a value
+                            // pushes the managed pointer. Load that pointer
+                            // (EmitInstanceReceiver yields arg0) and dereference
+                            // to the value before boxing; boxing the pointer
+                            // would produce invalid IL (StackUnexpected).
+                            this.EmitInstanceReceiver(instCall.Receiver);
+                            this.EmitLoadIndirect(receiverType);
+                        }
+                        else
+                        {
+                            // A by-value value-type receiver (local, field, or
+                            // rvalue) is materialized as the value directly.
+                            this.EmitExpression(instCall.Receiver);
                         }
 
                         this.il.OpCode(ILOpCode.Box);
