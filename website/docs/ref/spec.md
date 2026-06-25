@@ -55,7 +55,13 @@ The reserved keywords are:
 as async await break case catch chan class const continue default defer do else enum false fallthrough finally for func go goto guard if import interface internal is let map nil open operator override package private protected public range return scope sealed select sequence struct switch throw true try type using var while
 ```
 
-Several words are contextual rather than reserved. `data`, `inline`, `prop`, `event`, `shared`, `init`, `get`, `set`, `add`, `remove`, `raise`, `in`, `out`, `yield`, `with`, `typeof`, `nameof`, and `make` retain identifier status except in the grammar contexts described below. The legacy `record` contextual keyword was removed by ADR-0078; the lexer still recognises it so the parser can emit the GS0307 migration diagnostic (`use data struct` / `data class`).
+Several words are contextual rather than reserved: they retain identifier status except in the specific grammar contexts described below. The full set the parser recognises contextually is:
+
+```text
+add and base convenience data deinit delegate event explicit fixed get implicit in init inline make nameof not or out params prop raise ref remove scoped set shared stackalloc this typeof unmanaged unsafe when with yield
+```
+
+Notable contextual roles: `prop`, `event`, `delegate`, `data`, `inline`, `shared`, `convenience`, and `deinit` introduce or modify members; `get`, `set`, `add`, `remove`, and `raise` name accessors; `in`, `out`, `ref`, `scoped`, and `params` modify parameters; `explicit` and `implicit` mark conversion operators; `and`, `or`, and `not` combine patterns; `this` and `base` reference the receiver; `when` guards a `catch`/`case`; and `make`, `with`, `yield`, `typeof`, and `nameof` are expression forms. The `init` parameterless-constructor constraint (`[T init()]`) was renamed from the former `new()` spelling by ADR-0097 (issue #997); `new` is therefore no longer a constraint keyword. The unsafe/low-level words `unsafe`, `fixed`, `stackalloc`, and `unmanaged` are contextual (for example `stackalloc` is recognised only in the `stackalloc [` shape) and otherwise remain ordinary identifiers. The legacy `record` contextual keyword was removed by ADR-0078; the lexer still recognises it so the parser can emit the GS0307 migration diagnostic (`use data struct` / `data class`).
 
 ### Operators and punctuation
 
