@@ -819,6 +819,23 @@ internal sealed class StatementBinder
                 variableType = type;
                 convertedInitializer = new BoundDefaultExpression(defaultInit, variableType);
             }
+            else if (type != null
+                && (syntax.Initializer is IfExpressionSyntax
+                    || syntax.Initializer is ConditionalExpressionSyntax
+                    || syntax.Initializer is SwitchExpressionSyntax))
+            {
+                // Issue #1158: when a typed local is initialised with an
+                // if-/conditional-/switch-expression, thread the declared type
+                // into the binder as the target type so sibling arms can unify
+                // to it (C# 9+ target-typed conditional/switch), including a
+                // target that is wider than the arms' natural least-upper-bound
+                // (e.g. `object` or a shared interface). The conversion below is
+                // identity for the chosen target; a genuine mismatch still
+                // reports the regular conversion diagnostic.
+                variableType = type;
+                var initializer = bindExpressionWithTargetType(syntax.Initializer, type);
+                convertedInitializer = conversions.BindConversion(syntax.Initializer.Location, initializer, variableType);
+            }
             else
             {
                 var initializer = bindExpression(syntax.Initializer);
@@ -3724,11 +3741,13 @@ internal sealed class StatementBinder
         }
         else
         {
-            // Issue #1112: a `return switch { … }` honors the function's
-            // declared return type as the switch-expression target type so the
-            // result type can unify to the return type (C#-style target-typing)
-            // before the conversion below.
-            if (syntax.Expression is SwitchExpressionSyntax
+            // Issue #1112 / #1158: a `return switch { … }`, `return if … `, or
+            // `return cond ? … : …` honors the function's declared return type
+            // as the target type so the result type can unify to the return type
+            // (C#-style target-typing) before the conversion below.
+            if ((syntax.Expression is SwitchExpressionSyntax
+                    || syntax.Expression is IfExpressionSyntax
+                    || syntax.Expression is ConditionalExpressionSyntax)
                 && function != null
                 && !function.IsReturnTypeInferred
                 && function.Type != TypeSymbol.Void
