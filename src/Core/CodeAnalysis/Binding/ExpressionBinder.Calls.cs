@@ -1176,7 +1176,17 @@ internal sealed partial class ExpressionBinder
         }
 
         var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openReturn, imp.OpenDefinition, imp.TypeArguments);
-        return TypeSymbol.ContainsTypeParameter(mapped) ? mapped : null;
+
+        // Issue #1100: keep the symbolic projection when the recovered return
+        // type references a same-compilation user type as well (not only an
+        // in-scope type parameter). A constructed BCL generic over a
+        // same-compilation class — e.g. `Queue[Entry].Dequeue()` — projects the
+        // open `T` return to the user `Entry` symbol (whose `ClrType` is null
+        // while being emitted). Without this the result type-erases to `object`
+        // and an `Entry`-typed target fails to bind (GS0155).
+        return TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped)
+            ? mapped
+            : null;
     }
 
     /// <summary>
