@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -937,11 +938,17 @@ internal sealed class LambdaBinder
         // When a target delegate return type is supplied we therefore adopt it
         // directly, exactly as the equivalent `func() T { throw ... }` literal
         // (whose explicit return type a throwing body satisfies) already does.
+        // ADR-0128 / issue #1172: the body may now contain un-lowered control-
+        // flow statements (e.g. an `if`-without-`else` void statement), so lower
+        // it before running the CFG analysis — `ControlFlowGraph.AllPathsReturn`
+        // expects the goto/label form produced by the lowerer (mirrors the
+        // function-literal path in Binder).
         var bodyNeverCompletesNormally = !hasExplicitReturn
             && trailingIsVoidPlaceholder
             && boundBody is BoundBlockExpression neverBlock
             && neverBlock.Statements.Length > 0
-            && ControlFlowGraph.AllPathsReturn(new BoundBlockStatement(syntax.Body, neverBlock.Statements));
+            && ControlFlowGraph.AllPathsReturn(
+                Lowerer.Lower(new BoundBlockStatement(syntax.Body, neverBlock.Statements)));
 
         // ADR-0076 §3: the candidate set.
         var candidates = new List<TypeSymbol>();

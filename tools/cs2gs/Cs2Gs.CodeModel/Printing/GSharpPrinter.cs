@@ -545,16 +545,23 @@ public static class GSharpPrinter
 
         if (lambda.BlockBody != null)
         {
-            // A block body is a STATEMENT block, so it must render as the G#
-            // function-literal form `func (params) RetType { … }` rather than the
-            // arrow form `(params) -> { … }` (whose body is an expression-block).
-            // The explicit return type is required for value-returning literals so
-            // they are not inferred as void; a void block omits it.
-            var retClause = lambda.ReturnType != null
-                ? " " + RenderTypeReference(lambda.ReturnType)
-                : string.Empty;
+            // ADR-0128 / issue #1172: a block-bodied arrow lambda renders as the
+            // idiomatic G# arrow form `(params) -> { … }`. The arrow lambda's block
+            // body is now a STATEMENT block with an optional trailing value
+            // expression — full parity with func literals — and its return type is
+            // inferred, so no explicit return-type clause is needed.
+            //
+            // A C# local function (IsFunctionLiteral) is NOT an arrow lambda, so it
+            // keeps the function-literal form `func (params) RetType { … }`; the
+            // explicit return type is required so a value-returning literal is not
+            // inferred as void (and supports recursion).
+            var arrowOpen = lambda.IsFunctionLiteral
+                ? $"{asyncPrefix}func ({parameters})" +
+                    (lambda.ReturnType != null ? " " + RenderTypeReference(lambda.ReturnType) : string.Empty) +
+                    " {"
+                : $"{asyncPrefix}({parameters}) -> {{";
             var sb = new StringBuilder();
-            sb.Append($"{asyncPrefix}func ({parameters}){retClause} {{");
+            sb.Append(arrowOpen);
             foreach (var statement in lambda.BlockBody.Statements)
             {
                 sb.Append('\n');

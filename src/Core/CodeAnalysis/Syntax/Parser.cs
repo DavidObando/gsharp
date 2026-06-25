@@ -8748,22 +8748,130 @@ public class Parser
         return ParseStatement();
     }
 
-    // Issue #669: lookahead to determine if an `if` at the current position
-    // looks like an if-expression rather than an if-statement. We check
-    // whether `if <expr> {` pattern is followed by a `}` at the same brace
-    // depth, and then either by `else` or by the end of the enclosing block.
-    // Simple heuristic: an if-expression body is always a brace block
-    // (not a bare statement), so `if expr {` is the if-expression shape.
-    // If-statements in G# also use `if expr {`, so we disambiguate by
-    // context: in a block expression, we always prefer the expression parse.
+    // Issue #669 / ADR-0128 / issue #1172: lookahead to determine whether an
+    // `if` at the current position is a value-producing if-EXPRESSION rather
+    // than a void if-STATEMENT inside a block expression (e.g. an arrow-lambda
+    // `-> { ... }` body, an if-expression then/else block, or a standalone
+    // block expression).
+    //
+    // The disambiguation rule (ADR-0128 / issue #1172): an `if`/`else if`
+    // chain is a value-producing if-expression ONLY when the chain terminates
+    // in a plain `else { ... }` branch — only then does every code path yield
+    // a value (matching the binder's BindIfExpression, which requires a
+    // non-null ElseExpression). A chain that ends without a plain final `else`
+    // (no `else` at all, or a trailing `else if` with nothing after) has a
+    // path with no value and is therefore parsed as a void if-statement. This
+    // brings block-bodied arrow lambdas to parity with func literals: a
+    // non-trailing `if`/`else if` chain without a final `else` becomes a void
+    // statement, and a trailing one yields a void (Action-like) lambda instead
+    // of being rejected with GS0276/GS0124.
+    //
+    // We perform look-ahead only (no token consumption): we walk every link of
+    // the `if`/`else if` chain. For each link we scan forward to its then-block
+    // opening brace (the first `{` at paren/bracket depth zero after the `if`
+    // keyword), then to its matching close brace (tracking brace depth, which
+    // handles nested blocks). After the matching `}` we inspect what follows:
+    //   * not `else`                -> void if-statement (return false);
+    //   * `else if`                 -> continue walking from that inner `if`;
+    //   * plain `else { ... }`      -> value-producing if-expression (return true).
     private bool LooksLikeIfExpression()
     {
-        // In block-expression context, all `if` forms can be treated as
-        // expressions. If the if has no else (statement-only form), the binder
-        // will reject it with GS0276 when in value position; but in non-value
-        // trailing position it would just produce a null trailing expression
-        // which the binder handles. We always prefer the expression parse here.
-        return true;
+        // `i` is the offset of the `if` keyword for the current chain link.
+        // Peek(0) is the current token (the leading `if`).
+        var i = 0;
+        while (true)
+        {
+            // Locate this link's then-block opening brace: the first `{` at
+            // paren and bracket depth zero after the `if` keyword at offset i.
+            var parenDepth = 0;
+            var bracketDepth = 0;
+            var j = i + 1;
+            while (true)
+            {
+                var k = Peek(j).Kind;
+                if (k == SyntaxKind.EndOfFileToken)
+                {
+                    return false;
+                }
+
+                if (parenDepth == 0 && bracketDepth == 0 && k == SyntaxKind.OpenBraceToken)
+                {
+                    break;
+                }
+
+                switch (k)
+                {
+                    case SyntaxKind.OpenParenthesisToken:
+                        parenDepth++;
+                        break;
+                    case SyntaxKind.CloseParenthesisToken:
+                        if (parenDepth > 0)
+                        {
+                            parenDepth--;
+                        }
+
+                        break;
+                    case SyntaxKind.OpenSquareBracketToken:
+                        bracketDepth++;
+                        break;
+                    case SyntaxKind.CloseSquareBracketToken:
+                        if (bracketDepth > 0)
+                        {
+                            bracketDepth--;
+                        }
+
+                        break;
+                }
+
+                j++;
+            }
+
+            // Scan from the then-block's opening brace to its matching close brace.
+            var braceDepth = 0;
+            while (true)
+            {
+                var k = Peek(j).Kind;
+                if (k == SyntaxKind.EndOfFileToken)
+                {
+                    return false;
+                }
+
+                if (k == SyntaxKind.OpenBraceToken)
+                {
+                    braceDepth++;
+                }
+                else if (k == SyntaxKind.CloseBraceToken)
+                {
+                    braceDepth--;
+                    if (braceDepth == 0)
+                    {
+                        break;
+                    }
+                }
+
+                j++;
+            }
+
+            // `j` is now at this link's matching close brace. Inspect what
+            // follows to decide whether the chain continues or terminates.
+            if (Peek(j + 1).Kind != SyntaxKind.ElseKeyword)
+            {
+                // No `else`: this link has a path with no value, so the whole
+                // chain is a void if-statement.
+                return false;
+            }
+
+            if (Peek(j + 2).Kind == SyntaxKind.IfKeyword)
+            {
+                // `else if`: continue walking the chain from the inner `if`.
+                i = j + 2;
+                continue;
+            }
+
+            // Plain final `else { ... }`: the chain terminates in an else, so
+            // every path yields a value -> value-producing if-expression.
+            return true;
+        }
     }
 
     // ADR-0060 helper for the optional `out var name T` / `out let name T` /

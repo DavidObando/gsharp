@@ -28,7 +28,7 @@ let first = matrix?[0]?[0] ?? -1
 let kind = (p.X + p.Y).GetType()
 ```
 
-Lambda literals use the arrow form. The canonical form infers parameter and return types from the target delegate: `(x) -> expr`, `(a, b) -> expr`, or the paren-dropped single-parameter `x -> expr`; block bodies use `(params) -> { ... }`. Types may also be written explicitly (`(x int32) -> expr`), and async lambdas use `async (params) -> ...`. A trailing lambda may follow a call as the final argument. See [ADR-0119](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0119-canonical-arrow-lambda-inference.md).
+Lambda literals use the arrow form. The canonical form infers parameter and return types from the target delegate: `(x) -> expr`, `(a, b) -> expr`, or the paren-dropped single-parameter `x -> expr`; block bodies use `(params) -> { ... }`. A block body is a statement block with an optional trailing value expression ([ADR-0128](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0128-arrow-lambda-statement-block-parity.md)): an `if`-without-`else` and other void control-flow run as statements, `return` works anywhere, and a trailing expression (or `return`) supplies the value — full parity with `func` literals (void when neither yields a value). Types may also be written explicitly (`(x int32) -> expr`), and async lambdas use `async (params) -> ...`. A trailing lambda may follow a call as the final argument. See [ADR-0119](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0119-canonical-arrow-lambda-inference.md).
 
 ## Interpolation
 
