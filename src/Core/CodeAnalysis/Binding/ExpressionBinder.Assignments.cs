@@ -253,6 +253,41 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #1132: returns <see langword="true"/> when the receiver
+    /// <paramref name="type"/> of a dotted member write is a reference type, in
+    /// which case mutating one of its members mutates the heap object rather
+    /// than the (possibly read-only) binding. A nullable reference type is
+    /// unwrapped first so a smart-cast / annotated reference receiver is also
+    /// treated as a reference, while a nullable value type (<c>int32?</c>) stays
+    /// a value type and remains rejected.
+    /// </summary>
+    /// <param name="type">The receiver variable's type.</param>
+    /// <returns><see langword="true"/> when the receiver is a reference type.</returns>
+    private static bool ReceiverTypeIsReference(TypeSymbol type)
+    {
+        var underlying = type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
+        return Binder.IsReferenceTypeForConstraint(underlying);
+    }
+
+    /// <summary>
+    /// Issue #1132: returns <see langword="true"/> when a member write through
+    /// <paramref name="receiver"/> must be rejected because the receiver is a
+    /// read-only (e.g. <c>let</c>) local of a <em>value</em> type — mutating one
+    /// of its members would mutate the value stored in the read-only slot. A
+    /// reference-type receiver (mutating the heap object) and the enclosing
+    /// <c>this</c> are both exempt.
+    /// </summary>
+    /// <param name="receiver">The bound receiver of the member write.</param>
+    /// <returns><see langword="true"/> when the member write must be rejected.</returns>
+    private bool ReceiverBlocksValueTypeMemberWrite(BoundExpression receiver)
+    {
+        return receiver is BoundVariableExpression bve
+            && bve.Variable.IsReadOnly
+            && !ReceiverVariableIsThis(bve.Variable)
+            && !ReceiverTypeIsReference(bve.Variable.Type);
+    }
+
+    /// <summary>
     /// Issue #947: returns <see langword="true"/> when the bound
     /// <paramref name="receiver"/> denotes the enclosing function's <c>this</c>
     /// (a <see langword="null"/> receiver is an implicit <c>this</c>).
@@ -577,6 +612,16 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportProtectedMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propDeclaringType.Name);
                 }
 
+                // Issue #1132: writing a property of a read-only value-type
+                // receiver mutates the value in the read-only slot — reject it
+                // (a reference-type receiver mutates the heap object and the
+                // enclosing `this` are both exempt via ReceiverVariableIsThis /
+                // ReceiverTypeIsReference).
+                if (variable.IsReadOnly && !ReceiverVariableIsThis(variable) && !ReceiverTypeIsReference(variable.Type))
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, receiverName);
+                }
+
                 var propConverted = conversions.BindConversion(syntax.Value.Location, value, prop.Type);
                 var propReceiver = implicitFieldReceiverExpr ?? new BoundVariableExpression(null, variable);
                 EnforceInitOnlyAssignment(prop, propReceiver, syntax.EqualsToken.Location);
@@ -629,7 +674,12 @@ internal sealed partial class ExpressionBinder
         // Issue #947: a read-only field of `this` may be assigned inside the
         // declaring type's constructor; in that case the receiver being `this`
         // (which is itself read-only) must not block the field write.
-        if (variable.IsReadOnly && !receiverIsThisField)
+        // Issue #1132: `let` communicates immutability of the *binding* only
+        // (shallow / readonly-reference semantics). For a reference-type
+        // receiver, `b.Field = v` mutates the heap object, not the binding, so
+        // it must be allowed; only value-type receivers (where the field write
+        // would mutate the value stored in the read-only slot) stay rejected.
+        if (variable.IsReadOnly && !receiverIsThisField && !ReceiverTypeIsReference(variable.Type))
         {
             Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, receiverName);
         }
@@ -935,6 +985,14 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             }
 
+            // Issue #1132: compound-mutating a field of a read-only value-type
+            // receiver mutates the value in the read-only slot — reject it.
+            // Reference-type receivers and `this` are exempt.
+            if (ReceiverBlocksValueTypeMemberWrite(boundReceiver))
+            {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
+            }
+
             var leftRead = new BoundFieldAccessExpression(null, boundReceiver, declaringType, field);
             var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, field.Type, boundRhs.Type);
             if (op == null)
@@ -955,6 +1013,13 @@ internal sealed partial class ExpressionBinder
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
                 return new BoundErrorExpression(null);
+            }
+
+            // Issue #1132: compound-mutating a property of a read-only value-type
+            // receiver mutates the value in the read-only slot — reject it.
+            if (ReceiverBlocksValueTypeMemberWrite(boundReceiver))
+            {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             }
 
             var leftRead = new BoundPropertyAccessExpression(null, boundReceiver, structSym, prop);
