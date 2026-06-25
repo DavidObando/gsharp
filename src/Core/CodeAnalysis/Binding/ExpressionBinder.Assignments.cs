@@ -138,7 +138,7 @@ internal sealed partial class ExpressionBinder
 
         var convertedExpression = conversions.BindConversion(syntax.Expression.Location, boundExpression, variable.Type);
 
-        return new BoundAssignmentExpression(null, variable, convertedExpression);
+        return new BoundAssignmentExpression(null, variable, convertedExpression, boundExpression.Type);
     }
 
     /// <summary>

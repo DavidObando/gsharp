@@ -354,6 +354,15 @@ internal sealed class StatementBinder
                 // narrowing from the current frame so subsequent reads in this
                 // block see the variable at its declared (nullable) type again.
                 InvalidateNarrowingsForAssignedVariables(statementSyntax);
+
+                // Issue #1123: assignment-based smart cast. After invalidation
+                // (which clears any stale narrowing on the assigned variable),
+                // re-narrow a nullable `var` local that was just assigned a
+                // statically non-nullable value, so subsequent reads in this
+                // block — and nested blocks — see the non-nullable type until a
+                // later mutation invalidates it again. Runs last so it wins over
+                // the invalidation pass for the same statement.
+                ApplyAssignmentNarrowing(statement, memberNotNullFrame);
             }
         }
         finally
@@ -556,6 +565,108 @@ internal sealed class StatementBinder
                 persistentFrame[kv.Key] = kv.Value;
             }
         }
+    }
+
+    /// <summary>
+    /// Issue #1123: assignment-based smart cast. When the bound statement is a
+    /// plain <c>x = rhs</c> assignment whose target is a nullable <c>var</c>
+    /// local and whose right-hand side is statically a <em>non-nullable</em>
+    /// value assignable to the local's underlying type, record a narrowing of
+    /// <c>x</c> to that underlying non-nullable type in
+    /// <paramref name="persistentFrame"/>. Mirrors the post-guard narrowing of
+    /// <see cref="ApplyEarlyExitNarrowings"/>: the entry persists for the rest
+    /// of the enclosing block (and into nested blocks) until
+    /// <see cref="InvalidateNarrowingsForAssignedVariables"/> clears it on a
+    /// subsequent mutation. Called after invalidation so the fresh narrowing
+    /// supersedes the clearing pass for this same statement.
+    /// </summary>
+    private void ApplyAssignmentNarrowing(BoundStatement statement, Dictionary<VariableSymbol, TypeSymbol> persistentFrame)
+    {
+        if (statement is not BoundExpressionStatement { Expression: BoundAssignmentExpression assign })
+        {
+            return;
+        }
+
+        // Narrow locals only — never parameters, fields, or read-only `let`
+        // locals (a `let` cannot be reassigned, so it never reaches here with a
+        // re-narrowable shape anyway). This matches the receiver-stability rule
+        // the type-test smart cast applies to `var` locals.
+        if (assign.Variable is not LocalVariableSymbol local || local.IsReadOnly)
+        {
+            return;
+        }
+
+        if (local.Type is not NullableTypeSymbol nullable)
+        {
+            return;
+        }
+
+        var assignedType = assign.AssignedValueType;
+        if (assignedType == null || assignedType == TypeSymbol.Error)
+        {
+            return;
+        }
+
+        // A possibly-null right-hand side does not narrow (invalidation already
+        // cleared any prior narrowing). Only a statically non-nullable value
+        // proves the local is non-null after the assignment.
+        if (assignedType is NullableTypeSymbol)
+        {
+            return;
+        }
+
+        // Issue #1123 is scoped to reference (and interface) types. Nullable
+        // value types (`int32?` → `int32`) are excluded: the existing narrowed-
+        // read emit path does not unwrap `Nullable<T>` to its underlying value
+        // for a `var`-local read, so a narrowed value-type read produces
+        // unverifiable IL. Reference nullability is purely an annotation, so a
+        // narrowed reference read needs no special emit.
+        var underlying = nullable.UnderlyingType;
+        if (!IsReferenceLikeType(underlying))
+        {
+            return;
+        }
+
+        // The right-hand side must be implicitly convertible to the local's
+        // underlying non-nullable type. The assignment itself already proved the
+        // value converts to the nullable declared type; this guards the value
+        // narrowing to the underlying type (e.g. excludes shapes where the only
+        // conversion to the bare underlying type would be explicit).
+        var conversion = Conversion.Classify(assignedType, underlying);
+        if (!conversion.Exists || !conversion.IsImplicit)
+        {
+            return;
+        }
+
+        persistentFrame[local] = underlying;
+    }
+
+    /// <summary>
+    /// Issue #1123: whether <paramref name="type"/> is a reference-like type —
+    /// an interface, a user class, or a CLR-backed class/interface. User value
+    /// structs (null <c>ClrType</c> during binding, <c>IsClass == false</c>)
+    /// and CLR value types / pointers / by-refs are excluded. Mirrors the
+    /// reference-likeness rule the conversion classifier uses for nullable
+    /// reference targets.
+    /// </summary>
+    private static bool IsReferenceLikeType(TypeSymbol type)
+    {
+        if (type is InterfaceSymbol)
+        {
+            return true;
+        }
+
+        if (type is StructSymbol structSymbol)
+        {
+            return structSymbol.IsClass;
+        }
+
+        if (type?.ClrType is { } clrBacking)
+        {
+            return !clrBacking.IsValueType && !clrBacking.IsPointer && !clrBacking.IsByRef;
+        }
+
+        return false;
     }
 
     /// <summary>
