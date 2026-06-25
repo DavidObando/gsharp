@@ -3833,25 +3833,57 @@ public sealed class Binder
 
     internal static bool ImplementsInterface(TypeSymbol typeArgument, InterfaceSymbol iface)
     {
+        // Issue #1113: an interface constraint is satisfied when the type
+        // argument implements the interface ANYWHERE in its hierarchy — directly,
+        // through a base class, or via a transitively-inherited base interface
+        // (mirrors C#'s `where T : IFace`). Walk the full base-class chain and,
+        // for every interface encountered, its transitive base-interface closure.
         if (typeArgument is StructSymbol s)
         {
-            foreach (var implemented in s.Interfaces)
+            for (var current = s; current != null; current = current.BaseClass)
             {
-                if (implemented == iface || SameConstructedInterface(implemented, iface))
+                foreach (var implemented in current.Interfaces)
+                {
+                    if (implemented == null)
+                    {
+                        continue;
+                    }
+
+                    foreach (var candidate in implemented.SelfAndAllBaseInterfaces())
+                    {
+                        if (candidate == iface || SameConstructedInterface(candidate, iface))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (typeArgument is InterfaceSymbol i)
+        {
+            // An interface type argument satisfies the constraint when it is the
+            // constraint interface or transitively extends it.
+            foreach (var candidate in i.SelfAndAllBaseInterfaces())
+            {
+                if (candidate == iface || SameConstructedInterface(candidate, iface))
                 {
                     return true;
                 }
             }
         }
 
-        if (typeArgument is InterfaceSymbol i && (i == iface || SameConstructedInterface(i, iface)))
+        if (typeArgument is TypeParameterSymbol tp && tp.InterfaceConstraint != null)
         {
-            return true;
-        }
-
-        if (typeArgument is TypeParameterSymbol tp && tp.InterfaceConstraint == iface)
-        {
-            return true;
+            // Constraint propagation: a type parameter whose own interface
+            // constraint is or extends the target satisfies the bound.
+            foreach (var candidate in tp.InterfaceConstraint.SelfAndAllBaseInterfaces())
+            {
+                if (candidate == iface || SameConstructedInterface(candidate, iface))
+                {
+                    return true;
+                }
+            }
         }
 
         return false;
