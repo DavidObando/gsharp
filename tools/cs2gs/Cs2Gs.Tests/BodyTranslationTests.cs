@@ -127,6 +127,35 @@ public class BodyTranslationTests
         Assert.Contains("for var i = 1; i <= 3; i++ {", body);
     }
 
+    /// <summary>C# statement-level discard <c>_ = expr;</c> has no G# discard target
+    /// (<c>_ = e</c> → GS0125), so it lowers to a bare expression statement of the
+    /// RHS (issue #914).</summary>
+    [Fact]
+    public void DiscardAssignment_EmitsBareRightHandSide()
+    {
+        string body = GetMethodBody("_ = n.ToString();");
+        Assert.Contains("n.ToString()", body);
+        Assert.DoesNotContain("_ =", body);
+    }
+
+    /// <summary>A C-style <c>for</c> with multiple declarators/initializers or
+    /// multiple incrementors cannot fit G#'s single-init, single-incrementor
+    /// <c>for</c>, so it lowers to a block + <c>while</c> running every init once up
+    /// front and every incrementor at the end of each iteration (issue #914).</summary>
+    [Fact]
+    public void MultiInitMultiIncrementorFor_LowersToBlockWhile()
+    {
+        string body = GetMethodBody(
+            "for (int f = 0, start = 0; f < 3; start += f, f++) { n = n + start; }");
+
+        Assert.Contains("var f = 0", body);
+        Assert.Contains("var start = 0", body);
+        Assert.Contains("while f < 3 {", body);
+        Assert.Contains("start += f", body);
+        Assert.Contains("f++", body);
+        Assert.DoesNotContain("for ", body);
+    }
+
     /// <summary>C# <c>foreach (var x in xs)</c> maps to the G# <c>for x in xs</c>
     /// (<see cref="ForInStatement"/>).</summary>
     [Fact]
