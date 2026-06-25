@@ -373,6 +373,22 @@ internal sealed partial class ExpressionBinder
     {
         var receiverName = syntax.Receiver.Text;
 
+        // Issue #1104: `base.Prop = value` — a non-virtual write to the nearest
+        // base class implementation of property `Prop`, mirroring C#
+        // `base.Prop = value`. `base` is a contextual keyword: only intercepted
+        // when it is not a real value in scope.
+        if (receiverName == "base" && !(scope.TryLookupSymbol(receiverName) is VariableSymbol))
+        {
+            var baseValue = BindExpression(syntax.Value);
+            return BindBaseClassPropertyWrite(
+                syntax.FieldIdentifier.Text,
+                syntax.FieldIdentifier.Location,
+                syntax.Receiver.Location,
+                baseValue,
+                syntax.Value.Location,
+                syntax.EqualsToken.Location);
+        }
+
         // Stream B: imported class name on LHS → static field/property write.
         // Probe the import table FIRST so we don't shadow with a variable lookup
         // diagnostic.
