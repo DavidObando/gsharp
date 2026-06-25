@@ -1742,6 +1742,29 @@ internal sealed partial class ExpressionBinder
             for (var i = 0; i < permutedArgs.Length; i++)
             {
                 var paramType = method.Parameters[i].Type;
+
+                // ADR-0060 / issue #1139: an inline-decl `out var n` / `out let
+                // n` / `out _` was bound with TypeSymbol.Error in the first
+                // pass (before the static method was resolved) and never
+                // declared a local. Now that overload resolution has chosen the
+                // method — and the method type-argument substitution is known —
+                // re-bind it (via the shared helper used by the instance path)
+                // so the synthesized local is typed from the resolved
+                // (substituted) out-parameter pointee type and leaks into the
+                // enclosing block scope. The out-var arg always sits in the
+                // fixed-parameter region, so permutedArgs[i] / ce.Arguments[i] /
+                // method.Parameters[i] line up. This must run BEFORE the
+                // open-type-parameter shortcut so generic static out-parameters
+                // (`func G[T](out r T)`) are handled too.
+                var slotSyntax = i < ce.Arguments.Count ? ce.Arguments[i] : null;
+                var substitutedPointeeType = substitution != null ? Binder.SubstituteType(paramType, substitution) : paramType;
+                var reboundOutVar = TryRebindInlineOutVarPlaceholder(permutedArgs[i], slotSyntax, method.Parameters[i], substitutedPointeeType);
+                if (reboundOutVar != null)
+                {
+                    convertedArgs.Add(reboundOutVar);
+                    continue;
+                }
+
                 if (paramType is TypeParameterSymbol)
                 {
                     convertedArgs.Add(permutedArgs[i]);

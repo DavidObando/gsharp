@@ -112,6 +112,7 @@ internal sealed class OverloadResolver
 
     private readonly Func<ExpressionSyntax, BoundExpression> bindExpression;
     private readonly Func<RefArgumentExpressionSyntax, ParameterSymbol, BoundExpression> bindRefArgumentExpression;
+    private readonly Func<BoundExpression, ExpressionSyntax, ParameterSymbol, TypeSymbol, BoundExpression> tryRebindInlineOutVarPlaceholder;
     private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
     private readonly Func<string, TypeSymbol> lookupType;
     private readonly Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable;
@@ -150,6 +151,10 @@ internal sealed class OverloadResolver
     /// <param name="bindRefArgumentExpression">Callback to bind a
     /// <see cref="RefArgumentExpressionSyntax"/> against a known parameter
     /// symbol (or <c>null</c> in the first, parameter-unknown, pass).</param>
+    /// <param name="tryRebindInlineOutVarPlaceholder">Callback that re-binds a
+    /// first-pass inline out-var placeholder once the callee/parameter is
+    /// resolved, returning the rebound expression (or <c>null</c> when the
+    /// argument is not an inline out-var placeholder).</param>
     /// <param name="bindTypeClause">Callback to bind a
     /// <see cref="TypeClauseSyntax"/> to a <see cref="TypeSymbol"/>.</param>
     /// <param name="lookupType">Callback to resolve a bare type name to a
@@ -215,6 +220,7 @@ internal sealed class OverloadResolver
         ConversionClassifier conversions,
         Func<ExpressionSyntax, BoundExpression> bindExpression,
         Func<RefArgumentExpressionSyntax, ParameterSymbol, BoundExpression> bindRefArgumentExpression,
+        Func<BoundExpression, ExpressionSyntax, ParameterSymbol, TypeSymbol, BoundExpression> tryRebindInlineOutVarPlaceholder,
         Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
         Func<string, TypeSymbol> lookupType,
         Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable,
@@ -241,6 +247,7 @@ internal sealed class OverloadResolver
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
         this.bindExpression = bindExpression ?? throw new ArgumentNullException(nameof(bindExpression));
         this.bindRefArgumentExpression = bindRefArgumentExpression ?? throw new ArgumentNullException(nameof(bindRefArgumentExpression));
+        this.tryRebindInlineOutVarPlaceholder = tryRebindInlineOutVarPlaceholder ?? throw new ArgumentNullException(nameof(tryRebindInlineOutVarPlaceholder));
         this.bindTypeClause = bindTypeClause ?? throw new ArgumentNullException(nameof(bindTypeClause));
         this.lookupType = lookupType ?? throw new ArgumentNullException(nameof(lookupType));
         this.reportObsoleteUseIfApplicable = reportObsoleteUseIfApplicable ?? throw new ArgumentNullException(nameof(reportObsoleteUseIfApplicable));
@@ -3985,16 +3992,11 @@ internal sealed class OverloadResolver
                 && inlineOutAddr.Operand.Type == TypeSymbol.Error)
             {
                 var slotSyntax = i < permutedSyntax.Length ? permutedSyntax[i] : null;
-                var unwrappedSlotSyntax = slotSyntax != null ? UnwrapNamedArgumentValue(slotSyntax) : null;
-                if (unwrappedSlotSyntax is RefArgumentExpressionSyntax inlineOutRefArg
-                    && inlineOutRefArg.IsInlineDeclaration
-                    && inlineOutRefArg.DeclaredType == null)
+                var pointeeType = substitution != null ? substituteType(paramType, substitution) : paramType;
+                var reboundOutVar = tryRebindInlineOutVarPlaceholder(permutedArguments[i], slotSyntax, parameter, pointeeType);
+                if (reboundOutVar != null)
                 {
-                    var pointeeType = substitution != null ? substituteType(paramType, substitution) : paramType;
-                    var rebindParameter = ReferenceEquals(pointeeType, parameter.Type)
-                        ? parameter
-                        : new ParameterSymbol(parameter.Name, pointeeType, refKind: RefKind.Out);
-                    convertedArgs.Add(bindRefArgumentExpression(inlineOutRefArg, rebindParameter));
+                    convertedArgs.Add(reboundOutVar);
                     continue;
                 }
             }

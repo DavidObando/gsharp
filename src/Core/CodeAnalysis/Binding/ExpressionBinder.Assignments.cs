@@ -1269,6 +1269,57 @@ internal sealed partial class ExpressionBinder
         return new BoundAddressOfExpression(null, operand);
     }
 
+    /// <summary>
+    /// ADR-0060 / issues #1133, #1139: re-binds a first-pass inline out-var
+    /// placeholder once overload resolution has chosen the callee. An inline
+    /// <c>out var n</c> / <c>out let n</c> / <c>out _</c> argument is bound in
+    /// the first pass (before the parameter/method is known) to a
+    /// <see cref="BoundAddressOfExpression"/> wrapping a
+    /// <see cref="BoundErrorExpression"/> that declares <em>no</em> local. Now
+    /// that the resolved out-parameter (and its substituted pointee type) is
+    /// known, re-bind via <see cref="BindRefArgumentExpression"/> so the
+    /// synthesized local is typed correctly and leaks into the enclosing block
+    /// scope. Shared by the user-instance path
+    /// (<see cref="OverloadResolver.BindUserInstanceCall"/>) and the qualified
+    /// static path (<c>BindUserTypeStaticCall</c>) so both behave identically.
+    /// </summary>
+    /// <param name="boundArg">The first-pass bound argument that may be an
+    /// inline out-var placeholder.</param>
+    /// <param name="slotSyntax">The argument syntax at this position (may be a
+    /// named-argument wrapper).</param>
+    /// <param name="resolvedParameter">The resolved out-parameter this argument
+    /// binds to.</param>
+    /// <param name="substitutedPointeeType">The (already-substituted) pointee
+    /// type the synthesized local should carry.</param>
+    /// <returns>The rebound address-of expression when <paramref name="boundArg"/>
+    /// is an inline out-var placeholder; otherwise <see langword="null"/> so the
+    /// caller keeps its normal conversion path.</returns>
+    internal BoundExpression TryRebindInlineOutVarPlaceholder(
+        BoundExpression boundArg,
+        ExpressionSyntax slotSyntax,
+        ParameterSymbol resolvedParameter,
+        TypeSymbol substitutedPointeeType)
+    {
+        if (boundArg is not BoundAddressOfExpression inlineOutAddr
+            || inlineOutAddr.Operand.Type != TypeSymbol.Error)
+        {
+            return null;
+        }
+
+        var unwrappedSlotSyntax = slotSyntax != null ? OverloadResolver.UnwrapNamedArgumentValue(slotSyntax) : null;
+        if (unwrappedSlotSyntax is not RefArgumentExpressionSyntax inlineOutRefArg
+            || !inlineOutRefArg.IsInlineDeclaration
+            || inlineOutRefArg.DeclaredType != null)
+        {
+            return null;
+        }
+
+        var rebindParameter = ReferenceEquals(substitutedPointeeType, resolvedParameter.Type)
+            ? resolvedParameter
+            : new ParameterSymbol(resolvedParameter.Name, substitutedPointeeType, refKind: RefKind.Out);
+        return BindRefArgumentExpression(inlineOutRefArg, rebindParameter);
+    }
+
     private BoundExpression BindIndexAssignmentExpression(IndexAssignmentExpressionSyntax syntax)
     {
         var name = syntax.TargetIdentifier.Text;
