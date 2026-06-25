@@ -3,7 +3,9 @@
 - **Status**: Superseded by [ADR-0074](0074-arrow-lambda-and-colon-switch-arms.md)
 - **Date**: 2026-05-28
 - **Phase**: Phase 7 polish
-- **Related**: issue #198, PR #74 (Phase 4.9 trailing-lambda), ADR-0023 (async state machine), ADR-0043 (`async func` type clause), [ADR-0074](0074-arrow-lambda-and-colon-switch-arms.md) (`->` repurposed as the lambda operator; this trailing-lambda-connector proposal is therefore no longer the way `->` is spent)
+- **Related**: issue #198, issue #411 (this revisit), PR #74 (Phase 4.9 trailing-lambda), ADR-0023 (async state machine), ADR-0043 (`async func` type clause), [ADR-0074](0074-arrow-lambda-and-colon-switch-arms.md) (`->` repurposed as the lambda operator; this trailing-lambda-connector proposal is therefore no longer the way `->` is spent)
+
+> **Note (ADR-0074, issue #411):** the `->` trailing-lambda **connector** syntax proposed below (`runIt -> { … }`, `xs.forEach -> (x int32) { … }`) was **never implemented and never will be**. [ADR-0074](0074-arrow-lambda-and-colon-switch-arms.md) repurposed `->` as the lambda operator, "full stop", so the connector spelling now collides head-on with a `(params) -> …` lambda: the parser reads `runIt ->` as the start of a lambda whose parameter is `runIt`, and the compiler reports `GS0304: Cannot infer the type of lambda parameter 'runIt'`. The token is spent; there is no room for a connector overload. The current language already covers this ground two ways: full lambda **expressions** exist in both `(params) -> expr` and `(params) -> { body }` forms (ADR-0074), and the Phase 4.9 trailing-lambda **call** form (`call() func(params) R { body }`, PR #74) remains live and unchanged. See the [Current state and design opportunities](#current-state-and-design-opportunities-issue-411) section at the end of this ADR for the up-to-date analysis and recommendation. The rest of this ADR is preserved as a historical record of the original decision.
 
 ## Context
 
@@ -148,3 +150,53 @@ A Kotlin/Scala-style lambda expression where `{ }` unambiguously means "lambda" 
 ### E. Soft-deprecating Phase 4.9 immediately
 
 Considered and rejected for this phase. The Phase 4.9 form has been in the language since PR #74 and is used in existing tests and code. Deprecating it now would break existing programs for a purely stylistic gain. If the `->` form achieves strong adoption, a later ADR can soft-deprecate the `func` keyword form with a formatter-enforced migration path.
+
+## Current state and design opportunities (issue #411)
+
+This section supersedes the historical decision above and records the language as it actually stands. Issue #411 asked us to revisit ADR-0050 now that G# has full lambda support and to decide what, if anything, remains to be done.
+
+### What G# has today
+
+Three lambda / trailing-lambda ergonomics are live on `main`, all verified to compile with `gsc` at the time of this revisit:
+
+1. **Expression-bodied arrow lambda** (ADR-0074). A single-expression body whose value is the return value:
+
+   ```gsharp
+   let double = (x int32) -> x * 2
+   ```
+
+2. **Block-bodied arrow lambda** (ADR-0074). A brace-delimited block body:
+
+   ```gsharp
+   let double = (x int32) -> { return x * 2 }
+   ```
+
+3. **Phase 4.9 trailing-lambda call form** (PR #74). A `func(params) R { body }` literal written immediately after a call's closing `)` is desugared into the last positional argument:
+
+   ```gsharp
+   func runIt(f () -> int32) int32 { return f() }
+   // trailing-lambda call:
+   runIt() func() int32 { return 42 }
+   ```
+
+   This form is unchanged by ADR-0074 and continues to compile exactly as before.
+
+The `->`-connector form this ADR originally proposed (`runIt -> { return 42 }`) is **not** a fourth option — it does not parse. With `->` now the lambda operator, `runIt ->` is read as the head of a lambda whose parameter is named `runIt`, yielding `GS0304: Cannot infer the type of lambda parameter 'runIt'`. The spelling is permanently unavailable.
+
+### Design opportunities now that `->` is the lambda operator
+
+- **A Kotlin-style no-call-parens trailing lambda** (passing a `(params) -> { body }` lambda as a trailing argument *without* the enclosing call parentheses, e.g. `xs.forEach (x int32) -> { … }`) was the most attractive part of the original proposal, because it removed call ceremony at DSL-style call sites. It is no longer reachable through `->` (the token is spent), and reaching it through any other surface — brace-only, juxtaposition, or a new connector token — reintroduces exactly the parse ambiguities catalogued in *Alternatives considered* §A above (brace-vs-block, param-list-vs-chained-call, no-parens-vs-regular-call). None of those ambiguities got easier; the arrow that previously dissolved them is gone. Adding this sugar today would require either a new punctuator or whitespace significance, both of which carry costs that outweigh the saved parentheses.
+
+- **Redundancy of the Phase 4.9 `func(){}` trailing-call form.** With concise `->` lambdas available, the long `func(params) R { body }` trailing literal is rarely the most readable choice. But it is **not** strictly redundant: the arrow lambda has no syntactic slot for an explicit return-type annotation and (per ADR-0074 v0) no `async`, `ref`/`out`/`in`/`scoped`, or variadic parameter shapes — call sites that need any of those still reach for `func(...) R { … }`. The Phase 4.9 form therefore earns its keep until the arrow form's capability gaps close. Soft-deprecating it is premature for the same reasons given in §E above.
+
+- **Relationship to adjacent work.** Function-type syntax is now spelled `(T) -> R` (ADR-0075, paired issue #715), and lambda parameter-type inference is tracked by issue #716 (delivered for the canonical arrow form via ADR-0119/#932's bare `x -> body` shorthand). These reduce lambda verbosity from the *type* side rather than the *call* side, which further weakens the case for any new trailing-lambda surface syntax: the ergonomic pressure that motivated this ADR has largely been relieved by the arrow lambda and its inference work.
+
+### Recommendation
+
+1. **The `->`-connector trailing-lambda proposal is permanently closed.** It cannot be implemented without colliding with the lambda operator, and ADR-0074 has already superseded it. This ADR remains as a historical record only.
+
+2. **No new trailing-lambda surface syntax is warranted at this time.** Full `->` lambda expressions (both expression- and block-bodied) plus the still-live Phase 4.9 `func(...)` trailing-call form already satisfy the ergonomic need that ADR-0050 set out to address.
+
+3. **Keep the Phase 4.9 trailing-call form as-is** — neither extend nor deprecate it. It continues to cover the return-type-annotated, `async`, and ref-kind cases that the v0 arrow lambda deliberately omits.
+
+4. **Defer any future Kotlin-style trailing-lambda sugar to a fresh ADR driven by a usage survey**, not by reviving this one. Such a proposal would need to pick a non-`->` disambiguation strategy and justify the new ambiguity surface against the parentheses it saves; the bar is high precisely because the arrow lambda has already absorbed most of the demand.
