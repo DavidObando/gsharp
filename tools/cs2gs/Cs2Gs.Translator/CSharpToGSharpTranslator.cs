@@ -4174,7 +4174,7 @@ public sealed class CSharpToGSharpTranslator
                         // faithful `Slice(start, length)` / `Slice(start)` call the
                         // C# range indexer itself lowers to (ADR-0115 §B).
                         return this.TranslateRangeSlice(
-                            this.TranslateExpression(elementAccess.Expression),
+                            this.TranslateReceiverWithNullForgiveness(elementAccess.Expression),
                             sliceRange);
                     }
 
@@ -4182,7 +4182,7 @@ public sealed class CSharpToGSharpTranslator
                         ? this.TranslateExpression(elementAccess.ArgumentList.Arguments[0].Expression)
                         : new IdentifierExpression("nil");
                     return new IndexExpression(
-                        this.TranslateExpression(elementAccess.Expression),
+                        this.TranslateReceiverWithNullForgiveness(elementAccess.Expression),
                         index);
 
                 case SimpleLambdaExpressionSyntax simpleLambda:
@@ -4974,7 +4974,7 @@ public sealed class CSharpToGSharpTranslator
             // Member access on a bare-identifier element access (`values[i].M`)
             // previously hit a G# parser ambiguity (#942); that gap is now fixed,
             // so the construct translates through the normal member-access path.
-            GExpression target = this.TranslateExpression(member.Expression);
+            GExpression target = this.TranslateReceiverWithNullForgiveness(member.Expression);
             string memberName = member.Name.Identifier.Text;
 
             // A C# tuple element access (`item.Name`, `item.Price`) lowers to the
@@ -4990,6 +4990,98 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return new MemberAccessExpression(target, SanitizeIdentifier(memberName));
+        }
+
+        /// <summary>
+        /// Translates a member- or element-access <paramref name="recv"/> receiver,
+        /// wrapping it in G#'s postfix non-null assertion (<c>recv!!</c>) when the
+        /// receiver is <em>declared</em> nullable (a <c>T?</c> reference type or
+        /// nullable array) yet Roslyn's nullable <em>flow</em> analysis has proven
+        /// it non-null at this site (e.g. after a guard such as
+        /// <c>if (o.Child == null) return;</c>).
+        /// </summary>
+        /// <remarks>
+        /// C# uses flow-sensitive null analysis, so a guarded nullable property or
+        /// field chain reads as non-null afterwards. G# follows Kotlin-style
+        /// smart-casts that narrow only <em>local</em> variables, never
+        /// property/field-access chains, so emitting <c>Moov.TextTrack.Mdia</c>
+        /// where <c>TextTrack</c> is <c>TrakBox?</c> is rejected with GS0158 (member
+        /// access on a <c>T?</c> receiver) or GS0116 (indexing a <c>T?</c> receiver).
+        /// Reusing Roslyn's own proof, the assertion <c>!!</c> re-establishes the
+        /// non-null fact the guard already proved (#914). The assertion is harmless
+        /// on an already-non-null receiver, but the predicate below stays precise to
+        /// keep the output faithful.
+        /// </remarks>
+        /// <param name="recv">The immediate receiver expression (left of the
+        /// <c>.</c> or <c>[</c>).</param>
+        /// <returns>The translated receiver, wrapped in
+        /// <see cref="NonNullAssertionExpression"/> when flow-proven non-null.</returns>
+        private GExpression TranslateReceiverWithNullForgiveness(ExpressionSyntax recv)
+        {
+            GExpression translated = this.TranslateExpression(recv);
+
+            if (this.ReceiverNeedsNullForgiveness(recv))
+            {
+                return new NonNullAssertionExpression(translated);
+            }
+
+            return translated;
+        }
+
+        /// <summary>
+        /// Determines whether <paramref name="recv"/> is a declared-nullable
+        /// reference receiver that Roslyn's flow analysis has narrowed to non-null,
+        /// and therefore needs a G# <c>!!</c> assertion (see
+        /// <see cref="TranslateReceiverWithNullForgiveness"/>).
+        /// </summary>
+        private bool ReceiverNeedsNullForgiveness(ExpressionSyntax recv)
+        {
+            // `expr!` already lowers to a `NonNullAssertionExpression`; never
+            // double-assert. `this`/`base`, a null literal, and a `?.` conditional
+            // access receiver are handled by their own paths and are not
+            // declared-nullable property/field chains.
+            if (recv is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                or ThisExpressionSyntax
+                or BaseExpressionSyntax
+                or LiteralExpressionSyntax
+                or ConditionalAccessExpressionSyntax)
+            {
+                return false;
+            }
+
+            // Flow analysis must have proven the receiver non-null at this site.
+            if (this.context.GetTypeInfo(recv).Nullability.FlowState != NullableFlowState.NotNull)
+            {
+                return false;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(recv).Symbol;
+
+            // Static member access (`Type.StaticMember`) and namespace-qualified
+            // names carry a type/namespace receiver, not a value: never assert.
+            if (symbol is ITypeSymbol or INamespaceSymbol or null)
+            {
+                return false;
+            }
+
+            // Inspect the receiver's *declared* type. The flow-collapsed
+            // `Nullability.Annotation` reports NotAnnotated once flow proves
+            // non-null, so it cannot distinguish a declared `T?` from a `T`; the
+            // declaring symbol's type is the reliable source.
+            ITypeSymbol declared = symbol switch
+            {
+                IPropertySymbol property => property.Type,
+                IFieldSymbol field => field.Type,
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                IMethodSymbol method => method.ReturnType,
+                _ => null,
+            };
+
+            // Focus on the GS0158/GS0116 cases: nullable reference types and
+            // nullable arrays. Nullable value types (`int?`) take the `.Value`/
+            // `.HasValue` path and are left untouched.
+            return declared is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated };
         }
 
         private GExpression TranslateInvocation(InvocationExpressionSyntax invocation)
