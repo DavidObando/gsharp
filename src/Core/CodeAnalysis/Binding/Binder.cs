@@ -206,6 +206,7 @@ public sealed class Binder
             conversions,
             bindExpression: syntax => expressions.BindExpression(syntax),
             bindRefArgumentExpression: (refSyntax, parameter) => expressions.BindRefArgumentExpression(refSyntax, parameter),
+            tryRebindInlineOutVarPlaceholder: (boundArg, slotSyntax, resolvedParameter, substitutedPointeeType) => expressions.TryRebindInlineOutVarPlaceholder(boundArg, slotSyntax, resolvedParameter, substitutedPointeeType),
             bindTypeClause: BindTypeClause,
             lookupType: LookupType,
             reportObsoleteUseIfApplicable: ReportObsoleteUseIfApplicable,
