@@ -277,6 +277,88 @@ public class Issue1104BasePropertyAccessEmitTests
         }
     }
 
+    [Fact]
+    public void Library_BracketedBaseProperty_PassesIlVerify_AndUsesCallNotCallvirt()
+    {
+        var source = """
+            package Probe
+
+            open class Base {
+                open prop RenderSize int64 {
+                    get { return 10L }
+                }
+            }
+
+            open class Deriv() : Base {
+                override prop RenderSize int64 {
+                    get { return base[Base].RenderSize }
+                }
+            }
+            """;
+
+        var dllPath = CompileLibrary(source);
+        try
+        {
+            using var stream = File.OpenRead(dllPath);
+            using var peReader = new PEReader(stream);
+            var reader = peReader.GetMetadataReader();
+
+            // Find Deriv::get_RenderSize — the override getter that contains the
+            // bracketed base property read.
+            MethodDefinitionHandle? derivGetter = null;
+            foreach (var typeHandle in reader.TypeDefinitions)
+            {
+                var td = reader.GetTypeDefinition(typeHandle);
+                if (!reader.StringComparer.Equals(td.Name, "Deriv"))
+                {
+                    continue;
+                }
+
+                foreach (var mh in td.GetMethods())
+                {
+                    var md = reader.GetMethodDefinition(mh);
+                    if (reader.StringComparer.Equals(md.Name, "get_RenderSize"))
+                    {
+                        derivGetter = mh;
+                    }
+                }
+            }
+
+            Assert.True(derivGetter.HasValue, "expected to find Deriv::get_RenderSize");
+
+            var method = reader.GetMethodDefinition(derivGetter.Value);
+            Assert.True(method.RelativeVirtualAddress != 0, "Deriv::get_RenderSize must carry a body");
+            var body = peReader.GetMethodBody(method.RelativeVirtualAddress);
+            var ilBytes = body.GetILBytes();
+            Assert.NotNull(ilBytes);
+
+            // ECMA-335 opcodes: `call` = 0x28; `callvirt` = 0x6F. The override
+            // getter body's only call is the bracketed base property read, which
+            // MUST be a non-virtual `call` (a `callvirt` would re-dispatch into
+            // Deriv::get_RenderSize and stack-overflow).
+            bool sawCall = false;
+            bool sawCallvirt = false;
+            for (int i = 0; i < ilBytes.Length; i++)
+            {
+                if (ilBytes[i] == 0x28)
+                {
+                    sawCall = true;
+                }
+                else if (ilBytes[i] == 0x6F)
+                {
+                    sawCallvirt = true;
+                }
+            }
+
+            Assert.True(sawCall, "Deriv::get_RenderSize must contain a `call` opcode (non-virtual bracketed base property read)");
+            Assert.False(sawCallvirt, "Deriv::get_RenderSize must NOT use `callvirt` for base[Base].Prop — it would re-enter the override");
+        }
+        finally
+        {
+            TryCleanup(dllPath);
+        }
+    }
+
     private static string CompileLibrary(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_bpa_lib_").FullName;

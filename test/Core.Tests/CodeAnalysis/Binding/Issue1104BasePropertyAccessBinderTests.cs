@@ -247,6 +247,51 @@ open class Mid() : Base {
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0157");
     }
 
+    [Fact]
+    public void BracketedBaseProperty_MemberNotOnBase_DiagnosticGS0384()
+    {
+        var source = @"
+open class Base {
+    open prop RenderSize int64 {
+        get { return 10L }
+    }
+}
+
+open class Deriv() : Base {
+    func Read() int64 { return base[Base].NotAProperty }
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0384");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0157");
+    }
+
+    [Fact]
+    public void BracketedBaseProperty_Write_SelectorNotBaseClass_DiagnosticGS0385()
+    {
+        var source = @"
+open class Base {
+    var stored int64 = 0L
+    open prop Stored int64 {
+        get { return stored }
+        set { stored = value }
+    }
+}
+
+open class Other {
+}
+
+open class Deriv() : Base {
+    func SetBad(v int64) {
+        base[Other].Stored = v
+    }
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0385");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0157");
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
