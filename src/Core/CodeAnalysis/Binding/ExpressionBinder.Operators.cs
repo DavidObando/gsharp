@@ -880,15 +880,18 @@ internal sealed partial class ExpressionBinder
 
         // Nil/null compatibility: when one arm is the null sentinel and the
         // other is non-null, pick the non-null. The conversion machinery
-        // accepts the trivial null → reference/nullable widening.
+        // accepts the trivial null → reference/nullable widening. Issue #1151:
+        // when the other arm is a non-nullable value type `T`, the unified type
+        // must be `T?` so the value arm is lifted and the nil arm becomes the
+        // null `T?` (reference and already-nullable arms are left unchanged).
         if (left == TypeSymbol.Null)
         {
-            return right;
+            return LiftForNilArm(right);
         }
 
         if (right == TypeSymbol.Null)
         {
-            return left;
+            return LiftForNilArm(left);
         }
 
         var leftToRight = Conversion.Classify(left, right);
@@ -924,6 +927,26 @@ internal sealed partial class ExpressionBinder
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Issue #1151: lifts a non-nullable value type to its nullable form when it
+    /// is unified with a <c>nil</c> arm in an if/switch-expression. A value type
+    /// <c>T</c> becomes <c>T?</c> so the value arm can be lifted and the nil arm
+    /// can become the null <c>T?</c>. Reference types already legally hold
+    /// <c>nil</c>, and already-nullable types are idempotent, so both are
+    /// returned unchanged.
+    /// </summary>
+    /// <param name="type">The non-nil arm's type.</param>
+    /// <returns><c>T?</c> for a non-nullable value type <c>T</c>; otherwise <paramref name="type"/>.</returns>
+    private static TypeSymbol LiftForNilArm(TypeSymbol type)
+    {
+        if (type is not NullableTypeSymbol && type?.ClrType is { IsValueType: true })
+        {
+            return NullableTypeSymbol.Get(type);
+        }
+
+        return type;
     }
 
     /// <summary>
