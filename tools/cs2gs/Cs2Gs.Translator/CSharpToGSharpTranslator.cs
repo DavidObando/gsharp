@@ -5498,13 +5498,19 @@ public sealed class CSharpToGSharpTranslator
                 return new CompositeLiteralExpression(type, fieldInitializers);
             }
 
-            // A value aggregate (`struct` / `data struct`) has no callable
-            // constructor surface in G#: it is constructed with a struct literal
-            // `T{Field: value, ...}` (spec §Struct literals). Map the positional C#
-            // `new T(a, b)` to that literal by zipping the arguments with the
-            // type's settable instance members in declaration order (ADR-0115 §B.4).
+            // A source-defined value aggregate (`struct` / `data struct`) has no
+            // callable constructor surface in G#: it is constructed with a struct
+            // literal `T{Field: value, ...}` (spec §Struct literals). Map the
+            // positional C# `new T(a, b)` to that literal by zipping the arguments
+            // with the type's settable instance members in declaration order
+            // (ADR-0115 §B.4). Imported/BCL structs (e.g. `Guid`, `DateTime`,
+            // `Span<T>` — all `SpecialType.None`) DO expose real constructors that
+            // G# can call directly (`Guid(bytes, true)`), so they must fall through
+            // to a constructor call rather than be zipped into a bogus literal over
+            // the type's *properties*.
             if (typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Struct, SpecialType: SpecialType.None } valueType &&
                 !valueType.IsTupleType &&
+                !valueType.DeclaringSyntaxReferences.IsEmpty &&
                 arguments.Count > 0)
             {
                 List<string> targetNames = OrderedValueMemberNames(valueType);
@@ -5932,10 +5938,12 @@ public sealed class CSharpToGSharpTranslator
                     .Select(a => this.TranslateArgument(a))
                     .ToList();
 
-            // A value aggregate is constructed with a composite literal; a reference
-            // type with a call on the (bracketed-generic) type name.
+            // A source-defined value aggregate is constructed with a composite
+            // literal; a reference type — or an imported/BCL struct with a real
+            // constructor — with a call on the (bracketed-generic) type name.
             if (typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Struct, SpecialType: SpecialType.None } valueType &&
                 !valueType.IsTupleType &&
+                !valueType.DeclaringSyntaxReferences.IsEmpty &&
                 creation.Initializer == null)
             {
                 List<string> targetNames = OrderedValueMemberNames(valueType);
