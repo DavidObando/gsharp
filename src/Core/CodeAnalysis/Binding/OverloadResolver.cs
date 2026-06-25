@@ -283,6 +283,32 @@ internal sealed class OverloadResolver
     private BoundScope Scope => binderCtx.RootScope;
 
     /// <summary>
+    /// Issue #1159: returns the implicit-<c>this</c> parameter that an
+    /// unqualified instance-member reference should bind against. For a direct
+    /// instance method (or interface default method) body this is the enclosing
+    /// function's own <see cref="FunctionSymbol.ThisParameter"/>. Inside a
+    /// lambda body the enclosing function is a synthetic
+    /// <see cref="FunctionSymbol"/> with no receiver, so we fall back to the
+    /// <c>this</c> that is still visible in the current lexical scope — the
+    /// enclosing instance method's <c>this</c>, which the lambda's child scope
+    /// inherits and which capture analysis already captures into the display
+    /// class (mirroring how explicit <c>this.X</c> and bare field/property
+    /// reads already work and capture). In a static context no <c>this</c> is
+    /// in scope, so this returns <see langword="null"/> and unqualified
+    /// resolution stays unchanged.
+    /// </summary>
+    private ParameterSymbol GetEffectiveThisParameter()
+    {
+        var current = getCurrentFunction();
+        if (current?.ThisParameter != null)
+        {
+            return current.ThisParameter;
+        }
+
+        return Scope.TryLookupSymbol("this") as ParameterSymbol;
+    }
+
+    /// <summary>
     /// Issue #506: synthesises C#-style <c>params T[]</c> expansion for a CLR
     /// call site that won overload resolution in expanded form. The trailing
     /// positional arguments (those mapped to the final <c>params</c> parameter)
@@ -2825,8 +2851,13 @@ internal sealed class OverloadResolver
             // Implicit `this`: if we are inside an instance method body and the
             // name matches a sibling method on the receiver type, dispatch via
             // `this.<method>(args)` automatically.
-            if (getCurrentFunction()?.ThisParameter != null
-                && getCurrentFunction().ReceiverType is StructSymbol implicitReceiverStruct)
+            // Issue #1159: `effThis` is the enclosing instance method's `this`
+            // even when this call sits inside a lambda body (whose synthetic
+            // enclosing function carries no receiver), so unqualified
+            // enclosing-instance member calls resolve and capture `this`.
+            var effThis = GetEffectiveThisParameter();
+            if (effThis != null
+                && effThis.Type is StructSymbol implicitReceiverStruct)
             {
                 // Issue #1147 (Facet B): an unqualified same-named call inside an
                 // instance method resolves against the COMBINED instance + static
@@ -2866,7 +2897,7 @@ internal sealed class OverloadResolver
                         return new BoundCallExpression(null, implicitMethod, convertedSelfStaticArgs.MoveToImmutable());
                     }
 
-                    var implicitReceiver = new BoundVariableExpression(null, getCurrentFunction().ThisParameter);
+                    var implicitReceiver = new BoundVariableExpression(null, effThis);
                     return BindUserInstanceCall(implicitReceiver, implicitMethod, boundArguments.ToImmutable(), syntax, argumentNames);
                 }
 
@@ -2878,7 +2909,7 @@ internal sealed class OverloadResolver
                 // false for any name Object does not define, so the GS0130 path
                 // below still fires for genuinely undefined functions.
                 var implicitBaseClr = implicitReceiverStruct.ImportedBaseType?.ClrType ?? typeof(object);
-                var implicitReceiverExpr = new BoundVariableExpression(null, getCurrentFunction().ThisParameter);
+                var implicitReceiverExpr = new BoundVariableExpression(null, effThis);
                 if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, null, default, argumentNames))
                 {
                     return implicitInheritedCall;
@@ -2893,8 +2924,8 @@ internal sealed class OverloadResolver
             // inside the interface see both the public surface and the
             // private helpers; external callers go through the receiver-typed
             // path which does its own GS0334 check.
-            if (getCurrentFunction()?.ThisParameter != null
-                && getCurrentFunction().ReceiverType is InterfaceSymbol implicitReceiverIface)
+            if (effThis != null
+                && effThis.Type is InterfaceSymbol implicitReceiverIface)
             {
                 var implicitIfaceOverloads = TypeMemberModel.GetMethods(implicitReceiverIface, syntax.Identifier.Text, MemberQuery.Instance(MemberKinds.Method));
                 var implicitPrivateIfaceOverloads = implicitReceiverIface.GetPrivateMethods(syntax.Identifier.Text);
@@ -2911,7 +2942,7 @@ internal sealed class OverloadResolver
                         return new BoundErrorExpression(null);
                     }
 
-                    var implicitReceiver = new BoundVariableExpression(null, getCurrentFunction().ThisParameter);
+                    var implicitReceiver = new BoundVariableExpression(null, effThis);
                     return BindUserInstanceCall(implicitReceiver, implicitIfaceMethod, boundArguments.ToImmutable(), syntax, argumentNames);
                 }
             }

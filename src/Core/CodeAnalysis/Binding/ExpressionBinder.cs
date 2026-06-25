@@ -115,6 +115,31 @@ internal sealed partial class ExpressionBinder
     private FunctionSymbol function => getCurrentFunction();
 #pragma warning restore SA1300
 
+    /// <summary>
+    /// Issue #1159: returns the implicit-<c>this</c> parameter that an
+    /// unqualified instance-member reference should bind against. For a direct
+    /// instance method body this is the enclosing function's own
+    /// <see cref="FunctionSymbol.ThisParameter"/>. Inside a lambda body the
+    /// enclosing function is a synthetic <see cref="FunctionSymbol"/> with no
+    /// receiver, so we fall back to the <c>this</c> still visible in the
+    /// current lexical scope — the enclosing instance method's <c>this</c>,
+    /// which the lambda's child scope inherits and which capture analysis
+    /// already captures into the display class (mirroring explicit
+    /// <c>this.X</c> and bare field/property reads). In a static context no
+    /// <c>this</c> is in scope, so this returns <see langword="null"/> and the
+    /// bare-name method-group path stays unchanged.
+    /// </summary>
+    private ParameterSymbol GetEffectiveThisParameter()
+    {
+        var current = getCurrentFunction();
+        if (current?.ThisParameter != null)
+        {
+            return current.ThisParameter;
+        }
+
+        return scope.TryLookupSymbol("this") as ParameterSymbol;
+    }
+
     private BoundExpression BindExpressionWithNarrowing(ExpressionSyntax syntax, Dictionary<VariableSymbol, TypeSymbol> frame)
     {
         if (frame == null)
@@ -819,18 +844,22 @@ internal sealed partial class ExpressionBinder
         // null-receiver group. This mirrors how the event-subscription path
         // already resolves bare `this`-instance handlers, generalized to any
         // value (delegate-conversion) context.
+        // Issue #1159: `effThis` is the enclosing instance method's `this`
+        // even when this bare name sits inside a lambda body, so an unqualified
+        // instance method group resolves and captures `this`.
         var enclosing = this.function;
+        var effThis = GetEffectiveThisParameter();
+        if (effThis != null && effThis.Type is StructSymbol thisStruct)
+        {
+            var instanceMethods = TypeMemberModel.GetMethods(thisStruct, name, MemberQuery.Instance(MemberKinds.Method));
+            if (TryBuildUserMethodGroup(new BoundVariableExpression(null, effThis), instanceMethods, out methodGroup))
+            {
+                return true;
+            }
+        }
+
         if (enclosing != null)
         {
-            if (enclosing.ThisParameter != null && enclosing.ReceiverType is StructSymbol thisStruct)
-            {
-                var instanceMethods = TypeMemberModel.GetMethods(thisStruct, name, MemberQuery.Instance(MemberKinds.Method));
-                if (TryBuildUserMethodGroup(new BoundVariableExpression(null, enclosing.ThisParameter), instanceMethods, out methodGroup))
-                {
-                    return true;
-                }
-            }
-
             var enclosingType = (enclosing.ReceiverType as StructSymbol) ?? (enclosing.StaticOwnerType as StructSymbol);
             if (enclosingType != null)
             {
