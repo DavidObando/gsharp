@@ -53,9 +53,19 @@ public class ArrayTests
     }
 
     [Fact]
-    public void IndexExpression_OnNonArray_Diagnosed()
+    public void IndexExpression_OnString_ReturnsChar()
     {
-        var diagnostics = Bind("let s = \"hello\"\nlet c = s[0]\n");
+        // Issue #1129: `string` is now indexable; `s[i]` yields the char at
+        // position `i` (via .NET's String.get_Chars). 'h' = 104.
+        var result = Evaluate("let s = \"hello\"\nint32(s[0])");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(104, result.Value);
+    }
+
+    [Fact]
+    public void IndexExpression_OnNonIndexable_Diagnosed()
+    {
+        var diagnostics = Bind("let x = 5\nlet c = x[0]\n");
         Assert.Contains(diagnostics, d => d.Message.Contains("not indexable"));
     }
 
