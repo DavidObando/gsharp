@@ -2018,6 +2018,17 @@ internal sealed partial class ExpressionBinder
                         return instanceUserGroup;
                     }
 
+                    // Issue #1136: an inherited System.Object instance member
+                    // (GetType/ToString/GetHashCode/Equals) named in method-group
+                    // position. When the user type declares no explicit imported
+                    // base, fall back to typeof(object) so the member is captured
+                    // as a CLR method group resolvable against a target delegate.
+                    var inheritedMgClr = structSym.ImportedBaseType?.ClrType ?? typeof(object);
+                    if (TryBindClrMethodGroup(receiver, inheritedMgClr, wantStatic: false, ne.IdentifierToken.Text, out var inheritedClrGroup))
+                    {
+                        return inheritedClrGroup;
+                    }
+
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
                 }
                 else if (receiver != null && receiver.Type is InterfaceSymbol ifaceSym)
