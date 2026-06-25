@@ -1812,6 +1812,21 @@ public sealed class Binder
             foreach (var f in previous.Functions)
             {
                 scope.TryDeclareFunction(f);
+
+                // Issue #1103: extension functions are flattened into
+                // BoundGlobalScope.Functions (Binder.BindGlobalScope merges
+                // GetDeclaredExtensionFunctions into Functions) so free-call
+                // syntax resolves them as ordinary functions. When a follow-up
+                // pass rehydrates the previous global scope (the body-binding
+                // pass binds member/function bodies against this rebuilt
+                // scope), the extension registry must be repopulated too —
+                // otherwise member-syntax dispatch (`receiver.Ext()`) via
+                // BoundScope.TryLookupExtensionFunction finds nothing and the
+                // call reports GS0159 even though the free-call form binds.
+                if (f.IsExtension)
+                {
+                    scope.TryDeclareExtensionFunction(f);
+                }
             }
 
             foreach (var v in previous.Variables)
