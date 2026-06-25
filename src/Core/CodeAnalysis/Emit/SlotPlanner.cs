@@ -356,6 +356,15 @@ internal sealed class SlotPlanner
                 this.localTypes.Add(node.PointerVariable.Type);
             }
 
+            // ADR-0125 / issue #1043: the span-like (PinnableReference) form holds
+            // the source value in a synthetic local whose address feeds the
+            // `GetPinnableReference()` call; allocate its slot too.
+            if (node.SourceVariable != null && !this.locals.ContainsKey(node.SourceVariable))
+            {
+                this.locals[node.SourceVariable] = this.localTypes.Count;
+                this.localTypes.Add(node.SourceVariable.Type);
+            }
+
             base.VisitFixedStatement(node);
         }
 

@@ -2714,6 +2714,20 @@ internal sealed class StatementBinder
                 elementType = TypeSymbol.Char;
                 pinnedUnderlying = TypeSymbol.String;
             }
+            else if (TryGetPinnableReference(source.Type, out _, out var pinnableElementClr))
+            {
+                // ADR-0125 / issue #1043: span-like pin form — any type exposing a
+                // public instance `ref T GetPinnableReference()` (canonically
+                // `System.Span[T]` / `System.ReadOnlySpan[T]`). Pin the `T&`
+                // returned by `GetPinnableReference()` into a `T& pinned` local and
+                // derive the `*T` via `conv.u`, mirroring C# `fixed (T* p = span)`.
+                // `ReadOnlySpan[T].GetPinnableReference()` returns `ref readonly T`
+                // (a `modreq(InAttribute)` ref-return); the method-reference
+                // encoder reproduces that modreq (see EncodeReturnClr).
+                pinKind = FixedPinKind.PinnableReference;
+                elementType = TypeSymbol.FromClrType(pinnableElementClr);
+                pinnedUnderlying = ByRefTypeSymbol.Get(elementType);
+            }
             else
             {
                 Diagnostics.ReportFixedSourceNotPinnable(
@@ -2763,14 +2777,66 @@ internal sealed class StatementBinder
             var pinnedVariable = new LocalVariableSymbol(
                 $"$pin${pointerVariable.Name}", isReadOnly: false, new PinnedTypeSymbol(pinnedUnderlying));
 
+            // Span-like form only: a synthetic local holding the source value,
+            // whose address (`ldloca`) feeds the `GetPinnableReference()` call.
+            VariableSymbol sourceVariable = null;
+            if (pinKind == FixedPinKind.PinnableReference)
+            {
+                sourceVariable = new LocalVariableSymbol(
+                    $"$pinsrc${pointerVariable.Name}", isReadOnly: false, source.Type);
+            }
+
             var body = BindStatement(syntax.Body);
 
-            return new BoundFixedStatement(syntax, pinKind, pinnedVariable, pointerVariable, source, body);
+            return new BoundFixedStatement(syntax, pinKind, pinnedVariable, pointerVariable, source, body, sourceVariable);
         }
         finally
         {
             scope = scope.Parent;
         }
+    }
+
+    // ADR-0125 / issue #1043: detect a span-like pin source — a type exposing a
+    // public instance `ref T GetPinnableReference()` (canonically `System.Span[T]`
+    // / `System.ReadOnlySpan[T]`). Returns the resolved method and the ref-return
+    // element CLR type (`T`). Used to enable the `GetPinnableReference` pin kind.
+    private static bool TryGetPinnableReference(
+        TypeSymbol sourceType,
+        out System.Reflection.MethodInfo method,
+        out System.Type elementClrType)
+    {
+        method = null;
+        elementClrType = null;
+
+        var clrType = sourceType?.ClrType;
+        if (clrType == null)
+        {
+            return false;
+        }
+
+        System.Reflection.MethodInfo found;
+        try
+        {
+            found = clrType.GetMethod(
+                "GetPinnableReference",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance,
+                binder: null,
+                types: System.Type.EmptyTypes,
+                modifiers: null);
+        }
+        catch (System.Reflection.AmbiguousMatchException)
+        {
+            return false;
+        }
+
+        if (found == null || !found.ReturnType.IsByRef)
+        {
+            return false;
+        }
+
+        method = found;
+        elementClrType = found.ReturnType.GetElementType();
+        return elementClrType != null;
     }
 
     private BoundStatement BindAwaitForRangeStatement(AwaitForRangeStatementSyntax syntax)

@@ -19,6 +19,14 @@ public enum FixedPinKind
 
     /// <summary>A managed <c>string</c> — pin <c>string.GetPinnableReference()</c>, derive the char-data pointer.</summary>
     String,
+
+    /// <summary>
+    /// A span-like source exposing a public instance <c>ref T GetPinnableReference()</c>
+    /// (e.g. <c>System.Span[T]</c> / <c>System.ReadOnlySpan[T]</c>) — pin the
+    /// <c>T&amp;</c> returned by <c>GetPinnableReference()</c> and derive the
+    /// <c>*T</c> via <c>conv.u</c>, mirroring C# <c>fixed (T* p = span)</c>.
+    /// </summary>
+    PinnableReference,
 }
 
 /// <summary>
@@ -37,18 +45,24 @@ public sealed class BoundFixedStatement : BoundStatement
     /// Initializes a new instance of the <see cref="BoundFixedStatement"/> class.
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
-    /// <param name="pinKind">Whether the pinned source is an array or a string.</param>
+    /// <param name="pinKind">Whether the pinned source is an array, a string, or a span-like <c>GetPinnableReference</c> source.</param>
     /// <param name="pinnedVariable">The synthetic pinned local.</param>
     /// <param name="pointerVariable">The user-visible <c>*T</c> pointer local.</param>
     /// <param name="pinnedSource">The managed array/string source to pin.</param>
     /// <param name="body">The block over which the pin is held.</param>
+    /// <param name="sourceVariable">
+    /// For the <see cref="FixedPinKind.PinnableReference"/> form only: a synthetic
+    /// local holding the span-like source value, whose address feeds the
+    /// <c>GetPinnableReference()</c> instance call. Null for the array/string forms.
+    /// </param>
     public BoundFixedStatement(
         SyntaxNode syntax,
         FixedPinKind pinKind,
         VariableSymbol pinnedVariable,
         VariableSymbol pointerVariable,
         BoundExpression pinnedSource,
-        BoundStatement body)
+        BoundStatement body,
+        VariableSymbol sourceVariable = null)
         : base(syntax)
     {
         PinKind = pinKind;
@@ -56,12 +70,13 @@ public sealed class BoundFixedStatement : BoundStatement
         PointerVariable = pointerVariable ?? throw new ArgumentNullException(nameof(pointerVariable));
         PinnedSource = pinnedSource ?? throw new ArgumentNullException(nameof(pinnedSource));
         Body = body ?? throw new ArgumentNullException(nameof(body));
+        SourceVariable = sourceVariable;
     }
 
     /// <inheritdoc/>
     public override BoundNodeKind Kind => BoundNodeKind.FixedStatement;
 
-    /// <summary>Gets whether the pinned source is an array or a string.</summary>
+    /// <summary>Gets whether the pinned source is an array, a string, or a span-like <c>GetPinnableReference</c> source.</summary>
     public FixedPinKind PinKind { get; }
 
     /// <summary>Gets the synthetic pinned local (a CLR <c>pinned</c> local).</summary>
@@ -72,6 +87,13 @@ public sealed class BoundFixedStatement : BoundStatement
 
     /// <summary>Gets the managed array/string source to pin.</summary>
     public BoundExpression PinnedSource { get; }
+
+    /// <summary>
+    /// Gets the synthetic local holding the span-like source value for the
+    /// <see cref="FixedPinKind.PinnableReference"/> form (whose address feeds the
+    /// <c>GetPinnableReference()</c> instance call), or null for other forms.
+    /// </summary>
+    public VariableSymbol SourceVariable { get; }
 
     /// <summary>Gets the block over which the pin is held.</summary>
     public BoundStatement Body { get; }

@@ -122,7 +122,8 @@ public static class SpillSequenceSpiller
                             fixedStmt.PinnedVariable,
                             fixedStmt.PointerVariable,
                             fixedStmt.PinnedSource,
-                            fixedBody);
+                            fixedBody,
+                            fixedStmt.SourceVariable);
                     builder.Add(rebuilt);
                     return rebuilt != fixedStmt;
 

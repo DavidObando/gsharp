@@ -946,7 +946,8 @@ public abstract class BoundTreeRewriter
             node.PinnedVariable,
             node.PointerVariable,
             source,
-            body);
+            body,
+            node.SourceVariable);
     }
 
     /// <summary>Rewrites a bound <c>await for v := range stream</c> statement (Phase 5.8).</summary>
