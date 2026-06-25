@@ -3613,7 +3613,22 @@ internal sealed class StatementBinder
         }
         else
         {
-            expression = syntax.Expression == null ? null : bindExpression(syntax.Expression);
+            // Issue #1112: a `return switch { … }` honors the function's
+            // declared return type as the switch-expression target type so the
+            // result type can unify to the return type (C#-style target-typing)
+            // before the conversion below.
+            if (syntax.Expression is SwitchExpressionSyntax
+                && function != null
+                && !function.IsReturnTypeInferred
+                && function.Type != TypeSymbol.Void
+                && function.Type != TypeSymbol.Error)
+            {
+                expression = bindExpressionWithTargetType(syntax.Expression, function.Type);
+            }
+            else
+            {
+                expression = syntax.Expression == null ? null : bindExpression(syntax.Expression);
+            }
         }
 
         // Issue #490 (ADR-0060 follow-up): validate the `return ref` / `return` form
