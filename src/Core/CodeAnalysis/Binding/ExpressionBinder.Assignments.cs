@@ -240,6 +240,50 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #1132: determines whether <paramref name="type"/> is a value type
+    /// for the purpose of read-only (<c>let</c>) receiver enforcement. A
+    /// member write (<c>recv.Field = v</c>, <c>recv.Field += v</c>,
+    /// <c>recv.Field++</c>) through a read-only <c>let</c> binding is only
+    /// rejected when the receiver is a value type — mutating it would change the
+    /// value held in the read-only slot. For a reference type the write mutates
+    /// the heap object the binding points at, not the binding itself, so it is
+    /// allowed (only rebinding <c>recv = other</c> stays blocked).
+    /// </summary>
+    /// <param name="type">The static type of the receiver variable.</param>
+    /// <returns><see langword="true"/> when the receiver type is a value type.</returns>
+    private static bool IsValueTypeReceiver(TypeSymbol type)
+    {
+        switch (type)
+        {
+            case null:
+                return false;
+
+            // User-defined `struct` is a value type; `class` (IsClass) is a
+            // reference type and therefore exempt.
+            case StructSymbol structSymbol:
+                return !structSymbol.IsClass;
+
+            // Enums are value types.
+            case EnumSymbol:
+                return true;
+
+            // Interfaces are reference types.
+            case InterfaceSymbol:
+                return false;
+
+            // A type parameter is a value type only when it carries a
+            // value-type (`struct`) constraint; otherwise it may bind to a
+            // reference type, so do not over-restrict.
+            case TypeParameterSymbol typeParameter:
+                return typeParameter.HasValueTypeConstraint;
+
+            // Imported / CLR-backed types: defer to the runtime classification.
+            default:
+                return type.ClrType is { IsValueType: true };
+        }
+    }
+
+    /// <summary>
     /// Issue #947: returns <see langword="true"/> when <paramref name="variable"/>
     /// is the enclosing function's <c>this</c> parameter (the instance under
     /// construction or the method's receiver).
@@ -629,7 +673,15 @@ internal sealed partial class ExpressionBinder
         // Issue #947: a read-only field of `this` may be assigned inside the
         // declaring type's constructor; in that case the receiver being `this`
         // (which is itself read-only) must not block the field write.
-        if (variable.IsReadOnly && !receiverIsThisField)
+        //
+        // Issue #1132: `let` makes the BINDING read-only, not the heap object it
+        // points at. For a reference-type receiver (`class`/interface/imported
+        // reference type), `b.Field = x` mutates the object on the heap, not the
+        // binding, so it is allowed; only rebinding `b = other` is blocked. For a
+        // value-type receiver (`struct`/enum/value-type type parameter), the
+        // field write would mutate the value held in the read-only slot, so it
+        // stays rejected.
+        if (variable.IsReadOnly && !receiverIsThisField && IsValueTypeReceiver(variable.Type))
         {
             Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, receiverName);
         }
@@ -925,12 +977,24 @@ internal sealed partial class ExpressionBinder
         var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
         var boundRhs = BindExpression(syntax.Value);
 
+        // Issue #1132: a compound member write (`recv.Field += v`) through a
+        // read-only `let` binding mutates the member in place. When the receiver
+        // is a value type held in the read-only slot this is rejected; for a
+        // reference type the heap object is mutated, not the binding, so it is
+        // allowed. Mirrors the simple-assignment guard in BindFieldAssignmentExpression.
+        var receiverIsReadOnlyValueType =
+            boundReceiver is BoundVariableExpression compoundReceiverVar
+            && compoundReceiverVar.Variable.IsReadOnly
+            && !ReceiverExpressionIsThis(boundReceiver)
+            && IsValueTypeReceiver(compoundReceiverVar.Variable.Type);
+
         // ADR-0112 A3: this-first base-chain instance field walk, using the
         // declaring struct as the owner for both the read access and assignment.
         if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
         {
-            if (field.IsReadOnly
-                && !IsReadOnlyFieldAssignmentAllowed(field, declaringType, ReceiverExpressionIsThis(boundReceiver)))
+            if (receiverIsReadOnlyValueType
+                || (field.IsReadOnly
+                    && !IsReadOnlyFieldAssignmentAllowed(field, declaringType, ReceiverExpressionIsThis(boundReceiver))))
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             }
@@ -951,6 +1015,11 @@ internal sealed partial class ExpressionBinder
         // ADR-0051: check properties.
         if (TypeMemberModel.TryGetProperty(structSym, memberName, out var prop))
         {
+            if (receiverIsReadOnlyValueType)
+            {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
+            }
+
             if (!prop.HasGetter || !prop.HasSetter)
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
@@ -1322,8 +1391,15 @@ internal sealed partial class ExpressionBinder
             // declaring struct as the owner for the emitted assignment.
             if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
             {
-                if (field.IsReadOnly
-                    && !IsReadOnlyFieldAssignmentAllowed(field, declaringType, ReceiverExpressionIsThis(receiver)))
+                // Issue #1132: reject a member write through a read-only `let`
+                // binding only when the receiver is a value type (mutating the
+                // slot); reference-type receivers mutate the heap object instead.
+                if ((receiver is BoundVariableExpression memberReceiverVar
+                        && memberReceiverVar.Variable.IsReadOnly
+                        && !ReceiverExpressionIsThis(receiver)
+                        && IsValueTypeReceiver(memberReceiverVar.Variable.Type))
+                    || (field.IsReadOnly
+                        && !IsReadOnlyFieldAssignmentAllowed(field, declaringType, ReceiverExpressionIsThis(receiver))))
                 {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 }

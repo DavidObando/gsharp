@@ -4002,6 +4002,32 @@ internal sealed class OverloadResolver
             }
 
             var argLoc = argSyntaxForLocation?.Location ?? ce.Location;
+
+            // ADR-0060 / issue #1133: an inline `out var n` / `out let n` /
+            // `out _` argument was bound to a placeholder address-of (Error
+            // pointee) in the eager argument pass, because the resolved
+            // parameter — and therefore the local's type — was not yet known.
+            // Now that overload resolution has chosen this method, re-bind the
+            // inline declaration against the resolved by-ref parameter so the
+            // synthesized local is declared (with the correct pointee type)
+            // into the enclosing block scope and becomes visible to the rest of
+            // the block (mirrors the imported-method path in
+            // RebindInlineOutVarArguments and the free-function fix-up in
+            // BindCallExpression).
+            if (permutedArguments[i] is BoundAddressOfExpression inlineOutAddr
+                && inlineOutAddr.Operand?.Type == TypeSymbol.Error
+                && argSyntaxForInterp is RefArgumentExpressionSyntax inlineOutRefArg
+                && inlineOutRefArg.IsInlineDeclaration
+                && inlineOutRefArg.DeclaredType == null)
+            {
+                var inlineOutParameter = new ParameterSymbol(
+                    method.Parameters[i + parameterOffset].Name,
+                    expectedType,
+                    refKind: RefKind.Out);
+                convertedArgs.Add(bindRefArgumentExpression(inlineOutRefArg, inlineOutParameter));
+                continue;
+            }
+
             convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, method.Parameters[i + parameterOffset]));
         }
 
