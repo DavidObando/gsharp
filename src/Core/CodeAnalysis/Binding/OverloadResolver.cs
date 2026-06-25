@@ -3953,7 +3953,37 @@ internal sealed class OverloadResolver
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(permutedArguments.Length);
         for (var i = 0; i < permutedArguments.Length; i++)
         {
-            var paramType = method.Parameters[i + parameterOffset].Type;
+            var parameter = method.Parameters[i + parameterOffset];
+            var paramType = parameter.Type;
+
+            // ADR-0060 / issue #1133: an inline-decl `out var n` / `out let n` /
+            // `out _` was bound with TypeSymbol.Error in the first pass (from
+            // BindCallExpression, before the method was resolved) and never
+            // declared a local. Now that overload resolution has chosen the
+            // method — and the receiver / method type-argument substitution is
+            // known — re-bind it so the synthesized local is typed from the
+            // resolved (substituted) out-parameter pointee type and leaks into
+            // the enclosing block scope. This mirrors the free-function path
+            // and the imported-method RebindInlineOutVarArguments helper, and
+            // must run BEFORE the open-type-parameter shortcut below so generic
+            // out-parameters (`func M[T](out result T)`) are handled too.
+            if (permutedArguments[i] is BoundAddressOfExpression inlineOutAddr
+                && inlineOutAddr.Operand.Type == TypeSymbol.Error)
+            {
+                var slotSyntax = i < permutedSyntax.Length ? permutedSyntax[i] : null;
+                var unwrappedSlotSyntax = slotSyntax != null ? UnwrapNamedArgumentValue(slotSyntax) : null;
+                if (unwrappedSlotSyntax is RefArgumentExpressionSyntax inlineOutRefArg
+                    && inlineOutRefArg.IsInlineDeclaration
+                    && inlineOutRefArg.DeclaredType == null)
+                {
+                    var pointeeType = substitution != null ? substituteType(paramType, substitution) : paramType;
+                    var rebindParameter = ReferenceEquals(pointeeType, parameter.Type)
+                        ? parameter
+                        : new ParameterSymbol(parameter.Name, pointeeType, refKind: RefKind.Out);
+                    convertedArgs.Add(bindRefArgumentExpression(inlineOutRefArg, rebindParameter));
+                    continue;
+                }
+            }
 
             // An argument bound to an open type parameter is left untouched —
             // the emitter boxes value types at the call boundary (the parameter
