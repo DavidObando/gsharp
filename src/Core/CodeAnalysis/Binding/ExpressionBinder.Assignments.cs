@@ -386,7 +386,9 @@ internal sealed partial class ExpressionBinder
                 syntax.Receiver.Location,
                 baseValue,
                 syntax.Value.Location,
-                syntax.EqualsToken.Location);
+                syntax.EqualsToken.Location,
+                explicitBaseType: null,
+                selectorLocation: syntax.Receiver.Location);
         }
 
         // Stream B: imported class name on LHS → static field/property write.

@@ -13,11 +13,13 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #1104: end-to-end CLR emit + ilverify coverage for base-class
-/// property access <c>base.Prop</c> (read) and <c>base.Prop = value</c>
-/// (write). Validates the non-virtual <c>call instance R BaseClass::get_Prop()</c>
+/// property access <c>base.Prop</c> (read), <c>base.Prop = value</c> (write),
+/// and the explicit-ancestor bracketed form <c>base[BaseClass].Prop</c>.
+/// Validates the non-virtual <c>call instance R BaseClass::get_Prop()</c>
 /// / <c>... BaseClass::set_Prop(value)</c> shape (NOT <c>callvirt</c>), correct
-/// runtime behavior (the base accessor runs, no infinite recursion through the
-/// derived override), and that ilverify accepts the produced assembly.
+/// runtime behavior (the selected base accessor runs, no infinite recursion
+/// through the derived override, and <c>base[GrandParent]</c> skips the
+/// immediate base's override), and that ilverify accepts the produced assembly.
 /// </summary>
 public class Issue1104BasePropertyAccessEmitTests
 {
@@ -115,6 +117,81 @@ public class Issue1104BasePropertyAccessEmitTests
             """;
         var output = CompileAndRun(source);
         // Initial base.Stored == 100; after base.Stored = 42 it reads back 42.
+        Assert.Equal("100\n42\n", output);
+    }
+
+    [Fact]
+    public void EndToEnd_BracketedBaseProperty_Read_ReachesSpecificAncestor()
+    {
+        var source = """
+            package Probe
+            import System
+
+            open class Base {
+                open prop RenderSize int64 {
+                    get { return 10L }
+                }
+            }
+
+            open class Mid() : Base {
+                override prop RenderSize int64 {
+                    get { return 99L }
+                }
+            }
+
+            open class Deriv() : Mid {
+                func Probe() int64 {
+                    return base[Base].RenderSize + base.RenderSize
+                }
+            }
+
+            func Main() {
+                var d = Deriv()
+                Console.WriteLine(d.Probe())
+            }
+            """;
+        var output = CompileAndRun(source);
+        // base[Base].RenderSize == 10 (grandparent, non-virtual) and
+        // base.RenderSize == 99 (immediate base Mid) → 109.
+        Assert.Equal("109\n", output);
+    }
+
+    [Fact]
+    public void EndToEnd_BracketedBaseProperty_Write_RunsSpecificAncestorSetter()
+    {
+        var source = """
+            package Probe
+            import System
+
+            open class Base {
+                var stored int64 = 100L
+                open prop Stored int64 {
+                    get { return stored }
+                    set { stored = value }
+                }
+            }
+
+            open class Mid() : Base {
+            }
+
+            open class Deriv() : Mid {
+                func SetBase(v int64) {
+                    base[Base].Stored = v
+                }
+                func ReadBase() int64 {
+                    return base[Base].Stored
+                }
+            }
+
+            func Main() {
+                var d = Deriv()
+                Console.WriteLine(d.ReadBase())
+                d.SetBase(42L)
+                Console.WriteLine(d.ReadBase())
+            }
+            """;
+        var output = CompileAndRun(source);
+        // Initial base[Base].Stored == 100; after the write it reads back 42.
         Assert.Equal("100\n42\n", output);
     }
 

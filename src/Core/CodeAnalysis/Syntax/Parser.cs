@@ -6251,6 +6251,30 @@ public class Parser
             return new EventSubscriptionExpressionSyntax(syntaxTree, accessor, opToken, rhs);
         }
 
+        // Issue #1104: base-selector property assignment
+        // `base[BaseClass].Prop = value`. The LHS parses to a parenthesis-less
+        // property-form BaseInterfaceCallExpressionSyntax; attach the `= value`
+        // tail so the binder routes it through the base-class property WRITE
+        // path. Mirrors the indirect-assignment detection above.
+        if (expression is BaseInterfaceCallExpressionSyntax basePropForm
+            && basePropForm.IsPropertyAccess
+            && !basePropForm.IsPropertyWrite
+            && Current.Kind == SyntaxKind.EqualsToken)
+        {
+            var equalsToken = NextToken();
+            var value = ParseAssignmentExpression();
+            return new BaseInterfaceCallExpressionSyntax(
+                syntaxTree,
+                basePropForm.BaseKeyword,
+                basePropForm.OpenBracketToken,
+                basePropForm.InterfaceTypeClause,
+                basePropForm.CloseBracketToken,
+                basePropForm.DotToken,
+                basePropForm.MethodIdentifier,
+                equalsToken,
+                value);
+        }
+
         return expression;
     }
 
@@ -8028,6 +8052,26 @@ public class Parser
         if (Current.Kind == SyntaxKind.OpenSquareBracketToken && LooksLikeGenericCallSite(0))
         {
             methodTypeArgumentList = ParseTypeArgumentList();
+        }
+
+        // Issue #1104: the parenthesis-less PROPERTY form `base[BaseClass].Prop`
+        // (no `(args)` follows the member). This mirrors plain `base.Prop` but
+        // with an explicit ancestor selector. The optional `= value` write tail
+        // is attached later by ParseAssignmentExpression. A `[` generic-method
+        // argument list is only valid on the call form, so reject it here by
+        // still requiring it to be followed by `(`.
+        if (methodTypeArgumentList == null && Current.Kind != SyntaxKind.OpenParenthesisToken)
+        {
+            return new BaseInterfaceCallExpressionSyntax(
+                syntaxTree,
+                baseKeyword,
+                openBracket,
+                interfaceTypeClause,
+                closeBracket,
+                dot,
+                methodIdentifier,
+                equalsToken: null,
+                value: null);
         }
 
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);

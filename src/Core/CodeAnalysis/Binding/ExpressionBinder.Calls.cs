@@ -3632,6 +3632,39 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        // Issue #1104: the parenthesis-less PROPERTY form `base[BaseClass].Prop`
+        // (read) and `base[BaseClass].Prop = value` (write). Route to the shared
+        // base-class property read/write path with the explicit ancestor
+        // selector so resolution + GS0383/GS0384/GS0385 diagnostics + non-virtual
+        // `call instance ... <SelectorBase>::get_/set_Prop` emission all reuse
+        // the same code as plain `base.Prop`. A base-class selector is required;
+        // an interface selector in this position is not a supported form and is
+        // reported via the member-not-found path below by falling through to the
+        // call handling (which yields a clear diagnostic).
+        if (syntax.IsPropertyAccess && ifaceType is StructSymbol propSelector && propSelector.IsClass)
+        {
+            if (syntax.IsPropertyWrite)
+            {
+                var boundValue = BindExpression(syntax.Value);
+                return BindBaseClassPropertyWrite(
+                    syntax.MethodIdentifier.Text,
+                    syntax.MethodIdentifier.Location,
+                    syntax.BaseKeyword.Location,
+                    boundValue,
+                    syntax.Value.Location,
+                    syntax.EqualsToken.Location,
+                    explicitBaseType: propSelector,
+                    selectorLocation: syntax.InterfaceTypeClause.Location);
+            }
+
+            var memberName = new NameExpressionSyntax(syntax.SyntaxTree, syntax.MethodIdentifier);
+            return BindBaseClassPropertyRead(
+                memberName,
+                syntax.BaseKeyword.Location,
+                explicitBaseType: propSelector,
+                selectorLocation: syntax.InterfaceTypeClause.Location);
+        }
+
         if (ifaceType is StructSymbol classSelector && classSelector.IsClass)
         {
             var synthesizedCall = new CallExpressionSyntax(
@@ -4044,6 +4077,8 @@ internal sealed partial class ExpressionBinder
     /// <param name="value">The already-bound right-hand value expression.</param>
     /// <param name="valueLocation">The location of the value expression (for conversion diagnostics).</param>
     /// <param name="equalsLocation">The location of the <c>=</c> token (for GS cannot-assign).</param>
+    /// <param name="explicitBaseType">The class named in <c>base[BaseClass]</c>, or <see langword="null"/> for the plain <c>base.Prop</c> form.</param>
+    /// <param name="selectorLocation">The location of the bracketed selector (for GS0385); use <paramref name="baseLocation"/> for the plain form.</param>
     /// <returns>The bound base-class property write, or a bound error on failure.</returns>
     private BoundExpression BindBaseClassPropertyWrite(
         string memberName,
@@ -4051,9 +4086,11 @@ internal sealed partial class ExpressionBinder
         TextLocation baseLocation,
         BoundExpression value,
         TextLocation valueLocation,
-        TextLocation equalsLocation)
+        TextLocation equalsLocation,
+        StructSymbol explicitBaseType,
+        TextLocation selectorLocation)
     {
-        if (!TryResolveBaseSearchType(baseLocation, explicitBaseType: null, selectorLocation: baseLocation, out var searchBase))
+        if (!TryResolveBaseSearchType(baseLocation, explicitBaseType, selectorLocation, out var searchBase))
         {
             return new BoundErrorExpression(null);
         }
