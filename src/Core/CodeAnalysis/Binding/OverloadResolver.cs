@@ -3425,6 +3425,33 @@ internal sealed class OverloadResolver
                 continue;
             }
 
+            // Issue #1150: a func/arrow literal argument whose natural numeric
+            // return type implicitly, losslessly widens to the (non-generic)
+            // delegate parameter's return type (e.g. `(x int32) -> uint16(x)`
+            // into a `Func<int32,int64>` parameter) is routed through
+            // BindConversion, which reshapes it via the erased adapter so the
+            // produced delegate's return type already matches the target —
+            // inserting the widening conversion in the body. Without this the
+            // literal would materialise as a narrower-returning delegate flowing
+            // into a wider delegate slot (unverifiable IL).
+            if (!(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
+                && tryGetFunctionLiteral(argument, out var widenLiteralArg)
+                && widenLiteralArg.FunctionType is FunctionTypeSymbol widenLiteralFnType
+                && widenLiteralFnType.ReturnType != TypeSymbol.Void
+                && widenLiteralFnType.ReturnType != TypeSymbol.Error
+                && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(expectedType, out var widenTargetFn)
+                && widenTargetFn != null
+                && widenTargetFn.Arity == widenLiteralFnType.Arity
+                && widenTargetFn.ReturnType != TypeSymbol.Void
+                && widenTargetFn.ReturnType != TypeSymbol.Error
+                && !ReferenceEquals(widenLiteralFnType.ReturnType, widenTargetFn.ReturnType)
+                && Conversion.Classify(widenLiteralFnType.ReturnType, widenTargetFn.ReturnType).IsImplicit)
+            {
+                var widenLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
+                boundArguments[i] = conversions.BindConversion(widenLoc, argument, expectedType);
+                continue;
+            }
+
             // ADR-0055 Tier 4 (#369): an interpolated-string argument bound
             // against an IFormattable/FormattableString parameter is re-lowered
             // to FormattableStringFactory.Create instead of an eager string. Only

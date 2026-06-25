@@ -126,10 +126,12 @@ public class Issue1144LiteralIntAdaptBinderTests
     [Fact]
     public void TwoTypedIntegerOperands_StillErrorsGS0129()
     {
-        // No literal involved: uint8 + int32 between two typed locals still
-        // requires an explicit cast (general conversion path untouched).
-        var source = Wrap(@"func F(x uint8, y int32) int32 {
-        return int32(x + y)
+        // No literal involved, and neither operand widens to the other:
+        // int32 + uint32 (neither is an implicit conversion to the other)
+        // still requires an explicit cast. Issue #1150 only adds DIRECTIONAL
+        // lossless widening (e.g. uint8 + int32), which does not apply here.
+        var source = Wrap(@"func F(x int32, y uint32) int64 {
+        return int64(x + y)
     }");
         Assert.Contains(Errors(source), d => d.Id == "GS0129");
     }

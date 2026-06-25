@@ -274,9 +274,15 @@ public sealed class Conversion
         // `(int32, []string) -> int32` slot and vice versa. Identity (i.e.
         // exact same FunctionTypeSymbol cache instance) was already handled
         // by the early reference-equality short circuit at the top.
+        //
+        // Issue #1150: also allow the conversion when the parameter types match
+        // but the source's numeric return type implicitly, losslessly widens to
+        // the target's return type (e.g. `(int32) -> uint16` flowing into a
+        // `(int32) -> int64` slot) — mirroring C#'s implicit numeric conversion
+        // of a lambda body to an expected delegate return type.
         if (from is FunctionTypeSymbol fnFrom && to is FunctionTypeSymbol fnTo
             && fnFrom.Arity == fnTo.Arity
-            && fnFrom.ReturnType == fnTo.ReturnType)
+            && (fnFrom.ReturnType == fnTo.ReturnType || ReturnTypeWidens(fnFrom.ReturnType, fnTo.ReturnType)))
         {
             var sameShape = true;
             for (var i = 0; i < fnFrom.Arity; i++)
@@ -702,7 +708,26 @@ public sealed class Conversion
         }
 
         var fnReturnClr = fn.ReturnType.ClrType;
-        return fnReturnClr != null && ClrTypeUtilities.IsAssignableByName(invokeReturnType, fnReturnClr);
+        if (fnReturnClr == null)
+        {
+            return false;
+        }
+
+        // Identity / reference-assignable return (covers exact match and
+        // reference covariance).
+        if (ClrTypeUtilities.IsAssignableByName(invokeReturnType, fnReturnClr))
+        {
+            return true;
+        }
+
+        // Issue #1150: the function's numeric return type implicitly, losslessly
+        // widens to the delegate's numeric return type (e.g. a `uint16`-returning
+        // lambda flowing into a `Func<int32,int64>` parameter). Mirrors C#'s
+        // implicit numeric conversion of a lambda body to the expected delegate
+        // return type. Consulted by CLR full name so it is safe across reflection
+        // contexts. Narrowing and signed/unsigned same-width mismatches are not
+        // accepted here; they still require an explicit cast.
+        return WidensNumerically(fnReturnClr, invokeReturnType);
     }
 
     /// <summary>
@@ -896,6 +921,39 @@ public sealed class Conversion
 
         conversion = Conversion.None;
         return false;
+    }
+
+    /// <summary>
+    /// Issue #1150: determines whether the CLR type <paramref name="fromClr"/>
+    /// implicitly, losslessly widens to the CLR type <paramref name="toClr"/>
+    /// per the standard numeric-widening lattice (e.g. <c>uint16</c> →
+    /// <c>int64</c>). Compared by <see cref="Type.FullName"/> so it is safe
+    /// across reflection contexts. Narrowing and signed/unsigned same-width
+    /// mismatches return <see langword="false"/>.
+    /// </summary>
+    private static bool WidensNumerically(Type fromClr, Type toClr)
+    {
+        return fromClr?.FullName is { } fromName
+            && toClr?.FullName is { } toName
+            && NumericWideningTargets.TryGetValue(fromName, out var targets)
+            && targets.Contains(toName);
+    }
+
+    /// <summary>
+    /// Issue #1150: determines whether <paramref name="fromReturn"/> implicitly,
+    /// losslessly widens to <paramref name="toReturn"/> per the numeric-widening
+    /// lattice. Used for the function-type → function-type return-type
+    /// relaxation. Both types must be non-void numeric CLR primitives.
+    /// </summary>
+    private static bool ReturnTypeWidens(TypeSymbol fromReturn, TypeSymbol toReturn)
+    {
+        if (fromReturn == null || toReturn == null
+            || fromReturn == TypeSymbol.Void || toReturn == TypeSymbol.Void)
+        {
+            return false;
+        }
+
+        return WidensNumerically(fromReturn.ClrType, toReturn.ClrType);
     }
 
     private static bool IsEnumLikeType(TypeSymbol type)

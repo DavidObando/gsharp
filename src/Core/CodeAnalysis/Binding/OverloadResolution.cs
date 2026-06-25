@@ -149,6 +149,29 @@ internal static class OverloadResolution
         /// chosen delegate type.
         /// </summary>
         DelegateStructuralMatch = 11,
+
+        /// <summary>
+        /// Issue #1150: a delegate value (typically a <c>func</c>/arrow literal
+        /// whose natural CLR type is a <c>System.Func&lt;...&gt;</c>) whose
+        /// parameter signature is identical to the target delegate's but whose
+        /// numeric return type implicitly, losslessly widens to the target's
+        /// return type per the standard C# integer-widening lattice
+        /// (e.g. <c>Func&lt;Item,uint32&gt;</c> → <c>Func&lt;Item,int64&gt;</c>,
+        /// selecting <c>Enumerable.Sum(Func&lt;T,long&gt;)</c> for a
+        /// <c>uint32</c> selector). Mirrors C#'s implicit numeric conversion of
+        /// a lambda body to an expected delegate return type. Ranked last
+        /// (worst) so an exact (identity) or reference-covariant delegate match
+        /// always wins when both are applicable; when several numeric-widening
+        /// targets are applicable, <see cref="CompareConversions"/> breaks the
+        /// tie by "better conversion target" on the delegate return types so the
+        /// closest integral target (e.g. <c>long</c> over <c>double</c>) wins.
+        /// The binder's erasing rebind
+        /// (<c>RebindFunctionLiteralDelegateArguments</c>) materializes the
+        /// numeric return conversion for a literal argument so the produced
+        /// delegate is created over a method whose return type already matches
+        /// the target.
+        /// </summary>
+        DelegateReturnNumericWidening = 12,
     }
 
     /// <summary>
@@ -314,6 +337,19 @@ internal static class OverloadResolution
         if (IsDelegateReturnCovariant(target, source))
         {
             return ImplicitConversionKind.DelegateReturnCovariance;
+        }
+
+        // Issue #1150: delegate return-type numeric widening. A delegate value
+        // whose parameter signature matches the target's but whose numeric
+        // return type implicitly, losslessly widens to the target's return type
+        // (e.g. Func<Item,uint32> → Func<Item,int64>) is applicable, mirroring
+        // C#'s implicit numeric conversion of a lambda body to an expected
+        // delegate return type. Checked here — alongside the reference
+        // covariance case — before the assignability / base-type-walk blocks
+        // below. Ranked last so an exact (identity) delegate match always wins.
+        if (IsDelegateReturnNumericWidening(target, source))
+        {
+            return ImplicitConversionKind.DelegateReturnNumericWidening;
         }
 
         if (ReferenceEquals(target.Assembly, source.Assembly) || target.GetType() == source.GetType())
@@ -1213,6 +1249,73 @@ internal static class OverloadResolution
         }
 
         if (!IsReferencePreservingUpcast(targetReturn, sourceReturn))
+        {
+            return false;
+        }
+
+        // Parameter signatures must match exactly (by name, cross-context safe).
+        if (targetParams.Length != sourceParams.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < targetParams.Length; i++)
+        {
+            if (!ClrTypeUtilities.AreSame(targetParams[i], sourceParams[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1150: determines whether <paramref name="source"/> is a delegate
+    /// type whose parameter signature is identical to delegate
+    /// <paramref name="target"/> but whose numeric return type implicitly,
+    /// losslessly widens to the target's numeric return type per the standard
+    /// integer-widening lattice (e.g. <c>Func&lt;Item,uint32&gt;</c> →
+    /// <c>Func&lt;Item,int64&gt;</c>). This mirrors C#'s implicit numeric
+    /// conversion of a lambda body to an expected delegate return type, and lets
+    /// a <c>uint32</c> selector flow into <c>Enumerable.Sum(Func&lt;T,long&gt;)</c>.
+    /// Parameter and return types are compared by name to remain safe across
+    /// reflection contexts (the literal's natural <c>Func&lt;...&gt;</c> may be a
+    /// host-runtime constructed type closed over MetadataLoadContext arguments).
+    /// Only the widening lattice in this file is consulted; narrowing and
+    /// signed/unsigned same-width mismatches are rejected.
+    /// </summary>
+    /// <param name="target">The candidate delegate parameter type.</param>
+    /// <param name="source">The argument's natural delegate type.</param>
+    /// <returns><see langword="true"/> when the numeric-widening return conversion applies.</returns>
+    private static bool IsDelegateReturnNumericWidening(Type target, Type source)
+    {
+        if (!ClrTypeUtilities.IsDelegateType(target) || !ClrTypeUtilities.IsDelegateType(source))
+        {
+            return false;
+        }
+
+        if (!TryGetDelegateSignature(target, out var targetParams, out var targetReturn)
+            || !TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn))
+        {
+            return false;
+        }
+
+        if (targetReturn is null || sourceReturn is null)
+        {
+            return false;
+        }
+
+        // Identity return types are handled by the normal delegate identity /
+        // assignability paths; numeric widening only applies when they differ.
+        if (ClrTypeUtilities.AreSame(targetReturn, sourceReturn))
+        {
+            return false;
+        }
+
+        // The source's return type must implicitly widen to the target's return
+        // type per the lossless numeric-widening lattice (directional only).
+        if (!IsNumericWidening(sourceReturn, targetReturn))
         {
             return false;
         }
@@ -2504,6 +2607,24 @@ internal static class OverloadResolution
         if (ka == ImplicitConversionKind.NumericWidening)
         {
             return CompareNumericTargets(paramA, paramB, source);
+        }
+
+        // Issue #1150: when two candidates both convert a delegate argument by
+        // numeric return-type widening, prefer the one whose delegate return is
+        // the "better conversion target" for the source's return type — so a
+        // uint32 selector prefers Func<T,long> over Func<T,double>/decimal,
+        // mirroring C#'s preference of the closest integral target.
+        if (ka == ImplicitConversionKind.DelegateReturnNumericWidening)
+        {
+            if (TryGetDelegateSignature(paramA, out _, out var retA)
+                && TryGetDelegateSignature(paramB, out _, out var retB)
+                && TryGetDelegateSignature(source, out _, out var retSource)
+                && retA != null && retB != null && retSource != null)
+            {
+                return CompareNumericTargets(retA, retB, retSource);
+            }
+
+            return 0;
         }
 
         // Issue #377 sub-item 4: FormattableString is more specific than
