@@ -1812,6 +1812,24 @@ public sealed class Binder
             foreach (var f in previous.Functions)
             {
                 scope.TryDeclareFunction(f);
+
+                // Issue #1103: extension functions are folded into
+                // BoundGlobalScope.Functions (so free-function call syntax
+                // `Ext(receiver, …)` resolves through normal overload
+                // resolution). They must ALSO be re-registered as extension
+                // functions on the rebuilt body-binding scope, otherwise
+                // member/instance call syntax `receiver.Ext(…)` inside a
+                // function/method body finds no candidate (the scope walked at
+                // the call site carries an empty extension table) and reports
+                // GS0159. This is independent of the receiver type — it was
+                // previously masked only because top-level call sites are bound
+                // in the same pass that declares the extension, and because
+                // package-owned struct receivers also register the function as
+                // an instance method on the struct.
+                if (f.IsExtension)
+                {
+                    scope.TryDeclareExtensionFunction(f);
+                }
             }
 
             foreach (var v in previous.Variables)

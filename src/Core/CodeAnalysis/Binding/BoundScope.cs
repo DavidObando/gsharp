@@ -265,10 +265,13 @@ public sealed class BoundScope
     /// <remarks>
     /// Two lookup paths are tried, in order:
     /// <list type="number">
-    /// <item><description><b>Exact-match fast path</b> — reference-equality on the
-    /// declared receiver type. This is sufficient for non-generic receivers
-    /// (<c>(self string)</c>, <c>(self int32)</c>) and for already-closed
-    /// receiver spellings.</description></item>
+    /// <item><description><b>Exact / structural receiver match</b> — a
+    /// reference-equality fast path (sufficient for primitive singletons and
+    /// already-interned imported symbols) backed by a STRUCTURAL CLR-type
+    /// comparison (issue #1103) so an imported/BCL or primitive receiver still
+    /// matches when the declaration-site and call-site symbols are distinct
+    /// <see cref="ImportedTypeSymbol"/> instances wrapping the same CLR type.
+    /// See <see cref="ExtensionReceiverMatches"/>.</description></item>
     /// <item><description><b>Generic-receiver unification (issue #773)</b> —
     /// an extension whose receiver type references its own function-level
     /// type parameters (e.g. <c>func (self sequence[T]) FirstOrNil[T]() T?</c>
@@ -290,7 +293,7 @@ public sealed class BoundScope
         {
             foreach (var ext in extensionFunctions)
             {
-                if (ext.Name == name && ext.ExtensionReceiverType == receiverType)
+                if (ext.Name == name && ExtensionReceiverMatches(ext.ExtensionReceiverType, receiverType))
                 {
                     function = ext;
                     return true;
@@ -899,6 +902,133 @@ public sealed class BoundScope
         }
 
         return symbols.Values.OfType<TSymbol>().ToImmutableArray();
+    }
+
+    /// <summary>
+    /// Issue #1103: determines whether an extension function declared with
+    /// receiver type <paramref name="declared"/> applies to a call-site
+    /// receiver of type <paramref name="callSite"/>.
+    /// </summary>
+    /// <remarks>
+    /// Reference equality is the fast path and is sufficient for the common
+    /// case where both spellings resolve to the same interned symbol
+    /// (primitive singletons such as <c>int32</c>/<c>string</c>, or an
+    /// <see cref="ImportedTypeSymbol"/> served from its per-CLR-<see cref="Type"/>
+    /// cache). It is, however, NOT sufficient for an imported/BCL receiver
+    /// whose declaration-site and call-site symbols are DISTINCT
+    /// <see cref="ImportedTypeSymbol"/> instances wrapping the same logical CLR
+    /// type — this happens when the two <see cref="Type"/> objects originate
+    /// from different reflection/metadata-load contexts and are therefore not
+    /// reference-equal, so the cache hands out distinct symbols. For those we
+    /// fall back to a STRUCTURAL comparison of the underlying CLR type
+    /// (<see cref="ClrTypeUtilities.IsSameAs(Type, Type)"/>, which compares by
+    /// <see cref="Type.FullName"/> and recurses through constructed generics /
+    /// arrays), so <c>func (s Stream) …</c> matches a <c>Stream</c> receiver and
+    /// <c>func (l List[int32]) …</c> matches a <c>List[int32]</c> receiver. When
+    /// either side carries SYMBOLIC type arguments (a #313 erased generic whose
+    /// closed CLR shape is projected onto <c>object</c>) the symbolic arguments
+    /// are compared too, so <c>List[A]</c> never matches <c>List[B]</c>. Because
+    /// the comparison is rooted in CLR-type identity, two different imported
+    /// types (or an imported type vs. a user type, whose <c>ClrType</c> is
+    /// <see langword="null"/> while being compiled) never collide.
+    /// </remarks>
+    /// <param name="declared">The declared extension receiver type.</param>
+    /// <param name="callSite">The static type of the call-site receiver.</param>
+    /// <returns><c>true</c> when both denote the same receiver type.</returns>
+    private static bool ExtensionReceiverMatches(TypeSymbol declared, TypeSymbol callSite)
+    {
+        if (ReferenceEquals(declared, callSite))
+        {
+            return true;
+        }
+
+        if (declared is null || callSite is null
+            || ReferenceEquals(declared, TypeSymbol.Error)
+            || ReferenceEquals(callSite, TypeSymbol.Error))
+        {
+            return false;
+        }
+
+        // Structural CLR-type identity. A null ClrType means a
+        // same-compilation user type / interface / open generic; those are
+        // identified by reference (handled above) — never by CLR identity —
+        // so a user receiver can never collide with an imported one here.
+        if (declared.ClrType is null || callSite.ClrType is null
+            || !ClrTypeUtilities.IsSameAs(declared.ClrType, callSite.ClrType))
+        {
+            return false;
+        }
+
+        // For constructed generics whose closed CLR shape is type-erased to
+        // `object` (symbolic arguments, e.g. `List[A]` for a same-compilation
+        // user type `A`), the ClrType comparison above is not discriminating —
+        // require the symbolic type arguments to agree as well so `List[A]`
+        // does not spuriously match `List[B]`.
+        if (declared is ImportedTypeSymbol declaredImported
+            && callSite is ImportedTypeSymbol callSiteImported
+            && (declaredImported.HasSubstitutableTypeArgument || callSiteImported.HasSubstitutableTypeArgument))
+        {
+            return ImportedTypeArgumentsMatch(declaredImported, callSiteImported);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1103: compares the symbolic type arguments of two constructed
+    /// imported generics for structural identity, recovering same-compilation
+    /// user-type arguments whose <see cref="TypeSymbol.ClrType"/> has erased to
+    /// <c>object</c> (or is <see langword="null"/>). Same-compilation symbols
+    /// are reference-equal; distinct user types differ by reference / name so a
+    /// genuine mismatch (e.g. <c>List[A]</c> vs. <c>List[B]</c>) is rejected.
+    /// </summary>
+    /// <param name="declared">The declared receiver generic.</param>
+    /// <param name="callSite">The call-site receiver generic.</param>
+    /// <returns><c>true</c> when the open definitions and every type argument agree.</returns>
+    private static bool ImportedTypeArgumentsMatch(ImportedTypeSymbol declared, ImportedTypeSymbol callSite)
+    {
+        if (!ClrTypeUtilities.IsSameAs(declared.OpenDefinition, callSite.OpenDefinition))
+        {
+            return false;
+        }
+
+        if (declared.TypeArguments.IsDefaultOrEmpty || callSite.TypeArguments.IsDefaultOrEmpty
+            || declared.TypeArguments.Length != callSite.TypeArguments.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < declared.TypeArguments.Length; i++)
+        {
+            var a = declared.TypeArguments[i];
+            var b = callSite.TypeArguments[i];
+            if (ReferenceEquals(a, b))
+            {
+                continue;
+            }
+
+            if (a is null || b is null)
+            {
+                return false;
+            }
+
+            // Concrete arguments compare by CLR identity; erased
+            // same-compilation user-type arguments (null ClrType) compare by
+            // reference (handled above) or by name as a last resort.
+            if (a.ClrType != null && b.ClrType != null)
+            {
+                if (!ClrTypeUtilities.IsSameAs(a.ClrType, b.ClrType))
+                {
+                    return false;
+                }
+            }
+            else if (!string.Equals(a.Name, b.Name, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
