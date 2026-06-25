@@ -290,7 +290,7 @@ public sealed class BoundScope
         {
             foreach (var ext in extensionFunctions)
             {
-                if (ext.Name == name && ext.ExtensionReceiverType == receiverType)
+                if (ext.Name == name && ReceiverMatches(ext.ExtensionReceiverType, receiverType))
                 {
                     function = ext;
                     return true;
@@ -755,6 +755,43 @@ public sealed class BoundScope
     /// <returns>The composite storage key.</returns>
     private static string MangleArity(string name, int arity)
         => arity <= 0 ? name : name + "`" + arity.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Determines whether an extension's declared receiver type matches the
+    /// static type of the call receiver.
+    /// </summary>
+    /// <remarks>
+    /// Package-owned user struct/class/interface receivers are interned, so
+    /// reference equality matches them exactly (and must remain the primary
+    /// check so two distinct user types never collide). Imported/BCL and
+    /// primitive receivers, however, are not interned: the
+    /// <see cref="FunctionSymbol.ExtensionReceiverType"/> captured at the
+    /// extension declaration and the receiver's type symbol at the call site
+    /// can be distinct <c>ImportedTypeSymbol</c> instances (or symbols
+    /// materialised through a <see cref="System.Reflection.MetadataLoadContext"/>)
+    /// that wrap the same logical CLR type (issue #1103). For those we fall
+    /// back to an exact structural CLR-type identity comparison via
+    /// <see cref="ClrTypeUtilities.IsSameAs"/> — exact identity, never
+    /// assignability, so genuinely different types do not match.
+    /// </remarks>
+    /// <param name="declaredReceiverType">The extension's declared receiver type.</param>
+    /// <param name="receiverType">The static type of the call receiver.</param>
+    /// <returns><c>true</c> when the receiver types match.</returns>
+    private static bool ReceiverMatches(TypeSymbol declaredReceiverType, TypeSymbol receiverType)
+    {
+        if (declaredReceiverType == receiverType)
+        {
+            return true;
+        }
+
+        if (declaredReceiverType?.ClrType is Type declaredClr
+            && receiverType?.ClrType is Type receiverClr)
+        {
+            return declaredClr.IsSameAs(receiverClr);
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Issue #1080: returns the enclosing type of a (possibly nested) user type
