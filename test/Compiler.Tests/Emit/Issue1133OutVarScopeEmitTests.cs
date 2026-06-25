@@ -12,12 +12,13 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <summary>
 /// Issue #1133: an inline <c>out var n</c> / <c>out let n</c> declaration on a
 /// call to a user-defined <em>instance</em> method (e.g.
-/// <c>this.G(out var n)</c> via implicit <c>this</c>) must leak the new local
-/// into the ENCLOSING block scope — like C# — so it is usable by later
-/// statements. Previously the local was accepted at the call site but a
-/// subsequent use failed with GS0125 ("Variable doesn't exist") because the
-/// re-bind (after overload resolution) never declared it. These end-to-end
-/// tests confirm the leaked local both binds and receives the value at runtime.
+/// <c>this.G(out var n)</c> via implicit <c>this</c>) or a <em>qualified
+/// static</em> method (e.g. <c>C.G(out var n)</c>) must leak the new local into
+/// the ENCLOSING block scope — like C# — so it is usable by later statements.
+/// Previously the local was accepted at the call site but a subsequent use
+/// failed with GS0125 ("Variable doesn't exist") because the re-bind (after
+/// overload resolution) never declared it. These end-to-end tests confirm the
+/// leaked local both binds and receives the value at runtime.
 /// </summary>
 public class Issue1133OutVarScopeEmitTests
 {
@@ -170,6 +171,115 @@ public class Issue1133OutVarScopeEmitTests
             """;
 
         Assert.Equal("9\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void QualifiedStaticMethod_OutVar_LeaksToEnclosingScope_AndReceivesValue()
+    {
+        var source = """
+            package P
+            import System
+
+            class C {
+                shared {
+                    func G(out x int32) {
+                        x = 5
+                    }
+
+                    func F() int32 {
+                        C.G(out var y)
+                        return y
+                    }
+                }
+            }
+
+            Console.WriteLine(C.F())
+            """;
+
+        Assert.Equal("5\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void QualifiedStaticMethod_OutLet_ReadAfterCall()
+    {
+        var source = """
+            package P
+            import System
+
+            class C {
+                shared {
+                    func G(out x int32) {
+                        x = 11
+                    }
+
+                    func F() int32 {
+                        C.G(out let y)
+                        return y
+                    }
+                }
+            }
+
+            Console.WriteLine(C.F())
+            """;
+
+        Assert.Equal("11\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void QualifiedStaticMethod_OutVar_ReassignedThenUsed()
+    {
+        var source = """
+            package P
+            import System
+
+            class C {
+                shared {
+                    func G(out x int32) {
+                        x = 5
+                    }
+
+                    func F() int32 {
+                        C.G(out var y)
+                        y = 7
+                        return y
+                    }
+                }
+            }
+
+            Console.WriteLine(C.F())
+            """;
+
+        Assert.Equal("7\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void QualifiedStaticMethod_OnOtherClass_OutVar_ReceivesValue()
+    {
+        var source = """
+            package P
+            import System
+
+            class Other {
+                shared {
+                    func G(out x int32) {
+                        x = 8
+                    }
+                }
+            }
+
+            class C {
+                shared {
+                    func F() int32 {
+                        Other.G(out var y)
+                        return y
+                    }
+                }
+            }
+
+            Console.WriteLine(C.F())
+            """;
+
+        Assert.Equal("8\n", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)

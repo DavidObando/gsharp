@@ -1742,6 +1742,25 @@ internal sealed partial class ExpressionBinder
             for (var i = 0; i < permutedArgs.Length; i++)
             {
                 var paramType = method.Parameters[i].Type;
+
+                // ADR-0060 / issue #1133: an inline `out var n` / `out let n` /
+                // `out _` argument was bound to a placeholder address-of (Error
+                // pointee) in the eager argument pass, because the resolved
+                // parameter — and therefore the local's type — was not yet
+                // known. Now that the static (`shared`) overload has been
+                // chosen, re-bind the inline declaration against the resolved
+                // by-ref parameter so the synthesized local is declared (with
+                // the correct pointee type) into the enclosing block scope and
+                // becomes visible to the rest of the block — mirroring the
+                // instance-method path in OverloadResolver.BindUserInstanceCall.
+                var outVarParamType = substitution != null ? Binder.SubstituteType(paramType, substitution) : paramType;
+                var argSyntaxForOutVar = i < ce.Arguments.Count ? ce.Arguments[i] : null;
+                if (TryRebindInlineOutVarUserArgument(permutedArgs[i], argSyntaxForOutVar, method.Parameters[i].Name, outVarParamType, out var reboundOutVar))
+                {
+                    convertedArgs.Add(reboundOutVar);
+                    continue;
+                }
+
                 if (paramType is TypeParameterSymbol)
                 {
                     convertedArgs.Add(permutedArgs[i]);

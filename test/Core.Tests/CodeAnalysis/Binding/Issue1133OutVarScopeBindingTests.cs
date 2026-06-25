@@ -15,11 +15,14 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// Issue #1133: an inline <c>out var n</c> / <c>out let n</c> / <c>out _</c>
 /// declaration on a call to a user-defined <em>instance</em> method (resolved
 /// through <see cref="GSharp.Core.CodeAnalysis.Binding.OverloadResolver"/>'s
-/// instance-call path) must leak the new local into the ENCLOSING block scope,
-/// like C#, so later statements can use it. Previously the call site was
-/// accepted but using the variable afterwards reported GS0125
-/// ("Variable doesn't exist") because the post-overload-resolution re-bind never
-/// declared the local. <c>out _</c> introduces no visible name.
+/// instance-call path) or a <em>qualified static</em> method (e.g.
+/// <c>C.G(out var n)</c>, resolved through
+/// <c>ExpressionBinder.BindUserTypeStaticCall</c>) must leak the new local into
+/// the ENCLOSING block scope, like C#, so later statements can use it.
+/// Previously the call site was accepted but using the variable afterwards
+/// reported GS0125 ("Variable doesn't exist") because the
+/// post-overload-resolution re-bind never declared the local. <c>out _</c>
+/// introduces no visible name.
 /// </summary>
 public class Issue1133OutVarScopeBindingTests
 {
@@ -139,6 +142,126 @@ class D {
     let c = C{ }
     c.G(out var y)
     return y
+  }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0125");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void QualifiedStaticMethod_OutVar_VisibleInEnclosingScope_NoGS0125()
+    {
+        const string source = @"
+package p
+class C {
+  shared {
+    func G(out x int32) { x = 5 }
+    func F() int32 {
+      C.G(out var y)
+      return y
+    }
+  }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0125");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void QualifiedStaticMethod_OutLet_ReadAfterCall_NoGS0125()
+    {
+        const string source = @"
+package p
+class C {
+  shared {
+    func G(out x int32) { x = 5 }
+    func F() int32 {
+      C.G(out let y)
+      return y
+    }
+  }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0125");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void QualifiedStaticMethod_OutLet_RebindReportsCannotAssign()
+    {
+        const string source = @"
+package p
+class C {
+  shared {
+    func G(out x int32) { x = 5 }
+    func F() int32 {
+      C.G(out let y)
+      y = 7
+      return y
+    }
+  }
+}
+";
+        Assert.Contains(GetDiagnostics(source), d => d.Id == "GS0127");
+    }
+
+    [Fact]
+    public void QualifiedStaticMethod_OutVar_ReassignedThenUsed_NoErrors()
+    {
+        const string source = @"
+package p
+class C {
+  shared {
+    func G(out x int32) { x = 5 }
+    func F() int32 {
+      C.G(out var y)
+      y = 7
+      return y
+    }
+  }
+}
+";
+        Assert.Empty(GetDiagnostics(source));
+    }
+
+    [Fact]
+    public void QualifiedStaticMethod_OutDiscard_IntroducesNoVisibleName()
+    {
+        const string source = @"
+package p
+class C {
+  shared {
+    func G(out x int32) { x = 5 }
+    func F() int32 {
+      C.G(out _)
+      return 0
+    }
+  }
+}
+";
+        Assert.Empty(GetDiagnostics(source));
+    }
+
+    [Fact]
+    public void QualifiedStaticMethod_OnOtherClass_OutVar_VisibleInEnclosingScope()
+    {
+        const string source = @"
+package p
+class Other {
+  shared {
+    func G(out x int32) { x = 5 }
+  }
+}
+class C {
+  shared {
+    func F() int32 {
+      Other.G(out var y)
+      return y
+    }
   }
 }
 ";
