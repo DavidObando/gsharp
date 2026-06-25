@@ -397,6 +397,141 @@ namespace Demo
         Assert.Contains("Ac4Extensions.ChannelCount(g)", printed);
     }
 
+    /// <summary>
+    /// Defect #914-1: a parameterless-constructor assignment whose right-hand side
+    /// reads an instance member (here the abstract instance property
+    /// <c>InputBufferSize</c>) must NOT be hoisted into a G# field initializer — a
+    /// field initializer cannot reference instance state (GS0125). It stays in a
+    /// synthesized <c>init()</c> body, while a sibling assignment with a fully
+    /// static RHS is still hoisted to a field initializer.
+    /// </summary>
+    [Fact]
+    public void CtorAssignment_ReferencingInstanceMember_StaysInInitBody()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public abstract class FrameFilterBase<TInput>
+    {
+        private readonly int[] cache;
+        private TInput[] buffer;
+
+        public FrameFilterBase()
+        {
+            cache = new int[8];
+            buffer = new TInput[InputBufferSize];
+        }
+
+        protected abstract int InputBufferSize { get; }
+    }
+}");
+
+        // The instance-member-dependent assignment is kept in an init() body.
+        Assert.Contains("init()", printed);
+        Assert.Contains("buffer = System.GC.AllocateArray[TInput](InputBufferSize)", printed);
+
+        // The field itself carries no (invalid) initializer.
+        Assert.Contains("var buffer []TInput", printed);
+        Assert.DoesNotContain("var buffer []TInput = ", printed);
+
+        // The static-RHS sibling assignment is still hoisted to a field initializer.
+        Assert.Contains("cache []int32 = System.GC.AllocateArray[int32](8)", printed);
+    }
+
+    /// <summary>
+    /// Defect #914-2: a C# iterator method declared to return
+    /// <c>IEnumerator&lt;T&gt;</c> maps to the G# return type
+    /// <c>IEnumerator[T]</c> (NOT <c>sequence[T]</c>), so it satisfies
+    /// <c>IEnumerable[T].GetEnumerator</c> and forms the dual-GetEnumerator bridge
+    /// with the non-generic <c>func GetEnumerator() IEnumerator</c> (issue #985).
+    /// A method returning <c>IEnumerable&lt;T&gt;</c> still maps to
+    /// <c>sequence[T]</c>.
+    /// </summary>
+    [Fact]
+    public void IteratorReturningIEnumeratorOfT_MapsToIEnumeratorOfT()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    using System.Collections;
+    using System.Collections.Generic;
+
+    public class Repo<T> : IEnumerable<T>
+    {
+        private readonly List<T> items = new List<T>();
+
+        public IEnumerator<T> GetEnumerator()
+        {
+            foreach (var x in items) { yield return x; }
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+        public IEnumerable<T> All()
+        {
+            foreach (var x in items) { yield return x; }
+        }
+    }
+}");
+
+        // The IEnumerator<T> iterator keeps the IEnumerator[T] return type.
+        Assert.Contains("func GetEnumerator() IEnumerator[T]", printed);
+        Assert.DoesNotContain("func GetEnumerator() sequence[T]", printed);
+
+        // The non-generic bridge is retained.
+        Assert.Contains("func GetEnumerator() IEnumerator {", printed);
+
+        // The IEnumerable<T> generator still lowers to sequence[T].
+        Assert.Contains("func All() sequence[T]", printed);
+    }
+
+    /// <summary>
+    /// Defect #914-3: a C# binary expression that relied on implicit numeric
+    /// promotion across differing operand types (here <c>ushort? == int</c>) must
+    /// emit an explicit conversion so both operands share a G# type — G# has no
+    /// implicit cross-type numeric promotion (GS0129). The constant literal is
+    /// retyped to the other operand's G# type.
+    /// </summary>
+    [Fact]
+    public void BinaryExpression_ImplicitNumericPromotion_MadeExplicit()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Entry { public ushort ChannelCount { get; set; } }
+
+    public class C
+    {
+        public bool IsStereo(Entry? e) => e?.ChannelCount == 2;
+    }
+}");
+
+        Assert.Contains("== (2 as uint16?)", printed);
+    }
+
+    /// <summary>
+    /// Defect #914-3 guard: when the operands already share an underlying numeric
+    /// type (only nullability differs, e.g. <c>int? == int</c>), no conversion is
+    /// inserted — that form already compiles and must not be perturbed.
+    /// </summary>
+    [Fact]
+    public void BinaryExpression_SameUnderlyingNumericType_NotPerturbed()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Entry { public int Count { get; set; } }
+
+    public class C
+    {
+        public bool IsTwo(Entry? e) => e?.Count == 2;
+    }
+}");
+
+        Assert.Contains("Count == 2", printed);
+        Assert.DoesNotContain(" as int32", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

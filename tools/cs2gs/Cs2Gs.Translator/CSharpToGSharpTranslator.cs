@@ -998,6 +998,7 @@ public sealed class CSharpToGSharpTranslator
 
             var paramToTarget = new Dictionary<IParameterSymbol, (string Name, ITypeSymbol Type, bool IsProperty)>(SymbolEqualityComparer.Default);
             var fieldInitializers = new Dictionary<string, GExpression>();
+            var residualInitStatements = new List<GStatement>();
 
             SyntaxNode previousScope = this.currentBodyScope;
             this.currentBodyScope = ctor;
@@ -1079,6 +1080,21 @@ public sealed class CSharpToGSharpTranslator
                         return ConstructorLift.None;
                     }
 
+                    // A G# field initializer is evaluated before the object is fully
+                    // constructed, so it cannot reference any instance member of the
+                    // type (an instance field/property/method, or `this`/`base`). Such
+                    // an assignment must remain in the constructor body — keep it as a
+                    // residual `init(...)` statement instead of hoisting it to a field
+                    // initializer (defect: GS0125 'Variable doesn't exist' + cascade
+                    // GS0159; e.g. `buffer = AllocateArray[T](InputBufferSize)` where
+                    // `InputBufferSize` is an abstract instance property). Static /
+                    // constant RHS assignments still hoist normally.
+                    if (this.ReferencesInstanceMember(assignment.Right, symbol))
+                    {
+                        residualInitStatements.Add(this.TranslateExpressionStatement(assignment));
+                        continue;
+                    }
+
                     // G# supports a field member initializer (`var Name T = expr`)
                     // but has no property member initializer (`prop Name T = expr`
                     // is rejected). A constant assignment to a property therefore
@@ -1100,6 +1116,17 @@ public sealed class CSharpToGSharpTranslator
             // Every constructor parameter must be consumed by exactly one direct
             // member assignment for the constructor to drop cleanly.
             if (ctorSymbol.Parameters.Any(p => !paramToTarget.ContainsKey(p)))
+            {
+                return ConstructorLift.None;
+            }
+
+            // An instance-member-dependent assignment must stay in the constructor
+            // body (see above). It is emitted as a synthesized parameterless
+            // `init() { ... }`, which cannot coexist with a primary constructor that
+            // carries parameters. When the constructor also copies parameters into
+            // members, leave the whole explicit constructor intact rather than emit a
+            // conflicting primary-ctor + init pair (still valid G#).
+            if (residualInitStatements.Count > 0 && ctorSymbol.Parameters.Length > 0)
             {
                 return ConstructorLift.None;
             }
@@ -1140,6 +1167,7 @@ public sealed class CSharpToGSharpTranslator
                 FieldsAsPrimaryParameters = fieldsAsParams,
                 PropertiesAsPrimaryParameters = propertiesAsParams,
                 FieldInitializers = fieldInitializers,
+                ResidualInitStatements = residualInitStatements,
             };
         }
 
@@ -1149,6 +1177,64 @@ public sealed class CSharpToGSharpTranslator
             {
                 if (this.context.GetSymbolInfo(id).Symbol is IParameterSymbol p
                     && SymbolEqualityComparer.Default.Equals(p.ContainingSymbol, ctorSymbol))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Determines whether <paramref name="expression"/> reads any instance
+        /// member of the type under construction — an instance field, property,
+        /// method or event accessed without a static qualifier, or an explicit
+        /// <c>this</c>/<c>base</c> expression. Such an expression cannot be lifted
+        /// into a G# field initializer (it would reference object state before the
+        /// instance exists, GS0125) and must stay in the constructor body.
+        /// </summary>
+        private bool ReferencesInstanceMember(ExpressionSyntax expression, INamedTypeSymbol containingType)
+        {
+            foreach (SyntaxNode node in expression.DescendantNodesAndSelf())
+            {
+                if (node is ThisExpressionSyntax or BaseExpressionSyntax)
+                {
+                    return true;
+                }
+
+                if (node is not SimpleNameSyntax name)
+                {
+                    continue;
+                }
+
+                // Only the leftmost name of a member-access chain (`a.B.C`) binds to
+                // a member/local in the current scope; the trailing names resolve
+                // against another receiver's type, so skip them.
+                if (node.Parent is MemberAccessExpressionSyntax memberAccess &&
+                    memberAccess.Name == node)
+                {
+                    continue;
+                }
+
+                ISymbol symbol = this.context.GetSymbolInfo(name).Symbol;
+                if (symbol is { IsStatic: false } &&
+                    symbol.Kind is SymbolKind.Field or SymbolKind.Property
+                        or SymbolKind.Method or SymbolKind.Event &&
+                    symbol.ContainingType != null &&
+                    InheritsFromOrEquals(containingType, symbol.ContainingType))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool InheritsFromOrEquals(INamedTypeSymbol type, INamedTypeSymbol candidateBase)
+        {
+            for (INamedTypeSymbol current = type; current != null; current = current.BaseType)
+            {
+                if (SymbolEqualityComparer.Default.Equals(current.OriginalDefinition, candidateBase.OriginalDefinition))
                 {
                     return true;
                 }
@@ -1205,9 +1291,20 @@ public sealed class CSharpToGSharpTranslator
                 case ConstructorDeclarationSyntax ctor:
                     // T2: a fully-lifted constructor is dropped entirely; its field
                     // initialization moved to field initializers / primary-ctor
-                    // parameters (ADR-0115 §B.3).
+                    // parameters (ADR-0115 §B.3). Assignments whose RHS reads an
+                    // instance member cannot become field initializers, so they are
+                    // re-emitted here as a synthesized parameterless `init() { ... }`.
                     if (lift.DropConstructor && lift.Constructor == ctor)
                     {
+                        if (lift.ResidualInitStatements.Count > 0)
+                        {
+                            yield return (
+                                new ConstructorDeclaration(
+                                    new List<Parameter>(),
+                                    new BlockStatement(new List<GStatement>(lift.ResidualInitStatements))),
+                                false);
+                        }
+
                         break;
                     }
 
@@ -2180,14 +2277,23 @@ public sealed class CSharpToGSharpTranslator
 
                 ITypeSymbol returnType = symbol.ReturnType;
 
-                // An iterator `func` (its body contains a `yield`) declares the G#
-                // `sequence[T]` element type, not the C# `IEnumerable[T]` envelope
-                // (spec §Iterators; sample TupleSequenceIterators.gs). The element
-                // type is the single type argument of the C# IEnumerable<T> /
-                // IEnumerator<T> return.
+                // An iterator `func` (its body contains a `yield`) that DECLARES a
+                // C# `IEnumerable[T]` envelope maps to the G# `sequence[T]` element
+                // type, not the envelope itself (spec §Iterators; sample
+                // TupleSequenceIterators.gs). The element type is the single type
+                // argument of the C# IEnumerable<T> return.
+                //
+                // An iterator whose declared return type is `IEnumerator[T]` is the
+                // class-level `GetEnumerator()` member of an `IEnumerable[T]`
+                // implementation: it must keep the `IEnumerator[T]` return type so it
+                // satisfies `IEnumerable[T].GetEnumerator` and forms the dual
+                // GetEnumerator bridge pair with the non-generic
+                // `func GetEnumerator() IEnumerator` (issue #985). A G# generator may
+                // return `IEnumerator[T]`, so the `yield` body is unaffected — only
+                // `IEnumerable[T]` returns are rewritten to `sequence[T]`.
                 if (IsIteratorBody(node) &&
                     returnType is INamedTypeSymbol { IsGenericType: true } enumerable &&
-                    enumerable.Name is "IEnumerable" or "IEnumerator")
+                    enumerable.Name is "IEnumerable")
                 {
                     GTypeReference element = this.typeMapper.Map(
                         enumerable.TypeArguments[0], this.context, node.ReturnType.GetLocation());
@@ -2664,6 +2770,152 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return results;
+        }
+
+        /// <summary>
+        /// Translates a C# binary expression, inserting an explicit numeric
+        /// conversion when C#'s implicit numeric promotion bridged two operands of
+        /// different numeric types. G# has no implicit cross-type numeric promotion:
+        /// an operator such as <c>==</c>/<c>&lt;</c>/<c>+</c> is per-primitive-type,
+        /// so <c>uint16 == int32</c> (and the lifted <c>uint16? == int32</c>) is
+        /// <c>GS0129</c>. The faithful fix mirrors C#: when one operand is a constant
+        /// literal, retype the literal to the other operand's G# type; otherwise
+        /// convert each C#-promoted operand to the common (promoted) type.
+        /// </summary>
+        private GExpression TranslateBinaryExpression(BinaryExpressionSyntax binary)
+        {
+            GExpression left = this.TranslateExpression(binary.Left);
+            string op = binary.OperatorToken.Text;
+            GExpression right = this.TranslateExpression(binary.Right);
+
+            if (!IsNumericPromotionOperator(op))
+            {
+                return new BinaryExpression(left, op, right);
+            }
+
+            ITypeSymbol leftType = this.context.GetTypeInfo(binary.Left).Type;
+            ITypeSymbol rightType = this.context.GetTypeInfo(binary.Right).Type;
+
+            if (!TryGetNumericKind(leftType, out SpecialType leftUnderlying) ||
+                !TryGetNumericKind(rightType, out SpecialType rightUnderlying))
+            {
+                return new BinaryExpression(left, op, right);
+            }
+
+            // Operand types already share an underlying numeric type (only the
+            // nullability may differ, e.g. `int32? == 2`); G# accepts those directly,
+            // so leave the expression untouched.
+            if (leftUnderlying == rightUnderlying)
+            {
+                return new BinaryExpression(left, op, right);
+            }
+
+            bool leftConst = this.context.SemanticModel.GetConstantValue(binary.Left).HasValue;
+            bool rightConst = this.context.SemanticModel.GetConstantValue(binary.Right).HasValue;
+
+            // Prefer the minimal, faithful form: a constant literal is retyped to the
+            // other (non-constant) operand's G# type so both operands share a type
+            // (e.g. `channelCount == (2 as uint16?)`).
+            if (rightConst && !leftConst)
+            {
+                right = this.CoerceOperandTo(right, leftType);
+                return new BinaryExpression(left, op, right);
+            }
+
+            if (leftConst && !rightConst)
+            {
+                left = this.CoerceOperandTo(left, rightType);
+                return new BinaryExpression(left, op, right);
+            }
+
+            // Neither (or both) operand is a constant literal: convert each operand
+            // that C# promoted (its declared type differs from the common converted
+            // type) to that common type.
+            ITypeSymbol leftConverted = this.context.GetTypeInfo(binary.Left).ConvertedType;
+            ITypeSymbol rightConverted = this.context.GetTypeInfo(binary.Right).ConvertedType;
+
+            if (TryGetNumericKind(leftConverted, out SpecialType leftConvUnderlying) &&
+                leftConvUnderlying != leftUnderlying)
+            {
+                left = this.CoerceOperandTo(left, leftConverted);
+            }
+
+            if (TryGetNumericKind(rightConverted, out SpecialType rightConvUnderlying) &&
+                rightConvUnderlying != rightUnderlying)
+            {
+                right = this.CoerceOperandTo(right, rightConverted);
+            }
+
+            return new BinaryExpression(left, op, right);
+        }
+
+        // Emits `(expr as T)` where T is the canonical G# form of `targetType`,
+        // making the C# implicit numeric promotion explicit for the G# binder.
+        private GExpression CoerceOperandTo(GExpression expression, ITypeSymbol targetType)
+        {
+            GTypeReference target = this.typeMapper.Map(targetType, this.context, Location.None);
+            return new ParenthesizedExpression(
+                new BinaryExpression(expression, "as", new TypeExpression(target)));
+        }
+
+        private static bool IsNumericPromotionOperator(string op)
+        {
+            switch (op)
+            {
+                case "==":
+                case "!=":
+                case "<":
+                case "<=":
+                case ">":
+                case ">=":
+                case "+":
+                case "-":
+                case "*":
+                case "/":
+                case "%":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        // Reports whether `type` is a numeric primitive (unwrapping Nullable<T>) and
+        // yields its underlying special type. `bool`/`char`/`string` are excluded:
+        // they do not participate in C# implicit numeric promotion in a way that
+        // needs a G# conversion here.
+        private static bool TryGetNumericKind(ITypeSymbol type, out SpecialType underlying)
+        {
+            underlying = SpecialType.None;
+            if (type == null)
+            {
+                return false;
+            }
+
+            if (type is INamedTypeSymbol named &&
+                named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+                named.TypeArguments.Length == 1)
+            {
+                type = named.TypeArguments[0];
+            }
+
+            switch (type.SpecialType)
+            {
+                case SpecialType.System_SByte:
+                case SpecialType.System_Byte:
+                case SpecialType.System_Int16:
+                case SpecialType.System_UInt16:
+                case SpecialType.System_Int32:
+                case SpecialType.System_UInt32:
+                case SpecialType.System_Int64:
+                case SpecialType.System_UInt64:
+                case SpecialType.System_Single:
+                case SpecialType.System_Double:
+                case SpecialType.System_Decimal:
+                    underlying = type.SpecialType;
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         private GStatement TranslateThrow(ThrowStatementSyntax throwStatement)
@@ -3248,10 +3500,7 @@ public sealed class CSharpToGSharpTranslator
                     // Issue #941: C# null-coalescing `a ?? b` now maps directly to
                     // G#'s `a ?? b` (the operator token text is identical), so it
                     // flows through the generic binary translation below.
-                    return new BinaryExpression(
-                        this.TranslateExpression(binary.Left),
-                        binary.OperatorToken.Text,
-                        this.TranslateExpression(binary.Right));
+                    return this.TranslateBinaryExpression(binary);
 
                 case PrefixUnaryExpressionSyntax prefix:
                     // G# uses the Go-style `^` for bitwise complement; C# spells it
@@ -5143,6 +5392,16 @@ public sealed class CSharpToGSharpTranslator
 
             public Dictionary<string, GExpression> FieldInitializers { get; init; } =
                 new Dictionary<string, GExpression>();
+
+            /// <summary>
+            /// Gets the constructor-body assignments that could not be hoisted to a
+            /// field initializer because their right-hand side reads an instance
+            /// member (GS0125). They are re-emitted, in source order, as a synthesized
+            /// parameterless <c>init() { ... }</c> when the explicit constructor is
+            /// otherwise dropped.
+            /// </summary>
+            public IReadOnlyList<GStatement> ResidualInitStatements { get; init; } =
+                new List<GStatement>();
         }
     }
 }
