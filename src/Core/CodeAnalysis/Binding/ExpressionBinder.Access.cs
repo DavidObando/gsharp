@@ -562,6 +562,28 @@ internal sealed partial class ExpressionBinder
                 return BindBaseClassPropertyRead(basePropName, leftName.Location, explicitBaseType: null, selectorLocation: leftName.Location);
             }
 
+            // Issue #1147 (Facet A — "Color Color" + unified overload
+            // resolution): when the receiver name binds to BOTH an in-scope
+            // value AND a same-named user struct/class, and the right-hand side
+            // is a CALL to a method declared as BOTH an instance and a static
+            // (`shared`) overload, neither the value nor the type interpretation
+            // is correct on its own. Resolve the call against the COMBINED
+            // instance + static overload set (C# §12.8.7.1) and route by the
+            // selected method's IsStatic: an instance overload binds the VALUE
+            // as the receiver; a static overload binds against the TYPE. This is
+            // strictly scoped to the both-buckets-non-empty case, so a
+            // static-only member name still falls through to the #687 type path
+            // below and an instance-only name still falls through to the
+            // value/instance path — both unchanged.
+            if (variableHit != null
+                && rightPart is CallExpressionSyntax colorColorCall
+                && TryResolveColorColorType(name, leftName, out _, out var unifiedColorStruct, out _)
+                && unifiedColorStruct != null
+                && TryBindColorColorUnifiedCall(unifiedColorStruct, leftName, colorColorCall, out var unifiedColorResult))
+            {
+                return unifiedColorResult;
+            }
+
             // Issue #687 (Option A — C#-style "color color"): when an identifier
             // resolves to both a value (field/local/parameter) AND a same-named
             // type in scope, prefer the type interpretation if the right-hand
@@ -1089,6 +1111,92 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #1147 (Facet A): finalizes a "Color Color" member-access CALL whose
+    /// receiver name binds to BOTH a value (an in-scope property/field/local/
+    /// parameter) and a same-named user struct/class (<paramref name="structSym"/>),
+    /// when the invoked method name is declared as BOTH an instance and a static
+    /// (<c>shared</c>) overload. The call is resolved against the unified
+    /// instance + static overload set and routed by the selected method's
+    /// <see cref="FunctionSymbol.IsStatic"/>:
+    /// <list type="bullet">
+    /// <item>instance overload → the value is bound as the receiver and the call
+    /// is dispatched as an ordinary instance call;</item>
+    /// <item>static overload → the call is bound as a static member call on the
+    /// type.</item>
+    /// </list>
+    /// Returns <see langword="false"/> (leaving <paramref name="result"/> unset)
+    /// when the method name is not declared in BOTH buckets, so the existing #687
+    /// type path (static-only) and the value/instance path (instance-only) keep
+    /// their current behavior unchanged.
+    /// </summary>
+    private bool TryBindColorColorUnifiedCall(
+        StructSymbol structSym,
+        NameExpressionSyntax leftName,
+        CallExpressionSyntax ce,
+        out BoundExpression result)
+    {
+        result = null;
+        var methodName = ce.Identifier.Text;
+
+        var instanceGroup = TypeMemberModel.GetMethods(structSym, methodName, MemberQuery.Instance(MemberKinds.Method));
+        var staticGroup = TypeMemberModel.GetMethods(structSym, methodName, MemberQuery.Static(MemberKinds.Method));
+
+        // Only intercept the genuinely-ambiguous case: the name is declared as
+        // BOTH an instance and a static overload. Otherwise defer to the existing
+        // paths so behavior is unchanged.
+        if (instanceGroup.IsDefaultOrEmpty || staticGroup.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        if (!overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames))
+        {
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(ce.Arguments.Count);
+        foreach (var argument in ce.Arguments)
+        {
+            var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argument);
+            boundArguments.Add(argSyntax is RefArgumentExpressionSyntax refArg
+                ? BindRefArgumentExpression(refArg, parameter: null)
+                : BindExpression(argSyntax));
+        }
+
+        var arguments = boundArguments.ToImmutable();
+        var unified = instanceGroup.AddRange(staticGroup);
+        var method = overloads.SelectInstanceOverloadOrReport(unified, arguments, ce, methodName, argumentNames);
+        if (method == null)
+        {
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        if (method.IsStatic)
+        {
+            // Static overload selected: bind as a static member call on the type
+            // (re-resolves the static group, applying optional/variadic/generic
+            // fidelity through the shared static-call finalizer).
+            result = BindUserTypeStaticCall(structSym, ce);
+            return true;
+        }
+
+        // Instance overload selected: materialize the value (property / field /
+        // local / parameter) as the receiver and dispatch the instance call with
+        // the already-bound arguments.
+        var receiver = BindNameExpression(leftName);
+        if (receiver is BoundErrorExpression)
+        {
+            result = receiver;
+            return true;
+        }
+
+        result = overloads.BindUserInstanceCall(receiver, method, arguments, ce, argumentNames);
+        return true;
+    }
+
+    /// <summary>
     /// Issue #687 (Option A): inspects the right-hand side of an accessor chain
     /// to determine whether it would bind as a static member (field, property,
     /// event, nested type, or method) of the supplied type. Used to decide
@@ -1475,7 +1583,7 @@ internal sealed partial class ExpressionBinder
         return new BoundErrorExpression(null);
     }
 
-    private BoundExpression BindUserTypeStaticCall(StructSymbol structSym, CallExpressionSyntax ce)
+    internal BoundExpression BindUserTypeStaticCall(StructSymbol structSym, CallExpressionSyntax ce)
     {
         var methodName = ce.Identifier.Text;
 
