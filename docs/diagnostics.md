@@ -128,7 +128,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0176 | Error | Switch expression is missing a `default` arm. | A `switch` expression that cannot be proven exhaustive and has no `default`. |
 | GS0177 | Error | Switch expression on enum is not exhaustive. | One or more enum members not covered and no `default` arm. |
 | GS0178 | Error | Switch statement on enum is not exhaustive. | One or more enum members not covered and no `default` arm. |
-| GS0179 | Error | Switch expression arm type mismatch. | Different arms of a `switch` expression produce incompatible types. |
+| GS0179 | Error | Switch expression arm type mismatch. | The arms of a `switch` expression have no best-common-type (shared base class/interface) and no usable target type — e.g. unrelated types like `string` + `int32`. |
 | GS0180 | Error | Accessibility modifier not allowed here. | `pub` or `priv` used on a local variable or inside a function body. |
 | GS0181 | Error | Base class is not open. | Inheriting from a class that was not declared `open`. |
 | GS0182 | Error | Method is overridable; `override` required. | Redefining an `open` method without the `override` keyword. |

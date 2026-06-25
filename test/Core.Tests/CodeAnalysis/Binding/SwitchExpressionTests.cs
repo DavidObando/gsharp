@@ -64,6 +64,154 @@ let label = switch v { case 1: ""one"" default: 2 }
         Assert.Contains(diagnostics, d => d.Message.Contains("All switch-expression arms must produce the same type", System.StringComparison.Ordinal));
     }
 
+    // Issue #1112: sibling subtypes that share a common base class produce a
+    // switch whose result type is the shared base, not a GS0179 mismatch.
+    [Fact]
+    public void SwitchExpression_SiblingSubtypes_SharedBaseClass_BindsToBase()
+    {
+        var scope = BindGlobalScope(@"
+open class Base {}
+class A : Base {}
+class B : Base {}
+let box = switch ""a"" { case ""a"": A() case ""b"": B() default: A() }
+");
+
+        Assert.DoesNotContain(scope.Diagnostics, d => d.Id == "GS0179");
+        Assert.Equal("Base", scope.Variables.Single(v => v.Name == "box").Type.Name);
+    }
+
+    // Issue #1112: arms whose types share only a common interface produce a
+    // switch whose result type is that interface.
+    [Fact]
+    public void SwitchExpression_SharedInterface_BindsToInterface()
+    {
+        var scope = BindGlobalScope(@"
+interface IShape { func Area() float64; }
+class Circle : IShape { func Area() float64 { return 3.14 } }
+class Square : IShape { func Area() float64 { return 4.0 } }
+let shape = switch ""c"" { case ""c"": Circle() default: Square() }
+");
+
+        Assert.DoesNotContain(scope.Diagnostics, d => d.Id == "GS0179");
+        Assert.Equal("IShape", scope.Variables.Single(v => v.Name == "shape").Type.Name);
+    }
+
+    // Issue #1112: one arm literally IS the common base — the dominance rule
+    // keeps the base as the result type.
+    [Fact]
+    public void SwitchExpression_ArmIsTheBase_BindsToBase()
+    {
+        var scope = BindGlobalScope(@"
+open class Base {}
+class A : Base {}
+let box = switch ""a"" { case ""a"": A() default: Base() }
+");
+
+        Assert.DoesNotContain(scope.Diagnostics, d => d.Id == "GS0179");
+        Assert.Equal("Base", scope.Variables.Single(v => v.Name == "box").Type.Name);
+    }
+
+    // Issue #1112: the full repro program (PickLet + PickReturn) compiles with
+    // no diagnostics under best-common-type alone.
+    [Fact]
+    public void SwitchExpression_Issue1112Repro_CompilesClean()
+    {
+        var diagnostics = Bind(@"
+package p
+
+open class Base {
+    open func Name() string { return ""base"" }
+}
+class A : Base {
+    override func Name() string { return ""a"" }
+}
+class B : Base {
+    override func Name() string { return ""b"" }
+}
+
+class Factory {
+    func PickLet(s string) Base {
+        let box = switch s {
+            case ""a"": A()
+            case ""b"": B()
+            default: A()
+        }
+        return box
+    }
+    func PickReturn(s string) Base {
+        return switch s {
+            case ""a"": A()
+            case ""b"": B()
+            default: A()
+        }
+    }
+}
+");
+
+        Assert.Empty(diagnostics);
+    }
+
+    // Issue #1112: numeric widening across arms is preserved (int8 + int32 →
+    // int32 via the dominance / numeric tie-break rule).
+    [Fact]
+    public void SwitchExpression_NumericWidening_PicksWiderType()
+    {
+        var scope = BindGlobalScope(@"
+let a int8 = 1
+let n = switch ""x"" { case ""x"": a default: 1000 }
+");
+
+        Assert.DoesNotContain(scope.Diagnostics, d => d.Id == "GS0179");
+        Assert.Equal(TypeSymbol.Int32, scope.Variables.Single(v => v.Name == "n").Type);
+    }
+
+    // Issue #1112: target-typing — when no best-common-type exists but every
+    // arm converts to a declared target type, the arms are target-typed.
+    [Fact]
+    public void SwitchExpression_TargetTypedToObject_Binds()
+    {
+        var scope = BindGlobalScope(@"
+let s = ""a""
+let x object = switch s { case ""a"": ""s"" default: 1 }
+");
+
+        Assert.DoesNotContain(scope.Diagnostics, d => d.Id == "GS0179");
+        Assert.Equal(TypeSymbol.Object, scope.Variables.Single(v => v.Name == "x").Type);
+    }
+
+    // Issue #1112: a never (throw-expression) arm does not constrain the
+    // common type — the result is the sibling arms' shared base.
+    [Fact]
+    public void SwitchExpression_NeverArm_DoesNotConstrainCommonType()
+    {
+        var diagnostics = Bind(@"
+import System
+
+open class Base {}
+class A : Base {}
+class B : Base {}
+func pick(s string) Base {
+    return switch s { case ""a"": A() case ""b"": throw Exception(""boom"") default: B() }
+}
+");
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0179");
+        Assert.Empty(diagnostics);
+    }
+
+    // Issue #1112: unrelated arm types with no declared target type still
+    // report GS0179 — object/ValueType are never a valid common type.
+    [Fact]
+    public void SwitchExpression_UnrelatedTypes_NoTarget_StillDiagnoses()
+    {
+        var diagnostics = Bind(@"
+let v = 1
+let label = switch v { case 1: ""one"" default: 2 }
+");
+
+        Assert.Contains(diagnostics, d => d.Id == "GS0179");
+    }
+
     [Fact]
     public void SwitchExpression_CaseValueTypeMismatch_Diagnoses()
     {

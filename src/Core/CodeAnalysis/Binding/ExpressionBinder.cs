@@ -168,6 +168,19 @@ internal sealed partial class ExpressionBinder
             return BindStackAllocExpression(stackAlloc, targetType);
         }
 
+        // Issue #1112: thread the declared target type into a switch-expression
+        // so its arms can be target-typed when no best-common-type exists
+        // across them (e.g. `let x object = switch …` or a `return switch …`
+        // into a wider declared return type). When a best-common-type does
+        // exist it wins, and the outer conversion below is then identity.
+        if (syntax is SwitchExpressionSyntax switchSyntax)
+        {
+            var boundSwitch = BindSwitchExpression(switchSyntax, targetType);
+            return targetType == null
+                ? boundSwitch
+                : conversions.BindConversion(syntax.Location, boundSwitch, targetType);
+        }
+
         return conversions.BindConversion(syntax, targetType);
     }
 

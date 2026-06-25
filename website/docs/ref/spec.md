@@ -763,6 +763,8 @@ Each element lowers against a fresh local seeded by the constructor call: a **ba
 
 Switch expressions use `:` between the pattern and the arm value (per ADR-0074 / issue #714). The legacy `->` arm separator is still accepted as a one-release migration aid but emits warning `GS0302`. Switch expressions require coverage or a default arm as enforced by diagnostics.
 
+The result type of a switch-expression is the **best-common-type** (least-upper-bound) across all arm values (issue #1112), not merely the first arm's type. It is chosen by: identity (all arms already share one type); pairwise dominance (an arm type to which every other arm implicitly converts — preserving numeric widening and the case where one arm is the shared base); otherwise the most-derived shared supertype — base class or interface — to which every arm implicitly converts. `object`/`System.ValueType` are never a valid common type, so unrelated arms (e.g. `string` + `int32`) have none. A `never`-typed (throw-expression) arm does not constrain the common type and a `nil` arm only requires a reference/nullable result. When no best-common-type exists but the switch appears as a `let x T = …` initializer or as a `return` in a function with a declared return type, the arms are target-typed to `T` when they all convert to it. When neither a common type nor a usable target type exists, the arms are rejected with `GS0179`.
+
 ```gsharp
 let description = switch value {
 case 0: "zero"

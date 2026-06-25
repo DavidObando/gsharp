@@ -708,6 +708,14 @@ internal sealed class StatementBinder
                 variableType = type;
                 convertedInitializer = new BoundDefaultExpression(defaultInit, variableType);
             }
+            else if (type != null && syntax.Initializer is SwitchExpressionSyntax)
+            {
+                // Issue #1112: a `let x T = switch …` declaration target-types
+                // the switch arms against the declared type, so arms that share
+                // no best-common-type but all convert to T still bind.
+                variableType = type;
+                convertedInitializer = bindExpressionWithTargetType(syntax.Initializer, type);
+            }
             else
             {
                 var initializer = bindExpression(syntax.Initializer);
@@ -3613,7 +3621,22 @@ internal sealed class StatementBinder
         }
         else
         {
-            expression = syntax.Expression == null ? null : bindExpression(syntax.Expression);
+            if (syntax.Expression is SwitchExpressionSyntax switchReturn
+                && function != null
+                && !function.IsReturnTypeInferred
+                && function.Type != TypeSymbol.Void
+                && function.Type != TypeSymbol.Error)
+            {
+                // Issue #1112: a `return switch …` in a function with a declared
+                // return type target-types the switch arms against that type,
+                // so arms with no best-common-type but a common conversion to
+                // the return type still bind.
+                expression = bindExpressionWithTargetType(switchReturn, function.Type);
+            }
+            else
+            {
+                expression = syntax.Expression == null ? null : bindExpression(syntax.Expression);
+            }
         }
 
         // Issue #490 (ADR-0060 follow-up): validate the `return ref` / `return` form
