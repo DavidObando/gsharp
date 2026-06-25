@@ -238,6 +238,25 @@ public sealed class Conversion
             {
                 return Conversion.Implicit;
             }
+
+            // Issue #1121: a non-nullable T is implicitly convertible to U?
+            // whenever T is implicitly convertible to its underlying U. This
+            // combines a reference upcast (to a base class or an implemented
+            // interface of T) with nullable wrapping into a single implicit
+            // conversion — a non-null reference is always a valid U?. For a
+            // reference-type underlying U the nullable wrap is a representation
+            // no-op, so we defer to the full implicit-conversion classification
+            // of `T → U` (identity, reference/upcast, interface implementation,
+            // boxing-to-object). Restricted to reference-like underlying targets
+            // so numeric nullable lifting (e.g. int32 → int64?) is unaffected.
+            if (IsReferenceLikeTarget(toNullable.UnderlyingType))
+            {
+                var underlyingConversion = Classify(from, toNullable.UnderlyingType);
+                if (underlyingConversion.Exists && underlyingConversion.IsImplicit)
+                {
+                    return Conversion.Implicit;
+                }
+            }
         }
 
         // Phase 3.C.2: nil literal is never assignable to a non-nullable type.
@@ -909,6 +928,29 @@ public sealed class Conversion
         {
             return false;
         }
+    }
+
+    private static bool IsReferenceLikeTarget(TypeSymbol type)
+    {
+        if (type is InterfaceSymbol)
+        {
+            return true;
+        }
+
+        if (type is StructSymbol { IsClass: true })
+        {
+            return true;
+        }
+
+        // Imported / CLR-backed types are reference-like when the CLR backing
+        // is a class or interface (not a value type, pointer, or by-ref). User
+        // value structs carry a null ClrType during binding and fall through.
+        if (type?.ClrType is { } clrBacking)
+        {
+            return !clrBacking.IsValueType && !clrBacking.IsPointer && !clrBacking.IsByRef;
+        }
+
+        return false;
     }
 
     private static bool IsInterfaceLikeType(TypeSymbol type)
