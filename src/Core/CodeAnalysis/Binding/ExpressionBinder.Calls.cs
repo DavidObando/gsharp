@@ -2558,8 +2558,14 @@ internal sealed partial class ExpressionBinder
             // base CLR type so inherited members are callable on the derived
             // GSharp instance. Inherited instance members take precedence over
             // imported extension methods.
+            // Issue #1136: when the user class/struct declares no explicit
+            // imported base, every .NET type still inherits System.Object's
+            // instance members (GetType/ToString/GetHashCode/Equals). Fall back
+            // to typeof(object) so those resolve. TryBindInheritedClrInstanceCall
+            // returns false for any name Object does not define, so unknown
+            // methods still report GS0159 below.
             if (receiver != null && receiver.Type is StructSymbol inheritedDerived
-                && inheritedDerived.ImportedBaseType?.ClrType is System.Type inheritedBaseClr
+                && (inheritedDerived.ImportedBaseType?.ClrType ?? typeof(object)) is System.Type inheritedBaseClr
                 && TryBindInheritedClrInstanceCall(receiver, inheritedBaseClr, methodName, arguments, ce, out var inheritedCall, explicitTypeArgs, typeArgSymbols, argumentNames))
             {
                 return inheritedCall;

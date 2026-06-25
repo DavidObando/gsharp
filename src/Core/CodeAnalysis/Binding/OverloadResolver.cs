@@ -2652,6 +2652,20 @@ internal sealed class OverloadResolver
                     var implicitReceiver = new BoundVariableExpression(null, getCurrentFunction().ThisParameter);
                     return BindUserInstanceCall(implicitReceiver, implicitMethod, boundArguments.ToImmutable(), syntax, argumentNames);
                 }
+
+                // Issue #1136: a bare (implicit-`this`) call such as `GetType()`
+                // inside an instance method must resolve as `this.GetType()`
+                // against the universally-inherited System.Object members when
+                // no sibling user method matches. Falls back to typeof(object)
+                // (or the explicit imported base if present); the helper returns
+                // false for any name Object does not define, so the GS0130 path
+                // below still fires for genuinely undefined functions.
+                var implicitBaseClr = implicitReceiverStruct.ImportedBaseType?.ClrType ?? typeof(object);
+                var implicitReceiverExpr = new BoundVariableExpression(null, getCurrentFunction().ThisParameter);
+                if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, null, default, argumentNames))
+                {
+                    return implicitInheritedCall;
+                }
             }
 
             // ADR-0085 / ADR-0090 implicit `this` inside an interface default
