@@ -64,6 +64,119 @@ let label = switch v { case 1: ""one"" default: 2 }
         Assert.Contains(diagnostics, d => d.Message.Contains("All switch-expression arms must produce the same type", System.StringComparison.Ordinal));
     }
 
+    // Issue #1112: a class hierarchy used to exercise best-common-type and
+    // target-typing across switch-expression arms.
+    private const string ShapeHierarchy = @"
+open class Base {
+    open func Name() string { return ""base"" }
+}
+class A : Base {
+    override func Name() string { return ""a"" }
+}
+class B : Base {
+    override func Name() string { return ""b"" }
+}
+interface IShape {
+    func Area() float64;
+}
+class Sq : IShape {
+    func Area() float64 { return 4.0 }
+}
+class Ci : IShape {
+    func Area() float64 { return 3.0 }
+}
+";
+
+    [Fact]
+    public void SwitchExpression_CommonBaseClass_LetInference_Compiles()
+    {
+        // Issue #1112: arms produce A and B which share base class Base; the
+        // switch-expression result type should be the best common type Base,
+        // so `let box = …` infers Base and returning it as Base succeeds.
+        var diagnostics = Bind(ShapeHierarchy + @"
+func Pick(s string) Base {
+    let box = switch s {
+        case ""a"": A()
+        case ""b"": B()
+        default: A()
+    }
+    return box
+}
+");
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void SwitchExpression_CommonBaseClass_DirectReturn_Compiles()
+    {
+        // Issue #1112: `return switch { … }` unifies the A/B arms to Base
+        // (best common type and/or the function-return target type).
+        var diagnostics = Bind(ShapeHierarchy + @"
+func Pick(s string) Base {
+    return switch s {
+        case ""a"": A()
+        case ""b"": B()
+        default: A()
+    }
+}
+");
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void SwitchExpression_CommonInterface_LetInference_Compiles()
+    {
+        // Issue #1112: arms produce Sq and Ci which share interface IShape; the
+        // best common type is IShape.
+        var diagnostics = Bind(ShapeHierarchy + @"
+func Pick(s string) IShape {
+    let box = switch s {
+        case ""a"": Sq()
+        default: Ci()
+    }
+    return box
+}
+");
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void SwitchExpression_TargetTypedLocal_Compiles()
+    {
+        // Issue #1112: an explicitly-typed local supplies the target type the
+        // switch-expression unifies to.
+        var diagnostics = Bind(ShapeHierarchy + @"
+func Pick(s string) Base {
+    let box Base = switch s {
+        case ""a"": A()
+        default: B()
+    }
+    return box
+}
+");
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void SwitchExpression_CommonBaseClass_ResultTypeIsBase()
+    {
+        // Issue #1112: the inferred local type is the best common type Base.
+        var scope = BindGlobalScope(ShapeHierarchy + @"
+let box = switch ""x"" {
+    case ""a"": A()
+    case ""b"": B()
+    default: A()
+}
+");
+
+        Assert.Empty(scope.Diagnostics);
+        Assert.Equal("Base", scope.Variables.Single(v => v.Name == "box").Type.Name);
+    }
+
     [Fact]
     public void SwitchExpression_CaseValueTypeMismatch_Diagnoses()
     {

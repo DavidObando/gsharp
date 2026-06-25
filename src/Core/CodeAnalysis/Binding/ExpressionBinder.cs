@@ -168,6 +168,16 @@ internal sealed partial class ExpressionBinder
             return BindStackAllocExpression(stackAlloc, targetType);
         }
 
+        // Issue #1112: a switch-expression honors the target type (C#-style
+        // target-typing) — bind it with the target so the result type can be
+        // the target when every arm is implicitly convertible to it, then run
+        // the standard conversion to shape/validate the overall result.
+        if (syntax is SwitchExpressionSyntax switchExpr)
+        {
+            var boundSwitch = BindSwitchExpression(switchExpr, targetType);
+            return conversions.BindConversion(syntax.Location, boundSwitch, targetType);
+        }
+
         return conversions.BindConversion(syntax, targetType);
     }
 

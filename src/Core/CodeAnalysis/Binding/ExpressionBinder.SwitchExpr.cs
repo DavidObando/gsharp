@@ -25,6 +25,9 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 internal sealed partial class ExpressionBinder
 {
     private BoundExpression BindSwitchExpression(SwitchExpressionSyntax syntax)
+        => BindSwitchExpression(syntax, targetType: null);
+
+    private BoundExpression BindSwitchExpression(SwitchExpressionSyntax syntax, TypeSymbol targetType)
     {
         var discriminant = BindExpression(syntax.Expression);
         var switchType = discriminant.Type;
@@ -107,7 +110,7 @@ internal sealed partial class ExpressionBinder
             Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location);
         }
 
-        var resultType = boundArmBuilders[0].Result.Type;
+        var resultType = ComputeSwitchExpressionResultType(boundArmBuilders, targetType);
         var arms = ImmutableArray.CreateBuilder<BoundSwitchExpressionArm>(boundArmBuilders.Count);
         foreach (var arm in boundArmBuilders)
         {
@@ -139,5 +142,152 @@ internal sealed partial class ExpressionBinder
             Diagnostics);
 
         return new BoundSwitchExpression(null, discriminant, boundArms, resultType);
+    }
+
+    /// <summary>
+    /// Issue #1112: computes the switch-expression result type. When a target
+    /// type is available (C#-style target-typing from an enclosing typed local,
+    /// function return type, or argument context) and every arm is implicitly
+    /// convertible to it, the target type is used. Otherwise the best common
+    /// type (least-upper-bound) across the arm types is computed by walking the
+    /// base-class chain and implemented interfaces, falling back to
+    /// <c>object</c>. When no common type exists the first arm's type is kept so
+    /// the existing GS0179 arm-mismatch diagnostic fires for the offending arms.
+    /// </summary>
+    private static TypeSymbol ComputeSwitchExpressionResultType(
+        IReadOnlyList<(SwitchExpressionArmSyntax Syntax, BoundPattern Pattern, BoundExpression Guard, BoundExpression Result)> arms,
+        TypeSymbol targetType)
+    {
+        var armTypes = new List<TypeSymbol>(arms.Count);
+        foreach (var arm in arms)
+        {
+            armTypes.Add(arm.Result.Type);
+        }
+
+        // Target-typing: honor an explicit target when every arm converts to it.
+        if (targetType != null
+            && targetType != TypeSymbol.Error
+            && targetType != TypeSymbol.Void
+            && AllArmsImplicitlyConvertTo(armTypes, targetType))
+        {
+            return targetType;
+        }
+
+        var common = ComputeBestCommonType(armTypes);
+        return common ?? armTypes[0];
+    }
+
+    private static bool AllArmsImplicitlyConvertTo(IReadOnlyList<TypeSymbol> armTypes, TypeSymbol candidate)
+    {
+        foreach (var armType in armTypes)
+        {
+            if (armType == TypeSymbol.Error
+                || armType == TypeSymbol.Never
+                || armType == TypeSymbol.Null)
+            {
+                // The bottom (`never`) and null-sentinel types convert to any
+                // reference/nullable target; an error arm is already diagnosed.
+                continue;
+            }
+
+            var conversion = Conversion.Classify(armType, candidate);
+            if (!conversion.IsImplicit)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Computes the best common type (least-upper-bound) across the supplied
+    /// arm types. Candidates are enumerated from the most-derived "anchor" arm
+    /// type — itself, then its base-class chain, then its implemented
+    /// interfaces, then <c>object</c> — and the first candidate to which every
+    /// arm is implicitly convertible is returned. Returns <see langword="null"/>
+    /// when no common type can be found.
+    /// </summary>
+    private static TypeSymbol ComputeBestCommonType(IReadOnlyList<TypeSymbol> armTypes)
+    {
+        // Any error arm short-circuits to Error so callers suppress further
+        // diagnostics.
+        foreach (var t in armTypes)
+        {
+            if (t == TypeSymbol.Error)
+            {
+                return TypeSymbol.Error;
+            }
+        }
+
+        // Drop the trivial bottom / null-sentinel types — they convert to any
+        // reference target and never constrain the common type.
+        var significant = new List<TypeSymbol>(armTypes.Count);
+        foreach (var t in armTypes)
+        {
+            if (t != TypeSymbol.Never && t != TypeSymbol.Null)
+            {
+                significant.Add(t);
+            }
+        }
+
+        if (significant.Count == 0)
+        {
+            return null;
+        }
+
+        // Fast path: all arms already share the same type.
+        var first = significant[0];
+        var allSame = true;
+        for (var i = 1; i < significant.Count; i++)
+        {
+            if (!ReferenceEquals(significant[i], first))
+            {
+                allSame = false;
+                break;
+            }
+        }
+
+        if (allSame)
+        {
+            return first;
+        }
+
+        foreach (var candidate in EnumerateSupertypeCandidates(first))
+        {
+            if (AllArmsImplicitlyConvertTo(significant, candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Enumerates the candidate supertypes of <paramref name="type"/> ordered
+    /// most-specific first: the type itself, its base-class chain, then its
+    /// directly implemented interfaces. Mirroring C# best-common-type, this
+    /// deliberately does NOT invent <c>object</c> as a candidate — when arms
+    /// share no common base/interface the result is left unresolved so the
+    /// arm-mismatch diagnostic (GS0179) fires (an explicit target type can
+    /// still unify to a wider type, including <c>object</c>).
+    /// </summary>
+    private static IEnumerable<TypeSymbol> EnumerateSupertypeCandidates(TypeSymbol type)
+    {
+        yield return type;
+
+        if (type is StructSymbol structSymbol)
+        {
+            for (var baseClass = structSymbol.BaseClass; baseClass != null; baseClass = baseClass.BaseClass)
+            {
+                yield return baseClass;
+            }
+
+            foreach (var iface in structSymbol.Interfaces)
+            {
+                yield return iface;
+            }
+        }
     }
 }
