@@ -530,8 +530,11 @@ public sealed class ParenthesizedExpression : GExpression
 }
 
 /// <summary>
-/// An arrow lambda <c>(x int32) -&gt; body</c> (ADR-0074). The body is either
-/// a single expression or a brace-delimited block.
+/// A lambda (ADR-0074). An expression body renders as the arrow form
+/// <c>(x int32) -&gt; expr</c> (an expression-block); a block body renders as the
+/// function-literal form <c>func (x int32) RetType { … }</c> (a statement-block),
+/// which handles control flow and supplies an explicit <see cref="ReturnType"/> for
+/// value-returning literals.
 /// </summary>
 public sealed class LambdaExpression : GExpression
 {
@@ -542,16 +545,25 @@ public sealed class LambdaExpression : GExpression
     /// <param name="expressionBody">The single-expression body, when present.</param>
     /// <param name="blockBody">The block body, when present.</param>
     /// <param name="isAsync">Whether the lambda is asynchronous.</param>
+    /// <param name="returnType">
+    /// The explicit return type for a block (func-literal) body, or
+    /// <see langword="null"/> when the block returns no value (void) or the body is
+    /// an expression. A block-bodied lambda renders as the G# function-literal form
+    /// <c>func (params) RetType { … }</c>; the return type is required so a
+    /// value-returning literal is not inferred as <c>void</c>.
+    /// </param>
     public LambdaExpression(
         IReadOnlyList<Parameter> parameters,
         GExpression expressionBody = null,
         BlockStatement blockBody = null,
-        bool isAsync = false)
+        bool isAsync = false,
+        GTypeReference returnType = null)
     {
         Parameters = parameters ?? new List<Parameter>();
         ExpressionBody = expressionBody;
         BlockBody = blockBody;
         IsAsync = isAsync;
+        ReturnType = returnType;
     }
 
     /// <summary>Gets the lambda parameters.</summary>
@@ -565,6 +577,12 @@ public sealed class LambdaExpression : GExpression
 
     /// <summary>Gets a value indicating whether the lambda is asynchronous.</summary>
     public bool IsAsync { get; }
+
+    /// <summary>
+    /// Gets the explicit return type for a block (func-literal) body, or
+    /// <see langword="null"/> when the block is void or the body is an expression.
+    /// </summary>
+    public GTypeReference ReturnType { get; }
 }
 
 /// <summary>
