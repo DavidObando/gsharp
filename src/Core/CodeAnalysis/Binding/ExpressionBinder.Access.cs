@@ -2327,6 +2327,31 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
                     return new BoundErrorExpression(null);
                 }
+                else if (receiver != null
+                    && receiver.Type is SliceTypeSymbol or ArrayTypeSymbol
+                    && receiver.Type.ClrType == null)
+                {
+                    // Issue #1162: a slice/array whose element is a
+                    // same-compilation user type has a null backing
+                    // ClrType during binding, so the CLR-property arm
+                    // above (gated on `receiver.Type.ClrType != null`)
+                    // cannot reflect `System.Array` members such as
+                    // `.Length`/`.Rank`/`.LongLength`. The runtime
+                    // receiver is the real `T[]`, which derives from
+                    // `System.Array`, so reflect the member directly
+                    // against `typeof(System.Array)` and bind it as an
+                    // ordinary CLR property read; the IL is correct
+                    // because the array genuinely exposes the member.
+                    var arrayMemberName = ne.IdentifierToken.Text;
+                    var arrayProp = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(typeof(System.Array), arrayMemberName, BindingFlags.Public | BindingFlags.Instance);
+                    if (arrayProp != null && arrayProp.GetIndexParameters().Length == 0 && arrayProp.CanRead)
+                    {
+                        return new BoundClrPropertyAccessExpression(null, receiver, arrayProp, ClrNullability.GetPropertyTypeSymbol(arrayProp));
+                    }
+
+                    Diagnostics.ReportUnableToFindMember(ne.Location, arrayMemberName);
+                    return new BoundErrorExpression(null);
+                }
                 else
                 {
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);

@@ -533,6 +533,29 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // Issue #1162: same forward slice-to-array conversion when the
+        // slice element is a same-compilation user type whose backing
+        // ClrType is still null during binding (so the CLR-backed arm
+        // above cannot fire). The target may itself be a SliceTypeSymbol
+        // or ArrayTypeSymbol with a null ClrType; match symbolically by
+        // element equivalence. Slice invariance is preserved because
+        // `AreTypeArgumentsEquivalent` requires the elements to match.
+        if (from is SliceTypeSymbol sliceSrcSym && sliceSrcSym.ClrType == null)
+        {
+            TypeSymbol targetElementSym = to switch
+            {
+                SliceTypeSymbol toSlice => toSlice.ElementType,
+                ArrayTypeSymbol toArray => toArray.ElementType,
+                _ => null,
+            };
+
+            if (targetElementSym != null
+                && AreTypeArgumentsEquivalent(targetElementSym, sliceSrcSym.ElementType))
+            {
+                return Conversion.Implicit;
+            }
+        }
+
         // Slice-to-interface: a G# slice `[]T` is backed by a CLR `T[]`
         // at runtime. Extend to every interface that `T[]` implements
         // (IEnumerable<T>, IReadOnlyList<T>, IList<T>, non-generic
@@ -548,8 +571,8 @@ public sealed class Conversion
         // accept covariant matches via `IsAssignableFrom`) from firing.
         if (from is SliceTypeSymbol sliceForIface && to?.ClrType != null && to.ClrType.IsInterface)
         {
-            if (sliceForIface.ClrType != null
-                && SliceImplementsInterface(sliceForIface, to))
+            if ((sliceForIface.ClrType != null && SliceImplementsInterface(sliceForIface, to))
+                || (sliceForIface.ClrType == null && SliceImplementsInterfaceSymbolically(sliceForIface, to)))
             {
                 return Conversion.Implicit;
             }
@@ -1215,5 +1238,48 @@ public sealed class Conversion
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issue #1162: symbolic counterpart to <see cref="SliceImplementsInterface"/>
+    /// for a slice <c>[]T</c> whose element <c>T</c> is a same-compilation user
+    /// type and whose backing <see cref="TypeSymbol.ClrType"/> is therefore
+    /// <see langword="null"/> during binding. The backing CLR array cannot be
+    /// walked, so instead match the target interface's open definition against
+    /// the known generic interfaces that a one-dimensional <c>T[]</c> implements
+    /// (<c>IEnumerable&lt;T&gt;</c>, <c>IReadOnlyList&lt;T&gt;</c>,
+    /// <c>IReadOnlyCollection&lt;T&gt;</c>, <c>IList&lt;T&gt;</c>,
+    /// <c>ICollection&lt;T&gt;</c>) and require the single type argument to match
+    /// the slice element. Slice invariance is preserved because
+    /// <see cref="AreTypeArgumentsEquivalent"/> demands an exact element match.
+    /// </summary>
+    private static bool SliceImplementsInterfaceSymbolically(SliceTypeSymbol slice, TypeSymbol targetInterface)
+    {
+        if (targetInterface is not ImportedTypeSymbol imported
+            || imported.OpenDefinition is null
+            || imported.TypeArguments.Length != 1)
+        {
+            return false;
+        }
+
+        var openName = imported.OpenDefinition.FullName;
+        if (openName is null)
+        {
+            return false;
+        }
+
+        var isArrayInterface =
+            string.Equals(openName, typeof(System.Collections.Generic.IEnumerable<>).FullName, StringComparison.Ordinal)
+            || string.Equals(openName, typeof(System.Collections.Generic.IReadOnlyList<>).FullName, StringComparison.Ordinal)
+            || string.Equals(openName, typeof(System.Collections.Generic.IReadOnlyCollection<>).FullName, StringComparison.Ordinal)
+            || string.Equals(openName, typeof(System.Collections.Generic.IList<>).FullName, StringComparison.Ordinal)
+            || string.Equals(openName, typeof(System.Collections.Generic.ICollection<>).FullName, StringComparison.Ordinal);
+
+        if (!isArrayInterface)
+        {
+            return false;
+        }
+
+        return AreTypeArgumentsEquivalent(imported.TypeArguments[0], slice.ElementType);
     }
 }

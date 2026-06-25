@@ -914,6 +914,23 @@ internal sealed class MemberLookup
                 // (erased) element type and the structural delegate conversion
                 // applies.
                 return TryProjectErasedDelegateClrType(fn, out erased);
+            case StructSymbol { IsClass: true } userClass:
+                // Issue #1162: a slice/array element that is a same-compilation
+                // user type has a null ClrType during binding, so projecting
+                // `[]Segment` previously failed at the element and aborted the
+                // whole slice projection — blocking IEnumerable<T> extension
+                // (LINQ) candidate gating with GS0159. Erase user types just
+                // enough to pass the ClrType gate (mirroring the delegate-
+                // component eraser); the symbolic-argument recovery downstream
+                // re-derives the real element type for inference.
+                erased = userClass.ImportedBaseType?.ClrType ?? typeof(object);
+                return true;
+            case StructSymbol:
+                erased = typeof(object);
+                return true;
+            case EnumSymbol:
+                erased = typeof(int);
+                return true;
             default:
                 return false;
         }
