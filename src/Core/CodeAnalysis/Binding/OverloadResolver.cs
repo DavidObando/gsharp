@@ -133,6 +133,7 @@ internal sealed class OverloadResolver
     private readonly Func<TypeParameterSymbol, string> describeConstraint;
     private readonly Func<FunctionSymbol> getCurrentFunction;
     private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTarget;
+    private readonly Func<StructSymbol, CallExpressionSyntax, BoundExpression> bindUserTypeStaticCall;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="OverloadResolver"/>
@@ -214,6 +215,11 @@ internal sealed class OverloadResolver
     /// arrow-lambda syntax against a target <see cref="FunctionTypeSymbol"/>,
     /// used to target-type a deferred un-typed arrow-lambda argument from the
     /// resolved parameter's delegate shape. May be <see langword="null"/>.</param>
+    /// <param name="bindUserTypeStaticCall">Issue #1147: callback that finalizes
+    /// a <c>Type.Method(args)</c> static (<c>shared</c>) user call against a
+    /// resolved struct/class, used by the unqualified implicit-<c>this</c> path
+    /// when unified instance+static overload resolution selects a static sibling.
+    /// May be <see langword="null"/>.</param>
     public OverloadResolver(
         BinderContext binderCtx,
         MemberLookup memberLookup,
@@ -240,7 +246,8 @@ internal sealed class OverloadResolver
         Func<TypeSymbol, TypeParameterSymbol, bool> satisfiesConstraint,
         Func<TypeParameterSymbol, string> describeConstraint,
         Func<FunctionSymbol> getCurrentFunction,
-        Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTarget = null)
+        Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTarget = null,
+        Func<StructSymbol, CallExpressionSyntax, BoundExpression> bindUserTypeStaticCall = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.memberLookup = memberLookup ?? throw new ArgumentNullException(nameof(memberLookup));
@@ -268,6 +275,7 @@ internal sealed class OverloadResolver
         this.describeConstraint = describeConstraint ?? throw new ArgumentNullException(nameof(describeConstraint));
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
         this.bindLambdaWithTarget = bindLambdaWithTarget;
+        this.bindUserTypeStaticCall = bindUserTypeStaticCall;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
@@ -487,6 +495,53 @@ internal sealed class OverloadResolver
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Issue #1147: builds the <em>unified</em> instance + static (<c>shared</c>)
+    /// method group for <paramref name="structSym"/>.<paramref name="methodName"/>
+    /// and selects the single best applicable overload across BOTH buckets,
+    /// reporting the standard ambiguity / no-applicable-overload diagnostics. This
+    /// implements C#'s combined instance+static overload resolution that both the
+    /// "Color Color" receiver-disambiguation (ECMA-334 §12.8.7.1) and an
+    /// unqualified same-named call inside an instance method reduce to. The
+    /// selected method's <see cref="FunctionSymbol.IsStatic"/> tells the caller
+    /// whether to finalize the call as an instance or a static dispatch.
+    /// </summary>
+    /// <param name="structSym">The user struct/class whose method group is searched.</param>
+    /// <param name="methodName">The invoked method name.</param>
+    /// <param name="arguments">The already-bound call arguments.</param>
+    /// <param name="ce">The originating call syntax (for diagnostic locations / type-arg arity).</param>
+    /// <param name="argumentNames">The named-argument layout, or default.</param>
+    /// <param name="hasCandidates">Set to <see langword="true"/> when the union
+    /// was non-empty. When this is <see langword="false"/> the caller should fall
+    /// through to its existing not-found path so a genuinely-undefined name still
+    /// reports GS0130.</param>
+    /// <returns>The selected overload, or <see langword="null"/> (after a
+    /// diagnostic) when the non-empty union had no applicable overload.</returns>
+    public FunctionSymbol SelectUnifiedInstanceStaticOverload(
+        StructSymbol structSym,
+        string methodName,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        ImmutableArray<string> argumentNames,
+        out bool hasCandidates)
+    {
+        var instanceGroup = TypeMemberModel.GetMethods(structSym, methodName, MemberQuery.Instance(MemberKinds.Method));
+        var staticGroup = TypeMemberModel.GetMethods(structSym, methodName, MemberQuery.Static(MemberKinds.Method));
+        var unified = instanceGroup.IsDefaultOrEmpty
+            ? staticGroup
+            : staticGroup.IsDefaultOrEmpty
+                ? instanceGroup
+                : instanceGroup.AddRange(staticGroup);
+
+        hasCandidates = !unified.IsDefaultOrEmpty;
+        if (!hasCandidates)
+        {
+            return null;
+        }
+
+        return SelectInstanceOverloadOrReport(unified, arguments, ce, methodName, argumentNames);
     }
 
     private FunctionSymbol SelectBestUserOverload(
@@ -2647,13 +2702,42 @@ internal sealed class OverloadResolver
             if (getCurrentFunction()?.ThisParameter != null
                 && getCurrentFunction().ReceiverType is StructSymbol implicitReceiverStruct)
             {
-                var implicitOverloads = TypeMemberModel.GetMethods(implicitReceiverStruct, syntax.Identifier.Text, MemberQuery.Instance(MemberKinds.Method));
-                if (implicitOverloads.Length > 0)
+                // Issue #1147 (Facet B): an unqualified same-named call inside an
+                // instance method resolves against the COMBINED instance + static
+                // (`shared`) overload set of the enclosing type — mirroring C#'s
+                // unified overload resolution — instead of seeing only instance
+                // overloads. The selected method's IsStatic routes emission.
+                var implicitMethod = SelectUnifiedInstanceStaticOverload(
+                    implicitReceiverStruct,
+                    syntax.Identifier.Text,
+                    boundArguments.ToImmutable(),
+                    syntax,
+                    argumentNames,
+                    out var implicitHasCandidates);
+                if (implicitHasCandidates)
                 {
-                    var implicitMethod = SelectInstanceOverloadOrReport(implicitOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.Text, argumentNames);
                     if (implicitMethod == null)
                     {
                         return new BoundErrorExpression(null);
+                    }
+
+                    if (implicitMethod.IsStatic)
+                    {
+                        // Resolved to a same-named static sibling: finalize as a
+                        // static user call (full optional/variadic/generic
+                        // fidelity via the shared static-call finalizer).
+                        if (bindUserTypeStaticCall != null)
+                        {
+                            return bindUserTypeStaticCall(implicitReceiverStruct, syntax);
+                        }
+
+                        var convertedSelfStaticArgs = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+                        for (var ai = 0; ai < syntax.Arguments.Count; ai++)
+                        {
+                            convertedSelfStaticArgs.Add(conversions.BindConversion(syntax.Arguments[ai].Location, boundArguments[ai], implicitMethod.Parameters[ai].Type));
+                        }
+
+                        return new BoundCallExpression(null, implicitMethod, convertedSelfStaticArgs.MoveToImmutable());
                     }
 
                     var implicitReceiver = new BoundVariableExpression(null, getCurrentFunction().ThisParameter);

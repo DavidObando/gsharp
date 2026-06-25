@@ -226,7 +226,8 @@ public sealed class Binder
             satisfiesConstraint: SatisfiesConstraint,
             describeConstraint: DescribeConstraint,
             getCurrentFunction: () => this.function,
-            bindLambdaWithTarget: (syntax, targetType) => lambdas.BindLambdaExpression(syntax, targetType));
+            bindLambdaWithTarget: (syntax, targetType) => lambdas.BindLambdaExpression(syntax, targetType),
+            bindUserTypeStaticCall: (structSym, ce) => expressions.BindUserTypeStaticCall(structSym, ce));
         patterns = new PatternBinder(
             binderCtx,
             conversions,
