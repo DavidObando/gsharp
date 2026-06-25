@@ -127,7 +127,12 @@ internal sealed partial class ExpressionBinder
             }
             else if (!conversion.IsIdentity)
             {
-                result = new BoundConversionExpression(null, resultType, result);
+                // Issue #1151: route the materialised conversion through
+                // BindConversion so value-type `nil → T?` arms are lowered to a
+                // BoundDefaultExpression (the verifiable Nullable<T> default),
+                // matching the if-expression path. The Conversion.Classify check
+                // above still governs the GS0179 arm-mismatch diagnostic.
+                result = conversions.BindConversion(arm.Syntax.Result.Location, result, resultType);
             }
 
             arms.Add(new BoundSwitchExpressionArm(null, arm.Pattern, arm.Guard, result));
@@ -221,11 +226,18 @@ internal sealed partial class ExpressionBinder
         }
 
         // Drop the trivial bottom / null-sentinel types — they convert to any
-        // reference target and never constrain the common type.
+        // reference target and never constrain the common type. Issue #1151:
+        // remember whether a `nil` arm was present so a value-type common type
+        // can be lifted to its nullable form below.
         var significant = new List<TypeSymbol>(armTypes.Count);
+        var hasNullArm = false;
         foreach (var t in armTypes)
         {
-            if (t != TypeSymbol.Never && t != TypeSymbol.Null)
+            if (t == TypeSymbol.Null)
+            {
+                hasNullArm = true;
+            }
+            else if (t != TypeSymbol.Never)
             {
                 significant.Add(t);
             }
@@ -248,20 +260,32 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        TypeSymbol common;
         if (allSame)
         {
-            return first;
+            common = first;
         }
-
-        foreach (var candidate in EnumerateSupertypeCandidates(first))
+        else
         {
-            if (AllArmsImplicitlyConvertTo(significant, candidate))
+            common = null;
+            foreach (var candidate in EnumerateSupertypeCandidates(first))
             {
-                return candidate;
+                if (AllArmsImplicitlyConvertTo(significant, candidate))
+                {
+                    common = candidate;
+                    break;
+                }
             }
         }
 
-        return null;
+        // Issue #1151: when a `nil` arm was present and the common type of the
+        // remaining arms is a non-nullable value type `T`, unify to `T?`.
+        if (common != null && hasNullArm)
+        {
+            common = LiftForNilArm(common);
+        }
+
+        return common;
     }
 
     /// <summary>
