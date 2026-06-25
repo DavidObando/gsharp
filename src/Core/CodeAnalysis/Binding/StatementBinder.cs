@@ -354,6 +354,17 @@ internal sealed class StatementBinder
                 // narrowing from the current frame so subsequent reads in this
                 // block see the variable at its declared (nullable) type again.
                 InvalidateNarrowingsForAssignedVariables(statementSyntax);
+
+                // Issue #1123: Kotlin-style assignment smart cast. Runs AFTER
+                // invalidation so the stale narrowing for the assigned variable
+                // is first cleared, then re-added only when the assigned value
+                // is statically non-null. This means a reassignment to a
+                // nullable/`nil` value naturally invalidates the narrowing
+                // (cleared and not re-added), while `x = <non-null T>` narrows
+                // `x` to the assigned value's static non-null type for
+                // subsequent reads in this block (and nested blocks) until it is
+                // reassigned or otherwise invalidated.
+                ApplyAssignmentNarrowings(statement, memberNotNullFrame);
             }
         }
         finally
@@ -439,6 +450,169 @@ internal sealed class StatementBinder
         {
             frame[fieldVar] = nullable.UnderlyingType;
         }
+    }
+
+    /// <summary>
+    /// Issue #1123: Kotlin-style assignment smart cast. When a statement assigns
+    /// a statically non-null value to a nullable local/parameter
+    /// (<c>var x T?; x = &lt;non-null T&gt;</c>), narrows <paramref name="frame"/>
+    /// so subsequent reads of the variable see its non-nullable (RHS-static)
+    /// type. Runs immediately after
+    /// <see cref="InvalidateNarrowingsForAssignedVariables"/>, so a reassignment
+    /// to a nullable / <c>nil</c> value leaves the narrowing cleared and
+    /// un-readded (i.e. invalidated). Handles the single
+    /// <see cref="BoundAssignmentExpression"/> form as well as the multi-
+    /// assignment lowering, whose per-target assignments live inside a
+    /// synthesized <see cref="BoundBlockStatement"/>.
+    /// </summary>
+    private void ApplyAssignmentNarrowings(BoundStatement statement, Dictionary<VariableSymbol, TypeSymbol> frame)
+    {
+        switch (statement)
+        {
+            case BoundExpressionStatement { Expression: BoundAssignmentExpression assignment }:
+                NarrowAssignedVariableIfNonNull(assignment, frame);
+                break;
+
+            // The multi-assignment statement (`a, b = x, y`) lowers to a
+            // synthesized block of per-target `BoundExpressionStatement`s.
+            // Only descend into that specific lowering — never into arbitrary
+            // user blocks, whose narrowings must not leak into the enclosing
+            // frame.
+            case BoundBlockStatement block when block.Syntax is MultiAssignmentStatementSyntax:
+                foreach (var inner in block.Statements)
+                {
+                    if (inner is BoundExpressionStatement { Expression: BoundAssignmentExpression innerAssignment })
+                    {
+                        NarrowAssignedVariableIfNonNull(innerAssignment, frame);
+                    }
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1123: adds a smart-cast narrowing for a single assignment when its
+    /// target is a narrowable nullable local/parameter and the assigned value is
+    /// statically non-null and implicitly convertible to the target's underlying
+    /// type. The narrowed type is the value's own static non-null type (Kotlin
+    /// behaviour), which may be more specific than the declared underlying type.
+    /// </summary>
+    private void NarrowAssignedVariableIfNonNull(BoundAssignmentExpression assignment, Dictionary<VariableSymbol, TypeSymbol> frame)
+    {
+        var variable = assignment.Variable;
+
+        // ADR-0069 stability: narrow locals and parameters only — never fields,
+        // properties, or globals whose value can change under aliasing.
+        if (variable is not (LocalVariableSymbol or ParameterSymbol))
+        {
+            return;
+        }
+
+        // The declared type must be nullable `T?` to have anything to narrow.
+        if (variable.Type is not NullableTypeSymbol declaredNullable)
+        {
+            return;
+        }
+
+        var declaredUnderlying = declaredNullable.UnderlyingType;
+
+        // Recover the assigned value's static type. BindAssignmentExpression
+        // wraps the RHS in an implicit conversion to the declared (nullable)
+        // type, so peel that single nullable-wrapping conversion to see the
+        // value's non-null static type (`T → T?`).
+        var assignedType = UnwrapAssignedValueType(assignment.Expression);
+
+        // Only narrow when the assigned value is statically non-null and
+        // meaningful: not nullable, not the `nil` sentinel, not an error/void.
+        if (assignedType is null or NullableTypeSymbol
+            || assignedType == TypeSymbol.Null
+            || assignedType == TypeSymbol.Error
+            || assignedType == TypeSymbol.Void
+            || assignedType == TypeSymbol.Never)
+        {
+            return;
+        }
+
+        // Issue #1123: scope assignment narrowing to reference-like targets.
+        // A value-type nullable read (`int32? → int32`) needs the emitter to
+        // strip the `Nullable<T>` wrapper, but the narrowed-read emit path
+        // (EmitNarrowingCastIfNeeded) treats a value-type nullable strip as a
+        // representation no-op — which is unsound when the read flows straight
+        // into arithmetic/return (it leaves a `Nullable<T>` where a `T` is
+        // expected). This is a pre-existing emit limitation shared by the
+        // `if x != nil { … }` value-type narrowing; until the emit path lifts
+        // value-type nullables, narrowing only reference-like targets keeps the
+        // generated IL verifiable. Reference nullables share T's CLR
+        // representation, so the narrowed read is a no-op or a `castclass`.
+        if (!IsReferenceLikeNarrowTarget(declaredUnderlying) || !IsReferenceLikeNarrowTarget(assignedType))
+        {
+            return;
+        }
+
+        // Guard: the value's non-null type must be implicitly convertible to the
+        // declared underlying type. This always holds because the assignment
+        // already type-checked, but assert it so the narrowing can never be
+        // unsound (e.g. if the unwrap ever surfaces an unrelated type).
+        var conversion = Conversion.Classify(assignedType, declaredUnderlying);
+        if (!conversion.Exists || !conversion.IsImplicit)
+        {
+            return;
+        }
+
+        frame[variable] = assignedType;
+    }
+
+    /// <summary>
+    /// Issue #1123: returns the static type of an assigned value, peeling the
+    /// single implicit nullable-wrapping conversion that
+    /// <c>BindAssignmentExpression</c> inserts when storing a non-null value into
+    /// a nullable slot (`T → T?`). Identity assignments (nullable → nullable)
+    /// are returned unwrapped by the conversion binder, so their type already
+    /// reflects the source.
+    /// </summary>
+    private static TypeSymbol UnwrapAssignedValueType(BoundExpression value)
+    {
+        if (value is BoundConversionExpression conversion
+            && conversion.Type is NullableTypeSymbol
+            && conversion.Expression.Type is not NullableTypeSymbol)
+        {
+            return conversion.Expression.Type;
+        }
+
+        return value.Type;
+    }
+
+    /// <summary>
+    /// Issue #1123: a type is a sound assignment-narrowing target when its CLR
+    /// representation is a reference (class or interface). Reference nullables
+    /// (`T?` where T is a class/interface) share T's representation, so a
+    /// narrowed read is a representation no-op or a verifiable <c>castclass</c>.
+    /// Value types are excluded because the narrowed-read emit path does not yet
+    /// strip the <c>Nullable&lt;T&gt;</c> wrapper. Mirrors
+    /// <c>Conversion.IsReferenceLikeTarget</c>.
+    /// </summary>
+    private static bool IsReferenceLikeNarrowTarget(TypeSymbol type)
+    {
+        if (type is InterfaceSymbol)
+        {
+            return true;
+        }
+
+        if (type is StructSymbol { IsClass: true })
+        {
+            return true;
+        }
+
+        // Imported / CLR-backed types are reference-like when the CLR backing
+        // is a class or interface (not a value type, pointer, or by-ref). User
+        // value structs carry a null ClrType during binding and fall through.
+        if (type?.ClrType is { } clrBacking)
+        {
+            return !clrBacking.IsValueType && !clrBacking.IsPointer && !clrBacking.IsByRef;
+        }
+
+        return false;
     }
 
     private BoundTryStatement BuildCleanupTryStatement(ImmutableArray<BoundStatement> protectedStatements, BoundExpression cleanup)
