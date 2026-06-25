@@ -648,6 +648,37 @@ internal sealed class OverloadResolver
             }
         }
 
+        // Issue #1154: arity/name applicability (Phase 1) does not check whether
+        // each argument is type-convertible to the corresponding parameter. Per
+        // C# §11.6.4.2 a candidate is NOT applicable when any argument has no
+        // implicit conversion to its parameter type. Without this filter a
+        // wholly-inapplicable overload (e.g. F(string) for a []uint8 argument)
+        // can tie — and thus be reported ambiguous (GS0266) — with the unique
+        // genuinely-applicable overload that merely needs an implicit
+        // nullable/reference widening (e.g. []uint8 -> []uint8?). Drop such
+        // non-convertible candidates here, conservatively (see skips below), so
+        // the unique applicable overload is selected without a spurious GS0266.
+        if (applicable.Count > 1 && !HasNamedArguments(argumentNames))
+        {
+            var convertible = new List<FunctionSymbol>(applicable.Count);
+            foreach (var cand in applicable)
+            {
+                if (IsConvertibilityApplicable(cand, argumentCount, boundArguments))
+                {
+                    convertible.Add(cand);
+                }
+            }
+
+            // Mirror the #1124 pattern: only adopt the narrowed set when it
+            // leaves at least one candidate. An empty result means the call is
+            // genuinely unsatisfiable; keep the prior list so the pre-existing
+            // diagnostics (no-applicable-overload / ambiguity) are preserved.
+            if (convertible.Count > 0)
+            {
+                applicable = convertible;
+            }
+        }
+
         if (applicable.Count == 0)
         {
             return null;
@@ -709,6 +740,101 @@ internal sealed class OverloadResolver
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// Issue #1154: returns <see langword="true"/> when <paramref name="argumentNames"/>
+    /// carries any non-null positional name. When named arguments are present the
+    /// positional index→parameter mapping used by the convertibility filter is
+    /// unreliable, so the filter is skipped entirely for that call.
+    /// </summary>
+    private static bool HasNamedArguments(ImmutableArray<string> argumentNames)
+    {
+        if (argumentNames.IsDefault)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < argumentNames.Length; i++)
+        {
+            if (argumentNames[i] != null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #1154: convertibility-aware applicability. Returns
+    /// <see langword="true"/> when every positional argument actually supplied
+    /// is implicitly convertible to the corresponding parameter type of
+    /// <paramref name="candidate"/>. Conservatively treats a candidate as
+    /// convertible (does NOT reject) for situations where the positional
+    /// index→parameter mapping or the parameter type is unreliable: generic
+    /// candidates (their parameter types may contain unsubstituted method type
+    /// parameters — handled by the #1124 inference filter), the variadic tail,
+    /// by-ref/out/in parameters, and unknown argument/parameter types.
+    /// </summary>
+    private bool IsConvertibilityApplicable(
+        FunctionSymbol candidate,
+        int argumentCount,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        // Generic candidates may carry unsubstituted method type parameters in
+        // their signature; rely on the existing #1124 inference filter instead.
+        if (candidate.IsGeneric)
+        {
+            return true;
+        }
+
+        var parameterOffset = candidate.ExplicitReceiverParameter == null ? 0 : 1;
+        var paramLen = candidate.Parameters.Length - parameterOffset;
+        var isVariadic = paramLen > 0 && candidate.Parameters[candidate.Parameters.Length - 1].IsVariadic;
+        var fixedParamCount = isVariadic ? paramLen - 1 : paramLen;
+
+        var count = Math.Min(argumentCount, paramLen);
+        for (var i = 0; i < count && i < boundArguments.Count; i++)
+        {
+            // The variadic tail binds its element(s) elsewhere; do not reject.
+            if (isVariadic && i >= fixedParamCount)
+            {
+                continue;
+            }
+
+            var parameter = candidate.Parameters[i + parameterOffset];
+
+            // By-ref/out/in parameters have their own exact-type rules.
+            if (parameter.RefKind != RefKind.None)
+            {
+                continue;
+            }
+
+            var argType = boundArguments[i]?.Type;
+            var paramType = parameter.Type;
+
+            // Unknown argument or parameter type — be conservative, do not reject.
+            if (argType == null || paramType == null)
+            {
+                continue;
+            }
+
+            var conversion = Conversion.Classify(argType, paramType);
+            if (conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity))
+            {
+                continue;
+            }
+
+            if (conversions.TryApplyUserDefinedImplicitArgumentConversion(boundArguments[i], paramType, out _))
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
