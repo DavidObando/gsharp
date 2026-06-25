@@ -1474,13 +1474,15 @@ internal sealed partial class MethodBodyEmitter
             this.il.Token(this.outer.GetElementTypeToken(node.Expression.Type));
         }
 
-        // Determine the isinst target type. For `as T?` where T is a value type,
-        // `isinst` targets T (not Nullable<T>), and then we unbox.any to Nullable<T>.
+        // Determine the isinst target type. For any `as T?` (nullable target),
+        // `isinst` targets the underlying type T (reference nullability is not a
+        // distinct CLR type, and a value-type `Nullable<T>` is never the isinst
+        // operand). For value-type targets we additionally unbox.any to Nullable<T>.
         var isNullableValueTarget = node.TargetType is NullableTypeSymbol nts2
             && nts2.UnderlyingType?.ClrType is { IsValueType: true };
 
-        var isinstTarget = isNullableValueTarget
-            ? ((NullableTypeSymbol)node.TargetType).UnderlyingType
+        var isinstTarget = node.TargetType is NullableTypeSymbol nts3
+            ? nts3.UnderlyingType
             : node.TargetType;
 
         this.il.OpCode(ILOpCode.Isinst);
