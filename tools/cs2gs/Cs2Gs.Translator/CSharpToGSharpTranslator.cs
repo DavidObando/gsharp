@@ -322,6 +322,10 @@ public sealed class CSharpToGSharpTranslator
         // tuple-deconstruction assignments (`(a, b) = (x, y)`); ADR-0115 §B.
         private int deconCounter;
 
+        // Monotonic counter for synthesizing unique temporaries when lowering a
+        // null-coalescing-with-throw (`x ?? throw E`) to a nil-guard (issue #914).
+        private int coalesceThrowCounter;
+
         // When translating the body of a lifted owned-value-aggregate receiver
         // method (issue #938), the implicit `this.` of a bare instance-member
         // reference must be made explicit through the receiver name (`self.`),
@@ -2426,12 +2430,57 @@ public sealed class CSharpToGSharpTranslator
             this.currentBodyScope = bodyOwner;
             try
             {
-                return this.TranslateBodyCore(bodyOwner, description);
+                BlockStatement body = this.TranslateBodyCore(bodyOwner, description);
+                return this.WithParameterShadows(bodyOwner, body);
             }
             finally
             {
                 this.currentBodyScope = previousScope;
             }
+        }
+
+        // G# function parameters are read-only (Kotlin-style); a C# method that
+        // reassigns a value parameter must shadow it with a mutable local at the top
+        // of the body (`var p = p`) so the later writes are legal. Parameters that
+        // are never reassigned, or that are already `ref`/`out`/`in`, are left alone.
+        private BlockStatement WithParameterShadows(SyntaxNode bodyOwner, BlockStatement body)
+        {
+            BaseParameterListSyntax parameterList = bodyOwner switch
+            {
+                MethodDeclarationSyntax method => method.ParameterList,
+                OperatorDeclarationSyntax op => op.ParameterList,
+                ConstructorDeclarationSyntax ctor => ctor.ParameterList,
+                LocalFunctionStatementSyntax localFunction => localFunction.ParameterList,
+                _ => null,
+            };
+
+            if (parameterList == null || parameterList.Parameters.Count == 0)
+            {
+                return body;
+            }
+
+            var shadows = new List<GStatement>();
+            foreach (ParameterSyntax parameter in parameterList.Parameters)
+            {
+                if (this.context.GetDeclaredSymbol(parameter) is not IParameterSymbol symbol
+                    || symbol.RefKind != RefKind.None
+                    || !this.IsSymbolReassigned(symbol, bodyOwner))
+                {
+                    continue;
+                }
+
+                string name = SanitizeIdentifier(parameter.Identifier.Text);
+                shadows.Add(new LocalDeclarationStatement(
+                    BindingKind.Var, name, type: null, new IdentifierExpression(name)));
+            }
+
+            if (shadows.Count == 0)
+            {
+                return body;
+            }
+
+            shadows.AddRange(body.Statements);
+            return new BlockStatement(shadows, body.IsUnsafe);
         }
 
         private BlockStatement TranslateBodyCore(SyntaxNode bodyOwner, string description)
@@ -2647,6 +2696,12 @@ public sealed class CSharpToGSharpTranslator
                     return this.TranslateFixedStatement(fixedStatement);
 
                 case ReturnStatementSyntax ret:
+                    if (ret.Expression != null
+                        && TryGetCoalesceThrow(ret.Expression, out ExpressionSyntax retValue, out ThrowExpressionSyntax retThrow))
+                    {
+                        return this.LowerCoalesceThrow(retValue, retThrow, r => new ReturnStatement(r));
+                    }
+
                     return new[]
                     {
                         (GStatement)new ReturnStatement(
@@ -2759,6 +2814,21 @@ public sealed class CSharpToGSharpTranslator
                     type = typeSymbol != null
                         ? this.typeMapper.Map(typeSymbol, this.context, declaration.Type.GetLocation())
                         : null;
+                }
+
+                // `let r = x ?? throw E` → evaluate x once, throw when nil, then
+                // bind r to the non-null value (issue #914). Emitted in place of the
+                // (invalid) inline throw-in-expression form.
+                if (!isConst && !isUsing && declarator.Initializer != null
+                    && TryGetCoalesceThrow(declarator.Initializer.Value, out ExpressionSyntax coalesceValue, out ThrowExpressionSyntax coalesceThrow))
+                {
+                    BindingKind declBinding = binding;
+                    string declName = SanitizeIdentifier(declarator.Identifier.Text);
+                    results.AddRange(this.LowerCoalesceThrow(
+                        coalesceValue,
+                        coalesceThrow,
+                        r => new LocalDeclarationStatement(declBinding, declName, type: null, r)));
+                    continue;
                 }
 
                 results.Add(new LocalDeclarationStatement(
@@ -3170,6 +3240,17 @@ public sealed class CSharpToGSharpTranslator
             if (expression is AssignmentExpressionSyntax assignment &&
                 assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
             {
+                if (TryGetCoalesceThrow(assignment.Right, out ExpressionSyntax coalesceValue, out ThrowExpressionSyntax coalesceThrow))
+                {
+                    // `target = x ?? throw E` → evaluate x once, throw when nil,
+                    // then assign the non-null value (issue #914).
+                    GExpression target = this.TranslateExpression(assignment.Left);
+                    return this.LowerCoalesceThrow(
+                        coalesceValue,
+                        coalesceThrow,
+                        r => new AssignmentStatement(target, r, assignment.OperatorToken.Text));
+                }
+
                 if (this.TryGetDeconstructionTargets(assignment.Left, out BindingKind binding, out IReadOnlyList<string> names))
                 {
                     // `var (a, b) = e` → `let (a, b) = e` (spec §Tuples).
@@ -3251,6 +3332,69 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return statements;
+        }
+
+        // Detects the C# `value ?? throw E` shape (a coalesce whose right operand is
+        // a throw expression), unwrapping enclosing parentheses on either side.
+        private static bool TryGetCoalesceThrow(
+            ExpressionSyntax expression,
+            out ExpressionSyntax value,
+            out ThrowExpressionSyntax throwExpression)
+        {
+            value = null;
+            throwExpression = null;
+
+            ExpressionSyntax unwrapped = expression;
+            while (unwrapped is ParenthesizedExpressionSyntax parenthesized)
+            {
+                unwrapped = parenthesized.Expression;
+            }
+
+            if (unwrapped is not BinaryExpressionSyntax binary
+                || !binary.IsKind(SyntaxKind.CoalesceExpression))
+            {
+                return false;
+            }
+
+            ExpressionSyntax right = binary.Right;
+            while (right is ParenthesizedExpressionSyntax parenthesizedRight)
+            {
+                right = parenthesizedRight.Expression;
+            }
+
+            if (right is not ThrowExpressionSyntax thrown)
+            {
+                return false;
+            }
+
+            value = binary.Left;
+            throwExpression = thrown;
+            return true;
+        }
+
+        // Lowers a C# `value ?? throw E` (statement position) to the faithful G#
+        // nil-guard form: evaluate the value once into a temp, throw when it is nil,
+        // then feed the (now non-null, smart-cast) temp to <paramref name="useResult"/>
+        // which forms the enclosing return/declaration/assignment (issue #914).
+        private IEnumerable<GStatement> LowerCoalesceThrow(
+            ExpressionSyntax value,
+            ThrowExpressionSyntax throwExpression,
+            Func<GExpression, GStatement> useResult)
+        {
+            string temp = $"__coalesce{this.coalesceThrowCounter++}";
+            return new[]
+            {
+                (GStatement)new LocalDeclarationStatement(
+                    BindingKind.Let, temp, type: null, this.TranslateExpression(value)),
+                new IfStatement(
+                    new BinaryExpression(new IdentifierExpression(temp), "==", LiteralExpression.Null()),
+                    new BlockStatement(new GStatement[]
+                    {
+                        new ThrowStatement(this.TranslateExpression(throwExpression.Expression)),
+                    }),
+                    elseBranch: null),
+                useResult(new IdentifierExpression(temp)),
+            };
         }
 
         private static List<PostfixUnaryExpressionSyntax> CollectEmbeddedPostfix(ExpressionSyntax expression)
@@ -3403,7 +3547,7 @@ public sealed class CSharpToGSharpTranslator
             LambdaExpression lambda;
             if (localFunction.Body != null)
             {
-                lambda = new LambdaExpression(parameters, blockBody: this.TranslateBlock(localFunction.Body), isAsync: isAsync);
+                lambda = new LambdaExpression(parameters, blockBody: this.WithParameterShadows(localFunction, this.TranslateBlock(localFunction.Body)), isAsync: isAsync);
             }
             else if (localFunction.ExpressionBody != null)
             {
@@ -3465,7 +3609,161 @@ public sealed class CSharpToGSharpTranslator
                 return hoisted;
             }
 
+            if (this.TryBuildPositiveGuardHoist(ifStatement, out IReadOnlyList<GStatement> positiveHoisted))
+            {
+                return positiveHoisted;
+            }
+
             return new[] { this.TranslateIf(ifStatement) };
+        }
+
+        /// <summary>
+        /// Lowers a C# positive type-pattern guard <c>if (receiver is T t) { … }</c>
+        /// to the smart-cast-friendly G# form below, but only when the pattern
+        /// variable <c>t</c> is referenced *outside* the then-block (C# leaks a
+        /// positive declaration-pattern variable into the enclosing scope under
+        /// definite-assignment rules, so later code reads or reassigns it).
+        /// <code>
+        /// var t T? = receiver as T   // 'let' when t is never reassigned
+        /// if t != nil { … }          // t smart-casts to T inside the guard
+        /// … later statements using t …
+        /// </code>
+        /// When <c>t</c> is used only inside the then-block the existing
+        /// smart-cast binding (no hoist) is kept, so currently passing tests do not
+        /// regress. Only applies over a reference (non-value) target type, where the
+        /// <c>as T</c> + nil-guard form is valid.
+        /// </summary>
+        private bool TryBuildPositiveGuardHoist(
+            IfStatementSyntax ifStatement, out IReadOnlyList<GStatement> result)
+        {
+            result = null;
+
+            if (ifStatement.Condition is not IsPatternExpressionSyntax isPattern ||
+                !TryExtractSingleVarTypePattern(
+                    isPattern.Pattern, out TypeSyntax typeSyntax, out SingleVariableDesignationSyntax single))
+            {
+                return false;
+            }
+
+            // The hoisted `as T` + `!= nil` guard is only valid when T is a
+            // reference type (or nullable value type); a non-nullable value-type
+            // target keeps the existing then-block smart-cast binding.
+            ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
+            if (targetSymbol == null || targetSymbol.IsValueType)
+            {
+                return false;
+            }
+
+            // Only hoist when the pattern variable escapes the then-block. If it is
+            // used solely inside the guarded block the existing smart cast (rewriting
+            // `t` to the receiver) is correct and avoids an unnecessary local.
+            if (this.context.GetDeclaredSymbol(single) is not ILocalSymbol patternSymbol ||
+                !this.IsSymbolReferencedOutside(patternSymbol, ifStatement.Statement))
+            {
+                return false;
+            }
+
+            string localName = SanitizeIdentifier(single.Identifier.Text);
+            GExpression receiver = this.TranslateExpression(isPattern.Expression);
+            GTypeReference targetType = this.MapTypeSyntax(typeSyntax);
+
+            // `var t T? = receiver as T` when the leaked variable is reassigned
+            // anywhere in the body (C# allows it); otherwise an immutable `let`.
+            BindingKind binding = this.IsLocalReassigned(patternSymbol)
+                ? BindingKind.Var
+                : BindingKind.Let;
+
+            var hoist = new LocalDeclarationStatement(
+                binding,
+                localName,
+                MakeNullable(targetType),
+                new BinaryExpression(receiver, "as", new TypeExpression(targetType)));
+
+            // `if t != nil { <then> }` — the positive guard; the then-block runs on a
+            // successful cast and `t` smart-casts to non-null T inside it. References
+            // to `t` print as the hoisted local (no patternBindings entry registered).
+            GExpression guard = new BinaryExpression(
+                new IdentifierExpression(localName), "!=", LiteralExpression.Null());
+            BlockStatement then = this.TranslateStatementAsBlock(ifStatement.Statement);
+
+            GStatement elseBranch = null;
+            if (ifStatement.Else != null)
+            {
+                elseBranch = ifStatement.Else.Statement is IfStatementSyntax elseIf
+                    ? this.TranslateIf(elseIf)
+                    : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+            }
+
+            result = new GStatement[] { hoist, new IfStatement(guard, then, elseBranch) };
+            return true;
+        }
+
+        // Extracts the target type and single-variable designation from a positive
+        // declaration / recursive type-pattern (`x is T t`, `x is T { } t`). Returns
+        // false for any other pattern shape (constant, relational, property
+        // subpatterns, multi-variable designations).
+        private static bool TryExtractSingleVarTypePattern(
+            PatternSyntax pattern,
+            out TypeSyntax typeSyntax,
+            out SingleVariableDesignationSyntax single)
+        {
+            typeSyntax = null;
+            single = null;
+
+            VariableDesignationSyntax designation;
+            switch (pattern)
+            {
+                case DeclarationPatternSyntax declaration:
+                    typeSyntax = declaration.Type;
+                    designation = declaration.Designation;
+                    break;
+
+                case RecursivePatternSyntax { Type: { } recursiveType } recursive
+                    when recursive.PropertyPatternClause is null or { Subpatterns.Count: 0 }:
+                    typeSyntax = recursiveType;
+                    designation = recursive.Designation;
+                    break;
+
+                default:
+                    return false;
+            }
+
+            single = designation as SingleVariableDesignationSyntax;
+            return single != null;
+        }
+
+        // Returns true when <paramref name="symbol"/> is referenced anywhere in the
+        // current body scope outside <paramref name="excludedSubtree"/> (e.g. a
+        // pattern variable read or written after/around its `if`). Mirrors the
+        // body-walk in <see cref="IsLocalReassigned"/>.
+        private bool IsSymbolReferencedOutside(ISymbol symbol, SyntaxNode excludedSubtree)
+        {
+            SyntaxNode scope = this.currentBodyScope;
+            if (scope == null)
+            {
+                return false;
+            }
+
+            foreach (SyntaxNode node in scope.DescendantNodes())
+            {
+                if (node is not IdentifierNameSyntax identifier)
+                {
+                    continue;
+                }
+
+                if (excludedSubtree != null && excludedSubtree.Contains(identifier))
+                {
+                    continue;
+                }
+
+                ISymbol referenced = this.context.GetSymbolInfo(identifier).Symbol;
+                if (referenced != null && SymbolEqualityComparer.Default.Equals(referenced, symbol))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -3674,10 +3972,51 @@ public sealed class CSharpToGSharpTranslator
             return false;
         }
 
-        private bool BindsTo(ExpressionSyntax expression, ILocalSymbol local)
+        private bool BindsTo(ExpressionSyntax expression, ISymbol target)
         {
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
-            return symbol != null && SymbolEqualityComparer.Default.Equals(symbol, local);
+            return symbol != null && SymbolEqualityComparer.Default.Equals(symbol, target);
+        }
+
+        // Returns true when <paramref name="symbol"/> is assigned, incremented,
+        // decremented, or passed by ref/out anywhere in <paramref name="scope"/>.
+        // Generalises <see cref="IsLocalReassigned"/> to any symbol (used for
+        // value parameters, which are read-only in G#).
+        private bool IsSymbolReassigned(ISymbol symbol, SyntaxNode scope)
+        {
+            if (scope == null)
+            {
+                return false;
+            }
+
+            foreach (SyntaxNode node in scope.DescendantNodes())
+            {
+                switch (node)
+                {
+                    case AssignmentExpressionSyntax assignment
+                        when this.BindsTo(assignment.Left, symbol):
+                        return true;
+
+                    case PostfixUnaryExpressionSyntax postfix
+                        when (postfix.IsKind(SyntaxKind.PostIncrementExpression)
+                                || postfix.IsKind(SyntaxKind.PostDecrementExpression))
+                            && this.BindsTo(postfix.Operand, symbol):
+                        return true;
+
+                    case PrefixUnaryExpressionSyntax prefix
+                        when (prefix.IsKind(SyntaxKind.PreIncrementExpression)
+                                || prefix.IsKind(SyntaxKind.PreDecrementExpression))
+                            && this.BindsTo(prefix.Operand, symbol):
+                        return true;
+
+                    case ArgumentSyntax argument
+                        when !argument.RefOrOutKeyword.IsKind(SyntaxKind.None)
+                            && this.BindsTo(argument.Expression, symbol):
+                        return true;
+                }
+            }
+
+            return false;
         }
 
         private GExpression TranslateExpression(ExpressionSyntax expression)
