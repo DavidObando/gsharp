@@ -3632,6 +3632,39 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        // Issue #1104: the parenthesis-less PROPERTY form `base[BaseClass].Prop`
+        // (read) and `base[BaseClass].Prop = value` (write). Route to the shared
+        // base-class property read/write path with the explicit ancestor
+        // selector so resolution + GS0383/GS0384/GS0385 diagnostics + non-virtual
+        // `call instance ... <SelectorBase>::get_/set_Prop` emission all reuse
+        // the same code as plain `base.Prop`. A base-class selector is required;
+        // an interface selector in this position is not a supported form and is
+        // reported via the member-not-found path below by falling through to the
+        // call handling (which yields a clear diagnostic).
+        if (syntax.IsPropertyAccess && ifaceType is StructSymbol propSelector && propSelector.IsClass)
+        {
+            if (syntax.IsPropertyWrite)
+            {
+                var boundValue = BindExpression(syntax.Value);
+                return BindBaseClassPropertyWrite(
+                    syntax.MethodIdentifier.Text,
+                    syntax.MethodIdentifier.Location,
+                    syntax.BaseKeyword.Location,
+                    boundValue,
+                    syntax.Value.Location,
+                    syntax.EqualsToken.Location,
+                    explicitBaseType: propSelector,
+                    selectorLocation: syntax.InterfaceTypeClause.Location);
+            }
+
+            var memberName = new NameExpressionSyntax(syntax.SyntaxTree, syntax.MethodIdentifier);
+            return BindBaseClassPropertyRead(
+                memberName,
+                syntax.BaseKeyword.Location,
+                explicitBaseType: propSelector,
+                selectorLocation: syntax.InterfaceTypeClause.Location);
+        }
+
         if (ifaceType is StructSymbol classSelector && classSelector.IsClass)
         {
             var synthesizedCall = new CallExpressionSyntax(
@@ -3861,37 +3894,8 @@ internal sealed partial class ExpressionBinder
         StructSymbol explicitBaseType,
         TextLocation selectorLocation)
     {
-        // The call site must live in an instance member of a class. Top-level
-        // functions, `shared` statics, and structs (no base class) all fail.
-        var enclosingType = function?.ReceiverType as StructSymbol;
-        if (enclosingType == null || function?.ThisParameter == null || !enclosingType.IsClass)
+        if (!TryResolveBaseSearchType(baseLocation, explicitBaseType, selectorLocation, out var searchBase))
         {
-            Diagnostics.ReportBaseClassCallHasNoBaseClass(baseLocation, EnclosingTypeDisplayName());
-            return new BoundErrorExpression(null);
-        }
-
-        // Determine the base class to start the method search from. For the
-        // bracketed form, the named selector must be an actual base class of
-        // the enclosing type; for the plain form, use the immediate base.
-        StructSymbol searchBase;
-        if (explicitBaseType != null)
-        {
-            if (!IsBaseClassOf(enclosingType, explicitBaseType))
-            {
-                Diagnostics.ReportBaseClassCallSelectorNotBaseClass(selectorLocation, enclosingType.Name, explicitBaseType.Name);
-                return new BoundErrorExpression(null);
-            }
-
-            searchBase = explicitBaseType;
-        }
-        else
-        {
-            searchBase = enclosingType.BaseClass;
-        }
-
-        if (searchBase == null)
-        {
-            Diagnostics.ReportBaseClassCallHasNoBaseClass(baseLocation, enclosingType.Name);
             return new BoundErrorExpression(null);
         }
 
@@ -3943,6 +3947,180 @@ internal sealed partial class ExpressionBinder
             uic.Method,
             uic.Arguments,
             uic.Type);
+    }
+
+    /// <summary>
+    /// Issue #1104: resolves the base class to start a <c>base.Member</c> search
+    /// from, shared by the base-method-call path
+    /// (<see cref="BindBaseClassCall"/>) and the base-property-access path
+    /// (<see cref="BindBaseClassPropertyRead"/> /
+    /// <see cref="BindBaseClassPropertyWrite"/>). Reports GS0383 when the call
+    /// site is not an instance member of a class (or the class has no base) and
+    /// GS0385 when a bracketed <c>base[Type]</c> selector does not name an actual
+    /// base class.
+    /// </summary>
+    /// <param name="baseLocation">The location of the <c>base</c> token (for GS0383).</param>
+    /// <param name="explicitBaseType">The class named in <c>base[BaseClass]</c>, or <see langword="null"/> for the plain form.</param>
+    /// <param name="selectorLocation">The location of the bracketed selector (for GS0385).</param>
+    /// <param name="searchBase">The resolved base class to start the member search from on success.</param>
+    /// <returns><see langword="true"/> when a valid base class was resolved.</returns>
+    private bool TryResolveBaseSearchType(
+        TextLocation baseLocation,
+        StructSymbol explicitBaseType,
+        TextLocation selectorLocation,
+        out StructSymbol searchBase)
+    {
+        searchBase = null;
+
+        // The access site must live in an instance member of a class. Top-level
+        // functions, `shared` statics, and structs (no base class) all fail.
+        var enclosingType = function?.ReceiverType as StructSymbol;
+        if (enclosingType == null || function?.ThisParameter == null || !enclosingType.IsClass)
+        {
+            Diagnostics.ReportBaseClassCallHasNoBaseClass(baseLocation, EnclosingTypeDisplayName());
+            return false;
+        }
+
+        // Determine the base class to start the member search from. For the
+        // bracketed form, the named selector must be an actual base class of
+        // the enclosing type; for the plain form, use the immediate base.
+        if (explicitBaseType != null)
+        {
+            if (!IsBaseClassOf(enclosingType, explicitBaseType))
+            {
+                Diagnostics.ReportBaseClassCallSelectorNotBaseClass(selectorLocation, enclosingType.Name, explicitBaseType.Name);
+                return false;
+            }
+
+            searchBase = explicitBaseType;
+        }
+        else
+        {
+            searchBase = enclosingType.BaseClass;
+        }
+
+        if (searchBase == null)
+        {
+            Diagnostics.ReportBaseClassCallHasNoBaseClass(baseLocation, enclosingType.Name);
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1104: binds a base-class property READ of the form
+    /// <c>base.Prop</c> (or the bracketed <c>base[BaseClass].Prop</c> form).
+    /// Resolves <c>Prop</c> on the nearest base class's property set (walking
+    /// grandparents) and wraps the property's getter accessor in a
+    /// <see cref="BoundBaseClassCallExpression"/> so the emitter produces a
+    /// non-virtual <c>call instance R BaseClass::get_Prop()</c> — exactly like
+    /// C# <c>base.Prop</c>. This lets an override reference the inherited member
+    /// it shadows without re-entering its own getter (infinite recursion).
+    /// </summary>
+    /// <param name="member">The member-name syntax (<c>Prop</c>).</param>
+    /// <param name="baseLocation">The location of the <c>base</c> token for context diagnostics.</param>
+    /// <param name="explicitBaseType">The class named in <c>base[BaseClass]</c>, or <see langword="null"/> for the plain form.</param>
+    /// <param name="selectorLocation">The location of the bracketed selector (for GS0385).</param>
+    /// <returns>The bound base-class property read, or a bound error on failure.</returns>
+    private BoundExpression BindBaseClassPropertyRead(
+        NameExpressionSyntax member,
+        TextLocation baseLocation,
+        StructSymbol explicitBaseType,
+        TextLocation selectorLocation)
+    {
+        if (!TryResolveBaseSearchType(baseLocation, explicitBaseType, selectorLocation, out var searchBase))
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var memberName = member.IdentifierToken.Text;
+        if (!TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
+        {
+            Diagnostics.ReportBaseClassCallMemberNotFound(member.IdentifierToken.Location, searchBase.Name, memberName);
+            return new BoundErrorExpression(null);
+        }
+
+        if (!prop.HasGetter || prop.GetterSymbol == null)
+        {
+            Diagnostics.ReportCannotAssign(member.IdentifierToken.Location, memberName);
+            return new BoundErrorExpression(null);
+        }
+
+        // Issue #950: enforce `protected` property access against the declaring type.
+        if (!AccessibilityChecker.IsAccessible(prop.Accessibility, declaringType, this.function))
+        {
+            Diagnostics.ReportProtectedMemberInaccessible(member.IdentifierToken.Location, prop.Name, declaringType.Name);
+        }
+
+        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        return new BoundBaseClassCallExpression(
+            member,
+            receiver,
+            declaringType,
+            prop.GetterSymbol,
+            ImmutableArray<BoundExpression>.Empty,
+            prop.Type);
+    }
+
+    /// <summary>
+    /// Issue #1104: binds a base-class property WRITE of the form
+    /// <c>base.Prop = value</c>. Resolves <c>Prop</c> on the nearest base
+    /// class's property set (walking grandparents) and wraps the property's
+    /// setter accessor in a <see cref="BoundBaseClassCallExpression"/> so the
+    /// emitter produces a non-virtual
+    /// <c>call instance void BaseClass::set_Prop(value)</c>.
+    /// </summary>
+    /// <param name="memberName">The property name.</param>
+    /// <param name="memberLocation">The location of the property name token.</param>
+    /// <param name="baseLocation">The location of the <c>base</c> token for context diagnostics.</param>
+    /// <param name="value">The already-bound right-hand value expression.</param>
+    /// <param name="valueLocation">The location of the value expression (for conversion diagnostics).</param>
+    /// <param name="equalsLocation">The location of the <c>=</c> token (for GS cannot-assign).</param>
+    /// <param name="explicitBaseType">The class named in <c>base[BaseClass]</c>, or <see langword="null"/> for the plain <c>base.Prop</c> form.</param>
+    /// <param name="selectorLocation">The location of the bracketed selector (for GS0385); use <paramref name="baseLocation"/> for the plain form.</param>
+    /// <returns>The bound base-class property write, or a bound error on failure.</returns>
+    private BoundExpression BindBaseClassPropertyWrite(
+        string memberName,
+        TextLocation memberLocation,
+        TextLocation baseLocation,
+        BoundExpression value,
+        TextLocation valueLocation,
+        TextLocation equalsLocation,
+        StructSymbol explicitBaseType,
+        TextLocation selectorLocation)
+    {
+        if (!TryResolveBaseSearchType(baseLocation, explicitBaseType, selectorLocation, out var searchBase))
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        if (!TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
+        {
+            Diagnostics.ReportBaseClassCallMemberNotFound(memberLocation, searchBase.Name, memberName);
+            return new BoundErrorExpression(null);
+        }
+
+        if (!prop.HasSetter || prop.SetterSymbol == null)
+        {
+            Diagnostics.ReportCannotAssign(equalsLocation, memberName);
+            return new BoundErrorExpression(null);
+        }
+
+        // Issue #950: enforce `protected` property assignment against the declaring type.
+        if (!AccessibilityChecker.IsAccessible(prop.Accessibility, declaringType, this.function))
+        {
+            Diagnostics.ReportProtectedMemberInaccessible(memberLocation, prop.Name, declaringType.Name);
+        }
+
+        var converted = conversions.BindConversion(valueLocation, value, prop.Type);
+        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        return new BoundBaseClassCallExpression(
+            value.Syntax,
+            receiver,
+            declaringType,
+            prop.SetterSymbol,
+            ImmutableArray.Create(converted));
     }
 
     /// <summary>

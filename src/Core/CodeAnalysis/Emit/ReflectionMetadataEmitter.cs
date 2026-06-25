@@ -6766,16 +6766,16 @@ internal sealed class ReflectionMetadataEmitter
     // through BoundUserInstanceCallExpression (obj[i] / obj[i]=v), whose emit
     // resolves the accessor via cache.MethodHandles. Mirror the planned
     // PropertyAccessorHandles rows into MethodHandles for indexer accessors.
+    // Issue #1104: a base-property access (`base.Prop` / `base.Prop = v`) is
+    // lowered to a BoundBaseClassCallExpression over the property's getter /
+    // setter FunctionSymbol, which the emitter also resolves via
+    // cache.MethodHandles — so register ordinary instance property accessors
+    // there too (not just indexers).
     private void RegisterIndexerAccessorHandles(
         PropertySymbol prop,
         MethodDefinitionHandle? getterHandle,
         MethodDefinitionHandle? setterHandle)
     {
-        if (!prop.IsIndexer)
-        {
-            return;
-        }
-
         if (prop.GetterSymbol != null && getterHandle.HasValue)
         {
             this.cache.MethodHandles[prop.GetterSymbol] = getterHandle.Value;
