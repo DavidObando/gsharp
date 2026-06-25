@@ -599,6 +599,9 @@ internal sealed partial class ExpressionBinder
     }
 
     private BoundExpression BindConditionalExpression(ConditionalExpressionSyntax syntax)
+        => BindConditionalExpression(syntax, targetType: null);
+
+    private BoundExpression BindConditionalExpression(ConditionalExpressionSyntax syntax, TypeSymbol targetType)
     {
         var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
 
@@ -648,7 +651,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var resultType = ComputeConditionalCommonType(whenTrue.Type, whenFalse.Type);
+        var resultType = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType);
         if (resultType == null)
         {
             Diagnostics.ReportConditionalNoCommonResultType(
@@ -674,6 +677,9 @@ internal sealed partial class ExpressionBinder
     /// are lowered to <see cref="BoundBlockExpression"/> wrapping the final value.
     /// </summary>
     private BoundExpression BindIfExpression(IfExpressionSyntax syntax)
+        => BindIfExpression(syntax, targetType: null);
+
+    private BoundExpression BindIfExpression(IfExpressionSyntax syntax, TypeSymbol targetType)
     {
         // An if-expression in value position must have an else branch.
         if (syntax.ElseExpression == null)
@@ -692,7 +698,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var resultType = ComputeConditionalCommonType(whenTrue.Type, whenFalse.Type);
+        var resultType = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType);
         if (resultType == null)
         {
             Diagnostics.ReportConditionalNoCommonResultType(
@@ -829,6 +835,47 @@ internal sealed partial class ExpressionBinder
         }
 
         return BindExpression(bodySyntax, canBeVoid: true);
+    }
+
+    /// <summary>
+    /// Issue #1158: computes the conditional/if-expression result type using the
+    /// same target-typing + best-common-type machinery as switch-expressions, in
+    /// the following priority order (first non-null wins):
+    /// <list type="number">
+    ///   <item><description>Target-typing — when an explicit, valid target type is supplied and BOTH arms implicitly convert to it (C# 9+ target-typed conditional).</description></item>
+    ///   <item><description>The existing pairwise <see cref="ComputeConditionalCommonType"/> (identity, never/null lift, one-way implicit, ADR-0037 numeric tie-break).</description></item>
+    ///   <item><description>Best-common-type (least-upper-bound) across the two arms — unifies sibling subtypes to their shared base/interface.</description></item>
+    /// </list>
+    /// Returns <see langword="null"/> only when none of the three yield a type, so
+    /// the caller reports GS0263.
+    /// </summary>
+    /// <param name="left">The true-arm type.</param>
+    /// <param name="right">The false-arm type.</param>
+    /// <param name="targetType">The optional target type (C#-style target-typing), or <see langword="null"/>.</param>
+    /// <returns>The chosen result type, or <see langword="null"/>.</returns>
+    private static TypeSymbol ComputeConditionalResultType(TypeSymbol left, TypeSymbol right, TypeSymbol targetType)
+    {
+        // (a) Target-typing: honor an explicit, valid target when both arms
+        // implicitly convert to it.
+        if (targetType != null
+            && targetType != TypeSymbol.Error
+            && targetType != TypeSymbol.Void
+            && AllArmsImplicitlyConvertTo(new[] { left, right }, targetType))
+        {
+            return targetType;
+        }
+
+        // (b) Existing pairwise common type (identity, never/null, one-way
+        // implicit, numeric tie-break). DO NOT alter this method's behavior.
+        var pairwise = ComputeConditionalCommonType(left, right);
+        if (pairwise != null)
+        {
+            return pairwise;
+        }
+
+        // (c) Best-common-type (least-upper-bound) fallback: unify sibling
+        // subtypes to their shared base/interface.
+        return ComputeBestCommonType(new[] { left, right });
     }
 
     /// <summary>

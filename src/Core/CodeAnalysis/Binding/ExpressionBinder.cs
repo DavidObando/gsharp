@@ -178,6 +178,22 @@ internal sealed partial class ExpressionBinder
             return conversions.BindConversion(syntax.Location, boundSwitch, targetType);
         }
 
+        // Issue #1158: an if-expression and a ternary conditional likewise honor
+        // the target type (C# 9+ target-typed conditional) — bind with the
+        // target so sibling arms can unify to it, then run the standard
+        // conversion to shape/validate the overall result.
+        if (syntax is IfExpressionSyntax ifExpr)
+        {
+            var boundIf = BindIfExpression(ifExpr, targetType);
+            return conversions.BindConversion(syntax.Location, boundIf, targetType);
+        }
+
+        if (syntax is ConditionalExpressionSyntax conditionalExpr)
+        {
+            var boundConditional = BindConditionalExpression(conditionalExpr, targetType);
+            return conversions.BindConversion(syntax.Location, boundConditional, targetType);
+        }
+
         return conversions.BindConversion(syntax, targetType);
     }
 
