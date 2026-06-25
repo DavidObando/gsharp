@@ -12,6 +12,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Numerics;
 using System.Reflection;
 using System.Text;
 using GSharp.Core.CodeAnalysis.Lowering;
@@ -1070,6 +1071,40 @@ internal sealed partial class ExpressionBinder
 
         var boundOperator = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type);
 
+        // issue #1144: constant integer-literal adaptation (C#-style
+        // constant-expression conversion). When exactly one operand is a
+        // compile-time constant integer literal and the OTHER operand is a
+        // (non-literal) integer type, the literal implicitly adapts to that
+        // integer type provided its value is representable there. This makes
+        // `a + 1` (a: uint32) bind as `uint32 + uint32` without touching the
+        // general conversion path — conversions between two TYPED integer
+        // operands still require an explicit cast. An OUT-OF-RANGE literal is
+        // NOT adapted, so the GS0129 path below still reports an error (the
+        // value is never silently wrapped/truncated). Placed before the
+        // nullable mixed-mode lifts so it takes precedence for the
+        // non-nullable integer-literal case (lifts don't apply there anyway).
+        if (boundOperator == null)
+        {
+            if (boundLeft is BoundLiteralExpression leftLit
+                && IsIntegerLiteralValue(leftLit.Value)
+                && boundRight is not BoundLiteralExpression
+                && IsIntegerType(boundRight.Type)
+                && TryAdaptIntegerLiteral(leftLit.Value, boundRight.Type, out var adaptedLeftValue))
+            {
+                boundLeft = new BoundLiteralExpression(boundLeft.Syntax, adaptedLeftValue);
+                boundOperator = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type);
+            }
+            else if (boundRight is BoundLiteralExpression rightLit
+                && IsIntegerLiteralValue(rightLit.Value)
+                && boundLeft is not BoundLiteralExpression
+                && IsIntegerType(boundLeft.Type)
+                && TryAdaptIntegerLiteral(rightLit.Value, boundLeft.Type, out var adaptedRightValue))
+            {
+                boundRight = new BoundLiteralExpression(boundRight.Syntax, adaptedRightValue);
+                boundOperator = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type);
+            }
+        }
+
         // PR N-4 / §6.1 / C# §7.3.7: mixed-mode lift. When one operand is
         // a value-type Nullable<T> and the other is its underlying T, lift
         // T to T? via the existing implicit conversion and re-bind. The
@@ -1209,5 +1244,144 @@ internal sealed partial class ExpressionBinder
         }
 
         return new BoundBinaryExpression(null, boundLeft, boundOperator, boundRight);
+    }
+
+    // issue #1144: the ten G# integer primitive types (signed + unsigned,
+    // including the native-int pair). Membership mirrors the integral sets in
+    // BoundBinaryOperator.
+    private static bool IsIntegerType(TypeSymbol type)
+    {
+        return type == TypeSymbol.Int8 || type == TypeSymbol.Int16 || type == TypeSymbol.Int32
+            || type == TypeSymbol.Int64 || type == TypeSymbol.NInt
+            || type == TypeSymbol.UInt8 || type == TypeSymbol.UInt16 || type == TypeSymbol.UInt32
+            || type == TypeSymbol.UInt64 || type == TypeSymbol.NUInt;
+    }
+
+    // issue #1144: true when the boxed literal value is a compile-time constant
+    // INTEGER (excludes char/bool/float/decimal/string/enum, which never adapt).
+    private static bool IsIntegerLiteralValue(object value)
+    {
+        return value is sbyte or byte or short or ushort or int or uint or long or ulong or nint or nuint;
+    }
+
+    // issue #1144: try to adapt a constant integer literal to the target integer
+    // type. Uses BigInteger as a wide, sign-agnostic carrier so the full uint64
+    // range is handled, and range-checks against the target's min/max before
+    // producing a boxed value whose CLR type maps (via BoundLiteralExpression's
+    // InferType) to EXACTLY the target type. Native ints are range-tested
+    // conservatively as int64 (nint) / uint64 (nuint) so the result is stable
+    // regardless of the host process pointer width.
+    private static bool TryAdaptIntegerLiteral(object value, TypeSymbol target, out object converted)
+    {
+        converted = null;
+        BigInteger v = value switch
+        {
+            sbyte s => s,
+            byte b => b,
+            short s => s,
+            ushort u => u,
+            int i => i,
+            uint u => u,
+            long l => l,
+            ulong u => u,
+            nint n => (long)n,
+            nuint n => (ulong)n,
+            _ => default,
+        };
+
+        BigInteger min;
+        BigInteger max;
+        if (target == TypeSymbol.Int8)
+        {
+            min = sbyte.MinValue;
+            max = sbyte.MaxValue;
+        }
+        else if (target == TypeSymbol.UInt8)
+        {
+            min = byte.MinValue;
+            max = byte.MaxValue;
+        }
+        else if (target == TypeSymbol.Int16)
+        {
+            min = short.MinValue;
+            max = short.MaxValue;
+        }
+        else if (target == TypeSymbol.UInt16)
+        {
+            min = ushort.MinValue;
+            max = ushort.MaxValue;
+        }
+        else if (target == TypeSymbol.Int32)
+        {
+            min = int.MinValue;
+            max = int.MaxValue;
+        }
+        else if (target == TypeSymbol.UInt32)
+        {
+            min = uint.MinValue;
+            max = uint.MaxValue;
+        }
+        else if (target == TypeSymbol.Int64 || target == TypeSymbol.NInt)
+        {
+            min = long.MinValue;
+            max = long.MaxValue;
+        }
+        else if (target == TypeSymbol.UInt64 || target == TypeSymbol.NUInt)
+        {
+            min = ulong.MinValue;
+            max = ulong.MaxValue;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (v < min || v > max)
+        {
+            return false;
+        }
+
+        if (target == TypeSymbol.Int8)
+        {
+            converted = (sbyte)v;
+        }
+        else if (target == TypeSymbol.UInt8)
+        {
+            converted = (byte)v;
+        }
+        else if (target == TypeSymbol.Int16)
+        {
+            converted = (short)v;
+        }
+        else if (target == TypeSymbol.UInt16)
+        {
+            converted = (ushort)v;
+        }
+        else if (target == TypeSymbol.Int32)
+        {
+            converted = (int)v;
+        }
+        else if (target == TypeSymbol.UInt32)
+        {
+            converted = (uint)v;
+        }
+        else if (target == TypeSymbol.Int64)
+        {
+            converted = (long)v;
+        }
+        else if (target == TypeSymbol.UInt64)
+        {
+            converted = (ulong)v;
+        }
+        else if (target == TypeSymbol.NInt)
+        {
+            converted = (nint)(long)v;
+        }
+        else
+        {
+            converted = (nuint)(ulong)v;
+        }
+
+        return true;
     }
 }

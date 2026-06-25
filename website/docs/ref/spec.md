@@ -155,7 +155,7 @@ The predeclared primitive and special type names are `bool`, `uint8`, `int8`, `i
 
 ### Numeric types
 
-Integral types are `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, `uint64`, `nint`, and `nuint`. Floating and decimal types are `float32`, `float64`, and `decimal`. Operators are defined per primitive type rather than by implicit cross-type promotion. Widening numeric conversions follow the implemented conversion lattice; other numeric primitive pairs require explicit conversion.
+Integral types are `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, `uint64`, `nint`, and `nuint`. Floating and decimal types are `float32`, `float64`, and `decimal`. Operators are defined per primitive type rather than by implicit cross-type promotion. Widening numeric conversions follow the implemented conversion lattice; other numeric primitive pairs require explicit conversion. As an exception, when one operand of a binary operator is a constant integer literal and the other operand is an integer type, the literal adapts to that integer type if its value is representable there (C#-style constant-expression conversion); so `a + 1` with `a` of type `uint32` binds as `uint32 + uint32`. A constant whose value is out of range for the target type, or a conversion between two typed integer operands, still requires an explicit cast.
 
 ### String and character types
 
