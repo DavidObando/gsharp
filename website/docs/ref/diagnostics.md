@@ -1261,33 +1261,34 @@ Cross-references:
   (cs2gs migration mapping for C# `abstract`).
 
 
-## `new()` constraint construction diagnostic (GS0389)
+## `init()` constraint construction diagnostic (GS0389)
 
-See issue #988 / ADR-0097 (`class` / `struct` / `new()` constraints) and
-ADR-0087 (reified generics). A type parameter that carries a `new()`
-default-constructor constraint (`[T new()]`) may be constructed inside the
+See issue #988 / ADR-0097 (`class` / `struct` / `init()` constraints; the
+default-constructor constraint was renamed from `new()` to `init()` by issue
+#997) and ADR-0087 (reified generics). A type parameter that carries an `init()`
+default-constructor constraint (`[T init()]`) may be constructed inside the
 generic body with the call-like spelling `T()`. The construction lowers to a
 reified `System.Activator.CreateInstance<T>()`, which yields a real instance for
 both reference types with a public parameterless constructor and value types.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0389 | Error | `Cannot construct '<T>()' because type parameter '<T>' has no 'new()' constraint; add a 'new()' constraint (e.g. '[<T> new()]') to allow construction.` |
+| GS0389 | Error | `Cannot construct '<T>()' because type parameter '<T>' has no 'init()' constraint; add an 'init()' constraint (e.g. '[<T> init()]') to allow construction.` |
 
 Cause/fix:
 
 - **GS0389** — the body constructs a type parameter (`T()`) that does not
-  declare a `new()` constraint, so the compiler cannot guarantee an accessible
-  parameterless constructor exists for every instantiation. Add a `new()`
-  constraint to the type parameter (e.g. `class Factory[T new()]` or
-  `func make[T new()]()`). Mirrors C# CS0304. Note that a type **argument** that
-  cannot satisfy the `new()` constraint (e.g. a class whose only constructor
+  declare an `init()` constraint, so the compiler cannot guarantee an accessible
+  parameterless constructor exists for every instantiation. Add an `init()`
+  constraint to the type parameter (e.g. `class Factory[T init()]` or
+  `func make[T init()]()`). Mirrors C# CS0304. Note that a type **argument** that
+  cannot satisfy the `init()` constraint (e.g. a class whose only constructor
   takes parameters) is reported separately as **GS0152** at the instantiation
   site.
 
 Cross-references:
 
-- Issue #988 (this feature); ADR-0097 (`class`/`struct`/`new()` constraints),
+- Issue #988 (this feature); ADR-0097 (`class`/`struct`/`init()` constraints),
   ADR-0087 (reified generics and the `Activator.CreateInstance<T>()` lowering),
   ADR-0115 §G (cs2gs migration mapping for C# `where T : new()` / `new T()`).
 
@@ -1638,32 +1639,33 @@ Cross-references:
 - ADR-0096 — `@MarshalAs` parameter overrides (this feature).
 - Issues #762 (this feature), #706 (native-interop parent).
 
-## Type-parameter `class` / `struct` / `new()` constraint diagnostic (GS0361)
+## Type-parameter `class` / `struct` / `init()` constraint diagnostic (GS0361)
 
-ADR-0097 / issue #775. The new bracket-position flag-style
-constraints (`[T class]`, `[T struct]`, `[T new()]`, plus combinations
-like `[T class new()]` and `[T IFoo class]`) compose freely with each
+ADR-0097 / issue #775 (the default-constructor flag constraint was renamed from
+`new()` to `init()` by issue #997). The bracket-position flag-style
+constraints (`[T class]`, `[T struct]`, `[T init()]`, plus combinations
+like `[T class init()]` and `[T IFoo class]`) compose freely with each
 other and with the legacy single-slot `any` / `comparable` /
 sealed-interface bound — except for two combinations that are rejected
 as mutually exclusive:
 
 | Code | Severity | Message |
 |----|----------|-------------|
-| GS0361 | Error | Type parameter `<T>` carries the mutually exclusive constraints `<first>` and `<second>`. The two combinations that fire today are `class struct` (a type cannot simultaneously be a reference type and a value type) and `struct new()` (the `new()` flag is redundant because the CLR's `NotNullableValueTypeConstraint` already implies `DefaultConstructorConstraint` per ECMA-335 II.10.1.7). |
+| GS0361 | Error | Type parameter `<T>` carries the mutually exclusive constraints `<first>` and `<second>`. The two combinations that fire today are `class struct` (a type cannot simultaneously be a reference type and a value type) and `struct init()` (the `init()` flag is redundant because the CLR's `NotNullableValueTypeConstraint` already implies `DefaultConstructorConstraint` per ECMA-335 II.10.1.7). |
 
 Cause/fix:
 
 - **`class struct` combo.** Pick one. Reference-type-only callers want
   `[T class]`; value-type-only callers want `[T struct]`. If you really
   want "any type", drop both and use `[T]` (or `[T any]`).
-- **`struct new()` combo.** Drop the explicit `new()` — `struct`
+- **`struct init()` combo.** Drop the explicit `init()` — `struct`
   already requires every type argument to expose a public parameterless
   constructor at the CLR level. The emitter sets both flag bits
-  whenever it sees `struct`, so the explicit `new()` adds nothing.
+  whenever it sees `struct`, so the explicit `init()` adds nothing.
 
 Cross-references:
 
-- ADR-0097 — G# spelling for `class` / `struct` / `new()` constraints.
+- ADR-0097 — G# spelling for `class` / `struct` / `init()` constraints.
 - ADR-0088 — constraint-aware overload resolution (the consumption side
   that reads CLR `GenericParameterAttributes` from imported types).
 - ADR-0084 — Gsharp.Extensions Optional/Sequences (the canonical use

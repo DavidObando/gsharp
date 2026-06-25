@@ -48,13 +48,13 @@ public sealed class TypeParameterSyntax : SyntaxNode
             constraintTypeArgumentCloseBracketToken,
             classConstraintKeyword: null,
             structConstraintKeyword: null,
-            newConstraintKeyword: null,
-            newConstraintOpenParenToken: null,
-            newConstraintCloseParenToken: null)
+            initConstraintKeyword: null,
+            initConstraintOpenParenToken: null,
+            initConstraintCloseParenToken: null)
     {
     }
 
-    /// <summary>Initializes a new instance of the <see cref="TypeParameterSyntax"/> class with optional <c>class</c> / <c>struct</c> / <c>new()</c> constraints (ADR-0097 / issue #775).</summary>
+    /// <summary>Initializes a new instance of the <see cref="TypeParameterSyntax"/> class with optional <c>class</c> / <c>struct</c> / <c>init()</c> constraints (ADR-0097 / issue #775; constraint keyword renamed from <c>new()</c> to <c>init()</c> by issue #997).</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="varianceModifier">Optional variance contextual keyword.</param>
     /// <param name="identifier">The type-parameter identifier token.</param>
@@ -64,9 +64,9 @@ public sealed class TypeParameterSyntax : SyntaxNode
     /// <param name="constraintTypeArgumentCloseBracketToken">Optional closing <c>]</c> of the constraint's type-argument list.</param>
     /// <param name="classConstraintKeyword">Optional <c>class</c> keyword token (ADR-0097).</param>
     /// <param name="structConstraintKeyword">Optional <c>struct</c> keyword token (ADR-0097).</param>
-    /// <param name="newConstraintKeyword">Optional <c>new</c> contextual keyword token (ADR-0097); when set, the parens MUST also be set.</param>
-    /// <param name="newConstraintOpenParenToken">Optional <c>(</c> token of the <c>new()</c> constraint (ADR-0097).</param>
-    /// <param name="newConstraintCloseParenToken">Optional <c>)</c> token of the <c>new()</c> constraint (ADR-0097).</param>
+    /// <param name="initConstraintKeyword">Optional <c>init</c> contextual keyword token (ADR-0097 / issue #997); when set, the parens MUST also be set.</param>
+    /// <param name="initConstraintOpenParenToken">Optional <c>(</c> token of the <c>init()</c> constraint (issue #997).</param>
+    /// <param name="initConstraintCloseParenToken">Optional <c>)</c> token of the <c>init()</c> constraint (issue #997).</param>
     public TypeParameterSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken varianceModifier,
@@ -77,9 +77,9 @@ public sealed class TypeParameterSyntax : SyntaxNode
         SyntaxToken constraintTypeArgumentCloseBracketToken,
         SyntaxToken classConstraintKeyword,
         SyntaxToken structConstraintKeyword,
-        SyntaxToken newConstraintKeyword,
-        SyntaxToken newConstraintOpenParenToken,
-        SyntaxToken newConstraintCloseParenToken)
+        SyntaxToken initConstraintKeyword,
+        SyntaxToken initConstraintOpenParenToken,
+        SyntaxToken initConstraintCloseParenToken)
         : base(syntaxTree)
     {
         VarianceModifier = varianceModifier;
@@ -90,9 +90,9 @@ public sealed class TypeParameterSyntax : SyntaxNode
         ConstraintTypeArgumentCloseBracketToken = constraintTypeArgumentCloseBracketToken;
         ClassConstraintKeyword = classConstraintKeyword;
         StructConstraintKeyword = structConstraintKeyword;
-        NewConstraintKeyword = newConstraintKeyword;
-        NewConstraintOpenParenToken = newConstraintOpenParenToken;
-        NewConstraintCloseParenToken = newConstraintCloseParenToken;
+        InitConstraintKeyword = initConstraintKeyword;
+        InitConstraintOpenParenToken = initConstraintOpenParenToken;
+        InitConstraintCloseParenToken = initConstraintCloseParenToken;
     }
 
     /// <inheritdoc/>
@@ -122,14 +122,14 @@ public sealed class TypeParameterSyntax : SyntaxNode
     /// <summary>Gets the optional <c>struct</c> keyword token introducing a non-nullable value-type constraint (ADR-0097 / issue #775).</summary>
     public SyntaxToken StructConstraintKeyword { get; }
 
-    /// <summary>Gets the optional <c>new</c> contextual keyword token of a <c>new()</c> default-constructor constraint (ADR-0097 / issue #775).</summary>
-    public SyntaxToken NewConstraintKeyword { get; }
+    /// <summary>Gets the optional <c>init</c> contextual keyword token of an <c>init()</c> default-constructor constraint (ADR-0097 / issue #775; renamed from <c>new()</c> by issue #997).</summary>
+    public SyntaxToken InitConstraintKeyword { get; }
 
-    /// <summary>Gets the optional opening <c>(</c> of the <c>new()</c> constraint (ADR-0097 / issue #775).</summary>
-    public SyntaxToken NewConstraintOpenParenToken { get; }
+    /// <summary>Gets the optional opening <c>(</c> of the <c>init()</c> constraint (issue #997).</summary>
+    public SyntaxToken InitConstraintOpenParenToken { get; }
 
-    /// <summary>Gets the optional closing <c>)</c> of the <c>new()</c> constraint (ADR-0097 / issue #775).</summary>
-    public SyntaxToken NewConstraintCloseParenToken { get; }
+    /// <summary>Gets the optional closing <c>)</c> of the <c>init()</c> constraint (issue #997).</summary>
+    public SyntaxToken InitConstraintCloseParenToken { get; }
 
     /// <summary>Gets a value indicating whether this type parameter carries a generic-instance constraint (ADR-0089).</summary>
     public bool HasConstraintTypeArguments => ConstraintTypeArgumentOpenBracketToken != null;
@@ -140,6 +140,6 @@ public sealed class TypeParameterSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this type parameter carries a <c>struct</c> constraint (ADR-0097).</summary>
     public bool HasStructConstraint => StructConstraintKeyword != null;
 
-    /// <summary>Gets a value indicating whether this type parameter carries a <c>new()</c> constraint (ADR-0097).</summary>
-    public bool HasNewConstraint => NewConstraintKeyword != null;
+    /// <summary>Gets a value indicating whether this type parameter carries an <c>init()</c> constraint (ADR-0097 / issue #997).</summary>
+    public bool HasInitConstraint => InitConstraintKeyword != null;
 }

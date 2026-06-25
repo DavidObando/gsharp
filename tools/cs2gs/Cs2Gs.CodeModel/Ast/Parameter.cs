@@ -60,7 +60,7 @@ public sealed class Parameter : GNode
 /// A generic type parameter and its constraints, rendered inside the bracket
 /// section (ADR-0020/ADR-0097, ADR-0115 §B.7). The legacy slot carries a single
 /// constraint name (<c>any</c>, <c>comparable</c>, or an interface); the flag
-/// constraints (<c>class</c>, <c>struct</c>, <c>new()</c>) are repeatable.
+/// constraints (<c>class</c>, <c>struct</c>, <c>init()</c>) are repeatable.
 /// </summary>
 public sealed class TypeParameter : GNode
 {
@@ -89,7 +89,7 @@ public sealed class TypeParameter : GNode
     /// <summary>Gets the legacy single-slot constraint, if any.</summary>
     public string LegacyConstraint { get; }
 
-    /// <summary>Gets the repeatable flag constraints (<c>class</c>, <c>struct</c>, <c>new()</c>).</summary>
+    /// <summary>Gets the repeatable flag constraints (<c>class</c>, <c>struct</c>, <c>init()</c>).</summary>
     public IReadOnlyList<string> FlagConstraints { get; }
 
     /// <summary>Gets the variance marker.</summary>

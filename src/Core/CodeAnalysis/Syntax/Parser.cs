@@ -3054,7 +3054,7 @@ public class Parser
     private bool LooksLikeTypeParameterList()
     {
         // We are positioned at `[`. A type parameter list looks like
-        // `[ Ident (Ident|class|struct|new())? ( , ... )* ]`. Crucially the *first*
+        // `[ Ident (Ident|class|struct|init())? ( , ... )* ]`. Crucially the *first*
         // token after `[` is an identifier (not a number, ']', or another '['). That
         // alone is enough to disambiguate against `[]T` (slice) and `[N]T` (array shape)
         // which appear in type positions, not after declaration names anyway.
@@ -3069,18 +3069,19 @@ public class Parser
         // shouldn't be). At a declaration header the follow-set after the TP
         // list is `(`, so we just look for that.
         //
-        // ADR-0097 / issue #775: also skip `class`, `struct`, and `new()`
-        // constraint tokens that may appear after the type-parameter name.
+        // ADR-0097 / issue #775 (constraint keyword renamed to `init()` by
+        // issue #997): also skip `class`, `struct`, and `init()` constraint
+        // tokens that may appear after the type-parameter name.
         var ahead = 2;
         while (true)
         {
             var k = Peek(ahead).Kind;
             if (k == SyntaxKind.IdentifierToken || k == SyntaxKind.ClassKeyword || k == SyntaxKind.StructKeyword)
             {
-                // `new` is lexed as an identifier; consume an optional `()` pair
-                // when this identifier is the contextual `new` constraint keyword.
+                // `init` is lexed as an identifier; consume an optional `()` pair
+                // when this identifier is the contextual `init` constraint keyword.
                 if (k == SyntaxKind.IdentifierToken
-                    && Peek(ahead).Text == "new"
+                    && Peek(ahead).Text == "init"
                     && Peek(ahead + 1).Kind == SyntaxKind.OpenParenthesisToken
                     && Peek(ahead + 2).Kind == SyntaxKind.CloseParenthesisToken)
                 {
@@ -3179,8 +3180,8 @@ public class Parser
 
         if (Current.Kind == SyntaxKind.IdentifierToken)
         {
-            // Reserve the `class`/`struct`/`new` constraints (handled below
-            // as their own keyword tokens / `new`-contextual identifier) so
+            // Reserve the `class`/`struct`/`init` constraints (handled below
+            // as their own keyword tokens / `init`-contextual identifier) so
             // that we don't accidentally bind them as the legacy
             // any/comparable/interface-name slot.
             if (!IsAdditionalConstraintStart(Current))
@@ -3219,14 +3220,15 @@ public class Parser
             }
         }
 
-        // ADR-0097 / issue #775: consume any of `class`, `struct`, `new()`
-        // constraints in any order. The binder validates illegal
-        // combinations (e.g. `class struct`).
+        // ADR-0097 / issue #775 (constraint keyword renamed to `init()` by
+        // issue #997): consume any of `class`, `struct`, `init()` constraints
+        // in any order. The binder validates illegal combinations (e.g.
+        // `class struct`).
         SyntaxToken classKw = null;
         SyntaxToken structKw = null;
-        SyntaxToken newKw = null;
-        SyntaxToken newOpenParen = null;
-        SyntaxToken newCloseParen = null;
+        SyntaxToken initKw = null;
+        SyntaxToken initOpenParen = null;
+        SyntaxToken initCloseParen = null;
         while (true)
         {
             if (Current.Kind == SyntaxKind.ClassKeyword)
@@ -3252,15 +3254,15 @@ public class Parser
                 }
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken
-                     && Current.Text == "new"
+                     && Current.Text == "init"
                      && Peek(1).Kind == SyntaxKind.OpenParenthesisToken
                      && Peek(2).Kind == SyntaxKind.CloseParenthesisToken)
             {
-                if (newKw == null)
+                if (initKw == null)
                 {
-                    newKw = NextToken();
-                    newOpenParen = MatchToken(SyntaxKind.OpenParenthesisToken);
-                    newCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+                    initKw = NextToken();
+                    initOpenParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+                    initCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
                 }
                 else
                 {
@@ -3283,15 +3285,16 @@ public class Parser
             closeBracket,
             classKw,
             structKw,
-            newKw,
-            newOpenParen,
-            newCloseParen);
+            initKw,
+            initOpenParen,
+            initCloseParen);
     }
 
     /// <summary>
-    /// ADR-0097 / issue #775: returns <see langword="true"/> when
+    /// ADR-0097 / issue #775 (constraint keyword renamed to <c>init()</c> by
+    /// issue #997): returns <see langword="true"/> when
     /// <paramref name="token"/> begins a flag-style constraint
-    /// (<c>class</c>, <c>struct</c>, or <c>new(</c>). These are handled
+    /// (<c>class</c>, <c>struct</c>, or <c>init(</c>). These are handled
     /// in a dedicated post-loop after the legacy single-identifier
     /// constraint slot is parsed (<c>any</c>, <c>comparable</c>, or a
     /// sealed-interface name).
@@ -3303,7 +3306,7 @@ public class Parser
             return true;
         }
 
-        if (token.Kind == SyntaxKind.IdentifierToken && token.Text == "new" && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+        if (token.Kind == SyntaxKind.IdentifierToken && token.Text == "init" && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
         {
             return true;
         }

@@ -9,8 +9,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
 /// Bound expression representing the construction of a type parameter under a
-/// <c>new()</c> default-constructor constraint — the G# spelling <c>T()</c>
-/// where the enclosing generic declares <c>[T new()]</c> (issue #988).
+/// <c>init()</c> default-constructor constraint — the G# spelling <c>T()</c>
+/// where the enclosing generic declares <c>[T init()]</c> (issue #988; spelled new() before issue #997).
 /// Lowered at emit time to a reified
 /// <c>call !!0 System.Activator::CreateInstance&lt;!!T&gt;()</c> (ADR-0087),
 /// which produces a real instance for both reference types that expose a public

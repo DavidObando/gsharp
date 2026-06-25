@@ -13,16 +13,16 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// End-to-end emit tests for issue #988 — constructing a type parameter under a
-/// <c>new()</c> default-constructor constraint (<c>T()</c> where <c>[T new()]</c>).
+/// <c>init()</c> default-constructor constraint (<c>T()</c> where <c>[T init()]</c>).
 /// <para>
-/// G# now accepts a <c>new()</c> constraint on a generic type or function
+/// G# now accepts a <c>init()</c> constraint on a generic type or function
 /// parameter and lets the body construct that parameter with the call-like
 /// spelling <c>T()</c>. The construction lowers to a reified
 /// <c>System.Activator.CreateInstance&lt;T&gt;()</c> (ADR-0087), which works for
 /// both reference types with a public parameterless constructor and value types.
 /// These tests lock the feature in at the emit layer: parse + bind + emit +
 /// ilverify + execute, plus the two negative diagnostics (GS0152 for a type
-/// argument that cannot satisfy <c>new()</c>, GS0389 for constructing a type
+/// argument that cannot satisfy <c>init()</c>, GS0389 for constructing a type
 /// parameter that lacks the constraint), and a metadata assertion that the
 /// emitted GenericParam row carries <c>DefaultConstructorConstraint</c>.
 /// </para>
@@ -33,12 +33,12 @@ public class Issue988TypeParameterConstructionEmitTests
     public void GenericClass_ConstructsValueTypeParameter_PrintsDefault()
     {
         // The canonical issue #988 sample: a generic factory whose Make()
-        // constructs its `[T new()]` parameter. Closed over int32, the default
+        // constructs its `[T init()]` parameter. Closed over int32, the default
         // instance is 0.
         var source = """
             package T
             import System
-            class Factory[T new()] {
+            class Factory[T init()] {
                 func Make() T { return T() }
             }
             let f = Factory[int32]()
@@ -60,7 +60,7 @@ public class Issue988TypeParameterConstructionEmitTests
             class Node {
                 var Value int32 = 42
             }
-            class Factory[T new()] {
+            class Factory[T init()] {
                 func Make() T { return T() }
             }
             let f = Factory[Node]()
@@ -74,7 +74,7 @@ public class Issue988TypeParameterConstructionEmitTests
     [Fact]
     public void GenericFunction_ConstructsTypeParameter_PrintsField()
     {
-        // The `new()` constraint and `T()` construction also work on a generic
+        // The `init()` constraint and `T()` construction also work on a generic
         // FUNCTION (not just a generic type).
         var source = """
             package T
@@ -82,7 +82,7 @@ public class Issue988TypeParameterConstructionEmitTests
             class Node {
                 var Value int32 = 7
             }
-            func make[U new()]() U { return U() }
+            func make[U init()]() U { return U() }
             let m = make[Node]()
             Console.WriteLine(m.Value.ToString())
             """;
@@ -94,11 +94,11 @@ public class Issue988TypeParameterConstructionEmitTests
     public void TypeArgumentWithoutParameterlessCtor_ReportsGs0152()
     {
         // A type argument that lacks an accessible parameterless constructor
-        // cannot satisfy the `new()` constraint at the instantiation site.
+        // cannot satisfy the `init()` constraint at the instantiation site.
         var source = """
             package T
             class NoCtor(Value int32) { }
-            class Factory[T new()] {
+            class Factory[T init()] {
                 func Make() T { return T() }
             }
             let f = Factory[NoCtor]()
@@ -111,7 +111,7 @@ public class Issue988TypeParameterConstructionEmitTests
     [Fact]
     public void ConstructingTypeParameterWithoutNewConstraint_ReportsGs0389()
     {
-        // Constructing a type parameter that carries no `new()` constraint is a
+        // Constructing a type parameter that carries no `init()` constraint is a
         // clean compile error pointing at the missing constraint.
         var source = """
             package T
@@ -131,7 +131,7 @@ public class Issue988TypeParameterConstructionEmitTests
         // DefaultConstructorConstraint flag so the metadata round-trips.
         var source = """
             package T
-            class Factory[T new()] {
+            class Factory[T init()] {
                 func Make() T { return T() }
             }
             """;

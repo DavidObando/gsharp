@@ -103,15 +103,16 @@ public sealed class TypeParameterSymbol : TypeSymbol
     /// Type arguments must be a non-nullable value type. Maps to
     /// <see cref="System.Reflection.GenericParameterAttributes.NotNullableValueTypeConstraint"/>
     /// in emitted IL. A <c>struct</c> constraint implies the
-    /// <c>new()</c> (default-constructor) flag at the CLR level — the
+    /// <c>init()</c> (default-constructor) flag at the CLR level — the
     /// emitter sets both bits automatically per ECMA-335 II.10.1.7.
     /// </summary>
     public bool HasValueTypeConstraint { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether this type parameter carries
-    /// the default-constructor (<c>new()</c>) constraint (ADR-0097 /
-    /// issue #775). Type arguments must either be a value type or expose a
+    /// the default-constructor (<c>init()</c>) constraint (ADR-0097 /
+    /// issue #775; spelled <c>new()</c> before issue #997). Type arguments
+    /// must either be a value type or expose a
     /// public parameterless constructor. Maps to
     /// <see cref="System.Reflection.GenericParameterAttributes.DefaultConstructorConstraint"/>
     /// in emitted IL.

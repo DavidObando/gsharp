@@ -3733,11 +3733,11 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// Reports GS0361 — ADR-0097 / issue #775: a type-parameter constraint
     /// list combines mutually exclusive flag constraints. The forbidden
     /// combinations are <c>class struct</c> (a type cannot simultaneously
-    /// be a reference type and a value type) and <c>struct new()</c> (the
-    /// <c>new()</c> flag is implied by — and redundant with — <c>struct</c>
+    /// be a reference type and a value type) and <c>struct init()</c> (the
+    /// <c>init()</c> flag is implied by — and redundant with — <c>struct</c>
     /// at the CLR level; ECMA-335 II.10.1.7 already forces both bits
     /// whenever the value-type constraint is set, so the explicit
-    /// <c>new()</c> is rejected to keep the surface unambiguous).
+    /// <c>init()</c> is rejected to keep the surface unambiguous).
     /// </summary>
     /// <param name="location">The offending constraint location.</param>
     /// <param name="typeParameterName">The type-parameter name (e.g. <c>T</c>).</param>
@@ -4367,10 +4367,11 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
 
     /// <summary>
     /// Issue #988: GS0389 — a type parameter is constructed (<c>T()</c>) but it
-    /// carries no <c>new()</c> default-constructor constraint, so the compiler
+    /// carries no <c>init()</c> default-constructor constraint, so the compiler
     /// cannot guarantee an accessible parameterless constructor exists. Mirrors
-    /// C#'s CS0304. The fix is to add a <c>new()</c> constraint to the type
-    /// parameter (e.g. <c>[T new()]</c>).
+    /// C#'s CS0304. The fix is to add an <c>init()</c> constraint to the type
+    /// parameter (e.g. <c>[T init()]</c>). (Constraint keyword renamed from
+    /// <c>new()</c> to <c>init()</c> by issue #997.)
     /// </summary>
     /// <param name="location">The source location of the constructing identifier.</param>
     /// <param name="typeParameterName">The name of the type parameter being constructed.</param>
@@ -4381,7 +4382,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(
             location,
             "GS0389",
-            $"Cannot construct '{typeParameterName}()' because type parameter '{typeParameterName}' has no 'new()' constraint; add a 'new()' constraint (e.g. '[{typeParameterName} new()]') to allow construction (issue #988).",
+            $"Cannot construct '{typeParameterName}()' because type parameter '{typeParameterName}' has no 'init()' constraint; add an 'init()' constraint (e.g. '[{typeParameterName} init()]') to allow construction (issue #988).",
             DiagnosticSeverity.Error);
     }
 

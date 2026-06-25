@@ -173,10 +173,11 @@ For each generic `data struct`/`class`/`struct`/`interface`/`delegate type` decl
 - A call to `Map[int32, string](...)` (a user-declared generic method) emits a `MethodSpec` whose blob is `GENERICINST <n=2> I4 STRING`, parented at the open `MethodDef` (or the closed `MemberRef` if the declaring type is a generic instantiation).
 - A call to a generic method whose type arguments are inferred from arguments under ADR-0038 emits the same `MethodSpec` with the inferred types substituted in.
 
-#### 3.4.1 `new()`-constraint construction (issue #988)
+#### 3.4.1 `init()`-constraint construction (issue #988)
 
-Constructing a type parameter that carries a `new()` constraint — the G# form
-`T()` where `[T new()]` — lowers to a reified call to the BCL generic method
+Constructing a type parameter that carries an `init()` constraint — the G# form
+`T()` where `[T init()]` (the constraint keyword was renamed from `new()` to
+`init()` by issue #997) — lowers to a reified call to the BCL generic method
 `System.Activator::CreateInstance<T>()`. The call site emits a `MethodSpec`
 parented at the open `Activator.CreateInstance<>` `MemberRef`, with a one-argument
 `GENERICINST`-style argument blob that encodes the in-scope type parameter as
@@ -186,7 +187,7 @@ verifies clean for both reference types with a public parameterless constructor
 and value types, so no `constrained.`/`initobj` special-casing is required. The
 declaring type's `GenericParam` row carries the `DefaultConstructorConstraint`
 flag (set by `TypeDefEmitter`), so the metadata round-trips faithfully and the
-JIT enforces the constraint at the call site. Constructing without the `new()`
+JIT enforces the constraint at the call site. Constructing without the `init()`
 constraint is a binder error (GS0389), so the unverifiable shape never reaches
 emit.
 

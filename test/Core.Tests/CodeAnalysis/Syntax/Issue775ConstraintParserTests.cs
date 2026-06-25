@@ -10,12 +10,13 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 
 /// <summary>
 /// ADR-0097 / issue #775: parser-side acceptance tests for the new
-/// <c>class</c> / <c>struct</c> / <c>new()</c> type-parameter
-/// constraint spellings. The parser must round-trip each spelling
-/// (including all legal combinations) without diagnostics, must reach
-/// the <see cref="TypeParameterSyntax"/> node and expose the correct
-/// boolean flags, and must not regress on the legacy spellings
-/// (<c>any</c>, <c>comparable</c>, sealed-interface name, generic-bound
+/// <c>class</c> / <c>struct</c> / <c>init()</c> type-parameter
+/// constraint spellings (the default-constructor constraint was renamed
+/// from <c>new()</c> to <c>init()</c> by issue #997). The parser must
+/// round-trip each spelling (including all legal combinations) without
+/// diagnostics, must reach the <see cref="TypeParameterSyntax"/> node and
+/// expose the correct boolean flags, and must not regress on the legacy
+/// spellings (<c>any</c>, <c>comparable</c>, sealed-interface name, generic-bound
 /// shape <c>[T IAdd[T]]</c>).
 /// </summary>
 public class Issue775ConstraintParserTests
@@ -30,7 +31,7 @@ public class Issue775ConstraintParserTests
         var tp = FindFirstTypeParameter(tree);
         Assert.True(tp.HasClassConstraint);
         Assert.False(tp.HasStructConstraint);
-        Assert.False(tp.HasNewConstraint);
+        Assert.False(tp.HasInitConstraint);
         Assert.Null(tp.Constraint);
     }
 
@@ -44,34 +45,34 @@ public class Issue775ConstraintParserTests
         var tp = FindFirstTypeParameter(tree);
         Assert.False(tp.HasClassConstraint);
         Assert.True(tp.HasStructConstraint);
-        Assert.False(tp.HasNewConstraint);
+        Assert.False(tp.HasInitConstraint);
     }
 
     [Fact]
-    public void NewConstraint_Parses_AndExposesFlag()
+    public void InitConstraint_Parses_AndExposesFlag()
     {
-        const string source = "func F[T new()](x T) T { return x }";
+        const string source = "func F[T init()](x T) T { return x }";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
         var tp = FindFirstTypeParameter(tree);
         Assert.False(tp.HasClassConstraint);
         Assert.False(tp.HasStructConstraint);
-        Assert.True(tp.HasNewConstraint);
-        Assert.NotNull(tp.NewConstraintOpenParenToken);
-        Assert.NotNull(tp.NewConstraintCloseParenToken);
+        Assert.True(tp.HasInitConstraint);
+        Assert.NotNull(tp.InitConstraintOpenParenToken);
+        Assert.NotNull(tp.InitConstraintCloseParenToken);
     }
 
     [Fact]
-    public void ClassAndNewConstraint_Combined_Parses()
+    public void ClassAndInitConstraint_Combined_Parses()
     {
-        const string source = "func F[T class new()](x T) T { return x }";
+        const string source = "func F[T class init()](x T) T { return x }";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
         var tp = FindFirstTypeParameter(tree);
         Assert.True(tp.HasClassConstraint);
-        Assert.True(tp.HasNewConstraint);
+        Assert.True(tp.HasInitConstraint);
     }
 
     [Fact]
@@ -118,7 +119,7 @@ public class Issue775ConstraintParserTests
         Assert.Equal("any", tp.Constraint.Text);
         Assert.False(tp.HasClassConstraint);
         Assert.False(tp.HasStructConstraint);
-        Assert.False(tp.HasNewConstraint);
+        Assert.False(tp.HasInitConstraint);
     }
 
     [Fact]
@@ -154,6 +155,79 @@ public class Issue775ConstraintParserTests
             """;
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
+    }
+
+    [Fact]
+    public void InitConstraint_OnClassDeclaration_Parses()
+    {
+        const string source = """
+            package P
+            class Box[T init()] {
+                var v T
+            }
+            """;
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var tp = FindFirstTypeParameter(tree);
+        Assert.True(tp.HasInitConstraint);
+    }
+
+    [Fact]
+    public void InitCtorDeclaration_StillParses_NoRegressionFromInitConstraint()
+    {
+        // Issue #997 guard: adding `init()` as a contextual constraint keyword
+        // (only inside a generic parameter list) must NOT break the existing
+        // `init(...)` constructor declaration syntax in a class body.
+        const string source = """
+            package P
+            class Rect {
+                var Width int32
+                var Height int32
+                init(w int32, h int32) {
+                    Width = w
+                    Height = h
+                }
+            }
+            """;
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+    }
+
+    [Fact]
+    public void InitOnlyProperty_StillParses_NoRegressionFromInitConstraint()
+    {
+        // Issue #997 guard: the `init` accessor of an init-only property must
+        // still parse correctly after `init()` becomes a constraint keyword.
+        const string source = """
+            package P
+            class Box {
+                prop X int32 { get; init; }
+            }
+            """;
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+    }
+
+    [Fact]
+    public void InitConstraint_WithInitCtor_BothParseTogether()
+    {
+        // Issue #997: a generic class can carry an `init()` constraint on its
+        // type parameter AND declare an `init(...)` constructor in its body.
+        const string source = """
+            package P
+            class Box[T init()] {
+                var v T
+                init(value T) {
+                    v = value
+                }
+            }
+            """;
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var tp = FindFirstTypeParameter(tree);
+        Assert.True(tp.HasInitConstraint);
     }
 
     private static TypeParameterSyntax FindFirstTypeParameter(SyntaxTree tree)

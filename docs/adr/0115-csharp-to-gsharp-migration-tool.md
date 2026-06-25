@@ -158,7 +158,7 @@ C# **extension methods** (`static R M(this T self, …)`) translate to the recei
 #### B.7 Generics — ADR-0020, ADR-0097, ADR-0098/ADR-0049
 
 - Bracket form for both declaration and instantiation: `func Identity[T any](value T) T`, `List[int32]()` (ADR-0020). **No angle brackets** ever appear in output.
-- Constraints render in the bracket: the legacy slot (`any`, `comparable`, an interface bound — non-generic or **constructed-generic**, including the self-referential `IComparable[T]`) plus repeatable flag constraints `class`, `struct`, `new()` (ADR-0097). C# `where T : class` → `[T class]`, `where T : struct` → `[T struct]`, `where T : new()` → `[T new()]`, `where T : IFoo` → `[T IFoo]`, `where T : IComparable<T>` → `[T IComparable[T]]` (issue #943). Variance `in`/`out` is carried on type parameters of interfaces/delegates (ADR-0021).
+- Constraints render in the bracket: the legacy slot (`any`, `comparable`, an interface bound — non-generic or **constructed-generic**, including the self-referential `IComparable[T]`) plus repeatable flag constraints `class`, `struct`, `init()` (ADR-0097; the default-constructor constraint was renamed from `new()` to `init()` by issue #997). C# `where T : class` → `[T class]`, `where T : struct` → `[T struct]`, `where T : new()` → `[T init()]`, `where T : IFoo` → `[T IFoo]`, `where T : IComparable<T>` → `[T IComparable[T]]` (issue #943). Variance `in`/`out` is carried on type parameters of interfaces/delegates (ADR-0021).
 - **`where T : notnull`** has no precise G# constraint keyword; the translator **drops** it (records an Info diagnostic). `comparable`/`any` would change the semantics, so the faithful choice is no constraint.
 
 > **Generic-interface constraint `where T : IComparable<T>` — RESOLVED (issue #943).**
@@ -765,7 +765,7 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #985 | implementing `IEnumerable[T]` needs two `GetEnumerator` overloads differing only by return type (generic `IEnumerator[T]` + non-generic `IEnumerator`) | GS0264 + GS0187 | resolved (covariant-return interface bridge: GS0264 relaxed when two same-name/param methods satisfy distinct interface slots; inherited base-interface slots now required so a missing bridge still errors GS0187; emit writes the `MethodImpl` + non-generic `IEnumerable` `InterfaceImpl` rows) |
 | #986 | `base.Method()` virtual base-class call has no canonical G# form (`base[Base].M` is interface-only per ADR-0091) | GS0157 / GS0338 | **resolved** (issue #986 — `base.M(...)` / `base[Base].M(...)` emit a non-virtual base-class call; ADR-0091 extended) |
 | #987 | an `abstract` (no-body) method on an `open class` → emitter crash | GS9998 (NRE) | **resolved** (issue #987 — no-body `open func F() R;` emits a CLR `abstract virtual` slot; the declaring type becomes `TypeAttributes.Abstract`; new diagnostics GS0386 not-instantiable / GS0387 missing-override / GS0388 abstract-requires-open) |
-| #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | **resolved** (issue #988 — `[T new()]` declares a `new()` constraint and `T()` constructs the parameter, lowered to a reified `Activator.CreateInstance<T>()`; new diagnostic GS0389 when constructing without the constraint; GS0152 still guards bad type arguments) |
+| #988 | `new T()` construction under a `new()` constraint has no canonical G# form | GS0125 / GS0130 / GS0157 | **resolved** (issue #988 — `[T init()]` declares an `init()` constraint (renamed from `new()` by issue #997) and `T()` constructs the parameter, lowered to a reified `Activator.CreateInstance<T>()`; new diagnostic GS0389 when constructing without the constraint; GS0152 still guards bad type arguments) |
 | #989 | a generic auto-property over `T` (`prop Value T`) cannot be member-accessed | GS0158 | **resolved** (issue #989 — `StructSymbol` construction now carries the property table across with the property/indexer type substituted, exactly like fields; the emitter parents the external accessor call at the constructed `TypeSpec` and routes the auto-accessor backing-field token through the self-`TypeSpec` MemberRef so read/write round-trips and IL-verifies) |
 | #990 | a user reference-type iterator (`sequence[UserClass]`) → emitter crash | GS9998 | **resolved** (user reference- and value-type element iterators emit, ilverify, and run) |
 | #991 | a `when` guard on a `switch` statement/expression arm won't parse | GS0005 | **resolved** (issue #991 — `case <pattern> when <bool>:` / `case <pattern> when <bool> { … }` parse a contextual `when` guard; an arm matches only when the pattern matches AND the guard is true; guarded arms never satisfy exhaustiveness; cs2gs now translates C# `when` guards to the new form) |
@@ -953,21 +953,22 @@ open class Shape {
 
 **#988 — `new T()` construction under a `new()` constraint. RESOLVED (issue #988).**
 A C# generic that constructs its type parameter (`where T : new()`, `new T()`)
-now has a canonical G# spelling: declare the constraint with `[T new()]` and
+now has a canonical G# spelling: declare the constraint with `[T init()]`
+(renamed from `new()` by issue #997) and
 construct the parameter with the call-like form `T()`. The construction lowers
 to a reified `System.Activator.CreateInstance<T>()` (the standard C# `new()`
 lowering, ADR-0087), which produces a real instance for both reference types
 with a public parameterless constructor and value types. Constructing a type
-parameter without the `new()` constraint is a clean compile error (GS0389); a
-type argument that cannot satisfy `new()` is still rejected at the instantiation
+parameter without the `init()` constraint is a clean compile error (GS0389); a
+type argument that cannot satisfy `init()` is still rejected at the instantiation
 site (GS0152).
 
 ```gs
 // now compiles, ilverifies, and runs:
-class Factory[T new()] {
+class Factory[T init()] {
     func Make() T { return T() }     // T() constructs T
 }
-func make[T new()]() T { return T() } // also on generic functions
+func make[T init()]() T { return T() } // also on generic functions
 ```
 ```gs
 // control — the caller supplies the instance (still compiles):

@@ -15,12 +15,12 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #988: binder-level coverage for constructing a type parameter under a
-/// <c>new()</c> default-constructor constraint (<c>T()</c> where <c>[T new()]</c>).
+/// <c>init()</c> default-constructor constraint (<c>T()</c> where <c>[T init()]</c>).
 /// The construction is reified to <c>Activator.CreateInstance&lt;T&gt;()</c> at
 /// emit time (see <c>Issue988TypeParameterConstructionEmitTests</c>); these
 /// tests lock in the binder contract: the construction binds clean when the
 /// constraint is present, GS0389 fires when it is absent, and GS0152 fires when
-/// a type argument cannot satisfy <c>new()</c>.
+/// a type argument cannot satisfy <c>init()</c>.
 /// </summary>
 public class Issue988NewConstraintConstructionTests
 {
@@ -28,7 +28,7 @@ public class Issue988NewConstraintConstructionTests
     public void NewConstraint_ConstructTypeParameterInGenericClass_BindsWithoutDiagnostics()
     {
         var source = @"
-class Factory[T new()] {
+class Factory[T init()] {
     func Make() T { return T() }
 }
 ";
@@ -40,7 +40,7 @@ class Factory[T new()] {
     public void NewConstraint_ConstructTypeParameterInGenericFunction_BindsWithoutDiagnostics()
     {
         var source = @"
-func make[U new()]() U { return U() }
+func make[U init()]() U { return U() }
 ";
         var diagnostics = Bind(source);
         Assert.DoesNotContain(diagnostics, d => d.IsError);
@@ -73,7 +73,7 @@ func make[U any]() U { return U() }
     {
         var source = @"
 class NoCtor(Value int32) { }
-class Factory[T new()] {
+class Factory[T init()] {
     func Make() T { return T() }
 }
 let f = Factory[NoCtor]()
@@ -86,7 +86,7 @@ let f = Factory[NoCtor]()
     public void NewConstraint_ValueTypeArgument_SatisfiesConstraint()
     {
         var source = @"
-class Factory[T new()] {
+class Factory[T init()] {
     func Make() T { return T() }
 }
 let f = Factory[int32]()
