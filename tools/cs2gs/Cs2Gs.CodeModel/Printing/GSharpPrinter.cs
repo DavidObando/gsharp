@@ -437,14 +437,10 @@ public static class GSharpPrinter
                 return $"if {RenderExpression(ifExpression.Condition, indent)} {{ {RenderBranchValue(ifExpression.ThenExpression, indent)} }} else {{ {RenderBranchValue(ifExpression.ElseExpression, indent)} }}";
 
             case ThrowExpression throwExpression:
-                // G# has no throw-expression: lower to an if-expression whose
-                // then-branch block runs the `throw` statement and supplies an
-                // unreachable typed tail (spec §If expressions). The shape is a
-                // primary expression, so it is valid in every value position.
-                var throwTail = throwExpression.ResultType == null
-                    ? "default"
-                    : $"default({RenderType(throwExpression.ResultType)})";
-                return $"if true {{ throw {RenderExpression(throwExpression.Operand, indent)}\n{Indent(indent + 1)}{throwTail} }} else {{ {throwTail} }}";
+                // G# supports throw-as-expression natively: render the bare
+                // `throw <operand>` form, valid in coalesce-RHS, switch-arm,
+                // and ternary expression positions (issue #1153).
+                return $"throw {RenderExpression(throwExpression.Operand, indent)}";
 
             case OutArgumentExpression outArgument:
                 return $"{outArgument.Keyword} {outArgument.Name}";
@@ -483,6 +479,18 @@ public static class GSharpPrinter
         if (expression is SwitchExpression)
         {
             return $"({RenderExpression(expression, indent)})";
+        }
+
+        // A bare throw-expression is not accepted as the sole trailing value of
+        // an if-expression block branch (gsc GS0277). Emit the throw as a
+        // STATEMENT followed by a value-producing typed tail so the branch block
+        // ends with a value-producing expression (issue #1153).
+        if (expression is ThrowExpression throwExpression)
+        {
+            var throwTail = throwExpression.ResultType == null
+                ? "default"
+                : $"default({RenderType(throwExpression.ResultType)})";
+            return $"throw {RenderExpression(throwExpression.Operand, indent)}\n{Indent(indent + 1)}{throwTail}";
         }
 
         return RenderExpression(expression, indent);
