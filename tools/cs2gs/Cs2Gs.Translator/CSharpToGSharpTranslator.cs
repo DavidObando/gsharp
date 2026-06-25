@@ -1487,6 +1487,14 @@ public sealed class CSharpToGSharpTranslator
                     ? this.typeMapper.Map(symbol.Type, this.context, declarator.GetLocation())
                     : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
 
+                // Issue #1072: a non-nullable reference/array field that is
+                // null-checked or null-assigned anywhere in the declaring type is
+                // really nullable; render it `T?` so the `== nil` guard type-checks.
+                if (symbol != null)
+                {
+                    type = this.PromoteIfUsedAsNullable(type, symbol);
+                }
+
                 // T2: a field initializer (ADR-0115 §B.3) comes either from a
                 // constructor assignment independent of the constructor parameters
                 // (lifted out of the dropped `init`) or from a C# field initializer.
@@ -2253,6 +2261,15 @@ public sealed class CSharpToGSharpTranslator
 
             GTypeReference type = this.typeMapper.Map(parameterType, this.context, symbol.Locations.FirstOrDefault());
 
+            // Issue #1072: a non-nullable reference/array parameter that is
+            // null-checked or null-assigned in the method body is really nullable;
+            // render it `T?` so the `== nil` guard type-checks (variadic params are
+            // never null-compared as a whole, so they are excluded).
+            if (!variadic)
+            {
+                type = this.PromoteIfUsedAsNullable(type, symbol);
+            }
+
             GExpression defaultValue = null;
             if (symbol.HasExplicitDefaultValue)
             {
@@ -2814,6 +2831,13 @@ public sealed class CSharpToGSharpTranslator
                     type = typeSymbol != null
                         ? this.typeMapper.Map(typeSymbol, this.context, declaration.Type.GetLocation())
                         : null;
+
+                    // Issue #1072: a non-nullable reference/array local that is
+                    // null-checked or null-assigned in its scope is really nullable.
+                    if (this.context.GetDeclaredSymbol(declarator) is ILocalSymbol localSymbol)
+                    {
+                        type = this.PromoteIfUsedAsNullable(type, localSymbol);
+                    }
                 }
 
                 // `let r = x ?? throw E` → evaluate x once, throw when nil, then
@@ -4088,6 +4112,163 @@ public sealed class CSharpToGSharpTranslator
             return false;
         }
 
+        // Issue #1072: G# follows Kotlin-style nullability, so `nil`-safety is
+        // enforced by the static type, not by a `!!`-on-`nil` escape hatch. A C#
+        // symbol DECLARED non-nullable (`T`) but defensively compared against
+        // `null` (`== null` / `!= null`) or assigned `null` / `null!` is, in
+        // truth, nullable: faithfully it must render `T?` so the `== nil`/`!= nil`
+        // guard type-checks (gsc only permits `== nil` on a nullable operand,
+        // otherwise GS0129). Returns true when <paramref name="symbol"/> is used
+        // that way anywhere in <paramref name="scope"/>.
+        private bool IsUsedAsNullable(ISymbol symbol, SyntaxNode scope)
+        {
+            if (symbol == null || scope == null)
+            {
+                return false;
+            }
+
+            // The scope is scanned with the current document's semantic model, so a
+            // node from another syntax tree (e.g. an inherited field declared in a
+            // different file) cannot be queried here — `GetSymbolInfo` would throw
+            // "Syntax node is not within syntax tree". Such a symbol is promoted (if
+            // applicable) while its own document is translated; skip it here.
+            if (scope.SyntaxTree != this.context.SemanticModel.SyntaxTree)
+            {
+                return false;
+            }
+
+            foreach (SyntaxNode node in scope.DescendantNodes())
+            {
+                switch (node)
+                {
+                    case BinaryExpressionSyntax binary
+                        when binary.IsKind(SyntaxKind.EqualsExpression)
+                            || binary.IsKind(SyntaxKind.NotEqualsExpression):
+                        if ((IsNullLiteral(binary.Right) && this.BindsTo(binary.Left, symbol))
+                            || (IsNullLiteral(binary.Left) && this.BindsTo(binary.Right, symbol)))
+                        {
+                            return true;
+                        }
+
+                        break;
+
+                    case AssignmentExpressionSyntax assignment
+                        when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                            && this.BindsTo(assignment.Left, symbol)
+                            && IsNullOrSuppressedNull(assignment.Right):
+                        return true;
+
+                    case IsPatternExpressionSyntax isPattern
+                        when this.BindsTo(isPattern.Expression, symbol)
+                            && IsNullConstantPattern(isPattern.Pattern):
+                        return true;
+
+                    case VariableDeclaratorSyntax declarator
+                        when declarator.Initializer != null
+                            && IsNullOrSuppressedNull(declarator.Initializer.Value)
+                            && SymbolEqualityComparer.Default.Equals(
+                                this.context.GetDeclaredSymbol(declarator), symbol):
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        // Promotes <paramref name="type"/> to its nullable (`T?`) form when the
+        // symbol it renders is declared as a non-nullable reference/array type yet
+        // is used as nullable in its scope (issue #1072). Value types and
+        // already-nullable types are left untouched: this pass only covers
+        // reference-type/array null-comparison and null-assignment.
+        private GTypeReference PromoteIfUsedAsNullable(GTypeReference type, ISymbol symbol)
+        {
+            if (type == null || type.IsNullable)
+            {
+                return type;
+            }
+
+            return this.IsPromotedToNullableReference(symbol) ? MakeNullable(type) : type;
+        }
+
+        // Issue #1072: true when <paramref name="symbol"/> is a parameter/field/local
+        // whose DECLARED type is a non-nullable reference (or array) but which is
+        // null-checked or null-assigned in its scope, so the translator renders it
+        // `T?`. This is the single source of truth shared by the type-rendering paths
+        // (param/field/local) and the `!!` non-null-assertion pass
+        // (<see cref="ReceiverNeedsNullForgiveness"/>) so a promoted receiver still
+        // gets its flow-proven `recv!!.Member` assertion.
+        private bool IsPromotedToNullableReference(ISymbol symbol)
+        {
+            ITypeSymbol declared = symbol switch
+            {
+                IFieldSymbol f => f.Type,
+                ILocalSymbol l => l.Type,
+                IParameterSymbol p => p.Type,
+                _ => null,
+            };
+
+            if (declared is not { IsReferenceType: true }
+                || declared.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return false;
+            }
+
+            return this.IsUsedAsNullable(symbol, this.GetNullabilityScope(symbol));
+        }
+
+        // The syntax region a symbol's null usage is searched in: the whole
+        // enclosing method for a parameter, the whole declaring type for a field,
+        // and the enclosing method body block for a local.
+        private SyntaxNode GetNullabilityScope(ISymbol symbol)
+        {
+            switch (symbol)
+            {
+                case IParameterSymbol parameter:
+                    return parameter.ContainingSymbol?
+                        .DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+
+                case IFieldSymbol field:
+                    return field.ContainingType?
+                        .DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+
+                case ILocalSymbol local:
+                    SyntaxNode declaration = local
+                        .DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+                    return declaration?.Ancestors().LastOrDefault(a => a is BlockSyntax);
+
+                default:
+                    return null;
+            }
+        }
+
+        // `x is null` / `x is not null` constant pattern (the C# pattern form of a
+        // null comparison, which the translator lowers to `== nil` / `!= nil`).
+        private static bool IsNullConstantPattern(PatternSyntax pattern)
+        {
+            if (pattern is UnaryPatternSyntax unary && unary.IsKind(SyntaxKind.NotPattern))
+            {
+                pattern = unary.Pattern;
+            }
+
+            return pattern is ConstantPatternSyntax constant && IsNullLiteral(constant.Expression);
+        }
+
+        private static bool IsNullLiteral(ExpressionSyntax expression) =>
+            expression is LiteralExpressionSyntax literal
+                && literal.IsKind(SyntaxKind.NullLiteralExpression);
+
+        // `null` or `null!` (a SuppressNullableWarning over a null literal).
+        private static bool IsNullOrSuppressedNull(ExpressionSyntax expression)
+        {
+            if (expression is PostfixUnaryExpressionSyntax suppress
+                && suppress.IsKind(SyntaxKind.SuppressNullableWarningExpression))
+            {
+                expression = suppress.Operand;
+            }
+
+            return IsNullLiteral(expression);
+        }
+
         private GExpression TranslateExpression(ExpressionSyntax expression)
         {
             switch (expression)
@@ -5081,7 +5262,17 @@ public sealed class CSharpToGSharpTranslator
             // Focus on the GS0158/GS0116 cases: nullable reference types and
             // nullable arrays. Nullable value types (`int?`) take the `.Value`/
             // `.HasValue` path and are left untouched.
-            return declared is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated };
+            if (declared is not { IsReferenceType: true })
+            {
+                return false;
+            }
+
+            // A declared-nullable receiver (`T?`) flow-proven non-null needs `!!`.
+            // A declared non-null receiver that this pass PROMOTED to `T?`
+            // (issue #1072: null-checked param/field/local) is rendered nullable
+            // too, so its flow-proven uses need the same assertion for consistency.
+            return declared.NullableAnnotation == NullableAnnotation.Annotated
+                || this.IsPromotedToNullableReference(symbol);
         }
 
         private GExpression TranslateInvocation(InvocationExpressionSyntax invocation)
