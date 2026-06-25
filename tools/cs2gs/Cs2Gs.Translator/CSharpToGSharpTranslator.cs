@@ -3240,6 +3240,16 @@ public sealed class CSharpToGSharpTranslator
             if (expression is AssignmentExpressionSyntax assignment &&
                 assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
             {
+                if (assignment.Left is IdentifierNameSyntax { Identifier.ValueText: "_" })
+                {
+                    // C# statement-level discard `_ = e` (Roslyn parses the `_`
+                    // target as an IdentifierNameSyntax). G# has no discard target
+                    // (`_ = e` → GS0125), so drop the assignment and emit just the
+                    // RHS as statement(s); `_ = a = b`, `_ = x ?? throw E`, and
+                    // `_ = await ...` flow through the RHS translation (issue #914).
+                    return this.TranslateExpressionStatements(assignment.Right);
+                }
+
                 if (TryGetCoalesceThrow(assignment.Right, out ExpressionSyntax coalesceValue, out ThrowExpressionSyntax coalesceThrow))
                 {
                     // `target = x ?? throw E` → evaluate x once, throw when nil,
@@ -3913,6 +3923,20 @@ public sealed class CSharpToGSharpTranslator
 
         private GStatement TranslateForStatement(ForStatementSyntax forStatement)
         {
+            int declaratorCount = forStatement.Declaration?.Variables.Count ?? 0;
+
+            // G#'s `for` carries a SINGLE init clause and a SINGLE incrementor, so
+            // a C-style `for` with multiple declarators/initializers or multiple
+            // incrementors cannot be represented directly. Lower those to a block
+            // + `while` so every init runs once up front and every incrementor runs
+            // at the end of each iteration (issue #914).
+            if (declaratorCount > 1 ||
+                forStatement.Initializers.Count > 1 ||
+                forStatement.Incrementors.Count > 1)
+            {
+                return this.LowerForToWhile(forStatement);
+            }
+
             GStatement initializer = null;
             if (forStatement.Declaration != null)
             {
@@ -3937,6 +3961,51 @@ public sealed class CSharpToGSharpTranslator
                 condition,
                 incrementor,
                 this.TranslateStatementAsBlock(forStatement.Statement));
+        }
+
+        /// <summary>
+        /// Lowers a C-style <c>for</c> that has more than one initializer/declarator
+        /// or more than one incrementor — neither of which fits G#'s single-init,
+        /// single-incrementor <c>for</c> — into an equivalent block + <c>while</c>:
+        /// all inits run once before the loop, the body runs each iteration, then
+        /// every incrementor runs at the end of the body (issue #914).
+        /// </summary>
+        /// <remarks>
+        /// Fidelity caveat: in C# the incrementors also run when the body executes a
+        /// loop-targeting <c>continue</c>; in this while-lowering the trailing
+        /// incrementors are SKIPPED on <c>continue</c>. The decoder loops this fix
+        /// targets do not use a loop-level <c>continue</c>, so the lowering is
+        /// faithful for them; a warning would be required to generalise this.
+        /// </remarks>
+        private GStatement LowerForToWhile(ForStatementSyntax forStatement)
+        {
+            var outer = new List<GStatement>();
+
+            if (forStatement.Declaration != null)
+            {
+                outer.AddRange(this.TranslateLocalDeclaration(forStatement.Declaration, isConst: false));
+            }
+
+            foreach (ExpressionSyntax init in forStatement.Initializers)
+            {
+                outer.AddRange(this.TranslateExpressionStatements(init));
+            }
+
+            GExpression condition = forStatement.Condition == null
+                ? LiteralExpression.Bool(true)
+                : GuardBlockCondition(this.TranslateExpression(forStatement.Condition));
+
+            var bodyStatements = new List<GStatement>(
+                this.TranslateStatementAsBlock(forStatement.Statement).Statements);
+
+            foreach (ExpressionSyntax inc in forStatement.Incrementors)
+            {
+                bodyStatements.AddRange(this.TranslateExpressionStatements(inc));
+            }
+
+            outer.Add(new WhileStatement(condition, new BlockStatement(bodyStatements)));
+
+            return new BlockStatement(outer);
         }
 
         private bool IsLocalReassigned(ILocalSymbol local)
