@@ -2654,7 +2654,7 @@ public sealed class CSharpToGSharpTranslator
                     };
 
                 case IfStatementSyntax ifStatement:
-                    return new[] { this.TranslateIf(ifStatement) };
+                    return this.TranslateIfStatements(ifStatement).ToArray();
 
                 case WhileStatementSyntax whileStatement:
                     return new[]
@@ -2788,6 +2788,16 @@ public sealed class CSharpToGSharpTranslator
             string op = binary.OperatorToken.Text;
             GExpression right = this.TranslateExpression(binary.Right);
 
+            // C# null-coalescing `a ?? b`: the left is a nullable numeric, the
+            // right must match the left's *underlying* (non-nullable) numeric type
+            // (a `??` is not a symmetric arithmetic promotion of both sides). Only
+            // apply this when both sides are numeric; mixed reference cases such as
+            // `Task<T>? ?? Task` flow through unchanged.
+            if (op == "??")
+            {
+                return this.TranslateNullCoalescing(binary, left, right);
+            }
+
             if (!IsNumericPromotionOperator(op))
             {
                 return new BinaryExpression(left, op, right);
@@ -2849,13 +2859,102 @@ public sealed class CSharpToGSharpTranslator
             return new BinaryExpression(left, op, right);
         }
 
-        // Emits `(expr as T)` where T is the canonical G# form of `targetType`,
-        // making the C# implicit numeric promotion explicit for the G# binder.
+        // For a compound numeric assignment `x OP= y` (`+= -= *= /= %= &= |= ^=`),
+        // G# requires the RHS to share the LHS's numeric type; a mismatched RHS is
+        // coerced to the LHS type via the conversion-call form (e.g. `x += int64(y)`).
+        // A nullable RHS is coerced through the LHS's underlying numeric type.
+        private GExpression CoerceCompoundAssignmentRhs(
+            AssignmentExpressionSyntax assignment, GExpression rhs)
+        {
+            if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+            {
+                return rhs;
+            }
+
+            ITypeSymbol leftType = this.context.GetTypeInfo(assignment.Left).Type;
+            ITypeSymbol rightType = this.context.GetTypeInfo(assignment.Right).Type;
+
+            if (TryGetNumericKind(leftType, out SpecialType leftUnderlying) &&
+                TryGetNumericKind(rightType, out SpecialType rightUnderlying) &&
+                leftUnderlying != rightUnderlying)
+            {
+                return this.CoerceOperandTo(rhs, UnwrapNullable(leftType));
+            }
+
+            return rhs;
+        }
+
+        // C# `a ?? b` where `a` is a nullable numeric: G# requires `b` to match
+        // the underlying numeric type of `a`, otherwise GS0129. Coerce the right
+        // operand to the left's underlying (non-nullable) type when they differ.
+        // Non-numeric coalescing (reference types, tasks) is left untouched.
+        private GExpression TranslateNullCoalescing(
+            BinaryExpressionSyntax binary, GExpression left, GExpression right)
+        {
+            ITypeSymbol leftType = this.context.GetTypeInfo(binary.Left).Type;
+            ITypeSymbol rightType = this.context.GetTypeInfo(binary.Right).Type;
+
+            if (TryGetNumericKind(leftType, out SpecialType leftUnderlying) &&
+                TryGetNumericKind(rightType, out SpecialType rightUnderlying) &&
+                leftUnderlying != rightUnderlying)
+            {
+                ITypeSymbol leftUnderlyingType = UnwrapNullable(leftType);
+                right = this.CoerceOperandTo(right, leftUnderlyingType);
+            }
+
+            return new BinaryExpression(left, "??", right);
+        }
+
+        // Unwraps `System.Nullable<T>` to its underlying `T`; other types pass
+        // through unchanged.
+        private static ITypeSymbol UnwrapNullable(ITypeSymbol type)
+        {
+            if (type is INamedTypeSymbol named &&
+                named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+                named.TypeArguments.Length == 1)
+            {
+                return named.TypeArguments[0];
+            }
+
+            return type;
+        }
+
+        // non-nullable value type target (e.g. `uint8`, `int32`) G# rejects
+        // `(expr as T)` with GS0270 ("the 'as' operator requires the target type to
+        // be a reference type or a nullable value type"); the canonical G# form is
+        // the width-bearing conversion-call `T(expr)`. Only a reference type or a
+        // nullable value type target (where `as` is valid) keeps the `as` form.
         private GExpression CoerceOperandTo(GExpression expression, ITypeSymbol targetType)
         {
+            if (IsNonNullableValueType(targetType))
+            {
+                GTypeReference conversionTarget = this.typeMapper.Map(
+                    targetType, this.context, Location.None);
+                return new ConversionExpression(conversionTarget, expression);
+            }
+
             GTypeReference target = this.typeMapper.Map(targetType, this.context, Location.None);
             return new ParenthesizedExpression(
                 new BinaryExpression(expression, "as", new TypeExpression(target)));
+        }
+
+        // Reports whether `type` is a value type that is not `System.Nullable<T>`,
+        // i.e. a target for which G#'s `as` operator is invalid (GS0270) and the
+        // conversion-call form must be used instead.
+        private static bool IsNonNullableValueType(ITypeSymbol type)
+        {
+            if (type == null || !type.IsValueType)
+            {
+                return false;
+            }
+
+            if (type is INamedTypeSymbol named &&
+                named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+            {
+                return false;
+            }
+
+            return true;
         }
 
         private static bool IsNumericPromotionOperator(string op)
@@ -2873,6 +2972,9 @@ public sealed class CSharpToGSharpTranslator
                 case "*":
                 case "/":
                 case "%":
+                case "&":
+                case "|":
+                case "^":
                     return true;
                 default:
                     return false;
@@ -2880,9 +2982,9 @@ public sealed class CSharpToGSharpTranslator
         }
 
         // Reports whether `type` is a numeric primitive (unwrapping Nullable<T>) and
-        // yields its underlying special type. `bool`/`char`/`string` are excluded:
-        // they do not participate in C# implicit numeric promotion in a way that
-        // needs a G# conversion here.
+        // yields its underlying special type. `char` is included because C# promotes
+        // it to `int` in arithmetic/comparison/bitwise contexts, so a mismatched
+        // `uint8 == 'A'` needs a G# conversion here. `bool`/`string` are excluded.
         private static bool TryGetNumericKind(ITypeSymbol type, out SpecialType underlying)
         {
             underlying = SpecialType.None;
@@ -2900,6 +3002,7 @@ public sealed class CSharpToGSharpTranslator
 
             switch (type.SpecialType)
             {
+                case SpecialType.System_Char:
                 case SpecialType.System_SByte:
                 case SpecialType.System_Byte:
                 case SpecialType.System_Int16:
@@ -3026,11 +3129,13 @@ public sealed class CSharpToGSharpTranslator
             {
                 case AssignmentExpressionSyntax assignment:
                     string op = assignment.OperatorToken.Text;
+                    GExpression assignRhs = this.CoerceConstantToUnsigned(
+                        assignment.Right,
+                        this.TranslateExpression(assignment.Right));
+                    assignRhs = this.CoerceCompoundAssignmentRhs(assignment, assignRhs);
                     return new AssignmentStatement(
                         this.TranslateExpression(assignment.Left),
-                        this.CoerceConstantToUnsigned(
-                            assignment.Right,
-                            this.TranslateExpression(assignment.Right)),
+                        assignRhs,
                         op);
 
                 case PostfixUnaryExpressionSyntax postfix
@@ -3341,6 +3446,136 @@ public sealed class CSharpToGSharpTranslator
                 IndexExpression => true,
                 BinaryExpression binary => EndsWithIndexExpression(binary.Right),
                 _ => false,
+            };
+        }
+
+        /// <summary>
+        /// Translates an <c>if</c> statement into one or more G# statements. A C#
+        /// negated type-pattern guard with a designation (<c>if (x is not T t) {
+        /// throw/return; }</c>) needs the binder <c>t</c> to remain in scope *after*
+        /// the <c>if</c> (the then-block exits), and a property-path receiver cannot
+        /// be smart-cast — so it is lowered to a hoisted nullable local plus a
+        /// nil-guard (<see cref="TryBuildNegatedGuardHoist"/>). Every other form maps
+        /// to the single-statement <see cref="TranslateIf"/>.
+        /// </summary>
+        private IEnumerable<GStatement> TranslateIfStatements(IfStatementSyntax ifStatement)
+        {
+            if (this.TryBuildNegatedGuardHoist(ifStatement, out IReadOnlyList<GStatement> hoisted))
+            {
+                return hoisted;
+            }
+
+            return new[] { this.TranslateIf(ifStatement) };
+        }
+
+        /// <summary>
+        /// Lowers a C# negated type-pattern guard <c>if (receiver is not T t) {
+        /// … }</c> to the smart-cast-friendly G# form below.
+        /// <code>
+        /// let t T? = receiver as T
+        /// if t == nil { … }
+        /// </code>
+        /// The binder <c>t</c> becomes a real hoisted local that survives past the
+        /// <c>if</c> (so later <c>t.Member</c> uses bind to it under G#'s Kotlin-style
+        /// smart cast), and a property-path receiver (<c>child.Header</c>) is
+        /// evaluated once into the local. Only applies when the whole condition is a
+        /// negated declaration/recursive type-pattern with a single-variable
+        /// designation over a reference (non-value) target type, where
+        /// <c>as T</c> + nil-guard is valid.
+        /// </summary>
+        private bool TryBuildNegatedGuardHoist(
+            IfStatementSyntax ifStatement, out IReadOnlyList<GStatement> result)
+        {
+            result = null;
+
+            if (ifStatement.Condition is not IsPatternExpressionSyntax isPattern ||
+                isPattern.Pattern is not UnaryPatternSyntax notPattern ||
+                !notPattern.IsKind(SyntaxKind.NotPattern))
+            {
+                return false;
+            }
+
+            TypeSyntax typeSyntax;
+            VariableDesignationSyntax designation;
+            switch (notPattern.Pattern)
+            {
+                case DeclarationPatternSyntax declaration:
+                    typeSyntax = declaration.Type;
+                    designation = declaration.Designation;
+                    break;
+
+                case RecursivePatternSyntax { Type: { } recursiveType } recursive
+                    when recursive.PropertyPatternClause is null or { Subpatterns.Count: 0 }:
+                    typeSyntax = recursiveType;
+                    designation = recursive.Designation;
+                    break;
+
+                default:
+                    return false;
+            }
+
+            if (designation is not SingleVariableDesignationSyntax single)
+            {
+                return false;
+            }
+
+            // The hoisted `as T` + `== nil` guard is only valid when T is a
+            // reference type (or nullable value type); a non-nullable value-type
+            // target keeps the existing then-block binding behaviour.
+            ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
+            if (targetSymbol == null || targetSymbol.IsValueType)
+            {
+                return false;
+            }
+
+            string localName = SanitizeIdentifier(single.Identifier.Text);
+            GExpression receiver = this.TranslateExpression(isPattern.Expression);
+            GTypeReference targetType = this.MapTypeSyntax(typeSyntax);
+
+            // `let t T? = receiver as T` — the local is declared nullable so the
+            // `== nil` guard and the subsequent smart cast both type-check, while the
+            // `as` cast keeps its non-nullable reference target (a nullable `as T?`
+            // target is rejected at emit time).
+            var hoist = new LocalDeclarationStatement(
+                BindingKind.Let,
+                localName,
+                MakeNullable(targetType),
+                new BinaryExpression(receiver, "as", new TypeExpression(targetType)));
+
+            // `if t == nil { <then> }` reproduces the negated guard: when the cast
+            // fails the local is nil, so the original then-block runs.
+            GExpression guard = new BinaryExpression(
+                new IdentifierExpression(localName), "==", LiteralExpression.Null());
+            BlockStatement then = this.TranslateStatementAsBlock(ifStatement.Statement);
+
+            GStatement elseBranch = null;
+            if (ifStatement.Else != null)
+            {
+                elseBranch = ifStatement.Else.Statement is IfStatementSyntax elseIf
+                    ? this.TranslateIf(elseIf)
+                    : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+            }
+
+            result = new GStatement[] { hoist, new IfStatement(guard, then, elseBranch) };
+            return true;
+        }
+
+        // Returns a nullable (`T?`) copy of a type reference, preserving the
+        // concrete reference kind (named/array/pointer/tuple). Used when hoisting a
+        // negated type-pattern guard local so the `== nil` test type-checks.
+        private static GTypeReference MakeNullable(GTypeReference reference)
+        {
+            return reference switch
+            {
+                NamedTypeReference named =>
+                    new NamedTypeReference(named.Name, named.TypeArguments) { IsNullable = true },
+                ArrayTypeReference array =>
+                    new ArrayTypeReference(array.ElementType) { IsNullable = true },
+                PointerTypeReference pointer =>
+                    new PointerTypeReference(pointer.ElementType) { IsNullable = true },
+                TupleTypeReference tuple =>
+                    new TupleTypeReference(tuple.ElementTypes) { IsNullable = true },
+                _ => reference,
             };
         }
 
