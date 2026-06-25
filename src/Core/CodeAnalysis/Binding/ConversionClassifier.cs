@@ -53,6 +53,14 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </remarks>
 internal sealed class ConversionClassifier
 {
+    private static readonly System.Collections.Generic.HashSet<string> NumericPrimitiveFullNames = new(StringComparer.Ordinal)
+    {
+        "System.SByte", "System.Byte", "System.Int16", "System.UInt16",
+        "System.Int32", "System.UInt32", "System.Int64", "System.UInt64",
+        "System.IntPtr", "System.UIntPtr", "System.Char",
+        "System.Single", "System.Double", "System.Decimal",
+    };
+
     private readonly BinderContext binderCtx;
     private readonly MemberLookup memberLookup;
     private readonly Func<ExpressionSyntax, BoundExpression> bindExpression;
@@ -338,6 +346,33 @@ internal sealed class ConversionClassifier
             if (!ReferenceEquals(voidized, voidCandidateLiteral))
             {
                 return BindConversion(diagnosticLocation, voidized, type, allowExplicit);
+            }
+        }
+
+        // Issue #1150: a `func`/arrow literal whose natural numeric return type
+        // implicitly, losslessly widens to the target delegate's return type
+        // (e.g. `(x int32) -> uint16(x)` flowing into a `Func<int32,int64>`
+        // slot) is reshaped through the erased adapter so the produced delegate
+        // is created over a method whose return type already matches the target
+        // — inserting the widening conversion in the adapter body. This mirrors
+        // C#'s implicit numeric conversion of a lambda body to an expected
+        // delegate return type. Without it the literal would materialize as a
+        // narrower-returning delegate flowing into a wider delegate slot.
+        if (expression is BoundFunctionLiteralExpression widenCandidateLiteral
+            && widenCandidateLiteral.FunctionType is FunctionTypeSymbol widenCandidateFnType
+            && widenCandidateFnType.ReturnType != TypeSymbol.Void
+            && widenCandidateFnType.ReturnType != TypeSymbol.Error
+            && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(type, out var widenTargetFnType)
+            && widenTargetFnType.ReturnType != TypeSymbol.Void
+            && widenTargetFnType.ReturnType != TypeSymbol.Error
+            && widenTargetFnType.Arity == widenCandidateFnType.Arity
+            && !ReferenceEquals(widenCandidateFnType.ReturnType, widenTargetFnType.ReturnType)
+            && IsNumericReturnWidening(widenCandidateFnType.ReturnType, widenTargetFnType.ReturnType))
+        {
+            var widened = createErasedFunctionLiteralAdapter(widenCandidateLiteral, widenTargetFnType);
+            if (!ReferenceEquals(widened, widenCandidateLiteral))
+            {
+                return BindConversion(diagnosticLocation, widened, type, allowExplicit);
             }
         }
 
@@ -1339,6 +1374,26 @@ internal sealed class ConversionClassifier
         }
 
         return from.ClrType != targetParameterType;
+    }
+
+    // Issue #1150: a func/arrow literal's natural numeric return type
+    // implicitly, losslessly widens to a target delegate's numeric return type
+    // per the standard widening lattice. Both types must be numeric CLR
+    // primitives and the conversion classified implicit (i.e. directional
+    // widening — narrowing and signed/unsigned same-width pairs are excluded).
+    private static bool IsNumericReturnWidening(TypeSymbol source, TypeSymbol target)
+    {
+        var sourceClr = source?.ClrType?.FullName;
+        var targetClr = target?.ClrType?.FullName;
+        if (sourceClr == null || targetClr == null
+            || !NumericPrimitiveFullNames.Contains(sourceClr)
+            || !NumericPrimitiveFullNames.Contains(targetClr))
+        {
+            return false;
+        }
+
+        var conversion = Conversion.Classify(source, target);
+        return conversion.Exists && conversion.IsImplicit;
     }
 
     // Issue #337: a method-group overload's return type is compatible with a

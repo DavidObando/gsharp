@@ -3448,6 +3448,19 @@ internal sealed partial class ExpressionBinder
 
         var downstreamMapping = resolution.IsExpanded ? default : resolution.ParameterMapping;
 
+        // Issue #1150: reshape a func/arrow literal argument whose natural
+        // numeric return type implicitly, losslessly widens to the resolved
+        // parameter's delegate return type (e.g. a `uint32`-returning selector
+        // flowing into `Sum`'s `Func<T,long>` overload) so the produced delegate
+        // is created over a method whose return type already matches the target
+        // — inserting the numeric return-widening conversion in the body. Only
+        // the return is widened; the literal's concrete parameter types are
+        // preserved (so non-widening selectors such as `Where`/`Single`/`Select`
+        // are left untouched and value-type selectors are not erased to object).
+        // The bound vector is [receiver, args…] aligned with the method's
+        // parameter list (receiver at slot 0), matching the mapping used below.
+        bound = RebindNumericReturnWideningDelegateArguments(bound, parameters, downstreamMapping);
+
         // Issue #506 follow-up: route through BindClrParameterConversions so
         // value-type → object boxing fires for fixed-arity imported extension
         // calls too. The receiver occupies arg slot 0 (and is already typed
@@ -3480,6 +3493,66 @@ internal sealed partial class ExpressionBinder
                 && LambdaBinder.TryGetFunctionLiteral(argument, out var literal)
                 && MemberLookup.TryGetDelegateFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
                 && literal.FunctionType != targetFunctionType)
+            {
+                rebound = lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
+            }
+
+            if (rebound != argument && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(arguments[j]);
+                }
+            }
+
+            builder?.Add(rebound);
+        }
+
+        if (builder == null)
+        {
+            return arguments;
+        }
+
+        for (var i = builder.Count; i < arguments.Length; i++)
+        {
+            builder.Add(arguments[i]);
+        }
+
+        return builder.ToImmutable();
+    }
+
+    // Issue #1150: reshape only those func/arrow literal arguments whose natural
+    // numeric return type implicitly, losslessly widens to the corresponding
+    // delegate parameter's return type. The reshape routes through the erased
+    // adapter (the established pattern for generic-LINQ dispatch), inserting the
+    // numeric return-widening conversion in the body so the produced delegate's
+    // return type matches the target. Literals whose return already matches the
+    // target (the common LINQ case: Where/Single/Select with bool/string
+    // selectors) are left completely untouched, preserving their natural
+    // concrete delegate signature.
+    private ImmutableArray<BoundExpression> RebindNumericReturnWideningDelegateArguments(
+        ImmutableArray<BoundExpression> arguments,
+        ParameterInfo[] parameters,
+        ImmutableArray<int> parameterMapping = default)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            var argument = arguments[i];
+            var rebound = argument;
+            if (paramIndex < parameters.Length
+                && LambdaBinder.TryGetFunctionLiteral(argument, out var literal)
+                && literal.FunctionType is FunctionTypeSymbol literalFnType
+                && literalFnType.ReturnType != TypeSymbol.Void
+                && literalFnType.ReturnType != TypeSymbol.Error
+                && MemberLookup.TryGetDelegateFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
+                && targetFunctionType.ReturnType != TypeSymbol.Void
+                && targetFunctionType.ReturnType != TypeSymbol.Error
+                && targetFunctionType.Arity == literalFnType.Arity
+                && !ReferenceEquals(literalFnType.ReturnType, targetFunctionType.ReturnType)
+                && Conversion.Classify(literalFnType.ReturnType, targetFunctionType.ReturnType).IsImplicit)
             {
                 rebound = lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
             }

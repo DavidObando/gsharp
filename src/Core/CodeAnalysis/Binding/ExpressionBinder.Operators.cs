@@ -1105,6 +1105,38 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // Issue #1150: directional implicit integer widening between two TYPED
+        // integer operands. When the initial per-type operator bind failed and
+        // NEITHER operand is a constant integer literal (those are owned by the
+        // #1144 adaptation above), but exactly one operand's integer type
+        // implicitly, losslessly widens to the OTHER operand's integer type
+        // (per the conversion lattice — e.g. `uint32 + int64`, `uint8 + int32`,
+        // `int32 + int64`), widen the narrower operand and re-bind the operator
+        // at the wider type. This mirrors C#'s implicit-conversion behaviour for
+        // mixed-width integer operands. Strictly directional and lossless: when
+        // NEITHER operand widens to the other (e.g. `int32` vs `uint32`, where
+        // neither is an implicit conversion to the other) the operator stays
+        // unbound and the GS0129 diagnostic below still fires. Narrowing always
+        // requires an explicit cast.
+        if (boundOperator == null
+            && boundLeft is not BoundLiteralExpression
+            && boundRight is not BoundLiteralExpression
+            && IsIntegerType(boundLeft.Type)
+            && IsIntegerType(boundRight.Type)
+            && boundLeft.Type != boundRight.Type)
+        {
+            if (Conversion.Classify(boundLeft.Type, boundRight.Type).IsImplicit)
+            {
+                boundLeft = conversions.BindConversion(syntax.Left.Location, boundLeft, boundRight.Type);
+                boundOperator = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type);
+            }
+            else if (Conversion.Classify(boundRight.Type, boundLeft.Type).IsImplicit)
+            {
+                boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundLeft.Type);
+                boundOperator = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type);
+            }
+        }
+
         // PR N-4 / §6.1 / C# §7.3.7: mixed-mode lift. When one operand is
         // a value-type Nullable<T> and the other is its underlying T, lift
         // T to T? via the existing implicit conversion and re-bind. The
