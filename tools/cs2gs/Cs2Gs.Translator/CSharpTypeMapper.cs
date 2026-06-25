@@ -101,7 +101,16 @@ public sealed class CSharpTypeMapper
             return WithNullable(underlying, true);
         }
 
-        bool nullableReference = type.NullableAnnotation == NullableAnnotation.Annotated && type.IsReferenceType;
+        // A `T?`-annotated type also covers an annotated type parameter (`T?`
+        // where `T : IFoo` / unconstrained). Such a parameter reports
+        // `IsReferenceType == false` (an interface/unconstrained type parameter is
+        // not provably a reference type), so it must be recognised explicitly or
+        // the `?` is silently dropped and the nullable return/field no longer
+        // type-checks against `== nil`. A `T : struct` parameter's `T?` is modelled
+        // by Roslyn as `Nullable<T>` and is handled above, so an annotated
+        // ITypeParameterSymbol here is always the nullable-reference-like form.
+        bool nullableReference = type.NullableAnnotation == NullableAnnotation.Annotated
+            && (type.IsReferenceType || type is ITypeParameterSymbol);
         GTypeReference mapped = this.MapCore(type, context, location);
         return nullableReference ? WithNullable(mapped, true) : mapped;
     }

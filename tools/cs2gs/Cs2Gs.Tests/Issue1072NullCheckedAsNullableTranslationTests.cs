@@ -170,6 +170,27 @@ namespace Demo
         Assert.DoesNotContain("x int32?", printed);
     }
 
+    [Fact]
+    public void NullableTypeParameterReturn_RendersNullableType()
+    {
+        // A `T?` return on a method whose type parameter is interface-constrained
+        // (`where T : IBox`) reports `IsReferenceType == false` in Roslyn, so the
+        // `?` must be honoured via the type-parameter path or it is silently
+        // dropped and `let x = GetChild<T>()` infers a non-nullable `T`, breaking
+        // the subsequent `x == nil` guard at the call site (issue #1072 cascade).
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public interface IBox { }
+    public class Box : IBox
+    {
+        public T? GetChild<T>() where T : IBox => default;
+    }
+}");
+
+        Assert.Contains("GetChild[T IBox]() T?", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
