@@ -643,29 +643,35 @@ public sealed class Conversion
             return false;
         }
 
-        var invoke = delegateType.GetMethod("Invoke");
-        if (invoke == null)
+        // Issue #1100: a constructed generic delegate closed over a
+        // same-compilation user type (e.g. `Action[Entry]`) surfaces as a
+        // `System.Reflection.Emit.TypeBuilderInstantiation` whose
+        // `GetMethod("Invoke")` throws `NotSupportedException` ("TypeBuilder
+        // generic instantiation does not support resolving members"). Recover
+        // the `Invoke` signature from the open generic definition and
+        // substitute the type arguments by position so convertibility is
+        // decided without resolving a member directly off the instantiation.
+        if (!TryGetDelegateInvokeSignature(delegateType, out var invokeParamTypes, out var invokeReturnType))
         {
             return false;
         }
 
-        var parms = invoke.GetParameters();
-        if (parms.Length != fn.ParameterTypes.Length)
+        if (invokeParamTypes.Length != fn.ParameterTypes.Length)
         {
             return false;
         }
 
-        for (var i = 0; i < parms.Length; i++)
+        for (var i = 0; i < invokeParamTypes.Length; i++)
         {
             var fnParamClr = fn.ParameterTypes[i]?.ClrType;
-            if (fnParamClr == null || !ClrTypeUtilities.IsAssignableByName(parms[i].ParameterType, fnParamClr))
+            if (fnParamClr == null || !ClrTypeUtilities.IsAssignableByName(invokeParamTypes[i], fnParamClr))
             {
                 return false;
             }
         }
 
-        var invokeReturnIsVoid = invoke.ReturnType == null
-            || string.Equals(invoke.ReturnType.FullName, "System.Void", StringComparison.Ordinal);
+        var invokeReturnIsVoid = invokeReturnType == null
+            || string.Equals(invokeReturnType.FullName, "System.Void", StringComparison.Ordinal);
         if (fn.ReturnType == TypeSymbol.Void || fn.ReturnType == null)
         {
             return invokeReturnIsVoid;
@@ -677,7 +683,97 @@ public sealed class Conversion
         }
 
         var fnReturnClr = fn.ReturnType.ClrType;
-        return fnReturnClr != null && ClrTypeUtilities.IsAssignableByName(invoke.ReturnType, fnReturnClr);
+        return fnReturnClr != null && ClrTypeUtilities.IsAssignableByName(invokeReturnType, fnReturnClr);
+    }
+
+    /// <summary>
+    /// Issue #1100: resolves a delegate type's <c>Invoke</c> parameter and
+    /// return types without resolving a member directly off a
+    /// <c>System.Reflection.Emit.TypeBuilderInstantiation</c>. A
+    /// constructed generic delegate closed over a same-compilation user type
+    /// (whose CLR backing is an in-flight emit <c>TypeBuilder</c>) cannot serve
+    /// <see cref="Type.GetMethod(string)"/> — it throws
+    /// <see cref="NotSupportedException"/>. In that case the <c>Invoke</c>
+    /// signature is recovered from the open generic definition and each
+    /// generic parameter is substituted by position with the constructed type's
+    /// actual type argument. Returns <see langword="false"/> when no usable
+    /// <c>Invoke</c> can be resolved.
+    /// </summary>
+    private static bool TryGetDelegateInvokeSignature(Type delegateType, out Type[] parameterTypes, out Type returnType)
+    {
+        parameterTypes = Array.Empty<Type>();
+        returnType = null;
+
+        try
+        {
+            var invoke = delegateType.GetMethod("Invoke");
+            if (invoke == null)
+            {
+                return false;
+            }
+
+            var parms = invoke.GetParameters();
+            parameterTypes = new Type[parms.Length];
+            for (var i = 0; i < parms.Length; i++)
+            {
+                parameterTypes[i] = parms[i].ParameterType;
+            }
+
+            returnType = invoke.ReturnType;
+            return true;
+        }
+        catch (NotSupportedException)
+        {
+            // delegateType is a TypeBuilderInstantiation; fall through to the
+            // open-definition resolution below.
+        }
+
+        if (!delegateType.IsGenericType || delegateType.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        Type definition;
+        Type[] typeArguments;
+        try
+        {
+            definition = delegateType.GetGenericTypeDefinition();
+            typeArguments = delegateType.GetGenericArguments();
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+
+        var openInvoke = definition.GetMethod("Invoke");
+        if (openInvoke == null)
+        {
+            return false;
+        }
+
+        Type Substitute(Type t)
+        {
+            if (t != null && t.IsGenericParameter)
+            {
+                var pos = t.GenericParameterPosition;
+                if ((uint)pos < (uint)typeArguments.Length)
+                {
+                    return typeArguments[pos];
+                }
+            }
+
+            return t;
+        }
+
+        var openParms = openInvoke.GetParameters();
+        parameterTypes = new Type[openParms.Length];
+        for (var i = 0; i < openParms.Length; i++)
+        {
+            parameterTypes[i] = Substitute(openParms[i].ParameterType);
+        }
+
+        returnType = Substitute(openInvoke.ReturnType);
+        return true;
     }
 
     /// <summary>
@@ -790,7 +886,29 @@ public sealed class Conversion
             return true;
         }
 
-        return type?.ClrType?.IsEnum == true;
+        var clr = type?.ClrType;
+        if (clr == null)
+        {
+            return false;
+        }
+
+        // Issue #1100: a constructed generic delegate closed over a
+        // same-compilation user type (whose CLR backing is an in-flight emit
+        // TypeBuilder) surfaces as a
+        // System.Reflection.Emit.TypeBuilderInstantiation. Its reflection
+        // predicates throw NotSupportedException ("TypeBuilder generic
+        // instantiation does not support resolving members") — IsEnum probes the
+        // base-type chain via IsSubclassOf, which is one of the unsupported
+        // operations. Such a delegate type is never an enum, so treat a throw as
+        // a definite "not enum-like".
+        try
+        {
+            return clr.IsEnum;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
     }
 
     private static bool IsInterfaceLikeType(TypeSymbol type)
@@ -800,7 +918,23 @@ public sealed class Conversion
             return true;
         }
 
-        return type?.ClrType?.IsInterface == true;
+        var clr = type?.ClrType;
+        if (clr == null)
+        {
+            return false;
+        }
+
+        // Issue #1100: as with IsEnumLikeType, querying IsInterface on a
+        // TypeBuilderInstantiation throws NotSupportedException. A constructed
+        // generic delegate is never an interface.
+        try
+        {
+            return clr.IsInterface;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
     }
 
     private static bool IsValueTypeLikeFrom(TypeSymbol type)

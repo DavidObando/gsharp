@@ -289,13 +289,15 @@ public sealed class ControlFlowGraph
                     case BoundNodeKind.ChannelSendStatement:
                     case BoundNodeKind.SelectStatement:
                     case BoundNodeKind.ScopeStatement:
+                    case BoundNodeKind.FixedStatement:
                     case BoundNodeKind.AwaitForRangeStatement:
                     case BoundNodeKind.PatternSwitchStatement:
                     case BoundNodeKind.YieldStatement:
                         // Treat exception-flow constructs as opaque statements; precise
                         // CFG modeling of catch/finally edges is deferred to a later phase.
                         // GoStatement and ChannelSendStatement fall through to the next
-                        // statement at the CFG level.
+                        // statement at the CFG level. A FixedStatement carries a pinned
+                        // body that likewise falls through to the following statement.
                         statements.Add(statement);
                         break;
                     default:
@@ -400,6 +402,7 @@ public sealed class ControlFlowGraph
                         case BoundNodeKind.ChannelSendStatement:
                         case BoundNodeKind.SelectStatement:
                         case BoundNodeKind.ScopeStatement:
+                        case BoundNodeKind.FixedStatement:
                         case BoundNodeKind.AwaitForRangeStatement:
                         case BoundNodeKind.PatternSwitchStatement:
                         case BoundNodeKind.YieldStatement:
