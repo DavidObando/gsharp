@@ -232,10 +232,10 @@ hatch under `src/Sdk/Gsharp.Extensions/*.cs` works today.
   passes verification end-to-end. The remaining gap blocking the
   full dogfooded port —
   [issue #775](https://github.com/DavidObando/gsharp/issues/775)
-  (G# spelling for `class` / `struct` / `new()` constraints) — is
+  (G# spelling for `class` / `struct` / `init()` constraints) — is
   **closed by ADR-0097**. The new bracket-position flag spelling
-  (`[T class]`, `[T struct]`, `[T new()]`, plus combinations like
-  `[T class new()]`) maps directly to the matching
+  (`[T class]`, `[T struct]`, `[T init()]`, plus combinations like
+  `[T class init()]`) maps directly to the matching
   `GenericParameterAttributes` flag bits at emit time, and the
   binder's `BoundScope.TryLookupExtensionFunction` now filters
   same-name unifiable extensions by constraint and prefers the
@@ -616,7 +616,7 @@ of that migration, not left behind as dead code.
   closed by issue #752, L2's parser side closed in the PR for
   #751, L2's binder side closed by #773, the open-receiver
   iteration emit gap closed by #774, and the G# spelling for
-  `class` / `struct` / `new()` constraints closed by ADR-0097
+  `class` / `struct` / `init()` constraints closed by ADR-0097
   (#775). **The SDK ↔ Extensions bootstrap cycle (L5) is now
   broken and exercised end-to-end by issue #806**:
   `src/Sdk/Gsharp.NET.Sdk.Bootstrap/` ships a build-time-only mirror

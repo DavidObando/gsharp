@@ -36,8 +36,8 @@ removed and a fresh `0.2` snapshot is cut from the live docs.
   the variadic slot inside anonymous function-type clauses
   ([ADR-0102](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0102-variadic-anonymous-function-type-clause.md))
   and at every declaration site ([ADR-0103](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0103-variadic-all-declaration-sites.md)),
-  `class` / `struct` / `new()` constraint flag spellings
-  ([ADR-0097](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0097-class-struct-new-constraints.md)),
+  `class` / `struct` / `init()` constraint flag spellings
+  ([ADR-0097](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0097-class-struct-new-type-parameter-constraints.md)),
   default-interface methods ([ADR-0085](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0085-default-interface-methods.md),
   [ADR-0089](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0089-default-interface-methods-static-virtual.md),
   [ADR-0090](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0090-default-interface-methods-private-helpers.md),

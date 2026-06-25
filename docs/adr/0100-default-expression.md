@@ -156,7 +156,7 @@ placeholder before the diagnostic phase runs, `GS0362` fires.
 - `test/Core.Tests/CodeAnalysis/Binding/Issue795DefaultExpressionBinderTests.cs`
   — binder/interpreter tests for `default(int32)`, `default(string)`,
   `default(T?)`, `default(T)` for unconstrained / `class` / `struct` /
-  `new()` constrained `T`, all four target-typed positions, and the
+  `init()` constrained `T`, all four target-typed positions, and the
   GS0362 diagnostic when no target type is available.
 - `test/Core.Tests/CodeAnalysis/Emit/Issue795DefaultExpressionEmitTests.cs`
   — end-to-end emit tests: each compiled assembly is loaded into a

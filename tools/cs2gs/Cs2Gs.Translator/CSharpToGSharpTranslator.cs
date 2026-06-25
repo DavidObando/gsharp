@@ -2134,7 +2134,7 @@ public sealed class CSharpToGSharpTranslator
 
             if (tp.HasConstructorConstraint)
             {
-                flags.Add("new()");
+                flags.Add("init()");
             }
 
             // C# `where T : notnull` has no precise G# constraint keyword; it is

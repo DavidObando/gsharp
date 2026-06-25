@@ -14,7 +14,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// ADR-0097 / issue #775: G# spelling for `class` / `struct` / `new()`
+/// ADR-0097 / issue #775: G# spelling for `class` / `struct` / `init()`
 /// type-parameter constraints. The tests cover parser acceptance, binder
 /// satisfaction rules, illegal-combination diagnostics (GS0361),
 /// interaction with the legacy `IInterface` constraint, and
@@ -73,7 +73,7 @@ First[string](""hi"")
     {
         var source = @"
 class Box { var n int32 = 0 }
-func MakeOne[T new()]() T { return T{} }
+func MakeOne[T init()]() T { return T{} }
 let b = MakeOne[Box]()
 b.n
 ";
@@ -87,7 +87,7 @@ b.n
     public void NewConstraint_AcceptedOnDeclarationOnly()
     {
         var source = @"
-func Bag[T new()](x T) T { return x }
+func Bag[T init()](x T) T { return x }
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
@@ -98,7 +98,7 @@ func Bag[T new()](x T) T { return x }
     {
         var source = @"
 class Box {}
-func Bag[T class new()](x T) T { return x }
+func Bag[T class init()](x T) T { return x }
 Bag(Box{})
 ";
         var result = Evaluate(source);
@@ -118,10 +118,10 @@ func Bad[T class struct](x T) T { return x }
     [Fact]
     public void StructNewCombo_RejectedAsGS0361_RedundantNew()
     {
-        // `struct` already implies `new()` per ECMA-335 II.10.1.7; the
-        // explicit `new()` is rejected to keep the surface unambiguous.
+        // `struct` already implies `init()` per ECMA-335 II.10.1.7; the
+        // explicit `init()` is rejected to keep the surface unambiguous.
         var source = @"
-func Bad[T struct new()](x T) T { return x }
+func Bad[T struct init()](x T) T { return x }
 ";
         var result = Evaluate(source);
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0361");

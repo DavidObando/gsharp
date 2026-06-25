@@ -15,7 +15,7 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// ADR-0097 / issue #775: end-to-end emit + IL-verify coverage for the
-/// new G# spelling of <c>class</c> / <c>struct</c> / <c>new()</c>
+/// new G# spelling of <c>class</c> / <c>struct</c> / <c>init()</c>
 /// type-parameter constraints. Each test:
 /// <list type="number">
 /// <item>compiles a tiny program containing a generic function with the
@@ -71,7 +71,7 @@ public class Issue775ConstraintEmitTests
         var attrs = ReadGenericParamAttrs(outPath, "Pick");
         Assert.True((attrs & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0,
             $"expected NotNullableValueTypeConstraint, got {attrs}");
-        // ECMA-335 II.10.1.7 — `struct` implies `new()` at the CLR level.
+        // ECMA-335 II.10.1.7 — `struct` implies `init()` at the CLR level.
         Assert.True((attrs & GenericParameterAttributes.DefaultConstructorConstraint) != 0,
             $"expected DefaultConstructorConstraint (struct implies it), got {attrs}");
         Assert.True((attrs & GenericParameterAttributes.ReferenceTypeConstraint) == 0,
@@ -86,7 +86,7 @@ public class Issue775ConstraintEmitTests
             import System
 
             class Box {}
-            func Make[T new()](x T) T { return x }
+            func Make[T init()](x T) T { return x }
             Console.WriteLine(Make(Box()))
             """;
 
@@ -108,7 +108,7 @@ public class Issue775ConstraintEmitTests
             import System
 
             class Box {}
-            func Make[T class new()](x T) T { return x }
+            func Make[T class init()](x T) T { return x }
             Console.WriteLine(Make(Box()))
             """;
 

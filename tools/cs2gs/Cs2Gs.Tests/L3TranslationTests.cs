@@ -202,11 +202,13 @@ namespace Demo
     /// <summary>
     /// Issue #988 / ADR-0115 §G #988: a C# generic constrained with
     /// <c>where T : new()</c> that constructs its parameter via <c>new T()</c>
-    /// translates to the canonical G# <c>[T new()]</c> constraint and the
+    /// translates to the canonical G# <c>[T init()]</c> constraint and the
     /// call-like construction <c>T()</c> (which now compiles against gsc).
+    /// (The G# constraint keyword was renamed from <c>new()</c> to <c>init()</c>
+    /// by issue #997; the C# source still spells it <c>new()</c>.)
     /// </summary>
     [Fact]
-    public void NewConstraintConstruction_EmitsNewConstraintAndCallLikeConstruction()
+    public void NewConstraintConstruction_EmitsInitConstraintAndCallLikeConstruction()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -217,7 +219,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("new()", printed);
+        Assert.Contains("init()", printed);
         Assert.Contains("T()", printed);
     }
 

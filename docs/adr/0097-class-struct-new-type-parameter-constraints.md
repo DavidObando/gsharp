@@ -1,10 +1,22 @@
-# ADR-0097: G# spelling for `class` / `struct` / `new()` type-parameter constraints
+# ADR-0097: G# spelling for `class` / `struct` / `init()` type-parameter constraints
 
 - **Status**: Accepted
 - **Date**: 2026-06-13
 - **Phase**: Binder + emit hardening
-- **Closes**: Issue #775 (G# language gap — no spelling for class/struct/new() generic constraints on G#-authored type parameters)
-- **Related**: ADR-0020 (sealed-interface bounds and `any`/`comparable` spellings); ADR-0084 (Gsharp.Extensions Optional/Sequences — language-gap L2 residual was this hole on the *G# authoring* side); ADR-0088 (constraint-aware overload resolution — handled the *consumption* side of class/struct/new() that comes through CLR-imported assemblies); ADR-0089 (static-virtual interface members — sets the precedent of treating a constraint identifier as a self-referential generic instance); parent issue #706 (Oats cleanup); related issues #697, #751, #773, #774, #750
+- **Closes**: Issue #775 (G# language gap — no spelling for class/struct/init() generic constraints on G#-authored type parameters)
+- **Related**: ADR-0020 (sealed-interface bounds and `any`/`comparable` spellings); ADR-0084 (Gsharp.Extensions Optional/Sequences — language-gap L2 residual was this hole on the *G# authoring* side); ADR-0088 (constraint-aware overload resolution — handled the *consumption* side of class/struct/init() that comes through CLR-imported assemblies); ADR-0089 (static-virtual interface members — sets the precedent of treating a constraint identifier as a self-referential generic instance); parent issue #706 (Oats cleanup); related issues #697, #751, #773, #774, #750
+
+> **Update (issue #997):** the default-constructor flag constraint was
+> originally spelled `new()` (mirroring C#). It has since been **renamed to
+> `init()`** to give the constraint a G#-flavored surface keyword consistent
+> with G#'s `init(...)` constructor declarations. This is a breaking change to
+> an unreleased feature; `new()` is no longer accepted in constraint position.
+> The keyword is contextual — `init()` is a constraint **only** inside a
+> generic type-parameter list (`[T init()]`); the `init(...)` constructor-decl
+> and init-only-property syntaxes are unaffected. The underlying CLR semantics
+> (the `DefaultConstructorConstraint` flag) and emitted metadata are unchanged.
+> This document is preserved with `init()` substituted for the historical
+> `new()` spelling.
 
 ## Context
 
@@ -25,7 +37,7 @@ It did **not** admit the three flag-style constraints the CLR's
 | ----------------------------------------------------- | ------------------------------------------------------- |
 | `class` — must be a reference type                    | `GenericParameterAttributes.ReferenceTypeConstraint`    |
 | `struct` — must be a non-nullable value type          | `GenericParameterAttributes.NotNullableValueTypeConstraint` (+ `DefaultConstructorConstraint`, per ECMA-335 II.10.1.7) |
-| `new()` — must expose a public parameterless ctor     | `GenericParameterAttributes.DefaultConstructorConstraint` |
+| `init()` — must expose a public parameterless ctor     | `GenericParameterAttributes.DefaultConstructorConstraint` |
 
 ADR-0088 (constraint-aware overload resolution) read those flag bits
 *from CLR-imported types* during overload resolution; but a G# author
@@ -67,11 +79,11 @@ Examples — all legal, all parseable today:
 ```
 func F[T class](x T) T { return x }
 func F[T struct](x T) T { return x }
-func F[T new()](x T) T { return x }
-func F[T class new()](x T) T { return x }
+func F[T init()](x T) T { return x }
+func F[T class init()](x T) T { return x }
 func F[T IFoo class](x T) T { return x }
 class Box[T struct] { var v T }
-data struct Holder[T new()] { var v T }
+data struct Holder[T init()] { var v T }
 ```
 
 The flag specifiers may appear **in any order**, may be combined with
@@ -98,15 +110,15 @@ new follow-set.
 | ------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `class`       | `ReferenceTypeConstraint`                             | Type argument must be a reference type (`!ClrType.IsValueType`, not `Nullable<T>`).      |
 | `struct`      | `NotNullableValueTypeConstraint` + `DefaultConstructorConstraint` (ECMA-335 II.10.1.7) | Type argument must be a non-nullable value type.                                         |
-| `new()`       | `DefaultConstructorConstraint`                        | Type argument must either be a value type or expose a public parameterless constructor. |
+| `init()`       | `DefaultConstructorConstraint`                        | Type argument must either be a value type or expose a public parameterless constructor. |
 
 Combinations:
 
-- `class new()` — legal. Restricts to reference types that also expose a
+- `class init()` — legal. Restricts to reference types that also expose a
   public parameterless constructor. Both CLR flag bits are emitted.
 - `class struct` — **illegal** (mutually exclusive). Diagnoses GS0361.
-- `struct new()` — **illegal** (redundant; `struct` already implies
-  `new()` at the CLR level per ECMA-335 II.10.1.7). Diagnoses GS0361.
+- `struct init()` — **illegal** (redundant; `struct` already implies
+  `init()` at the CLR level per ECMA-335 II.10.1.7). Diagnoses GS0361.
   The recovery action is to write just `struct`.
 - `class IFoo` (or `IFoo class`) — legal. Combines a reference-type
   constraint with an interface bound. The interface bound continues to
@@ -128,7 +140,7 @@ entry point gains three checks on top of the legacy interface +
 2. `struct` → `Binder.IsNonNullableValueTypeForConstraint(arg)` —
    accepts value-typed `StructSymbol`, the primitive `int32` / `bool`
    symbols, and CLR-imported value types that are not `Nullable<T>`.
-3. `new()` → `Binder.HasDefaultConstructorForConstraint(arg)` — value
+3. `init()` → `Binder.HasDefaultConstructorForConstraint(arg)` — value
    types satisfy it implicitly; G# classes satisfy it when no explicit
    ctor is declared or when at least one declared ctor has zero
    parameters; CLR-imported classes satisfy it when
@@ -137,7 +149,7 @@ entry point gains three checks on top of the legacy interface +
 Constraint *propagation* through nested type parameters is honoured —
 a substitution like `T → U` where `U` itself carries `struct` keeps the
 `struct` bit alive for downstream checks. `DescribeConstraint(tp)`
-includes the new flags in diagnostics (`"class new()"`, `"struct"`,
+includes the new flags in diagnostics (`"class init()"`, `"struct"`,
 `"IFoo class"`, etc.) so GS0152 ("type argument does not satisfy
 constraint") reads precisely.
 
@@ -176,12 +188,12 @@ combination of flag-style constraints on the same type parameter:
 
 ```
 GS0361: Type parameter 'T' carries the mutually exclusive constraints 'class' and 'struct' (ADR-0097).
-GS0361: Type parameter 'T' carries the mutually exclusive constraints 'struct' and 'new()' (ADR-0097).
+GS0361: Type parameter 'T' carries the mutually exclusive constraints 'struct' and 'init()' (ADR-0097).
 ```
 
 The binder recovers by dropping the offending companion flag (keeping
 `class` in the `class struct` case, keeping `struct` in the `struct
-new()` case) so downstream binding continues with one consistent
+init()` case) so downstream binding continues with one consistent
 shape and the user receives at most one diagnostic per parameter.
 
 We do **not** invent a new code for "duplicate `class`" / "duplicate
@@ -197,10 +209,10 @@ dedicated code.
 - **Legacy spellings are unchanged.** `[T any]`, `[T]`, `[T comparable]`,
   `[T IFoo]`, `[T IAdd[T]]` continue to parse and bind exactly as
   before. The new flags slot is purely additive.
-- **`where T : I` (interface) and `class`/`struct`/`new()` compose.**
+- **`where T : I` (interface) and `class`/`struct`/`init()` compose.**
   An interface bound occupies the legacy single-identifier slot; the
-  flags slot is independent. `[T IDisposable class new()]` is a valid
-  ordering, as is `[T IDisposable class]`. (`new()` after `struct` is
+  flags slot is independent. `[T IDisposable class init()]` is a valid
+  ordering, as is `[T IDisposable class]`. (`init()` after `struct` is
   rejected per the table above.)
 - **ADR-0088 composes cleanly.** `Binder.SatisfiesConstraint` is the
   single entry point used by both call-site applicability checks and
@@ -238,7 +250,7 @@ to G# once the language gaps closed:
 - **L2 binder side** — closed by #773.
 - **L2 emit side residual (open-receiver iteration)** — closed by #774.
 - **L3 (`?:` over nullable value types)** — closed by #752.
-- **G# `class`/`struct`/`new()` spelling** — closed by this ADR.
+- **G# `class`/`struct`/`init()` spelling** — closed by this ADR.
 
 What remains is **not** a language gap: it is an SDK bootstrap cycle.
 `Gsharp.Extensions.dll` is auto-referenced by every `.gsproj` build via
@@ -266,7 +278,7 @@ Concretely, the bootstrap fix needs to:
 
 That work is filed as a follow-up; the language-gap closure shipped in
 this ADR is independent of it and unblocks any *user* project that
-wants to author class/struct/new() constraints in G#. The
+wants to author class/struct/init() constraints in G#. The
 `Gsharp.Extensions.*` C# escape hatches stay in place until the
 bootstrap is solved; once they migrate, the test suite
 (`test/Extensions.Tests/`, 107 tests) is expected to continue passing
@@ -296,8 +308,8 @@ same way ADR-0088 collapsed the CLR-imported side.
   workaround.
 - **Neutral — the flags slot is order-insensitive.** Style choice. The
   recommended convention (used in the docs samples) is
-  `[T <interface>? class? struct? new()?]` — interface bound first,
-  then the flag specifiers in `class struct new()` order. The binder
+  `[T <interface>? class? struct? init()?]` — interface bound first,
+  then the flag specifiers in `class struct init()` order. The binder
   does not enforce this; tooling may surface a fix-it later.
 - **Neutral — the `new` token is contextual.** The parser only treats
   `new` as a constraint keyword when it directly follows the type
@@ -318,7 +330,7 @@ same way ADR-0088 collapsed the CLR-imported side.
    *bits*, not mutually exclusive cases. Modelling them as boolean
    flags on `TypeParameterSymbol` matches the CLR shape one-for-one
    and lets the binder use simple bitwise reasoning.
-3. **Implicit `new()` from `struct`** (i.e. accept `[T struct new()]`
+3. **Implicit `init()` from `struct`** (i.e. accept `[T struct init()]`
    silently). Rejected: explicit redundancy invites the false belief
    that the two are independent. Failing fast with GS0361 keeps the
    surface honest.
@@ -347,4 +359,4 @@ same way ADR-0088 collapsed the CLR-imported side.
   Extensions port.
 - **Fix-it tooling.** The language server could offer a
   "reorder constraints" code action that normalises the order to
-  `[T <interface>? class? struct? new()?]`.
+  `[T <interface>? class? struct? init()?]`.

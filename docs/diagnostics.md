@@ -718,21 +718,22 @@ a concrete (non-`open`) subclass must override every inherited abstract member.
 | GS0387 | Error | `{className}` does not implement inherited abstract member `{declaringType}.{member}`. |
 | GS0388 | Error | Abstract method `{methodName}` must be declared `open` inside an `open class`; `{className}` is not open or the method omits `open`. |
 
-## `new()` constraint construction diagnostic (GS0389)
+## `init()` constraint construction diagnostic (GS0389)
 
-Issue #988: a type parameter that carries a `new()` default-constructor
-constraint (`[T new()]`) may be constructed inside the generic body with the
+Issue #988: a type parameter that carries an `init()` default-constructor
+constraint (`[T init()]`) may be constructed inside the generic body with the
 call-like spelling `T()`. The construction lowers to a reified
 `System.Activator.CreateInstance<T>()` (ADR-0087), which works for both
 reference types with a public parameterless constructor and value types.
+(The constraint keyword was renamed from `new()` to `init()` by issue #997.)
 
 | ID | Severity | Summary |
 | --- | --- | --- |
-| GS0389 | Error | Cannot construct `{T}()` because type parameter `{T}` has no `new()` constraint; add a `new()` constraint (e.g. `[{T} new()]`) to allow construction. |
+| GS0389 | Error | Cannot construct `{T}()` because type parameter `{T}` has no `init()` constraint; add an `init()` constraint (e.g. `[{T} init()]`) to allow construction. |
 
 GS0389 fires when the body constructs a type parameter (`T()`) that does not
-declare a `new()` constraint. A type **argument** that cannot satisfy the
-`new()` constraint at the instantiation site is reported separately as GS0152.
+declare an `init()` constraint. A type **argument** that cannot satisfy the
+`init()` constraint at the instantiation site is reported separately as GS0152.
 Mirrors C# CS0304.
 
 ## `and`/`or`/`not` pattern combinator diagnostic (GS0390)

@@ -2437,10 +2437,10 @@ internal sealed class OverloadResolver
         }
 
         // Issue #988: `T()` constructs the type parameter `T` when the enclosing
-        // generic declares a `new()` default-constructor constraint (`[T new()]`).
+        // generic declares an `init()` default-constructor constraint (`[T init()]`).
         // Lowered to a reified `Activator.CreateInstance<T>()` (ADR-0087). A
         // type parameter has no user-callable members, so a zero-argument call
-        // to it can only mean construction. When the `new()` constraint is
+        // to it can only mean construction. When the `init()` constraint is
         // absent we cannot guarantee an accessible parameterless constructor, so
         // report GS0389 pointing at the missing constraint.
         if (syntax.Arguments.Count == 0
