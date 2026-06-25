@@ -1014,6 +1014,14 @@ public sealed class Evaluator
             return DefaultValue(mapType.ValueType);
         }
 
+        // Issue #1129: `s[i]` on a string reads the char at position `i` via
+        // the .NET String indexer (`get_Chars`), matching the emit lowering.
+        if (node.Target.Type == TypeSymbol.String && target is string str)
+        {
+            var charIndex = (int)EvaluateExpression(node.Index);
+            return str[charIndex];
+        }
+
         var arr = (System.Array)target;
         var index = (int)EvaluateExpression(node.Index);
         return arr.GetValue(index);

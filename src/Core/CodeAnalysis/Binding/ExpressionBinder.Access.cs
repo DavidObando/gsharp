@@ -2438,6 +2438,18 @@ internal sealed partial class ExpressionBinder
             return new BoundIndexExpression(null, target, index, element);
         }
 
+        // Issue #1129: `string` is the primitive `TypeSymbol.String` (not an
+        // `ImportedTypeSymbol`), so it matches none of the indexer-resolution
+        // branches below. Model `s[i]` against .NET's `String` indexer
+        // (`char this[int]` / `get_Chars(int)`), yielding a `char`. The index is
+        // converted to int32 exactly like array indexing. Emit already lowers a
+        // `BoundIndexExpression` whose target is `string` to `get_Chars` (#537).
+        if (target.Type == TypeSymbol.String)
+        {
+            var index = ConvertIndex(TypeSymbol.Int32);
+            return new BoundIndexExpression(null, target, index, TypeSymbol.Char);
+        }
+
         // Phase 4 exit: CLR indexer read on an imported reference type
         // (e.g. `d["k"]` on Dictionary[string, int]). Pick a public
         // instance indexer (a `PropertyInfo` whose `GetIndexParameters()`
