@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Numerics;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -165,6 +166,25 @@ internal sealed class PatternBinder
     private BoundPattern BindConstantPattern(ConstantPatternSyntax syntax, TypeSymbol discriminantType)
     {
         var expression = bindExpression(syntax.Expression);
+
+        // Issue #1157: adapt a constant integer LITERAL case label that fits the
+        // discriminant's integer type to that type, mirroring the constant
+        // adaptation #1144 restored for binary operators. Without this, a literal
+        // like `0` (typed int32) on a `uint8` switch is a narrowing conversion and
+        // would be rejected with GS0171 even though it clearly fits. A nullable
+        // discriminant targets its underlying type; out-of-range labels are left
+        // untouched so the existing GS0171 path still fires.
+        var adaptTarget = discriminantType is NullableTypeSymbol nullableTarget
+            ? nullableTarget.UnderlyingType
+            : discriminantType;
+        if (ExpressionBinder.IsIntegerType(adaptTarget)
+            && expression.Type != adaptTarget
+            && TryGetConstantIntegerLiteralValue(expression, out var literalValue)
+            && ExpressionBinder.TryAdaptIntegerLiteral(literalValue, adaptTarget, out var adaptedValue))
+        {
+            expression = new BoundLiteralExpression(syntax.Expression, adaptedValue);
+        }
+
         var conversion = Conversion.Classify(expression.Type, discriminantType);
         if (!conversion.Exists || conversion.IsExplicit)
         {
@@ -191,6 +211,76 @@ internal sealed class PatternBinder
         }
 
         return new BoundConstantPattern(syntax, discriminantType, value);
+    }
+
+    // Issue #1157: extract a compile-time constant INTEGER literal value from a
+    // case-label expression. Accepts a bare integer literal or a unary `+` / `-`
+    // applied to one (e.g. `case -1`), so a negative literal label can adapt to a
+    // signed governing type. Named constants and other non-literal expressions are
+    // deliberately excluded — only literal labels participate in adaptation.
+    private static bool TryGetConstantIntegerLiteralValue(BoundExpression expression, out object value)
+    {
+        switch (expression)
+        {
+            case BoundLiteralExpression lit when ExpressionBinder.IsIntegerLiteralValue(lit.Value):
+                value = lit.Value;
+                return true;
+
+            case BoundUnaryExpression unary
+                when unary.Op.Kind == BoundUnaryOperatorKind.Identity
+                    && TryGetConstantIntegerLiteralValue(unary.Operand, out var positive):
+                value = positive;
+                return true;
+
+            case BoundUnaryExpression unary
+                when unary.Op.Kind == BoundUnaryOperatorKind.Negation
+                    && TryGetConstantIntegerLiteralValue(unary.Operand, out var operand):
+                return TryNegateIntegerLiteral(operand, out value);
+        }
+
+        value = null;
+        return false;
+    }
+
+    // Issue #1157: negate a boxed integer literal, re-boxing into the narrowest of
+    // int64 / uint64 that holds the result. The boxed type only feeds
+    // ExpressionBinder.TryAdaptIntegerLiteral (which range-checks via BigInteger),
+    // so any integer carrier with the correct value suffices.
+    private static bool TryNegateIntegerLiteral(object value, out object negated)
+    {
+        var result = -ToBigInteger(value);
+        if (result >= long.MinValue && result <= long.MaxValue)
+        {
+            negated = (long)result;
+            return true;
+        }
+
+        if (result >= ulong.MinValue && result <= ulong.MaxValue)
+        {
+            negated = (ulong)result;
+            return true;
+        }
+
+        negated = null;
+        return false;
+    }
+
+    private static BigInteger ToBigInteger(object value)
+    {
+        return value switch
+        {
+            sbyte s => s,
+            byte b => b,
+            short s => s,
+            ushort u => u,
+            int i => i,
+            uint u => u,
+            long l => l,
+            ulong u => u,
+            nint n => (long)n,
+            nuint n => (ulong)n,
+            _ => default,
+        };
     }
 
     private BoundPattern BindTypePattern(TypePatternSyntax syntax, TypeSymbol discriminantType, bool allowBindings)
