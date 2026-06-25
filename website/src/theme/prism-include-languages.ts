@@ -15,13 +15,21 @@ import type {Optional} from 'utility-types';
 function registerGSharp(Prism: typeof PrismNamespace): void {
   // Reserved keywords recognized by the lexer (SyntaxFacts.GetKeywordKind).
   const keywords =
-    /\b(?:as|async|await|break|case|catch|chan|class|const|continue|default|defer|do|else|enum|fallthrough|finally|for|func|go|goto|guard|if|import|interface|internal|is|let|map|open|operator|override|package|private|public|range|return|scope|sealed|select|sequence|struct|switch|throw|try|type|using|var|while)\b/;
+    /\b(?:as|async|await|break|case|catch|chan|class|const|continue|default|defer|do|else|enum|fallthrough|finally|for|func|go|goto|guard|if|import|interface|internal|is|let|map|open|operator|override|package|private|protected|public|range|return|scope|sealed|select|sequence|struct|switch|throw|try|type|using|var|while)\b/;
 
   // Contextual keywords: ordinary identifiers that act as keywords in context.
+  // Grounded in the parser's contextual recognitions (Text == "…" checks),
+  // covering member/declaration words (`prop`, `event`, `delegate`, `data`,
+  // `inline`, `shared`, `convenience`, `deinit`), accessors (`get`/`set`/`add`/
+  // `remove`/`raise`), parameter modifiers (`in`/`out`/`ref`/`scoped`/`params`),
+  // conversion operators (`explicit`/`implicit`), pattern combinators
+  // (`and`/`or`/`not`), the `init()` constructor constraint (renamed from
+  // `new()` by ADR-0097 / issue #997), and the unsafe/low-level words
+  // (`unsafe`/`fixed`/`stackalloc`/`unmanaged`).
   // `record` was removed in v0.2; the lexer still recognises it so the parser
   // can emit the GS0307 migration diagnostic, so we keep it here for fidelity.
   const contextualKeywords =
-    /\b(?:add|data|delegate|event|get|in|init|inline|make|nameof|out|prop|raise|record|ref|remove|scoped|set|shared|typeof|when|where|with|yield)\b/;
+    /\b(?:add|and|base|convenience|data|deinit|delegate|event|explicit|fixed|get|implicit|in|init|inline|make|nameof|not|or|out|params|prop|raise|record|ref|remove|scoped|set|shared|stackalloc|this|typeof|unmanaged|unsafe|when|with|yield)\b/;
 
   // Built-in primitive type names (TypeSymbol). Width-bearing names are
   // canonical; friendly aliases (`int`, `long`, etc.) are accepted by the
@@ -104,7 +112,7 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
     operator:
       // Order matters in Prism alternations — list multi-character operators
       // first so they win over their single-character prefixes.
-      /\?\?=|\?\?|\?\.|\?\[|!!|\+\+|--|<-|->|=>|:=|&&|\|\||==|!=|<=|>=|<<=|>>=|<<|>>|\.\.\.|&\^|[+\-*/%&|^!<>=]=?|[~?:.]/,
+      /\?\?=|\?\?|\?\.|\?\[|!!|\+\+|--|<-|->|=>|:=|&&|\|\||==|!=|<=|>=|<<=|>>=|<<|>>|\.\.\.|\.\.|&\^=|&\^|[+\-*/%&|^!<>=]=?|@|[~?:.]/,
     punctuation: /[{}[\];(),]/,
   };
 

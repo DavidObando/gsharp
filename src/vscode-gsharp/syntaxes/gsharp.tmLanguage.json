@@ -219,7 +219,7 @@
         },
         {
           "name": "keyword.modifier.contextual.gsharp",
-          "match": "\\b(data|delegate|event|in|init|inline|make|nameof|out|prop|raise|record|ref|remove|scoped|shared|typeof|when|where|with|yield)\\b"
+          "match": "\\b(and|convenience|data|deinit|delegate|event|explicit|fixed|implicit|in|init|inline|make|nameof|not|or|out|params|prop|raise|record|ref|remove|scoped|shared|stackalloc|typeof|unmanaged|unsafe|when|with|yield)\\b"
         },
         {
           "name": "keyword.other.accessor.gsharp",
@@ -260,14 +260,47 @@
       ]
     },
     "operators": {
+      "comment": "Patterns are ordered longest-match-first so multi-character operators win over their single-character prefixes.",
       "patterns": [
         {
           "name": "keyword.operator.range.gsharp",
-          "match": "\\.\\.\\."
+          "match": "\\.\\.\\.|\\.\\."
+        },
+        {
+          "name": "keyword.operator.assignment.gsharp",
+          "match": "<<=|>>="
         },
         {
           "name": "keyword.operator.null-coalescing.gsharp",
-          "match": "\\?\\?=|\\?\\?"
+          "match": "\\?\\?="
+        },
+        {
+          "name": "keyword.operator.bitwise.gsharp",
+          "match": "&\\^="
+        },
+        {
+          "name": "keyword.operator.arrow.gsharp",
+          "match": "->|=>"
+        },
+        {
+          "name": "keyword.operator.channel.gsharp",
+          "match": "<-"
+        },
+        {
+          "name": "keyword.operator.increment.gsharp",
+          "match": "\\+\\+|--"
+        },
+        {
+          "name": "keyword.operator.bitwise.gsharp",
+          "match": "&\\^"
+        },
+        {
+          "name": "keyword.operator.assignment.gsharp",
+          "match": ":="
+        },
+        {
+          "name": "keyword.operator.null-coalescing.gsharp",
+          "match": "\\?\\?"
         },
         {
           "name": "keyword.operator.null-conditional.gsharp",
@@ -278,32 +311,44 @@
           "match": "!!"
         },
         {
+          "name": "keyword.operator.bitwise.gsharp",
+          "match": "<<|>>"
+        },
+        {
+          "name": "keyword.operator.logical.gsharp",
+          "match": "&&|\\|\\|"
+        },
+        {
+          "name": "keyword.operator.comparison.gsharp",
+          "match": "==|!=|<=|>="
+        },
+        {
+          "name": "keyword.operator.assignment.gsharp",
+          "match": "\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^="
+        },
+        {
           "name": "keyword.operator.ternary.gsharp",
           "match": "\\?|:"
         },
         {
           "name": "keyword.operator.comparison.gsharp",
-          "match": "(==|!=|<=|>=|<|>)"
+          "match": "<|>"
         },
         {
           "name": "keyword.operator.logical.gsharp",
-          "match": "(&&|\\|\\||!)"
-        },
-        {
-          "name": "keyword.operator.assignment.gsharp",
-          "match": "(\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<=|>>=|=)"
+          "match": "!"
         },
         {
           "name": "keyword.operator.bitwise.gsharp",
-          "match": "(&|\\||\\^|~|<<|>>)"
+          "match": "&|\\||\\^|~"
         },
         {
           "name": "keyword.operator.arithmetic.gsharp",
-          "match": "(\\+|-|\\*|/|%)"
+          "match": "\\+|-|\\*|/|%"
         },
         {
-          "name": "keyword.operator.arrow.gsharp",
-          "match": "(->|=>)"
+          "name": "keyword.operator.assignment.gsharp",
+          "match": "="
         }
       ]
     },
