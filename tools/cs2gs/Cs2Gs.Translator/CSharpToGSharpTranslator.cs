@@ -3470,7 +3470,8 @@ public sealed class CSharpToGSharpTranslator
         private GStatement TranslateLocalFunction(LocalFunctionStatementSyntax localFunction)
         {
             // A C# local function maps to a G# local `let` bound to a function
-            // literal (arrow lambda), whose return type is inferred (ADR-0074).
+            // literal `func (params) RetType { … }` (NOT an arrow lambda — a local
+            // function may be recursive and needs an explicit return type).
             var parameters = new List<Parameter>();
             foreach (ParameterSyntax parameter in localFunction.ParameterList.Parameters)
             {
@@ -3479,10 +3480,11 @@ public sealed class CSharpToGSharpTranslator
 
             bool isAsync = localFunction.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword));
 
-            // A local function renders as a `func` literal too, so a value-returning
-            // one needs an explicit return type (else the literal is inferred void
-            // and `return expr` is rejected). The declared symbol carries the real
-            // return type / void-ness; the async unwrap mirrors method `func`s.
+            // A local function renders as a `func` literal (NOT an arrow lambda):
+            // a value-returning one needs an explicit return type (else the literal
+            // is inferred void and `return expr` is rejected), and the explicit type
+            // also supports recursion. The declared symbol carries the real return
+            // type / void-ness; the async unwrap mirrors method `func`s.
             GTypeReference returnType = this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol localSymbol
                 ? this.MapDelegateLikeReturnType(localSymbol, isAsync, localFunction.ReturnType.GetLocation())
                 : null;
@@ -3490,7 +3492,7 @@ public sealed class CSharpToGSharpTranslator
             LambdaExpression lambda;
             if (localFunction.Body != null)
             {
-                lambda = new LambdaExpression(parameters, blockBody: this.WithParameterShadows(localFunction, this.TranslateBlock(localFunction.Body)), isAsync: isAsync, returnType: returnType);
+                lambda = new LambdaExpression(parameters, blockBody: this.WithParameterShadows(localFunction, this.TranslateBlock(localFunction.Body)), isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
             }
             else if (localFunction.ExpressionBody != null)
             {
@@ -3498,11 +3500,12 @@ public sealed class CSharpToGSharpTranslator
                     parameters,
                     blockBody: new BlockStatement(this.TranslateExpressionStatements(localFunction.ExpressionBody.Expression).ToList()),
                     isAsync: isAsync,
-                    returnType: returnType);
+                    returnType: returnType,
+                    isFunctionLiteral: true);
             }
             else
             {
-                lambda = new LambdaExpression(parameters, blockBody: new BlockStatement(new List<GStatement>()), isAsync: isAsync, returnType: returnType);
+                lambda = new LambdaExpression(parameters, blockBody: new BlockStatement(new List<GStatement>()), isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
             }
 
             return new LocalFunctionStatement(localFunction.Identifier.Text, lambda);
@@ -5664,47 +5667,31 @@ public sealed class CSharpToGSharpTranslator
 
             if (lambda.Body is BlockSyntax block)
             {
+                // ADR-0128 / issue #1172: a block-bodied C# lambda renders as the
+                // idiomatic G# arrow form `(params) -> { … }`. The arrow lambda's
+                // statement-block body now reaches parity with func literals and
+                // infers its return type, so no explicit return type is emitted.
                 return new LambdaExpression(
                     parameters,
                     blockBody: this.TranslateBlock(block),
-                    isAsync: isAsync,
-                    returnType: this.MapLambdaReturnType(lambda));
+                    isAsync: isAsync);
             }
 
             if (lambda.Body is AssignmentExpressionSyntax)
             {
                 // An assignment is statement-only in G#; an assignment-bodied lambda
-                // (`o => x = f()`) becomes a block-bodied lambda. An assignment has no
-                // value, so the resulting func literal is void (no return type).
+                // (`o => x = f()`) becomes a block-bodied arrow lambda. An assignment
+                // has no value, so the resulting arrow lambda is void (ADR-0128).
                 return new LambdaExpression(
                     parameters,
                     blockBody: new BlockStatement(this.TranslateExpressionStatements((ExpressionSyntax)lambda.Body).ToList()),
-                    isAsync: isAsync,
-                    returnType: null);
+                    isAsync: isAsync);
             }
 
             return new LambdaExpression(
                 parameters,
                 expressionBody: this.TranslateExpression((ExpressionSyntax)lambda.Body),
                 isAsync: isAsync);
-        }
-
-        // Computes the explicit return type for a block-bodied lambda's G#
-        // function-literal form. Returns null when the lambda yields no value (a
-        // C# statement/Action lambda, or an `async` lambda returning a bare
-        // `Task`), in which case the literal is rendered void; otherwise maps the
-        // inferred result type (unwrapping `Task<T>` for `async`, mirroring
-        // MapReturnType for methods). A null result also covers the case where the
-        // symbol is unavailable, leaving the literal void (the conservative form).
-        private GTypeReference MapLambdaReturnType(AnonymousFunctionExpressionSyntax lambda)
-        {
-            if (this.context.GetSymbolInfo(lambda).Symbol is not IMethodSymbol symbol)
-            {
-                return null;
-            }
-
-            Location location = lambda.GetLocation();
-            return this.MapDelegateLikeReturnType(symbol, symbol.IsAsync, location);
         }
 
         // Shared mapping of a method/lambda result type into a G# func return type,

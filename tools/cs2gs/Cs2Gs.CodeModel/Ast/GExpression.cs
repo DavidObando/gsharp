@@ -546,24 +546,35 @@ public sealed class LambdaExpression : GExpression
     /// <param name="blockBody">The block body, when present.</param>
     /// <param name="isAsync">Whether the lambda is asynchronous.</param>
     /// <param name="returnType">
-    /// The explicit return type for a block (func-literal) body, or
-    /// <see langword="null"/> when the block returns no value (void) or the body is
-    /// an expression. A block-bodied lambda renders as the G# function-literal form
-    /// <c>func (params) RetType { … }</c>; the return type is required so a
-    /// value-returning literal is not inferred as <c>void</c>.
+    /// The explicit return type for a function-literal block body
+    /// (<see cref="IsFunctionLiteral"/> is <see langword="true"/>), or
+    /// <see langword="null"/> when the block returns no value (void), the body is an
+    /// expression, or the lambda renders as the arrow form. The function-literal form
+    /// <c>func (params) RetType { … }</c> needs the explicit return type so a
+    /// value-returning literal is not inferred as <c>void</c>; an arrow lambda
+    /// (ADR-0128) infers its return type, so none is required.
+    /// </param>
+    /// <param name="isFunctionLiteral">
+    /// When <see langword="true"/>, a block body renders as the G# function-literal
+    /// form <c>func (params) RetType { … }</c> (used for C# local functions, which are
+    /// not arrow lambdas). When <see langword="false"/> (the default), a block body
+    /// renders as the idiomatic arrow form <c>(params) -&gt; { … }</c> (ADR-0128 /
+    /// issue #1172), whose statement-block body reaches parity with func literals.
     /// </param>
     public LambdaExpression(
         IReadOnlyList<Parameter> parameters,
         GExpression expressionBody = null,
         BlockStatement blockBody = null,
         bool isAsync = false,
-        GTypeReference returnType = null)
+        GTypeReference returnType = null,
+        bool isFunctionLiteral = false)
     {
         Parameters = parameters ?? new List<Parameter>();
         ExpressionBody = expressionBody;
         BlockBody = blockBody;
         IsAsync = isAsync;
         ReturnType = returnType;
+        IsFunctionLiteral = isFunctionLiteral;
     }
 
     /// <summary>Gets the lambda parameters.</summary>
@@ -579,10 +590,19 @@ public sealed class LambdaExpression : GExpression
     public bool IsAsync { get; }
 
     /// <summary>
-    /// Gets the explicit return type for a block (func-literal) body, or
-    /// <see langword="null"/> when the block is void or the body is an expression.
+    /// Gets the explicit return type for a function-literal block body, or
+    /// <see langword="null"/> when the block is void, the body is an expression, or
+    /// the lambda renders as the arrow form (whose return type is inferred).
     /// </summary>
     public GTypeReference ReturnType { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether a block body renders as the G#
+    /// function-literal form <c>func (params) RetType { … }</c> (true, for C# local
+    /// functions) rather than the idiomatic arrow form <c>(params) -&gt; { … }</c>
+    /// (false, the default — ADR-0128 / issue #1172).
+    /// </summary>
+    public bool IsFunctionLiteral { get; }
 }
 
 /// <summary>
