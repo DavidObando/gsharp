@@ -365,6 +365,9 @@
     "vscode-languageclient": "^9.0.1",
     "semver": "^7.6.0"
   },
+  "overrides": {
+    "js-yaml": "^4.2.0"
+  },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
