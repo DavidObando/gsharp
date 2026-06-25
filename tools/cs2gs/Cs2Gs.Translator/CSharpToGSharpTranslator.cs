@@ -2730,11 +2730,18 @@ public sealed class CSharpToGSharpTranslator
                     return new[] { this.TranslateForStatement(forStatement) };
 
                 case ForEachStatementSyntax forEach:
+                    // The iterable receiver gets the same nullable-narrowing `!!`
+                    // treatment as a member/element-access receiver: a declared-
+                    // nullable (or #1072-promoted) field/property iterated inside a
+                    // null guard is flow-proven non-null in C#, but G# smart-casts
+                    // narrow only locals, so `for x in field` over a `T?` field is
+                    // rejected (GS0116 "not indexable") without an explicit
+                    // `field!!`.
                     return new[]
                     {
                         (GStatement)new ForInStatement(
                             SanitizeIdentifier(forEach.Identifier.Text),
-                            this.TranslateExpression(forEach.Expression),
+                            this.TranslateReceiverWithNullForgiveness(forEach.Expression),
                             this.TranslateStatementAsBlock(forEach.Statement)),
                     };
 
@@ -5995,7 +6002,7 @@ public sealed class CSharpToGSharpTranslator
                 return new ForInStatement(
                     names[0],
                     names[1],
-                    this.TranslateExpression(node.Expression),
+                    this.TranslateReceiverWithNullForgiveness(node.Expression),
                     this.TranslateStatementAsBlock(node.Statement));
             }
 
