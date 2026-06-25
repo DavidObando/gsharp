@@ -174,6 +174,35 @@ namespace Demo
     }
 
     /// <summary>
+    /// The C# null-forgiving <em>null literal</em> <c>null!</c> (passing null where
+    /// a non-nullable reference is expected) maps to <c>default(T)</c> for the
+    /// expected type — not <c>nil!!</c>, which G#'s Kotlin-style nullability
+    /// rejects (the assertion keeps the operand type <c>nil</c>, issue #1072).
+    /// <c>default(T)</c> is null at runtime — faithful to <c>null!</c> — and is a
+    /// native non-nullable G# value (#914).
+    /// </summary>
+    [Fact]
+    public void SuppressNullableWarning_OnNullLiteralArgument_MapsToDefaultOfExpectedType()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Node
+    {
+        public Node(Node parent) { }
+    }
+
+    public class Root : Node
+    {
+        public Root() : base(null!) { }
+    }
+}");
+
+        Assert.Contains("base(default(Node))", printed);
+        Assert.DoesNotContain("nil!!", printed);
+    }
+
+    /// <summary>
     /// An embedded post-increment used as an expression (<c>a[i++] = v</c>) is
     /// hoisted: the sub-expression reads the pre-increment value and the
     /// mutation is appended as a trailing <c>i++</c> statement (ADR-0115 §B).
