@@ -322,10 +322,6 @@ public sealed class CSharpToGSharpTranslator
         // tuple-deconstruction assignments (`(a, b) = (x, y)`); ADR-0115 §B.
         private int deconCounter;
 
-        // Monotonic counter for synthesizing unique temporaries when lowering a
-        // null-coalescing-with-throw (`x ?? throw E`) to a nil-guard (issue #914).
-        private int coalesceThrowCounter;
-
         // When translating the body of a lifted owned-value-aggregate receiver
         // method (issue #938), the implicit `this.` of a bare instance-member
         // reference must be made explicit through the receiver name (`self.`),
@@ -2713,12 +2709,6 @@ public sealed class CSharpToGSharpTranslator
                     return this.TranslateFixedStatement(fixedStatement);
 
                 case ReturnStatementSyntax ret:
-                    if (ret.Expression != null
-                        && TryGetCoalesceThrow(ret.Expression, out ExpressionSyntax retValue, out ThrowExpressionSyntax retThrow))
-                    {
-                        return this.LowerCoalesceThrow(retValue, retThrow, r => new ReturnStatement(r));
-                    }
-
                     return new[]
                     {
                         (GStatement)new ReturnStatement(
@@ -2838,21 +2828,6 @@ public sealed class CSharpToGSharpTranslator
                     {
                         type = this.PromoteIfUsedAsNullable(type, localSymbol);
                     }
-                }
-
-                // `let r = x ?? throw E` → evaluate x once, throw when nil, then
-                // bind r to the non-null value (issue #914). Emitted in place of the
-                // (invalid) inline throw-in-expression form.
-                if (!isConst && !isUsing && declarator.Initializer != null
-                    && TryGetCoalesceThrow(declarator.Initializer.Value, out ExpressionSyntax coalesceValue, out ThrowExpressionSyntax coalesceThrow))
-                {
-                    BindingKind declBinding = binding;
-                    string declName = SanitizeIdentifier(declarator.Identifier.Text);
-                    results.AddRange(this.LowerCoalesceThrow(
-                        coalesceValue,
-                        coalesceThrow,
-                        r => new LocalDeclarationStatement(declBinding, declName, type: null, r)));
-                    continue;
                 }
 
                 results.Add(new LocalDeclarationStatement(
@@ -3274,17 +3249,6 @@ public sealed class CSharpToGSharpTranslator
                     return this.TranslateExpressionStatements(assignment.Right);
                 }
 
-                if (TryGetCoalesceThrow(assignment.Right, out ExpressionSyntax coalesceValue, out ThrowExpressionSyntax coalesceThrow))
-                {
-                    // `target = x ?? throw E` → evaluate x once, throw when nil,
-                    // then assign the non-null value (issue #914).
-                    GExpression target = this.TranslateExpression(assignment.Left);
-                    return this.LowerCoalesceThrow(
-                        coalesceValue,
-                        coalesceThrow,
-                        r => new AssignmentStatement(target, r, assignment.OperatorToken.Text));
-                }
-
                 if (this.TryGetDeconstructionTargets(assignment.Left, out BindingKind binding, out IReadOnlyList<string> names))
                 {
                     // `var (a, b) = e` → `let (a, b) = e` (spec §Tuples).
@@ -3366,69 +3330,6 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return statements;
-        }
-
-        // Detects the C# `value ?? throw E` shape (a coalesce whose right operand is
-        // a throw expression), unwrapping enclosing parentheses on either side.
-        private static bool TryGetCoalesceThrow(
-            ExpressionSyntax expression,
-            out ExpressionSyntax value,
-            out ThrowExpressionSyntax throwExpression)
-        {
-            value = null;
-            throwExpression = null;
-
-            ExpressionSyntax unwrapped = expression;
-            while (unwrapped is ParenthesizedExpressionSyntax parenthesized)
-            {
-                unwrapped = parenthesized.Expression;
-            }
-
-            if (unwrapped is not BinaryExpressionSyntax binary
-                || !binary.IsKind(SyntaxKind.CoalesceExpression))
-            {
-                return false;
-            }
-
-            ExpressionSyntax right = binary.Right;
-            while (right is ParenthesizedExpressionSyntax parenthesizedRight)
-            {
-                right = parenthesizedRight.Expression;
-            }
-
-            if (right is not ThrowExpressionSyntax thrown)
-            {
-                return false;
-            }
-
-            value = binary.Left;
-            throwExpression = thrown;
-            return true;
-        }
-
-        // Lowers a C# `value ?? throw E` (statement position) to the faithful G#
-        // nil-guard form: evaluate the value once into a temp, throw when it is nil,
-        // then feed the (now non-null, smart-cast) temp to <paramref name="useResult"/>
-        // which forms the enclosing return/declaration/assignment (issue #914).
-        private IEnumerable<GStatement> LowerCoalesceThrow(
-            ExpressionSyntax value,
-            ThrowExpressionSyntax throwExpression,
-            Func<GExpression, GStatement> useResult)
-        {
-            string temp = $"__coalesce{this.coalesceThrowCounter++}";
-            return new[]
-            {
-                (GStatement)new LocalDeclarationStatement(
-                    BindingKind.Let, temp, type: null, this.TranslateExpression(value)),
-                new IfStatement(
-                    new BinaryExpression(new IdentifierExpression(temp), "==", LiteralExpression.Null()),
-                    new BlockStatement(new GStatement[]
-                    {
-                        new ThrowStatement(this.TranslateExpression(throwExpression.Expression)),
-                    }),
-                    elseBranch: null),
-                useResult(new IdentifierExpression(temp)),
-            };
         }
 
         private static List<PostfixUnaryExpressionSyntax> CollectEmbeddedPostfix(ExpressionSyntax expression)
@@ -4459,8 +4360,8 @@ public sealed class CSharpToGSharpTranslator
 
                 case ThrowExpressionSyntax throwExpression:
                     // `a ?? throw e`, `cond ? a : throw e`, a `switch` arm value.
-                    // G# `throw` is a statement only; lower to a typed
-                    // if-expression that runs the throw (ADR-0115 §B).
+                    // G# supports throw-as-expression natively (issue #1153);
+                    // map it directly to a G# throw-expression.
                     return new ThrowExpression(
                         this.TranslateExpression(throwExpression.Expression),
                         this.ResolveExpressionType(throwExpression));

@@ -46,12 +46,12 @@ namespace Demo
     }
 
     /// <summary>
-    /// A C# throw-expression on the right of <c>??</c> is lowered to the
-    /// uniform value-position form <c>if true { throw … default(T) } else {
-    /// default(T) }</c> (G# `throw` is statement-only; ADR-0115 §B).
+    /// A C# throw-expression on the right of <c>??</c> maps to G#'s native
+    /// throw-expression (<c>s ?? throw …</c>); G# supports throw-as-expression
+    /// directly (issue #1153), so no <c>if true { … }</c> lowering is needed.
     /// </summary>
     [Fact]
-    public void ThrowExpression_InNullCoalescing_LoweredToIfExpression()
+    public void ThrowExpression_InNullCoalescing_RendersNativeCoalesceThrow()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -62,17 +62,19 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("throw ", printed);
-        Assert.Contains("if true {", printed);
+        Assert.Contains("?? throw", printed);
+        Assert.DoesNotContain("if true {", printed);
     }
 
     /// <summary>
-    /// A C# throw-expression in a ternary branch (<c>cond ? v : throw e</c>) is
-    /// lowered through the same value-position throw form inside the G#
-    /// if-expression branch.
+    /// A C# throw-expression in a ternary branch (<c>cond ? v : throw e</c>)
+    /// becomes a G# if-expression branch. Because gsc rejects a bare throw as the
+    /// sole trailing value of an if-expression block branch (GS0277), the printer
+    /// emits the throw as a STATEMENT followed by a value-producing typed tail
+    /// (<c>else { throw … default(T) }</c>) — no <c>if true { … }</c> wrapper.
     /// </summary>
     [Fact]
-    public void ThrowExpression_InTernaryBranch_LoweredToIfExpression()
+    public void ThrowExpression_InTernaryBranch_RendersBlockSafeThrow()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -85,6 +87,7 @@ namespace Demo
 }");
 
         Assert.Contains("throw ", printed);
+        Assert.DoesNotContain("if true {", printed);
     }
 
     /// <summary>

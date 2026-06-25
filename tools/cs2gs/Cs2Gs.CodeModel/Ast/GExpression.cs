@@ -882,13 +882,12 @@ public sealed class ConditionalAccessExpression : GExpression
 
 /// <summary>
 /// A C# <c>throw</c> expression used in value position (<c>a ?? throw e</c>,
-/// <c>cond ? a : throw e</c>, a <c>switch</c> arm value). G# models <c>throw</c>
-/// as a statement only (spec §If expressions), so the canonical faithful form
-/// lowers the throw to an if-expression whose then-branch is a block that runs
-/// the <c>throw</c> statement and supplies an (unreachable) tail of the result
-/// type: <c>if true { throw e\n default(T) } else { default(T) }</c>. This shape
-/// is a primary expression and therefore valid in every value position
-/// (ADR-0115 §B).
+/// <c>cond ? a : throw e</c>, a <c>switch</c> arm value). G# supports
+/// throw-as-expression natively (issue #1153), so it renders as a bare
+/// <c>throw e</c> in coalesce-RHS, switch-arm, and ternary positions. In the one
+/// position gsc rejects a bare throw — the sole trailing value of an
+/// if-expression block branch (GS0277) — it is emitted as a throw STATEMENT
+/// followed by a value-producing typed tail: <c>throw e\n default(T)</c>.
 /// </summary>
 public sealed class ThrowExpression : GExpression
 {
@@ -897,9 +896,9 @@ public sealed class ThrowExpression : GExpression
     /// </summary>
     /// <param name="operand">The thrown exception value.</param>
     /// <param name="resultType">
-    /// The type the surrounding expression position expects, used for the
-    /// unreachable <c>default(T)</c> tail. May be <see langword="null"/> when no
-    /// type is resolvable, in which case a bare <c>default</c> is emitted.
+    /// The type the surrounding if-expression block branch expects, used for the
+    /// value-producing <c>default(T)</c> tail. May be <see langword="null"/> when
+    /// no type is resolvable, in which case a bare <c>default</c> is emitted.
     /// </param>
     public ThrowExpression(GExpression operand, GTypeReference resultType)
     {
@@ -910,6 +909,6 @@ public sealed class ThrowExpression : GExpression
     /// <summary>Gets the thrown exception value.</summary>
     public GExpression Operand { get; }
 
-    /// <summary>Gets the result type used for the unreachable tail.</summary>
+    /// <summary>Gets the result type used for the if-expression block branch tail.</summary>
     public GTypeReference ResultType { get; }
 }

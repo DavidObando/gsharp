@@ -129,7 +129,7 @@ namespace Demo
     // ---- Task 3: `x ?? throw E` ---------------------------------------------
 
     [Fact]
-    public void CoalesceThrow_InReturn_LoweredToNilGuard()
+    public void CoalesceThrow_InReturn_RendersNativeCoalesceThrow()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -141,10 +141,70 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("if __coalesce", printed);
-        Assert.Contains("== nil", printed);
-        Assert.Contains("throw InvalidOperationException", printed);
-        Assert.DoesNotContain("?? if", printed);
+        Assert.Contains("?? throw InvalidOperationException", printed);
+        Assert.DoesNotContain("__coalesce", printed);
+        Assert.DoesNotContain("if true {", printed);
+    }
+
+    [Fact]
+    public void CoalesceThrow_InLocalDeclaration_RendersNativeCoalesceThrow()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class E { }
+    public class C
+    {
+        public E F(E? x)
+        {
+            var r = x ?? throw new System.InvalidOperationException(""nil"");
+            return r;
+        }
+    }
+}");
+
+        Assert.Contains("?? throw InvalidOperationException", printed);
+        Assert.DoesNotContain("__coalesce", printed);
+        Assert.DoesNotContain("if true {", printed);
+    }
+
+    [Fact]
+    public void CoalesceThrow_InAssignment_RendersNativeCoalesceThrow()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class E { }
+    public class C
+    {
+        public E Field;
+        public void F(E? x)
+        {
+            Field = x ?? throw new System.InvalidOperationException(""nil"");
+        }
+    }
+}");
+
+        Assert.Contains("?? throw InvalidOperationException", printed);
+        Assert.DoesNotContain("__coalesce", printed);
+        Assert.DoesNotContain("if true {", printed);
+    }
+
+    [Fact]
+    public void CoalesceThrow_ValueTypeNullable_RendersNativeCoalesceThrow()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public int F(int? n) { return n ?? throw new System.InvalidOperationException(""nil""); }
+    }
+}");
+
+        Assert.Contains("?? throw InvalidOperationException", printed);
+        Assert.DoesNotContain("__coalesce", printed);
+        Assert.DoesNotContain("if true {", printed);
     }
 
     private static string TranslateUnit(string source)
