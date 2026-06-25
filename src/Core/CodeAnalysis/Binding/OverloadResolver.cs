@@ -459,7 +459,12 @@ internal sealed class OverloadResolver
             return overloads.Length == 1 ? overloads[0] : null;
         }
 
-        var selected = SelectBestInstanceOverload(overloads, arguments.Length, argumentNames, arguments, out var ambiguous);
+        // Issue #1124: a call may carry an explicit method type-argument list
+        // (e.g. `Factory.Make[Box](...)`). Thread its arity into overload
+        // selection so generic candidates are filtered for applicability against
+        // either the explicit type arguments or, in their absence, type inference.
+        var explicitTypeArgCount = ce.TypeArgumentList?.Arguments.Count ?? 0;
+        var selected = SelectBestInstanceOverload(overloads, arguments.Length, argumentNames, arguments, out var ambiguous, explicitTypeArgCount);
         if (selected != null)
         {
             return selected;
@@ -482,9 +487,10 @@ internal sealed class OverloadResolver
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
-        out bool ambiguous)
+        out bool ambiguous,
+        int explicitTypeArgCount = 0)
     {
-        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, boundArguments, out ambiguous);
+        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, boundArguments, out ambiguous, explicitTypeArgCount);
     }
 
     /// <summary>
@@ -498,7 +504,8 @@ internal sealed class OverloadResolver
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression> boundArguments,
-        out bool ambiguous)
+        out bool ambiguous,
+        int explicitTypeArgCount = 0)
     {
         ambiguous = false;
         if (candidates.Length == 0)
@@ -513,7 +520,7 @@ internal sealed class OverloadResolver
 
         var builder = ImmutableArray.CreateBuilder<BoundExpression>(boundArguments.Length);
         builder.AddRange(boundArguments);
-        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, builder, out ambiguous);
+        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, builder, out ambiguous, explicitTypeArgCount);
     }
 
     private FunctionSymbol SelectBestUserOverloadCore(
@@ -521,7 +528,8 @@ internal sealed class OverloadResolver
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
-        out bool ambiguous)
+        out bool ambiguous,
+        int explicitTypeArgCount = 0)
     {
         ambiguous = false;
 
@@ -532,6 +540,49 @@ internal sealed class OverloadResolver
             if (IsApplicableUserCallable(cand, argumentCount, argumentNames))
             {
                 applicable.Add(cand);
+            }
+        }
+
+        // Issue #1124: a generic candidate whose method type parameters cannot be
+        // determined for the call is not applicable (C# §11.6.4.2 "if type
+        // inference fails, the method is not a candidate"). Without an explicit
+        // type-argument list this means every type parameter must be inferable
+        // from the argument types; with an explicit list it means the candidate
+        // must be generic of matching arity (a non-generic overload cannot accept
+        // type arguments). Dropping such candidates here prevents a uninferable
+        // generic overload from tying with — and thus being reported ambiguous
+        // (GS0266) against — an otherwise-unique non-generic best match.
+        if (applicable.Count > 1)
+        {
+            var filtered = new List<FunctionSymbol>(applicable.Count);
+            foreach (var cand in applicable)
+            {
+                if (explicitTypeArgCount > 0)
+                {
+                    if (cand.IsGeneric && cand.TypeParameters.Length == explicitTypeArgCount)
+                    {
+                        filtered.Add(cand);
+                    }
+                }
+                else if (cand.IsGeneric)
+                {
+                    if (AllMethodTypeParametersInferable(cand, boundArguments, argumentCount))
+                    {
+                        filtered.Add(cand);
+                    }
+                }
+                else
+                {
+                    filtered.Add(cand);
+                }
+            }
+
+            // Only adopt the filtered set when it leaves at least one candidate;
+            // an empty result means the call shape is genuinely unsatisfiable and
+            // the pre-existing diagnostics on the unfiltered set are preferable.
+            if (filtered.Count > 0)
+            {
+                applicable = filtered;
             }
         }
 
@@ -660,6 +711,69 @@ internal sealed class OverloadResolver
                 {
                     return false;
                 }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1124: returns <see langword="true"/> when every method type
+    /// parameter of a generic candidate can be inferred from the supplied
+    /// argument types, mirroring the inference the binder performs once a
+    /// candidate is selected (see <c>BindUserTypeStaticCall</c> /
+    /// <c>InferTypeArguments</c>). Used to drop generic candidates whose type
+    /// arguments cannot be inferred so they do not participate in (and tie within)
+    /// overload ranking. Non-generic candidates trivially qualify.
+    /// </summary>
+    private bool AllMethodTypeParametersInferable(
+        FunctionSymbol candidate,
+        ImmutableArray<BoundExpression>.Builder boundArguments,
+        int argumentCount)
+    {
+        if (!candidate.IsGeneric)
+        {
+            return true;
+        }
+
+        var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        var parameterOffset = candidate.ExplicitReceiverParameter == null ? 0 : 1;
+        var paramLen = candidate.Parameters.Length - parameterOffset;
+        var isVariadic = paramLen > 0 && candidate.Parameters[candidate.Parameters.Length - 1].IsVariadic;
+        var fixedParamCount = isVariadic ? paramLen - 1 : paramLen;
+
+        var inferenceLimit = isVariadic ? fixedParamCount : Math.Min(argumentCount, paramLen);
+        for (var i = 0; i < inferenceLimit && i < boundArguments.Count; i++)
+        {
+            var argType = boundArguments[i]?.Type;
+            if (argType == null)
+            {
+                continue;
+            }
+
+            inferTypeArguments(candidate.Parameters[i + parameterOffset].Type, argType, substitution);
+        }
+
+        if (isVariadic && candidate.Parameters[candidate.Parameters.Length - 1].Type is SliceTypeSymbol variadicSlice)
+        {
+            for (var i = fixedParamCount; i < argumentCount && i < boundArguments.Count; i++)
+            {
+                var argType = boundArguments[i]?.Type;
+                if (argType == null)
+                {
+                    continue;
+                }
+
+                var source = argType is SliceTypeSymbol argSlice ? argSlice.ElementType : argType;
+                inferTypeArguments(variadicSlice.ElementType, source, substitution);
+            }
+        }
+
+        foreach (var tp in candidate.TypeParameters)
+        {
+            if (!substitution.ContainsKey(tp))
+            {
+                return false;
             }
         }
 
@@ -2825,7 +2939,7 @@ internal sealed class OverloadResolver
         var overloadSet = Scope.TryLookupFunctions(syntax.Identifier.Text);
         if (overloadSet.Length > 1)
         {
-            var selected = SelectBestUserOverload(overloadSet, syntax.Arguments.Count, argumentNames, boundArguments, out var overloadAmbiguous);
+            var selected = SelectBestUserOverload(overloadSet, syntax.Arguments.Count, argumentNames, boundArguments, out var overloadAmbiguous, syntax.TypeArgumentList?.Arguments.Count ?? 0);
             if (selected == null)
             {
                 if (overloadAmbiguous)
