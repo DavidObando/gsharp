@@ -1190,6 +1190,64 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #1107: the by-ref-parameter counterpart of
+    /// <see cref="ResolveInstanceReturnTypeFromReceiver"/>. When a call is
+    /// dispatched against a receiver whose <see cref="ImportedTypeSymbol"/>
+    /// carries symbolic type arguments (e.g. <c>Dictionary[K, V]</c>),
+    /// substitute the open declaring type's parameter pointee type using the
+    /// receiver's symbolic arguments. Without this an inline <c>out var</c>
+    /// argument against a generic by-ref parameter (e.g. the <c>out TValue</c>
+    /// of <c>Dictionary&lt;K, V&gt;.TryGetValue</c>) would bind from the
+    /// type-erased closed shape (<c>out object</c>), losing the symbolic
+    /// projection (the same-compilation user element type) and reporting
+    /// <c>GS0158</c> on a subsequent member access of the out-var local.
+    /// Returns <see langword="null"/> when no override is needed so callers keep
+    /// their existing pointee derivation.
+    /// </summary>
+    /// <param name="receiverType">The receiver's static type symbol.</param>
+    /// <param name="closedMethod">The closed method selected by overload resolution.</param>
+    /// <param name="paramIndex">The zero-based parameter position to recover.</param>
+    /// <returns>The override pointee type symbol, or <see langword="null"/>.</returns>
+    private static TypeSymbol ResolveInstanceParameterPointeeTypeFromReceiver(
+        TypeSymbol receiverType,
+        System.Reflection.MethodInfo closedMethod,
+        int paramIndex)
+    {
+        if (receiverType is not ImportedTypeSymbol imp
+            || imp.OpenDefinition == null
+            || imp.TypeArguments.IsDefaultOrEmpty
+            || closedMethod == null
+            || paramIndex < 0)
+        {
+            return null;
+        }
+
+        var openMethod = TryGetOpenInstanceMethod(imp.OpenDefinition, closedMethod);
+        if (openMethod == null)
+        {
+            return null;
+        }
+
+        var openParameters = openMethod.GetParameters();
+        if (paramIndex >= openParameters.Length)
+        {
+            return null;
+        }
+
+        var openParamType = openParameters[paramIndex].ParameterType;
+        var openPointee = openParamType.IsByRef ? openParamType.GetElementType() : openParamType;
+        if (openPointee == null)
+        {
+            return null;
+        }
+
+        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openPointee, imp.OpenDefinition, imp.TypeArguments);
+        return TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped)
+            ? mapped
+            : null;
+    }
+
+    /// <summary>
     /// Locates the open-generic-definition counterpart of <paramref name="closedMethod"/>
     /// on <paramref name="openDefinition"/>. Match is by metadata token + module,
     /// which is stable for methods on a constructed generic type (the
@@ -2098,12 +2156,14 @@ internal sealed partial class ExpressionBinder
     /// <param name="arguments">The bound arguments (with placeholder out-var entries).</param>
     /// <param name="resolvedMethod">The chosen imported method (constructed if generic).</param>
     /// <param name="parameterMapping">The source-argument → parameter-position mapping; default for positional calls.</param>
+    /// <param name="receiverType">The receiver's static type (for symbolic by-ref-parameter recovery); may be <see langword="null"/>.</param>
     /// <returns>The argument vector with inline out-var placeholders rebound.</returns>
     private ImmutableArray<BoundExpression> RebindInlineOutVarArguments(
         CallExpressionSyntax ce,
         ImmutableArray<BoundExpression> arguments,
         System.Reflection.MethodInfo resolvedMethod,
-        ImmutableArray<int> parameterMapping)
+        ImmutableArray<int> parameterMapping,
+        TypeSymbol receiverType = null)
     {
         ImmutableArray<BoundExpression>.Builder rebuilt = null;
         System.Reflection.ParameterInfo[] parameters = null;
@@ -2123,7 +2183,16 @@ internal sealed partial class ExpressionBinder
 
             var clrParameterType = parameters[paramIndex].ParameterType;
             var pointeeClr = clrParameterType.IsByRef ? clrParameterType.GetElementType() : clrParameterType;
-            var pointeeType = TypeSymbol.FromClrType(pointeeClr);
+
+            // Issue #1107: when the by-ref parameter's pointee is a type-level
+            // generic parameter on the receiver (e.g. `Dictionary[string,
+            // Entry].TryGetValue(string, out TValue)`), the resolved CLR method
+            // erased `TValue` to `object`, so the out-var local would bind as
+            // `object` and member access on it (`found.V`) would fail (GS0158).
+            // Recover the symbolic pointee type from the receiver's symbolic
+            // type arguments (mirroring `ResolveInstanceReturnTypeFromReceiver`).
+            var pointeeType = ResolveInstanceParameterPointeeTypeFromReceiver(receiverType, resolvedMethod, paramIndex)
+                ?? TypeSymbol.FromClrType(pointeeClr);
             var syntheticParameter = new ParameterSymbol(
                 parameters[paramIndex].Name ?? "value",
                 pointeeType,
@@ -2621,7 +2690,7 @@ internal sealed partial class ExpressionBinder
                             // any inline `out var`/`out let`/`out _` placeholders
                             // against the resolved by-ref parameter so the new
                             // local is declared with the inferred pointee type.
-                            arguments = RebindInlineOutVarArguments(ce, arguments, resolution.Best, resolution.ParameterMapping);
+                            arguments = RebindInlineOutVarArguments(ce, arguments, resolution.Best, resolution.ParameterMapping, receiver?.Type);
                             var instSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(receiver?.Type, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
                             var instSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(resolution.Best, typeArgSymbols, instSymbolicArgs);
                             var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : typeArgSymbols;
