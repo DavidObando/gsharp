@@ -203,25 +203,20 @@ public sealed class Conversion
         // parameter type and the `List[T]` declared return type) are distinct
         // symbol instances but denote the same type. Treat them as identity so
         // `return items` inside a generic function binds.
-        if (from is ImportedTypeSymbol fromGeneric && fromGeneric.HasTypeParameterArgument
-            && to is ImportedTypeSymbol toGeneric && toGeneric.HasTypeParameterArgument
-            && ReferenceEquals(fromGeneric.OpenDefinition, toGeneric.OpenDefinition)
-            && fromGeneric.TypeArguments.Length == toGeneric.TypeArguments.Length)
+        // Issue #1088 extends this to the same-compilation user-type-argument
+        // case (e.g. `Channel[BufferEntry]`), where one side's `ClrType` erases
+        // to `Channel`1[object]` (or is null entirely) while both carry the
+        // same symbolic argument. Comparing the SYMBOLIC type arguments — rather
+        // than the erased `ClrType` — lets `let ch Channel[BufferEntry] = ...`
+        // bind even though `BufferEntry` has a null `ClrType` during binding.
+        if (from is ImportedTypeSymbol fromGeneric
+            && to is ImportedTypeSymbol toGeneric
+            && fromGeneric.OpenDefinition != null
+            && toGeneric.OpenDefinition != null
+            && (fromGeneric.HasSubstitutableTypeArgument || toGeneric.HasSubstitutableTypeArgument)
+            && AreConstructedGenericsIdentical(fromGeneric, toGeneric))
         {
-            var equivalent = true;
-            for (var i = 0; i < fromGeneric.TypeArguments.Length; i++)
-            {
-                if (!ReferenceEquals(fromGeneric.TypeArguments[i], toGeneric.TypeArguments[i]))
-                {
-                    equivalent = false;
-                    break;
-                }
-            }
-
-            if (equivalent)
-            {
-                return Conversion.Identity;
-            }
+            return Conversion.Identity;
         }
 
         // Phase 3.C.1 / ADR-0001: T → T? is an implicit widening; T? → T?
@@ -554,6 +549,85 @@ public sealed class Conversion
         }
 
         return Conversion.None;
+    }
+
+    /// <summary>
+    /// Issue #1088: determines whether two constructed generic
+    /// <see cref="ImportedTypeSymbol"/> instances denote the same closed type
+    /// by comparing their open definitions and SYMBOLIC type arguments, rather
+    /// than their (possibly erased) <see cref="TypeSymbol.ClrType"/>. A
+    /// same-compilation user type used as a CLR generic argument has a
+    /// <see langword="null"/> <c>ClrType</c> and erases to <c>object</c> on the
+    /// closed shape, so a purely CLR-based comparison spuriously fails for
+    /// otherwise identical instantiations (e.g. the declared variable type
+    /// <c>Channel[BufferEntry]</c> vs. a factory method's return type).
+    /// </summary>
+    private static bool AreConstructedGenericsIdentical(ImportedTypeSymbol from, ImportedTypeSymbol to)
+    {
+        if (!ClrTypeUtilities.IsSameAs(from.OpenDefinition, to.OpenDefinition))
+        {
+            return false;
+        }
+
+        if (from.TypeArguments.IsDefaultOrEmpty || to.TypeArguments.IsDefaultOrEmpty
+            || from.TypeArguments.Length != to.TypeArguments.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < from.TypeArguments.Length; i++)
+        {
+            if (!AreTypeArgumentsEquivalent(from.TypeArguments[i], to.TypeArguments[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1088: compares two symbolic generic type arguments for identity,
+    /// recovering same-compilation user types whose <see cref="TypeSymbol.ClrType"/>
+    /// has erased to <c>object</c> (or is <see langword="null"/>). Same-compilation
+    /// symbols are reference-equal; distinct user types differ by reference / name
+    /// so genuine negative conversions (e.g. <c>Channel[A]</c> → <c>Channel[B]</c>)
+    /// still report GS0155.
+    /// </summary>
+    private static bool AreTypeArgumentsEquivalent(TypeSymbol a, TypeSymbol b)
+    {
+        if (ReferenceEquals(a, b))
+        {
+            return true;
+        }
+
+        if (a is null || b is null)
+        {
+            return false;
+        }
+
+        // Nested constructed generics (e.g. List[List[MyGs]]) compare structurally.
+        if (a is ImportedTypeSymbol nestedA && b is ImportedTypeSymbol nestedB
+            && nestedA.OpenDefinition != null && nestedB.OpenDefinition != null)
+        {
+            return AreConstructedGenericsIdentical(nestedA, nestedB);
+        }
+
+        // Both arguments resolve to a real CLR type: compare those by name.
+        if (a.ClrType != null && b.ClrType != null)
+        {
+            return ClrTypeUtilities.AreSame(a.ClrType, b.ClrType);
+        }
+
+        // Both arguments are same-compilation user types with a null ClrType:
+        // compare by symbol kind and name so distinct user types stay distinct.
+        if (a.ClrType == null && b.ClrType == null)
+        {
+            return a.GetType() == b.GetType()
+                && string.Equals(a.Name, b.Name, StringComparison.Ordinal);
+        }
+
+        return false;
     }
 
     /// <summary>
