@@ -1304,7 +1304,7 @@ internal sealed partial class ExpressionBinder
     // issue #1144: the ten G# integer primitive types (signed + unsigned,
     // including the native-int pair). Membership mirrors the integral sets in
     // BoundBinaryOperator.
-    private static bool IsIntegerType(TypeSymbol type)
+    internal static bool IsIntegerType(TypeSymbol type)
     {
         return type == TypeSymbol.Int8 || type == TypeSymbol.Int16 || type == TypeSymbol.Int32
             || type == TypeSymbol.Int64 || type == TypeSymbol.NInt
@@ -1314,7 +1314,7 @@ internal sealed partial class ExpressionBinder
 
     // issue #1144: true when the boxed literal value is a compile-time constant
     // INTEGER (excludes char/bool/float/decimal/string/enum, which never adapt).
-    private static bool IsIntegerLiteralValue(object value)
+    internal static bool IsIntegerLiteralValue(object value)
     {
         return value is sbyte or byte or short or ushort or int or uint or long or ulong or nint or nuint;
     }
@@ -1326,7 +1326,7 @@ internal sealed partial class ExpressionBinder
     // InferType) to EXACTLY the target type. Native ints are range-tested
     // conservatively as int64 (nint) / uint64 (nuint) so the result is stable
     // regardless of the host process pointer width.
-    private static bool TryAdaptIntegerLiteral(object value, TypeSymbol target, out object converted)
+    internal static bool TryAdaptIntegerLiteral(object value, TypeSymbol target, out object converted)
     {
         converted = null;
         BigInteger v = value switch
