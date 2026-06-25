@@ -1518,7 +1518,7 @@ internal sealed partial class ExpressionBinder
         var staticMethodGroup = TypeMemberModel.GetMethods(structSym, methodName, MemberQuery.Static(MemberKinds.Method));
         if (!staticMethodGroup.IsDefaultOrEmpty)
         {
-            var method = overloads.SelectInstanceOverloadOrReport(staticMethodGroup, arguments, ce, methodName, argumentNames: default);
+            var method = overloads.SelectInstanceOverloadOrReport(staticMethodGroup, arguments, ce, methodName, argumentNames: default, hasExplicitTypeArgs: ce.TypeArgumentList != null);
             if (method == null)
             {
                 return new BoundErrorExpression(null);

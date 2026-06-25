@@ -452,14 +452,15 @@ internal sealed class OverloadResolver
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
         string methodName,
-        ImmutableArray<string> argumentNames)
+        ImmutableArray<string> argumentNames,
+        bool hasExplicitTypeArgs = false)
     {
         if (overloads.Length <= 1)
         {
             return overloads.Length == 1 ? overloads[0] : null;
         }
 
-        var selected = SelectBestInstanceOverload(overloads, arguments.Length, argumentNames, arguments, out var ambiguous);
+        var selected = SelectBestInstanceOverload(overloads, arguments.Length, argumentNames, arguments, out var ambiguous, hasExplicitTypeArgs);
         if (selected != null)
         {
             return selected;
@@ -482,9 +483,10 @@ internal sealed class OverloadResolver
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
-        out bool ambiguous)
+        out bool ambiguous,
+        bool hasExplicitTypeArgs = false)
     {
-        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, boundArguments, out ambiguous);
+        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, boundArguments, out ambiguous, hasExplicitTypeArgs);
     }
 
     /// <summary>
@@ -498,7 +500,8 @@ internal sealed class OverloadResolver
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression> boundArguments,
-        out bool ambiguous)
+        out bool ambiguous,
+        bool hasExplicitTypeArgs = false)
     {
         ambiguous = false;
         if (candidates.Length == 0)
@@ -513,7 +516,7 @@ internal sealed class OverloadResolver
 
         var builder = ImmutableArray.CreateBuilder<BoundExpression>(boundArguments.Length);
         builder.AddRange(boundArguments);
-        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, builder, out ambiguous);
+        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, builder, out ambiguous, hasExplicitTypeArgs);
     }
 
     private FunctionSymbol SelectBestUserOverloadCore(
@@ -521,7 +524,8 @@ internal sealed class OverloadResolver
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
-        out bool ambiguous)
+        out bool ambiguous,
+        bool hasExplicitTypeArgs = false)
     {
         ambiguous = false;
 
@@ -532,6 +536,39 @@ internal sealed class OverloadResolver
             if (IsApplicableUserCallable(cand, argumentCount, argumentNames))
             {
                 applicable.Add(cand);
+            }
+        }
+
+        // Issue #1124: a generic candidate invoked WITHOUT explicit type
+        // arguments is applicable only when ALL of its type parameters can be
+        // inferred from the supplied argument types — exactly as C# excludes a
+        // candidate whose type inference fails. Dropping such candidates before
+        // the tie/ambiguity determination lets a non-generic (or successfully
+        // inferred) sibling resolve unambiguously instead of surfacing GS0266.
+        // Symmetrically, when explicit type arguments ARE supplied, a
+        // non-generic candidate cannot accept them, so C# removes it from the
+        // candidate set; that leaves the generic overload to resolve. In both
+        // directions the exclusion is guarded so that it only applies when at
+        // least one candidate survives, preserving the existing single-candidate
+        // diagnostics (e.g. type-argument-inference-failure for a lone
+        // uninferable generic) rather than a misleading "no applicable overload".
+        if (applicable.Count > 1)
+        {
+            var filtered = new List<FunctionSymbol>();
+            foreach (var cand in applicable)
+            {
+                var keep = hasExplicitTypeArgs
+                    ? cand.IsGeneric
+                    : AllTypeParametersInferable(cand, boundArguments);
+                if (keep)
+                {
+                    filtered.Add(cand);
+                }
+            }
+
+            if (filtered.Count > 0 && filtered.Count < applicable.Count)
+            {
+                applicable = filtered;
             }
         }
 
@@ -660,6 +697,51 @@ internal sealed class OverloadResolver
                 {
                     return false;
                 }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1124: returns true when the candidate is non-generic, or when it
+    /// is generic and every one of its type parameters can be inferred from the
+    /// supplied argument types via the same left-to-right unification used by
+    /// the call binder. A generic candidate whose type parameter(s) appear only
+    /// in the return type / a constraint (never in a parameter) is therefore
+    /// reported as not inferable, so it can be excluded from the applicable set
+    /// when no explicit type arguments were supplied at the call site.
+    /// </summary>
+    private static bool AllTypeParametersInferable(FunctionSymbol candidate, ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        if (!candidate.IsGeneric)
+        {
+            return true;
+        }
+
+        // A static/top-level candidate carries no explicit receiver parameter,
+        // so argument index maps directly to parameter index. An instance
+        // candidate may carry a leading receiver parameter that has no matching
+        // argument; skip it via the same offset used by the scoring loop.
+        var parameterOffset = candidate.ExplicitReceiverParameter == null ? 0 : 1;
+        var paramLen = candidate.Parameters.Length - parameterOffset;
+        var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        for (var i = 0; i < paramLen && i < boundArguments.Count; i++)
+        {
+            var argType = boundArguments[i]?.Type;
+            if (argType == null)
+            {
+                continue;
+            }
+
+            Binder.InferTypeArguments(candidate.Parameters[i + parameterOffset].Type, argType, substitution);
+        }
+
+        foreach (var tp in candidate.TypeParameters)
+        {
+            if (!substitution.ContainsKey(tp))
+            {
+                return false;
             }
         }
 
@@ -2529,7 +2611,7 @@ internal sealed class OverloadResolver
                 var implicitOverloads = TypeMemberModel.GetMethods(implicitReceiverStruct, syntax.Identifier.Text, MemberQuery.Instance(MemberKinds.Method));
                 if (implicitOverloads.Length > 0)
                 {
-                    var implicitMethod = SelectInstanceOverloadOrReport(implicitOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.Text, argumentNames);
+                    var implicitMethod = SelectInstanceOverloadOrReport(implicitOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.Text, argumentNames, syntax.TypeArgumentList != null);
                     if (implicitMethod == null)
                     {
                         return new BoundErrorExpression(null);
@@ -2560,7 +2642,7 @@ internal sealed class OverloadResolver
 
                 if (implicitIfaceOverloads.Length > 0)
                 {
-                    var implicitIfaceMethod = SelectInstanceOverloadOrReport(implicitIfaceOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.Text, argumentNames);
+                    var implicitIfaceMethod = SelectInstanceOverloadOrReport(implicitIfaceOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.Text, argumentNames, syntax.TypeArgumentList != null);
                     if (implicitIfaceMethod == null)
                     {
                         return new BoundErrorExpression(null);
@@ -2589,7 +2671,7 @@ internal sealed class OverloadResolver
 
                 if (implicitStaticOverloads.Length > 0)
                 {
-                    var implicitStaticMethod = SelectInstanceOverloadOrReport(implicitStaticOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.Text, argumentNames);
+                    var implicitStaticMethod = SelectInstanceOverloadOrReport(implicitStaticOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.Text, argumentNames, syntax.TypeArgumentList != null);
                     if (implicitStaticMethod == null)
                     {
                         return new BoundErrorExpression(null);
@@ -2825,7 +2907,7 @@ internal sealed class OverloadResolver
         var overloadSet = Scope.TryLookupFunctions(syntax.Identifier.Text);
         if (overloadSet.Length > 1)
         {
-            var selected = SelectBestUserOverload(overloadSet, syntax.Arguments.Count, argumentNames, boundArguments, out var overloadAmbiguous);
+            var selected = SelectBestUserOverload(overloadSet, syntax.Arguments.Count, argumentNames, boundArguments, out var overloadAmbiguous, syntax.TypeArgumentList != null);
             if (selected == null)
             {
                 if (overloadAmbiguous)

@@ -2435,7 +2435,7 @@ internal sealed partial class ExpressionBinder
 
                 if (ifaceOverloads.Length > 0)
                 {
-                    var ifaceMethod = overloads.SelectInstanceOverloadOrReport(ifaceOverloads, arguments, ce, methodName, argumentNames);
+                    var ifaceMethod = overloads.SelectInstanceOverloadOrReport(ifaceOverloads, arguments, ce, methodName, argumentNames, ce.TypeArgumentList != null);
                     if (ifaceMethod == null)
                     {
                         return new BoundErrorExpression(null);
@@ -2456,7 +2456,7 @@ internal sealed partial class ExpressionBinder
                 var tpOverloads = TypeMemberModel.GetMethods(tpRecv.InterfaceConstraint, methodName, MemberQuery.Instance(MemberKinds.Method));
                 if (tpOverloads.Length > 0)
                 {
-                    var tpIfaceMethod = overloads.SelectInstanceOverloadOrReport(tpOverloads, arguments, ce, methodName, argumentNames);
+                    var tpIfaceMethod = overloads.SelectInstanceOverloadOrReport(tpOverloads, arguments, ce, methodName, argumentNames, ce.TypeArgumentList != null);
                     if (tpIfaceMethod == null)
                     {
                         return new BoundErrorExpression(null);
@@ -2484,7 +2484,7 @@ internal sealed partial class ExpressionBinder
                 var tpClassOverloads = TypeMemberModel.GetMethods(tpClassConstraint, methodName, MemberQuery.Instance(MemberKinds.Method));
                 if (tpClassOverloads.Length > 0)
                 {
-                    var tpClassMethod = overloads.SelectInstanceOverloadOrReport(tpClassOverloads, arguments, ce, methodName, argumentNames);
+                    var tpClassMethod = overloads.SelectInstanceOverloadOrReport(tpClassOverloads, arguments, ce, methodName, argumentNames, ce.TypeArgumentList != null);
                     if (tpClassMethod == null)
                     {
                         return new BoundErrorExpression(null);
@@ -2512,7 +2512,7 @@ internal sealed partial class ExpressionBinder
                 var userOverloads = TypeMemberModel.GetMethods(userClass, methodName, MemberQuery.Instance(MemberKinds.Method));
                 if (userOverloads.Length > 0)
                 {
-                    var userMethod = overloads.SelectInstanceOverloadOrReport(userOverloads, arguments, ce, methodName, argumentNames);
+                    var userMethod = overloads.SelectInstanceOverloadOrReport(userOverloads, arguments, ce, methodName, argumentNames, ce.TypeArgumentList != null);
                     if (userMethod == null)
                     {
                         return new BoundErrorExpression(null);
@@ -2585,7 +2585,7 @@ internal sealed partial class ExpressionBinder
             var priorityOverloads = TypeMemberModel.GetMethods(userClassPriority, methodName, MemberQuery.Instance(MemberKinds.Method));
             if (priorityOverloads.Length > 0)
             {
-                var userMethodPriority = overloads.SelectInstanceOverloadOrReport(priorityOverloads, arguments, ce, methodName, argumentNames);
+                var userMethodPriority = overloads.SelectInstanceOverloadOrReport(priorityOverloads, arguments, ce, methodName, argumentNames, ce.TypeArgumentList != null);
                 if (userMethodPriority == null)
                 {
                     return new BoundErrorExpression(null);
@@ -2863,7 +2863,7 @@ internal sealed partial class ExpressionBinder
                     continue;
                 }
 
-                var selected = this.overloads.SelectInstanceOverloadOrReport(defaultsOnly.ToImmutable(), arguments, ce, methodName, argumentNames);
+                var selected = this.overloads.SelectInstanceOverloadOrReport(defaultsOnly.ToImmutable(), arguments, ce, methodName, argumentNames, ce.TypeArgumentList != null);
                 if (selected != null)
                 {
                     return selected;
@@ -3923,7 +3923,7 @@ internal sealed partial class ExpressionBinder
         }
 
         var arguments = boundArguments.ToImmutable();
-        var method = overloads.SelectInstanceOverloadOrReport(baseOverloads, arguments, ce, methodName, argumentNames);
+        var method = overloads.SelectInstanceOverloadOrReport(baseOverloads, arguments, ce, methodName, argumentNames, ce.TypeArgumentList != null);
         if (method == null)
         {
             return new BoundErrorExpression(null);
