@@ -438,18 +438,39 @@ internal sealed partial class ExpressionBinder
     }
 
     private BoundExpression BindStructLiteralExpression(StructLiteralExpressionSyntax syntax)
+        => BindStructLiteralExpression(syntax, resolvedDefinition: null);
+
+    /// <summary>
+    /// Binds a struct/class literal <c>Foo{ ... }</c>. When
+    /// <paramref name="resolvedDefinition"/> is supplied (issue #1174: a
+    /// qualified nested type <c>Container.Nested{ ... }</c> whose simple name
+    /// collides with a top-level homonym), it is used directly instead of
+    /// resolving the type by the literal's simple name — which would otherwise
+    /// bind to the top-level homonym holding the simple key.
+    /// </summary>
+    private BoundExpression BindStructLiteralExpression(StructLiteralExpressionSyntax syntax, StructSymbol resolvedDefinition)
     {
         var typeName = syntax.TypeIdentifier.Text;
 
-        // Issue #1051: when the literal carries an explicit type-argument list,
-        // resolve the same-named generic definition of the matching arity so a
-        // non-generic `Foo` and a generic `Foo[T]` can coexist. Without one,
-        // prefer the arity-0 type (falling back to a lone generic for inference).
-        var preferredArity = syntax.TypeArgumentList != null ? syntax.TypeArgumentList.Arguments.Count : -1;
-        if (!scope.TryLookupTypeAlias(typeName, preferredArity, out var resolvedType) || !(resolvedType is StructSymbol structSymbol))
+        StructSymbol structSymbol;
+        if (resolvedDefinition != null)
         {
-            Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
-            return new BoundErrorExpression(null);
+            structSymbol = resolvedDefinition;
+        }
+        else
+        {
+            // Issue #1051: when the literal carries an explicit type-argument list,
+            // resolve the same-named generic definition of the matching arity so a
+            // non-generic `Foo` and a generic `Foo[T]` can coexist. Without one,
+            // prefer the arity-0 type (falling back to a lone generic for inference).
+            var preferredArity = syntax.TypeArgumentList != null ? syntax.TypeArgumentList.Arguments.Count : -1;
+            if (!scope.TryLookupTypeAlias(typeName, preferredArity, out var resolvedType) || !(resolvedType is StructSymbol resolvedStruct))
+            {
+                Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
+                return new BoundErrorExpression(null);
+            }
+
+            structSymbol = resolvedStruct;
         }
 
         // ADR-0047 §6 / #175: struct/class literal `Foo{ ... }` is a

@@ -7779,28 +7779,26 @@ public class Parser
         pos++;
 
         // Nested type-argument list, e.g. `List[int]`.
-        if (Peek(pos).Kind == SyntaxKind.OpenSquareBracketToken)
+        if (!TryScanOptionalTypeArgumentList(ref pos))
         {
-            pos++;
-            while (true)
+            return false;
+        }
+
+        // Issue #1174: a dotted tail names a (possibly nested, possibly
+        // generic) type — `Container.Nested`, `A.B.C`, or `Outer.Generic[T]`.
+        // Each `.Identifier` segment may carry its own type-argument list.
+        // Consuming the tail here lets `List[C.E]` and `List[C.E]{...}` scan as
+        // a SINGLE type clause in a generic-argument position so they are
+        // recognised as a generic call / composite site. The `.` is scanned
+        // INSIDE the bracket; the separate issue #942 rule about a trailing `.`
+        // AFTER the `]` (indexer-then-member disambiguation in
+        // LooksLikeGenericCallSite) is untouched.
+        while (Peek(pos).Kind == SyntaxKind.DotToken
+            && Peek(pos + 1).Kind == SyntaxKind.IdentifierToken)
+        {
+            pos += 2;
+            if (!TryScanOptionalTypeArgumentList(ref pos))
             {
-                if (!TryScanTypeClause(ref pos))
-                {
-                    return false;
-                }
-
-                if (Peek(pos).Kind == SyntaxKind.CommaToken)
-                {
-                    pos++;
-                    continue;
-                }
-
-                if (Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken)
-                {
-                    pos++;
-                    break;
-                }
-
                 return false;
             }
         }
@@ -7809,6 +7807,48 @@ public class Parser
         if (Peek(pos).Kind == SyntaxKind.QuestionToken)
         {
             pos++;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1174: scans an optional bracketed type-argument list
+    /// (<c>[T1, T2, ...]</c>) starting at <paramref name="pos"/>. A missing list
+    /// is a success (no-op). Used by <see cref="TryScanTypeClause"/> for both the
+    /// head identifier and each dotted-tail segment so a nested generic type such
+    /// as <c>Outer.Generic[T]</c> scans as one type clause.
+    /// </summary>
+    /// <param name="pos">The scan position, advanced past the list when present.</param>
+    /// <returns><see langword="true"/> when there is no list or it scans cleanly.</returns>
+    private bool TryScanOptionalTypeArgumentList(ref int pos)
+    {
+        if (Peek(pos).Kind != SyntaxKind.OpenSquareBracketToken)
+        {
+            return true;
+        }
+
+        pos++;
+        while (true)
+        {
+            if (!TryScanTypeClause(ref pos))
+            {
+                return false;
+            }
+
+            if (Peek(pos).Kind == SyntaxKind.CommaToken)
+            {
+                pos++;
+                continue;
+            }
+
+            if (Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken)
+            {
+                pos++;
+                break;
+            }
+
+            return false;
         }
 
         return true;

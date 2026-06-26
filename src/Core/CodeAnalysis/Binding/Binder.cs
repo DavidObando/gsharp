@@ -2550,8 +2550,16 @@ public sealed class Binder
 
         for (var i = 1; i < segmentTexts.Length; i++)
         {
-            var nested = LookupType(segmentTexts[i]);
-            if (nested == null || !ReferenceEquals(SymbolContainingType(nested), current))
+            // Issue #1174: resolve each non-head segment as a nested type of the
+            // previously-resolved container, NOT by global simple name. A bare
+            // simple-name lookup returns a same-named top-level homonym, which
+            // then fails the containment check and breaks `Container.Nested`
+            // references. Only the deepest segment carries the clause's type
+            // arguments, so it drives the preferred arity.
+            var preferredArity = (i == segmentTexts.Length - 1 && syntax.HasTypeArguments)
+                ? syntax.TypeArguments.Count
+                : -1;
+            if (!scope.TryLookupNestedTypeAlias(current, segmentTexts[i], preferredArity, out var nested))
             {
                 return null;
             }

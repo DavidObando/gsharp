@@ -35,6 +35,13 @@ public sealed class CSharpTypeMapper
     public const string UnsupportedPlaceholderType = "object";
 
     /// <summary>
+    /// Issue #1174: cached per-compilation census of source-declared type simple
+    /// names (built lazily on first use), used to decide whether a source nested
+    /// type's simple name is ambiguous and must be emitted in qualified form.
+    /// </summary>
+    private Dictionary<string, int> sourceSimpleNameCounts;
+
+    /// <summary>
     /// Maps a Roslyn type symbol to its canonical G# type reference, recording
     /// an unsupported-construct diagnostic on <paramref name="context"/> for any
     /// type with no canonical G# form.
@@ -226,10 +233,10 @@ public sealed class CSharpTypeMapper
                 List<GTypeReference> args = named.TypeArguments
                     .Select(a => this.Map(a, context, location))
                     .ToList();
-                return new NamedTypeReference(QualifiedTypeName(named), args);
+                return new NamedTypeReference(this.QualifiedTypeName(named, context), args);
             }
 
-            return new NamedTypeReference(QualifiedTypeName(named));
+            return new NamedTypeReference(this.QualifiedTypeName(named, context));
         }
 
         return new NamedTypeReference(type.Name);
@@ -238,14 +245,28 @@ public sealed class CSharpTypeMapper
     // A nested type is referenced through its containing type(s)
     // (`ConfiguredTaskAwaitable.ConfiguredTaskAwaiter`); emitting the innermost
     // name alone makes the reference unresolvable. Walk the containing-type chain
-    // and join with '.' so nested types stay qualified (ADR-0115 §B.12). Only
-    // metadata (BCL/external) nested types are qualified: a source-declared
+    // and join with '.' so nested types stay qualified (ADR-0115 §B.12).
+    //
+    // Metadata (BCL/external) nested types are ALWAYS qualified. A source-declared
     // nested type is emitted by the translator as a directly-nested G# member and
-    // is referenced by its simple name within the package, so qualifying it would
-    // break round-trip parsing of generic-argument positions.
-    private static string QualifiedTypeName(INamedTypeSymbol named)
+    // is normally referenced by its simple name within the package. However, when
+    // another source type shares its simple name (issue #1174 / #914: e.g. a
+    // top-level `class SampleEntry` alongside `class SttsBox { data struct
+    // SampleEntry(...) }`), the bare name binds to the homonym that holds the
+    // simple key — so the nested type must be qualified `Container.Nested` to
+    // resolve correctly. This is now safe to emit in every position (generic
+    // arguments, type clauses, struct literals) thanks to the issue #1174
+    // language fix, so the qualified form round-trips under gsc.
+    private string QualifiedTypeName(INamedTypeSymbol named, TranslationContext context)
     {
-        if (named.ContainingType == null || named.Locations.Any(l => l.IsInSource))
+        if (named.ContainingType == null)
+        {
+            return named.Name;
+        }
+
+        // A source nested type only needs qualifying when its simple name is
+        // ambiguous within the package (a same-named source homonym exists).
+        if (named.Locations.Any(l => l.IsInSource) && !this.HasSourceHomonym(named, context))
         {
             return named.Name;
         }
@@ -257,6 +278,68 @@ public sealed class CSharpTypeMapper
         }
 
         return string.Join(".", parts);
+    }
+
+    /// <summary>
+    /// Issue #1174: whether another source-declared type shares the simple name of
+    /// <paramref name="named"/>, making the bare name ambiguous in the flat G#
+    /// package scope. The per-compilation simple-name census is built once and
+    /// cached on this mapper instance.
+    /// </summary>
+    private bool HasSourceHomonym(INamedTypeSymbol named, TranslationContext context)
+    {
+        this.sourceSimpleNameCounts ??= BuildSourceSimpleNameCounts(context.Compilation);
+        return this.sourceSimpleNameCounts.TryGetValue(named.Name, out var count) && count > 1;
+    }
+
+    private static Dictionary<string, int> BuildSourceSimpleNameCounts(Compilation compilation)
+    {
+        var counts = new Dictionary<string, int>();
+        foreach (var type in EnumerateAllNamedTypes(compilation.GlobalNamespace))
+        {
+            if (!type.Locations.Any(l => l.IsInSource))
+            {
+                continue;
+            }
+
+            counts.TryGetValue(type.Name, out var existing);
+            counts[type.Name] = existing + 1;
+        }
+
+        return counts;
+    }
+
+    private static IEnumerable<INamedTypeSymbol> EnumerateAllNamedTypes(INamespaceSymbol ns)
+    {
+        foreach (var member in ns.GetMembers())
+        {
+            if (member is INamespaceSymbol childNs)
+            {
+                foreach (var nested in EnumerateAllNamedTypes(childNs))
+                {
+                    yield return nested;
+                }
+            }
+            else if (member is INamedTypeSymbol type)
+            {
+                foreach (var nested in EnumerateNamedTypeAndNested(type))
+                {
+                    yield return nested;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<INamedTypeSymbol> EnumerateNamedTypeAndNested(INamedTypeSymbol type)
+    {
+        yield return type;
+        foreach (var nested in type.GetTypeMembers())
+        {
+            foreach (var deeper in EnumerateNamedTypeAndNested(nested))
+            {
+                yield return deeper;
+            }
+        }
     }
 
     private ArrowTypeReference MapDelegate(IMethodSymbol invoke, TranslationContext context, Location location)
