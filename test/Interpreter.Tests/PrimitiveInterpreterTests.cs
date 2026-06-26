@@ -49,6 +49,12 @@ public class PrimitiveInterpreterTests
     [InlineData("-3.14M", "-3.14")]
     [InlineData("int64(42)", "42")]
     [InlineData("int32(9999999999L)", "1410065407")]
+
+    // Issue #1183 (C# §6.4.5.3): un-suffixed literals that exceed int32 infer
+    // a wider type and evaluate to the correct value in the tree interpreter.
+    [InlineData("4294967295", "4294967295")]
+    [InlineData("5000000000", "5000000000")]
+    [InlineData("18446744073709551615", "18446744073709551615")]
     public void Interpreter_PrimitiveArithmetic_MatchesEmitter(string expr, string expectedContains)
     {
         var output = RunSubmission(expr);

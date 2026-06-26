@@ -78,7 +78,7 @@ Integer literals may be decimal, hexadecimal, octal, or binary. Underscores may 
 | Octal | `0o` or `0O` | `0` through `7` | `0o755`, `0O_77` |
 | Binary | `0b` or `0B` | `0` and `1` | `0b1010`, `0B_1010` |
 
-Unsuffixed decimal integers default to `int32`. Non-decimal values that fit `uint32` are bit-cast to `int32` for compatibility. Integer suffixes are case-insensitive: `L` selects `int64`, `U` selects `uint32`, and `UL` or `LU` selects `uint64`.
+Unsuffixed integer literals follow C# §6.4.5.3 integer-literal type inference: the literal takes the type of the first of `int32`, `uint32`, `int64`, `uint64` in which its value can be represented. So `42` is `int32`, `4294967295` is `uint32`, `5000000000` is `int64`, and `18446744073709551615` is `uint64`; a value exceeding `uint64` is rejected (`GS0004`). Combined with the constant-expression conversions below, a wider-typed literal whose value is within a target's range assigns to that target without a suffix (e.g. `var u uint32 = 4294967295`). Non-decimal (hex/octal/binary) values that fit `uint32` are bit-cast to `int32` for compatibility (`0xFFFFFFFF` is `-1`); non-decimal values exceeding 32 bits follow the same `int64`/`uint64` widening lattice. Integer suffixes are case-insensitive: `L` selects `int64`, `U` selects `uint32`, and `UL` or `LU` selects `uint64`.
 
 ### Floating-point literals
 

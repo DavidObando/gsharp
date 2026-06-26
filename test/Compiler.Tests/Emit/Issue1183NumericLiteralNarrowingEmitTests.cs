@@ -107,6 +107,83 @@ public class Issue1183NumericLiteralNarrowingEmitTests
         Assert.Equal(typeof(sbyte), negByte.ReturnType);
     }
 
+    [Fact]
+    public void OverInt32Literals_InferWiderType_PreserveValue()
+    {
+        // C# §6.4.5.3: bare literals exceeding int32 infer the first fitting
+        // type among uint32, int64, uint64 and (via #1183 constant-narrowing)
+        // assign to a matching target with the correct runtime value.
+        var source = """
+            package P
+
+            func MaxUInt() uint32 {
+                var u uint32 = 4294967295
+                return u
+            }
+
+            func BigLong() int64 {
+                let big int64 = 5000000000
+                return big
+            }
+
+            func MaxULong() uint64 {
+                let v uint64 = 18446744073709551615
+                return v
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+
+        var maxUInt = GetMethod(assembly, "MaxUInt");
+        Assert.Equal(typeof(uint), maxUInt.ReturnType);
+        Assert.Equal(uint.MaxValue, maxUInt.Invoke(null, null));
+
+        var bigLong = GetMethod(assembly, "BigLong");
+        Assert.Equal(typeof(long), bigLong.ReturnType);
+        Assert.Equal(5000000000L, bigLong.Invoke(null, null));
+
+        var maxULong = GetMethod(assembly, "MaxULong");
+        Assert.Equal(typeof(ulong), maxULong.ReturnType);
+        Assert.Equal(ulong.MaxValue, maxULong.Invoke(null, null));
+    }
+
+    [Fact]
+    public void OverInt32Literal_AsReturnValue_InfersUInt32()
+    {
+        // 4294967295 fits uint32 (not int32); returned directly with no target
+        // assignment, the inferred literal type is uint32.
+        var source = """
+            package P
+
+            func DirectUInt() uint32 {
+                return 4294967295
+            }
+            """;
+
+        var directUInt = GetMethod(CompileToAssembly(source), "DirectUInt");
+        Assert.Equal(typeof(uint), directUInt.ReturnType);
+        Assert.Equal(uint.MaxValue, directUInt.Invoke(null, null));
+    }
+
+    [Fact]
+    public void HexLiteralExceeding32Bits_WidensToInt64()
+    {
+        // Hex literals that fit 32 bits keep their bit-cast-to-int behaviour;
+        // those exceeding 32 bits follow the §6.4.5.3 widening lattice.
+        var source = """
+            package P
+
+            func WideHex() int64 {
+                let h int64 = 0x1_0000_0000
+                return h
+            }
+            """;
+
+        var wideHex = GetMethod(CompileToAssembly(source), "WideHex");
+        Assert.Equal(typeof(long), wideHex.ReturnType);
+        Assert.Equal(4294967296L, wideHex.Invoke(null, null));
+    }
+
     private static MethodInfo GetMethod(Assembly assembly, string name)
     {
         var program = assembly.GetTypes().Single(t => t.Name == "<Program>");

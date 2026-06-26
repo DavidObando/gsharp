@@ -139,6 +139,68 @@ public class Issue1183NumericLiteralNarrowingBinderTests
         Assert.Empty(Errors(source));
     }
 
+    // ── Bare integer literals exceeding int32 infer a wider type ───────
+    // C# §6.4.5.3: an un-suffixed decimal literal is typed as the first of
+    // int32, uint32, int64, uint64 that can represent it. Combined with the
+    // constant-narrowing rule above, a target-typed assignment then compiles
+    // without a suffix.
+
+    [Theory]
+    [InlineData("uint32", "4294967295")]
+    [InlineData("int64", "5000000000")]
+    [InlineData("int64", "4294967296")]
+    [InlineData("uint64", "18446744073709551615")]
+    [InlineData("uint64", "5000000000")]
+    public void OverInt32Literal_InTargetRange_Compiles(string type, string value)
+    {
+        var source = Wrap("func F() { var x " + type + " = " + value + " }");
+        Assert.Empty(Errors(source));
+    }
+
+    [Fact]
+    public void OverInt32Literal_InfersUInt32_WhenItFits()
+    {
+        // 4294967295 fits uint32 but not int32; the inferred literal type is
+        // uint32, so no widening is even required for a uint32 target.
+        var source = Wrap("func F() uint32 { return 4294967295 }");
+        Assert.Empty(Errors(source));
+    }
+
+    [Fact]
+    public void OverInt32Literal_InfersInt64_WhenItFits()
+    {
+        // 5000000000 exceeds uint32, so the inferred type is int64.
+        var source = Wrap("func F() int64 { return 5000000000 }");
+        Assert.Empty(Errors(source));
+    }
+
+    [Fact]
+    public void OverInt64Literal_InfersUInt64_WhenItFits()
+    {
+        var source = Wrap("func F() uint64 { return 18446744073709551615 }");
+        Assert.Empty(Errors(source));
+    }
+
+    // ── A literal exceeding even uint64 must still error cleanly ────────
+
+    [Theory]
+    [InlineData("18446744073709551616")] // uint64.MaxValue + 1
+    [InlineData("99999999999999999999999999")]
+    public void LiteralExceedingUInt64_StillErrors(string value)
+    {
+        var source = Wrap("func F() uint64 { return " + value + " }");
+        Assert.Contains(Errors(source), d => d.Id == "GS0004");
+    }
+
+    [Fact]
+    public void OverInt32Literal_NarrowingBeyondTargetRange_StillErrors()
+    {
+        // 5000000000 infers int64; narrowing it into a uint32 (whose range it
+        // exceeds) must remain an error per the #1183 constant-narrowing rule.
+        var source = Wrap("func F() { var x uint32 = 5000000000 }");
+        Assert.Contains(Errors(source), d => d.Id == "GS0156");
+    }
+
     private static string Wrap(string member)
     {
         return @"

@@ -203,6 +203,40 @@ public class LexerTests
         Assert.Equal(expectedValue, token.Value);
     }
 
+    // C# §6.4.5.3: an un-suffixed integer literal infers the first of int32,
+    // uint32, int64, uint64 in which its value fits. Values that already fit
+    // int32 stay int32 (no regression); larger ones widen.
+    [Theory]
+    [InlineData("42", typeof(int), 42)]
+    [InlineData("2147483647", typeof(int), 2147483647)] // int32.MaxValue
+    [InlineData("2147483648", typeof(uint), 2147483648U)] // int32.MaxValue + 1
+    [InlineData("4294967295", typeof(uint), 4294967295U)] // uint32.MaxValue
+    [InlineData("4294967296", typeof(long), 4294967296L)] // uint32.MaxValue + 1
+    [InlineData("9223372036854775807", typeof(long), 9223372036854775807L)] // int64.MaxValue
+    [InlineData("9223372036854775808", typeof(ulong), 9223372036854775808UL)] // int64.MaxValue + 1
+    [InlineData("18446744073709551615", typeof(ulong), 18446744073709551615UL)] // uint64.MaxValue
+    [InlineData("0x1_0000_0000", typeof(long), 0x1_0000_0000L)] // hex > 32 bits widens
+    public void Lexes_UnsuffixedIntegerLiteral_InfersWideningType(string text, System.Type expectedType, object expectedValue)
+    {
+        var tokens = SyntaxTree.ParseTokens(text, out var diagnostics);
+        var token = Assert.Single(tokens);
+        Assert.Empty(diagnostics);
+        Assert.Equal(SyntaxKind.NumberToken, token.Kind);
+        Assert.Equal(expectedType, token.Value.GetType());
+        Assert.Equal(expectedValue, token.Value);
+    }
+
+    // A bare literal exceeding uint64 (the widest §6.4.5.3 candidate) still
+    // reports GS0004 rather than silently wrapping.
+    [Theory]
+    [InlineData("18446744073709551616")] // uint64.MaxValue + 1
+    [InlineData("99999999999999999999999999")]
+    public void Lexes_UnsuffixedIntegerLiteral_ExceedingUInt64_Reports(string text)
+    {
+        _ = SyntaxTree.ParseTokens(text, out var diagnostics);
+        Assert.Contains(diagnostics, d => d.Id == "GS0004");
+    }
+
     [Theory]
     [InlineData("1.5", typeof(double), 1.5)]
     [InlineData("1.5e2", typeof(double), 150.0)]

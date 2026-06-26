@@ -58,6 +58,18 @@ Implement the three C# rules in G# terms:
    explicit conversion-call form `T(x)` and truncates toward zero like C#
    (`int32(19.75) == 19`).
 
+4. **Integer-literal type inference for values exceeding `int32` (C#
+   §6.4.5.3).** An un-suffixed decimal integer literal whose value does not fit
+   `int32` is no longer rejected by the lexer. Instead it takes the type of the
+   first of `int32`, `uint32`, `int64`, `uint64` in which its value can be
+   represented. Combined with rule 1, a wider-typed literal then constant-narrows
+   to an in-range target, so `var u uint32 = 4294967295`, `let big int64 =
+   5000000000`, and `let v uint64 = 18446744073709551615` all compile without a
+   suffix. A literal exceeding `uint64` is still rejected (`GS0004`); the value is
+   never silently wrapped. Non-decimal (hex/octal/binary) literals keep their
+   existing 32-bit bit-cast-to-`int32` behaviour and follow the same
+   `int64`/`uint64` widening lattice when they exceed 32 bits.
+
 ### Implementation
 
 - `ExpressionBinder.Operators.cs`:
@@ -74,6 +86,13 @@ Implement the three C# rules in G# terms:
   (the implicit constant narrowing). Identity/widening conversions and all
   non-constant cases are untouched, so existing diagnostics and overload
   resolution are unaffected.
+- `Lexer.ParseIntegerLiteral`: an un-suffixed integer body is parsed into a
+  `ulong` carrier and mapped to the smallest CLR type along the §6.4.5.3 lattice
+  (`int` → `uint` → `long` → `ulong`); `BoundLiteralExpression.InferType` reads
+  that CLR type back as the literal's static type. Decimal values exceeding
+  `int32` now widen instead of erroring; only values exceeding the 64-bit carrier
+  report `GS0004` (against `uint64`, the widest candidate). Hex/octal/binary
+  literals retain the bit-cast-to-`int32` for 32-bit patterns.
 
 The widening lattice is **not** modified, so the three duplicated copies of
 `NumericWideningTargets` (`Conversion.cs`, `OverloadResolution.cs`, and the
@@ -93,6 +112,10 @@ top of the unchanged type-pair lattice.
   opcode (the literal is emitted directly as its target type); the
   `samples/FriendlyNumericAliases.gs` IL baseline was regenerated accordingly.
   Runtime values are unchanged.
+- Bare decimal literals exceeding `int32` (`4294967295`, `5000000000`,
+  `18446744073709551615`) now lex/bind to the smallest fitting type and assign
+  to an in-range target without a suffix; `int64`/`uint64` literals emit
+  `ldc.i8`. A literal exceeding `uint64` still reports `GS0004`.
 
 ## Alternatives considered
 
@@ -110,10 +133,7 @@ top of the unchanged type-pair lattice.
 
 ## Deferred
 
-- **Bare-literal type inference for values exceeding `int32` range.** A bare
-  decimal integer literal larger than `int32` (e.g. `4294967295`) is still
-  rejected by the lexer (`GS0004 "isn't valid int32"`) before binding, so
-  `var u uint32 = 4294967295` does not compile without a suffix. C#-style
-  integer-literal type inference (§6.4.5.3, where such a literal is typed as
-  `uint`/`long`/`ulong` automatically) is a distinct lexer-level feature and is
-  out of scope for issue #1183.
+- None. Bare-literal type inference for values exceeding `int32` range
+  (C# §6.4.5.3) is implemented (rule 4 above): a bare decimal literal larger
+  than `int32` infers `uint32`/`int64`/`uint64` automatically, so
+  `var u uint32 = 4294967295` compiles without a suffix.
