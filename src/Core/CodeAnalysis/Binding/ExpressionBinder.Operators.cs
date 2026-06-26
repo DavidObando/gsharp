@@ -1366,17 +1366,11 @@ internal sealed partial class ExpressionBinder
         return value is sbyte or byte or short or ushort or int or uint or long or ulong or nint or nuint;
     }
 
-    // issue #1144: try to adapt a constant integer literal to the target integer
-    // type. Uses BigInteger as a wide, sign-agnostic carrier so the full uint64
-    // range is handled, and range-checks against the target's min/max before
-    // producing a boxed value whose CLR type maps (via BoundLiteralExpression's
-    // InferType) to EXACTLY the target type. Native ints are range-tested
-    // conservatively as int64 (nint) / uint64 (nuint) so the result is stable
-    // regardless of the host process pointer width.
-    internal static bool TryAdaptIntegerLiteral(object value, TypeSymbol target, out object converted)
+    // issue #1183: widen a boxed integer literal value to a sign-agnostic
+    // BigInteger carrier so the full int64/uint64 range round-trips.
+    internal static BigInteger ToBigInteger(object value)
     {
-        converted = null;
-        BigInteger v = value switch
+        return value switch
         {
             sbyte s => s,
             byte b => b,
@@ -1390,7 +1384,58 @@ internal sealed partial class ExpressionBinder
             nuint n => (ulong)n,
             _ => default,
         };
+    }
 
+    // issue #1183: C# §10.2.11 constant-expression support. Extract the
+    // compile-time integer value of a constant integer expression — a bare
+    // integer literal or a unary +/- applied (recursively) to one. Returns
+    // false for any non-constant or non-integer expression so the caller
+    // falls back to the ordinary (explicit) numeric conversion classification.
+    internal static bool TryGetConstantIntegerValue(BoundExpression expression, out BigInteger value)
+    {
+        value = default;
+        switch (expression)
+        {
+            case BoundLiteralExpression lit when IsIntegerLiteralValue(lit.Value):
+                value = ToBigInteger(lit.Value);
+                return true;
+            case BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.Identity } identity:
+                return TryGetConstantIntegerValue(identity.Operand, out value);
+            case BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.Negation } negation
+                when TryGetConstantIntegerValue(negation.Operand, out var inner):
+                value = -inner;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // issue #1144: try to adapt a constant integer literal to the target integer
+    // type. Uses BigInteger as a wide, sign-agnostic carrier so the full uint64
+    // range is handled, and range-checks against the target's min/max before
+    // producing a boxed value whose CLR type maps (via BoundLiteralExpression's
+    // InferType) to EXACTLY the target type. Native ints are range-tested
+    // conservatively as int64 (nint) / uint64 (nuint) so the result is stable
+    // regardless of the host process pointer width.
+    internal static bool TryAdaptIntegerLiteral(object value, TypeSymbol target, out object converted)
+    {
+        converted = null;
+        if (!IsIntegerLiteralValue(value))
+        {
+            return false;
+        }
+
+        return TryAdaptIntegerLiteral(ToBigInteger(value), target, out converted);
+    }
+
+    // issue #1183: BigInteger-carrier overload shared by the constant-expression
+    // narrowing path (which folds unary +/- before classifying) and the boxed
+    // literal adaptation above. Range-checks against the target integer type's
+    // min/max before producing a boxed value whose CLR type maps (via
+    // BoundLiteralExpression.InferType) to EXACTLY the target type.
+    internal static bool TryAdaptIntegerLiteral(BigInteger v, TypeSymbol target, out object converted)
+    {
+        converted = null;
         BigInteger min;
         BigInteger max;
         if (target == TypeSymbol.Int8)

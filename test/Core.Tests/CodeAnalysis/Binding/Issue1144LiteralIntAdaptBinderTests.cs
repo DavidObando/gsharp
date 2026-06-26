@@ -139,11 +139,22 @@ public class Issue1144LiteralIntAdaptBinderTests
     [Fact]
     public void TypedVariableNarrowing_StillErrorsGS0156()
     {
-        // Proves the general numeric-conversion path is untouched: assigning
-        // a (typed int32) literal-initialized value to a uint8 still needs a
-        // cast. `let a uint8 = 4` narrows int32 -> uint8 and reports GS0156.
-        var source = Wrap("func F() { let a uint8 = 4 }");
+        // Proves the general numeric-conversion path still requires a cast for
+        // NON-constant narrowing: assigning a (typed int32) parameter value to a
+        // uint8 needs an explicit cast and reports GS0156. (Issue #1183 only
+        // relaxes this for in-range *constant* expressions; `x` here is not
+        // constant, so the narrowing remains an error.)
+        var source = Wrap("func F(x int32) { let a uint8 = x }");
         Assert.Contains(Errors(source), d => d.Id == "GS0156");
+    }
+
+    [Fact]
+    public void InRangeConstantNarrowing_NowCompiles()
+    {
+        // Issue #1183: an in-range *constant* integer expression narrows
+        // implicitly (C# §10.2.11), so `let a uint8 = 4` now binds cleanly.
+        var source = Wrap("func F() { let a uint8 = 4 }");
+        Assert.Empty(Errors(source));
     }
 
     // ── Regression: pre-existing behaviour preserved ───────────────────

@@ -378,6 +378,26 @@ internal sealed class ConversionClassifier
 
         var conversion = Conversion.Classify(expression.Type, type);
 
+        // Issue #1183: C# §10.2.11 implicit constant expression conversion.
+        // A *constant* integer expression (an integer literal, or unary +/-
+        // applied to one) whose value lies within the target integer type's
+        // range converts implicitly — no cast required — even when the
+        // type-pair classification above is only an explicit (narrowing)
+        // conversion (e.g. `uint8 x = 42`, `int16 s = 100`, `int8 a = -5`).
+        // The value is re-materialised as a literal of EXACTLY the target type
+        // (so emit produces a correctly-typed constant). Out-of-range constants
+        // are NOT adapted (TryAdaptIntegerLiteral fails), so they keep flowing
+        // through the explicit-only path below and remain an error unless an
+        // explicit cast is requested. Identity/already-implicit (widening)
+        // conversions are left untouched so existing behaviour is preserved.
+        if (!conversion.IsImplicit
+            && ExpressionBinder.IsIntegerType(type)
+            && ExpressionBinder.TryGetConstantIntegerValue(expression, out var constantIntegerValue)
+            && ExpressionBinder.TryAdaptIntegerLiteral(constantIntegerValue, type, out var adaptedConstant))
+        {
+            return new BoundLiteralExpression(expression.Syntax, adaptedConstant, type);
+        }
+
         if (!conversion.Exists)
         {
             // Issue #1017: a user-defined conversion operator declared on a
