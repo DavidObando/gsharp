@@ -63,6 +63,16 @@ public sealed class BoundCallExpression : BoundExpression
     public override TypeSymbol Type => ReturnType ?? Function.Type;
 
     /// <summary>
+    /// Gets, for issue #1209, the constructed generic user type when a
+    /// static (<c>shared</c>) method is dispatched on a constructed generic user
+    /// type (<c>Box[int32].Make()</c>), so the emitter parents the call at the
+    /// construction's <c>TypeSpec</c> (mirroring the static-field and
+    /// static-property paths). <see langword="null"/> for ordinary calls and for
+    /// non-generic static receivers (which use the bare accessor <c>MethodDef</c>).
+    /// </summary>
+    public StructSymbol StaticGenericOwnerType { get; internal set; }
+
+    /// <summary>
     /// Gets the function symbol.
     /// </summary>
     public FunctionSymbol Function { get; }

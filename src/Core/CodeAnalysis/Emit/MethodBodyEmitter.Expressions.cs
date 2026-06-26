@@ -146,7 +146,17 @@ internal sealed partial class MethodBodyEmitter
                 // would carry MVAR slots and fail ilverify against the
                 // concrete argument types.
                 EntityHandle callTokenToEmit = fnHandle;
-                if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
+                if (call.StaticGenericOwnerType != null
+                    && ReflectionMetadataEmitter.IsUserGenericTypeReference(call.StaticGenericOwnerType))
+                {
+                    // Issue #1209: a `shared` (static) method called on a
+                    // constructed generic user type (`Box[int32].Make()`) must
+                    // be referenced through a MemberRef parented at the
+                    // construction's TypeSpec; a bare MethodDef token is invalid
+                    // for a method of a generic type.
+                    callTokenToEmit = this.outer.ResolveUserStaticMethodToken(call.StaticGenericOwnerType, call.Function);
+                }
+                else if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
                 {
                     callTokenToEmit = this.outer.BuildMethodSpecForGenericCall(fnHandle, call);
                 }

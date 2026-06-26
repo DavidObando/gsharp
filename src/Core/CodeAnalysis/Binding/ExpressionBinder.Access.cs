@@ -757,15 +757,37 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
         }
-        else if (leftPart is IndexExpressionSyntax genericIfaceIndex
-            && !genericIfaceIndex.IsNullConditional
-            && TryResolveConstructedGenericInterfaceReceiver(genericIfaceIndex, out var constructedInterface))
+        else if (leftPart is IndexExpressionSyntax genericTypeIndex
+            && !genericTypeIndex.IsNullConditional
+            && TryResolveConstructedGenericTypeReceiver(
+                genericTypeIndex,
+                out var constructedStruct,
+                out var constructedInterface,
+                out var constructedImported))
         {
-            // ADR-0089 / issue #1030: `IBox[int32].StaticField` — qualified
-            // access to a *constructed generic* interface's static field. The
-            // closed construction is carried so emit parents the field at the
-            // construction's TypeSpec and the interpreter keys per construction.
-            userInterfaceSymbol = constructedInterface;
+            // Issue #1209 (extends ADR-0089 / issue #1030): a generic-type
+            // reference with explicit type arguments used in expression /
+            // member-access receiver position — `Box[int32].Default`,
+            // `ArrayPool[uint8].Shared`, `Comparer[int32].Default`. The parser
+            // shapes `Name[Arg]` as an index expression; when `Name` is NOT a
+            // value but IS a generic type definition of matching arity (user
+            // class/struct, user interface, or imported CLR generic), bind the
+            // whole `Name[Arg]` as the constructed generic *type* receiver
+            // rather than as element access. The closed construction is carried
+            // so static-member access (and static method calls) resolve against
+            // the construction.
+            if (constructedInterface != null)
+            {
+                userInterfaceSymbol = constructedInterface;
+            }
+            else if (constructedStruct != null)
+            {
+                userStructSymbol = constructedStruct;
+            }
+            else
+            {
+                classSymbol = constructedImported;
+            }
         }
         else if (leftPart is AccessorExpressionSyntax qualifiedNestedType
             && !qualifiedNestedType.IsNullConditional
@@ -1505,6 +1527,122 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #1209: resolves a <c>Name[TypeArg]</c> index-expression receiver
+    /// that appears in expression / member-access position to the constructed
+    /// generic *type* it names — a user class/struct, a user interface, or an
+    /// imported CLR generic type — so qualified static-member access
+    /// (<c>Box[int32].Default</c>, <c>ArrayPool[uint8].Shared</c>) and static
+    /// method calls bind against the construction rather than as element access.
+    /// <para>
+    /// Disambiguation rule (avoids breaking genuine indexing such as
+    /// <c>arr[i]</c> / <c>dict[key]</c>): the target must be a simple name that
+    /// does NOT resolve to a value/variable in scope, AND must resolve to a
+    /// generic type definition (user generic class/struct/interface, or imported
+    /// CLR generic) whose arity matches the bracketed type-argument count, AND
+    /// the bracket contents must parse as type arguments. When the name resolves
+    /// to a value, this returns <c>false</c> and the caller binds element access
+    /// as before.
+    /// </para>
+    /// </summary>
+    /// <param name="index">The candidate <c>Name[TypeArg]</c> receiver.</param>
+    /// <param name="constructedStruct">The constructed generic class/struct on success.</param>
+    /// <param name="constructedInterface">The constructed generic interface on success.</param>
+    /// <param name="constructedImported">The constructed imported CLR generic type on success.</param>
+    /// <returns>Whether a constructed generic type receiver was resolved.</returns>
+    private bool TryResolveConstructedGenericTypeReceiver(
+        IndexExpressionSyntax index,
+        out StructSymbol constructedStruct,
+        out InterfaceSymbol constructedInterface,
+        out ImportedClassSymbol constructedImported)
+    {
+        constructedStruct = null;
+        constructedInterface = null;
+        constructedImported = null;
+
+        if (index.Target is not NameExpressionSyntax targetName)
+        {
+            return false;
+        }
+
+        var name = targetName.IdentifierToken.Text;
+
+        // Genuine indexing (`arr[i]`, `dict[key]`) requires the target to name a
+        // value. Only when the name is NOT a value do we consider the
+        // constructed-generic-type interpretation.
+        if (scope.TryLookupSymbol(name) is VariableSymbol)
+        {
+            return false;
+        }
+
+        // Gate on the name actually naming a generic type definition before
+        // binding the bracket contents as type arguments, so that we never emit
+        // spurious type diagnostics for a non-generic-type target.
+        var arity = FlattenCommaList(index.Index).Count();
+        var userGenericDef = scope.TryLookupTypeAlias(name, out var alias)
+            && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
+                || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
+        Type openClrType = null;
+        var clrGenericDef = !userGenericDef
+            && scope.TryLookupImportedGenericClass(name, arity, out openClrType);
+
+        if (!userGenericDef && !clrGenericDef)
+        {
+            return false;
+        }
+
+        if (!TryBindTypeArgumentExpressions(index.Index, out var typeArgs)
+            || typeArgs.Length != arity)
+        {
+            return false;
+        }
+
+        if (userGenericDef)
+        {
+            switch (alias)
+            {
+                case StructSymbol structDef:
+                    constructedStruct = StructSymbol.Construct(structDef, typeArgs);
+                    return true;
+                case InterfaceSymbol ifaceDef:
+                    constructedInterface = InterfaceSymbol.Construct(ifaceDef, typeArgs);
+                    return true;
+            }
+        }
+
+        // Imported CLR generic type: close the open generic definition over the
+        // CLR types of the bound type arguments (e.g. ArrayPool`1 + byte ->
+        // ArrayPool<byte>) and surface it as an imported class so the existing
+        // static-member / static-call binding path resolves members against the
+        // closed construction.
+        var clrArgs = new Type[typeArgs.Length];
+        for (var i = 0; i < typeArgs.Length; i++)
+        {
+            var clr = NullableTypeSymbol.GetEffectiveClrType(typeArgs[i]);
+            if (clr == null)
+            {
+                return false;
+            }
+
+            // Project the host CLR type argument onto the resolver's reference
+            // set so it shares the open type's load context (its
+            // MetadataLoadContext when references are supplied via /reference:),
+            // which MakeGenericType requires (mirrors Binder.BindGenericClrType).
+            clrArgs[i] = scope.References.MapClrTypeToReferences(clr);
+        }
+
+        try
+        {
+            var closed = openClrType.MakeGenericType(clrArgs);
+            constructedImported = new ImportedClassSymbol(closed, index);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// ADR-0089 / issue #1030: binds the type-argument expression(s) of a
     /// generic-interface index receiver (<c>int32</c> in <c>IBox[int32]</c>) to
     /// <see cref="TypeSymbol"/>s. Supports a single argument or a comma list
@@ -1922,28 +2060,35 @@ internal sealed partial class ExpressionBinder
                 convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArgs[i], expectedType, method.Parameters[i]));
             }
 
+            // Issue #1209: when the static call dispatches on a constructed
+            // generic user type, carry the construction so the emitter parents
+            // the call at the construction's TypeSpec (a bare MethodDef token is
+            // invalid for a method of a generic type). Null for non-generic
+            // receivers leaves the ordinary MethodDef path unchanged.
+            var staticGenericOwner = structSym.Definition != null ? structSym : null;
+
             if (substitution != null)
             {
                 var substitutedReturn = Binder.SubstituteType(method.Type, substitution);
                 if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
                 {
                     substitutedReturn = lambdas.WrapAsTask(substitutedReturn);
-                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn);
+                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn) { StaticGenericOwnerType = staticGenericOwner };
                 }
 
                 if (!ReferenceEquals(substitutedReturn, method.Type))
                 {
-                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn);
+                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn) { StaticGenericOwnerType = staticGenericOwner };
                 }
             }
 
             if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
             {
                 var asyncReturn = lambdas.WrapAsTask(method.Type);
-                return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), asyncReturn);
+                return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), asyncReturn) { StaticGenericOwnerType = staticGenericOwner };
             }
 
-            return new BoundCallExpression(null, method, convertedArgs.ToImmutable());
+            return new BoundCallExpression(null, method, convertedArgs.ToImmutable()) { StaticGenericOwnerType = staticGenericOwner };
         }
 
         Diagnostics.ReportUnableToFindMember(ce.Location, methodName);

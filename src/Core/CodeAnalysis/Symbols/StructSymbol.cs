@@ -1156,6 +1156,19 @@ public sealed class StructSymbol : TypeSymbol
 
         constructed.SetMethods(definition.Methods);
 
+        // Issue #1209: a constructed generic class/struct must surface the open
+        // definition's static members so a qualified static reference on the
+        // construction (`Box[int32].Default`, `Box[int32].Make()`) resolves the
+        // same way as on the definition. G# erases generic type parameters to
+        // System.Object at emit (ADR-0004), so the static members live on the
+        // single erased type and can be shared with the definition by symbol
+        // identity (no per-construction substitution at emit). The constructed
+        // symbol is still carried as the owner of the bound access so member
+        // resolution and diagnostics see the closed type.
+        constructed.SetStaticMethods(definition.StaticMethods);
+        constructed.SetStaticFields(definition.StaticFields);
+        constructed.SetConstFields(definition.ConstFields);
+
         // Issue #989: a generic auto-property (or computed property) whose type
         // mentions the class type parameter must resolve on a constructed
         // instance with `T` substituted — exactly like instance fields above.

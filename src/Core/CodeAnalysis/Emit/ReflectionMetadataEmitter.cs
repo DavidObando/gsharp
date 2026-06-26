@@ -6804,6 +6804,32 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #1209: resolves the token for a call to a user <c>shared</c>
+    /// (static) method whose declaring type is a constructed generic user type
+    /// (<c>Box[int32].Make()</c>). A bare <c>MethodDef</c> token is invalid for a
+    /// method of a generic type, so a <c>MemberRef</c> parented at the
+    /// construction's <c>TypeSpec</c> is emitted (mirroring the static-field and
+    /// static-property paths). The MemberRef signature is the open static method
+    /// signature (no <c>this</c>) produced by <see cref="EncodeOpenMethodSignature"/>.
+    /// </summary>
+    internal EntityHandle ResolveUserStaticMethodToken(StructSymbol containingType, FunctionSymbol method)
+    {
+        if (!this.cache.MethodHandles.TryGetValue(method, out var openDef)
+            && !this.cache.FunctionHandles.TryGetValue(method, out openDef))
+        {
+            throw new InvalidOperationException(
+                $"Static method '{method.Name}' has no emitted handle.");
+        }
+
+        if (!IsUserGenericTypeReference(containingType))
+        {
+            return openDef;
+        }
+
+        return this.GetUserStructMethodRef(containingType, openDef, method.Name, this.EncodeOpenMethodSignature(method));
+    }
+
+    /// <summary>
     /// Issue #989: resolves the right token for a call to a user property's
     /// get/set accessor. For a non-generic containing type returns the bare
     /// accessor <c>MethodDef</c>; for a constructed generic containing type
@@ -6874,9 +6900,14 @@ internal sealed class ReflectionMetadataEmitter
         var indexParams = property.Parameters.IsDefaultOrEmpty
             ? ImmutableArray<ParameterSymbol>.Empty
             : property.Parameters;
+
+        // Issue #1209: a static (`shared`) property accessor on a generic user
+        // type has no `this` — the MemberRef signature must NOT set HASTHIS, or
+        // the runtime fails to bind the accessor (MissingMethodException).
+        var isInstanceAccessor = !property.IsStatic;
         if (wantSetter)
         {
-            new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: isInstanceAccessor)
                 .Parameters(
                     indexParams.Length + 1,
                     r => r.Void(),
@@ -6892,7 +6923,7 @@ internal sealed class ReflectionMetadataEmitter
         }
         else
         {
-            new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: isInstanceAccessor)
                 .Parameters(
                     indexParams.Length,
                     r => EncodeTypeSymbol(r.Type(), property.Type),
