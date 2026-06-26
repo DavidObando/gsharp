@@ -57,7 +57,12 @@ public class EventEmitTests
         var button = assembly.GetTypes().Single(t => t.Name == "MyButton");
         var backingField = button.GetField("Click", BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(backingField);
-        Assert.True(backingField!.IsPrivate);
+
+        // Issue #1221: the field-like event backing field is emitted as
+        // `family` (protected) rather than `private` so an inherited event can
+        // be raised from a derived class (the derived method reads this field on
+        // `this`). It remains inaccessible to unrelated types.
+        Assert.True(backingField!.IsFamily);
     }
 
     [Fact]
