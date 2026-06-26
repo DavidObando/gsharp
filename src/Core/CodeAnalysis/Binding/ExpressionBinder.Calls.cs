@@ -2573,6 +2573,19 @@ internal sealed partial class ExpressionBinder
                 return inheritedCall;
             }
 
+            // Issue #1218: an enum value is a CLR value type whose base chain is
+            // System.Enum -> System.ValueType -> System.Object. Its inherited
+            // instance members (Enum.HasFlag, Object/ValueType ToString /
+            // GetHashCode / Equals, Object.GetType) are callable on enum values.
+            // Resolve against typeof(System.Enum); SafeGetMethods walks the base
+            // types so all inherited members are found, and the helper returns
+            // false for any name Enum/Object does not define (still GS0159).
+            if (receiver != null && receiver.Type is EnumSymbol
+                && TryBindInheritedClrInstanceCall(receiver, typeof(System.Enum), methodName, arguments, ce, out var enumInheritedCall, explicitTypeArgs, typeArgSymbols, argumentNames, mapEnumArgumentsToBaseClr: true))
+            {
+                return enumInheritedCall;
+            }
+
             // Issue #294: imported [Extension] method dispatched with instance
             // (receiver) syntax, when the receiver carries a CLR type even
             // though its symbol is a user/interface shape.
@@ -3194,7 +3207,8 @@ internal sealed partial class ExpressionBinder
         out BoundExpression result,
         System.Type[] explicitTypeArgs = null,
         ImmutableArray<TypeSymbol> typeArgSymbols = default,
-        ImmutableArray<string> argumentNames = default)
+        ImmutableArray<string> argumentNames = default,
+        bool mapEnumArgumentsToBaseClr = false)
     {
         result = null;
 
@@ -3204,7 +3218,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        return TryResolveAndBindClrInstanceCall(receiver, candidates, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames);
+        return TryResolveAndBindClrInstanceCall(receiver, candidates, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames, mapEnumArgumentsToBaseClr);
     }
 
     /// <summary>
@@ -3288,6 +3302,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="explicitTypeArgs">Explicit CLR type arguments, when present.</param>
     /// <param name="typeArgSymbols">Explicit symbolic type arguments, when present.</param>
     /// <param name="argumentNames">Named-argument labels, when present.</param>
+    /// <param name="mapEnumArgumentsToBaseClr">When <see langword="true"/>, enum-typed arguments resolve as the inherited base CLR type (<c>System.Enum</c>) instead of their erased underlying primitive, so members such as <c>HasFlag(System.Enum)</c> match.</param>
     /// <returns>True when the call resolved (or reported a precise ambiguity).</returns>
     private bool TryResolveAndBindClrInstanceCall(
         BoundExpression receiver,
@@ -3299,7 +3314,8 @@ internal sealed partial class ExpressionBinder
         out BoundExpression result,
         System.Type[] explicitTypeArgs,
         ImmutableArray<TypeSymbol> typeArgSymbols,
-        ImmutableArray<string> argumentNames)
+        ImmutableArray<string> argumentNames,
+        bool mapEnumArgumentsToBaseClr = false)
     {
         result = null;
 
@@ -3307,6 +3323,17 @@ internal sealed partial class ExpressionBinder
         var hasUserClassArg = false;
         for (var i = 0; i < arguments.Length; i++)
         {
+            // Issue #1218: when resolving an inherited call against System.Enum
+            // (e.g. HasFlag(System.Enum)), an enum-typed argument is the boxed
+            // System.Enum the parameter expects. The default mapping erases an
+            // enum to its underlying int32 (issue #661), which would not match a
+            // System.Enum parameter, so map it to the base CLR type instead.
+            if (mapEnumArgumentsToBaseClr && arguments[i].Type is EnumSymbol)
+            {
+                argTypes[i] = importedBaseClr;
+                continue;
+            }
+
             // Issue #530: use GetEffectiveArgumentClrType (see instance method path).
             // Issue #533: allow null (nil literal) through.
             // Issue #658: use overload-resolution variant for user classes.

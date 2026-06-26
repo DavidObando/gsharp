@@ -2386,6 +2386,21 @@ internal sealed partial class ExpressionBinder
 
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
                 }
+                else if (receiver != null && receiver.Type is EnumSymbol)
+                {
+                    // Issue #1218: an inherited System.Enum / ValueType / Object
+                    // instance member (HasFlag/ToString/GetHashCode/Equals/GetType)
+                    // named in method-group position on an enum value. Capture it
+                    // as a CLR method group over typeof(System.Enum) so it resolves
+                    // against a target delegate signature; the emitter boxes the
+                    // value-type receiver into the delegate Target.
+                    if (TryBindClrMethodGroup(receiver, typeof(System.Enum), wantStatic: false, ne.IdentifierToken.Text, out var enumClrGroup))
+                    {
+                        return enumClrGroup;
+                    }
+
+                    Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
+                }
                 else if (receiver != null && receiver.Type is InterfaceSymbol ifaceSym)
                 {
                     // Issue #1068: read a property declared on the static

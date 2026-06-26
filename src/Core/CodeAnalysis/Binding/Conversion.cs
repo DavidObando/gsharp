@@ -443,6 +443,21 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // Issue #1218: an enum value boxes implicitly to its CLR reference base
+        // types — System.Object, System.ValueType, and System.Enum. An
+        // EnumSymbol carries no ClrType during binding (the enum is still being
+        // compiled), so the general object-boxing rule above cannot fire. This
+        // makes inherited Enum/ValueType/Object members callable on enum values
+        // (e.g. passing an enum to System.Enum.HasFlag(System.Enum)); the
+        // emitter lowers the conversion to a single `box <Enum>`.
+        if (from is EnumSymbol && to?.ClrType is System.Type enumBoxTarget
+            && (enumBoxTarget.IsSameAs(typeof(object))
+                || enumBoxTarget.IsSameAs(typeof(System.ValueType))
+                || enumBoxTarget.IsSameAs(typeof(System.Enum))))
+        {
+            return Conversion.Implicit;
+        }
+
         // ADR-0045 explicit unbox: `(T)objectValue` for any value-type T.
         if (from?.ClrType.IsSameAs(typeof(object)) == true && to?.ClrType != null && to.ClrType.IsValueType)
         {
