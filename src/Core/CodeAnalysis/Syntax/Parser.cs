@@ -7350,6 +7350,29 @@ public class Parser
         }
 
         var elementType = MatchToken(SyntaxKind.IdentifierToken);
+
+        // Issue #1212: an element-nullable array literal `[]T?{ … }` /
+        // `[N]T?{ … }`. The `?` binds to the element identifier, so route the
+        // element through a nullable-suffixed type clause (mirroring the
+        // nested-element path) instead of the bare-identifier fast path.
+        if (Current.Kind == SyntaxKind.QuestionToken)
+        {
+            var questionToken = MatchToken(SyntaxKind.QuestionToken);
+            var elementClause = new TypeClauseSyntax(syntaxTree, openBracketToken: null, lengthToken: null, closeBracketToken: null, elementType, questionToken);
+            var nullableOpenBrace = MatchToken(SyntaxKind.OpenBraceToken);
+            var nullableElements = ParseArrayInitializerElements();
+            var nullableCloseBrace = MatchToken(SyntaxKind.CloseBraceToken);
+            return new ArrayCreationExpressionSyntax(
+                syntaxTree,
+                openBracket,
+                length,
+                closeBracket,
+                elementClause,
+                nullableOpenBrace,
+                nullableElements,
+                nullableCloseBrace);
+        }
+
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
         var elements = ParseArrayInitializerElements();
         var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);

@@ -53,7 +53,7 @@ public class Issue751RichReceiverInterpreterTests
     public void NullableArray_Receiver_Dispatches()
     {
         var source = """
-            func (self []int32?) FirstOrZero() int32 {
+            func (self ([]int32)?) FirstOrZero() int32 {
                 if self == nil {
                     return 0
                 }
@@ -63,8 +63,8 @@ public class Issue751RichReceiverInterpreterTests
                 return self[0]
             }
 
-            var present []int32? = []int32{10, 20}
-            var absent []int32? = nil
+            var present ([]int32)? = []int32{10, 20}
+            var absent ([]int32)? = nil
             Console.WriteLine(present.FirstOrZero())
             Console.WriteLine(absent.FirstOrZero())
             """;

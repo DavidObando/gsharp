@@ -2148,6 +2148,16 @@ public sealed class Binder
         if (syntax.IsTuple)
         {
             // Phase 4.5: tuple type clause `(T1, T2, ...)`.
+            // Issue #1212: a *single* parenthesized type `(T)` is a grouping,
+            // not a tuple. It exists so a nullable array reference can be
+            // spelled `([]T)?` — the parentheses bind the array shape before
+            // the outer `?` (applied by BindTypeClause) wraps the whole array
+            // in a NullableTypeSymbol. Bind the lone element and return it.
+            if (syntax.TupleElements.Count == 1)
+            {
+                return BindTypeClause(syntax.TupleElements[0]);
+            }
+
             if (syntax.TupleElements.Count < 2)
             {
                 Diagnostics.ReportUnexpectedToken(syntax.CloseParenToken.Location, syntax.CloseParenToken.Kind, SyntaxKind.IdentifierToken);
@@ -2506,6 +2516,18 @@ public sealed class Binder
             return element;
         }
 
+        // Issue #1212: a trailing `?` on an array/slice clause (`[]T?`,
+        // `[N]T?`) binds to the *element* type, yielding an array whose
+        // elements are nullable (`Slice(Nullable(T))` / `Array(Nullable(T))`).
+        // This is orthogonal to a *nullable array reference* (the whole array
+        // possibly nil), which is spelled `([]T)?` and handled by the outer
+        // `NullableTypeSymbol` wrap in BindTypeClause. Element-nullable arrays
+        // remain indexable (the array itself is non-nil), reading/writing `T?`.
+        if (syntax.IsNullable)
+        {
+            element = NullableTypeSymbol.Get(element);
+        }
+
         if (syntax.IsSlice)
         {
             return SliceTypeSymbol.Get(element);
@@ -2524,6 +2546,15 @@ public sealed class Binder
     {
         var bound = BindNonNullableTypeClause(syntax);
         if (bound == null || !syntax.IsNullable)
+        {
+            return bound;
+        }
+
+        // Issue #1212: for an array/slice clause the trailing `?` is consumed
+        // by ApplyArraySuffix and applied to the element type; do not also wrap
+        // the whole array. Every other clause shape (`T?`, `map[K,V]?`,
+        // `chan T?`, the parenthesized `([]T)?` group, …) wraps the whole type.
+        if (syntax.IsArray)
         {
             return bound;
         }

@@ -215,7 +215,7 @@ hatch under `src/Sdk/Gsharp.Extensions/*.cs` works today.
   combinations are recognised by the parser and the function
   retains its extension-method status. The binder + emit pipeline
   also accept call-site dispatch when the receiver is *closed*
-  (concrete) — `string?`, `(int32, string)`, `[]int32?`,
+  (concrete) — `string?`, `(int32, string)`, `([]int32)?`,
   `map[string,int32]`. **Binder-side closed by
   [issue #773](https://github.com/DavidObando/gsharp/issues/773).**
   `BoundScope.TryLookupExtensionFunction` now falls back to

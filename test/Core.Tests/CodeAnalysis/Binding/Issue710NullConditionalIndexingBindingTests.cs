@@ -28,7 +28,7 @@ public class Issue710NullConditionalIndexingBindingTests
         var diagnostics = Bind("""
             package P
             func F() {
-                var a []int32? = nil
+                var a ([]int32)? = nil
                 var x = a?[0]
             }
             """);
@@ -52,12 +52,12 @@ public class Issue710NullConditionalIndexingBindingTests
     [Fact]
     public void Result_Is_Nullable_Form_Of_Element_Type()
     {
-        // `a?[0]` where a is `[]int32?` (slice of int32, nullable slice)
+        // `a?[0]` where a is `([]int32)?` (slice of int32, nullable slice)
         // should give `int32?` for the read result.
         var program = BindProgramFor("""
             package P
             func F() int32? {
-                var a []int32? = nil
+                var a ([]int32)? = nil
                 return a?[0]
             }
             """);
@@ -72,7 +72,7 @@ public class Issue710NullConditionalIndexingBindingTests
         var diagnostics = Bind("""
             package P
             class Holder {
-                var Data []int32?
+                var Data ([]int32)?
             }
             func F() {
                 var h Holder? = Holder{Data: []int32{1, 2, 3}}
@@ -115,7 +115,7 @@ public class Issue710NullConditionalIndexingBindingTests
         var diagnostics = Bind("""
             package P
             func F() {
-                var a []int32? = nil
+                var a ([]int32)? = nil
                 a?[0] = 1
             }
             """);
@@ -128,7 +128,7 @@ public class Issue710NullConditionalIndexingBindingTests
         var diagnostics = Bind("""
             package P
             func F() {
-                var a []int32? = nil
+                var a ([]int32)? = nil
                 a?[0] += 1
             }
             """);
@@ -143,7 +143,7 @@ public class Issue710NullConditionalIndexingBindingTests
         var diagnostics = Bind("""
             package P
             func F() {
-                var a []int32? = nil
+                var a ([]int32)? = nil
                 a?[0] ??= 1
             }
             """);

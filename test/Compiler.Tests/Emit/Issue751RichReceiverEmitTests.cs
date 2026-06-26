@@ -68,7 +68,7 @@ public class Issue751RichReceiverEmitTests
             package P
             import System
 
-            func (self []int32?) FirstOrZero() int32 {
+            func (self ([]int32)?) FirstOrZero() int32 {
                 if self == nil {
                     return 0
                 }
@@ -78,8 +78,8 @@ public class Issue751RichReceiverEmitTests
                 return self[0]
             }
 
-            var present []int32? = []int32{10, 20}
-            var absent []int32? = nil
+            var present ([]int32)? = []int32{10, 20}
+            var absent ([]int32)? = nil
             Console.WriteLine(present.FirstOrZero())
             Console.WriteLine(absent.FirstOrZero())
             """;
