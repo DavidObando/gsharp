@@ -235,11 +235,24 @@ public sealed class BoundScope
     /// <summary>
     /// Tries to declare an extension function (Phase 3.B.6 / ADR-0019). Extension
     /// functions live outside the normal symbol table because their identity is
-    /// the pair (receiverType, name): two extensions with the same name but
-    /// different receivers are legal.
+    /// the triple (receiverType, name, signature).
     /// </summary>
+    /// <remarks>
+    /// Issue #1188: extension functions support overloading exactly like ordinary
+    /// methods and free functions. Two extensions that share a (receiver, name)
+    /// pair but differ in parameter signature (by arity, parameter type, or
+    /// generic arity) are legal overloads and both are registered. A collision is
+    /// reported only when a candidate is overload-identical to an existing one
+    /// (same name, same receiver type, same callable parameter signature). The
+    /// receiver type participates in identity through the synthetic receiver slot
+    /// at <c>Parameters[0]</c> (extension functions never set
+    /// <see cref="FunctionSymbol.ExplicitReceiverParameter"/>, so
+    /// <see cref="FunctionSignaturesEqual"/> compares the receiver type too): two
+    /// extensions with the same name and parameter list but different receiver
+    /// types remain independent.
+    /// </remarks>
     /// <param name="function">The extension function symbol. Must have <see cref="FunctionSymbol.IsExtension"/> set.</param>
-    /// <returns>True if the extension was registered; false if an identical (receiver, name) pair already exists in this scope.</returns>
+    /// <returns>True if the extension was registered; false if an overload-identical (receiver, name, signature) extension already exists in this scope.</returns>
     public bool TryDeclareExtensionFunction(FunctionSymbol function)
     {
         if (extensionFunctions == null)
@@ -249,7 +262,8 @@ public sealed class BoundScope
 
         foreach (var existing in extensionFunctions)
         {
-            if (existing.Name == function.Name && existing.ExtensionReceiverType == function.ExtensionReceiverType)
+            if (FunctionSignaturesEqual(existing, function)
+                && ExtensionTypeParameterConstraintsEqual(existing, function))
             {
                 return false;
             }
@@ -360,6 +374,61 @@ public sealed class BoundScope
         }
 
         return Parent?.TryLookupExtensionFunction(receiverType, name, out function) ?? false;
+    }
+
+    /// <summary>
+    /// Issue #1188: returns every extension-function overload visible from this
+    /// scope (walking parent scopes) that matches the (receiverType, name) pair.
+    /// Extension functions support overloading, so a single call site may have
+    /// several candidates differing only by parameter signature; the caller runs
+    /// these through normal overload resolution to pick the best one.
+    /// </summary>
+    /// <remarks>
+    /// Both dispatch paths used by <see cref="TryLookupExtensionFunction"/> are
+    /// honoured: the reference-equality receiver fast path (issue #1103) and the
+    /// generic-receiver unification fallback (issue #773 / #775). Candidates are
+    /// returned in declaration order, innermost scope first.
+    /// </remarks>
+    /// <param name="receiverType">The static type of the call receiver.</param>
+    /// <param name="name">The method name at the call site.</param>
+    /// <returns>The matching extension overloads, or an empty array when none match.</returns>
+    public ImmutableArray<FunctionSymbol> TryLookupExtensionFunctions(TypeSymbol receiverType, string name)
+    {
+        ImmutableArray<FunctionSymbol>.Builder builder = null;
+        for (var s = this; s != null; s = s.Parent)
+        {
+            if (s.extensionFunctions == null)
+            {
+                continue;
+            }
+
+            foreach (var ext in s.extensionFunctions)
+            {
+                if (ext.Name != name)
+                {
+                    continue;
+                }
+
+                var matches = ReceiverMatches(ext.ExtensionReceiverType, receiverType);
+                if (!matches
+                    && !ext.TypeParameters.IsDefaultOrEmpty
+                    && ext.ExtensionReceiverType != null
+                    && ext.ExtensionReceiverType != TypeSymbol.Error
+                    && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters)
+                    && TryUnifyAndCheckConstraints(ext, receiverType, out _))
+                {
+                    matches = true;
+                }
+
+                if (matches)
+                {
+                    builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
+                    builder.Add(ext);
+                }
+            }
+        }
+
+        return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
     }
 
     /// <summary>Gets the extension functions declared in this scope (Phase 3.B.6).</summary>
@@ -982,6 +1051,52 @@ public sealed class BoundScope
 
     private static ImmutableArray<ParameterSymbol> SigCallableParameters(FunctionSymbol f)
         => f.ExplicitReceiverParameter == null ? f.Parameters : f.Parameters.RemoveAt(0);
+
+    /// <summary>
+    /// Issue #1188 / #775: compares the type-parameter constraints of two
+    /// extension functions for overload-identity purposes. Two extensions that
+    /// share a name, receiver type, and callable parameter signature are still
+    /// distinct overloads when their generic type parameters carry different
+    /// constraints (e.g. <c>FirstOrNil[T class]()</c> vs
+    /// <c>FirstOrNil[T struct]()</c>), because receiver-constraint dispatch
+    /// disambiguates them at the call site. Returns <see langword="true"/> only
+    /// when every type parameter carries equivalent class/struct/new() and
+    /// interface/base constraints.
+    /// </summary>
+    /// <param name="a">First extension function.</param>
+    /// <param name="b">Second extension function.</param>
+    /// <returns>Whether the two functions' type-parameter constraints match.</returns>
+    private static bool ExtensionTypeParameterConstraintsEqual(FunctionSymbol a, FunctionSymbol b)
+    {
+        var aTp = a.TypeParameters.IsDefault ? ImmutableArray<TypeParameterSymbol>.Empty : a.TypeParameters;
+        var bTp = b.TypeParameters.IsDefault ? ImmutableArray<TypeParameterSymbol>.Empty : b.TypeParameters;
+        if (aTp.Length != bTp.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < aTp.Length; i++)
+        {
+            var x = aTp[i];
+            var y = bTp[i];
+            if (x.HasValueTypeConstraint != y.HasValueTypeConstraint
+                || x.HasReferenceTypeConstraint != y.HasReferenceTypeConstraint
+                || x.HasDefaultConstructorConstraint != y.HasDefaultConstructorConstraint
+                || x.Constraint != y.Constraint)
+            {
+                return false;
+            }
+
+            var xRef = x.ConstraintReferenceType?.Name;
+            var yRef = y.ConstraintReferenceType?.Name;
+            if (!string.Equals(xRef, yRef, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static bool SigTypesEquivalent(TypeSymbol x, TypeSymbol y, FunctionSymbol fx, FunctionSymbol fy)
     {
