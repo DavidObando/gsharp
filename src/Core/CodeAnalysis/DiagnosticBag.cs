@@ -1380,14 +1380,6 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0216", $"Class '{className}' declares multiple 'init' constructors; only a single explicit constructor is supported.");
     }
 
-    /// <summary>Reports construction of a generic class that declares an explicit <c>init(...)</c> constructor, which is not yet supported (issue #306).</summary>
-    /// <param name="location">The text location of the construction call.</param>
-    /// <param name="className">The class name.</param>
-    public void ReportGenericExplicitConstructorUnsupported(TextLocation location, string className)
-    {
-        Report(location, "GS0217", $"Generic class '{className}' with an explicit 'init' constructor cannot be constructed; generic explicit constructors are not supported.");
-    }
-
     /// <summary>Reports a method that overrides a base method without using <c>override</c>. ADR-0017.</summary>
     /// <param name="location">The text location of the offending declaration.</param>
     /// <param name="baseTypeName">The base type name.</param>

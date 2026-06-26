@@ -1994,10 +1994,22 @@ internal sealed class OverloadResolver
     /// </summary>
     private BoundExpression BindExplicitConstructorCallExpression(CallExpressionSyntax syntax, StructSymbol classType)
     {
+        // Issue #1214: a generic class declaring an explicit `init(...)`
+        // constructor is constructed at a closed type (`Box[int32](5, "x")`).
+        // Resolve the type arguments — supplied explicitly or inferred from the
+        // value arguments against the constructor's parameter list — and close
+        // the definition before binding. The closed type's explicit
+        // constructor surfaces through EffectiveExplicitConstructors (the open
+        // definition's constructor table), with parameter types substituted via
+        // GetConstructorParameterTypesForConstruction; the emitter references
+        // the `.ctor` through a MemberRef parented at the construction's
+        // TypeSpec (ResolveUserCtorTokenForExplicit).
         if (syntax.TypeArgumentList != null || classType.IsGenericDefinition)
         {
-            Diagnostics.ReportGenericExplicitConstructorUnsupported(syntax.Identifier.Location, classType.Name);
-            return new BoundErrorExpression(syntax);
+            if (!TryCloseGenericExplicitConstructorType(syntax, classType, out classType))
+            {
+                return new BoundErrorExpression(syntax);
+            }
         }
 
         // Issue #343: pre-validate named-argument layout (positional precedes
@@ -2011,7 +2023,9 @@ internal sealed class OverloadResolver
         // bind the arguments first, then pick the constructor whose signature
         // best matches the call. With a single constructor the existing
         // single-overload diagnostics (wrong arity) still fire below.
-        var ctorOverloads = classType.ExplicitConstructors;
+        // Issue #1214: for a closed generic construction, the constructor table
+        // lives on the open definition (EffectiveExplicitConstructors).
+        var ctorOverloads = classType.EffectiveExplicitConstructors;
         var boundArgumentsBuilder = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
         for (var ai = 0; ai < syntax.Arguments.Count; ai++)
         {
@@ -2037,7 +2051,7 @@ internal sealed class OverloadResolver
         ConstructorSymbol selectedCtor;
         if (ctorOverloads.Length <= 1)
         {
-            selectedCtor = classType.ExplicitConstructor;
+            selectedCtor = ctorOverloads.Length == 1 ? ctorOverloads[0] : classType.ExplicitConstructor;
         }
         else
         {
@@ -2080,6 +2094,13 @@ internal sealed class OverloadResolver
         }
 
         var parameters = selectedCtor.Parameters;
+
+        // Issue #1214: for a closed generic construction, surface the
+        // constructor's parameter types with the construction's type arguments
+        // substituted (`init(v T)` on `Box[int32]` → `init(v int32)`), so the
+        // per-position conversion below targets the concrete argument types.
+        // For a non-generic or open type these equal the declared types.
+        var effectiveParamTypes = classType.GetConstructorParameterTypesForConstruction(selectedCtor);
 
         // ADR-0101 follow-up / issue #812: a constructor's last parameter
         // may be variadic. The arity check accepts any count >= the fixed
@@ -2151,7 +2172,11 @@ internal sealed class OverloadResolver
             // slice-typed argument so the per-position conversion loop
             // below sees exactly `parameters.Length` arguments.
             var variadicParam = parameters[parameters.Length - 1];
-            var sliceType = (SliceTypeSymbol)variadicParam.Type;
+
+            // Issue #1214: use the (possibly type-argument-substituted) slice
+            // type so a generic variadic init (`init(xs ...T)` on `Box[int32]`)
+            // packs into `[]int32`, matching the concrete argument types.
+            var sliceType = (SliceTypeSymbol)effectiveParamTypes[parameters.Length - 1];
             var elementType = sliceType.ElementType;
             var trailingCount = requestedArgCount - fixedCtorParamCount;
             var passThrough = trailingCount == 1
@@ -2240,14 +2265,19 @@ internal sealed class OverloadResolver
             var argument = boundArguments[i];
             var parameter = parameters[i];
 
+            // Issue #1214: target the type-argument-substituted parameter type
+            // for a closed generic construction (equal to parameter.Type for a
+            // non-generic/open type).
+            var paramType = effectiveParamTypes[i];
+
             // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument
             // targeting an IFormattable/FormattableString parameter.
             if (i < parameterSyntax.Length
                 && parameterSyntax[i] != null
                 && parameterSyntax[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
-                && isFormattableStringTargetType(parameter.Type))
+                && isFormattableStringTargetType(paramType))
             {
-                convertedArguments.Add(bindInterpolatedStringAsFormattable(interpolatedCtorArg, parameter.Type));
+                convertedArguments.Add(bindInterpolatedStringAsFormattable(interpolatedCtorArg, paramType));
                 continue;
             }
 
@@ -2259,7 +2289,7 @@ internal sealed class OverloadResolver
             if (parameter.RefKind != RefKind.None && argument is BoundAddressOfExpression addrCtor)
             {
                 var pointee = addrCtor.Operand?.Type;
-                if (pointee == parameter.Type || pointee == TypeSymbol.Error || parameter.Type == TypeSymbol.Error)
+                if (pointee == paramType || pointee == TypeSymbol.Error || paramType == TypeSymbol.Error)
                 {
                     convertedArguments.Add(argument);
                     continue;
@@ -2268,7 +2298,7 @@ internal sealed class OverloadResolver
             else if (parameter.RefKind != RefKind.None && argument is BoundConditionalAddressExpression condAddrCtor)
             {
                 var pointee = condAddrCtor.PointeeType;
-                if (pointee == parameter.Type || pointee == TypeSymbol.Error || parameter.Type == TypeSymbol.Error)
+                if (pointee == paramType || pointee == TypeSymbol.Error || paramType == TypeSymbol.Error)
                 {
                     convertedArguments.Add(argument);
                     continue;
@@ -2278,17 +2308,17 @@ internal sealed class OverloadResolver
             var argLocation = i < parameterSyntax.Length && parameterSyntax[i] != null
                 ? parameterSyntax[i].Location
                 : syntax.Identifier.Location;
-            if (argument.Type != parameter.Type
-                && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
+            if (argument.Type != paramType
+                && !Conversion.Classify(argument.Type, paramType).IsImplicit)
             {
                 // Issue #889: arrow/func literal → void-returning delegate.
-                if (TryConvertLiteralArgumentToVoidDelegate(argument, parameter.Type, argLocation, out var voidDelegateArg))
+                if (TryConvertLiteralArgumentToVoidDelegate(argument, paramType, argLocation, out var voidDelegateArg))
                 {
                     convertedArguments.Add(voidDelegateArg);
                     continue;
                 }
 
-                if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, parameter.Type, out var convertedArg))
+                if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, paramType, out var convertedArg))
                 {
                     convertedArguments.Add(convertedArg);
                     continue;
@@ -2296,7 +2326,7 @@ internal sealed class OverloadResolver
 
                 if (argument.Type != TypeSymbol.Error)
                 {
-                    Diagnostics.ReportWrongArgumentType(argLocation, parameter.Name, parameter.Type, argument.Type);
+                    Diagnostics.ReportWrongArgumentType(argLocation, parameter.Name, paramType, argument.Type);
                 }
 
                 hasErrors = true;
@@ -2304,7 +2334,7 @@ internal sealed class OverloadResolver
             }
             else
             {
-                convertedArguments.Add(conversions.BindConversion(argLocation, argument, parameter.Type));
+                convertedArguments.Add(conversions.BindConversion(argLocation, argument, paramType));
             }
         }
 
@@ -2314,6 +2344,109 @@ internal sealed class OverloadResolver
         }
 
         return new BoundConstructorCallExpression(syntax, classType, convertedArguments.ToImmutable(), selectedCtor);
+    }
+
+    /// <summary>
+    /// Issue #1214: closes a generic class that declares an explicit
+    /// <c>init(...)</c> constructor for a construction call <c>Box[int32](args)</c>.
+    /// Resolves the type arguments — taken from an explicit <c>[…]</c> list or
+    /// inferred from the value arguments against the constructor's parameter
+    /// list (first-seen-wins, mirroring the primary-constructor path in
+    /// <see cref="BindConstructorCallExpression"/>) — validates the arity and
+    /// constraints, then yields the constructed closed <see cref="StructSymbol"/>.
+    /// Returns <see langword="false"/> after reporting a diagnostic when the type
+    /// arguments cannot be resolved.
+    /// </summary>
+    private bool TryCloseGenericExplicitConstructorType(
+        CallExpressionSyntax syntax,
+        StructSymbol classType,
+        out StructSymbol constructed)
+    {
+        constructed = classType;
+
+        if (!classType.IsGenericDefinition)
+        {
+            // A type-argument list on a non-generic class is a usage error.
+            if (syntax.TypeArgumentList != null)
+            {
+                Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, classType.Name, 0, syntax.TypeArgumentList.Arguments.Count);
+                return false;
+            }
+
+            return true;
+        }
+
+        var tps = classType.TypeParameters;
+        var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        if (syntax.TypeArgumentList != null)
+        {
+            var explicitArgs = syntax.TypeArgumentList.Arguments;
+            if (explicitArgs.Count != tps.Length)
+            {
+                Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, classType.Name, tps.Length, explicitArgs.Count);
+                return false;
+            }
+
+            for (var i = 0; i < explicitArgs.Count; i++)
+            {
+                var ta = bindTypeClause(explicitArgs[i]);
+                if (ta == null)
+                {
+                    return false;
+                }
+
+                substitution[tps[i]] = ta;
+            }
+        }
+        else
+        {
+            // Infer the type arguments from the value arguments against the
+            // (first) explicit constructor's parameter list. The open-definition
+            // constructor parameter types reference the class type parameters,
+            // so binding each argument and unifying drives inference.
+            var ctorOverloads = classType.EffectiveExplicitConstructors;
+            var ctorParams = ctorOverloads.IsDefaultOrEmpty
+                ? ImmutableArray<ParameterSymbol>.Empty
+                : ctorOverloads[0].Parameters;
+
+            for (var i = 0; i < syntax.Arguments.Count && i < ctorParams.Length; i++)
+            {
+                var argSyntax = UnwrapNamedArgumentValue(syntax.Arguments[i]);
+                var preBound = bindExpression(argSyntax);
+                inferTypeArguments(ctorParams[i].Type, preBound.Type, substitution);
+            }
+
+            foreach (var tp in tps)
+            {
+                if (!substitution.ContainsKey(tp))
+                {
+                    Diagnostics.ReportTypeArgumentInferenceFailed(syntax.Identifier.Location, classType.Name, tp.Name);
+                    return false;
+                }
+            }
+        }
+
+        var constraintLocation = syntax.TypeArgumentList != null
+            ? syntax.TypeArgumentList.Location
+            : syntax.Identifier.Location;
+        foreach (var tp in tps)
+        {
+            var typeArg = substitution[tp];
+            if (!satisfiesConstraint(typeArg, tp))
+            {
+                Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, describeConstraint(tp));
+                return false;
+            }
+        }
+
+        var typeArgs = ImmutableArray.CreateBuilder<TypeSymbol>(tps.Length);
+        foreach (var tp in tps)
+        {
+            typeArgs.Add(substitution[tp]);
+        }
+
+        constructed = StructSymbol.Construct(classType, typeArgs.MoveToImmutable());
+        return true;
     }
 
     /// <summary>

@@ -190,7 +190,7 @@ Issue #306 covers user class constructor flow — explicit `init(...)` construct
 | GS0214 | Error | Class `{base}` has no accessible constructor that takes `{N}` argument(s). | `init() : base(1, 2)` when the base only declares `init()`. |
 | GS0215 | Error | Class `{name}` cannot declare both a primary constructor and an explicit `init` constructor. | `class Customer(id int32) { init(name string) { } }`. |
 | GS0216 | Error | Class `{name}` declares multiple `init` constructors; only a single explicit constructor is supported. | Two `init(...)` declarations in the same class body. |
-| GS0217 | Error | Generic class `{name}` with an explicit `init` constructor cannot be constructed; generic explicit constructors are not supported. | `class Box[T] { init(x T) { } }` then `Box[int32](42)`. |
+| GS0217 | _Retired_ | Previously: generic class with an explicit `init` constructor cannot be constructed. Generic classes with explicit `init(...)` constructors are now supported (issue #1214); this diagnostic is no longer emitted. | — |
 
 ### Delegate conversion diagnostics (GS0218)
 
