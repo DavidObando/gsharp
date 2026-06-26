@@ -1115,6 +1115,25 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitNullConditionalAccess(BoundNullConditionalAccessExpression nc)
     {
+        // Issue #1213: a `void`-typed null-conditional (e.g. the event-raise
+        // form `evt?.Invoke(args)` where the delegate returns `void`) leaves no
+        // value on the stack. Emit a plain null-guarded access: evaluate the
+        // receiver into the capture, skip the access when null, otherwise run
+        // the (value-less) access. Neither branch pushes a result, so the stack
+        // stays balanced (the generic path below would push a `null` on the nil
+        // branch with no matching value on the not-null branch).
+        if (ReferenceEquals(nc.Type, Symbols.TypeSymbol.Void))
+        {
+            this.EmitExpression(nc.Receiver);
+            this.EmitStoreVariable(nc.Capture);
+            this.EmitLoadVariable(nc.Capture);
+            var endVoid = this.il.DefineLabel();
+            this.il.Branch(ILOpCode.Brfalse, endVoid);
+            this.EmitExpression(nc.WhenNotNull);
+            this.il.MarkLabel(endVoid);
+            return;
+        }
+
         // Phase 3.C.3b / ADR-0001: evaluate the receiver once into a
         // synthetic capture local. If the captured value is null, leave
         // null on the stack and skip the access; otherwise evaluate the
