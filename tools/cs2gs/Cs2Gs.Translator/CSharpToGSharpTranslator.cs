@@ -1523,6 +1523,14 @@ public sealed class CSharpToGSharpTranslator
                     initializer = this.CoerceConstantToUnsigned(
                         declarator.Initializer.Value,
                         this.TranslateExpression(declarator.Initializer.Value));
+
+                    // Issue #1072: a non-nullable reference field whose initializer
+                    // is nullable (e.g. `?.`-access) is rendered `T?`.
+                    if (symbol != null)
+                    {
+                        type = this.PromoteIfInitializerNullable(
+                            type, symbol.Type, declarator.Initializer.Value);
+                    }
                 }
                 else if (symbol != null &&
                     this.staticFieldInitializers.TryGetValue(symbol, out GExpression staticLifted))
@@ -1819,6 +1827,15 @@ public sealed class CSharpToGSharpTranslator
             GExpression initializer = this.CoerceConstantToUnsigned(
                 node.Initializer.Value,
                 this.TranslateExpression(node.Initializer.Value));
+
+            // Issue #1072: a non-nullable reference static auto-property whose
+            // initializer is nullable (e.g. `GetAttribute<...>()?.Member`) is
+            // rendered `T?` so the initializer assignment type-checks.
+            if (symbol != null)
+            {
+                type = this.PromoteIfInitializerNullable(
+                    type, symbol.Type, node.Initializer.Value);
+            }
 
             // A mutable static auto-property (`{ get; set; }` / `{ get; private set; }`)
             // becomes a `var` field; an immutable get-only one becomes a `let` field.
@@ -4299,6 +4316,97 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return this.IsPromotedToNullableReference(symbol) ? MakeNullable(type) : type;
+        }
+
+        // Issue #1072 (field/property initializer form): when a field or property is
+        // emitted with an explicit declared type plus an initializer whose
+        // Roslyn-inferred type is nullable (e.g. the value comes from a `?.`
+        // conditional access or a method returning `T?`), widen the emitted declared
+        // type to `T?`. Otherwise gsc rejects the initializer with
+        // `GS0156: Cannot convert type 'T?' to 'T'`. We always key off the Roslyn
+        // `TypeInfo` of the FULL initializer expression (so a `?? nonNullFallback`
+        // that Roslyn proves non-null stays `T`). Value types and already-nullable
+        // declared types are left untouched.
+        private GTypeReference PromoteIfInitializerNullable(
+            GTypeReference type,
+            ITypeSymbol declaredType,
+            ExpressionSyntax initializer)
+        {
+            if (type == null || type.IsNullable || initializer == null)
+            {
+                return type;
+            }
+
+            if (declaredType is not { IsReferenceType: true }
+                || declaredType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return type;
+            }
+
+            return this.IsNullableInitializer(initializer) ? MakeNullable(type) : type;
+        }
+
+        // Determines whether <paramref name="expression"/> (a field/property
+        // initializer) yields a nullable reference value. Because the migrated
+        // corpus typically compiles with the nullable context DISABLED, flow
+        // nullability is unavailable, so this combines (a) syntactic forms that
+        // introduce null (`a?.b`, `a ?? nullableFallback`, `cond ? a : b`) with
+        // (b) the bound symbol's DECLARED nullable annotation, which survives in
+        // BCL/source metadata regardless of the consuming nullable context
+        // (e.g. `AssemblyName.Name` and `Path.GetFileNameWithoutExtension(...)`
+        // are declared `string?`). `x!` suppresses nullability.
+        private bool IsNullableInitializer(ExpressionSyntax expression)
+        {
+            if (expression == null)
+            {
+                return false;
+            }
+
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax paren:
+                    return this.IsNullableInitializer(paren.Expression);
+
+                case PostfixUnaryExpressionSyntax suppress
+                    when suppress.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                    return false;
+
+                // `a?.b` / `a?[i]`: conditional access yields a nullable result.
+                case ConditionalAccessExpressionSyntax:
+                    return true;
+
+                // `a ?? b`: nullable iff the `b` fallback is itself nullable.
+                case BinaryExpressionSyntax coalesce
+                    when coalesce.IsKind(SyntaxKind.CoalesceExpression):
+                    return this.IsNullableInitializer(coalesce.Right);
+
+                // `cond ? a : b`: nullable iff either branch is nullable.
+                case ConditionalExpressionSyntax ternary:
+                    return this.IsNullableInitializer(ternary.WhenTrue)
+                        || this.IsNullableInitializer(ternary.WhenFalse);
+            }
+
+            // Flow nullability when the nullable context happens to be enabled.
+            TypeInfo info = this.context.GetTypeInfo(expression);
+            if (info.Nullability.Annotation == NullableAnnotation.Annotated)
+            {
+                return true;
+            }
+
+            // Otherwise consult the bound symbol's declared annotation.
+            ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            ITypeSymbol symbolType = symbol switch
+            {
+                IMethodSymbol m => m.ReturnType,
+                IPropertySymbol p => p.Type,
+                IFieldSymbol f => f.Type,
+                ILocalSymbol l => l.Type,
+                IParameterSymbol pr => pr.Type,
+                _ => null,
+            };
+
+            return symbolType is { IsReferenceType: true }
+                && symbolType.NullableAnnotation == NullableAnnotation.Annotated;
         }
 
         // Issue #1072: true when <paramref name="symbol"/> is a parameter/field/local
