@@ -2204,6 +2204,42 @@ internal sealed partial class ExpressionBinder
                         return new BoundPropertyAccessExpression(null, receiver, null, ifaceProp);
                     }
 
+                    // Issue #1181: a user interface that extends an imported/BCL
+                    // interface (e.g. `interface IBox : ICollection`) inherits
+                    // that interface's properties/fields/methods. Mirror the
+                    // imported-base-class fallback above by probing the
+                    // transitive imported base interfaces so `b.Count`
+                    // (b : IBox) resolves and emits a verifiable
+                    // `callvirt get_Count`. The receiver carries an
+                    // InterfaceImpl row to each imported base interface, so a
+                    // CLR member access on it is verifiable.
+                    var ifaceMemberName = ne.IdentifierToken.Text;
+                    foreach (var clrBaseIface in MemberLookup.GetTransitiveClrBaseInterfaces(ifaceSym))
+                    {
+                        var clrProp = ClrTypeUtilities.SafeGetProperty(clrBaseIface, ifaceMemberName, BindingFlags.Public | BindingFlags.Instance);
+                        if (clrProp != null && clrProp.GetIndexParameters().Length == 0 && clrProp.CanRead)
+                        {
+                            return new BoundClrPropertyAccessExpression(null, receiver, clrProp, TypeSymbol.FromClrType(clrProp.PropertyType));
+                        }
+
+                        var clrFld = ClrTypeUtilities.SafeGetField(clrBaseIface, ifaceMemberName, BindingFlags.Public | BindingFlags.Instance);
+                        if (clrFld != null)
+                        {
+                            return new BoundClrPropertyAccessExpression(null, receiver, clrFld, TypeSymbol.FromClrType(clrFld.FieldType));
+                        }
+                    }
+
+                    // Issue #1181: an inherited imported-base-interface method
+                    // named in method-group position (e.g. `b.Dispose` passed
+                    // to a delegate) is captured against the bound receiver.
+                    foreach (var clrBaseIface in MemberLookup.GetTransitiveClrBaseInterfaces(ifaceSym))
+                    {
+                        if (TryBindClrMethodGroup(receiver, clrBaseIface, wantStatic: false, ifaceMemberName, out var ifaceClrGroup))
+                        {
+                            return ifaceClrGroup;
+                        }
+                    }
+
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
                 }
                 else if (receiver != null && receiver.Type is TupleTypeSymbol tupleSym)

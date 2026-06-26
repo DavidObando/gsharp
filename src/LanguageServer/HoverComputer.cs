@@ -8,6 +8,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Symbols.Display;
@@ -2086,7 +2087,45 @@ public static class CompletionComputer
             return;
         }
 
+        if (type is InterfaceSymbol interfaceType)
+        {
+            AddInterfaceInstanceMembers(items, seen, interfaceType);
+            return;
+        }
+
         AddClrMembers(items, seen, type?.ClrType, staticMembers: false);
+    }
+
+    private static void AddInterfaceInstanceMembers(List<CompletionItem> items, HashSet<string> seen, InterfaceSymbol interfaceType)
+    {
+        // ADR-0112: enumerate user-declared interface members (this interface
+        // and its user base interfaces) through the canonical layer.
+        foreach (var member in TypeMemberModel.EnumerateMembers(
+                     interfaceType,
+                     MemberQuery.Instance(MemberKinds.Property | MemberKinds.Event | MemberKinds.Method)))
+        {
+            switch (member)
+            {
+                case PropertySymbol property:
+                    AddItem(items, seen, property.Name, CompletionItemKind.Property, $"{property.Name}: {property.Type?.Name}");
+                    break;
+                case EventSymbol @event:
+                    AddItem(items, seen, @event.Name, CompletionItemKind.Event, @event.Name);
+                    break;
+                case FunctionSymbol method:
+                    AddItem(items, seen, method.Name, CompletionItemKind.Method, HoverComputer.FormatSymbol(method));
+                    break;
+            }
+        }
+
+        // Issue #1181: a user interface that extends an imported/BCL interface
+        // also surfaces that interface's (and its transitive CLR bases')
+        // members on an interface-typed receiver — keep the completion surface
+        // consistent with the binder's member resolution.
+        foreach (var clrBaseIface in MemberLookup.GetTransitiveClrBaseInterfaces(interfaceType))
+        {
+            AddClrMembers(items, seen, clrBaseIface, staticMembers: false);
+        }
     }
 
     private static void AddStructInstanceMembers(List<CompletionItem> items, HashSet<string> seen, StructSymbol structType)

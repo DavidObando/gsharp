@@ -2579,6 +2579,18 @@ internal sealed partial class ExpressionBinder
                 return userPathExt;
             }
 
+            // Issue #1181: a user interface that extends an imported/BCL
+            // interface (e.g. `interface IBox : IDisposable`) inherits that
+            // interface's members. After user-declared interface members and
+            // extension lookups fail, resolve the call against the transitive
+            // imported base interfaces so `b.Dispose()` (b : IBox) binds and
+            // emits a verifiable `callvirt IDisposable::Dispose`.
+            if (receiver != null && receiver.Type is InterfaceSymbol importedBaseIfaceRecv
+                && TryBindInterfaceImportedBaseInstanceCall(receiver, importedBaseIfaceRecv, methodName, arguments, ce, out var importedBaseIfaceCall, explicitTypeArgs, typeArgSymbols, argumentNames))
+            {
+                return importedBaseIfaceCall;
+            }
+
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             return new BoundErrorExpression(null);
         }
@@ -2639,6 +2651,7 @@ internal sealed partial class ExpressionBinder
         var candidates = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(clrType, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
             .Where(m => m.Name == methodName)
             .ToList();
+
         if (candidates.Count > 0)
         {
             var argTypes = new System.Type[arguments.Length];
@@ -3112,6 +3125,105 @@ internal sealed partial class ExpressionBinder
         {
             return false;
         }
+
+        return TryResolveAndBindClrInstanceCall(receiver, candidates, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames);
+    }
+
+    /// <summary>
+    /// Issue #1181: resolves an instance method call against the imported/BCL
+    /// base interfaces of a user interface receiver. A user interface
+    /// <c>interface IBox : IDisposable</c> has a null <c>ClrType</c>, so the
+    /// regular imported-instance walks find nothing; this projects every
+    /// transitive imported base interface's public instance methods onto the
+    /// receiver (matching how user-base-interface members are surfaced) and
+    /// runs the shared overload resolution. The emitted
+    /// <see cref="BoundImportedInstanceCallExpression"/> dispatches via
+    /// <c>callvirt</c> on the imported interface method, which is verifiable
+    /// because <c>IBox</c> carries an InterfaceImpl row to each imported base.
+    /// Runs only after user member-table lookup fails, so user-declared
+    /// interface members keep priority.
+    /// </summary>
+    /// <param name="receiver">The interface-typed receiver expression.</param>
+    /// <param name="interfaceSymbol">The user interface symbol of the receiver.</param>
+    /// <param name="methodName">The invoked method name.</param>
+    /// <param name="arguments">The bound call arguments.</param>
+    /// <param name="ce">The call syntax (for diagnostics/locations).</param>
+    /// <param name="result">The bound call on success, or an error node on ambiguity.</param>
+    /// <param name="explicitTypeArgs">Explicit CLR type arguments, when present.</param>
+    /// <param name="typeArgSymbols">Explicit symbolic type arguments, when present.</param>
+    /// <param name="argumentNames">Named-argument labels, when present.</param>
+    /// <returns>True when the call resolved (or reported a precise ambiguity).</returns>
+    internal bool TryBindInterfaceImportedBaseInstanceCall(
+        BoundExpression receiver,
+        InterfaceSymbol interfaceSymbol,
+        string methodName,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        out BoundExpression result,
+        System.Type[] explicitTypeArgs = null,
+        ImmutableArray<TypeSymbol> typeArgSymbols = default,
+        ImmutableArray<string> argumentNames = default)
+    {
+        result = null;
+
+        var clrBases = MemberLookup.GetTransitiveClrBaseInterfaces(interfaceSymbol);
+        if (clrBases.Count == 0)
+        {
+            return false;
+        }
+
+        var candidates = new List<MethodInfo>();
+        foreach (var clrBase in clrBases)
+        {
+            foreach (var m in ClrTypeUtilities.SafeGetMethods(clrBase, BindingFlags.Instance | BindingFlags.Public))
+            {
+                if (string.Equals(m.Name, methodName, System.StringComparison.Ordinal)
+                    && !MemberLookup.HasSameSignature(candidates, m))
+                {
+                    candidates.Add(m);
+                }
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        return TryResolveAndBindClrInstanceCall(receiver, candidates, importedBaseClr: clrBases[0], methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames);
+    }
+
+    /// <summary>
+    /// Issue #296 / #1181: shared overload-resolution + bound-call construction
+    /// core for an imported-instance method call against a pre-collected
+    /// <paramref name="candidates"/> set. Factored out of
+    /// <see cref="TryBindInheritedClrInstanceCall"/> so the inherited-base-class
+    /// path and the user-interface imported-base path share one implementation.
+    /// </summary>
+    /// <param name="receiver">The receiver expression.</param>
+    /// <param name="candidates">The candidate CLR methods.</param>
+    /// <param name="importedBaseClr">A representative CLR type for named-argument diagnostics.</param>
+    /// <param name="methodName">The invoked method name.</param>
+    /// <param name="arguments">The bound call arguments.</param>
+    /// <param name="ce">The call syntax.</param>
+    /// <param name="result">The bound call on success.</param>
+    /// <param name="explicitTypeArgs">Explicit CLR type arguments, when present.</param>
+    /// <param name="typeArgSymbols">Explicit symbolic type arguments, when present.</param>
+    /// <param name="argumentNames">Named-argument labels, when present.</param>
+    /// <returns>True when the call resolved (or reported a precise ambiguity).</returns>
+    private bool TryResolveAndBindClrInstanceCall(
+        BoundExpression receiver,
+        IReadOnlyList<MethodInfo> candidates,
+        System.Type importedBaseClr,
+        string methodName,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        out BoundExpression result,
+        System.Type[] explicitTypeArgs,
+        ImmutableArray<TypeSymbol> typeArgSymbols,
+        ImmutableArray<string> argumentNames)
+    {
+        result = null;
 
         var argTypes = new System.Type[arguments.Length];
         var hasUserClassArg = false;

@@ -198,6 +198,122 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Issue #1181: collects the transitive closure of imported/BCL base
+    /// interfaces declared on <paramref name="interfaceSymbol"/> or on any of
+    /// its user base interfaces. A user interface
+    /// <c>interface IBox : System.IDisposable</c> records <c>IDisposable</c> in
+    /// <see cref="InterfaceSymbol.BaseClrInterfaces"/>; this walk surfaces that
+    /// CLR interface plus every interface IT extends (e.g.
+    /// <c>IEnumerable&lt;T&gt;</c> → <c>IEnumerable</c>) so the binder and the
+    /// language server can project the inherited CLR members onto an
+    /// <c>IBox</c>-typed receiver. The result is deduplicated structurally via
+    /// <see cref="ClrTypeUtilities.AreSame"/> (FullName-based, robust across
+    /// metadata-load contexts).
+    /// </summary>
+    /// <param name="interfaceSymbol">The user interface whose imported base interfaces to collect.</param>
+    /// <returns>The transitive CLR base interface <see cref="Type"/>s, each appearing once.</returns>
+    public static IReadOnlyList<Type> GetTransitiveClrBaseInterfaces(InterfaceSymbol interfaceSymbol)
+    {
+        if (interfaceSymbol == null)
+        {
+            return Array.Empty<Type>();
+        }
+
+        var result = new List<Type>();
+
+        void AddClr(Type clr)
+        {
+            if (clr == null || !clr.IsInterface)
+            {
+                return;
+            }
+
+            foreach (var existing in result)
+            {
+                if (ClrTypeUtilities.AreSame(existing, clr))
+                {
+                    return;
+                }
+            }
+
+            result.Add(clr);
+
+            foreach (var transitive in ClrTypeUtilities.SafeGetInterfaces(clr))
+            {
+                AddClr(transitive);
+            }
+        }
+
+        // A user base interface may itself extend a CLR interface, so walk the
+        // whole user interface hierarchy (this-first) and harvest each level's
+        // imported base interfaces.
+        foreach (var iface in interfaceSymbol.SelfAndAllBaseInterfaces())
+        {
+            if (iface.BaseClrInterfaces.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var clrBase in iface.BaseClrInterfaces)
+            {
+                if (clrBase?.ClrType is Type clrType)
+                {
+                    AddClr(clrType);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Issue #1181: returns whether <paramref name="candidate"/> already has a
+    /// same-name, same-parameter-types entry in <paramref name="existing"/>
+    /// (structural CLR comparison via <see cref="ClrTypeUtilities.AreSame"/>).
+    /// Used to dedupe imported base-interface methods projected onto a user
+    /// interface receiver so a signature surfaced by two related interfaces
+    /// (e.g. <c>IEnumerable&lt;T&gt;</c> and <c>IEnumerable</c>) is not added
+    /// twice into an overload set.
+    /// </summary>
+    /// <param name="existing">The methods collected so far.</param>
+    /// <param name="candidate">The candidate method to test.</param>
+    /// <returns>True when a structurally-equal signature is already present.</returns>
+    public static bool HasSameSignature(IReadOnlyList<MethodInfo> existing, MethodInfo candidate)
+    {
+        foreach (var m in existing)
+        {
+            if (!string.Equals(m.Name, candidate.Name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var existingParams = m.GetParameters();
+            var candidateParams = candidate.GetParameters();
+            if (existingParams.Length != candidateParams.Length)
+            {
+                continue;
+            }
+
+            var match = true;
+            for (var i = 0; i < existingParams.Length; i++)
+            {
+                if (!ClrTypeUtilities.AreSame(existingParams[i].ParameterType, candidateParams[i].ParameterType))
+                {
+                    match = false;
+                    break;
+                }
+            }
+
+            if (match)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Returns the G# field on <paramref name="structSymbol"/> that satisfies
     /// the property contract of <paramref name="clrProp"/>: same name, the
     /// field's type's CLR projection matches the property's PropertyType, and
