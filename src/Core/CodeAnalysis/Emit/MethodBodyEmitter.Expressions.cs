@@ -1002,6 +1002,18 @@ internal sealed partial class MethodBodyEmitter
 
             foreach (var init in literal.Initializers)
             {
+                // Issue #1211: a `prop` member is set through its setter/init
+                // accessor (`dup; <value>; callvirt set_X`) rather than a stfld.
+                if (init.Property != null)
+                {
+                    var setterHandle = this.ResolveStructLiteralSetter(literal.StructType, init.Property, isGeneric);
+                    this.il.OpCode(ILOpCode.Dup);
+                    this.EmitExpression(init.Value);
+                    this.il.OpCode(ILOpCode.Callvirt);
+                    this.il.Token(setterHandle);
+                    continue;
+                }
+
                 EntityHandle fieldHandle;
                 if (isGeneric)
                 {
@@ -1042,6 +1054,19 @@ internal sealed partial class MethodBodyEmitter
         // For each initializer: ldloca slot; <emit value>; stfld fieldHandle.
         foreach (var init in literal.Initializers)
         {
+            // Issue #1211: a `prop` member on a value type is set through its
+            // setter/init accessor (`ldloca slot; <value>; call set_X`). The
+            // managed-pointer receiver means a non-virtual `call`.
+            if (init.Property != null)
+            {
+                var setterHandle = this.ResolveStructLiteralSetter(literal.StructType, init.Property, isGeneric);
+                this.il.LoadLocalAddress(slot);
+                this.EmitExpression(init.Value);
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(setterHandle);
+                continue;
+            }
+
             EntityHandle fieldHandle;
             if (isGeneric)
             {
@@ -1065,6 +1090,27 @@ internal sealed partial class MethodBodyEmitter
 
         // Leave the constructed struct value on the stack.
         this.il.LoadLocal(slot);
+    }
+
+    /// <summary>
+    /// Issue #1211: resolves the setter/init accessor MethodDef (or
+    /// TypeSpec-parented MemberRef for a constructed generic) for a property
+    /// targeted by a composite-literal initializer.
+    /// </summary>
+    private EntityHandle ResolveStructLiteralSetter(StructSymbol structType, PropertySymbol property, bool isGeneric)
+    {
+        if (isGeneric)
+        {
+            return this.outer.ResolveUserPropertyAccessorToken(structType, property, wantSetter: true);
+        }
+
+        if (this.outer.cache.PropertyAccessorHandles.TryGetValue(property, out var handles) && handles.Setter.HasValue)
+        {
+            return handles.Setter.Value;
+        }
+
+        throw new InvalidOperationException(
+            $"Property '{property.Name}' has no emitted setter MethodDef.");
     }
 
     private void EmitNullConditionalAccess(BoundNullConditionalAccessExpression nc)

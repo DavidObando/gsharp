@@ -1447,7 +1447,11 @@ public abstract class BoundTreeRewriter
 
             if (builder != null)
             {
-                builder.Add(newValue == init.Value ? init : new BoundFieldInitializer(init.Field, newValue));
+                builder.Add(newValue == init.Value
+                    ? init
+                    : (init.Field != null
+                        ? new BoundFieldInitializer(init.Field, newValue)
+                        : new BoundFieldInitializer(init.Property, newValue)));
             }
         }
 

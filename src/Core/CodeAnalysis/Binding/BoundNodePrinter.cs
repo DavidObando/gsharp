@@ -1297,7 +1297,7 @@ public static class BoundNodePrinter
             }
 
             var init = node.Initializers[i];
-            writer.WriteIdentifier(init.Field.Name);
+            writer.WriteIdentifier(init.MemberName);
             writer.WritePunctuation(SyntaxKind.ColonToken);
             writer.WriteSpace();
             init.Value.WriteTo(writer);
