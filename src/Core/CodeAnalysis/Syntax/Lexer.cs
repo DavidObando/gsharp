@@ -1455,8 +1455,11 @@ public sealed class Lexer
         }
         catch (System.Exception)
         {
+            // The body parses but exceeds the 64-bit carrier: it is not
+            // representable in any integer type. For an un-suffixed literal the
+            // widest §6.4.5.3 candidate is uint64, so report against that.
             var loc = new TextLocation(this.text, new TextSpan(spanStart, spanLength));
-            Diagnostics.ReportInvalidNumber(loc, fullText, suffixType ?? TypeSymbol.Int32);
+            Diagnostics.ReportInvalidNumber(loc, fullText, suffixType ?? TypeSymbol.UInt64);
             return suffixType == TypeSymbol.Int64 ? (object)0L
                 : suffixType == TypeSymbol.UInt64 ? (object)0UL
                 : suffixType == TypeSymbol.UInt32 ? (object)0U
@@ -1490,7 +1493,11 @@ public sealed class Lexer
             return (uint)parsed;
         }
 
-        // No suffix → default to int per ADR-0044. Narrow when it fits.
+        // No suffix → C# §6.4.5.3 integer-literal type inference. The literal
+        // takes the type of the first of int32, uint32, int64, uint64 in which
+        // its value can be represented. A bare literal that fits int32 stays
+        // int32; larger in-range values widen to the smallest fitting type and
+        // can then constant-narrow to a target type (issue #1183).
         if (parsed <= int.MaxValue)
         {
             return (int)parsed;
@@ -1498,15 +1505,27 @@ public sealed class Lexer
 
         // Backwards compatibility: hex/octal/binary literals whose bit
         // pattern fits in 32 bits are bit-cast to int (so `0xDEAD_BEEF`
-        // yields -559038737 rather than overflowing). Decimal literals
-        // still overflow per the obvious arithmetic reading.
+        // yields -559038737 rather than widening to uint32). Decimal literals
+        // follow the §6.4.5.3 lattice below instead.
         if (radix != 10 && parsed <= uint.MaxValue)
         {
             return (int)(uint)parsed;
         }
 
-        ReportOverflow(fullText, spanStart, spanLength, TypeSymbol.Int32);
-        return 0;
+        // §6.4.5.3 widening lattice: uint32 → int64 → uint64. `parsed` is a
+        // ulong, so a value that overflowed uint64 already threw above and was
+        // reported; anything reaching here is representable as uint64.
+        if (parsed <= uint.MaxValue)
+        {
+            return (uint)parsed;
+        }
+
+        if (parsed <= long.MaxValue)
+        {
+            return (long)parsed;
+        }
+
+        return parsed;
     }
 
     private object ParseFloatLiteral(string digitBody, TypeSymbol suffixType, string fullText, int spanStart, int spanLength)

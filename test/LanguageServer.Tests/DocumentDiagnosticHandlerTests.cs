@@ -103,7 +103,7 @@ public class DocumentDiagnosticHandlerTests
         try
         {
             var gsPath = System.IO.Path.Combine(dir, "Program.gs");
-            const string source = "var y uint8 = 255\n";
+            const string source = "var y uint8 = true\n";
             System.IO.File.WriteAllText(gsPath, source);
             System.IO.File.WriteAllText(
                 System.IO.Path.Combine(dir, "Repro.gsproj"),
@@ -136,8 +136,8 @@ public class DocumentDiagnosticHandlerTests
     {
         // Regression: column mapping previously hardcoded a 2-char ("\r\n") line break, so on
         // LF documents every line after the first was reported one column too early.
-        // Line 1 (0-based) is "var y uint8 = 255"; "255" starts at character index 14.
-        const string source = "let a = 1\nvar y uint8 = 255\n";
+        // Line 1 (0-based) is "var y uint8 = true"; "true" starts at character index 14.
+        const string source = "let a = 1\nvar y uint8 = true\n";
         var (server, uri) = await CreateServerWithDocumentAsync(source);
 
         var report = await server.DocumentDiagnosticAsync(
