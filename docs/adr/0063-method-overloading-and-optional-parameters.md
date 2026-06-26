@@ -76,14 +76,14 @@ parameter = identifier ellipsis? type_clause ('=' constant_expression)?
 
 In v1, an optional parameter must satisfy all of the following:
 
-1. Its default value is a compile-time constant representable in CLR parameter metadata: numeric literal, `bool`, `char`, `string`, enum constant, or `nil` for a nullable/reference-compatible parameter.
+1. Its default value is a compile-time constant representable in CLR parameter metadata: numeric literal, `bool`, `char`, `string`, enum constant, `nil` for a nullable/reference-compatible parameter, or a value-type `default(T)` / zero-value `T()` (issue #1182) — the type's all-zero value.
 2. It is not marked `ref`, `out`, or `in`.
 3. It is not variadic (`...`).
 4. It is not the receiver parameter of a receiver method or extension function.
 
 Optional and required parameters may therefore be interleaved. A call is applicable if every required parameter receives an argument and every unsupplied parameter is optional.
 
-These restrictions are deliberate. They preserve faithful CLR emission (`Optional`/`HasDefault` plus a Constant row) while keeping omitted-argument lowering purely compile-time. Non-constant defaults, defaults that reference earlier parameters, and `default(T)`-style generalized expressions are deferred.
+These restrictions are deliberate. They preserve faithful CLR emission (`Optional`/`HasDefault` plus a Constant row) while keeping omitted-argument lowering purely compile-time. A value-type `default(T)` (and the equivalent zero-value `T()` form) is also accepted (issue #1182): primitive defaults emit their typed-zero Constant, while arbitrary value types (BCL or user `data struct`) and `Nullable<T>` emit a nullref Constant and materialize the all-zero value at omitted call sites via a `BoundDefaultExpression` (`initobj` in IL), matching C#. Non-constant defaults, defaults that reference earlier parameters, and other generalized expressions remain deferred.
 
 ### 4. Call-site semantics
 

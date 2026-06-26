@@ -73,7 +73,9 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     /// Only meaningful when <see cref="HasExplicitDefaultValue"/> is <see langword="true"/>.
     /// Value kinds: numeric primitive, <see cref="bool"/>, <see cref="char"/>,
     /// <see cref="string"/>, enum constant (carried as its underlying integral value),
-    /// or <see langword="null"/> for a nullable/reference parameter.
+    /// or <see langword="null"/> for a nullable/reference parameter or a value-type
+    /// <c>default(T)</c> / <c>T()</c> default (issue #1182), whose all-zero value is
+    /// materialized at the call site via a <see cref="Binding.BoundDefaultExpression"/>.
     /// </summary>
     public object ExplicitDefaultValue { get; private set; }
 
@@ -94,7 +96,7 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     /// once by the binder when the parameter syntax includes a <c>= constant</c> clause
     /// and the constant has passed all ADR-0063 §3 restrictions.
     /// </summary>
-    /// <param name="value">The encoded constant default. May be <see langword="null"/> to represent the source-level <c>nil</c> default.</param>
+    /// <param name="value">The encoded constant default. May be <see langword="null"/> to represent the source-level <c>nil</c> default or a value-type <c>default(T)</c> / <c>T()</c> all-zero default (issue #1182).</param>
     public void SetExplicitDefaultValue(object value)
     {
         HasExplicitDefaultValue = true;
