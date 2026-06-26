@@ -857,6 +857,35 @@ internal sealed partial class ExpressionBinder
         type is StructSymbol or EnumSymbol or InterfaceSymbol;
 
     /// <summary>
+    /// Issue #1213: whether the function currently being bound belongs to
+    /// <paramref name="type"/> (or a type derived from it). Used to gate
+    /// in-type resolution of a field-like event to its private backing
+    /// delegate field, matching C# (an event name in expression position is
+    /// only valid inside the declaring type).
+    /// </summary>
+    private bool IsWithinType(StructSymbol type)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+
+        var enclosingType = (this.function?.ReceiverType as StructSymbol)
+            ?? (this.function?.StaticOwnerType as StructSymbol);
+
+        for (var t = enclosingType; t != null; t = t.BaseClass)
+        {
+            if (ReferenceEquals(t, type)
+                || (t.Declaration != null && ReferenceEquals(t.Declaration, type.Declaration)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Issue #1069: whether <paramref name="name"/> resolves to a user-defined
     /// type whose enclosing type is <paramref name="container"/>.
     /// </summary>
@@ -1024,6 +1053,18 @@ internal sealed partial class ExpressionBinder
         var whenNotNull = BindAccessorStep(captureRef, null, rightPart);
 
         scope = scope.Parent;
+
+        // Issue #1213: a null-conditional invocation whose access produces no
+        // value — the canonical event-raise form `evt?.Invoke(args)` where the
+        // delegate returns `void` — is itself a `void` statement. Do not wrap
+        // `void` in a nullable result type; that would force the emitter to
+        // push a `null` on the nil branch with nothing to match it on the
+        // not-null branch (a stack-imbalance). The emitter special-cases a
+        // `void`-typed null-conditional to a plain null-guarded call.
+        if (ReferenceEquals(whenNotNull.Type, TypeSymbol.Void))
+        {
+            return new BoundNullConditionalAccessExpression(null, receiver, capture, whenNotNull, TypeSymbol.Void, resultSlot: null);
+        }
 
         var resultType = whenNotNull.Type is NullableTypeSymbol ? whenNotNull.Type : (TypeSymbol)NullableTypeSymbol.Get(whenNotNull.Type);
 
@@ -2282,6 +2323,24 @@ internal sealed partial class ExpressionBinder
                         }
 
                         return ApplyMemberNarrowing(new BoundPropertyAccessExpression(null, receiver, structSym, prop));
+                    }
+
+                    // Issue #1213: an `event` member referenced in expression
+                    // position (e.g. `this.MyEvent?.Invoke(args)`) binds to its
+                    // private backing delegate field, mirroring how C# compiles
+                    // a raise of a field-like event to a read of the backing
+                    // field. Restricted to access from inside the declaring type
+                    // (the backing field is private); cross-type reads continue
+                    // to fall through to the existing member-lookup diagnostics
+                    // so the `+=`/`-=` subscription path is unaffected.
+                    if (IsWithinType(structSym))
+                    {
+                        var evt = structSym.Events.FirstOrDefault(e =>
+                            e.Name == ne.IdentifierToken.Text && e.IsFieldLike && e.BackingField != null);
+                        if (evt != null)
+                        {
+                            return ApplyMemberNarrowing(new BoundFieldAccessExpression(null, receiver, structSym, evt.BackingField));
+                        }
                     }
 
                     // Issue #296: a GSharp class inheriting an imported CLR base

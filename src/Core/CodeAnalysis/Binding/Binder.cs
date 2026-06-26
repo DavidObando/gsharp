@@ -365,6 +365,30 @@ public sealed class Binder
                                 }
                             }
                         }
+
+                        // Issue #1213: expose a field-like event of the
+                        // *declaring* type as a bare name inside its own method
+                        // bodies, bound to the event's private backing delegate
+                        // field. This lets the canonical raise pattern
+                        // `MyEvent?.Invoke(args)` resolve, exactly as C# compiles
+                        // it to a read of the backing field. Only the type that
+                        // declares the event may raise it (a base class event is
+                        // intentionally not surfaced here), so this is restricted
+                        // to `t == receiverStruct`. A bare `MyEvent += handler`
+                        // still routes to the event-subscription path, which is
+                        // checked first in BindBareEventOrCompoundAssignment.
+                        if (ReferenceEquals(t, receiverStruct) && !t.Events.IsDefaultOrEmpty)
+                        {
+                            foreach (var evt in t.Events)
+                            {
+                                if (evt.IsFieldLike
+                                    && evt.BackingField != null
+                                    && seenMembers.Add(evt.Name))
+                                {
+                                    scope.TryDeclareVariable(new ImplicitFieldVariableSymbol(function.ThisParameter, t, evt.BackingField));
+                                }
+                            }
+                        }
                     }
                 }
             }
