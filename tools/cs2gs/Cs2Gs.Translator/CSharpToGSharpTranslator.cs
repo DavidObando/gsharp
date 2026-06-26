@@ -904,17 +904,26 @@ public sealed class CSharpToGSharpTranslator
             // `sealed` class that carries `protected override` members (it overrides
             // an abstract/virtual protected base) therefore still maps to `open`;
             // G# has no `sealed` modifier so the sealedness is dropped (ADR-0115 §B.4).
+            // A C# `record` (G# `data class`) is reference-typed and may be
+            // subclassed (e.g. `record Derived : Base`); like a plain class it must
+            // be declared `open` in G# to permit subclassing (GS0181) or to carry a
+            // `protected` member (GS0380). `data struct`/`struct`/`interface` are
+            // excluded (value types are not subclassable; interfaces are open by
+            // nature).
+            bool isOpenableKind = kind == TypeDeclarationKind.Class
+                || kind == TypeDeclarationKind.DataClass;
             bool isOpen = symbol != null &&
-                kind == TypeDeclarationKind.Class &&
+                isOpenableKind &&
                 !symbol.IsStatic &&
                 ((!symbol.IsSealed && this.subclassedBases.Contains(symbol.OriginalDefinition))
                     || HasProtectedMember(symbol));
 
             // G# has no `abstract` class modifier (the keyword is not recognized by
             // the parser); a C# `abstract class`/`abstract record` therefore maps to
-            // an `open class` — subclassable but without enforced non-instantiation
-            // (ADR-0115 §B.4). The abstractness is intentionally dropped.
-            bool wasAbstract = symbol != null && symbol.IsAbstract && kind == TypeDeclarationKind.Class;
+            // an `open class`/`open data class` — subclassable but without enforced
+            // non-instantiation (ADR-0115 §B.4). The abstractness is intentionally
+            // dropped.
+            bool wasAbstract = symbol != null && symbol.IsAbstract && isOpenableKind;
             if (wasAbstract)
             {
                 this.context.Report(new TranslationDiagnostic(
