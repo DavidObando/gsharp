@@ -681,6 +681,116 @@ public sealed class BoundScope
     }
 
     /// <summary>
+    /// Issue #1174: resolves a nested type by its enclosing <paramref name="container"/>
+    /// and simple <paramref name="simpleName"/>, rather than by global simple
+    /// name. This is required when a top-level type shares the nested type's
+    /// simple name: per <see cref="TryDeclareTypeAlias"/>, the top-level homonym
+    /// keeps the simple key while the nested type is retained under its
+    /// containing-type-qualified key (e.g. <c>"C.E"</c>). A plain
+    /// <see cref="TryLookupTypeAlias(string, out TypeSymbol)"/> of the simple
+    /// name would return the top-level homonym, so a qualified reference
+    /// <c>Container.Nested</c> must look the nested type up by (container,
+    /// simpleName).
+    /// </summary>
+    /// <param name="container">The enclosing type the nested type must belong to.</param>
+    /// <param name="simpleName">The nested type's simple name.</param>
+    /// <param name="preferredArity">The preferred generic arity, or -1 for none.</param>
+    /// <param name="type">The resolved nested type, when found.</param>
+    /// <returns>Whether a nested type with that container and name exists.</returns>
+    public bool TryLookupNestedTypeAlias(TypeSymbol container, string simpleName, int preferredArity, out TypeSymbol type)
+    {
+        type = null;
+        if (container == null || string.IsNullOrEmpty(simpleName) || typeAliases == null)
+        {
+            return false;
+        }
+
+        // The nested type is stored under its containing-type-qualified key
+        // (e.g. `Outer.Inner` for a doubly-nested type), arity-mangled the same
+        // way as in TryDeclareTypeAlias.
+        var qualifiedName = QualifiedTypeName(container) + "." + simpleName;
+
+        if (preferredArity > 0)
+        {
+            var arityKey = MangleArity(qualifiedName, preferredArity);
+            if (typeAliases.TryGetValue(arityKey, out var arityMatch)
+                && IsNestedDirectlyIn(arityMatch, container))
+            {
+                type = arityMatch;
+                return true;
+            }
+        }
+
+        // Arity-0 (plain) qualified key.
+        if (typeAliases.TryGetValue(qualifiedName, out var exact)
+            && IsNestedDirectlyIn(exact, container))
+        {
+            type = exact;
+            return true;
+        }
+
+        // Lowest-arity same-name generic variant under the qualified key.
+        TypeSymbol best = null;
+        var bestArity = int.MaxValue;
+        foreach (var pair in typeAliases)
+        {
+            if (TryParseAritySuffix(pair.Key, qualifiedName, out var arity)
+                && arity < bestArity
+                && IsNestedDirectlyIn(pair.Value, container))
+            {
+                best = pair.Value;
+                bestArity = arity;
+            }
+        }
+
+        if (best != null)
+        {
+            type = best;
+            return true;
+        }
+
+        // No collision: when the nested type's simple name was free, it keeps
+        // the simple key. Accept the simple-key holder when it is in fact a
+        // nested type of `container`.
+        if (preferredArity > 0)
+        {
+            var simpleArityKey = MangleArity(simpleName, preferredArity);
+            if (typeAliases.TryGetValue(simpleArityKey, out var simpleArityMatch)
+                && IsNestedDirectlyIn(simpleArityMatch, container))
+            {
+                type = simpleArityMatch;
+                return true;
+            }
+        }
+
+        if (typeAliases.TryGetValue(simpleName, out var simpleMatch)
+            && IsNestedDirectlyIn(simpleMatch, container))
+        {
+            type = simpleMatch;
+            return true;
+        }
+
+        foreach (var pair in typeAliases)
+        {
+            if (TryParseAritySuffix(pair.Key, simpleName, out var arity)
+                && arity < bestArity
+                && IsNestedDirectlyIn(pair.Value, container))
+            {
+                best = pair.Value;
+                bestArity = arity;
+            }
+        }
+
+        if (best != null)
+        {
+            type = best;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Gets the set of declared type aliases.
     /// </summary>
     /// <returns>The map of alias names to underlying types.</returns>
@@ -805,6 +915,13 @@ public sealed class BoundScope
         InterfaceSymbol i => i.ContainingType,
         _ => null,
     };
+
+    /// <summary>
+    /// Issue #1174: whether <paramref name="type"/> is a user aggregate nested
+    /// directly inside <paramref name="container"/>.
+    /// </summary>
+    private static bool IsNestedDirectlyIn(TypeSymbol type, TypeSymbol container)
+        => ReferenceEquals(TypeContainingType(type), container);
 
     /// <summary>
     /// Issue #1080: two type declarations share a declaration scope when both

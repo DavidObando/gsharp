@@ -522,10 +522,32 @@ internal sealed partial class ExpressionBinder
             && scope.TryLookupSymbol(enclosingNameSyntax.IdentifierToken.Text) is not VariableSymbol
             && scope.TryLookupTypeAlias(enclosingNameSyntax.IdentifierToken.Text, out var enclosingAliasType)
             && IsUserAggregateType(enclosingAliasType)
-            && TryGetHeadIdentifier(syntax.RightPart, out var headIdentifier)
-            && IsNestedTypeOf(headIdentifier, enclosingAliasType))
+            && TryGetHeadIdentifier(syntax.RightPart, out var headIdentifier))
         {
-            return BindExpression(syntax.RightPart);
+            // Issue #1174: when a top-level type shares the nested type's simple
+            // name, re-binding the right part by simple name would resolve to the
+            // top-level homonym (which holds the simple key). Resolve the nested
+            // type by (container, simpleName) and bind the qualified composite
+            // literal directly against the NESTED definition so its members
+            // resolve correctly.
+            if (syntax.RightPart is StructLiteralExpressionSyntax nestedLiteral)
+            {
+                var literalArity = nestedLiteral.TypeArgumentList != null ? nestedLiteral.TypeArgumentList.Arguments.Count : -1;
+                if (scope.TryLookupNestedTypeAlias(enclosingAliasType, headIdentifier, literalArity, out var nestedLiteralType)
+                    && nestedLiteralType is StructSymbol nestedStructDef)
+                {
+                    return BindStructLiteralExpression(nestedLiteral, nestedStructDef);
+                }
+            }
+
+            // No collision (the nested type still holds its simple key): peel off
+            // the redundant enclosing-type qualifier and bind the remainder by
+            // simple name. This mirrors how the enclosing type's own members
+            // reference a sibling nested type.
+            if (IsNestedTypeOf(headIdentifier, enclosingAliasType))
+            {
+                return BindExpression(syntax.RightPart);
+            }
         }
 
         // Determine what the left side of the accessor is: either an imported
@@ -884,9 +906,7 @@ internal sealed partial class ExpressionBinder
                 return false;
         }
 
-        if (!scope.TryLookupTypeAlias(rightName.IdentifierToken.Text, out var candidate)
-            || !IsUserAggregateType(candidate)
-            || !ReferenceEquals(GetSymbolContainingType(candidate), container))
+        if (!scope.TryLookupNestedTypeAlias(container, rightName.IdentifierToken.Text, preferredArity: -1, out var candidate))
         {
             return false;
         }
