@@ -281,6 +281,21 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #1218: a value-type value (notably an enum) converting to one of
+        // its CLR reference base types — System.ValueType or System.Enum — boxes
+        // to a proper object reference. This mirrors the `object`/interface box
+        // above and lets inherited Enum/ValueType members receive the boxed
+        // receiver/argument (e.g. an enum passed to System.Enum.HasFlag).
+        if (ReflectionMetadataEmitter.IsValueTypeSymbol(from)
+            && to?.ClrType is System.Type valueBoxTarget
+            && (valueBoxTarget.IsSameAs(typeof(System.ValueType))
+                || valueBoxTarget.IsSameAs(typeof(System.Enum))))
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(from));
+            return;
+        }
+
         // ADR-0087 §3 R4: after R2 a value of `T` lives in a real type slot
         // (VAR/MVAR), not an erased `object`. Where the binder still emits a
         // BoundConversionExpression bridging `T → object` (e.g. passing a
