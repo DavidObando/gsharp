@@ -7406,15 +7406,31 @@ internal sealed class DeclarationBinder
         var nameLocation = GetAnnotationNameLocation(annotation);
         nameIsExact = true;
 
-        // The dotted form (e.g. `System.Obsolete`) is not yet routed through
-        // LookupType — fall back to a CLR walk by full name. v1 keeps
-        // resolution focused on the single-identifier form; dotted names
-        // remain a follow-up.
-        var direct = lookupType(name);
-        TypeSymbol suffixed = null;
-        if (!string.IsNullOrEmpty(name) && !name.EndsWith("Attribute", StringComparison.Ordinal))
+        // Issue #1206: resolve the verbatim name and the C#-style
+        // `<simple-name>Attribute` suffixed name. The suffix is appended to the
+        // final simple-name segment only — for a qualified name `Ns.Foo` the
+        // candidate is `Ns.FooAttribute`, never `Ns.FooAttribute` with a doubled
+        // `Attribute`, and a name whose simple part already ends in `Attribute`
+        // is not suffixed at all. Both the simple-identifier form (honoring
+        // imports/aliases via LookupType) and the dotted/qualified form (resolved
+        // by full name against the reference set, the same machinery used for
+        // qualified type references such as `System.IntPtr`) are supported.
+        var direct = ResolveAttributeName(name);
+
+        var simpleName = name;
+        var dotIndex = string.IsNullOrEmpty(name) ? -1 : name.LastIndexOf('.');
+        if (dotIndex >= 0)
         {
-            suffixed = lookupType(name + "Attribute");
+            simpleName = name.Substring(dotIndex + 1);
+        }
+
+        TypeSymbol suffixed = null;
+        if (!string.IsNullOrEmpty(simpleName) && !simpleName.EndsWith("Attribute", StringComparison.Ordinal))
+        {
+            var suffixedName = dotIndex >= 0
+                ? string.Concat(name.Substring(0, dotIndex + 1), simpleName, "Attribute")
+                : simpleName + "Attribute";
+            suffixed = ResolveAttributeName(suffixedName);
         }
 
         if (direct != null && IsAttributeType(direct) && suffixed != null && IsAttributeType(suffixed))
@@ -7436,6 +7452,33 @@ internal sealed class DeclarationBinder
         }
 
         Diagnostics.ReportAttributeTypeNotFound(nameLocation, name);
+        return null;
+    }
+
+    // Issue #1206: resolves a (possibly dotted) attribute name to a TypeSymbol.
+    // The simple-identifier form goes through LookupType so imports and aliases
+    // are honored; the qualified/dotted form (e.g. `System.Obsolete`,
+    // `System.Runtime.InteropServices.DllImport`) is resolved by full name
+    // against the reference set — the same resolution used for qualified type
+    // references elsewhere (e.g. `System.IntPtr`).
+    private TypeSymbol ResolveAttributeName(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return null;
+        }
+
+        var resolved = lookupType(name);
+        if (resolved != null)
+        {
+            return resolved;
+        }
+
+        if (name.IndexOf('.') >= 0 && scope.References.TryResolveType(name, out var clrType) && clrType != null)
+        {
+            return TypeSymbol.FromClrType(clrType);
+        }
+
         return null;
     }
 
