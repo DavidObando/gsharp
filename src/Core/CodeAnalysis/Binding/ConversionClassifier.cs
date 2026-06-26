@@ -1505,9 +1505,18 @@ internal sealed class ConversionClassifier
         {
             value = lit.Value;
         }
+        else if (inner is BoundDefaultExpression def)
+        {
+            // Issue #1182: a value-type `default(T)` (and the zero-value `T()`
+            // form, which the binder also lowers to a BoundDefaultExpression for
+            // value types with no surfaced parameterless constructor) is a valid
+            // compile-time constant — the type's all-zero value. Accept it and
+            // record a constant the call site can materialize, mirroring C#.
+            return TryExtractValueTypeDefaultConstant(def, parameterType, out value, out reason);
+        }
         else
         {
-            reason = "the default value must be a compile-time constant (numeric, bool, char, string, enum, or nil).";
+            reason = "the default value must be a compile-time constant (numeric, bool, char, string, enum, nil, or a value-type default(T)).";
             return false;
         }
 
@@ -1546,5 +1555,153 @@ internal sealed class ConversionClassifier
                 value = null;
                 return false;
         }
+    }
+
+    // Issue #1182: extracts the constant default for a value-type `default(T)` /
+    // zero-value `T()` optional default. The written `default(T)` must denote the
+    // parameter's own type. Primitive value types (numeric / bool / char) are
+    // recorded as their typed zero — identical to `= 0` — so a CLR Constant row is
+    // emitted; arbitrary value types (e.g. TimeSpan, user structs) and Nullable<T>
+    // record <see langword="null"/>, which the call site materializes as the
+    // all-zero value via a BoundDefaultExpression and the metadata encodes as a
+    // nullref Constant (matching C# `T x = default`).
+    private static bool TryExtractValueTypeDefaultConstant(BoundDefaultExpression def, TypeSymbol parameterType, out object value, out string reason)
+    {
+        value = null;
+        reason = null;
+
+        var paramUnderlying = parameterType is NullableTypeSymbol pn ? pn.UnderlyingType : parameterType;
+        var defUnderlying = def.Type is NullableTypeSymbol dn ? dn.UnderlyingType : def.Type;
+
+        // The written `default(T)` / `T()` must denote the parameter's own type;
+        // no implicit conversion of a value-type default is supported.
+        if (!DefaultTypeMatchesParameter(defUnderlying, paramUnderlying))
+        {
+            reason = $"the default value 'default({def.Type?.Name})' does not match the parameter type '{parameterType.Name}'.";
+            return false;
+        }
+
+        // Nullable<T> or reference-type parameter: the default is the missing value
+        // (nil), already representable as a nullref Constant and materialized as nil.
+        if (parameterType is NullableTypeSymbol || !IsValueTypeForDefault(paramUnderlying))
+        {
+            value = null;
+            return true;
+        }
+
+        // Primitive value types are CLR Constant-table representable as their typed
+        // zero — emit the same constant as the `= 0` form.
+        if (TryGetPrimitiveZero(paramUnderlying, out var primitiveZero))
+        {
+            value = primitiveZero;
+            return true;
+        }
+
+        // Arbitrary value type (TimeSpan, user struct, enum, tuple): materialized at
+        // the call site via BoundDefaultExpression; metadata Constant is nullref.
+        value = null;
+        return true;
+    }
+
+    // Issue #1182: the written `default(T)` / `T()` must denote the same type as the
+    // parameter. Symbol identity covers the common case (including user value types
+    // whose <see cref="TypeSymbol.ClrType"/> is null pre-emit); the CLR full-name and
+    // name fallbacks cover imported types and re-resolved symbol instances.
+    private static bool DefaultTypeMatchesParameter(TypeSymbol defType, TypeSymbol paramType)
+    {
+        if (defType == null || paramType == null)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(defType, paramType) || Equals(defType, paramType))
+        {
+            return true;
+        }
+
+        var defClr = defType.ClrType;
+        var paramClr = paramType.ClrType;
+        if (defClr != null && paramClr != null)
+        {
+            return string.Equals(defClr.FullName, paramClr.FullName, System.StringComparison.Ordinal);
+        }
+
+        return string.Equals(defType.Name, paramType.Name, System.StringComparison.Ordinal);
+    }
+
+    // Issue #1182: recognises value-type parameter symbols whose all-zero default is a
+    // valid optional default — including user `data struct` / enum / tuple symbols that
+    // carry no CLR backing type before emit.
+    private static bool IsValueTypeForDefault(TypeSymbol type)
+    {
+        if (type is StructSymbol s && !s.IsClass)
+        {
+            return true;
+        }
+
+        if (type is EnumSymbol || type is TupleTypeSymbol)
+        {
+            return true;
+        }
+
+        return type?.ClrType is { IsValueType: true };
+    }
+
+    // Issue #1182: returns the typed CLR zero for a primitive value-type symbol so a
+    // `default(T)` optional default emits the same CLR Constant row as `= 0`.
+    private static bool TryGetPrimitiveZero(TypeSymbol type, out object zero)
+    {
+        zero = null;
+
+        if (type == TypeSymbol.Bool)
+        {
+            zero = false;
+        }
+        else if (type == TypeSymbol.Int8)
+        {
+            zero = (sbyte)0;
+        }
+        else if (type == TypeSymbol.UInt8)
+        {
+            zero = (byte)0;
+        }
+        else if (type == TypeSymbol.Int16)
+        {
+            zero = (short)0;
+        }
+        else if (type == TypeSymbol.UInt16)
+        {
+            zero = (ushort)0;
+        }
+        else if (type == TypeSymbol.Int32)
+        {
+            zero = 0;
+        }
+        else if (type == TypeSymbol.UInt32)
+        {
+            zero = 0u;
+        }
+        else if (type == TypeSymbol.Int64)
+        {
+            zero = 0L;
+        }
+        else if (type == TypeSymbol.UInt64)
+        {
+            zero = 0UL;
+        }
+        else if (type == TypeSymbol.Float32)
+        {
+            zero = 0f;
+        }
+        else if (type == TypeSymbol.Float64)
+        {
+            zero = 0d;
+        }
+        else if (type == TypeSymbol.Char)
+        {
+            zero = '\0';
+        }
+
+        return zero != null;
     }
 }
