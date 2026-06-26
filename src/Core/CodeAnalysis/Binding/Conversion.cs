@@ -126,14 +126,23 @@ public sealed class Conversion
         }
 
         // Issue #1196: a generic type parameter `T` is implicitly convertible
-        // to any interface (or base class) in its (transitive) constraint set,
-        // and to `object`. Mirrors C# §10.2.12 (implicit reference conversions
-        // involving type parameters): an identity / implicit reference
-        // conversion exists from `T` to its effective interface set and to any
-        // base-class constraint. The IL is a no-op reference conversion (the
-        // type argument is statically known to satisfy the bound), so the
-        // emitter treats it as a no-op upcast.
+        // to any interface (or base class) in its (transitive) constraint set.
+        // Mirrors C# §10.2.12 (implicit reference conversions involving type
+        // parameters): an identity / implicit reference conversion exists from
+        // `T` to its effective interface set and to any base-class constraint.
+        // The emitter materialises this with `box T` (a no-op for reference
+        // `T`), so a value-type or reference-type argument both satisfy the
+        // interface-typed slot.
+        //
+        // NOTE: this deliberately does NOT cover `T -> object`. Open generic
+        // parameter slots (e.g. the `!0` element type of `List[T].Add(!0)`)
+        // are erased to the `object` singleton by the binder, so a `T -> object`
+        // rule here is indistinguishable from the identity argument conversion
+        // `T -> !0` and would make the emitter inject a spurious `box T`,
+        // producing invalid IL (the #1196 regression). `T` is passed straight
+        // through to an erased `!0` slot with no conversion.
         if (from is TypeParameterSymbol fromTypeParam && to != null
+            && to is not TypeParameterSymbol
             && TypeParameterConvertsTo(fromTypeParam, to))
         {
             return Conversion.Implicit;
@@ -618,16 +627,29 @@ public sealed class Conversion
     /// <paramref name="typeParam"/> is implicitly convertible (identity /
     /// implicit reference conversion) to <paramref name="target"/> on the
     /// strength of its declared constraints alone. Returns <see langword="true"/>
-    /// when <paramref name="target"/> is <c>object</c>, or is (transitively)
-    /// contained in the type parameter's effective interface set, or is a
-    /// (transitive) base class of its class constraint. Mirrors C# §10.2.12.
+    /// when <paramref name="target"/> is (transitively) contained in the type
+    /// parameter's effective interface set, or is a (transitive) base class of
+    /// its class constraint. Mirrors C# §10.2.12.
     /// </summary>
+    /// <remarks>
+    /// Deliberately excludes <c>object</c>: the binder erases open generic
+    /// parameter slots (such as the <c>!0</c> element type of
+    /// <c>List[T].Add(!0)</c>) to the <c>object</c> singleton, so a
+    /// <c>T -&gt; object</c> rule here cannot be distinguished from the identity
+    /// argument conversion <c>T -&gt; !0</c> and would cause the emitter to box
+    /// the argument, yielding invalid IL.
+    /// </remarks>
     private static bool TypeParameterConvertsTo(TypeParameterSymbol typeParam, TypeSymbol target)
     {
-        // Every type parameter ultimately derives from `object`.
-        if (target == TypeSymbol.Object || target?.ClrType.IsSameAs(typeof(object)) == true)
+        // `object` (and any target whose CLR type erases to `object`) is
+        // excluded: an erased open generic parameter slot is represented as the
+        // `object` singleton, so converting `T -> object` here is ambiguous with
+        // the identity argument conversion `T -> !0` and would cause a spurious
+        // box. `T -> object` needs no special-casing — it is a plain reference
+        // conversion handled by the value-type/box paths in the emitter.
+        if (target == TypeSymbol.Object || target?.ClrType?.IsSameAs(typeof(object)) == true)
         {
-            return true;
+            return false;
         }
 
         // G#-declared interface bound: include the bound and all of its
