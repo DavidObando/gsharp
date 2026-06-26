@@ -3108,6 +3108,16 @@ public sealed class CSharpToGSharpTranslator
                 return this.TranslateNullCoalescing(binary, left, right);
             }
 
+            // C# shifts (`<<` / `>>`) take the result type from the left operand and
+            // allow any integral count; G# requires the shift count (RHS) to be
+            // `int32` (a `uint32`/`uint8`/... count yields GS0129). Coerce the count
+            // to int32 when it isn't already.
+            if (op == "<<" || op == ">>")
+            {
+                return new BinaryExpression(
+                    left, op, this.CoerceShiftCountToInt32(binary.Right, right));
+            }
+
             if (!IsNumericPromotionOperator(op))
             {
                 return new BinaryExpression(left, op, right);
@@ -3181,6 +3191,15 @@ public sealed class CSharpToGSharpTranslator
                 return rhs;
             }
 
+            // Compound shift (`<<=` / `>>=`): the RHS is a shift count, which G#
+            // requires to be `int32` — NOT the LHS numeric type. Coerce the count to
+            // int32 (e.g. `value <<= n` where `n` is `uint32` → `value <<= int32(n)`).
+            if (assignment.IsKind(SyntaxKind.LeftShiftAssignmentExpression) ||
+                assignment.IsKind(SyntaxKind.RightShiftAssignmentExpression))
+            {
+                return this.CoerceShiftCountToInt32(assignment.Right, rhs);
+            }
+
             ITypeSymbol leftType = this.context.GetTypeInfo(assignment.Left).Type;
             ITypeSymbol rightType = this.context.GetTypeInfo(assignment.Right).Type;
 
@@ -3192,6 +3211,28 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return rhs;
+        }
+
+        // G# requires a shift count (the RHS of `<<` / `>>` / `<<=` / `>>=`) to be
+        // `int32`; C# infers the shift result from the left operand and accepts any
+        // integral count. Coerce a non-`int32` numeric count to int32 via the
+        // conversion-call form so the shift binds (avoids GS0129). A nullable or
+        // non-numeric count is left unchanged.
+        private GExpression CoerceShiftCountToInt32(
+            ExpressionSyntax countSyntax, GExpression count)
+        {
+            ITypeSymbol countType = this.context.GetTypeInfo(countSyntax).Type;
+            if (countType != null &&
+                IsNonNullableValueType(countType) &&
+                TryGetNumericKind(countType, out SpecialType underlying) &&
+                underlying != SpecialType.System_Int32)
+            {
+                ITypeSymbol int32Type =
+                    this.context.Compilation.GetSpecialType(SpecialType.System_Int32);
+                return this.CoerceOperandTo(count, int32Type);
+            }
+
+            return count;
         }
 
         // C# `a ?? b` where `a` is a nullable numeric: G# requires `b` to match
@@ -3213,6 +3254,43 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return new BinaryExpression(left, "??", right);
+        }
+
+        // C# ternary `cond ? a : b` lowers to the G# value-position `if` expression.
+        // When both arms are numeric primitives whose types differ from the
+        // conditional's overall (non-nullable) numeric result type, G# has no
+        // implicit numeric promotion and reports GS0263 ("branches have no common
+        // result type"). Coerce each diverging arm to the result type via the
+        // conversion-call form (e.g. `cond ? 1u : 0` → `if cond { 1u } else { uint32(0) }`).
+        private GExpression TranslateConditionalExpression(
+            ConditionalExpressionSyntax conditional)
+        {
+            GExpression condition = this.TranslateExpression(conditional.Condition);
+            GExpression whenTrue = this.TranslateExpression(conditional.WhenTrue);
+            GExpression whenFalse = this.TranslateExpression(conditional.WhenFalse);
+
+            ITypeSymbol resultType = this.context.GetTypeInfo(conditional).Type;
+            ITypeSymbol trueType = this.context.GetTypeInfo(conditional.WhenTrue).Type;
+            ITypeSymbol falseType = this.context.GetTypeInfo(conditional.WhenFalse).Type;
+
+            if (resultType != null &&
+                IsNonNullableValueType(resultType) &&
+                TryGetNumericKind(resultType, out SpecialType resultUnderlying) &&
+                TryGetNumericKind(trueType, out SpecialType trueUnderlying) &&
+                TryGetNumericKind(falseType, out SpecialType falseUnderlying))
+            {
+                if (trueUnderlying != resultUnderlying)
+                {
+                    whenTrue = this.CoerceOperandTo(whenTrue, resultType);
+                }
+
+                if (falseUnderlying != resultUnderlying)
+                {
+                    whenFalse = this.CoerceOperandTo(whenFalse, resultType);
+                }
+            }
+
+            return new IfExpression(condition, whenTrue, whenFalse);
         }
 
         // Unwraps `System.Nullable<T>` to its underlying `T`; other types pass
@@ -4627,10 +4705,7 @@ public sealed class CSharpToGSharpTranslator
                     // A C# ternary `cond ? a : b` maps to the canonical G#
                     // value-position `if` expression `if cond { a } else { b }`
                     // (ADR-0064, sample IfExpression.gs; ADR-0115 §B).
-                    return new IfExpression(
-                        this.TranslateExpression(conditional.Condition),
-                        this.TranslateExpression(conditional.WhenTrue),
-                        this.TranslateExpression(conditional.WhenFalse));
+                    return this.TranslateConditionalExpression(conditional);
 
                 case QueryExpressionSyntax query:
                     return this.TranslateQuery(query);
