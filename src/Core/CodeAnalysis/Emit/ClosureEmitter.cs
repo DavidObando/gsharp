@@ -462,7 +462,7 @@ internal sealed class ClosureEmitter
                     this.TryAdd(sl.StructType);
                     foreach (var init in sl.Initializers)
                     {
-                        this.TryAdd(init.Field.Type);
+                        this.TryAdd(init.MemberType);
                     }
 
                     break;

@@ -515,13 +515,22 @@ internal sealed partial class ExpressionBinder
                 // consistent with Phase 4.1 call-site inference).
                 foreach (var initSyntax in syntax.Initializers)
                 {
-                    if (!TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, initSyntax.FieldIdentifier.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
+                    TypeSymbol memberType;
+                    if (TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, initSyntax.FieldIdentifier.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
+                    {
+                        memberType = field.Type;
+                    }
+                    else if (TypeMemberModel.TryGetProperty(structSymbol, initSyntax.FieldIdentifier.Text, out var property))
+                    {
+                        memberType = property.Type;
+                    }
+                    else
                     {
                         continue;
                     }
 
                     var valueExpr = BindExpression(initSyntax.Value);
-                    Binder.InferTypeArguments(field.Type, valueExpr.Type, substitution);
+                    Binder.InferTypeArguments(memberType, valueExpr.Type, substitution);
                 }
 
                 foreach (var tp in tps)
@@ -567,10 +576,29 @@ internal sealed partial class ExpressionBinder
         foreach (var initSyntax in syntax.Initializers)
         {
             var fieldName = initSyntax.FieldIdentifier.Text;
-            if (!TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
+
+            // Issue #1211: a composite literal targets `var` fields AND settable
+            // `prop` auto-properties (a property with a `set` or `init`
+            // accessor). Resolve fields first, then fall back to properties so
+            // both `class C { var X int32 }` and `class C { prop X int32 { get;
+            // init; } }` accept `C{X: ...}`.
+            var hasField = TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out _);
+            PropertySymbol property = null;
+            if (!hasField)
             {
-                Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName);
-                continue;
+                if (!TypeMemberModel.TryGetProperty(structSymbol, fieldName, out property))
+                {
+                    Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName);
+                    continue;
+                }
+
+                // A get-only property (no `set` and no `init` accessor) cannot
+                // be assigned in a composite literal — keep it diagnosed.
+                if (!property.HasSetter)
+                {
+                    Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, fieldName);
+                    continue;
+                }
             }
 
             if (!seenFieldNames.Add(fieldName))
@@ -579,9 +607,12 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
+            var memberType = hasField ? field.Type : property.Type;
             var valueExpr = BindExpression(initSyntax.Value);
-            valueExpr = conversions.BindConversion(initSyntax.Value.Location, valueExpr, field.Type);
-            inits.Add(new BoundFieldInitializer(field, valueExpr));
+            valueExpr = conversions.BindConversion(initSyntax.Value.Location, valueExpr, memberType);
+            inits.Add(hasField
+                ? new BoundFieldInitializer(field, valueExpr)
+                : new BoundFieldInitializer(property, valueExpr));
         }
 
         // Issue #948: a value-type (struct / data struct) composite literal

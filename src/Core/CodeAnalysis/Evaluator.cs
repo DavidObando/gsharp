@@ -1171,6 +1171,31 @@ public sealed class Evaluator
 
         foreach (var init in node.Initializers)
         {
+            // Issue #1211: a composite-literal entry may target a settable
+            // property. For an auto-property store into its backing field; for
+            // a computed property run the setter body with `this` = sv.
+            if (init.Property != null)
+            {
+                if (init.Property.IsAutoProperty && init.Property.BackingField != null)
+                {
+                    sv.Fields[init.Property.BackingField.Name] = EvaluateExpression(init.Value);
+                }
+                else if (init.Property.SetterSymbol != null && program.Functions.TryGetValue(init.Property.SetterSymbol, out var setterBody))
+                {
+                    var value = EvaluateExpression(init.Value);
+                    var frame = new Dictionary<Symbols.VariableSymbol, object>
+                    {
+                        [init.Property.SetterSymbol.ThisParameter] = sv,
+                        [init.Property.SetterSymbol.Parameters[0]] = value,
+                    };
+                    locals.Push(frame);
+                    EvaluateFunctionBody(setterBody);
+                    locals.Pop();
+                }
+
+                continue;
+            }
+
             sv.Fields[init.Field.Name] = EvaluateExpression(init.Value);
         }
 
