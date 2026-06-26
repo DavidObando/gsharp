@@ -10,4 +10,8 @@
     <ProjectReference Include="..\Cs2Gs.CodeModel\Cs2Gs.CodeModel.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="GSharp.Cs2Gs.Tests" />
+  </ItemGroup>
+
 </Project>

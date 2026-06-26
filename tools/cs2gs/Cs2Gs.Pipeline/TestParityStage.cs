@@ -211,6 +211,7 @@ public sealed class TestParityStage : IMigrationStage
             .ConfigureAwait(false);
 
         var files = new List<GsharpSourceFile>();
+        var usedGsFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (LoadedDocument document in project.Documents)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -241,7 +242,7 @@ public sealed class TestParityStage : IMigrationStage
                     (roundTrip.Errors.FirstOrDefault() ?? "unknown parse error"));
             }
 
-            string gsFileName = Path.GetFileNameWithoutExtension(document.FilePath) + ".gs";
+            string gsFileName = EmittedFileNaming.UniqueGsFileName(document.FilePath, usedGsFileNames);
             files.Add(new GsharpSourceFile(gsFileName, printed));
         }
 

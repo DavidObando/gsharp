@@ -1281,6 +1281,16 @@ public sealed class CSharpToGSharpTranslator
                         break;
                     }
 
+                    // Issue #1190: a static auto-property with an inline initializer
+                    // maps to a static backing field in the `shared { }` block, since
+                    // a static G# `prop` cannot carry an `init` accessor (GS0374) and
+                    // there is no instance constructor to receive the initializer.
+                    if (this.TryTranslateStaticAutoPropertyField(property, out FieldDeclaration staticField))
+                    {
+                        yield return (staticField, true);
+                        break;
+                    }
+
                     yield return this.TranslateProperty(property);
                     break;
 
@@ -1745,6 +1755,75 @@ public sealed class CSharpToGSharpTranslator
             // to the instance-member list in VisitAggregate, which the parser
             // accepts directly in the type body).
             return (method, false);
+        }
+
+        /// <summary>
+        /// Issue #1190: a C# <c>static</c> auto-property with an inline initializer
+        /// (<c>public static Version OSVersion { get; } = GetOsVersion();</c>) has no
+        /// instance constructor to carry the initializer into (the OD-T1 path only
+        /// services instance properties), and a static G# <c>prop</c> cannot declare
+        /// an <c>init</c> accessor (GS0374). Such a property therefore maps to a
+        /// static read-only/mutable backing field inside the <c>shared { }</c> block,
+        /// preserving the initializer expression: a get-only property becomes a
+        /// <c>shared let NAME T = expr</c> field, and a mutable
+        /// (<c>{ get; private set; }</c> / <c>{ get; set; }</c>) property becomes a
+        /// <c>shared var NAME T = expr</c> field. It is accessed identically
+        /// (<c>Type.NAME</c>). A static auto-property without an initializer, or one
+        /// with a getter body, keeps its existing handling.
+        /// </summary>
+        private bool TryTranslateStaticAutoPropertyField(
+            PropertyDeclarationSyntax node,
+            out FieldDeclaration field)
+        {
+            field = null;
+
+            if (!node.Modifiers.Any(SyntaxKind.StaticKeyword) || node.Initializer == null)
+            {
+                return false;
+            }
+
+            // Auto-property: body-less, all accessors body-less, no expression body.
+            if (node.ExpressionBody != null || node.AccessorList == null)
+            {
+                return false;
+            }
+
+            IReadOnlyList<AccessorDeclarationSyntax> accessors = node.AccessorList.Accessors;
+            if (accessors.Any(a => a.Body != null || a.ExpressionBody != null))
+            {
+                return false;
+            }
+
+            bool hasGet = accessors.Any(a => a.IsKind(SyntaxKind.GetAccessorDeclaration));
+            if (!hasGet)
+            {
+                return false;
+            }
+
+            bool hasSet = accessors.Any(a => a.IsKind(SyntaxKind.SetAccessorDeclaration));
+
+            var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
+            GTypeReference type = symbol != null
+                ? this.typeMapper.Map(symbol.Type, this.context, node.GetLocation())
+                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+
+            GExpression initializer = this.CoerceConstantToUnsigned(
+                node.Initializer.Value,
+                this.TranslateExpression(node.Initializer.Value));
+
+            // A mutable static auto-property (`{ get; set; }` / `{ get; private set; }`)
+            // becomes a `var` field; an immutable get-only one becomes a `let` field.
+            BindingKind binding = hasSet ? BindingKind.Var : BindingKind.Let;
+
+            field = new FieldDeclaration(
+                binding,
+                SanitizeIdentifier(node.Identifier.Text),
+                type,
+                initializer: initializer,
+                visibility: MapVisibility(symbol, this.context, node),
+                attributes: this.MapAttributes(node.AttributeLists));
+
+            return true;
         }
 
         private (GMember Member, bool IsStatic) TranslateProperty(PropertyDeclarationSyntax node)
