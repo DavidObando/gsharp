@@ -143,8 +143,8 @@ internal sealed class BinderContext
     /// matching and flow analysis. Each entry maps a variable to its narrowed
     /// type within the corresponding scope.
     /// </summary>
-    public List<Dictionary<VariableSymbol, TypeSymbol>> NarrowedVariables { get; }
-        = new List<Dictionary<VariableSymbol, TypeSymbol>>();
+    public List<Dictionary<AccessPath, TypeSymbol>> NarrowedVariables { get; }
+        = new List<Dictionary<AccessPath, TypeSymbol>>();
 
     /// <summary>
     /// Gets the side-table that parks the else-branch narrowing frame of an
@@ -155,8 +155,8 @@ internal sealed class BinderContext
     /// then-branch ends in an unconditional exit (return, throw, break,
     /// continue), so subsequent reads in the block see the narrowing.
     /// </summary>
-    public Dictionary<BoundIfStatement, Dictionary<VariableSymbol, TypeSymbol>> PendingEarlyExitFrames { get; }
-        = new Dictionary<BoundIfStatement, Dictionary<VariableSymbol, TypeSymbol>>();
+    public Dictionary<BoundIfStatement, Dictionary<AccessPath, TypeSymbol>> PendingEarlyExitFrames { get; }
+        = new Dictionary<BoundIfStatement, Dictionary<AccessPath, TypeSymbol>>();
 
     /// <summary>
     /// Gets the side-table that parks the post-switch narrowing frame for a
@@ -168,8 +168,8 @@ internal sealed class BinderContext
     /// common narrowing is lifted into the enclosing block's persistent
     /// narrowing scope so subsequent reads in the block see the narrowing.
     /// </summary>
-    public Dictionary<BoundPatternSwitchStatement, Dictionary<VariableSymbol, TypeSymbol>> PendingSwitchExitFrames { get; }
-        = new Dictionary<BoundPatternSwitchStatement, Dictionary<VariableSymbol, TypeSymbol>>();
+    public Dictionary<BoundPatternSwitchStatement, Dictionary<AccessPath, TypeSymbol>> PendingSwitchExitFrames { get; }
+        = new Dictionary<BoundPatternSwitchStatement, Dictionary<AccessPath, TypeSymbol>>();
 
     /// <summary>
     /// Gets or sets the type-parameter dictionary in scope while binding a

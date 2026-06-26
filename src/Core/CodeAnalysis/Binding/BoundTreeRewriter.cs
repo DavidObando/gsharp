@@ -1945,7 +1945,7 @@ public abstract class BoundTreeRewriter
         }
 
         var receiver = RewriteExpression(node.Receiver);
-        return receiver == node.Receiver ? node : new BoundPropertyAccessExpression(null, receiver, node.StructType, node.Property);
+        return receiver == node.Receiver ? node : new BoundPropertyAccessExpression(null, receiver, node.StructType, node.Property, node.NarrowedType);
     }
 
     /// <summary>Rewrites a property assignment (ADR-0051).</summary>

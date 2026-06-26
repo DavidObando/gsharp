@@ -140,7 +140,7 @@ internal sealed partial class ExpressionBinder
         return scope.TryLookupSymbol("this") as ParameterSymbol;
     }
 
-    private BoundExpression BindExpressionWithNarrowing(ExpressionSyntax syntax, Dictionary<VariableSymbol, TypeSymbol> frame)
+    private BoundExpression BindExpressionWithNarrowing(ExpressionSyntax syntax, Dictionary<AccessPath, TypeSymbol> frame)
     {
         if (frame == null)
         {
@@ -162,7 +162,7 @@ internal sealed partial class ExpressionBinder
     // guard sees the same pattern narrowing / smart-cast frame as the arm body
     // (so `case x is T when …` observes `x` as `T`). A non-bool guard is
     // reported through the standard conversion diagnostic (GS0017).
-    private BoundExpression BindGuardExpression(ExpressionSyntax syntax, Dictionary<VariableSymbol, TypeSymbol> frame)
+    private BoundExpression BindGuardExpression(ExpressionSyntax syntax, Dictionary<AccessPath, TypeSymbol> frame)
     {
         if (frame == null)
         {
@@ -519,13 +519,89 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// ADR-0069 addendum / issue #1180: smart-cast narrowing lookup keyed by an
+    /// <see cref="AccessPath"/>. Walks the active frame stack innermost-first so
+    /// the topmost narrowing wins, mirroring the variable overload.
+    /// </summary>
+    /// <param name="path">The stable access path to look up.</param>
+    /// <returns>The narrowed type, or <c>null</c> when the path is not narrowed.</returns>
+    private TypeSymbol TryGetNarrowedType(AccessPath path)
+    {
+        if (path == null)
+        {
+            return null;
+        }
+
+        for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
+        {
+            if (binderCtx.NarrowedVariables[i].TryGetValue(path, out var narrowed))
+            {
+                return narrowed;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// ADR-0069 addendum / issue #1180: if <paramref name="node"/> reads a
+    /// stable member-access path that an active smart-cast frame has narrowed,
+    /// returns a copy of the read carrying the narrowed type so downstream
+    /// member lookup, overload resolution, conversion, and emit see the tested
+    /// type. Returns <paramref name="node"/> unchanged otherwise. The narrowing
+    /// never overrides an already-narrowed read (e.g. a <c>[MemberNotNull]</c>
+    /// view).
+    /// </summary>
+    /// <param name="node">A freshly bound field- or property-access read.</param>
+    /// <returns>The possibly-narrowed read.</returns>
+    private BoundExpression ApplyMemberNarrowing(BoundExpression node)
+    {
+        if (binderCtx.NarrowedVariables.Count == 0)
+        {
+            return node;
+        }
+
+        switch (node)
+        {
+            case BoundFieldAccessExpression fa when fa.NarrowedType == null:
+                {
+                    if (!SmartCastStability.TryGetStableMemberPath(fa, out var path, out _))
+                    {
+                        return node;
+                    }
+
+                    var narrowed = TryGetNarrowedType(path);
+                    return narrowed == null
+                        ? node
+                        : new BoundFieldAccessExpression(null, fa.Receiver, fa.StructType, fa.Field, narrowed);
+                }
+
+            case BoundPropertyAccessExpression pa when pa.NarrowedType == null:
+                {
+                    if (!SmartCastStability.TryGetStableMemberPath(pa, out var path, out _))
+                    {
+                        return node;
+                    }
+
+                    var narrowed = TryGetNarrowedType(path);
+                    return narrowed == null
+                        ? node
+                        : new BoundPropertyAccessExpression(null, pa.Receiver, pa.StructType, pa.Property, narrowed);
+                }
+
+            default:
+                return node;
+        }
+    }
+
+    /// <summary>
     /// ADR-0069 / issue #700: when binding an <c>&amp;&amp;</c> expression,
     /// derive the narrowing frame the right operand should bind under from
     /// the (already-bound) left operand. Recognises <c>x is T</c>,
     /// <c>!(x is T)</c>, and nested <c>&amp;&amp;</c> chains; returns
     /// <c>null</c> when no narrowing can be safely inferred.
     /// </summary>
-    private Dictionary<VariableSymbol, TypeSymbol> TryClassifyTypeTestNarrowingForAnd(BoundExpression boundLeft)
+    private Dictionary<AccessPath, TypeSymbol> TryClassifyTypeTestNarrowingForAnd(BoundExpression boundLeft)
     {
         var (thenFrame, _) = ClassifyTypeTestNarrowing(boundLeft);
         return (thenFrame != null && thenFrame.Count > 0) ? thenFrame : null;
@@ -539,24 +615,31 @@ internal sealed partial class ExpressionBinder
     /// <c>else</c> frame (the negation of its narrowing) applies. This
     /// makes `!(x is T) || f(x)` bind `f(x)` with `x` narrowed to `T`.
     /// </summary>
-    private Dictionary<VariableSymbol, TypeSymbol> TryClassifyTypeTestNarrowingForOr(BoundExpression boundLeft)
+    private Dictionary<AccessPath, TypeSymbol> TryClassifyTypeTestNarrowingForOr(BoundExpression boundLeft)
     {
         var (_, elseFrame) = ClassifyTypeTestNarrowing(boundLeft);
         return (elseFrame != null && elseFrame.Count > 0) ? elseFrame : null;
     }
 
-    private static (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) ClassifyTypeTestNarrowing(BoundExpression condition)
+    private static (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) ClassifyTypeTestNarrowing(BoundExpression condition)
     {
         switch (condition)
         {
             case BoundIsExpression isExpr:
                 {
-                    if (isExpr.Expression is not BoundVariableExpression bve)
+                    AccessPath targetPath;
+                    TypeSymbol declaredType;
+                    if (isExpr.Expression is BoundVariableExpression bve
+                        && bve.Variable is LocalVariableSymbol or ParameterSymbol)
                     {
-                        return (null, null);
+                        targetPath = bve.Variable;
+                        declaredType = bve.Variable.Type;
                     }
-
-                    if (bve.Variable is not (LocalVariableSymbol or ParameterSymbol))
+                    else if (SmartCastStability.TryGetStableMemberPath(isExpr.Expression, out targetPath, out declaredType))
+                    {
+                        // ADR-0069 addendum / issue #1180: stable member path.
+                    }
+                    else
                     {
                         return (null, null);
                     }
@@ -572,12 +655,12 @@ internal sealed partial class ExpressionBinder
                         targetType = nts.UnderlyingType;
                     }
 
-                    if (targetType == null || targetType == bve.Variable.Type)
+                    if (targetType == null || targetType == declaredType)
                     {
                         return (null, null);
                     }
 
-                    return (new Dictionary<VariableSymbol, TypeSymbol> { [bve.Variable] = targetType }, null);
+                    return (new Dictionary<AccessPath, TypeSymbol> { [targetPath] = targetType }, null);
                 }
 
             case BoundUnaryExpression unary when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation:
@@ -595,7 +678,7 @@ internal sealed partial class ExpressionBinder
                         return (null, null);
                     }
 
-                    var combined = leftThen == null ? new Dictionary<VariableSymbol, TypeSymbol>() : new Dictionary<VariableSymbol, TypeSymbol>(leftThen);
+                    var combined = leftThen == null ? new Dictionary<AccessPath, TypeSymbol>() : new Dictionary<AccessPath, TypeSymbol>(leftThen);
                     if (rightThen != null)
                     {
                         foreach (var kv in rightThen)
@@ -618,23 +701,23 @@ internal sealed partial class ExpressionBinder
                     var (leftThen, leftElse) = ClassifyTypeTestNarrowing(binary.Left);
                     var (rightThen, rightElse) = ClassifyTypeTestNarrowing(binary.Right);
 
-                    Dictionary<VariableSymbol, TypeSymbol> combinedThen = null;
+                    Dictionary<AccessPath, TypeSymbol> combinedThen = null;
                     if (leftThen != null && leftThen.Count > 0 && rightThen != null && rightThen.Count > 0)
                     {
                         foreach (var kv in leftThen)
                         {
                             if (rightThen.TryGetValue(kv.Key, out var other) && other == kv.Value)
                             {
-                                combinedThen ??= new Dictionary<VariableSymbol, TypeSymbol>();
+                                combinedThen ??= new Dictionary<AccessPath, TypeSymbol>();
                                 combinedThen[kv.Key] = kv.Value;
                             }
                         }
                     }
 
-                    Dictionary<VariableSymbol, TypeSymbol> combinedElse = null;
+                    Dictionary<AccessPath, TypeSymbol> combinedElse = null;
                     if ((leftElse != null && leftElse.Count > 0) || (rightElse != null && rightElse.Count > 0))
                     {
-                        combinedElse = leftElse == null ? new Dictionary<VariableSymbol, TypeSymbol>() : new Dictionary<VariableSymbol, TypeSymbol>(leftElse);
+                        combinedElse = leftElse == null ? new Dictionary<AccessPath, TypeSymbol>() : new Dictionary<AccessPath, TypeSymbol>(leftElse);
                         if (rightElse != null)
                         {
                             foreach (var kv in rightElse)

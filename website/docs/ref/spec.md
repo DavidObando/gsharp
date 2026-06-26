@@ -969,9 +969,9 @@ When an arm pattern is a type-pattern `<ident> is T` (or any pattern that proves
 
 ### Smart casts (flow narrowing)
 
-Ref: ADR-0069 and its issue #712 addendum.
+Ref: ADR-0069 and its issue #712 and #1180 addenda.
 
-A successful `is` (or `!is`) test against a *stable narrowable receiver* — a local, a parameter, or a read-only top-level `let` binding — flow-narrows that receiver to the tested type for the rest of the enclosing flow region. The narrowing applies to member lookup, overload resolution, conversion, and emit. The same machinery composes through `!`, `&&`, `||`, `if`/`else`, `switch` arms, `if let` / `guard let`, and the early-exit lift.
+A successful `is` (or `!is`) test against a *stable narrowable receiver* flow-narrows that receiver to the tested type for the rest of the enclosing flow region. A stable receiver is either a *local root* — a local, a parameter, or a read-only top-level `let` binding — **or** a *stable member-access path* (issue #1180): a chain of immutable members read through a stable receiver chain, such as `b.Pet` or `o.Box.Pet`. The narrowing applies to member lookup, overload resolution, conversion, and emit. The same machinery composes through `!`, `&&`, `||`, `if`/`else`, `switch` arms, `if let` / `guard let`, and the early-exit lift.
 
 ```gsharp
 if a is Dog {
@@ -993,6 +993,10 @@ switch a {
     case c is Cat { Console.WriteLine(a.Purr()) }    // a narrowed to Cat in this arm
     default       { return }
 }
+
+if b.Pet is Dog {
+    b.Pet.Bark()                  // stable member path b.Pet narrowed to Dog (issue #1180)
+}
 ```
 
 Rules summary:
@@ -1001,7 +1005,8 @@ Rules summary:
 - `&&` threads the left operand's then-frame into the right operand and into the combined then-branch.
 - `||` is the De Morgan dual of `&&`: the combined then-frame is the *intersection* of both operands' then-frames; the combined else-frame is the *merge* of both operands' else-frames; the right operand is bound with the left's else-frame.
 - A `switch` arm pattern of the shape `<ident> is T` narrows the discriminator inside the arm body. When the switch is exhaustive (has a `default` or discard arm) AND every non-exiting arm contributes the same `{discriminator → T}` narrowing, that narrowing is lifted into the rest of the enclosing block after the switch.
-- Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region; the same applies if the receiver is captured by a closure (the closure body binds the receiver at its declared type). Fields, properties, and indexed expressions are never narrowed because their reads are not idempotent.
+- Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region; the same applies if the receiver is captured by a closure (the closure body binds the receiver at its declared type).
+- A *stable member-access path* (issue #1180) narrows only when **every** link is provably immutable, matching Kotlin's smart-cast rules for members: the root must be a stable local/parameter/read-only global; each field link must be a `let`/read-only instance field; each property link must be an immutable auto-property (no custom getter, no setter or `init`-only, not `open`/overridable, not `static`). `var` fields, settable or custom-getter or overridable properties, static members, and members of imported/other-compilation types (CLR members) are never narrowed. A member-path narrowing is conservatively invalidated by any intervening call, by a member/indexed/indirect assignment, or by reassigning its root. Indexed expressions remain non-narrowable because their reads are not idempotent.
 
 ### For loops and while-style loops
 

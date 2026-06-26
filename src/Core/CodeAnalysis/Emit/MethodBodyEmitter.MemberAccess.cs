@@ -431,6 +431,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.OpCode(ILOpCode.Ldsfld);
             this.il.Token(fieldHandle);
+            this.EmitNarrowingCastIfNeeded(fa.Field.Type, fa.NarrowedType);
             return;
         }
 
@@ -460,6 +461,7 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.OpCode(ILOpCode.Ldfld);
         this.il.Token(fieldHandle);
+        this.EmitNarrowingCastIfNeeded(fa.Field.Type, fa.NarrowedType);
     }
 
     private void EmitFieldAssignment(BoundFieldAssignmentExpression fas)
@@ -665,6 +667,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.OpCode(ILOpCode.Call);
             this.il.Token(getterHandle);
+            this.EmitNarrowingCastIfNeeded(access.Property.Type, access.NarrowedType);
             return;
         }
 
@@ -683,6 +686,7 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.OpCode(receiverIsClass || receiverIsInterface ? ILOpCode.Callvirt : ILOpCode.Call);
         this.il.Token(getterHandle);
+        this.EmitNarrowingCastIfNeeded(access.Property.Type, access.NarrowedType);
     }
 
     // ADR-0051 Phase 6: emit IL for BoundPropertyAssignmentExpression (computed properties).
