@@ -721,13 +721,12 @@ public sealed class Binder
             binder.declarations.BindStructDeclarationBody(structSyntax, owningPackage, structSymbol);
         }
 
-        // Issue #1085: now that every type body is bound and every type's explicit
-        // constructors are populated, bind the deferred base-constructor-initializer
-        // (`: base(...)`) argument lists. Argument expressions may construct other
-        // user types whose constructors only exist after their (possibly later)
-        // source file was bound; deferring this resolution makes base-initializer
-        // argument binding independent of source-file order.
-        binder.declarations.BindPendingBaseInitializers();
+        // Issue #1085 / #1194: base-constructor-initializer and field-initializer
+        // argument binding is deferred until AFTER all top-level functions are
+        // declared (below), so those expressions can resolve unqualified
+        // free-function and sibling static-member calls in addition to other
+        // user types' constructors. The actual binding runs after the function
+        // declaration loop.
 
         // Issue #973: now that every class shell has had its base clause bound
         // and its base class installed, screen the resolved base relation for
@@ -753,6 +752,15 @@ public sealed class Binder
             binder.declarations.ValidateTopLevelProtected(function.AccessibilityModifier);
             binder.declarations.BindFunctionDeclaration(function, owningPackage);
         }
+
+        // Issue #1085 / #1194: now that every type body is bound (explicit
+        // constructors populated) AND every top-level function is declared,
+        // bind the deferred base-constructor-initializer (`: base(...)`) and
+        // field-initializer expressions. Deferring past function declaration
+        // lets these expressions resolve unqualified free-function and sibling
+        // static-member calls, matching the visibility a constructor body has.
+        binder.declarations.BindPendingBaseInitializers();
+        binder.declarations.BindPendingFieldInitializers();
 
         binder.declarations.ExpandStructInterfaceClosures();
 

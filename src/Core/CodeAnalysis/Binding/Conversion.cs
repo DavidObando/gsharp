@@ -125,6 +125,20 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // Issue #1196: a generic type parameter `T` is implicitly convertible
+        // to any interface (or base class) in its (transitive) constraint set,
+        // and to `object`. Mirrors C# §10.2.12 (implicit reference conversions
+        // involving type parameters): an identity / implicit reference
+        // conversion exists from `T` to its effective interface set and to any
+        // base-class constraint. The IL is a no-op reference conversion (the
+        // type argument is statically known to satisfy the bound), so the
+        // emitter treats it as a no-op upcast.
+        if (from is TypeParameterSymbol fromTypeParam && to != null
+            && TypeParameterConvertsTo(fromTypeParam, to))
+        {
+            return Conversion.Implicit;
+        }
+
         // ADR-0122 / issue #1014: unmanaged pointer conversions.
         // * pointer -> pointer: explicit reinterpret (e.g. `(byte*)p`).
         // * pointer <-> nint/nuint: explicit round-trip (IntPtr.ToPointer()).
@@ -597,6 +611,99 @@ public sealed class Conversion
         }
 
         return Conversion.None;
+    }
+
+    /// <summary>
+    /// Issue #1196: determines whether a generic type parameter
+    /// <paramref name="typeParam"/> is implicitly convertible (identity /
+    /// implicit reference conversion) to <paramref name="target"/> on the
+    /// strength of its declared constraints alone. Returns <see langword="true"/>
+    /// when <paramref name="target"/> is <c>object</c>, or is (transitively)
+    /// contained in the type parameter's effective interface set, or is a
+    /// (transitive) base class of its class constraint. Mirrors C# §10.2.12.
+    /// </summary>
+    private static bool TypeParameterConvertsTo(TypeParameterSymbol typeParam, TypeSymbol target)
+    {
+        // Every type parameter ultimately derives from `object`.
+        if (target == TypeSymbol.Object || target?.ClrType.IsSameAs(typeof(object)) == true)
+        {
+            return true;
+        }
+
+        // G#-declared interface bound: include the bound and all of its
+        // transitive base interfaces (plus any imported CLR base interfaces).
+        if (typeParam.InterfaceConstraint is InterfaceSymbol gInterface)
+        {
+            foreach (var iface in gInterface.SelfAndAllBaseInterfaces())
+            {
+                if (iface == target || ClrInterfaceMatches(iface, target))
+                {
+                    return true;
+                }
+
+                if (!iface.BaseClrInterfaces.IsDefaultOrEmpty)
+                {
+                    foreach (var clrBase in iface.BaseClrInterfaces)
+                    {
+                        if (ClrAssignableTarget(clrBase, target))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Imported CLR interface bound: a `T : ISomeClrInterface` constraint.
+        if (typeParam.ClrInterfaceConstraint is TypeSymbol clrInterface
+            && ClrAssignableTarget(clrInterface, target))
+        {
+            return true;
+        }
+
+        // Base-class constraint: include the class, its transitive base
+        // classes, and every interface it (transitively) implements.
+        if (typeParam.ClassConstraint is TypeSymbol classConstraint)
+        {
+            if (classConstraint == target)
+            {
+                return true;
+            }
+
+            var underlyingConversion = Classify(classConstraint, target);
+            if (underlyingConversion.Exists && underlyingConversion.IsImplicit)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #1196: matches a G#-declared interface symbol against a target that
+    /// may itself be an imported CLR interface (e.g. when the interface bound's
+    /// own <c>ClrType</c> is populated during a later phase).
+    /// </summary>
+    private static bool ClrInterfaceMatches(InterfaceSymbol iface, TypeSymbol target)
+    {
+        return iface?.ClrType != null && target?.ClrType != null
+            && ClrTypeUtilities.IsAssignableByName(target.ClrType, iface.ClrType);
+    }
+
+    /// <summary>
+    /// Issue #1196: determines whether an imported CLR-typed constraint source is
+    /// assignable to the target via the cross-context-safe by-name check.
+    /// </summary>
+    private static bool ClrAssignableTarget(TypeSymbol source, TypeSymbol target)
+    {
+        if (source == target)
+        {
+            return true;
+        }
+
+        return source?.ClrType != null && target?.ClrType != null
+            && ClrTypeUtilities.IsAssignableByName(target.ClrType, source.ClrType);
     }
 
     /// <summary>
