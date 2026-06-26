@@ -1368,6 +1368,19 @@ public sealed class Binder
                     continue;
                 }
 
+                // ADR-0086 / issue #1203: a bodyless `shared`-block method (a
+                // static `@DllImport` P/Invoke extern) has no managed body to
+                // bind. Register an empty synthetic block so the emitter still
+                // mints a MethodDef handle (it routes P/Invokes through the
+                // ImplMap path and writes no IL body) and skip body binding,
+                // which would otherwise dereference the null `Declaration.Body`
+                // and crash with GS9998 (the static-path analogue of issue #987).
+                if (method.Declaration.Body == null)
+                {
+                    functionBodies.Add(method, new BoundBlockStatement(method.Declaration, ImmutableArray<BoundStatement>.Empty));
+                    continue;
+                }
+
                 BindStructMethodBody(cache, dirtyTrees, parentScope, method, structSym, functionBodies, diagnostics);
             }
         }
