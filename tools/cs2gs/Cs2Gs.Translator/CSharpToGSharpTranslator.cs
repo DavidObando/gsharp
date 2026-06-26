@@ -3028,20 +3028,46 @@ public sealed class CSharpToGSharpTranslator
 
                 // A type clause is required when there is no initializer (it names
                 // the zero/default value, spec §Bindings). With an initializer the
-                // type is inferred (ADR-0115 §B.3).
+                // type is normally inferred (ADR-0115 §B.3) — but when the C#
+                // developer wrote an explicit type that differs from the
+                // initializer's natural type (an implicit conversion, e.g.
+                // `long startSample = 0;` where `0` is `int`), G# would re-infer
+                // the narrower natural type and later operations (e.g. `+=` with an
+                // `int64` value) fail with GS0129. In that case preserve the
+                // developer's declared type so the binding keeps the intended type.
                 GTypeReference type = null;
-                if (initializer == null && hasExplicitType)
+                if (hasExplicitType)
                 {
-                    ITypeSymbol typeSymbol = this.context.GetTypeInfo(declaration.Type).Type;
-                    type = typeSymbol != null
-                        ? this.typeMapper.Map(typeSymbol, this.context, declaration.Type.GetLocation())
-                        : null;
+                    bool emitType = initializer == null;
+                    ITypeSymbol declaredType = this.context.GetTypeInfo(declaration.Type).Type;
 
-                    // Issue #1072: a non-nullable reference/array local that is
-                    // null-checked or null-assigned in its scope is really nullable.
-                    if (this.context.GetDeclaredSymbol(declarator) is ILocalSymbol localSymbol)
+                    if (!emitType && initializer != null && declaredType != null)
                     {
-                        type = this.PromoteIfUsedAsNullable(type, localSymbol);
+                        // Preserve the explicit type only when it differs from the
+                        // initializer's natural type (an implicit conversion). When
+                        // they match, omit the clause and rely on inference — the
+                        // idiomatic common case.
+                        ITypeSymbol naturalType =
+                            this.context.GetTypeInfo(declarator.Initializer.Value).Type;
+                        if (naturalType == null
+                            || !SymbolEqualityComparer.Default.Equals(declaredType, naturalType))
+                        {
+                            emitType = true;
+                        }
+                    }
+
+                    if (emitType)
+                    {
+                        type = declaredType != null
+                            ? this.typeMapper.Map(declaredType, this.context, declaration.Type.GetLocation())
+                            : null;
+
+                        // Issue #1072: a non-nullable reference/array local that is
+                        // null-checked or null-assigned in its scope is really nullable.
+                        if (this.context.GetDeclaredSymbol(declarator) is ILocalSymbol localSymbol)
+                        {
+                            type = this.PromoteIfUsedAsNullable(type, localSymbol);
+                        }
                     }
                 }
 
