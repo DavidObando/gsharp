@@ -2325,21 +2325,30 @@ internal sealed partial class ExpressionBinder
                         return ApplyMemberNarrowing(new BoundPropertyAccessExpression(null, receiver, structSym, prop));
                     }
 
-                    // Issue #1213: an `event` member referenced in expression
-                    // position (e.g. `this.MyEvent?.Invoke(args)`) binds to its
-                    // private backing delegate field, mirroring how C# compiles
-                    // a raise of a field-like event to a read of the backing
+                    // Issue #1213 / #1221: an `event` member referenced in
+                    // expression position (e.g. `this.MyEvent?.Invoke(args)`)
+                    // binds to its backing delegate field, mirroring how C#
+                    // compiles a raise of a field-like event to a read of the
+                    // backing field. Issue #1213 enabled this for an event
+                    // declared on the receiver type; issue #1221 walks the base
+                    // chain so an event inherited from a base class can be raised
+                    // from a derived type — the field access targets the base
+                    // type that declares the (now `family`/protected) backing
                     // field. Restricted to access from inside the declaring type
-                    // (the backing field is private); cross-type reads continue
-                    // to fall through to the existing member-lookup diagnostics
-                    // so the `+=`/`-=` subscription path is unaffected.
+                    // or a derived type (`IsWithinType`); cross-type reads
+                    // continue to fall through to the existing member-lookup
+                    // diagnostics so the `+=`/`-=` subscription path is
+                    // unaffected.
                     if (IsWithinType(structSym))
                     {
-                        var evt = structSym.Events.FirstOrDefault(e =>
-                            e.Name == ne.IdentifierToken.Text && e.IsFieldLike && e.BackingField != null);
-                        if (evt != null)
+                        for (var evtDeclType = structSym; evtDeclType != null; evtDeclType = evtDeclType.BaseClass)
                         {
-                            return ApplyMemberNarrowing(new BoundFieldAccessExpression(null, receiver, structSym, evt.BackingField));
+                            var evt = evtDeclType.Events.FirstOrDefault(e =>
+                                e.Name == ne.IdentifierToken.Text && e.IsFieldLike && e.BackingField != null);
+                            if (evt != null)
+                            {
+                                return ApplyMemberNarrowing(new BoundFieldAccessExpression(null, receiver, evtDeclType, evt.BackingField));
+                            }
                         }
                     }
 

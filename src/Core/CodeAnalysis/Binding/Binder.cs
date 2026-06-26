@@ -366,18 +366,20 @@ public sealed class Binder
                             }
                         }
 
-                        // Issue #1213: expose a field-like event of the
-                        // *declaring* type as a bare name inside its own method
-                        // bodies, bound to the event's private backing delegate
+                        // Issue #1213 / #1221: expose a field-like event of the
+                        // receiver type *or any base class* as a bare name inside
+                        // method bodies, bound to the event's backing delegate
                         // field. This lets the canonical raise pattern
                         // `MyEvent?.Invoke(args)` resolve, exactly as C# compiles
-                        // it to a read of the backing field. Only the type that
-                        // declares the event may raise it (a base class event is
-                        // intentionally not surfaced here), so this is restricted
-                        // to `t == receiverStruct`. A bare `MyEvent += handler`
-                        // still routes to the event-subscription path, which is
-                        // checked first in BindBareEventOrCompoundAssignment.
-                        if (ReferenceEquals(t, receiverStruct) && !t.Events.IsDefaultOrEmpty)
+                        // it to a read of the backing field. Issue #1213 enabled
+                        // this for the declaring type; issue #1221 extends it to
+                        // derived types so an inherited event can be raised from a
+                        // derived class (the inheritance walk binds to the base
+                        // type `t` that declares the field). A bare
+                        // `MyEvent += handler` still routes to the event-
+                        // subscription path, which is checked first in
+                        // BindBareEventOrCompoundAssignment.
+                        if (!t.Events.IsDefaultOrEmpty)
                         {
                             foreach (var evt in t.Events)
                             {

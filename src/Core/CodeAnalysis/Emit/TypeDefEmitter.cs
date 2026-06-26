@@ -264,8 +264,18 @@ internal sealed class TypeDefEmitter
 
             var sigBlob = new BlobBuilder();
             this.encodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), ev.Type);
+
+            // Issue #1221: emit the field-like event's backing delegate field as
+            // `family` (protected) rather than `private`. C# keeps the backing
+            // field private and forbids raising a base-class event from a derived
+            // class, but G# semantics (and the Oahu corpus) require an inherited
+            // event to be raisable from a derived type. A derived method raises
+            // the event by reading this backing field on `this`, which a private
+            // field would reject at runtime (FieldAccessException); `family`
+            // grants the necessary derived-class (and cross-assembly subclass)
+            // access while still hiding the field from unrelated types.
             var backingHandle = this.emitCtx.Metadata.AddFieldDefinition(
-                attributes: FieldAttributes.Private,
+                attributes: FieldAttributes.Family,
                 name: this.emitCtx.Metadata.GetOrAddString(ev.BackingField.Name),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
             if (firstField.IsNil)

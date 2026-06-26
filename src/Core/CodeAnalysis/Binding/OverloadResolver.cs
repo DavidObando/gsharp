@@ -2816,6 +2816,67 @@ internal sealed class OverloadResolver
         return true;
     }
 
+    /// <summary>
+    /// Issue #1213 / #1221: lowers a call through a delegate/function-typed
+    /// variable to a <see cref="BoundIndirectCallExpression"/>, with two
+    /// event-raise refinements when the variable is the implicit backing-field
+    /// of a field-like event (an <see cref="ImplicitFieldVariableSymbol"/>):
+    /// <list type="bullet">
+    /// <item><description>The callee is loaded as a field read on <c>this</c>
+    /// (e.g. <c>ldfld Base::Changed</c>) — including the backing field declared
+    /// on a base class, so an inherited event can be raised from a derived type
+    /// — rather than a (non-existent) local slot.</description></item>
+    /// <item><description>The conditional raise form <c>Ev?(args)</c> on a
+    /// <c>void</c> delegate is guarded by a null check (a
+    /// <see cref="BoundNullConditionalAccessExpression"/>), so raising an event
+    /// with no subscribers is a safe no-op, mirroring <c>Ev?.Invoke(args)</c>.
+    /// </description></item>
+    /// </list>
+    /// </summary>
+    private BoundExpression BuildIndirectDelegateCall(
+        CallExpressionSyntax syntax,
+        VariableSymbol variable,
+        FunctionTypeSymbol fnType,
+        ImmutableArray<BoundExpression> args)
+    {
+        if (variable is ImplicitFieldVariableSymbol implicitField)
+        {
+            if (syntax.NullableQuestionToken != null
+                && ReferenceEquals(fnType.ReturnType, TypeSymbol.Void))
+            {
+                var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: implicitField.Field.Type);
+                var invoke = new BoundIndirectCallExpression(null, new BoundVariableExpression(null, capture), fnType, args);
+                return new BoundNullConditionalAccessExpression(
+                    syntax,
+                    BuildImplicitFieldLoad(implicitField),
+                    capture,
+                    invoke,
+                    TypeSymbol.Void,
+                    resultSlot: null);
+            }
+
+            return new BoundIndirectCallExpression(null, BuildImplicitFieldLoad(implicitField), fnType, args);
+        }
+
+        return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, variable), fnType, args);
+    }
+
+    /// <summary>
+    /// Issue #1213 / #1221: loads an <see cref="ImplicitFieldVariableSymbol"/>
+    /// (the implicit <c>this</c>-field exposed for a bare field/event name) as
+    /// a field read on its declaring type. The declaring type carried by the
+    /// symbol may be a base class, producing the correct base field token when
+    /// the access originates from a derived method.
+    /// </summary>
+    private static BoundExpression BuildImplicitFieldLoad(ImplicitFieldVariableSymbol implicitField) =>
+        new BoundFieldAccessExpression(
+            null,
+            new BoundVariableExpression(null, implicitField.Receiver),
+            implicitField.StructType,
+            implicitField.Field);
+
     public BoundExpression BindCallExpression(CallExpressionSyntax syntax)
     {
         // ADR-0065 §2: a bare `init(args)` call inside a constructor body is
@@ -3216,7 +3277,7 @@ internal sealed class OverloadResolver
                 convertedArgs.Add(conversions.BindConversion(argLoc, fnPermutedArgs[i], fnType.ParameterTypes[i]));
             }
 
-            return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, variable), fnType, convertedArgs.MoveToImmutable());
+            return BuildIndirectDelegateCall(syntax, variable, fnType, convertedArgs.MoveToImmutable());
         }
 
         // ADR-0059 / issue #255: direct call syntax `h(args)` on a variable
@@ -3290,7 +3351,7 @@ internal sealed class OverloadResolver
                 convertedNamedArgs.Add(conversions.BindConversion(argLoc, ndPermutedArgs[i], namedDelegateSym.Parameters[i].Type));
             }
 
-            return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, namedDelegateVar), namedDelegateSym.EquivalentFunctionType, convertedNamedArgs.MoveToImmutable());
+            return BuildIndirectDelegateCall(syntax, namedDelegateVar, namedDelegateSym.EquivalentFunctionType, convertedNamedArgs.MoveToImmutable());
         }
 
         // #325: a variable whose type is a CLR delegate (e.g. `Func[int32,
@@ -3302,7 +3363,9 @@ internal sealed class OverloadResolver
             && delegateVar.Type?.ClrType is System.Type delegateClrType
             && ClrTypeUtilities.IsDelegateType(delegateClrType))
         {
-            var receiver = new BoundVariableExpression(null, delegateVar);
+            var receiver = delegateVar is ImplicitFieldVariableSymbol clrImplicitField
+                ? BuildImplicitFieldLoad(clrImplicitField)
+                : (BoundExpression)new BoundVariableExpression(null, delegateVar);
             if (tryBindInheritedClrInstanceCall(receiver, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, null, default, argumentNames))
             {
                 return invokeCall;
