@@ -103,6 +103,36 @@ namespace Demo
         Assert.Contains("Len(text!!)", printed);
     }
 
+    [Fact]
+    public void NullCheckedFieldInNameOf_NotAsserted()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class C
+    {
+        private string? text;
+        public string M()
+        {
+            if (text == null)
+            {
+                return string.Empty;
+            }
+            else
+            {
+                return nameof(text) + text.Length;
+            }
+        }
+    }
+}");
+
+        // `nameof` requires a name reference; `nameof(text!!)` would be rejected
+        // (GS0190), so the null-forgiveness pass must skip nameof arguments.
+        Assert.Contains("nameof(text)", printed);
+        Assert.DoesNotContain("nameof(text!!)", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

@@ -5455,7 +5455,9 @@ public sealed class CSharpToGSharpTranslator
             // receiver null-forgiveness pass already gates on flow-proven non-null
             // AND a declared-nullable reference symbol, so asserting `!!` here is
             // always runtime-safe and widens cleanly to a `T?` parameter too.
-            if (this.ReceiverNeedsNullForgiveness(argument.Expression))
+            // `nameof(x)` takes a name reference, not a value, so `nameof(x!!)`
+            // is rejected (GS0190) — never assert inside a `nameof` argument.
+            if (!IsNameOfArgument(argument) && this.ReceiverNeedsNullForgiveness(argument.Expression))
             {
                 return new NonNullAssertionExpression(this.TranslateExpression(argument.Expression));
             }
@@ -5467,6 +5469,16 @@ public sealed class CSharpToGSharpTranslator
             return this.CoerceConstantToUnsigned(
                 argument.Expression,
                 this.TranslateExpression(argument.Expression));
+        }
+
+        // `nameof(x)` takes a name reference, not a value, so its argument must
+        // never be wrapped in a `!!` non-null assertion (GS0190).
+        private static bool IsNameOfArgument(ArgumentSyntax argument)
+        {
+            return argument.Parent?.Parent is InvocationExpressionSyntax
+            {
+                Expression: IdentifierNameSyntax { Identifier.Text: "nameof" },
+            };
         }
 
         private GExpression TranslateObjectCreation(ObjectCreationExpressionSyntax creation)
