@@ -88,11 +88,11 @@ internal static class PInvokeBinder
             diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "instance methods are not supported");
         }
 
-        if (function.IsStatic)
-        {
-            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "members of 'shared' blocks are not supported");
-        }
-
+        // ADR-0086 / issue #1203: a P/Invoke declared inside a class's
+        // `shared { }` block (function.IsStatic) is the canonical G# spelling
+        // of a C# `static extern [DllImport]` member. The CLR represents every
+        // P/Invoke as a static method, so a `shared`-block extern is precisely
+        // the supported shape — it is no longer rejected here.
         if (function.ReturnRefKind != RefKind.None)
         {
             diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "ref-returning functions are not supported");

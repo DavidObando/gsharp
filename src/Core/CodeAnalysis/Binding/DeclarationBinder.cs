@@ -2189,6 +2189,23 @@ internal sealed class DeclarationBinder
 
                     Binder.AttachDocumentation(methodSymbol, methodSyntax);
 
+                    // ADR-0086 / issue #1203: a `shared`-block method may be a
+                    // static P/Invoke (`@DllImport ... func F(...) R;`). Resolve
+                    // and attach the PInvokeMetadata so the body-binder skips the
+                    // (absent) body and the emitter writes the ImplMap row. A
+                    // bodyless `shared` method that is NOT a P/Invoke is reported
+                    // with GS0325, mirroring the top-level free-function path.
+                    var isStaticPInvoke = PInvokeBinder.TryAttachPInvokeMetadata(methodSymbol, methodSyntax, Diagnostics);
+                    if (!isStaticPInvoke && methodSyntax.HasSemicolonBody)
+                    {
+                        Diagnostics.ReportSemicolonBodyRequiresDllImport(methodSyntax.Identifier.Location, methodSymbol.Name);
+                    }
+
+                    if (!isStaticPInvoke)
+                    {
+                        PInvokeBinder.ReportMarshalAsOnNonPInvokeFunction(methodSyntax, Diagnostics);
+                    }
+
                     // ADR-0063 §11: detect duplicate-signature within the static block.
                     var hasDupSig = false;
                     foreach (var existingMethod in staticMethodsBuilder)

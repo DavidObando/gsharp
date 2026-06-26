@@ -264,15 +264,15 @@ public class Parser
         }
 
         // ADR-0122 / issue #1014: an optional `unsafe` contextual modifier may
-        // precede `func`, `class`, or `struct` (with or without an
-        // accessibility modifier). It introduces an unsafe context in which
-        // unmanaged raw pointers (`*T`) and raw-pointer operations are legal.
+        // precede `func` (with or without an accessibility / async modifier).
+        // It introduces an unsafe context in which unmanaged raw pointers
+        // (`*T`) and raw-pointer operations are legal. The `unsafe` class/struct
+        // modifier (issue #1202) is handled inside ParseAggregateDeclaration so
+        // it composes with `open`/`sealed`/etc. in any order.
         SyntaxToken unsafeModifier = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
             && (Peek(1).Kind == SyntaxKind.FuncKeyword
-                || Peek(1).Kind == SyntaxKind.AsyncKeyword
-                || Peek(1).Kind == SyntaxKind.ClassKeyword
-                || Peek(1).Kind == SyntaxKind.StructKeyword))
+                || Peek(1).Kind == SyntaxKind.AsyncKeyword))
         {
             unsafeModifier = NextToken();
         }
@@ -313,30 +313,12 @@ public class Parser
         else if (TryDetectAggregateDeclarationHead())
         {
             // ADR-0078 / issue #718: the canonical declaration head is
-            //   [visibility]? [open|sealed]? [data]? [inline]? (class|struct|enum|interface) Name ...
+            //   [visibility]? [unsafe]? [open|sealed]? [data]? [inline]? (class|struct|enum|interface) Name ...
             // The aggregate-kind keyword IS the declaration keyword — no leading
-            // `type`. Drop into the new aggregate parser path.
-            if (unsafeModifier != null)
-            {
-                this.unsafeDepth++;
-            }
-
-            try
-            {
-                member = ParseAggregateDeclaration(accessibilityModifier);
-            }
-            finally
-            {
-                if (unsafeModifier != null)
-                {
-                    this.unsafeDepth--;
-                }
-            }
-
-            if (unsafeModifier != null && member is StructDeclarationSyntax unsafeAggregate)
-            {
-                unsafeAggregate.UnsafeModifier = unsafeModifier;
-            }
+            // `type`. Drop into the new aggregate parser path. A leading
+            // `unsafe` modifier (issue #1202) is consumed inside
+            // ParseAggregateDeclaration so it composes with the other modifiers.
+            member = ParseAggregateDeclaration(accessibilityModifier);
         }
         else if (Current.Kind == SyntaxKind.TypeKeyword)
         {
@@ -570,7 +552,10 @@ public class Parser
                 continue;
             }
 
-            if (k.Kind == SyntaxKind.IdentifierToken && (k.Text == "data" || k.Text == "inline" || k.Text == "ref"))
+            // ADR-0122 / issue #1202: `unsafe` composes with the other class
+            // modifiers (in any order), establishing an unsafe context for the
+            // whole aggregate. Treat it like the other contextual modifiers.
+            if (k.Kind == SyntaxKind.IdentifierToken && (k.Text == "data" || k.Text == "inline" || k.Text == "ref" || k.Text == "unsafe"))
             {
                 // Bail out if the same contextual modifier appears twice — we are
                 // not in a declaration head; let the legacy / statement parser
@@ -600,11 +585,26 @@ public class Parser
         SyntaxToken dataKeyword = null;
         SyntaxToken inlineKeyword = null;
         SyntaxToken refModifier = null;
+        SyntaxToken unsafeModifier = null;
 
         // Collect modifiers in any order. Re-issuing of a modifier is reported
         // as an unexpected token but parsing continues for recovery.
         while (true)
         {
+            // ADR-0122 / issue #1202: `unsafe` composes with the other class
+            // modifiers in any order (e.g. `unsafe open class`, `open unsafe
+            // class`). It is a contextual identifier keyword.
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe")
+            {
+                if (unsafeModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword);
+                }
+
+                unsafeModifier = NextToken();
+                continue;
+            }
+
             if (Current.Kind == SyntaxKind.OpenKeyword)
             {
                 if (openModifier != null)
@@ -749,6 +749,11 @@ public class Parser
                     Diagnostics.ReportUnexpectedToken(refModifier.Location, SyntaxKind.IdentifierToken, SyntaxKind.EnumKeyword);
                 }
 
+                if (unsafeModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(unsafeModifier.Location, SyntaxKind.IdentifierToken, SyntaxKind.EnumKeyword);
+                }
+
                 break;
 
             case SyntaxKind.InterfaceKeyword:
@@ -770,6 +775,11 @@ public class Parser
                 if (refModifier != null)
                 {
                     Diagnostics.ReportUnexpectedToken(refModifier.Location, SyntaxKind.IdentifierToken, SyntaxKind.InterfaceKeyword);
+                }
+
+                if (unsafeModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(unsafeModifier.Location, SyntaxKind.IdentifierToken, SyntaxKind.InterfaceKeyword);
                 }
 
                 break;
@@ -800,10 +810,26 @@ public class Parser
         }
 
         // class / struct path.
-        var structDecl = ParseStructDeclarationNew(accessibilityModifier, dataKeyword, inlineKeyword, openModifier, sealedModifier, refModifier, aggregateKeyword, identifier);
-        structDecl.TypeParameterList = typeParameterList;
-        structDecl.RefModifier = refModifier;
-        return structDecl;
+        if (unsafeModifier != null)
+        {
+            this.unsafeDepth++;
+        }
+
+        try
+        {
+            var structDecl = ParseStructDeclarationNew(accessibilityModifier, dataKeyword, inlineKeyword, openModifier, sealedModifier, refModifier, aggregateKeyword, identifier);
+            structDecl.TypeParameterList = typeParameterList;
+            structDecl.RefModifier = refModifier;
+            structDecl.UnsafeModifier = unsafeModifier;
+            return structDecl;
+        }
+        finally
+        {
+            if (unsafeModifier != null)
+            {
+                this.unsafeDepth--;
+            }
+        }
     }
 
     /// <summary>
