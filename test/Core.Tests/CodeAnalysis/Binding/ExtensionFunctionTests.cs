@@ -188,6 +188,132 @@ n.Echo[int32, string](42)
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    [Fact]
+    public void Extension_Overload_ByArity_ResolvesCorrectOverload()
+    {
+        var source = @"
+func (s string) Do(x int32) string {
+    return ""one""
+}
+
+func (s string) Do(x int32, y int32) string {
+    return ""two""
+}
+
+var a = ""hi"".Do(1)
+var b = ""hi"".Do(1, 2)
+a + b
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("onetwo", result.Value);
+    }
+
+    [Fact]
+    public void Extension_Overload_ByParameterType_ResolvesCorrectOverload()
+    {
+        var source = @"
+func (s string) Tag(x int32) string {
+    return ""int""
+}
+
+func (s string) Tag(x string) string {
+    return ""str""
+}
+
+var a = ""hi"".Tag(1)
+var b = ""hi"".Tag(""x"")
+a + b
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("intstr", result.Value);
+    }
+
+    [Fact]
+    public void Extension_Overload_GenericArityVariant_ResolvesCorrectOverload()
+    {
+        var source = @"
+func (s string) Pick(x int32) string {
+    return ""concrete""
+}
+
+func (s string) Pick[T](item T) string {
+    return ""generic""
+}
+
+var a = ""hi"".Pick(1)
+var b = ""hi"".Pick[string](""x"")
+a + b
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("concretegeneric", result.Value);
+    }
+
+    [Fact]
+    public void Extension_Overload_DifferentReceiverTypes_StayIndependent()
+    {
+        var source = @"
+func (s string) Kind(x int32) string {
+    return ""string-recv""
+}
+
+func (n int32) Kind(x int32) string {
+    return ""int-recv""
+}
+
+var a = ""hi"".Kind(1)
+var b = (5).Kind(1)
+a + b
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("string-recvint-recv", result.Value);
+    }
+
+    [Fact]
+    public void Extension_Overload_SameReceiverDifferentSignatures_DeclareWithoutError()
+    {
+        var source = @"
+func (s string) Do(x int32) string {
+    return s
+}
+
+func (s string) Do(x int32, y int32) string {
+    return s
+}
+
+func (s string) Do[T](item T) string {
+    return s
+}
+
+var a = ""hi"".Do(1)
+a
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void Extension_DuplicateSignature_ReportsError()
+    {
+        var source = @"
+func (s string) Do(x int32) string {
+    return s
+}
+
+func (s string) Do(y int32) string {
+    return s
+}
+
+var a = ""hi"".Do(1)
+a
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));

@@ -2546,10 +2546,12 @@ internal sealed partial class ExpressionBinder
             }
 
             // Phase 3.B.6 / ADR-0019: extension function fallback for
-            // user-type receivers (struct/class/interface).
-            if (receiver != null && scope.TryLookupExtensionFunction(receiver.Type, methodName, out var userExtFn))
+            // user-type receivers (struct/class/interface). Issue #1188:
+            // extension functions overload, so select the best matching
+            // overload across all (receiver, name) candidates.
+            if (TryBindExtensionFunctionOverload(receiver, methodName, arguments, ce, argumentNames, out var userExtResult))
             {
-                return overloads.BindExtensionFunctionCall(receiver, userExtFn, arguments, ce, argumentNames);
+                return userExtResult;
             }
 
             // Issue #296: a GSharp class inheriting an imported CLR base class
@@ -2766,9 +2768,11 @@ internal sealed partial class ExpressionBinder
 
         // Phase 3.B.6 / ADR-0019: extension function fallback. After all
         // instance/static lookups fail, try matching by (receiverType, name).
-        if (receiver != null && scope.TryLookupExtensionFunction(receiver.Type, methodName, out var extFn))
+        // Issue #1188: extension functions overload, so select the best
+        // matching overload across all (receiver, name) candidates.
+        if (TryBindExtensionFunctionOverload(receiver, methodName, arguments, ce, argumentNames, out var extResult))
         {
-            return overloads.BindExtensionFunctionCall(receiver, extFn, arguments, ce, argumentNames);
+            return extResult;
         }
 
         // Issue #294: BCL/library [Extension] method dispatched with instance
@@ -2791,6 +2795,80 @@ internal sealed partial class ExpressionBinder
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression(null);
+    }
+
+    /// <summary>
+    /// Issue #1188: resolves an instance-syntax call <c>receiver.Method(args)</c>
+    /// against the user-defined extension functions visible from the current
+    /// scope, supporting overloading. Collects every extension overload matching
+    /// the (receiver type, name) pair and selects the single best applicable one
+    /// through the standard overload-resolution machinery before delegating to
+    /// <see cref="OverloadResolver.BindExtensionFunctionCall"/>.
+    /// </summary>
+    /// <remarks>
+    /// Extension function symbols carry their receiver in <c>Parameters[0]</c> and
+    /// never set <see cref="FunctionSymbol.ExplicitReceiverParameter"/>, so user
+    /// arguments line up against <c>Parameters[1..]</c>. To reuse the existing
+    /// instance-overload selector (which keys parameter alignment off
+    /// <c>ExplicitReceiverParameter</c>) the receiver is prepended as the first
+    /// positional argument; this makes the candidate's synthetic receiver slot
+    /// participate in applicability/convertibility ranking and in generic receiver
+    /// inference exactly as <see cref="OverloadResolver.BindExtensionFunctionCall"/>
+    /// does once a candidate is chosen.
+    /// </remarks>
+    /// <param name="receiver">The bound call receiver.</param>
+    /// <param name="methodName">The invoked method name.</param>
+    /// <param name="arguments">The bound user arguments (excluding the receiver).</param>
+    /// <param name="ce">The originating call syntax.</param>
+    /// <param name="argumentNames">The named-argument layout, or default.</param>
+    /// <param name="result">The bound call, when an extension overload matched.</param>
+    /// <returns><see langword="true"/> when at least one extension overload matched the (receiver, name) pair.</returns>
+    private bool TryBindExtensionFunctionOverload(
+        BoundExpression receiver,
+        string methodName,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        ImmutableArray<string> argumentNames,
+        out BoundExpression result)
+    {
+        result = null;
+        if (receiver == null)
+        {
+            return false;
+        }
+
+        var candidates = scope.TryLookupExtensionFunctions(receiver.Type, methodName);
+        if (candidates.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        var selected = candidates[0];
+        if (candidates.Length > 1)
+        {
+            var allArguments = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length + 1);
+            allArguments.Add(receiver);
+            allArguments.AddRange(arguments);
+
+            var allNames = argumentNames;
+            if (!argumentNames.IsDefault)
+            {
+                var namesBuilder = ImmutableArray.CreateBuilder<string>(argumentNames.Length + 1);
+                namesBuilder.Add(null);
+                namesBuilder.AddRange(argumentNames);
+                allNames = namesBuilder.ToImmutable();
+            }
+
+            selected = overloads.SelectInstanceOverloadOrReport(candidates, allArguments.ToImmutable(), ce, methodName, allNames);
+            if (selected == null)
+            {
+                result = new BoundErrorExpression(null);
+                return true;
+            }
+        }
+
+        result = overloads.BindExtensionFunctionCall(receiver, selected, arguments, ce, argumentNames);
+        return true;
     }
 
     /// <summary>

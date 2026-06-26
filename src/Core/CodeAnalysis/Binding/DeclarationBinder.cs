@@ -5234,9 +5234,16 @@ internal sealed class DeclarationBinder
             {
                 function.IsExtension = true;
                 function.ExtensionReceiverType = receiverType;
+
+                // Issue #1188: extension functions overload like ordinary
+                // methods and free functions. A collision now means a genuine
+                // duplicate signature (same receiver type, name, and callable
+                // parameters) — report it as a duplicate-overload-signature
+                // error to match the method/free-function path rather than a
+                // generic redeclaration.
                 if (function.Declaration.Identifier.Text != null && !scope.TryDeclareExtensionFunction(function))
                 {
-                    Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
+                    Diagnostics.ReportDuplicateOverloadSignature(syntax.Identifier.Location, function.Name, Binder.FormatOverloadSignature(function));
                 }
 
                 return;
