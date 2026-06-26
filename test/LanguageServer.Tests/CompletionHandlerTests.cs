@@ -192,6 +192,22 @@ public class CompletionHandlerTests
     }
 
     [Fact]
+    public void ComputeCompletions_AfterDotOnUserInterfaceExtendingImportedInterface_OffersInheritedClrMembers()
+    {
+        // Issue #1181: a user interface extending a BCL interface must surface
+        // the imported base interface's members (and the user-declared members)
+        // on an interface-typed receiver — consistent with the binder.
+        const string source = "package p\nimport System\ninterface IBox : IDisposable { prop N int32 }\nfunc use(b IBox) {\nb.\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var items = CompletionComputer.ComputeCompletions(content, After(source, "b."));
+
+        Assert.Contains(items, i => i.Label == "Dispose" && i.Kind == CompletionItemKind.Method);
+        Assert.Contains(items, i => i.Label == "N" && i.Kind == CompletionItemKind.Property);
+        Assert.DoesNotContain(items, i => i.Kind == CompletionItemKind.Keyword);
+    }
+
+    [Fact]
     public void ComputeCompletions_AfterDotOnParenthesizedExpression_InsideFunction_UsesParameters()
     {
         const string source = "func add(a int32, b int32) {\n(a + b).\n}\n";
