@@ -185,6 +185,59 @@ public class Issue794GenericInstanceCallReturnTypeEmitTests
         Assert.Equal("4\n1\n2\n", output);
     }
 
+    [Fact]
+    public void Generic_TypeParameter_ToInterface_And_ListT_Add_EmitsValidIl_Roundtrip()
+    {
+        // Regression guard for the issue #1196 conversion change: classifying
+        // `T -> interface` as an implicit conversion must NOT spill over to
+        // `T -> object`. Open generic parameter slots (e.g. the `!0` element
+        // type of `List[T].Add(!0)`) are erased to the `object` singleton, so a
+        // `T -> object` rule made the emitter inject a spurious `box T` before
+        // the call, producing invalid IL (System.InvalidProgramException at
+        // runtime). This test exercises BOTH a genuine `T -> interface`
+        // conversion (which must still box + dispatch correctly) AND a generic
+        // method that adds a type-parameter value into a `List[T]` (which must
+        // pass `T` straight through with no box). `IlVerifier.Verify` inside
+        // `CompileAndRun` fails the test if either path emits invalid IL.
+        var source = """
+            package P
+            import System
+            import System.Collections.Generic
+
+            interface IPrim {
+                func V() int32;
+            }
+
+            class RefBox(N int32) : IPrim {
+                func V() int32 {
+                    return N
+                }
+            }
+
+            func Use[T IPrim](t T) IPrim {
+                var x IPrim = t
+                return x
+            }
+
+            func (self []T) DoubleViaList[T]() []T {
+                var list = List[T]()
+                for v in self {
+                    list.Add(v)
+                    list.Add(v)
+                }
+                return list.ToArray()
+            }
+
+            var doubled = []int32{5}.DoubleViaList()
+            Console.WriteLine(Use(RefBox(9)).V())
+            Console.WriteLine(doubled.Length)
+            Console.WriteLine(doubled[1])
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("9\n2\n5\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue794_emit_").FullName;

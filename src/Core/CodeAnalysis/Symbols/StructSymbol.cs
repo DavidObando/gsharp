@@ -1374,6 +1374,34 @@ public sealed class StructSymbol : TypeSymbol
             return ReferenceEquals(inner, a.ElementType) ? type : ArrayTypeSymbol.Get(inner, a.Length);
         }
 
+        // Issue #1192: a function/delegate type (e.g. a primary-constructor
+        // parameter of type `(T) -> void`) must have its parameter types and
+        // return type recursively substituted so the constructed generic's
+        // synthesized constructor matches a `(int32) -> void` argument.
+        if (type is FunctionTypeSymbol fn)
+        {
+            var substitutedParams = ImmutableArray.CreateBuilder<TypeSymbol>(fn.ParameterTypes.Length);
+            var changed = false;
+            for (var i = 0; i < fn.ParameterTypes.Length; i++)
+            {
+                var substituted = SubstituteTypeForConstruction(fn.ParameterTypes[i], subst);
+                substitutedParams.Add(substituted);
+                changed |= !ReferenceEquals(substituted, fn.ParameterTypes[i]);
+            }
+
+            var substitutedReturn = SubstituteTypeForConstruction(fn.ReturnType, subst);
+            changed |= !ReferenceEquals(substitutedReturn, fn.ReturnType);
+
+            if (!changed)
+            {
+                return fn;
+            }
+
+            return fn.IsVariadic.IsDefaultOrEmpty
+                ? FunctionTypeSymbol.Get(substitutedParams.MoveToImmutable(), substitutedReturn)
+                : FunctionTypeSymbol.Get(substitutedParams.MoveToImmutable(), fn.IsVariadic, substitutedReturn);
+        }
+
         return type;
     }
 }

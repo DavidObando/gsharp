@@ -96,6 +96,13 @@ internal sealed class DeclarationBinder
     // post-pass gives it the same guarantee, regardless of source-file order.
     private readonly List<Action> pendingBaseInitializerBindings = new List<Action>();
 
+    // Issue #1194: field-initializer binding is deferred until after all
+    // top-level functions are declared in Binder.BindGlobalScope, so a field
+    // initializer can resolve an unqualified call to a free function or a
+    // sibling static method/const. Each entry re-establishes the captured
+    // scope and the enclosing type's static-member scope before binding.
+    private readonly List<Action> pendingFieldInitializerBindings = new List<Action>();
+
     // Issue #1069: nested struct/class and interface type-name shells declared in
     // phase 1 (DeclareNestedTypeShells) so a sibling member signature can
     // forward-reference a nested type by name. The recorded shells are reused in
@@ -2491,68 +2498,58 @@ internal sealed class DeclarationBinder
         // diagnostics that previously fired because the static member was not in
         // scope. Instance members remain out of scope (a field initializer has no
         // `this`), so genuine instance-member references are still rejected below.
-        using (PushStaticMemberScope(structSymbol))
+        // Issue #1194: defer field-initializer binding until after all
+        // top-level functions are declared, so a field initializer can resolve
+        // an unqualified call to a free function (declared later in
+        // Binder.BindGlobalScope) and a sibling static method/const — matching
+        // the visibility a constructor body already enjoys. The captured
+        // `scope` is the live global scope object into which functions are
+        // declared, so by the time this action runs they are present. The
+        // enclosing type's static members (fields, consts, static properties,
+        // static methods) are exposed by PushStaticMemberScope. Instance
+        // members remain out of scope (a field initializer has no `this`), so
+        // genuine instance-member references are still rejected below (GS0377).
+        var fieldInitScope = scope;
+        var fieldInitConstInitializers = pendingConstInitializers;
+        var fieldInitSharedConstInitializers = pendingSharedConstInitializers;
+        var fieldInitStaticInitializers = pendingStaticFieldInitializers;
+        var fieldInitInstanceInitializers = pendingInstanceInitializers;
+        var fieldInitFields = fields.ToImmutable();
+        var fieldInitPrimaryCtorParameters = primaryCtorParameters;
+        pendingFieldInitializerBindings.Add(() =>
         {
-            // Fold class const initializers first so a `shared` const that
-            // references a class const can read its already-folded value.
-            foreach (var (constField, fieldSyntaxNode, fieldType) in pendingConstInitializers)
+            var savedFieldInitScope = scope;
+            var savedFieldInitTypeParameters = binderCtx.CurrentTypeParameters;
+            scope = fieldInitScope;
+            if (!structSymbol.TypeParameters.IsDefaultOrEmpty)
             {
-                BindAndFoldConstFieldInitializer(constField, fieldSyntaxNode, fieldType);
+                binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+                foreach (var tp in structSymbol.TypeParameters)
+                {
+                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
+                }
             }
 
-            foreach (var (constField, fieldSyntaxNode, fieldType) in pendingSharedConstInitializers)
+            try
             {
-                BindAndFoldConstFieldInitializer(constField, fieldSyntaxNode, fieldType);
+                using (PushStaticMemberScope(structSymbol))
+                {
+                    BindDeferredFieldInitializers(
+                        structSymbol,
+                        fieldInitConstInitializers,
+                        fieldInitSharedConstInitializers,
+                        fieldInitStaticInitializers,
+                        fieldInitInstanceInitializers,
+                        fieldInitFields,
+                        fieldInitPrimaryCtorParameters);
+                }
             }
-
-            // Bind `shared` static field initializers.
-            if (pendingStaticFieldInitializers.Count > 0)
+            finally
             {
-                var staticInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
-                foreach (var (fieldSym, initSyntax, fieldType) in pendingStaticFieldInitializers)
-                {
-                    var boundInit = bindExpression(initSyntax);
-                    var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
-                    staticInitBuilder[fieldSym] = convertedInit;
-                }
-
-                structSymbol.SetStaticFieldInitializers(staticInitBuilder.ToImmutable());
+                scope = savedFieldInitScope;
+                binderCtx.CurrentTypeParameters = savedFieldInitTypeParameters;
             }
-
-            // Bind instance field initializers. These run before the constructor
-            // body, so they cannot reference `this`, other instance members, or
-            // constructor parameters (matching C#); a genuine instance-member
-            // reference is reported precisely rather than as a bare GS0125.
-            if (pendingInstanceInitializers.Count > 0)
-            {
-                var instanceMemberNames = new HashSet<string>(System.StringComparer.Ordinal) { "this" };
-                foreach (var f in fields)
-                {
-                    instanceMemberNames.Add(f.Name);
-                }
-
-                foreach (var p in primaryCtorParameters)
-                {
-                    instanceMemberNames.Add(p.Name);
-                }
-
-                var instanceInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
-                foreach (var (fieldSym, initSyntax, fieldType) in pendingInstanceInitializers)
-                {
-                    if (TryFindInstanceMemberReference(initSyntax, instanceMemberNames, out var offendingName, out var offendingLocation))
-                    {
-                        Diagnostics.ReportFieldInitializerCannotReferenceInstanceMember(offendingLocation, offendingName);
-                        continue;
-                    }
-
-                    var boundInit = bindExpression(initSyntax);
-                    var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
-                    instanceInitBuilder[fieldSym] = convertedInit;
-                }
-
-                structSymbol.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable());
-            }
-        }
+        });
 
         // Phase 3.B.4: validate interface implementation. Walks each
         // implemented interface and confirms the class (including inherited
@@ -2700,18 +2697,14 @@ internal sealed class DeclarationBinder
         return backing;
     }
 
-    private void BindAndFoldConstFieldInitializer(FieldSymbol constField, FieldDeclarationSyntax fieldSyntaxNode, TypeSymbol fieldType)
+    private (FieldSymbol Field, BoundExpression Bound, TextLocation Location) BindConstFieldInitializer(FieldSymbol constField, FieldDeclarationSyntax fieldSyntaxNode, TypeSymbol fieldType)
     {
         var boundInit = bindExpression(fieldSyntaxNode.Initializer);
         var convertedInit = conversions.BindConversion(fieldSyntaxNode.Initializer.Location, boundInit, fieldType);
-        if (TryFoldConstantFieldValue(convertedInit, fieldType, out var constantValue))
-        {
-            constField.SetConstantValue(constantValue);
-        }
-        else if (boundInit is not BoundErrorExpression && convertedInit is not BoundErrorExpression)
-        {
-            Diagnostics.ReportConstFieldInitializerNotConstant(fieldSyntaxNode.Initializer.Location, constField.Name);
-        }
+        var bound = boundInit is BoundErrorExpression || convertedInit is BoundErrorExpression
+            ? (BoundExpression)new BoundErrorExpression(fieldSyntaxNode.Initializer)
+            : convertedInit;
+        return (constField, bound, fieldSyntaxNode.Initializer.Location);
     }
 
     /// <summary>
@@ -2750,6 +2743,20 @@ internal sealed class DeclarationBinder
             foreach (var prop in structSymbol.StaticProperties)
             {
                 staticScope.TryDeclareVariable(new ImplicitStaticPropertyVariableSymbol(structSymbol, prop));
+            }
+        }
+
+        // Issue #1194: expose the enclosing type's static methods by bare name so
+        // a field/const/base initializer can call a sibling `static` method
+        // unqualified (matching C#). Declared as functions in the innermost
+        // scope, they shadow any same-named free function — the C# member-lookup
+        // order — and resolve through the normal free-function call path, which
+        // emits a static call on the owning method.
+        if (!structSymbol.StaticMethods.IsDefaultOrEmpty)
+        {
+            foreach (var method in structSymbol.StaticMethods)
+            {
+                staticScope.TryDeclareFunction(method);
             }
         }
 
@@ -2913,6 +2920,135 @@ internal sealed class DeclarationBinder
         }
 
         pendingBaseInitializerBindings.Clear();
+    }
+
+    /// <summary>
+    /// Issue #1194: binds the deferred field-initializer expressions for every
+    /// type, run from <c>Binder.BindGlobalScope</c> after all top-level
+    /// functions have been declared so a field initializer can resolve an
+    /// unqualified free-function or sibling static-member call.
+    /// </summary>
+    internal void BindPendingFieldInitializers()
+    {
+        foreach (var bind in pendingFieldInitializerBindings)
+        {
+            bind();
+        }
+
+        pendingFieldInitializerBindings.Clear();
+    }
+
+    /// <summary>
+    /// Issue #1194: binds a single type's deferred field/const/static
+    /// initializers within the active static-member scope. Const initializers
+    /// are folded with a fixpoint so sibling const references resolve regardless
+    /// of declaration order (#1193); instance initializers reject instance
+    /// member references (no <c>this</c> is available, GS0377).
+    /// </summary>
+    private void BindDeferredFieldInitializers(
+        StructSymbol structSymbol,
+        List<(FieldSymbol Field, FieldDeclarationSyntax Syntax, TypeSymbol FieldType)> constInitializers,
+        List<(FieldSymbol Field, FieldDeclarationSyntax Syntax, TypeSymbol FieldType)> sharedConstInitializers,
+        List<(FieldSymbol Field, ExpressionSyntax InitSyntax, TypeSymbol FieldType)> staticFieldInitializers,
+        List<(FieldSymbol Field, ExpressionSyntax InitSyntax, TypeSymbol FieldType)> instanceInitializers,
+        ImmutableArray<FieldSymbol> fields,
+        ImmutableArray<ParameterSymbol> primaryCtorParameters)
+    {
+        // Fold const initializers with a fixpoint so a const that references a
+        // sibling const folds regardless of declaration order (#1193). Each
+        // initializer is bound exactly once (binding a const reference does not
+        // require its value), then folding is retried until no further progress.
+        // Class const initializers are seeded first so a `shared` const
+        // referencing a class const can read its value.
+        var pendingConstFolds = new List<(FieldSymbol Field, BoundExpression Bound, TextLocation Location)>();
+        foreach (var (constField, fieldSyntaxNode, fieldType) in constInitializers)
+        {
+            pendingConstFolds.Add(BindConstFieldInitializer(constField, fieldSyntaxNode, fieldType));
+        }
+
+        foreach (var (constField, fieldSyntaxNode, fieldType) in sharedConstInitializers)
+        {
+            pendingConstFolds.Add(BindConstFieldInitializer(constField, fieldSyntaxNode, fieldType));
+        }
+
+        var progress = true;
+        while (progress && pendingConstFolds.Count > 0)
+        {
+            progress = false;
+            var stillPending = new List<(FieldSymbol Field, BoundExpression Bound, TextLocation Location)>();
+            foreach (var item in pendingConstFolds)
+            {
+                if (TryFoldConstantFieldValue(item.Bound, item.Field.Type, out var constantValue))
+                {
+                    item.Field.SetConstantValue(constantValue);
+                    progress = true;
+                }
+                else
+                {
+                    stillPending.Add(item);
+                }
+            }
+
+            pendingConstFolds = stillPending;
+        }
+
+        // Report diagnostics for any const that still cannot fold (a genuinely
+        // non-constant initializer or an unresolved cycle).
+        foreach (var (constField, bound, location) in pendingConstFolds)
+        {
+            if (bound is not BoundErrorExpression)
+            {
+                Diagnostics.ReportConstFieldInitializerNotConstant(location, constField.Name);
+            }
+        }
+
+        // Bind `shared` static field initializers.
+        if (staticFieldInitializers.Count > 0)
+        {
+            var staticInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
+            foreach (var (fieldSym, initSyntax, fieldType) in staticFieldInitializers)
+            {
+                var boundInit = bindExpression(initSyntax);
+                var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
+                staticInitBuilder[fieldSym] = convertedInit;
+            }
+
+            structSymbol.SetStaticFieldInitializers(staticInitBuilder.ToImmutable());
+        }
+
+        // Bind instance field initializers. These run before the constructor
+        // body, so they cannot reference `this`, other instance members, or
+        // constructor parameters (matching C#); a genuine instance-member
+        // reference is reported precisely rather than as a bare GS0125.
+        if (instanceInitializers.Count > 0)
+        {
+            var instanceMemberNames = new HashSet<string>(System.StringComparer.Ordinal) { "this" };
+            foreach (var f in fields)
+            {
+                instanceMemberNames.Add(f.Name);
+            }
+
+            foreach (var p in primaryCtorParameters)
+            {
+                instanceMemberNames.Add(p.Name);
+            }
+
+            var instanceInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
+            foreach (var (fieldSym, initSyntax, fieldType) in instanceInitializers)
+            {
+                if (TryFindInstanceMemberReference(initSyntax, instanceMemberNames, out var offendingName, out var offendingLocation))
+                {
+                    Diagnostics.ReportFieldInitializerCannotReferenceInstanceMember(offendingLocation, offendingName);
+                    continue;
+                }
+
+                var boundInit = bindExpression(initSyntax);
+                var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
+                instanceInitBuilder[fieldSym] = convertedInit;
+            }
+
+            structSymbol.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable());
+        }
     }
 
     internal void VerifyAbstractMethodImplementations()
@@ -3946,6 +4082,18 @@ internal sealed class DeclarationBinder
 
             case BoundConversionExpression conv:
                 return TryEvaluateConstant(conv.Expression, out value);
+
+            case BoundFieldAccessExpression fieldAccess
+                when fieldAccess.Field is { IsConst: true } constField
+                && constField.ConstantValue != null:
+                // Issue #1193: a `const` field initializer composed of other
+                // `const` fields folds by reading the referenced field's
+                // already-computed compile-time value. Sibling const fields are
+                // folded in dependency order (see the fixpoint loop in the
+                // const-binding pass), so a referenced const's value is present
+                // by the time this initializer is evaluated.
+                value = constField.ConstantValue;
+                return true;
 
             case BoundUnaryExpression unary
                 when unary.Op.Kind is BoundUnaryOperatorKind.Negation or BoundUnaryOperatorKind.Identity
@@ -6207,24 +6355,46 @@ internal sealed class DeclarationBinder
         }
 
         // Bind the argument expressions with the primary-constructor parameters
-        // in scope (they are the typical source of forwarded values).
+        // in scope (they are the typical source of forwarded values). Issue
+        // #1194: also expose the enclosing type's static members (consts, static
+        // fields/properties, static methods) and — because this runs after all
+        // top-level functions are declared — free functions, so a `: base(...)`
+        // argument can reference them unqualified (matching C#).
         var savedScope = scope;
-        scope = new BoundScope(savedScope);
-        if (!primaryCtorParameters.IsDefaultOrEmpty)
+        var savedTypeParameters = binderCtx.CurrentTypeParameters;
+        if (!structSymbol.TypeParameters.IsDefaultOrEmpty)
         {
-            foreach (var p in primaryCtorParameters)
+            binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+            foreach (var tp in structSymbol.TypeParameters)
             {
-                scope.TryDeclareVariable(p);
+                binderCtx.CurrentTypeParameters[tp.Name] = tp;
             }
         }
 
-        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.BaseConstructorArguments.Count);
-        for (var i = 0; i < syntax.BaseConstructorArguments.Count; i++)
+        ImmutableArray<BoundExpression>.Builder boundArguments;
+        using (PushStaticMemberScope(structSymbol))
         {
-            boundArguments.Add(bindExpression(syntax.BaseConstructorArguments[i]));
+            var staticScope = scope;
+            scope = new BoundScope(staticScope);
+            if (!primaryCtorParameters.IsDefaultOrEmpty)
+            {
+                foreach (var p in primaryCtorParameters)
+                {
+                    scope.TryDeclareVariable(p);
+                }
+            }
+
+            boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.BaseConstructorArguments.Count);
+            for (var i = 0; i < syntax.BaseConstructorArguments.Count; i++)
+            {
+                boundArguments.Add(bindExpression(syntax.BaseConstructorArguments[i]));
+            }
+
+            scope = staticScope;
         }
 
         scope = savedScope;
+        binderCtx.CurrentTypeParameters = savedTypeParameters;
 
         if (importedBaseType?.ClrType is System.Type clrBase)
         {
@@ -6858,20 +7028,42 @@ internal sealed class DeclarationBinder
     {
         var location = ctorSyntax.BaseKeyword.Location;
 
+        // Issue #1194: expose the enclosing type's static members (consts, static
+        // fields/properties, static methods) and — because this runs after all
+        // top-level functions are declared — free functions, so a `: base(...)`
+        // argument can reference them unqualified (matching C#).
         var savedScope = scope;
-        scope = new BoundScope(savedScope);
-        foreach (var p in ctorFunction.Parameters)
+        var savedTypeParameters = binderCtx.CurrentTypeParameters;
+        if (!structSymbol.TypeParameters.IsDefaultOrEmpty)
         {
-            scope.TryDeclareVariable(p);
+            binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+            foreach (var tp in structSymbol.TypeParameters)
+            {
+                binderCtx.CurrentTypeParameters[tp.Name] = tp;
+            }
         }
 
-        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(ctorSyntax.BaseArguments.Count);
-        for (var i = 0; i < ctorSyntax.BaseArguments.Count; i++)
+        ImmutableArray<BoundExpression>.Builder boundArguments;
+        using (PushStaticMemberScope(structSymbol))
         {
-            boundArguments.Add(bindExpression(ctorSyntax.BaseArguments[i]));
+            var staticScope = scope;
+            scope = new BoundScope(staticScope);
+            foreach (var p in ctorFunction.Parameters)
+            {
+                scope.TryDeclareVariable(p);
+            }
+
+            boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(ctorSyntax.BaseArguments.Count);
+            for (var i = 0; i < ctorSyntax.BaseArguments.Count; i++)
+            {
+                boundArguments.Add(bindExpression(ctorSyntax.BaseArguments[i]));
+            }
+
+            scope = staticScope;
         }
 
         scope = savedScope;
+        binderCtx.CurrentTypeParameters = savedTypeParameters;
 
         if (baseClassSymbol == null && importedBaseType == null)
         {
