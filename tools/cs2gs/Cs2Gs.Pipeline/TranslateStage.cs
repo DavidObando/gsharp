@@ -45,6 +45,8 @@ public sealed class TranslateStage : IMigrationStage
         var artifacts = new List<TriageArtifact>();
         Directory.CreateDirectory(context.AppRunDir);
 
+        var usedGsFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (LoadedDocument document in project.Documents)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -57,7 +59,7 @@ public sealed class TranslateStage : IMigrationStage
             CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, translationContext);
             string printed = GSharpPrinter.Print(unit);
 
-            string gsFileName = Path.GetFileNameWithoutExtension(document.FilePath) + ".gs";
+            string gsFileName = EmittedFileNaming.UniqueGsFileName(document.FilePath, usedGsFileNames);
             string gsPath = Path.Combine(context.AppRunDir, gsFileName);
             File.WriteAllText(gsPath, printed);
 
