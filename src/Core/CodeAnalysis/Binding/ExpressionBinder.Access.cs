@@ -3089,6 +3089,26 @@ internal sealed partial class ExpressionBinder
             }
 
             var binaryOp = BoundBinaryOperator.Bind(baseOpKind, indexRead.Type, rhsBound.Type);
+
+            // issue #1226: constant integer-literal adaptation (mirrors the
+            // #1144 behaviour in BindBinaryExpression). When the right operand
+            // is a compile-time integer literal — including the synthetic `1`
+            // emitted for `++`/`--` and `op= <literal>` over an element/indexer
+            // lvalue — and the target element type is a (non-literal) integer
+            // type, adapt the literal to the element type so `data[0]++` on a
+            // `uint8`/`uint16`/etc. element binds the same way `Field++` and
+            // `local++` already do, instead of failing GS0129 because the
+            // literal defaulted to `int32`.
+            if (binaryOp == null
+                && rhsBound is BoundLiteralExpression rhsLit
+                && IsIntegerLiteralValue(rhsLit.Value)
+                && IsIntegerType(indexRead.Type)
+                && TryAdaptIntegerLiteral(rhsLit.Value, indexRead.Type, out var adaptedRhsValue))
+            {
+                rhsBound = new BoundLiteralExpression(rhsBound.Syntax, adaptedRhsValue);
+                binaryOp = BoundBinaryOperator.Bind(baseOpKind, indexRead.Type, rhsBound.Type);
+            }
+
             if (binaryOp == null)
             {
                 Diagnostics.ReportUndefinedBinaryOperator(
