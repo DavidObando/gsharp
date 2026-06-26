@@ -678,7 +678,16 @@ internal sealed class MemberLookup
         {
             var openElement = openClr.GetElementType();
             var mappedElement = MapOpenClrTypeToSymbolic(openElement, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
-            if (TypeSymbol.ContainsTypeParameter(mappedElement))
+
+            // Issue #1216: a method-level parameter may be substituted by a
+            // same-compilation user type (e.g. `GC.AllocateArray[Foo]` /
+            // `Array.Empty[Foo]` whose open return is `T[]`). The closed CLR
+            // method erased `Foo` to `object`, so without surfacing the
+            // symbolic slice here the call's return would collapse to the
+            // erased `object[]` and fail to convert to `[]Foo` (GS0155). Mirror
+            // the generic-type branch below, which already honours #903.
+            if (TypeSymbol.ContainsTypeParameter(mappedElement)
+                || TypeSymbol.ContainsSameCompilationUserType(mappedElement))
             {
                 return SliceTypeSymbol.Get(mappedElement);
             }
@@ -693,7 +702,8 @@ internal sealed class MemberLookup
         {
             var openPointee = openClr.GetElementType();
             var mappedPointee = MapOpenClrTypeToSymbolic(openPointee, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
-            if (TypeSymbol.ContainsTypeParameter(mappedPointee))
+            if (TypeSymbol.ContainsTypeParameter(mappedPointee)
+                || TypeSymbol.ContainsSameCompilationUserType(mappedPointee))
             {
                 return ByRefTypeSymbol.Get(mappedPointee);
             }
