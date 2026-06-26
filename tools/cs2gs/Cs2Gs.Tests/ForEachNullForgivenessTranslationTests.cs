@@ -73,6 +73,36 @@ namespace Demo
         Assert.DoesNotContain("offsets!!", printed);
     }
 
+    [Fact]
+    public void NullCheckedFieldAsArgument_AssertsArgument()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class C
+    {
+        private string? text;
+        private static int Len(string s) => s.Length;
+        public int M()
+        {
+            if (text == null)
+            {
+                return 0;
+            }
+            else
+            {
+                return Len(text);
+            }
+        }
+    }
+}");
+
+        // The `string?` field is flow-proven non-null in the else branch and is
+        // passed to a `string` parameter, so the argument carries `!!`.
+        Assert.Contains("Len(text!!)", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

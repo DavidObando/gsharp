@@ -5447,6 +5447,19 @@ public sealed class CSharpToGSharpTranslator
                 return new UnaryExpression("&", this.TranslateExpression(argument.Expression));
             }
 
+            // A declared-nullable reference argument that C# flow analysis has
+            // narrowed to non-null (e.g. a `string?` field read inside an
+            // `if (field == null) … else …` guard) is passed by value, but G#
+            // smart-casts narrow only LOCALS — the field/property keeps its `T?`
+            // type, so a non-null `T` parameter rejects it (GS0156). The existing
+            // receiver null-forgiveness pass already gates on flow-proven non-null
+            // AND a declared-nullable reference symbol, so asserting `!!` here is
+            // always runtime-safe and widens cleanly to a `T?` parameter too.
+            if (this.ReceiverNeedsNullForgiveness(argument.Expression))
+            {
+                return new NonNullAssertionExpression(this.TranslateExpression(argument.Expression));
+            }
+
             // OD-T2: a C# integer literal implicitly converted to an unsigned
             // parameter (e.g. `base(4)` where the parameter is `byte`) must be
             // emitted as a typed G# literal (`uint8(4)`); G# performs no implicit
