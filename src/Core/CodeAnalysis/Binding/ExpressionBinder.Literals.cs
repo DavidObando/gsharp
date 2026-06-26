@@ -466,6 +466,21 @@ internal sealed partial class ExpressionBinder
             var preferredArity = syntax.TypeArgumentList != null ? syntax.TypeArgumentList.Arguments.Count : -1;
             if (!scope.TryLookupTypeAlias(typeName, preferredArity, out var resolvedType) || !(resolvedType is StructSymbol resolvedStruct))
             {
+                // Issue #1199: a composite literal `T{Field: value}` also targets
+                // an IMPORTED reference-type class (a BCL class such as
+                // `System.Text.Json.JsonSerializerOptions`). These resolve through
+                // the import table — not `TryLookupTypeAlias`, which only surfaces
+                // user-declared types — so route the literal through the same
+                // imported-class lookup that the constructor-call path uses and
+                // lower it to a C#-style object-initializer (construct via the
+                // parameterless ctor, then assign each named member).
+                if (syntax.TypeArgumentList == null
+                    && scope.TryLookupImportedClass(typeName, declaration: null, out var importedClass)
+                    && importedClass.ClassType is { IsValueType: false, IsGenericTypeDefinition: false })
+                {
+                    return BindImportedClassLiteralExpression(syntax, importedClass.ClassType);
+                }
+
                 Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
                 return new BoundErrorExpression(null);
             }
@@ -640,6 +655,97 @@ internal sealed partial class ExpressionBinder
         }
 
         return new BoundStructLiteralExpression(null, structSymbol, inits.ToImmutable());
+    }
+
+    /// <summary>
+    /// Issue #1199: binds a composite literal <c>T{Member: value, ...}</c> on an
+    /// IMPORTED reference-type class (e.g. <c>JsonSerializerOptions{WriteIndented:
+    /// true}</c>). It lowers to the same shape as the object-initializer suffix
+    /// (<c>T(){ Member = value }</c>, ADR-0117 / issue #569): construct the
+    /// instance via its public parameterless constructor into a synthetic local,
+    /// assign each named settable property/field through that local, and yield
+    /// the local. Reusing existing bound nodes (<see
+    /// cref="BoundClrConstructorCallExpression"/>,
+    /// <see cref="BoundClrPropertyAssignmentExpression"/>) means emit and the
+    /// interpreter both work without a new bound-node kind.
+    /// </summary>
+    private BoundExpression BindImportedClassLiteralExpression(StructLiteralExpressionSyntax syntax, Type clrType)
+    {
+        // The object-initializer lowering needs a constructed instance; require a
+        // public parameterless constructor (the C# object-initializer contract).
+        var parameterlessCtor = ClrTypeUtilities
+            .SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(c => c.GetParameters().Length == 0);
+        if (parameterlessCtor == null)
+        {
+            Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, syntax.TypeIdentifier.Text);
+            foreach (var initSyntax in syntax.Initializers)
+            {
+                _ = BindExpression(initSyntax.Value);
+            }
+
+            return new BoundErrorExpression(null);
+        }
+
+        var resultType = TypeSymbol.FromClrType(clrType);
+        BoundExpression construction = new BoundClrConstructorCallExpression(
+            syntax,
+            clrType,
+            parameterlessCtor,
+            ImmutableArray<BoundExpression>.Empty,
+            resultType);
+
+        var tempName = "$implit" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, resultType);
+        scope.TryDeclareVariable(tempVar);
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundVariableDeclaration(syntax, tempVar, construction));
+
+        var seen = new HashSet<string>();
+        foreach (var initSyntax in syntax.Initializers)
+        {
+            var memberName = initSyntax.FieldIdentifier.Text;
+            if (!seen.Add(memberName))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, memberName);
+                continue;
+            }
+
+            // Resolve a public instance property (non-indexer) or field on the
+            // imported CLR type. A settable member binds to a CLR property/field
+            // assignment; a get-only/read-only member stays diagnosed (GS0127).
+            MemberInfo member = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrType, memberName, BindingFlags.Public | BindingFlags.Instance);
+            if (member is PropertyInfo idxProp && idxProp.GetIndexParameters().Length != 0)
+            {
+                member = null;
+            }
+
+            member ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrType, memberName, BindingFlags.Public | BindingFlags.Instance);
+            if (member == null)
+            {
+                Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, memberName);
+                _ = BindExpression(initSyntax.Value);
+                continue;
+            }
+
+            if (!TryGetWritableClrMember(member, out _, out var targetSymbol, out _))
+            {
+                Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, memberName);
+                _ = BindExpression(initSyntax.Value);
+                continue;
+            }
+
+            var value = BindExpression(initSyntax.Value);
+            var converted = conversions.BindConversion(initSyntax.Value.Location, value, targetSymbol);
+            var receiverExpr = new BoundVariableExpression(initSyntax, tempVar);
+            statements.Add(new BoundExpressionStatement(
+                initSyntax,
+                new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, member, converted, targetSymbol)));
+        }
+
+        var resultExpr = new BoundVariableExpression(syntax, tempVar);
+        return new BoundBlockExpression(syntax, statements.ToImmutable(), resultExpr);
     }
 
     private BoundExpression BindTupleLiteralExpression(TupleLiteralExpressionSyntax syntax)
