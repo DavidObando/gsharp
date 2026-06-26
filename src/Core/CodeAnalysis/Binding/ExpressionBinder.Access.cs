@@ -2118,7 +2118,7 @@ internal sealed partial class ExpressionBinder
                             return MakeFixedBufferPointer(receiver, declaringType, field);
                         }
 
-                        return new BoundFieldAccessExpression(null, receiver, declaringType, field);
+                        return ApplyMemberNarrowing(new BoundFieldAccessExpression(null, receiver, declaringType, field));
                     }
 
                     // ADR-0051: check properties before reporting "unable to find member".
@@ -2136,7 +2136,7 @@ internal sealed partial class ExpressionBinder
                             Diagnostics.ReportProtectedMemberInaccessible(ne.IdentifierToken.Location, prop.Name, propDeclaringType.Name);
                         }
 
-                        return new BoundPropertyAccessExpression(null, receiver, structSym, prop);
+                        return ApplyMemberNarrowing(new BoundPropertyAccessExpression(null, receiver, structSym, prop));
                     }
 
                     // Issue #296: a GSharp class inheriting an imported CLR base

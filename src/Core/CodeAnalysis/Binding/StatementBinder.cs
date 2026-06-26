@@ -252,7 +252,7 @@ internal sealed class StatementBinder
         // After each call statement whose method carries [MemberNotNull], the
         // named fields are added to this frame and remain narrowed for all
         // subsequent statements in the block (until assignment invalidates them).
-        var memberNotNullFrame = new Dictionary<VariableSymbol, TypeSymbol>();
+        var memberNotNullFrame = new Dictionary<AccessPath, TypeSymbol>();
         binderCtx.NarrowedVariables.Add(memberNotNullFrame);
         try
         {
@@ -377,7 +377,7 @@ internal sealed class StatementBinder
     /// named field (via its <see cref="ImplicitFieldVariableSymbol"/>) to its
     /// underlying non-nullable type in <paramref name="frame"/>.
     /// </summary>
-    private void ApplyMemberNotNullNarrowings(BoundStatement statement, Dictionary<VariableSymbol, TypeSymbol> frame)
+    private void ApplyMemberNotNullNarrowings(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> frame)
     {
         BoundExpression callExpr = null;
         if (statement is BoundExpressionStatement exprStmt)
@@ -441,7 +441,7 @@ internal sealed class StatementBinder
     /// type is nullable, adds a narrowing entry to <paramref name="frame"/>
     /// that maps the symbol to its underlying non-nullable type.
     /// </summary>
-    private void NarrowFieldIfNullable(string fieldName, Dictionary<VariableSymbol, TypeSymbol> frame)
+    private void NarrowFieldIfNullable(string fieldName, Dictionary<AccessPath, TypeSymbol> frame)
     {
         if (scope.TryLookupSymbol(fieldName) is ImplicitFieldVariableSymbol fieldVar
             && fieldVar.Type is NullableTypeSymbol nullable)
@@ -466,7 +466,29 @@ internal sealed class StatementBinder
 
         var assignedNames = new HashSet<string>();
         CollectAssignedNames(statementSyntax, assignedNames);
-        if (assignedNames.Count == 0)
+
+        // ADR-0069 addendum / issue #1180: member-path narrowings are far more
+        // fragile than local narrowings. Any call could mutate a field reached
+        // through the chain, and any member/index/indirect assignment could too,
+        // so — matching the Kotlin guarantee that a smart cast only survives
+        // when the compiler can prove the value is unchanged — we conservatively
+        // drop EVERY member-bearing path when the statement contains a call or a
+        // member-mutating assignment. Plain variable narrowings keep their
+        // existing, more permissive invalidation (reassignment only).
+        var dropAllMemberPaths = StatementMayMutateMemberPaths(statementSyntax);
+
+        // Resolve the set of reassigned root variables so we can also drop any
+        // member path rooted at one of them.
+        var assignedRoots = new HashSet<VariableSymbol>();
+        foreach (var name in assignedNames)
+        {
+            if (scope.TryLookupSymbol(name) is VariableSymbol v)
+            {
+                assignedRoots.Add(v);
+            }
+        }
+
+        if (assignedRoots.Count == 0 && !dropAllMemberPaths)
         {
             return;
         }
@@ -479,16 +501,65 @@ internal sealed class StatementBinder
         // Issue #208: iterate ALL frames (not just the top) because the
         // memberNotNullFrame sits above the if-condition frames; dropping from
         // only the top would miss narrowings added by if-condition analysis.
-        foreach (var name in assignedNames)
+        for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
         {
-            if (scope.TryLookupSymbol(name) is VariableSymbol v)
+            var frame = binderCtx.NarrowedVariables[i];
+            if (frame.Count == 0)
             {
-                for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
+                continue;
+            }
+
+            List<AccessPath> toRemove = null;
+            foreach (var key in frame.Keys)
+            {
+                var drop = assignedRoots.Contains(key.Root)
+                    || (key.HasMembers && dropAllMemberPaths);
+                if (drop)
                 {
-                    binderCtx.NarrowedVariables[i].Remove(v);
+                    (toRemove ??= new List<AccessPath>()).Add(key);
+                }
+            }
+
+            if (toRemove != null)
+            {
+                foreach (var key in toRemove)
+                {
+                    frame.Remove(key);
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// ADR-0069 addendum / issue #1180: returns whether <paramref name="node"/>
+    /// contains a construct that could change a value reached through a stable
+    /// member path — a call (whose callee could mutate a field), or a member /
+    /// index / indirect assignment. Such statements conservatively invalidate
+    /// all member-path smart casts.
+    /// </summary>
+    private static bool StatementMayMutateMemberPaths(SyntaxNode node)
+    {
+        switch (node)
+        {
+            case CallExpressionSyntax:
+            case MemberFieldAssignmentExpressionSyntax:
+            case MemberIndexAssignmentExpressionSyntax:
+            case IndexAssignmentExpressionSyntax:
+            case CompoundIndexAssignmentExpressionSyntax:
+            case IndirectAssignmentExpressionSyntax:
+            case FieldAssignmentExpressionSyntax:
+                return true;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            if (StatementMayMutateMemberPaths(child))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void CollectAssignedNames(SyntaxNode node, HashSet<string> assigned)
@@ -524,7 +595,7 @@ internal sealed class StatementBinder
     /// <paramref name="persistentFrame"/> so subsequent statements in the
     /// enclosing block see the narrowing.
     /// </summary>
-    private void ApplyEarlyExitNarrowings(BoundStatement statement, Dictionary<VariableSymbol, TypeSymbol> persistentFrame)
+    private void ApplyEarlyExitNarrowings(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
         if (statement is BoundIfStatement ifStmt)
         {
@@ -580,7 +651,7 @@ internal sealed class StatementBinder
     /// subsequent mutation. Called after invalidation so the fresh narrowing
     /// supersedes the clearing pass for this same statement.
     /// </summary>
-    private void ApplyAssignmentNarrowing(BoundStatement statement, Dictionary<VariableSymbol, TypeSymbol> persistentFrame)
+    private void ApplyAssignmentNarrowing(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
         if (statement is not BoundExpressionStatement { Expression: BoundAssignmentExpression assign })
         {
@@ -1258,10 +1329,10 @@ internal sealed class StatementBinder
         // Build the narrowing frame so the then-block sees each binding at
         // its non-null underlying type. The else-block does NOT see the
         // narrowing — the bindings are not even in scope there.
-        Dictionary<VariableSymbol, TypeSymbol> thenFrame = null;
+        Dictionary<AccessPath, TypeSymbol> thenFrame = null;
         if (localsForFrame.Count > 0)
         {
-            thenFrame = new Dictionary<VariableSymbol, TypeSymbol>(localsForFrame.Count);
+            thenFrame = new Dictionary<AccessPath, TypeSymbol>(localsForFrame.Count);
             foreach (var (variable, underlying) in localsForFrame)
             {
                 thenFrame[variable] = underlying;
@@ -1451,7 +1522,7 @@ internal sealed class StatementBinder
     private BoundStatement BindGuardLetStatement(GuardLetStatementSyntax syntax)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        var pseudoFrame = new Dictionary<VariableSymbol, TypeSymbol>();
+        var pseudoFrame = new Dictionary<AccessPath, TypeSymbol>();
         BindGuardLetStatementInBlock(syntax, statements, pseudoFrame);
         return new BoundBlockStatement(syntax, statements.ToImmutable());
     }
@@ -1468,7 +1539,7 @@ internal sealed class StatementBinder
     private void BindGuardLetStatementInBlock(
         GuardLetStatementSyntax syntax,
         ImmutableArray<BoundStatement>.Builder statements,
-        Dictionary<VariableSymbol, TypeSymbol> persistentFrame)
+        Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
         // Bind the else block once up-front strictly to validate that it
         // unconditionally exits the enclosing scope (GS0297). We then
@@ -1512,9 +1583,9 @@ internal sealed class StatementBinder
         }
     }
 
-    private static Dictionary<VariableSymbol, TypeSymbol> MergeNarrowingFrames(
-        Dictionary<VariableSymbol, TypeSymbol> a,
-        Dictionary<VariableSymbol, TypeSymbol> b)
+    private static Dictionary<AccessPath, TypeSymbol> MergeNarrowingFrames(
+        Dictionary<AccessPath, TypeSymbol> a,
+        Dictionary<AccessPath, TypeSymbol> b)
     {
         if (a == null || a.Count == 0)
         {
@@ -1526,7 +1597,7 @@ internal sealed class StatementBinder
             return a;
         }
 
-        var merged = new Dictionary<VariableSymbol, TypeSymbol>(a);
+        var merged = new Dictionary<AccessPath, TypeSymbol>(a);
         foreach (var kv in b)
         {
             // Later (more specific) wins on conflict. The type-test path passes
@@ -1547,13 +1618,26 @@ internal sealed class StatementBinder
     /// <returns>A pair of narrowing frames — the first applies to the
     /// then-branch, the second to the else-branch. Either may be
     /// <c>null</c> if the corresponding branch has no narrowing.</returns>
-    private (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) TryClassifyTypeTestNarrowing(BoundExpression condition)
+    private (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) TryClassifyTypeTestNarrowing(BoundExpression condition)
     {
         switch (condition)
         {
             case BoundIsExpression isExpr:
                 {
-                    if (!IsNarrowableVariable(isExpr.Expression, out var target))
+                    AccessPath targetPath;
+                    TypeSymbol currentType;
+                    if (IsNarrowableVariable(isExpr.Expression, out var target))
+                    {
+                        targetPath = target;
+                        currentType = target.Type;
+                    }
+                    else if (SmartCastStability.TryGetStableMemberPath(isExpr.Expression, out targetPath, out currentType))
+                    {
+                        // ADR-0069 addendum / issue #1180: a stable immutable
+                        // member path (`x.shape`, `this.box.lid`) narrows just
+                        // like a local. Unstable members never reach here.
+                    }
+                    else
                     {
                         return (null, null);
                     }
@@ -1568,12 +1652,12 @@ internal sealed class StatementBinder
                     // else-branch carries no narrowing: failing the type test
                     // tells us nothing more about the variable's type.
                     var narrowed = StripNullable(targetType);
-                    if (!IsStrictlyNarrower(target.Type, narrowed))
+                    if (!IsStrictlyNarrower(currentType, narrowed))
                     {
                         return (null, null);
                     }
 
-                    return (new Dictionary<VariableSymbol, TypeSymbol> { [target] = narrowed }, null);
+                    return (new Dictionary<AccessPath, TypeSymbol> { [targetPath] = narrowed }, null);
                 }
 
             case BoundUnaryExpression unary when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation:
@@ -1632,21 +1716,21 @@ internal sealed class StatementBinder
     /// survive. Used by the <c>||</c> then-frame classifier where a
     /// narrowing is only sound if both operands prove the same fact.
     /// </summary>
-    private static Dictionary<VariableSymbol, TypeSymbol> IntersectNarrowingFrames(
-        Dictionary<VariableSymbol, TypeSymbol> a,
-        Dictionary<VariableSymbol, TypeSymbol> b)
+    private static Dictionary<AccessPath, TypeSymbol> IntersectNarrowingFrames(
+        Dictionary<AccessPath, TypeSymbol> a,
+        Dictionary<AccessPath, TypeSymbol> b)
     {
         if (a == null || a.Count == 0 || b == null || b.Count == 0)
         {
             return null;
         }
 
-        Dictionary<VariableSymbol, TypeSymbol> result = null;
+        Dictionary<AccessPath, TypeSymbol> result = null;
         foreach (var kv in a)
         {
             if (b.TryGetValue(kv.Key, out var other) && other == kv.Value)
             {
-                result ??= new Dictionary<VariableSymbol, TypeSymbol>();
+                result ??= new Dictionary<AccessPath, TypeSymbol>();
                 result[kv.Key] = kv.Value;
             }
         }
@@ -1725,7 +1809,7 @@ internal sealed class StatementBinder
         return true;
     }
 
-    private (Dictionary<VariableSymbol, TypeSymbol> NonNil, Dictionary<VariableSymbol, TypeSymbol> Nil) TryClassifyNilGuard(BoundExpression condition)
+    private (Dictionary<AccessPath, TypeSymbol> NonNil, Dictionary<AccessPath, TypeSymbol> Nil) TryClassifyNilGuard(BoundExpression condition)
     {
         // ADR-0069 addendum / issue #712: compose nil-guard classification across
         // `!`, `&&`, and `||` so guards like `if a == nil || cond { ... } else { use(a) }`
@@ -1775,37 +1859,52 @@ internal sealed class StatementBinder
             return (null, null);
         }
 
-        VariableSymbol target = null;
+        AccessPath target = null;
+        TypeSymbol targetType = null;
         if (be.Left is BoundVariableExpression lv && IsNilLiteral(be.Right))
         {
             target = lv.Variable;
+            targetType = lv.Variable.Type;
         }
         else if (be.Right is BoundVariableExpression rv && IsNilLiteral(be.Left))
         {
             target = rv.Variable;
+            targetType = rv.Variable.Type;
+        }
+        else if (IsNilLiteral(be.Right) && SmartCastStability.TryGetStableMemberPath(be.Left, out var leftPath, out var leftType))
+        {
+            // ADR-0069 addendum / issue #1180: nil-guard on a stable immutable
+            // member path narrows it to its non-nullable underlying type.
+            target = leftPath;
+            targetType = leftType;
+        }
+        else if (IsNilLiteral(be.Left) && SmartCastStability.TryGetStableMemberPath(be.Right, out var rightPath, out var rightType))
+        {
+            target = rightPath;
+            targetType = rightType;
         }
 
-        if (target == null || target.Type is not NullableTypeSymbol nullable)
+        if (target == null || targetType is not NullableTypeSymbol nullable)
         {
             return (null, null);
         }
 
         var underlying = nullable.UnderlyingType;
-        Dictionary<VariableSymbol, TypeSymbol> nonNilFrame = null;
-        Dictionary<VariableSymbol, TypeSymbol> nilFrame = null;
+        Dictionary<AccessPath, TypeSymbol> nonNilFrame = null;
+        Dictionary<AccessPath, TypeSymbol> nilFrame = null;
         if (be.Op.Kind == BoundBinaryOperatorKind.NotEquals)
         {
-            nonNilFrame = new Dictionary<VariableSymbol, TypeSymbol> { [target] = underlying };
+            nonNilFrame = new Dictionary<AccessPath, TypeSymbol> { [target] = underlying };
         }
         else if (be.Op.Kind == BoundBinaryOperatorKind.Equals)
         {
-            nilFrame = new Dictionary<VariableSymbol, TypeSymbol> { [target] = underlying };
+            nilFrame = new Dictionary<AccessPath, TypeSymbol> { [target] = underlying };
         }
 
         return (nonNilFrame, nilFrame);
     }
 
-    private (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) TryClassifyBoolCallNarrowing(BoundExpression condition)
+    private (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) TryClassifyBoolCallNarrowing(BoundExpression condition)
     {
         var negate = false;
         var inner = condition;
@@ -1838,7 +1937,7 @@ internal sealed class StatementBinder
 
         if (inner is BoundUserInstanceCallExpression userInstanceCall && userInstanceCall.Type == TypeSymbol.Bool)
         {
-            var (thenFrame, elseFrame) = (default(Dictionary<VariableSymbol, TypeSymbol>), default(Dictionary<VariableSymbol, TypeSymbol>));
+            var (thenFrame, elseFrame) = (default(Dictionary<AccessPath, TypeSymbol>), default(Dictionary<AccessPath, TypeSymbol>));
             MergeUserMemberNotNullWhenNarrowings(userInstanceCall.Method.Attributes, negate, ref thenFrame, ref elseFrame);
             return (thenFrame, elseFrame);
         }
@@ -1850,8 +1949,8 @@ internal sealed class StatementBinder
     private void MergeClrMemberNotNullWhenNarrowings(
         System.Reflection.MethodInfo method,
         bool negate,
-        ref Dictionary<VariableSymbol, TypeSymbol> thenFrame,
-        ref Dictionary<VariableSymbol, TypeSymbol> elseFrame)
+        ref Dictionary<AccessPath, TypeSymbol> thenFrame,
+        ref Dictionary<AccessPath, TypeSymbol> elseFrame)
     {
         if (!ClrNullability.TryGetMemberNotNullWhenData(method, out var returnValue, out var members))
         {
@@ -1859,7 +1958,7 @@ internal sealed class StatementBinder
         }
 
         var narrowThen = returnValue != negate;
-        var frame = narrowThen ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>()) : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
+        var frame = narrowThen ? (thenFrame ??= new Dictionary<AccessPath, TypeSymbol>()) : (elseFrame ??= new Dictionary<AccessPath, TypeSymbol>());
         foreach (var name in members)
         {
             NarrowFieldIfNullable(name, frame);
@@ -1870,8 +1969,8 @@ internal sealed class StatementBinder
     private void MergeUserMemberNotNullWhenNarrowings(
         ImmutableArray<BoundAttribute> attributes,
         bool negate,
-        ref Dictionary<VariableSymbol, TypeSymbol> thenFrame,
-        ref Dictionary<VariableSymbol, TypeSymbol> elseFrame)
+        ref Dictionary<AccessPath, TypeSymbol> thenFrame,
+        ref Dictionary<AccessPath, TypeSymbol> elseFrame)
     {
         if (attributes.IsDefaultOrEmpty)
         {
@@ -1886,7 +1985,7 @@ internal sealed class StatementBinder
             }
 
             var narrowThen = returnValue != negate;
-            var frame = narrowThen ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>()) : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
+            var frame = narrowThen ? (thenFrame ??= new Dictionary<AccessPath, TypeSymbol>()) : (elseFrame ??= new Dictionary<AccessPath, TypeSymbol>());
             foreach (var name in members)
             {
                 NarrowFieldIfNullable(name, frame);
@@ -1894,15 +1993,15 @@ internal sealed class StatementBinder
         }
     }
 
-    private static (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) ClassifyImportedBoolCallNarrowing(BoundImportedCallExpression call, bool negate)
+    private static (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) ClassifyImportedBoolCallNarrowing(BoundImportedCallExpression call, bool negate)
         => ClassifyImportedMethodBoolCallNarrowing(call.Function.Method.GetParameters(), call.Arguments, negate);
-    private static (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) ClassifyImportedMethodBoolCallNarrowing(
+    private static (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) ClassifyImportedMethodBoolCallNarrowing(
         ParameterInfo[] parameters,
         ImmutableArray<BoundExpression> arguments,
         bool negate)
     {
-        Dictionary<VariableSymbol, TypeSymbol> thenFrame = null;
-        Dictionary<VariableSymbol, TypeSymbol> elseFrame = null;
+        Dictionary<AccessPath, TypeSymbol> thenFrame = null;
+        Dictionary<AccessPath, TypeSymbol> elseFrame = null;
         var count = Math.Min(parameters.Length, arguments.Length);
         for (var i = 0; i < count; i++)
         {
@@ -1922,8 +2021,8 @@ internal sealed class StatementBinder
                 {
                     var widenThen = maybeNullWhenReturnValue != negate;
                     var widenFrame = widenThen
-                        ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>())
-                        : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
+                        ? (thenFrame ??= new Dictionary<AccessPath, TypeSymbol>())
+                        : (elseFrame ??= new Dictionary<AccessPath, TypeSymbol>());
                     widenFrame[widenVarExpr.Variable] = NullableTypeSymbol.Get(widenVarExpr.Variable.Type);
                 }
 
@@ -1938,22 +2037,22 @@ internal sealed class StatementBinder
             }
 
             var narrowThen = returnValue != negate;
-            var frame = narrowThen ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>()) : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
+            var frame = narrowThen ? (thenFrame ??= new Dictionary<AccessPath, TypeSymbol>()) : (elseFrame ??= new Dictionary<AccessPath, TypeSymbol>());
             frame[variableExpression.Variable] = nullable.UnderlyingType;
         }
 
         return (thenFrame, elseFrame);
     }
 
-    private static (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) ClassifyUserBoolCallNarrowing(BoundCallExpression call, bool negate)
+    private static (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) ClassifyUserBoolCallNarrowing(BoundCallExpression call, bool negate)
     {
         // Issue #178 / ADR-0047 §6: a user-declared function may carry the
         // same [NotNullWhen] / [MaybeNullWhen] postconditions C# uses.
         // Recognition is type-identity based via KnownAttributes so renaming
         // or shadowing the source name cannot bypass the narrowing rule.
         var parameters = call.Function.Parameters;
-        Dictionary<VariableSymbol, TypeSymbol> thenFrame = null;
-        Dictionary<VariableSymbol, TypeSymbol> elseFrame = null;
+        Dictionary<AccessPath, TypeSymbol> thenFrame = null;
+        Dictionary<AccessPath, TypeSymbol> elseFrame = null;
         var count = Math.Min(parameters.Length, call.Arguments.Length);
         for (var i = 0; i < count; i++)
         {
@@ -1988,8 +2087,8 @@ internal sealed class StatementBinder
             {
                 var narrowThen = returnValue != negate;
                 var frame = narrowThen
-                    ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>())
-                    : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
+                    ? (thenFrame ??= new Dictionary<AccessPath, TypeSymbol>())
+                    : (elseFrame ??= new Dictionary<AccessPath, TypeSymbol>());
                 frame[narrowVarExpr.Variable] = nullable.UnderlyingType;
             }
 
@@ -2002,8 +2101,8 @@ internal sealed class StatementBinder
             {
                 var widenThen = widenReturnValue != negate;
                 var widenFrame = widenThen
-                    ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>())
-                    : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
+                    ? (thenFrame ??= new Dictionary<AccessPath, TypeSymbol>())
+                    : (elseFrame ??= new Dictionary<AccessPath, TypeSymbol>());
                 widenFrame[widenVarExpr.Variable] = NullableTypeSymbol.Get(widenVarExpr.Variable.Type);
             }
         }
@@ -2021,30 +2120,41 @@ internal sealed class StatementBinder
         return expr is BoundLiteralExpression lit && lit.Type == TypeSymbol.Null;
     }
 
-    internal static Dictionary<VariableSymbol, TypeSymbol> TryClassifyPatternNarrowing(BoundExpression discriminant, BoundPattern pattern)
+    internal static Dictionary<AccessPath, TypeSymbol> TryClassifyPatternNarrowing(BoundExpression discriminant, BoundPattern pattern)
     {
-        if (discriminant is not BoundVariableExpression variableExpression || pattern == null)
+        if (pattern == null)
         {
             return null;
         }
 
         // ADR-0069 addendum / issue #712: only narrow non-mutable receivers
-        // (locals, parameters, and read-only globals). Mutable globals could
-        // be reassigned between the test and the use under aliasing or
-        // another thread, mirroring ADR-0069's stability rule.
-        if (!IsStableNarrowableVariable(variableExpression.Variable))
+        // (locals, parameters, and read-only globals). ADR-0069 addendum /
+        // issue #1180 extends this to stable immutable member paths
+        // (`switch x.shape { case c is Circle: ... }`). Mutable receivers could
+        // be reassigned or mutated between the test and the use.
+        AccessPath discriminantPath;
+        if (discriminant is BoundVariableExpression variableExpression
+            && IsStableNarrowableVariable(variableExpression.Variable))
+        {
+            discriminantPath = variableExpression.Variable;
+        }
+        else if (SmartCastStability.TryGetStableMemberPath(discriminant, out var memberPath, out _))
+        {
+            discriminantPath = memberPath;
+        }
+        else
         {
             return null;
         }
 
-        var variable = variableExpression.Variable;
+        var discriminantType = discriminant.Type;
         TypeSymbol narrowedType = null;
         switch (pattern)
         {
             case BoundTypePattern typePattern:
                 narrowedType = typePattern.TargetType;
                 break;
-            case BoundConstantPattern constantPattern when variable.Type is NullableTypeSymbol nullable && !IsNilLiteral(constantPattern.Value):
+            case BoundConstantPattern constantPattern when discriminantType is NullableTypeSymbol nullable && !IsNilLiteral(constantPattern.Value):
                 narrowedType = nullable.UnderlyingType;
                 break;
             case BoundDiscardPattern:
@@ -2080,10 +2190,10 @@ internal sealed class StatementBinder
                 break;
         }
 
-        return narrowedType == null ? null : new Dictionary<VariableSymbol, TypeSymbol> { [variable] = narrowedType };
+        return narrowedType == null ? null : new Dictionary<AccessPath, TypeSymbol> { [discriminantPath] = narrowedType };
     }
 
-    private BoundStatement BindStatementWithNarrowing(StatementSyntax syntax, Dictionary<VariableSymbol, TypeSymbol> frame)
+    private BoundStatement BindStatementWithNarrowing(StatementSyntax syntax, Dictionary<AccessPath, TypeSymbol> frame)
     {
         if (frame == null)
         {
@@ -2104,7 +2214,7 @@ internal sealed class StatementBinder
     // Issue #991: bind a switch-arm `when` guard as a boolean expression under
     // the arm's pattern-narrowing frame. A non-bool guard surfaces the standard
     // conversion diagnostic.
-    private BoundExpression BindGuardExpressionWithNarrowing(ExpressionSyntax syntax, Dictionary<VariableSymbol, TypeSymbol> frame)
+    private BoundExpression BindGuardExpressionWithNarrowing(ExpressionSyntax syntax, Dictionary<AccessPath, TypeSymbol> frame)
     {
         if (frame == null)
         {
@@ -2208,7 +2318,7 @@ internal sealed class StatementBinder
         // not contribute to the merge — they remove themselves from the
         // post-switch dataflow.
         var hasAnyFallThroughArm = false;
-        Dictionary<VariableSymbol, TypeSymbol> mergedExitFrame = null;
+        Dictionary<AccessPath, TypeSymbol> mergedExitFrame = null;
         var mergeFailed = false;
 
         foreach (var caseSyntax in syntax.Cases)
@@ -2293,13 +2403,13 @@ internal sealed class StatementBinder
 
             if (mergedExitFrame == null)
             {
-                mergedExitFrame = new Dictionary<VariableSymbol, TypeSymbol>(frame);
+                mergedExitFrame = new Dictionary<AccessPath, TypeSymbol>(frame);
                 continue;
             }
 
             // Intersect with the running merge. Only variables narrowed to
             // the same type by every fall-through arm survive.
-            var next = new Dictionary<VariableSymbol, TypeSymbol>();
+            var next = new Dictionary<AccessPath, TypeSymbol>();
             foreach (var kv in frame)
             {
                 if (mergedExitFrame.TryGetValue(kv.Key, out var existing) && existing == kv.Value)

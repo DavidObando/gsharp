@@ -279,3 +279,84 @@ func RunDogs(a Animal) {
     Console.WriteLine(a.Bark())    // accepted — a is Dog after the switch.
 }
 ```
+
+## Addendum — issue #1180 (stable member-access paths)
+
+- **Status**: Accepted (addendum)
+- **Related**: parent issue [#706](https://github.com/DavidObando/gsharp/issues/706), this addendum's issue [#1180](https://github.com/DavidObando/gsharp/issues/1180), the #712 addendum above, ADR-0001, ADR-0017.
+
+The original ADR (and the #712 addendum) restricted flow-narrowing to *local* roots only: `LocalVariableSymbol`, `ParameterSymbol`, and read-only `GlobalVariableSymbol`. This addendum extends narrowing to **stable member-access paths** — chains of immutable members read through a stable receiver chain (e.g. `b.Pet`, `o.Box.Pet`) — bringing G# to parity with Kotlin's smart-cast rules for properties and other members.
+
+### Motivation
+
+Kotlin smart-casts a property/field access only when the compiler can *guarantee* the value cannot change between the type check and the use. G# previously narrowed only locals, so idiomatic code that tests and then uses an immutable member (`if b.Pet is Dog { b.Pet.Bark() }`) failed to resolve the derived member. This addendum closes that gap while preserving soundness for anything that could be mutated.
+
+### What makes a member path "stable" (Kotlin parity)
+
+Narrowing now keys on an **access path** = a stable root variable followed by zero or more *stable members*. A path narrows only when **every** link is stable:
+
+- **Root** — a local, parameter (`this` included), or read-only global (the existing allow-list).
+- **Field link** — a `let`/read-only instance field (`IsReadOnly && !IsStatic`). `var` fields are excluded.
+- **Property link** — an *auto-property* (no custom getter) that is immutable (no setter, or `init`-only), not overridable (`!virtual && !override`), not `static`, and has a getter. Properties with a custom getter, `var` (settable) properties, `open`/overridable properties, and static properties are all excluded.
+- **Imported / other-compilation members** — members surfaced as CLR member accesses (`BoundClrPropertyAccessExpression`) are never treated as stable, mirroring Kotlin's "same module" requirement (the compiler cannot prove a foreign member has no custom getter / is not overridable).
+- **Delegated members** — not stable (G# has no delegated-property form that would qualify).
+
+These predicates live in `SmartCastStability`; the path key is `AccessPath` (a root `VariableSymbol` plus an immutable array of member `Symbol`s with structural equality).
+
+### Invalidation (soundness)
+
+A member-path narrowing is conservatively dropped when anything in scope could change it:
+
+- **Root reassignment** — any path rooted at a reassigned variable is invalidated (as before for locals).
+- **Intervening call** — any statement containing a call invalidates *all* member-bearing paths, because a method could mutate reachable state. (Local-only narrowings are unaffected.)
+- **Member / indexed / indirect assignment** — invalidates all member-bearing paths.
+
+This is intentionally stricter than Kotlin (which keeps `val`-member casts across benign calls), but it satisfies the issue's explicit "intervening call invalidates" requirement and is trivially sound. Local-root narrowings retain their previous, more precise invalidation behavior.
+
+### Where it applies
+
+Member-path narrowing is produced by the same classifiers as local narrowing — `is` / `!is` tests (statement and expression level, including `&&` / `||` threading and `if`-as-expression), nil-guards, and `switch` arm discriminators — and consumed at every field/property *read* site (`ApplyMemberNarrowing`). Emit inserts the same `castclass` / `unbox.any` after the `ldfld` / `ldsfld` / getter call for a narrowed member read; the lowerer and rewriter carry the narrowed type through (including auto-property reads that lower to backing-field access).
+
+### Examples (addendum)
+
+```gs
+open class Animal { var Name string }
+class Dog : Animal { func Bark() string { return Name + ":woof" } }
+
+class Box { let Pet Animal }                       // stable: read-only field
+
+func Run(b Box) {
+    if b.Pet is Dog {
+        b.Pet.Bark()        // accepted — stable path b.Pet narrowed to Dog
+    }
+}
+
+class Inner { let Pet Animal }
+class Outer { let Box Inner }
+
+func Deep(o Outer) {
+    if o.Box.Pet is Dog {
+        o.Box.Pet.Bark()    // accepted — every link in o.Box.Pet is stable
+    }
+}
+
+// NOT narrowed — each of these has an unstable link:
+class MutBox  { var Pet Animal }                          // var field
+class PropBox { prop Pet Animal }                         // settable auto-property
+class GetBox  { prop Pet Animal { get { return ... } } }  // custom getter
+open class OpenBox { open prop Pet Animal { get; init; } } // overridable
+
+func NoNarrow(m MutBox) {
+    if m.Pet is Dog {
+        m.Pet.Bark()        // rejected — m.Pet is not stable (var field)
+    }
+}
+
+// Invalidated by an intervening call:
+func CallInvalidates(b Box) {
+    if b.Pet is Dog {
+        SomethingElse()
+        b.Pet.Bark()        // rejected — call may have mutated reachable state
+    }
+}
+```

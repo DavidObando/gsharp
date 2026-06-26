@@ -1375,13 +1375,24 @@ internal sealed partial class MethodBodyEmitter
     /// </summary>
     private void EmitNarrowingCastIfNeeded(BoundVariableExpression v)
     {
-        var narrowed = v.NarrowedType;
+        this.EmitNarrowingCastIfNeeded(v.Variable.Type, v.NarrowedType);
+    }
+
+    /// <summary>
+    /// ADR-0069 / issue #1180: emit the single conversion opcode that realigns
+    /// the IL stack to a smart-cast narrowed type. Shared by narrowed variable
+    /// reads and narrowed stable member-access reads (field / property). A pure
+    /// nullable strip (<c>T? → T</c>) or a same-runtime-type alias needs no IL.
+    /// </summary>
+    /// <param name="declared">The statically declared type of the read.</param>
+    /// <param name="narrowed">The narrowed type, or <c>null</c> when not narrowed.</param>
+    private void EmitNarrowingCastIfNeeded(TypeSymbol declared, TypeSymbol narrowed)
+    {
         if (narrowed == null)
         {
             return;
         }
 
-        var declared = v.Variable.Type;
         if (declared == narrowed)
         {
             return;

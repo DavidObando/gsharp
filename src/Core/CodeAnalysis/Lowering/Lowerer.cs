@@ -462,7 +462,7 @@ public sealed class Lowerer : BoundTreeRewriter
         if (node.Property.IsAutoProperty && node.Property.BackingField != null
             && this.declaringType != null && node.StructType == this.declaringType)
         {
-            return new BoundFieldAccessExpression(null, node.Receiver, node.StructType, node.Property.BackingField);
+            return new BoundFieldAccessExpression(null, node.Receiver, node.StructType, node.Property.BackingField, node.NarrowedType);
         }
 
         // Computed properties (or external access) remain as BoundPropertyAccessExpression —
