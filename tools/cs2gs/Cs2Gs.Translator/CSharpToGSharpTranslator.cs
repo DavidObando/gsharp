@@ -3246,6 +3246,28 @@ public sealed class CSharpToGSharpTranslator
             return count;
         }
 
+        // C# array-creation lengths accept any integral type (`new T[uint]`,
+        // `new T[long]`, …), but the emitted `System.GC.AllocateArray[T]` takes an
+        // `int32`. Coerce a non-`int32` numeric length to int32 via the
+        // conversion-call form so the allocation binds (avoids GS0159). A nullable
+        // or non-numeric length is left unchanged.
+        private GExpression CoerceLengthToInt32(
+            ExpressionSyntax lengthSyntax, GExpression length)
+        {
+            ITypeSymbol lengthType = this.context.GetTypeInfo(lengthSyntax).Type;
+            if (lengthType != null &&
+                IsNonNullableValueType(lengthType) &&
+                TryGetNumericKind(lengthType, out SpecialType underlying) &&
+                underlying != SpecialType.System_Int32)
+            {
+                ITypeSymbol int32Type =
+                    this.context.Compilation.GetSpecialType(SpecialType.System_Int32);
+                return this.CoerceOperandTo(length, int32Type);
+            }
+
+            return length;
+        }
+
         // C# `a ?? b` where `a` is a nullable numeric: G# requires `b` to match
         // the underlying numeric type of `a`, otherwise GS0129. Coerce the right
         // operand to the left's underlying (non-nullable) type when they differ.
@@ -5083,13 +5105,22 @@ public sealed class CSharpToGSharpTranslator
             // `new T[n]` (runtime/constant length, no initializer) → the canonical
             // zero-initialised allocation `System.GC.AllocateArray[T](n)`, which
             // returns a `T[]` of length `n` (the Go-style `make([]T, n)` form is a
-            // documented gsc gap, ADR-0083).
-            GExpression length = creation.Type.RankSpecifiers.Count > 0 &&
+            // documented gsc gap, ADR-0083). C# accepts any integral length
+            // (`uint`/`long`/…); `GC.AllocateArray[T]` takes an `int32`, so a
+            // non-`int32` numeric length is coerced via the conversion-call form
+            // (`int32(n)`) to avoid GS0159 (no matching overload).
+            GExpression length;
+            if (creation.Type.RankSpecifiers.Count > 0 &&
                 creation.Type.RankSpecifiers[0].Sizes.Count > 0 &&
                 creation.Type.RankSpecifiers[0].Sizes[0] is { } sizeExpr &&
-                !sizeExpr.IsKind(SyntaxKind.OmittedArraySizeExpression)
-                ? this.TranslateExpression(sizeExpr)
-                : LiteralExpression.Int("0");
+                !sizeExpr.IsKind(SyntaxKind.OmittedArraySizeExpression))
+            {
+                length = this.CoerceLengthToInt32(sizeExpr, this.TranslateExpression(sizeExpr));
+            }
+            else
+            {
+                length = LiteralExpression.Int("0");
+            }
 
             return new InvocationExpression(
                 new MemberAccessExpression(
