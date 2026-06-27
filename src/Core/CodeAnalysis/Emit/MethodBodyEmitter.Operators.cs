@@ -527,12 +527,10 @@ internal sealed partial class MethodBodyEmitter
                 this.il.OpCode(isUnsigned ? ILOpCode.Rem_un : ILOpCode.Rem);
                 break;
             case BoundBinaryOperatorKind.ShiftLeft:
-                this.EmitShiftWithGoSemanticsGuard(ILOpCode.Shl, b.Left.Type);
+                this.il.OpCode(ILOpCode.Shl);
                 break;
             case BoundBinaryOperatorKind.ShiftRight:
-                this.EmitShiftWithGoSemanticsGuard(
-                    isUnsigned ? ILOpCode.Shr_un : ILOpCode.Shr,
-                    b.Left.Type);
+                this.il.OpCode(isUnsigned ? ILOpCode.Shr_un : ILOpCode.Shr);
                 break;
             case BoundBinaryOperatorKind.BitwiseAnd:
                 this.il.OpCode(ILOpCode.And);
@@ -741,89 +739,14 @@ internal sealed partial class MethodBodyEmitter
         }
     }
 
-    // Issue #421 (P2-2): IL `shl`/`shr`/`shr_un` mask the shift count to
-    // the low log2(stack-width) bits (5 for i4, 6 for i8). G# follows Go
-    // semantics, where a shift count >= the operand's natural width
-    // yields zero. Without this guard, `int32(1) << 33` would produce 2
-    // under the CLR mask but should produce 0 in Go. Emit a runtime
-    // check `count >= width` and substitute zero when the count is
-    // out-of-range; otherwise emit the normal shift opcode.
-    //
-    // Stack on entry: [value, count(i4)]; stack on exit: [result].
-    // For signed right shift this simplification (zero instead of
-    // sign-extension to all-ones for negative values) matches the
-    // documented G# behavior — interpreter and emitter agree on it.
-    private void EmitShiftWithGoSemanticsGuard(ILOpCode shiftOp, TypeSymbol leftType)
-    {
-        var zeroLabel = this.il.DefineLabel();
-        var endLabel = this.il.DefineLabel();
-
-        this.il.OpCode(ILOpCode.Dup);
-        this.EmitTypeBitWidth(leftType);
-        this.il.Branch(ILOpCode.Bge_un, zeroLabel);
-        this.il.OpCode(shiftOp);
-        this.il.Branch(ILOpCode.Br, endLabel);
-
-        this.il.MarkLabel(zeroLabel);
-        this.il.OpCode(ILOpCode.Pop);
-        this.il.OpCode(ILOpCode.Pop);
-        this.EmitZeroForShiftResult(leftType);
-
-        this.il.MarkLabel(endLabel);
-    }
-
-    private void EmitTypeBitWidth(TypeSymbol t)
-    {
-        if (t == TypeSymbol.Int8 || t == TypeSymbol.UInt8)
-        {
-            this.il.LoadConstantI4(8);
-        }
-        else if (t == TypeSymbol.Int16 || t == TypeSymbol.UInt16 || t == TypeSymbol.Char)
-        {
-            this.il.LoadConstantI4(16);
-        }
-        else if (t == TypeSymbol.Int32 || t == TypeSymbol.UInt32)
-        {
-            this.il.LoadConstantI4(32);
-        }
-        else if (t == TypeSymbol.Int64 || t == TypeSymbol.UInt64)
-        {
-            this.il.LoadConstantI4(64);
-        }
-        else if (t == TypeSymbol.NInt || t == TypeSymbol.NUInt)
-        {
-            // Width is sizeof(IntPtr) * 8, determined at IL runtime so
-            // 32-bit and 64-bit hosts both produce Go-correct results.
-            this.il.OpCode(ILOpCode.Sizeof);
-            this.il.Token(this.outer.GetTypeReference(typeof(IntPtr)));
-            this.il.LoadConstantI4(8);
-            this.il.OpCode(ILOpCode.Mul);
-        }
-        else
-        {
-            // Fallback (shouldn't reach here for non-integer types since
-            // shifts are only bound on integer operands).
-            this.il.LoadConstantI4(32);
-        }
-    }
-
-    private void EmitZeroForShiftResult(TypeSymbol t)
-    {
-        if (t == TypeSymbol.Int64 || t == TypeSymbol.UInt64)
-        {
-            this.il.LoadConstantI8(0);
-        }
-        else if (t == TypeSymbol.NInt || t == TypeSymbol.NUInt)
-        {
-            this.il.LoadConstantI4(0);
-            this.il.OpCode(ILOpCode.Conv_i);
-        }
-        else
-        {
-            this.il.LoadConstantI4(0);
-        }
-    }
-
+    // Issue #1232: G# shift semantics now match C#/CLR. The IL `shl`/`shr`/
+    // `shr_un` opcodes mask the shift count to the low log2(stack-width) bits
+    // (5 for an i4 stack slot — covering int32/uint32 and the sub-i4 types
+    // promoted to i4 — and 6 for i8). Native-int operands mask to the runtime
+    // pointer width. This is exactly C#'s behavior (`x << count` masks `count`
+    // by `& 0x1F` for 32-bit operands and `& 0x3F` for 64-bit operands), so the
+    // bare opcode is emitted directly with no count-range guard. (G# previously
+    // followed Go, substituting zero when the count was >= the operand width.)
     private bool TryEmitDecimalBinary(BoundBinaryOperatorKind kind)
     {
         string opName = kind switch

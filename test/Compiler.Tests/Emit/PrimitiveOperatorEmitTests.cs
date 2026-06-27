@@ -33,17 +33,19 @@ public class PrimitiveOperatorEmitTests
     [InlineData("int64", "1L << 10", "1024")]
     [InlineData("int64", "1024L >> 2", "256")]
 
-    // Issue #421 (P2-2): Go semantics — count >= width yields 0 (not CLR's masked shift).
-    [InlineData("int32", "1 << 33", "0")]
-    [InlineData("int32", "1 << 32", "0")]
-    [InlineData("int32", "100 >> 32", "0")]
-    [InlineData("uint32", "uint32(1) << 32", "0")]
-    [InlineData("uint32", "uint32(100) >> 64", "0")]
-    [InlineData("int64", "1L << 64", "0")]
-    [InlineData("int64", "1L << 100", "0")]
-    [InlineData("int64", "1024L >> 64", "0")]
-    [InlineData("uint64", "uint64(1) << 64", "0")]
-    [InlineData("uint64", "uint64(1024) >> 64", "0")]
+    // Issue #1232: shift count masking matches C#/CLR — the count is masked by
+    // the operand's stack width (`& 0x1F` for 32-bit operands, `& 0x3F` for
+    // 64-bit operands), not Go's "count >= width yields 0".
+    [InlineData("int32", "1 << 33", "2")]
+    [InlineData("int32", "1 << 32", "1")]
+    [InlineData("int32", "100 >> 32", "100")]
+    [InlineData("uint32", "uint32(1) << 32", "1")]
+    [InlineData("uint32", "uint32(100) >> 64", "100")]
+    [InlineData("int64", "1L << 64", "1")]
+    [InlineData("int64", "1L << 100", "68719476736")]
+    [InlineData("int64", "1024L >> 64", "1024")]
+    [InlineData("uint64", "uint64(1) << 64", "1")]
+    [InlineData("uint64", "uint64(1024) >> 64", "1024")]
 
     // Boundary: shift by exactly width-1 still works normally.
     [InlineData("int32", "1 << 31", "-2147483648")]
@@ -57,6 +59,42 @@ public class PrimitiveOperatorEmitTests
     public void Long_Operators_ProduceExpectedValue(string _, string expr, string expected)
     {
         Assert.Equal(expected + "\n", CompileAndRun(BuildSource(expr)));
+    }
+
+    // Issue #1232: a narrower-order integer shift count is implicitly widened to
+    // int32, and the shift runs with C#/CLR masking — end-to-end.
+    [Fact]
+    public void Shift_NarrowOrderCount_WidensAndRuns()
+    {
+        var src = """
+            package P
+            import System
+
+            func Shl(value uint32, count uint8) uint32 {
+                return value << count
+            }
+
+            Console.WriteLine(Shl(uint32(1), uint8(4)))
+            """;
+        Assert.Equal("16\n", CompileAndRun(src));
+    }
+
+    // Issue #1232: a value-producing if whose arms are a uint32 and the literal
+    // `0` unifies on uint32 without an explicit cast on the `0`.
+    [Fact]
+    public void ValueIf_Uint32AndZeroLiteral_RunsWithoutCast()
+    {
+        var src = """
+            package P
+            import System
+
+            func Pick(cond bool, u uint32) uint32 {
+                return if cond { u } else { 0 }
+            }
+
+            Console.WriteLine(Pick(false, uint32(7)))
+            """;
+        Assert.Equal("0\n", CompileAndRun(src));
     }
 
     [Theory]

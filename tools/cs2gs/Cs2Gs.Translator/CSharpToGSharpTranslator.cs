@@ -3119,16 +3119,11 @@ public sealed class CSharpToGSharpTranslator
                 return this.TranslateNullCoalescing(binary, left, right);
             }
 
-            // C# shifts (`<<` / `>>`) take the result type from the left operand and
-            // allow any integral count; G# requires the shift count (RHS) to be
-            // `int32` (a `uint32`/`uint8`/... count yields GS0129). Coerce the count
-            // to int32 when it isn't already.
-            if (op == "<<" || op == ">>")
-            {
-                return new BinaryExpression(
-                    left, op, this.CoerceShiftCountToInt32(binary.Right, right));
-            }
-
+            // Issue #1232: G# now matches C#'s shift-count ergonomics — gsc
+            // implicitly widens a narrower-order integer shift count to int32 —
+            // so `<<` / `>>` translate straight through with no count coercion.
+            // (`<<` / `>>` are not numeric-promotion operators, so they fall
+            // through to the plain binary form below.)
             if (!IsNumericPromotionOperator(op))
             {
                 return new BinaryExpression(left, op, right);
@@ -3202,13 +3197,16 @@ public sealed class CSharpToGSharpTranslator
                 return rhs;
             }
 
-            // Compound shift (`<<=` / `>>=`): the RHS is a shift count, which G#
-            // requires to be `int32` — NOT the LHS numeric type. Coerce the count to
-            // int32 (e.g. `value <<= n` where `n` is `uint32` → `value <<= int32(n)`).
+            // Issue #1232: compound shift (`<<=` / `>>=`). The RHS is a shift
+            // count, NOT the LHS numeric type — gsc now implicitly widens a
+            // narrower-order integer count to int32, so the count needs no
+            // coercion. Return it unchanged (and, crucially, skip the LHS-type
+            // numeric promotion below, which would wrongly coerce the count to
+            // the LHS type, e.g. `uint32(count)` → GS0129).
             if (assignment.IsKind(SyntaxKind.LeftShiftAssignmentExpression) ||
                 assignment.IsKind(SyntaxKind.RightShiftAssignmentExpression))
             {
-                return this.CoerceShiftCountToInt32(assignment.Right, rhs);
+                return rhs;
             }
 
             ITypeSymbol leftType = this.context.GetTypeInfo(assignment.Left).Type;
@@ -3222,28 +3220,6 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return rhs;
-        }
-
-        // G# requires a shift count (the RHS of `<<` / `>>` / `<<=` / `>>=`) to be
-        // `int32`; C# infers the shift result from the left operand and accepts any
-        // integral count. Coerce a non-`int32` numeric count to int32 via the
-        // conversion-call form so the shift binds (avoids GS0129). A nullable or
-        // non-numeric count is left unchanged.
-        private GExpression CoerceShiftCountToInt32(
-            ExpressionSyntax countSyntax, GExpression count)
-        {
-            ITypeSymbol countType = this.context.GetTypeInfo(countSyntax).Type;
-            if (countType != null &&
-                IsNonNullableValueType(countType) &&
-                TryGetNumericKind(countType, out SpecialType underlying) &&
-                underlying != SpecialType.System_Int32)
-            {
-                ITypeSymbol int32Type =
-                    this.context.Compilation.GetSpecialType(SpecialType.System_Int32);
-                return this.CoerceOperandTo(count, int32Type);
-            }
-
-            return count;
         }
 
         // C# array-creation lengths accept any integral type (`new T[uint]`,
@@ -3368,11 +3344,15 @@ public sealed class CSharpToGSharpTranslator
         }
 
         // C# ternary `cond ? a : b` lowers to the G# value-position `if` expression.
-        // When both arms are numeric primitives whose types differ from the
-        // conditional's overall (non-nullable) numeric result type, G# has no
-        // implicit numeric promotion and reports GS0263 ("branches have no common
-        // result type"). Coerce each diverging arm to the result type via the
-        // conversion-call form (e.g. `cond ? 1u : 0` → `if cond { 1u } else { uint32(0) }`).
+        // Issue #1232: gsc now matches C#'s numeric ergonomics for conditional arms
+        // — it adapts an in-range constant integer literal arm and implicitly widens
+        // a narrower typed arm to the other arm's type. So a coercion is only needed
+        // for the residual case G# still cannot unify on its own: when C#'s common
+        // result type is STRICTLY WIDER than BOTH arm types (e.g. `cond ? u16 : i16`
+        // whose C# common type is `int`, which equals neither arm). There we coerce
+        // both diverging arms to the result type via the conversion-call form. The
+        // idiomatic `cond ? 1u : 0` now translates to `if cond { 1u } else { 0 }`
+        // (no cast on the `0`), letting gsc adapt the literal.
         private GExpression TranslateConditionalExpression(
             ConditionalExpressionSyntax conditional)
         {
@@ -3388,17 +3368,12 @@ public sealed class CSharpToGSharpTranslator
                 IsNonNullableValueType(resultType) &&
                 TryGetNumericKind(resultType, out SpecialType resultUnderlying) &&
                 TryGetNumericKind(trueType, out SpecialType trueUnderlying) &&
-                TryGetNumericKind(falseType, out SpecialType falseUnderlying))
+                TryGetNumericKind(falseType, out SpecialType falseUnderlying) &&
+                resultUnderlying != trueUnderlying &&
+                resultUnderlying != falseUnderlying)
             {
-                if (trueUnderlying != resultUnderlying)
-                {
-                    whenTrue = this.CoerceOperandTo(whenTrue, resultType);
-                }
-
-                if (falseUnderlying != resultUnderlying)
-                {
-                    whenFalse = this.CoerceOperandTo(whenFalse, resultType);
-                }
+                whenTrue = this.CoerceOperandTo(whenTrue, resultType);
+                whenFalse = this.CoerceOperandTo(whenFalse, resultType);
             }
 
             return new IfExpression(condition, whenTrue, whenFalse);

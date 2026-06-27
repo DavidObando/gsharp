@@ -30,15 +30,16 @@ public class PrimitiveInterpreterTests
     [InlineData("1L << 10", "1024")]
     [InlineData("1024L >> 2", "256")]
 
-    // Issue #421 (P2-2): Go semantics — count >= width yields 0.
-    [InlineData("1 << 33", "0")]
-    [InlineData("1 << 32", "0")]
-    [InlineData("100 >> 32", "0")]
-    [InlineData("1L << 64", "0")]
-    [InlineData("1L << 100", "0")]
-    [InlineData("1024L >> 64", "0")]
-    [InlineData("uint32(1) << 32", "0")]
-    [InlineData("uint64(1) << 64", "0")]
+    // Issue #1232: shift count masking matches C#/CLR (`& 0x1F` for 32-bit
+    // operands, `& 0x3F` for 64-bit operands), not Go's "count >= width = 0".
+    [InlineData("1 << 33", "2")]
+    [InlineData("1 << 32", "1")]
+    [InlineData("100 >> 32", "100")]
+    [InlineData("1L << 64", "1")]
+    [InlineData("1L << 100", "68719476736")]
+    [InlineData("1024L >> 64", "1024")]
+    [InlineData("uint32(1) << 32", "1")]
+    [InlineData("uint64(1) << 64", "1")]
 
     // Boundary: shift by exactly width-1 still works normally.
     [InlineData("1 << 31", "-2147483648")]
