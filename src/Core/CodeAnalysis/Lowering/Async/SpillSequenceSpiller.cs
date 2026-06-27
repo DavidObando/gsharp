@@ -98,6 +98,9 @@ public static class SpillSequenceSpiller
                 case BoundIfStatement ifStmt:
                     return RewriteIfStatement(ifStmt, builder);
 
+                case BoundConditionalGotoStatement condGoto:
+                    return RewriteConditionalGotoStatement(condGoto, builder);
+
                 case BoundTryStatement tryStmt:
                     return RewriteTryStatement(tryStmt, builder);
 
@@ -133,7 +136,6 @@ public static class SpillSequenceSpiller
                 // (AsyncExceptionHandlerRewriter, Lowerer, iterator rewriter).
                 case BoundLabelStatement:
                 case BoundGotoStatement:
-                case BoundConditionalGotoStatement:
                 case BoundThrowStatement:
                 case BoundScopeStatement:
                 case BoundChannelSendStatement:
@@ -258,6 +260,40 @@ public static class SpillSequenceSpiller
             }
 
             builder.Add(new BoundIfStatement(null, condition, thenStmt, elseStmt));
+            return true;
+        }
+
+        /// <summary>
+        /// Spills awaits that appear inside a <see cref="BoundConditionalGotoStatement"/>
+        /// condition. By the time the spiller runs, the Lowerer and the statement
+        /// binder have already desugared <c>if</c>/<c>while</c>/<c>for</c>/<c>do-while</c>
+        /// statements into label/goto form, so an await embedded in a branch or loop
+        /// condition lives here rather than in a <see cref="BoundIfStatement"/>
+        /// (issue #1266). Without this case the condition await leaked un-rewritten to
+        /// the emitter, which threw <c>GS9998</c>.
+        /// </summary>
+        /// <remarks>
+        /// The spilled side-effects (including the await suspension points) are emitted
+        /// immediately before the conditional goto. For loops the binder places the
+        /// loop's <c>check:</c> label directly ahead of this conditional goto, so the
+        /// spilled condition computation sits inside the loop and is re-evaluated on
+        /// every iteration — preserving while/for/do-while re-evaluation semantics. The
+        /// <see cref="SpillExpression"/> call also handles short-circuiting
+        /// <c>&amp;&amp;</c>/<c>||</c> conditions (see <c>SpillLogicalAnd</c>/
+        /// <c>SpillLogicalOr</c>), so a right-operand await only runs when the left
+        /// operand requires it.
+        /// </remarks>
+        private bool RewriteConditionalGotoStatement(BoundConditionalGotoStatement gotoStmt, ImmutableArray<BoundStatement>.Builder builder)
+        {
+            if (!AsyncBoundTreeQueries.HasAwait(gotoStmt.Condition))
+            {
+                builder.Add(gotoStmt);
+                return false;
+            }
+
+            var spilled = SpillExpression(gotoStmt.Condition);
+            FlushSideEffects(spilled, builder);
+            builder.Add(new BoundConditionalGotoStatement(null, gotoStmt.Label, spilled.Value, gotoStmt.JumpIfTrue));
             return true;
         }
 
