@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -102,6 +103,19 @@ internal sealed class BinderContext
     /// </summary>
     public int UnsafeDepth;
 #pragma warning restore SA1401
+
+    /// <summary>
+    /// Issue #1201: cached set of user-defined types brought into unqualified
+    /// static-member scope via a non-alias type import (<c>import Ns.Type</c>,
+    /// the G# spelling of C#'s <c>using static</c>). <c>null</c> until first
+    /// computed by <see cref="GetStaticImportTypes"/>; invalidated when the
+    /// import or struct count moves.
+    /// </summary>
+    private ImmutableArray<StructSymbol>? cachedStaticImportTypes;
+
+    private int cachedStaticImportImportCount = -1;
+
+    private int cachedStaticImportStructCount = -1;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BinderContext"/> class.
@@ -206,6 +220,89 @@ internal sealed class BinderContext
     /// so the first lookup always misses.
     /// </summary>
     public int CachedImportedExtensionImportCount { get; set; } = -1;
+
+    /// <summary>
+    /// Issue #1201: resolves the compilation's non-alias type imports
+    /// (<c>import Ns.Type</c>) to the user-defined <see cref="StructSymbol"/>s
+    /// whose <c>shared</c> (static) members are thereby brought into scope for
+    /// unqualified reference — the G# equivalent of C#'s <c>using static</c>.
+    /// A plain namespace import (<c>import Ns</c>) names no type and contributes
+    /// nothing; an alias import (<c>import x = Ns.Type</c>) is a type alias, not
+    /// a static import, and is likewise excluded (mirroring C#, where
+    /// <c>using X = T;</c> does not hoist members). Same-compilation user types
+    /// only; imported CLR static classes are out of scope (see ADR-0134).
+    /// </summary>
+    /// <returns>The distinct imported static-import types, in import order. Empty when none apply.</returns>
+    public ImmutableArray<StructSymbol> GetStaticImportTypes()
+    {
+        var imports = RootScope.GetDeclaredImports();
+        var structs = RootScope.GetDeclaredStructs();
+        if (cachedStaticImportTypes is { } cached
+            && cachedStaticImportImportCount == imports.Length
+            && cachedStaticImportStructCount == structs.Length)
+        {
+            return cached;
+        }
+
+        ImmutableArray<StructSymbol>.Builder builder = null;
+        HashSet<StructSymbol> seen = null;
+        foreach (var imp in imports)
+        {
+            // A compiler-synthesized (implicit `import System`) import always
+            // names a namespace, and an alias import is a type alias rather than
+            // a static import — neither hoists members.
+            if (imp.IsImplicit || imp.IsAlias)
+            {
+                continue;
+            }
+
+            foreach (var s in structs)
+            {
+                if (!ImportTargetNamesType(imp.Target, s))
+                {
+                    continue;
+                }
+
+                seen ??= new HashSet<StructSymbol>();
+                if (seen.Add(s))
+                {
+                    (builder ??= ImmutableArray.CreateBuilder<StructSymbol>()).Add(s);
+                }
+
+                break;
+            }
+        }
+
+        var result = builder?.ToImmutable() ?? ImmutableArray<StructSymbol>.Empty;
+        cachedStaticImportTypes = result;
+        cachedStaticImportImportCount = imports.Length;
+        cachedStaticImportStructCount = structs.Length;
+        return result;
+
+        // Issue #1201: whether the fully-qualified import `target` names the user
+        // type `s` — its package-qualified name (`PackageName.Name`), or its bare
+        // simple name for a default-package type imported as `import TypeName`.
+        static bool ImportTargetNamesType(string target, StructSymbol s)
+        {
+            if (string.IsNullOrEmpty(target) || string.IsNullOrEmpty(s.Name))
+            {
+                return false;
+            }
+
+            var pkg = s.PackageName;
+            var fq = string.IsNullOrEmpty(pkg) || string.Equals(pkg, "Default", StringComparison.Ordinal)
+                ? s.Name
+                : pkg + "." + s.Name;
+
+            if (string.Equals(fq, target, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // A bare `import TypeName` (no dotted prefix) names a default-package type.
+            return target.IndexOf('.') < 0 && string.Equals(s.Name, target, StringComparison.Ordinal);
+        }
+    }
 
     /// <summary>
     /// ADR-0082 / issue #722. Returns whether <c>import Gsharp.Extensions.Go</c>

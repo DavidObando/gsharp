@@ -4257,6 +4257,26 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #1201: GS0414 — an unqualified reference to a <c>shared</c>
+    /// (static) member that is exposed by two or more types imported via
+    /// <c>import Ns.Type</c> (the G# spelling of C#'s <c>using static</c>).
+    /// Mirrors C#'s CS0121 ambiguity for using-static members: the reference is
+    /// only an error when it is actually used and more than one imported type
+    /// contributes a member of that name. Qualify the reference with the owning
+    /// type name (<c>Type.Member</c>) to disambiguate.
+    /// </summary>
+    /// <param name="location">The source location of the ambiguous member identifier.</param>
+    /// <param name="name">The ambiguous member name.</param>
+    public void ReportAmbiguousImportedStaticMember(TextLocation location, string name)
+    {
+        Report(
+            location,
+            "GS0414",
+            $"Reference to '{name}' is ambiguous between members of two or more imported types; qualify it with the owning type name (issue #1201).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Issue #987: GS0386 — an attempt to construct (instantiate) an abstract
     /// class. A class is abstract when it declares (or inherits without
     /// overriding) an abstract method — a no-body <c>open func F() R;</c>. Like

@@ -66,7 +66,8 @@ public sealed class CSharpToGSharpTranslator
         IReadOnlyList<ImportDirective> imports = this.TranslateImports(root, context);
 
         HashSet<INamedTypeSymbol> openBases = CollectSubclassedBaseTypes(context.Compilation);
-        var visitor = new DeclarationVisitor(context, new CSharpTypeMapper(), openBases);
+        HashSet<INamedTypeSymbol> staticUsingTargets = CollectStaticUsingTargets(root, context);
+        var visitor = new DeclarationVisitor(context, new CSharpTypeMapper(), openBases, staticUsingTargets);
 
         // T3 (ADR-0115 §B.1/§B.11): the C# program entry point and its enclosing
         // static class become top-level G#. The entry `Main` body translates to
@@ -235,17 +236,60 @@ public sealed class CSharpToGSharpTranslator
 
             if (!directive.StaticKeyword.IsKind(SyntaxKind.None))
             {
-                context.Report(new TranslationDiagnostic(
-                    nameof(SyntaxKind.UsingDirective),
-                    $"'using static {name}' has no direct G# member-hoisting form; emitted as a plain import (ADR-0115 §B.1).",
-                    directive.GetLocation(),
-                    TranslationSeverity.Warning));
+                // Issue #1201 / ADR-0134: a C# `using static X` translates to a
+                // bare type import `import X`, which gsc now hoists X's `shared`
+                // (static) members into scope for unqualified reference — so the
+                // member references are emitted bare (NOT qualified through X).
+                // An alias on a `using static` has no unqualified-hoisting form
+                // and degrades to a plain (alias) import.
+                if (alias != null)
+                {
+                    context.Report(new TranslationDiagnostic(
+                        nameof(SyntaxKind.UsingDirective),
+                        $"'using static {name}' with an alias has no G# member-hoisting form; emitted as a plain import (ADR-0134).",
+                        directive.GetLocation(),
+                        TranslationSeverity.Warning));
+                }
             }
 
             imports.Add(new ImportDirective(name, alias));
         }
 
         return imports;
+    }
+
+    /// <summary>
+    /// Issue #1201 / ADR-0134: collects the type symbols targeted by C#
+    /// <c>using static X</c> directives in the document. Members referenced from
+    /// such a directive are brought into unqualified scope in G# by the bare
+    /// type import <c>import X</c>, so the translator must NOT qualify those
+    /// references through the owning type (unlike a sibling static, which still
+    /// needs qualification). Aliased <c>using static</c> directives are excluded:
+    /// an alias does not hoist members. Original definitions are stored so the
+    /// comparison is stable across constructed generics.
+    /// </summary>
+    private static HashSet<INamedTypeSymbol> CollectStaticUsingTargets(CompilationUnitSyntax root, TranslationContext context)
+    {
+        var targets = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        IEnumerable<UsingDirectiveSyntax> usings = root.Usings
+            .Concat(root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>().SelectMany(n => n.Usings));
+
+        foreach (UsingDirectiveSyntax directive in usings)
+        {
+            if (directive.StaticKeyword.IsKind(SyntaxKind.None)
+                || directive.Name is null
+                || directive.Alias != null)
+            {
+                continue;
+            }
+
+            if (context.GetSymbolInfo(directive.Name).Symbol is INamedTypeSymbol typeSymbol)
+            {
+                targets.Add(typeSymbol.OriginalDefinition);
+            }
+        }
+
+        return targets;
     }
 
     /// <summary>
@@ -262,6 +306,12 @@ public sealed class CSharpToGSharpTranslator
         private readonly TranslationContext context;
         private readonly CSharpTypeMapper typeMapper;
         private readonly HashSet<INamedTypeSymbol> subclassedBases;
+
+        // Issue #1201 / ADR-0134: the types targeted by `using static X` in this
+        // document. A bare reference to one of their static members is left
+        // UNQUALIFIED (gsc resolves it through `import X`), unlike a sibling
+        // static, which is qualified through its owning type.
+        private readonly HashSet<INamedTypeSymbol> staticUsingTargets;
 
         // The set of hard G# keywords (Cs2Gs.Compiler SyntaxFacts.GetKeywordKind).
         // A C# identifier that collides with one of these cannot be emitted bare; it
@@ -359,11 +409,13 @@ public sealed class CSharpToGSharpTranslator
         public DeclarationVisitor(
             TranslationContext context,
             CSharpTypeMapper typeMapper,
-            HashSet<INamedTypeSymbol> subclassedBases)
+            HashSet<INamedTypeSymbol> subclassedBases,
+            HashSet<INamedTypeSymbol> staticUsingTargets)
         {
             this.context = context;
             this.typeMapper = typeMapper;
             this.subclassedBases = subclassedBases;
+            this.staticUsingTargets = staticUsingTargets ?? new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
             this.entryType = context.Compilation.GetEntryPoint(default)?.ContainingType;
         }
 
@@ -471,6 +523,18 @@ public sealed class CSharpToGSharpTranslator
 
             return (funcs, statements);
         }
+
+        /// <summary>
+        /// Issue #1201 / ADR-0134: whether <paramref name="owner"/> is a type
+        /// brought into unqualified static scope by a <c>using static</c>
+        /// directive in this document. Bare references to such a type's static
+        /// members are emitted unqualified (gsc hoists them through the bare
+        /// type import) rather than qualified through the owning type name.
+        /// </summary>
+        /// <param name="owner">The static member's containing type.</param>
+        /// <returns><c>true</c> when the owner is a <c>using static</c> target.</returns>
+        private bool IsStaticUsingTarget(INamedTypeSymbol owner)
+            => owner != null && this.staticUsingTargets.Contains(owner.OriginalDefinition);
 
         private static Visibility MapVisibility(ISymbol symbol, TranslationContext context, SyntaxNode node)
         {
@@ -5654,6 +5718,7 @@ public sealed class CSharpToGSharpTranslator
                     { IsStatic: true, Kind: SymbolKind.Field or SymbolKind.Property } staticMember &&
                 staticMember.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
                 !owner.IsImplicitlyDeclared &&
+                !this.IsStaticUsingTarget(owner) &&
                 !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition))
             {
                 return new MemberAccessExpression(
@@ -5986,12 +6051,16 @@ public sealed class CSharpToGSharpTranslator
                 this.context.GetSymbolInfo(bareName).Symbol is IMethodSymbol { IsStatic: true } staticMethod &&
                 staticMethod.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
                 !owner.IsImplicitlyDeclared &&
+                !this.IsStaticUsingTarget(owner) &&
                 !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition))
             {
                 // A C# bare sibling static call (`Round(value, 2)`) carries an
                 // implicit type qualifier. A G# `shared` method body has no
                 // implicit type scope, so the call must be qualified through the
                 // owning type (`Geometry.Round(value, 2)`); see ADR-0115 §B.18.
+                // A bare call to a `using static` member is the exception
+                // (ADR-0134): gsc brings it into scope through `import Owner`,
+                // so it is left unqualified above.
                 target = new MemberAccessExpression(
                     new IdentifierExpression(owner.Name),
                     staticMethod.Name);

@@ -811,6 +811,20 @@ spelled alongside an initializer (`stackalloc [n]T{…}`), the two must agree
 exactly, mirroring C# (GS0412); use the count-inferred shape to avoid repeating
 the length.
 
+## Ambiguous imported static member diagnostic (GS0414)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0414 | Error | An unqualified reference to a `shared` member is ambiguous between two or more imported types (the G# form of C# `using static`, ADR-0134). Qualify it with the owning type name. |
+
+GS0414 supports the static-import feature (issue #1201): a non-alias type
+import (`import Ns.Type`) brings that type's `shared` members into scope for
+unqualified reference. When the same bare name is exposed by `shared` members of
+two or more imported types, the reference cannot be resolved unambiguously and
+GS0414 fires — but only at the use site, mirroring C# `using static`
+ambiguity. Qualify the call or identifier with the owning type
+(`EnumUtil.GetValues()`) to disambiguate. See ADR-0134.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |
