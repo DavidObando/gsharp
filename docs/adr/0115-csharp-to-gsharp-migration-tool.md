@@ -260,7 +260,7 @@ The mapping is recorded as an Info diagnostic. Only the type that *contains the 
 
 #### B.12 Numeric type names and identifiers — ADR-0049, ADR-0098
 
-Canonical output uses **width-bearing** primitive names (ADR-0049): C# `int`→`int32`, `uint`→`uint32`, `long`→`int64`, `ulong`→`uint64`, `short`→`int16`, `ushort`→`uint16`, `byte`→`uint8`, `sbyte`→`int8`, `float`→`float32`, `double`→`float64`, `bool`→`bool`, `string`→`string`, `char`→`char`, `object`→`object`. The friendly aliases (ADR-0098) parse, but the printer emits the canonical width-bearing form so output is uniform. **Identifier names are preserved verbatim** from C# (PascalCase types/members, camelCase locals) — the tool does not rename to a different casing convention. **Numeric literal spellings are likewise preserved verbatim** (the original token text, not the bound value): a C# `2.0` stays `2.0` and hex such as `0xFF0000` stays `0xFF0000`. This is load-bearing — G# has no implicit numeric promotion, so collapsing `2.0` to `2` would type it as `int32` and make `int32 * float64` a hard `GS0129` error.
+Canonical output uses **width-bearing** primitive names (ADR-0049): C# `int`→`int32`, `uint`→`uint32`, `long`→`int64`, `ulong`→`uint64`, `short`→`int16`, `ushort`→`uint16`, `byte`→`uint8`, `sbyte`→`int8`, `float`→`float32`, `double`→`float64`, `bool`→`bool`, `string`→`string`, `char`→`char`, `object`→`object`. The friendly aliases (ADR-0098) parse, but the printer emits the canonical width-bearing form so output is uniform. **Identifier names are preserved verbatim** from C# (PascalCase types/members, camelCase locals) — the tool does not rename to a different casing convention. **Numeric literal spellings are likewise preserved verbatim** (the original token text, not the bound value): a C# `2.0` stays `2.0` and hex such as `0xFF0000` stays `0xFF0000`. This is load-bearing — G# does not implicitly promote across the integer/floating boundary at a binary operator, so collapsing `2.0` to `2` would type it as `int32` and make `int32 * float64` a hard `GS0129` error.
 
 #### B.13 Data-type structural equality and `IEquatable<Self>` — ADR-0078, ADR-0025
 
@@ -357,12 +357,14 @@ A C# iterator method (a body containing `yield return`) returning `IEnumerable<T
 > **Numeric literal promotion at a converted-type site (§B.12 note).** C# applies
 > an implicit `int`→`double`/`float` conversion when an integer literal is passed
 > where a floating-point value is expected (e.g. `M(30)` where the parameter is
-> `double`). G# has **no** implicit numeric promotion, so emitting a bare `int32`
-> literal compiles but produces invalid IL — `ilverify` reports `StackUnexpected`
-> (found Int32, expected Double). The translator therefore consults the bound
-> `ConvertedType`: when an integer literal is implicitly converted to a
-> floating-point type it is emitted as a **float literal** (`30` → `30.0`), so the
-> value matches its target type. (Discovered by the L5 pipeline.)
+> `double`). As of issue #1281 gsc applies the same implicit widening at a
+> **concrete** numeric parameter, so a bare `int32` literal now compiles and
+> verifies; the translator nonetheless emits the **float literal** spelling
+> (`30` → `30.0`) as the canonical converted-type form — it consults the bound
+> `ConvertedType` so the emitted value is self-describing and matches its target
+> type. (Historically a bare `int32` literal produced invalid IL — `ilverify`
+> `StackUnexpected`, found Int32 expected Double — before gsc widened numeric
+> arguments at the call site; discovered by the L5 pipeline.)
 >
 > **Parameterless constructor initializing a property (§B.3 note).** The
 > primary-constructor / field-initializer canonicalization lifts a `_field = expr`
@@ -492,8 +494,8 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   `CollectionExpression` targeting an array/`Span`/`IEnumerable<T>` maps to the
   canonical G# slice literal `[]T{ a, b, c }`, with the element type taken from
   the converted target type. Bare numeric literals are coerced to the element
-  type (`byte[] = [0, 1]` → `[]uint8{ uint8(0), uint8(1) }`) since G# has no
-  implicit numeric promotion (§B.12).
+  type (`byte[] = [0, 1]` → `[]uint8{ uint8(0), uint8(1) }`) to pin each element's
+  type at the slice-literal boundary (§B.12).
 - **Throw-expression `x ?? throw e` / `c ? v : throw e` → value-position throw
   lowering.** G# `throw` is **statement-only**; a C# `ThrowExpression` used in a
   value position is lowered to the uniform form `if true { throw e\n default(T) }
@@ -576,13 +578,17 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   re-escapes any character below `U+0020` (and `U+007F`) — e.g. C# `"\0\0\0"` —
   as a `\uXXXX` escape so the emitted G# string stays terminated and round-trips
   (previously a raw NUL produced `GS0003: Unterminated string literal`).
-- **Unsigned literal coercion at an unsigned target (OD-T2).** A C# integer
-  literal implicitly converted to an unsigned field/parameter (`uint samplesPerChunk = 0`,
-  a `: base(4)` argument whose parameter is `uint8`) is emitted with an explicit
-  width cast (`uint32(0)`, `uint8(4)`) because G# has no implicit numeric
-  promotion (`GS0156`). The coercion (`CoerceConstantToUnsigned`) fires on field
-  initializers, assignments, and call/`base(...)` arguments whose Roslyn-converted
-  target type is `uint8`/`uint16`/`uint32`/`uint64`.
+- **Unsigned literal coercion at an unsigned target (OD-T2, refined by issue #1281).**
+  A C# integer literal implicitly converted to an unsigned **field initializer,
+  assignment, or local declaration** (`uint samplesPerChunk = 0`) is emitted with an
+  explicit width cast (`uint32(0)`) by `CoerceConstantToUnsigned`. **Call and
+  `base(...)` argument** positions no longer carry this cast when the parameter is a
+  **concrete** numeric type: gsc now accepts the constant-expression narrowing/cross-sign
+  conversion at the call site (issue #1281), so a `: base(4)` argument whose parameter is
+  `uint8` emits the bare literal `4` rather than `uint8(4)`. The explicit cast is still
+  emitted for a **generic** (type-parameter) argument position, where gsc's inference
+  would otherwise fail (`GS0159`), and for a non-literal constant (e.g. a `const` field)
+  that gsc does not fold.
 - **`new object()` / target-typed `new()` to `object` → `System.Object()` (OD-T3).**
   A construction of `System.Object` has no bare `object()` spelling (`GS0130`,
   "function `object` doesn't exist"); the translator emits the fully-qualified

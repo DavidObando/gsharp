@@ -1720,4 +1720,24 @@ internal sealed partial class ExpressionBinder
 
         return true;
     }
+
+    // Issue #1281: C# §10.2.11 implicit constant expression conversion at a CALL
+    // SITE. A constant integer argument (an integer literal, or unary +/- over
+    // one) whose value lies within the parameter's integer type range converts
+    // implicitly with no cast — exactly as at a declaration/assignment target
+    // (ADR-0129, handled in ConversionClassifier.BindConversion). This predicate
+    // lets overload resolution accept such an argument before it reaches
+    // BindConversion (which then re-materialises the correctly-typed literal),
+    // so e.g. `f(5)` binds to a `uint16`/`uint32` parameter the same way
+    // `var x uint16 = 5` already does. Non-constant operands and `char` targets
+    // are excluded, matching C# (char is not a §10.2.11 destination type, and a
+    // non-constant narrowing/cross-sign value still requires an explicit cast).
+    internal static bool IsImplicitConstantNarrowingArgument(BoundExpression argument, TypeSymbol parameterType)
+    {
+        return argument != null
+            && parameterType != null
+            && IsIntegerType(parameterType)
+            && TryGetConstantIntegerValue(argument, out var value)
+            && TryAdaptIntegerLiteral(value, parameterType, out _);
+    }
 }

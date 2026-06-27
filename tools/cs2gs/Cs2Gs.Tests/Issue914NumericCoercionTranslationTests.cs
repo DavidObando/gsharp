@@ -506,9 +506,11 @@ namespace Demo
     /// <summary>
     /// An argument whose declared numeric type differs from the type C# implicitly
     /// converted it to at the call site (here a <c>ushort</c> constant passed where
-    /// generic inference selected <c>int</c>) must carry that conversion explicitly,
-    /// since G# performs no implicit numeric promotion at the call site (an
-    /// un-coerced operand defeats generic inference → GS0159).
+    /// generic inference selected <c>int</c>) must carry that conversion explicitly
+    /// when the parameter is GENERIC: gsc applies the implicit widening/constant
+    /// narrowing only at a concrete numeric parameter, and an un-coerced operand
+    /// defeats CLR generic inference (GS0159). Issue #1281 keeps the wrap for this
+    /// generic case while dropping it for concrete-parameter targets.
     /// </summary>
     [Fact]
     public void Argument_ImplicitNumericConversion_EmitsExplicitConversion()
