@@ -510,8 +510,8 @@ namespace Demo
         Assert.Contains("func GetEnumerator() IEnumerator[T]", printed);
         Assert.DoesNotContain("func GetEnumerator() sequence[T]", printed);
 
-        // The non-generic bridge is retained.
-        Assert.Contains("func GetEnumerator() IEnumerator {", printed);
+        // The non-generic bridge is retained (expression-bodied → arrow form).
+        Assert.Contains("func GetEnumerator() IEnumerator -> GetEnumerator()", printed);
 
         // The IEnumerable<T> generator still lowers to sequence[T].
         Assert.Contains("func All() sequence[T]", printed);

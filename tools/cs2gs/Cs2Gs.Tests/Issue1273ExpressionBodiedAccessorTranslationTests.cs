@@ -12,12 +12,13 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #1273: G# has no fat-arrow <c>=&gt;</c> expression-bodied accessor (that
-/// is C# syntax) and no lambda-arrow <c>-&gt;</c> accessor either — a G# property
-/// accessor body is a block <c>{ }</c> or <c>;</c> only. cs2gs must therefore
-/// translate a C# expression-bodied accessor (<c>public int P =&gt; 7;</c> or an
-/// explicit <c>get =&gt; e</c> / <c>set =&gt; e</c>) into a G# <b>block body</b>
-/// (<c>get { return e }</c>), never emitting <c>=&gt;</c> in the G# output.
+/// Issue #1273 / #1278 (ADR-0131): G# now has a first-class expression-bodied
+/// member form using the lambda arrow <c>-&gt;</c> (never the C# fat arrow
+/// <c>=&gt;</c>). cs2gs therefore translates a C# expression-bodied member
+/// (<c>public int Expr =&gt; 7;</c> or an explicit <c>get =&gt; e</c> /
+/// <c>set =&gt; e</c>) into the idiomatic G# arrow form
+/// (<c>prop Expr int32 -&gt; 7</c>, <c>get -&gt; e</c>, <c>set -&gt; e</c>),
+/// never emitting a fat arrow <c>=&gt;</c> in the output.
 /// </summary>
 public class Issue1273ExpressionBodiedAccessorTranslationTests
 {
@@ -40,13 +41,15 @@ namespace Corpus.Issue1273
 ";
 
     [Fact]
-    public void ExpressionBodiedAccessors_RenderAsBlockBodies()
+    public void ExpressionBodiedProperty_RendersAsPropertyLevelArrow()
     {
         string rendered = Render();
 
-        // The expression-bodied getters become block bodies with a return.
-        Assert.Contains("get {", rendered, StringComparison.Ordinal);
-        Assert.Contains("return", rendered, StringComparison.Ordinal);
+        // The expression-bodied read-only property becomes `prop Expr int32 -> 7`.
+        Assert.Contains("prop Expr int32 -> 7", rendered, StringComparison.Ordinal);
+
+        // It should NOT fall back to a get-block body for this simple case.
+        Assert.DoesNotContain("get { return 7", rendered, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -54,18 +57,27 @@ namespace Corpus.Issue1273
     {
         string rendered = Render();
 
-        // G# accessors never use the C# fat arrow.
+        // G# never uses the C# fat arrow; the arrow form is `->`.
         Assert.DoesNotContain("=>", rendered, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ExpressionBodiedSetter_RendersAsBlockBody()
+    public void ExpressionBodiedGetter_RendersAsArrowAccessor()
     {
         string rendered = Render();
 
-        // The expression-bodied setter becomes a block body, not `set => e`.
-        Assert.Contains("set {", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("set =>", rendered, StringComparison.Ordinal);
+        // `get => this.n` becomes `get -> this.n`, not a block body.
+        Assert.Contains("get -> this.n", rendered, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExpressionBodiedSetter_RendersAsArrowAccessor()
+    {
+        string rendered = Render();
+
+        // `set => this.n = value` becomes `set -> this.n = value`, not `set { }`.
+        Assert.Contains("set -> this.n = value", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("set { this.n", rendered, StringComparison.Ordinal);
     }
 
     private static string Render()

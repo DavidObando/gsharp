@@ -77,11 +77,13 @@ public sealed class PropertyAccessor : GNode
     /// <param name="kind">The accessor kind.</param>
     /// <param name="body">The optional accessor body.</param>
     /// <param name="setterParameterName">The setter value parameter name (e.g. <c>v</c>).</param>
-    public PropertyAccessor(AccessorKind kind, BlockStatement body = null, string setterParameterName = null)
+    /// <param name="expressionBody">The optional single-statement arrow body (issue #1278 / ADR-0131); when set the accessor renders as <c>get -&gt; expr</c> / <c>set -&gt; expr</c>.</param>
+    public PropertyAccessor(AccessorKind kind, BlockStatement body = null, string setterParameterName = null, GStatement expressionBody = null)
     {
         Kind = kind;
         Body = body;
         SetterParameterName = setterParameterName;
+        ExpressionBody = expressionBody;
     }
 
     /// <summary>Gets the accessor kind.</summary>
@@ -92,6 +94,13 @@ public sealed class PropertyAccessor : GNode
 
     /// <summary>Gets the setter value parameter name.</summary>
     public string SetterParameterName { get; }
+
+    /// <summary>
+    /// Gets the optional single-statement arrow body (issue #1278 / ADR-0131).
+    /// When non-null the accessor renders as an expression-bodied accessor
+    /// <c>get -&gt; expr</c> / <c>set -&gt; expr</c> rather than a block body.
+    /// </summary>
+    public GStatement ExpressionBody { get; }
 }
 
 /// <summary>
@@ -111,6 +120,7 @@ public sealed class PropertyDeclaration : GMember
     /// <param name="isOverride">Whether the property is an <c>override</c>.</param>
     /// <param name="attributes">The property attributes.</param>
     /// <param name="indexerParameters">The index parameters for an indexer member (ADR-0118); empty for an ordinary property.</param>
+    /// <param name="expressionBody">The optional single-statement arrow body for an expression-bodied read-only property/indexer (issue #1278 / ADR-0131); when set the member renders as <c>prop Name T -&gt; expr</c>.</param>
     public PropertyDeclaration(
         string name,
         GTypeReference type,
@@ -119,7 +129,8 @@ public sealed class PropertyDeclaration : GMember
         bool isOpen = false,
         bool isOverride = false,
         IReadOnlyList<AttributeUse> attributes = null,
-        IReadOnlyList<Parameter> indexerParameters = null)
+        IReadOnlyList<Parameter> indexerParameters = null,
+        GStatement expressionBody = null)
     {
         Name = name;
         Type = type;
@@ -129,6 +140,7 @@ public sealed class PropertyDeclaration : GMember
         IsOverride = isOverride;
         Attributes = attributes ?? new List<AttributeUse>();
         IndexerParameters = indexerParameters ?? new List<Parameter>();
+        ExpressionBody = expressionBody;
     }
 
     /// <summary>Gets the property name.</summary>
@@ -157,6 +169,13 @@ public sealed class PropertyDeclaration : GMember
 
     /// <summary>Gets a value indicating whether this property is an indexer member (<c>prop this[...]</c>).</summary>
     public bool IsIndexer => IndexerParameters.Count > 0;
+
+    /// <summary>
+    /// Gets the optional single-statement arrow body (issue #1278 / ADR-0131).
+    /// When non-null the property/indexer renders as an expression-bodied
+    /// read-only member <c>prop Name T -&gt; expr</c> rather than an accessor list.
+    /// </summary>
+    public GStatement ExpressionBody { get; }
 }
 
 /// <summary>
@@ -182,6 +201,7 @@ public sealed class MethodDeclaration : GMember
     /// <param name="isOverride">Whether the method is an <c>override</c>.</param>
     /// <param name="isAsync">Whether the method is asynchronous.</param>
     /// <param name="attributes">The method attributes.</param>
+    /// <param name="expressionBody">The optional single-statement arrow body for an expression-bodied method/function (issue #1278 / ADR-0131); when set the member renders as <c>func F(...) T -&gt; expr</c>.</param>
     public MethodDeclaration(
         string name,
         IReadOnlyList<Parameter> parameters = null,
@@ -193,7 +213,8 @@ public sealed class MethodDeclaration : GMember
         bool isOpen = false,
         bool isOverride = false,
         bool isAsync = false,
-        IReadOnlyList<AttributeUse> attributes = null)
+        IReadOnlyList<AttributeUse> attributes = null,
+        GStatement expressionBody = null)
     {
         Name = name;
         Parameters = parameters ?? new List<Parameter>();
@@ -206,6 +227,7 @@ public sealed class MethodDeclaration : GMember
         IsOverride = isOverride;
         IsAsync = isAsync;
         Attributes = attributes ?? new List<AttributeUse>();
+        ExpressionBody = expressionBody;
     }
 
     /// <summary>Gets the method name.</summary>
@@ -240,6 +262,13 @@ public sealed class MethodDeclaration : GMember
 
     /// <summary>Gets the method attributes.</summary>
     public IReadOnlyList<AttributeUse> Attributes { get; }
+
+    /// <summary>
+    /// Gets the optional single-statement arrow body (issue #1278 / ADR-0131).
+    /// When non-null the method/function renders as an expression-bodied member
+    /// <c>func F(...) T -&gt; expr</c> rather than a block body.
+    /// </summary>
+    public GStatement ExpressionBody { get; }
 }
 
 /// <summary>

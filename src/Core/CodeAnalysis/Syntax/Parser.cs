@@ -2627,6 +2627,25 @@ public class Parser
                 closeBrace);
         }
 
+        if (Current.Kind == SyntaxKind.RightArrowToken)
+        {
+            // Issue #1278 / ADR-0131: an expression-bodied read-only property
+            // `prop Name T -> expr`. Desugar into a single get-only accessor
+            // whose body returns the expression (`{ get { return expr } }`).
+            var (synthOpenBrace, getAccessor, synthCloseBrace) = SynthesizeArrowGetAccessorList();
+            return new PropertyDeclarationSyntax(
+                syntaxTree,
+                accessibilityModifier,
+                openModifier,
+                overrideModifier,
+                propKeyword,
+                identifier,
+                type,
+                synthOpenBrace,
+                ImmutableArray.Create(getAccessor),
+                synthCloseBrace);
+        }
+
         // Bare auto-property: prop Name Type
         return new PropertyDeclarationSyntax(
             syntaxTree,
@@ -2664,6 +2683,13 @@ public class Parser
             openBrace = MatchToken(SyntaxKind.OpenBraceToken);
             accessors = ParsePropertyAccessors();
             closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        }
+        else if (Current.Kind == SyntaxKind.RightArrowToken)
+        {
+            // Issue #1278 / ADR-0131: an expression-bodied read-only indexer
+            // `prop this[i T] U -> expr`, desugared into a get-only accessor.
+            (openBrace, var getAccessor, closeBrace) = SynthesizeArrowGetAccessorList();
+            accessors = ImmutableArray.Create(getAccessor);
         }
 
         return new PropertyDeclarationSyntax(
@@ -2821,19 +2847,32 @@ public class Parser
                 {
                     body = ParseBlockStatement();
                 }
+                else if (Current.Kind == SyntaxKind.RightArrowToken)
+                {
+                    // Issue #1278 / ADR-0131: an expression-bodied accessor
+                    // `get -> expr` / `set -> expr` / `init -> expr`. Desugar
+                    // into an equivalent block body so binding and emit reuse
+                    // the existing accessor-body path: a getter lowers to
+                    // `{ return expr }` and a setter/init lowers to `{ expr }`
+                    // (an expression statement, typically an assignment using
+                    // the `set(name)` value parameter). Note: G# uses the `->`
+                    // arrow, never the C# fat arrow `=>`, which remains a
+                    // syntax error below.
+                    body = ParseArrowExpressionBody(asReturn: accessorKeyword.Text == "get");
+                }
                 else if (Current.Kind == SyntaxKind.SemicolonToken)
                 {
                     semicolon = NextToken();
                 }
                 else if (!IsAccessorListTerminator())
                 {
-                    // Issue #1273: a G# property accessor body is a block `{ }`
-                    // or `;` (bare/auto accessor) only. Unlike C#, G# has no
-                    // fat-arrow `=>` (or `->`) expression-bodied accessor form.
-                    // Anything else here (e.g. `get => e` or `get -> e`) is a
-                    // syntax error: report it loudly rather than silently
-                    // skipping the tokens, which previously left a body-less
-                    // accessor returning the type's default value.
+                    // Issue #1273: a G# property accessor body is a block `{ }`,
+                    // a `->` expression body (issue #1278), or `;` (bare/auto
+                    // accessor). Unlike C#, G# has no fat-arrow `=>`
+                    // expression-bodied accessor form. Anything else here (e.g.
+                    // `get => e`) is a syntax error: report it loudly rather
+                    // than silently skipping the tokens, which previously left a
+                    // body-less accessor returning the type's default value.
                     Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.OpenBraceToken);
                     SkipMalformedAccessorBody();
                 }
@@ -2897,6 +2936,70 @@ public class Parser
         {
             NextToken();
         }
+    }
+
+    // Issue #1278 / ADR-0131: parse the `-> expr` tail of an expression-bodied
+    // member (free function, method, operator, conversion operator, property,
+    // indexer, or property accessor) and synthesize an equivalent block body so
+    // binding, lowering, async, and emit reuse the existing block-body path. A
+    // body that yields a value (a getter, or a non-void function/property)
+    // lowers to `{ return expr }` (asReturn == true); a value-less body (a void
+    // function/method, or a set/init accessor) lowers to `{ expr }`, an
+    // expression statement (asReturn == false). The synthesized braces reuse the
+    // arrow's source position so diagnostics and spans stay anchored at the
+    // member. G# spells this arrow `->` (RightArrowToken); the C# fat arrow `=>`
+    // is never accepted.
+    private BlockStatementSyntax ParseArrowExpressionBody(bool asReturn)
+    {
+        var arrowToken = MatchToken(SyntaxKind.RightArrowToken);
+        var arrowPosition = arrowToken.Position;
+
+        var expression = ParseExpression();
+
+        var openBrace = new SyntaxToken(syntaxTree, SyntaxKind.OpenBraceToken, arrowPosition, "{", null);
+        var closeBrace = new SyntaxToken(syntaxTree, SyntaxKind.CloseBraceToken, arrowPosition, "}", null);
+
+        StatementSyntax statement;
+        if (asReturn)
+        {
+            var returnKeyword = new SyntaxToken(syntaxTree, SyntaxKind.ReturnKeyword, arrowPosition, "return", null);
+            statement = new ReturnStatementSyntax(syntaxTree, returnKeyword, expression);
+        }
+        else
+        {
+            statement = new ExpressionStatementSyntax(syntaxTree, expression);
+        }
+
+        return new BlockStatementSyntax(
+            syntaxTree,
+            openBrace,
+            ImmutableArray.Create(statement),
+            closeBrace);
+    }
+
+    // Issue #1278 / ADR-0131: synthesize the accessor list for an
+    // expression-bodied read-only property or indexer `prop Name T -> expr`.
+    // Produces the equivalent of `{ get { return expr } }`: a single get-only
+    // accessor whose block body returns the expression, plus synthetic braces
+    // for the enclosing accessor list anchored at the arrow's position.
+    private (SyntaxToken OpenBrace, PropertyAccessorSyntax GetAccessor, SyntaxToken CloseBrace) SynthesizeArrowGetAccessorList()
+    {
+        var arrowPosition = Current.Position;
+        var body = ParseArrowExpressionBody(asReturn: true);
+
+        var getKeyword = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, arrowPosition, "get", null);
+        var getAccessor = new PropertyAccessorSyntax(
+            syntaxTree,
+            getKeyword,
+            openParenToken: null,
+            parameterIdentifier: null,
+            closeParenToken: null,
+            body,
+            semicolonToken: null);
+
+        var openBrace = new SyntaxToken(syntaxTree, SyntaxKind.OpenBraceToken, arrowPosition, "{", null);
+        var closeBrace = new SyntaxToken(syntaxTree, SyntaxKind.CloseBraceToken, arrowPosition, "}", null);
+        return (openBrace, getAccessor, closeBrace);
     }
 
     private FieldDeclarationSyntax ParseFieldDeclaration()
@@ -3015,6 +3118,19 @@ public class Parser
         {
             semicolonBody = NextToken();
             body = null;
+        }
+        else if (Current.Kind == SyntaxKind.RightArrowToken)
+        {
+            // Issue #1278 / ADR-0131: an expression-bodied function/method
+            // `func F(...) T -> expr`. Desugar at parse time into an equivalent
+            // block body so binding, lowering, async, and emit reuse the
+            // existing block-body path. A non-void function (return type
+            // present) lowers to `{ return expr }`; a void function (no return
+            // type clause) lowers to `{ expr }` (an expression statement),
+            // mirroring C#'s expression-bodied void methods. This single path
+            // also covers methods, operators (`func operator + ...`), and
+            // user-defined conversion operators (`func operator implicit ...`).
+            body = ParseArrowExpressionBody(asReturn: type != null);
         }
         else
         {
