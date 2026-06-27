@@ -3268,6 +3268,84 @@ public sealed class CSharpToGSharpTranslator
             return length;
         }
 
+        // G# array/indexer element access requires an `int32` index. C# accepts any
+        // integral index and implicitly widens the narrow ones (`byte`, `sbyte`,
+        // `short`, `ushort`, `char`) to `int`, but the wider/unsigned kinds
+        // (`uint`, `long`, `ulong`, `nint`, `nuint`) do NOT implicitly convert to
+        // `int32`, so gsc rejects them with GS0156. When the indexed target's index
+        // type is `int32` (an array, or an indexer whose single parameter is
+        // `int32` — e.g. `List<T>`/`Span<T>`/`IReadOnlyList<T>`) and the C# index
+        // expression has a non-`int32` integral type that does not widen, wrap the
+        // index in the conversion-call form `int32(<index>)`. Dictionary/other
+        // indexers whose key type is not `int32`, `System.Index`/`System.Range`
+        // indices, and indices already `int`/narrower are left untouched.
+        private GExpression CoerceIndexToInt32(
+            ElementAccessExpressionSyntax elementAccess, GExpression index)
+        {
+            if (elementAccess.ArgumentList.Arguments.Count != 1)
+            {
+                return index;
+            }
+
+            if (!this.IndexerTargetTypeIsInt32(elementAccess))
+            {
+                return index;
+            }
+
+            ExpressionSyntax indexSyntax = elementAccess.ArgumentList.Arguments[0].Expression;
+            ITypeSymbol indexType = this.context.GetTypeInfo(indexSyntax).Type;
+            if (indexType != null &&
+                IsNonNullableValueType(indexType) &&
+                IsIntegerNotWideningToInt32(indexType))
+            {
+                ITypeSymbol int32Type =
+                    this.context.Compilation.GetSpecialType(SpecialType.System_Int32);
+                return this.CoerceOperandTo(index, int32Type);
+            }
+
+            return index;
+        }
+
+        // Reports whether the element-access target indexes by `int32`: a C# array,
+        // or a type whose bound indexer takes a single `int32` parameter (such as
+        // `List<T>`, `Span<T>`, `IReadOnlyList<T>`). A `Dictionary<TKey, T>` or any
+        // other indexer keyed by a non-`int32` type returns false.
+        private bool IndexerTargetTypeIsInt32(ElementAccessExpressionSyntax elementAccess)
+        {
+            ITypeSymbol receiverType = this.context.GetTypeInfo(elementAccess.Expression).Type;
+            if (receiverType is IArrayTypeSymbol)
+            {
+                return true;
+            }
+
+            if (this.context.GetSymbolInfo(elementAccess).Symbol is IPropertySymbol
+                    { IsIndexer: true, Parameters.Length: 1 } indexer)
+            {
+                return indexer.Parameters[0].Type.SpecialType == SpecialType.System_Int32;
+            }
+
+            return false;
+        }
+
+        // Reports whether `type` is an integral type that does NOT implicitly widen
+        // to `int32` in C# — `uint`/`uint32`, `long`/`int64`, `ulong`/`uint64`,
+        // `nint`, and `nuint`. The narrow integrals (`byte`, `sbyte`, `short`,
+        // `ushort`, `char`) and `int` itself widen to/are `int32` and return false.
+        private static bool IsIntegerNotWideningToInt32(ITypeSymbol type)
+        {
+            switch (type.SpecialType)
+            {
+                case SpecialType.System_UInt32:
+                case SpecialType.System_Int64:
+                case SpecialType.System_UInt64:
+                case SpecialType.System_IntPtr:
+                case SpecialType.System_UIntPtr:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         // C# `a ?? b` where `a` is a nullable numeric: G# requires `b` to match
         // the underlying numeric type of `a`, otherwise GS0129. Coerce the right
         // operand to the left's underlying (non-nullable) type when they differ.
@@ -4723,7 +4801,9 @@ public sealed class CSharpToGSharpTranslator
                     }
 
                     GExpression index = elementAccess.ArgumentList.Arguments.Count > 0
-                        ? this.TranslateExpression(elementAccess.ArgumentList.Arguments[0].Expression)
+                        ? this.CoerceIndexToInt32(
+                            elementAccess,
+                            this.TranslateExpression(elementAccess.ArgumentList.Arguments[0].Expression))
                         : new IdentifierExpression("nil");
                     return new IndexExpression(
                         this.TranslateReceiverWithNullForgiveness(elementAccess.Expression),
