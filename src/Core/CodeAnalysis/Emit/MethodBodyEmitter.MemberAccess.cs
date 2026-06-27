@@ -435,6 +435,23 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #1235: a field read on a receiver whose static type is a type
+        // parameter constrained to a class (`t.F` with `t : T`, `T : Base`).
+        // A reference-type-constrained `!!T` value is boxed (a no-op at runtime
+        // that yields the object reference typed as the constraint) so the
+        // verifier accepts the subsequent `ldfld` against the constraint class —
+        // the same shape the C# compiler emits for `t.field`.
+        if (fa.Receiver.Type is TypeParameterSymbol fieldReceiverTp)
+        {
+            this.EmitExpression(fa.Receiver);
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(fieldReceiverTp));
+            this.il.OpCode(ILOpCode.Ldfld);
+            this.il.Token(fieldHandle);
+            this.EmitNarrowingCastIfNeeded(fa.Field.Type, fa.NarrowedType);
+            return;
+        }
+
         // Class receivers are references: load the value (the ref) and ldfld.
         // For struct receivers, load by address when the receiver is a
         // simple variable (avoids a copy and is verifier-friendly); fall
@@ -666,6 +683,24 @@ internal sealed partial class MethodBodyEmitter
         if (access.Receiver == null)
         {
             this.il.OpCode(ILOpCode.Call);
+            this.il.Token(getterHandle);
+            this.EmitNarrowingCastIfNeeded(access.Property.Type, access.NarrowedType);
+            return;
+        }
+
+        // Issue #1235: a property read on a receiver whose static type is a type
+        // parameter constrained to a class or interface (`t.P` with `t : T`,
+        // `T : Base`). A reference-type-constrained `!!T` value is boxed (a
+        // runtime no-op yielding the object reference typed as the constraint)
+        // and the getter dispatched with `callvirt get_P` — the same verifiable
+        // shape the C# compiler emits for a property read through a type
+        // parameter.
+        if (access.Receiver.Type is TypeParameterSymbol tpReceiver)
+        {
+            this.EmitExpression(access.Receiver);
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(tpReceiver));
+            this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(getterHandle);
             this.EmitNarrowingCastIfNeeded(access.Property.Type, access.NarrowedType);
             return;
