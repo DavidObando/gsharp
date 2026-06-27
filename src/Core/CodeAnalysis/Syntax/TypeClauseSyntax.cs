@@ -104,6 +104,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <param name="typeArguments">The type-argument list, or the default value.</param>
     /// <param name="typeArgumentCloseBracketToken">The closing bracket of the type-argument list, or <c>null</c>.</param>
     /// <param name="questionToken">The optional trailing <c>?</c> marking the type nullable.</param>
+    /// <param name="arrayQuestionToken">The optional <c>?</c> placed immediately after <c>]</c>, marking the whole array nullable (<c>[]?T</c>, issue #1212).</param>
     public TypeClauseSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken openBracketToken,
@@ -115,7 +116,8 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken typeArgumentOpenBracketToken,
         SeparatedSyntaxList<TypeClauseSyntax> typeArguments,
         SyntaxToken typeArgumentCloseBracketToken,
-        SyntaxToken questionToken)
+        SyntaxToken questionToken,
+        SyntaxToken arrayQuestionToken = null)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
@@ -128,6 +130,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
         TypeArguments = typeArguments;
         TypeArgumentCloseBracketToken = typeArgumentCloseBracketToken;
         QuestionToken = questionToken;
+        ArrayQuestionToken = arrayQuestionToken;
     }
 
     /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a tuple type <c>(T1, T2, ...)</c> (Phase 4.5).</summary>
@@ -241,7 +244,8 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken closeBracketToken,
         TypeClauseSyntax arrayElementType,
         SyntaxToken questionToken,
-        bool isNestedArray)
+        bool isNestedArray,
+        SyntaxToken arrayQuestionToken = null)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
@@ -249,6 +253,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
         CloseBracketToken = closeBracketToken;
         ArrayElementType = arrayElementType;
         QuestionToken = questionToken;
+        ArrayQuestionToken = arrayQuestionToken;
         QualifierDotTokens = ImmutableArray<SyntaxToken>.Empty;
         QualifierIdentifierTokens = ImmutableArray<SyntaxToken>.Empty;
     }
@@ -483,6 +488,12 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this clause denotes a nullable type <c>T?</c> (Phase 3.C.1).</summary>
     public bool IsNullable => QuestionToken != null;
 
+    /// <summary>Gets the optional <c>?</c> token placed immediately after the array <c>]</c> (before the element type), marking the whole array reference nullable (<c>[]?T</c> / <c>[N]?T</c>, issue #1212).</summary>
+    public SyntaxToken ArrayQuestionToken { get; }
+
+    /// <summary>Gets a value indicating whether this array/slice clause is itself a nullable array reference (<c>[]?T</c>), spelled with a <c>?</c> right after <c>]</c> (issue #1212).</summary>
+    public bool IsArrayNullable => ArrayQuestionToken != null;
+
     /// <summary>Gets the opening <c>(</c> token for tuple types, or <c>null</c>.</summary>
     public SyntaxToken OpenParenToken { get; }
 
@@ -659,6 +670,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <param name="closeBracketToken">The closing <c>]</c> token of the array/slice prefix.</param>
     /// <param name="elementType">The nested element type clause.</param>
     /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    /// <param name="arrayQuestionToken">The optional <c>?</c> placed immediately after <c>]</c>, marking the whole array nullable (<c>[]?T</c>, issue #1212).</param>
     /// <returns>An array/slice type clause carrying a nested element type clause.</returns>
     public static TypeClauseSyntax CreateArray(
         SyntaxTree syntaxTree,
@@ -666,9 +678,10 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken lengthToken,
         SyntaxToken closeBracketToken,
         TypeClauseSyntax elementType,
-        SyntaxToken questionToken)
+        SyntaxToken questionToken,
+        SyntaxToken arrayQuestionToken = null)
     {
-        return new TypeClauseSyntax(syntaxTree, openBracketToken, lengthToken, closeBracketToken, elementType, questionToken, isNestedArray: true);
+        return new TypeClauseSyntax(syntaxTree, openBracketToken, lengthToken, closeBracketToken, elementType, questionToken, isNestedArray: true, arrayQuestionToken);
     }
 
     /// <summary>Creates a sequence type clause <c>sequence[T]</c> (ADR-0040).</summary>

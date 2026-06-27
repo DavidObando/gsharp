@@ -21,7 +21,7 @@ public sealed class NullableTypeSymbol : TypeSymbol
     private static readonly ConcurrentDictionary<TypeSymbol, NullableTypeSymbol> Cache = new();
 
     private NullableTypeSymbol(TypeSymbol underlyingType)
-        : base(underlyingType.Name + "?", underlyingType.ClrType)
+        : base(ComputeDisplayName(underlyingType), underlyingType.ClrType)
     {
         UnderlyingType = underlyingType;
     }
@@ -55,4 +55,22 @@ public sealed class NullableTypeSymbol : TypeSymbol
     /// <returns>The CLR <see cref="Type"/> to use for overload resolution, or <see langword="null"/> if <paramref name="typeSymbol"/> is <see langword="null"/>.</returns>
     public static Type GetEffectiveClrType(TypeSymbol typeSymbol)
         => NullableLifting.GetEffectiveClrType(typeSymbol);
+
+    /// <summary>
+    /// Issue #1212: a nullable array/slice must render with the <c>?</c> bound to
+    /// the array itself (<c>[]?T</c> / <c>[N]?T</c>) so its display name is distinct
+    /// from an array of nullable elements (<c>[]T?</c> = <c>Slice(Nullable(T))</c>).
+    /// For all other underlying types the nullable marker trails the name (<c>T?</c>).
+    /// </summary>
+    /// <param name="underlyingType">The non-nullable underlying type.</param>
+    /// <returns>The G# display name for the nullable wrapper.</returns>
+    private static string ComputeDisplayName(TypeSymbol underlyingType)
+    {
+        return underlyingType switch
+        {
+            SliceTypeSymbol slice => $"[]?{slice.ElementType.Name}",
+            ArrayTypeSymbol array => $"[{array.Length}]?{array.ElementType.Name}",
+            _ => underlyingType.Name + "?",
+        };
+    }
 }

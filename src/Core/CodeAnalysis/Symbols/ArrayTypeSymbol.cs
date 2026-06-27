@@ -21,7 +21,7 @@ public sealed class ArrayTypeSymbol : TypeSymbol
     private static readonly ConcurrentDictionary<(TypeSymbol Element, int Length), ArrayTypeSymbol> Cache = new();
 
     private ArrayTypeSymbol(TypeSymbol elementType, int length)
-        : base($"[{length}]{elementType.Name}", elementType.ClrType?.MakeArrayType())
+        : base($"[{length}]{elementType.Name}", NullableLifting.GetEffectiveClrType(elementType)?.MakeArrayType())
     {
         ElementType = elementType;
         Length = length;

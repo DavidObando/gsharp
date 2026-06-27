@@ -16,7 +16,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// overload that needs an implicit nullable-widening conversion (T → T?) when
 /// a second, wholly non-applicable overload (e.g. <c>F(string)</c>) also
 /// exists — without a spurious GS0266 ambiguity. This test proves the selected
-/// <c>F([]uint8?)</c> overload actually runs: a non-null array argument flows
+/// <c>F([]?uint8)</c> overload actually runs: a non-null array argument flows
 /// into the nullable-array overload body and produces its distinctive output.
 /// </summary>
 public class Issue1154NullableWideningOverloadEmitTests
@@ -32,7 +32,7 @@ public class Issue1154NullableWideningOverloadEmitTests
             class C {
                 shared { func Make() []uint8 { var r = []uint8{uint8(10), uint8(20), uint8(30)} return r } }
                 func F(a string) string { return "string-overload" }
-                func F(a []uint8?) string {
+                func F(a []?uint8) string {
                     if a == nil { return "null" }
                     return "bytes-overload:" + a.Length.ToString()
                 }

@@ -2542,6 +2542,18 @@ public sealed class Binder
             return element;
         }
 
+        // Issue #1212: a trailing `?` on an array/slice clause (`[]T?`,
+        // `[N]T?`) binds to the *element* type, yielding an array whose
+        // elements are nullable (`Slice(Nullable(T))` / `Array(Nullable(T))`).
+        // This is orthogonal to a *nullable array reference* (`[]?T`), spelled
+        // with a `?` right after `]` and handled by the outer NullableTypeSymbol
+        // wrap in BindTypeClause. Element-nullable arrays stay indexable (the
+        // array itself is non-nil), reading/writing `T?`.
+        if (syntax.IsNullable)
+        {
+            element = NullableTypeSymbol.Get(element);
+        }
+
         if (syntax.IsSlice)
         {
             return SliceTypeSymbol.Get(element);
@@ -2559,7 +2571,21 @@ public sealed class Binder
     private TypeSymbol BindTypeClause(TypeClauseSyntax syntax)
     {
         var bound = BindNonNullableTypeClause(syntax);
-        if (bound == null || !syntax.IsNullable)
+        if (bound == null)
+        {
+            return bound;
+        }
+
+        // Issue #1212: for an array/slice clause the trailing `?` is consumed
+        // by ApplyArraySuffix and applied to the element type (`[]T?`), so it
+        // must not also wrap the whole array. The *array* is made nullable only
+        // by an explicit `?` right after `]` (`[]?T` → `ArrayQuestionToken`).
+        if (syntax.IsArray)
+        {
+            return syntax.IsArrayNullable ? NullableTypeSymbol.Get(bound) : bound;
+        }
+
+        if (!syntax.IsNullable)
         {
             return bound;
         }

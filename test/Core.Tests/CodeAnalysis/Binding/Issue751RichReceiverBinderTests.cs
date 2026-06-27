@@ -82,7 +82,7 @@ p.Tag() + ""|"" + q.Tag()
     public void NullableArray_Receiver_Dispatches_Via_DotSyntax()
     {
         var source = @"
-func (self []int32?) FirstOrZero() int32 {
+func (self []?int32) FirstOrZero() int32 {
     if self == nil {
         return 0
     }
@@ -92,8 +92,8 @@ func (self []int32?) FirstOrZero() int32 {
     return self[0]
 }
 
-var present []int32? = []int32{10, 20}
-var absent []int32? = nil
+var present []?int32 = []int32{10, 20}
+var absent []?int32 = nil
 present.FirstOrZero() + absent.FirstOrZero()
 ";
         var result = Evaluate(source);

@@ -193,6 +193,29 @@ let buffer = [8]int32     // length-8, all elements 0
 
 Slices are backed by CLR arrays. `len` and `cap` observe array length, and `append` allocates and copies into a new array in the current implementation. The `len`, `cap`, `append`, `delete`, and `make` built-ins are Go-style and require `import Gsharp.Extensions.Go` (ADR-0083); see [Go-style built-ins (`import Gsharp.Extensions.Go`)](#go-style-built-ins-import-gsharpextensionsgo) for the gate and the .NET-idiomatic alternatives (`.Length`, `.Count`, `.Remove(k)`, `List[T].Add`).
 
+#### Nullable arrays vs arrays of nullable elements (issue #1212)
+
+The position of a nullable `?` in an array/slice type clause selects **what** is nullable — the array reference itself, or each element. A `?` **after the element** marks the element; a `?` **right after `]`** marks the whole array:
+
+| Spelling | Meaning | Indexable? |
+| --- | --- | --- |
+| `[]T?`   | a (non-nil) array of **nullable elements** | yes — `a[i]` yields `T?` |
+| `[]?T`   | a **nullable array** reference (the whole array may be nil) | no — null-forgive (`!!`) or use `a?[i]` first |
+| `[]?T?`  | a nullable array of nullable elements | no — `!!` first, then `a[i]` yields `T?` |
+
+The same rule applies to fixed arrays: `[N]T?` is a fixed array of nullable elements, `[N]?T` is a nullable fixed array, and `[N]?T?` is both. In a jagged type the trailing `?` binds to the innermost element, so `[][]T?` is a slice of slices of `T?`, and `[]*T?` is a slice of nullable pointers. An element-nullable value array (`[]int32?`) is backed by `Nullable<int32>[]` and round-trips nil elements; a nullable array (`[]?T`) is a nullable reference to a slice and stays non-indexable until null-forgiven (`GS0116` otherwise), preserving the prior nullable-array semantics under the new spelling. A nullable array whose element is itself a slice (`[]?[]T`) is not spellable, because `?[` lexes as the null-conditional index token.
+
+```gsharp
+var elems []int32? = []int32?{nil, 7}   // array of nullable elements
+elems[0] = 42                            // a[i] : int32? (read/write nil)
+
+var maybe []?int32 = nil                 // nullable array reference
+if maybe == nil { /* … */ }
+var first = maybe?[0]                     // null-conditional index, first : int32?
+```
+
+Slices are backed by CLR arrays. `len` and `cap` observe array length, and `append` allocates and copies into a new array in the current implementation.
+
 Array and slice element access (`a[i]`, read or write) accepts **any** integer-typed index, matching C#'s element-access rule (issue #1279): `int8`, `uint8`, `int16`, `uint16`, `char`, `int32`, `uint32`, `int64`, `uint64`, `nint`, and `nuint`. The narrower kinds that implicitly widen to `int32` are converted to `int32`; the wider kinds (`uint32`, `int64`, `uint64`, `nint`, `nuint`) are converted to the native index type `nint`, which the underlying CIL `ldelem`/`stelem`/`ldelema` accept as the index operand. A non-integer index (`float32`/`float64`/`bool`/`string`/`decimal`/a user type) is rejected (`GS0156`). `string` char-indexing (`s[i]`) likewise accepts any integer index, converting to the `int32` the `get_Chars` accessor takes.
 
 ### Maps
@@ -356,8 +379,8 @@ The implementation emits **reified CLR generic metadata** for user-declared and 
 
 ```ebnf
 TypeClause = identifier TypeArgList? "?"?
-           | "[" number? "]" identifier TypeArgList? "?"?
-           | "[" number? "]" TypeClause "?"?
+           | "[" number? "]" "?"? identifier TypeArgList? "?"?
+           | "[" number? "]" "?"? TypeClause "?"?
            | "(" TypeClause { "," TypeClause } ")" "?"?
            | "(" TypeClauseList? ")" "->" TypeClause "?"?
            | "async" "(" TypeClauseList? ")" "->" TypeClause "?"?
