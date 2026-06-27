@@ -2656,6 +2656,18 @@ internal static class OverloadResolution
             return CompareNumericTargets(paramA, paramB, source);
         }
 
+        // Issue #1311 follow-up: when the SAME constant literal adapts to two
+        // candidates via constant-narrowing (e.g. `UIntPtr(16)` matching both
+        // `.ctor(UInt32)` and `.ctor(UInt64)`), apply the same "better
+        // conversion target" rule so the narrowest applicable integral target
+        // wins (UInt32 over UInt64) instead of producing a spurious GS0160.
+        // A genuinely non-orderable pair (CompareNumericTargets returns 0)
+        // still surfaces as ambiguous.
+        if (ka == ImplicitConversionKind.ConstantNarrowing)
+        {
+            return CompareNumericTargets(paramA, paramB, source);
+        }
+
         // Issue #1150: when two candidates both convert a delegate argument by
         // numeric return-type widening, prefer the one whose delegate return is
         // the "better conversion target" for the source's return type — so a

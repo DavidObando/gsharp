@@ -115,6 +115,26 @@ class C {
         Assert.Empty(EmitDiagnostics(source));
     }
 
+    [Fact]
+    public void ImportedConstructorWithNarrowAndWideOverloads_BindsToNarrowestWithoutAmbiguity()
+    {
+        // System.UIntPtr exposes both .ctor(UInt32) and .ctor(UInt64). A bare
+        // in-range int literal adapts to BOTH via constant-narrowing; the
+        // better-conversion-target tie-break must pick the narrower UInt32
+        // overload rather than reporting GS0160 ambiguity.
+        var source = @"
+package p
+class C {
+    func F() {
+        let p = UIntPtr(16)
+    }
+}
+";
+        var diagnostics = EmitDiagnostics(source);
+        Assert.DoesNotContain(diagnostics, d => d.Message.Contains("ambiguous"));
+        Assert.Empty(diagnostics);
+    }
+
     private static IReadOnlyList<Diagnostic> EmitDiagnostics(string source)
     {
         var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(source)));
