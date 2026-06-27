@@ -444,6 +444,62 @@ namespace Demo
         Assert.Contains("Mode == (12 as uint8?)", printed);
     }
 
+    /// <summary>
+    /// A C# conversion operator with a block body must keep that body when
+    /// translated. The body switch in <c>TranslateBodyCore</c> previously had no
+    /// arm for <c>ConversionOperatorDeclarationSyntax</c>, so the operator was
+    /// emitted with an empty block (silently dropping the conversion logic, which
+    /// also yielded GS0100 "not all code paths return a value").
+    /// </summary>
+    [Fact]
+    public void ConversionOperator_BlockBody_IsTranslated()
+    {
+        string printed = TranslateUnit(@"
+using System;
+namespace Demo
+{
+    public readonly struct Meters
+    {
+        public Meters(int value) { Value = value; }
+        public int Value { get; }
+
+        public static implicit operator Meters(int value)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            return new Meters(value);
+        }
+    }
+}");
+        Assert.Contains("func operator implicit", printed);
+        Assert.Contains("ThrowIfNegative", printed);
+        Assert.Contains("return Meters", printed);
+    }
+
+    /// <summary>
+    /// An argument whose declared numeric type differs from the type C# implicitly
+    /// converted it to at the call site (here a <c>ushort</c> constant passed where
+    /// generic inference selected <c>int</c>) must carry that conversion explicitly,
+    /// since G# performs no implicit numeric promotion at the call site (an
+    /// un-coerced operand defeats generic inference → GS0159).
+    /// </summary>
+    [Fact]
+    public void Argument_ImplicitNumericConversion_EmitsExplicitConversion()
+    {
+        string printed = TranslateUnit(@"
+using System;
+namespace Demo
+{
+    public class C
+    {
+        public void M(int x)
+        {
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(x, ushort.MaxValue);
+        }
+    }
+}");
+        Assert.Contains("int32(UInt16.MaxValue)", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
