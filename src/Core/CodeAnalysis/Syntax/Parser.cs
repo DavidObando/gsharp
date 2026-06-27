@@ -2821,6 +2821,17 @@ public class Parser
                 {
                     body = ParseBlockStatement();
                 }
+                else if (IsAccessorExpressionBodyArrow())
+                {
+                    // Issue #1270: an expression-bodied accessor `get => e` /
+                    // `set => e`. Desugar at parse time into an equivalent block
+                    // body so binding and emit reuse the existing accessor-body
+                    // path: a getter becomes `{ return e }` and a setter/init
+                    // becomes `{ e }` (an expression statement). Without this the
+                    // `=> e` tokens were silently skipped, leaving a body-less
+                    // accessor that returned the type's default value.
+                    body = ParseAccessorExpressionBody(accessorKeyword.Text == "get");
+                }
                 else if (Current.Kind == SyntaxKind.SemicolonToken)
                 {
                     semicolon = NextToken();
@@ -2849,6 +2860,49 @@ public class Parser
         }
 
         return accessors.ToImmutable();
+    }
+
+    // Issue #1270: detect the start of an expression-bodied accessor arrow
+    // `=>`. The lexer produces `=>` as adjacent `=` (EqualsToken) and `>`
+    // (GreaterToken) tokens, so a fat arrow is the pair with no intervening
+    // characters. Requiring adjacency avoids misreading a stray `= >`.
+    private bool IsAccessorExpressionBodyArrow()
+        => Current.Kind == SyntaxKind.EqualsToken
+            && Peek(1).Kind == SyntaxKind.GreaterToken
+            && Current.Position + (Current.Text?.Length ?? 0) == Peek(1).Position;
+
+    // Issue #1270: parse the `=> expr` tail of an expression-bodied accessor and
+    // synthesize an equivalent block body. A getter lowers to `{ return expr }`;
+    // a setter/init lowers to `{ expr }` (an expression statement). The
+    // synthesized braces reuse the arrow's source position so diagnostics and
+    // spans remain anchored at the accessor.
+    private BlockStatementSyntax ParseAccessorExpressionBody(bool isGetter)
+    {
+        var equalsToken = NextToken();
+        var greaterToken = NextToken();
+        var arrowPosition = equalsToken.Position;
+
+        var expression = ParseExpression();
+
+        var openBrace = new SyntaxToken(syntaxTree, SyntaxKind.OpenBraceToken, arrowPosition, "{", null);
+        var closeBrace = new SyntaxToken(syntaxTree, SyntaxKind.CloseBraceToken, greaterToken.Position, "}", null);
+
+        StatementSyntax statement;
+        if (isGetter)
+        {
+            var returnKeyword = new SyntaxToken(syntaxTree, SyntaxKind.ReturnKeyword, arrowPosition, "return", null);
+            statement = new ReturnStatementSyntax(syntaxTree, returnKeyword, expression);
+        }
+        else
+        {
+            statement = new ExpressionStatementSyntax(syntaxTree, expression);
+        }
+
+        return new BlockStatementSyntax(
+            syntaxTree,
+            openBrace,
+            ImmutableArray.Create(statement),
+            closeBrace);
     }
 
     private FieldDeclarationSyntax ParseFieldDeclaration()

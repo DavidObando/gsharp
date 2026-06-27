@@ -245,4 +245,55 @@ public class PropertyParserTests
         var propDecl = structDecl.Properties.Single();
         Assert.True(propDecl.Accessors.Single(a => a.IsInit).IsInit);
     }
+
+    [Fact]
+    public void ParsesExpressionBodiedGetter_NoDiagnostics()
+    {
+        // Issue #1270: `prop P T { get => e }` is an expression-bodied getter.
+        const string source = "package P\nclass Foo {\n  prop X int32 { get => 5 }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+    }
+
+    [Fact]
+    public void ExpressionBodiedGetter_DesugarsToBlockWithReturn()
+    {
+        // Issue #1270: the parser desugars `get => e` into a synthesized block
+        // `{ return e }` so binding/emit reuse the existing accessor-body path.
+        const string source = "package P\nclass Foo {\n  prop X int32 { get => 5 }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var accessor = structDecl.Properties.Single().Accessors.Single();
+        Assert.True(accessor.IsGetter);
+        Assert.NotNull(accessor.Body);
+        var statement = Assert.Single(accessor.Body.Statements);
+        Assert.IsType<ReturnStatementSyntax>(statement);
+    }
+
+    [Fact]
+    public void ExpressionBodiedSetter_DesugarsToBlockWithExpressionStatement()
+    {
+        // Issue #1270: a `set => e` desugars to `{ e }` (an expression
+        // statement), NOT an implicit return, because the setter is void.
+        const string source = "package P\nclass Foo {\n  var n int32\n  prop X int32 { get => this.n  set => this.n = value }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var setter = structDecl.Properties.Single().Accessors.Single(a => a.IsSetter);
+        Assert.NotNull(setter.Body);
+        var statement = Assert.Single(setter.Body.Statements);
+        Assert.IsType<ExpressionStatementSyntax>(statement);
+    }
+
+    [Fact]
+    public void ParsesExpressionBodiedGetterOnInterface_NoDiagnostics()
+    {
+        // Issue #1270: default interface getter via expression body.
+        const string source = "package P\ninterface I {\n  prop X int32 { get => 5 }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+    }
 }
