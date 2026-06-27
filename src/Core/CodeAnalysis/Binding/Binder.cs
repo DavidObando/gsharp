@@ -341,6 +341,20 @@ public sealed class Binder
                         {
                             foreach (var fld in t.Fields)
                             {
+                                // Issue #1240: a method/constructor parameter named
+                                // like an instance field shadows that field for bare
+                                // (unqualified) access — matching C# semantics and the
+                                // parameter > instance member > static member precedence
+                                // already enforced for static members below. The field
+                                // remains reachable as `this.<field>`. Without this
+                                // guard the field's pseudo-variable is seeded first and
+                                // TryDeclareVariable silently drops the later parameter,
+                                // so the parameter is wrongly ignored.
+                                if (paramNames.Contains(fld.Name))
+                                {
+                                    continue;
+                                }
+
                                 if (seenMembers.Add(fld.Name))
                                 {
                                     scope.TryDeclareVariable(new ImplicitFieldVariableSymbol(function.ThisParameter, t, fld));
@@ -356,6 +370,14 @@ public sealed class Binder
                                 // CLR name `Item` but is not accessible by bare name —
                                 // it is reached only through `this[i]` index access.
                                 if (prop.IsIndexer)
+                                {
+                                    continue;
+                                }
+
+                                // Issue #1240: a parameter named like an instance
+                                // property shadows that property for bare access; the
+                                // property stays reachable as `this.<property>`.
+                                if (paramNames.Contains(prop.Name))
                                 {
                                     continue;
                                 }
@@ -386,6 +408,7 @@ public sealed class Binder
                             {
                                 if (evt.IsFieldLike
                                     && evt.BackingField != null
+                                    && !paramNames.Contains(evt.Name)
                                     && seenMembers.Add(evt.Name))
                                 {
                                     scope.TryDeclareVariable(new ImplicitFieldVariableSymbol(function.ThisParameter, t, evt.BackingField));
