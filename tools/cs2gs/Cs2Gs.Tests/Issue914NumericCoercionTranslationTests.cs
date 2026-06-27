@@ -236,6 +236,93 @@ namespace Demo
         Assert.Contains("trun.DoThing()", printed);
     }
 
+    /// <summary>
+    /// A shift count of a non-<c>int32</c> integral (here <c>byte</c>, which C#
+    /// implicitly widens to <c>int</c>) is wrapped as <c>int32(count)</c> so the
+    /// shift binds in G# (which requires an <c>int32</c> shift count; a
+    /// <c>uint8</c>/<c>uint32</c> count is GS0129).
+    /// </summary>
+    [Fact]
+    public void Shift_NonInt32Count_WrapsInInt32Conversion()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public uint F(uint value, byte count) => value << count;
+    }
+}");
+
+        Assert.Contains("value << int32(count)", printed);
+    }
+
+    /// <summary>
+    /// A shift whose count is already <c>int32</c> is left unchanged (no redundant
+    /// conversion).
+    /// </summary>
+    [Fact]
+    public void Shift_Int32Count_LeftUnchanged()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public uint F(uint value, int count) => value << count;
+    }
+}");
+
+        Assert.Contains("value << count", printed);
+        Assert.DoesNotContain("int32(count)", printed);
+    }
+
+    /// <summary>
+    /// A compound shift-assignment <c>value &lt;&lt;= count</c> coerces the count to
+    /// <c>int32</c>, NOT to the left operand's numeric type (the previous behavior
+    /// wrongly emitted <c>uint32(count)</c>, yielding GS0129).
+    /// </summary>
+    [Fact]
+    public void CompoundShiftAssignment_NonInt32Count_CoercesCountToInt32()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public uint F(uint value, byte count)
+        {
+            value <<= count;
+            return value;
+        }
+    }
+}");
+
+        Assert.Contains("value <<= int32(count)", printed);
+        Assert.DoesNotContain("uint32(count)", printed);
+    }
+
+    /// <summary>
+    /// A ternary whose arms are differing numeric primitives coerces the diverging
+    /// arm to the conditional's non-nullable numeric result type (G# has no implicit
+    /// numeric promotion; mismatched arms are GS0263). Here C#'s common type of
+    /// <c>1u</c> and <c>0</c> is <c>uint</c>, so the <c>0</c> arm becomes <c>uint32(0)</c>.
+    /// </summary>
+    [Fact]
+    public void Ternary_DivergingNumericArms_CoercesToResultType()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public uint F(bool b) => b ? 1u : 0;
+    }
+}");
+
+        Assert.Contains("uint32(0)", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
