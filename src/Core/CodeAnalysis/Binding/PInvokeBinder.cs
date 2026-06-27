@@ -171,6 +171,17 @@ internal static class PInvokeBinder
                 continue;
             }
 
+            // ADR-0086 §2 / issue #1208: SafeHandle (and derived types such as
+            // SafeFileHandle, SafeWaitHandle) marshal as managed handle
+            // wrappers — the CLR marshaller performs the handle ref-count /
+            // lifetime bookkeeping automatically. Accept them as a by-value
+            // parameter; this guard takes precedence over the struct / class
+            // and generic unsupported-type rejections below.
+            if (IsSafeHandleType(parameter.Type))
+            {
+                continue;
+            }
+
             // ADR-0093 §3 / §4: struct values and (layout-annotated) class
             // references are validated separately so the binder can issue
             // the tailored GS0349 "not blittable" message rather than the
@@ -205,7 +216,15 @@ internal static class PInvokeBinder
             // ownership / lifetime contract. The caller should declare the
             // return as `unmanaged[CC] (...) -> R` or `nint` and use
             // `Marshal.GetDelegateForFunctionPointer` manually.
-            if (function.Type is DelegateTypeSymbol returnDelegate)
+            if (IsSafeHandleType(function.Type))
+            {
+                // ADR-0086 §2 / issue #1208: SafeHandle return — the CLR
+                // marshaller constructs the managed wrapper and assumes
+                // ownership of the native handle. This guard precedes the
+                // class-return / unsupported-type rejections so an imported
+                // BCL handle type (e.g. SafeFileHandle) is never misclassified.
+            }
+            else if (function.Type is DelegateTypeSymbol returnDelegate)
             {
                 diagnostics.ReportPInvokeDelegateReturnNotSupported(returnLocation, returnDelegate.Name);
             }
@@ -274,6 +293,11 @@ internal static class PInvokeBinder
         }
 
         if (type == TypeSymbol.String)
+        {
+            return true;
+        }
+
+        if (IsSafeHandleType(type))
         {
             return true;
         }
@@ -432,6 +456,46 @@ internal static class PInvokeBinder
         }
 
         structSymbol = null;
+        return false;
+    }
+
+    /// <summary>
+    /// ADR-0086 §2 / issue #1208: returns <c>true</c> when
+    /// <paramref name="type"/> is
+    /// <c>System.Runtime.InteropServices.SafeHandle</c> or any type deriving
+    /// from it (e.g. <c>Microsoft.Win32.SafeHandles.SafeFileHandle</c>,
+    /// <c>Microsoft.Win32.SafeHandles.SafeWaitHandle</c>). <c>SafeHandle</c> is
+    /// a managed reference type that the CLR marshaller special-cases for
+    /// P/Invoke: it performs the handle ref-count / lifetime management
+    /// automatically and accepts the type as both a parameter and a return
+    /// value. <c>SafeHandle</c> is neither blittable nor a pointer, so it must
+    /// bypass the struct / pointer marshalling checks. Detection walks the CLR
+    /// base-type chain on the symbol's <see cref="TypeSymbol.ClrType"/> and
+    /// compares the full name, so it works for imported BCL handle types loaded
+    /// through a <c>MetadataLoadContext</c>. A <see cref="NullableTypeSymbol"/>
+    /// wrapper is unwrapped first so <c>SafeFileHandle?</c> is still recognised.
+    /// Only <c>SafeHandle</c> and its subclasses are accepted — arbitrary
+    /// reference types are not broadened in.
+    /// </summary>
+    /// <param name="type">The bound parameter or return type.</param>
+    /// <returns><c>true</c> when the type is or derives from <c>SafeHandle</c>.</returns>
+    internal static bool IsSafeHandleType(TypeSymbol type)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+
+        var unwrapped = type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
+        var clrType = unwrapped?.ClrType;
+        for (var current = clrType; current != null; current = current.BaseType)
+        {
+            if (current.FullName == "System.Runtime.InteropServices.SafeHandle")
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 

@@ -64,6 +64,7 @@ A P/Invoke parameter or return type is **valid in v1** if and only if it falls i
 | `string`                         | `System.String`     | Marshalled per `CharSet` (default: `CharSet.Ansi`, matching CLR default). |
 | `*T` (where `T` is a primitive)  | `T*` (unmanaged pointer) | Raw pointer; not GC-tracked.            |
 | `[]T` for primitive `T`          | `T[]` (managed array) | Marshalled as an LPArray; pinned and a base pointer passed. |
+| `SafeHandle` (and derived)       | `System.Runtime.InteropServices.SafeHandle` (or subclass, e.g. `Microsoft.Win32.SafeHandles.SafeFileHandle`) | The CLR marshaller special-cases `SafeHandle`: as a parameter it adds a ref to the handle for the duration of the call; as a return value it constructs the managed wrapper and takes ownership of the native handle. Not blittable and not a pointer — accepted as a managed reference type. |
 | `void` (return only)             | `System.Void`       |                                            |
 
 **Not yet supported in v1** (diagnose with GS0323; tracked in follow-up issues):
@@ -72,8 +73,29 @@ A P/Invoke parameter or return type is **valid in v1** if and only if it falls i
 - Delegates as function pointers (`[MarshalAs(UnmanagedType.FunctionPtr)]`).
 - Out / ref parameters with primitive types (filed as follow-up #728).
 - Custom marshallers (`[MarshalAs(CustomMarshaler = ...)]`).
-- `StringBuilder` and `SafeHandle` derived types.
+- `StringBuilder`.
 - `@LibraryImport` source-generator pattern (filed as follow-up #729).
+
+#### 2.1 `SafeHandle` marshalling (issue #1208)
+
+`System.Runtime.InteropServices.SafeHandle` and any type that derives from it
+(e.g. `Microsoft.Win32.SafeHandles.SafeFileHandle`,
+`Microsoft.Win32.SafeHandles.SafeWaitHandle`) are accepted as a P/Invoke
+**parameter** and as a **return value**. `SafeHandle` is the standard,
+idiomatic way to write safe Win32 interop in .NET: the CLR marshaller performs
+the handle ref-count / lifetime bookkeeping automatically, so the canonical
+`CreateFile` → `SafeFileHandle` / `ReadFile(SafeHandle, …)` shape compiles and
+emits a `PinvokeImpl` method whose signature references the real handle type via
+a `TypeRef`. The binder detects "is or derives from `SafeHandle`" by walking the
+CLR base-type chain on the type's `ClrType` and comparing the full name
+`System.Runtime.InteropServices.SafeHandle` — only `SafeHandle` and its
+subclasses are accepted; arbitrary reference types are **not** broadened in (a
+`StringBuilder` parameter or an arbitrary class return is still rejected with
+GS0323). `SafeHandle` is neither blittable nor a pointer, so it bypasses the
+struct / pointer blittability checks (it is a managed reference type the
+marshaller special-cases). The emitter needs no marshalling-specific gate: the
+general method-signature type encoder emits the handle type's `TypeRef`
+directly, and the runtime marshaller does the rest.
 
 ### 3. Attribute knobs
 
