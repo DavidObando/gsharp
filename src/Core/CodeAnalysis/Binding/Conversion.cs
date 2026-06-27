@@ -580,12 +580,9 @@ public sealed class Conversion
 
             if (to is StructSymbol toClass && toClass.IsClass)
             {
-                for (var c = fromClass.BaseClass; c != null; c = c.BaseClass)
+                if (DerivesFromConstructed(fromClass, toClass))
                 {
-                    if (c == toClass)
-                    {
-                        return Conversion.Implicit;
-                    }
+                    return Conversion.Implicit;
                 }
             }
         }
@@ -810,6 +807,115 @@ public sealed class Conversion
         for (var i = 0; i < from.TypeArguments.Length; i++)
         {
             if (!AreTypeArgumentsEquivalent(from.TypeArguments[i], to.TypeArguments[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1248: determines whether a (possibly constructed generic) class
+    /// <paramref name="fromClass"/> implicitly upcasts to a constructed generic
+    /// base class <paramref name="toClass"/> by walking the inheritance chain
+    /// while substituting type arguments at each level.
+    /// <para>
+    /// A base-type reference is declared in terms of the derived class's OWN
+    /// type parameters (e.g. <c>TransformBase[TIn, TOut] : FilterBase[TIn]</c>),
+    /// and a constructed instance keeps that base reference unsubstituted
+    /// (<see cref="StructSymbol.BaseClass"/> is the open definition's base). A
+    /// naive reference-equality walk therefore compares <c>FilterBase[TIn]</c>
+    /// against the target <c>FilterBase[int32]</c> and fails. This walk threads
+    /// a substitution map mapping each class's declaration type parameters onto
+    /// the concrete type arguments seen at the most-derived level, composing the
+    /// map down every hop, so the base reference is fully substituted before the
+    /// comparison. Handles multi-level chains (concrete leaf → generic mid →
+    /// generic base), type-parameter renaming, and partial type-parameter flow
+    /// (only some of the derived's parameters reaching the base). A wrong type
+    /// argument or an unrelated definition still fails (GS0155).
+    /// </para>
+    /// </summary>
+    private static bool DerivesFromConstructed(StructSymbol fromClass, StructSymbol toClass)
+    {
+        // Maps each visited class's declaration type parameters onto concrete
+        // type arguments resolved in fromClass's context, composed across hops.
+        Dictionary<TypeParameterSymbol, TypeSymbol> running = null;
+
+        for (var c = fromClass; c != null; c = c.BaseClass)
+        {
+            // The most-derived class itself is the identity case (handled by the
+            // caller); only its base chain is an upcast target.
+            if (!ReferenceEquals(c, fromClass) && MatchesConstructedTarget(c, toClass, running))
+            {
+                return true;
+            }
+
+            // Extend the running map with this class's own declaration
+            // parameters -> (resolved) arguments, so a deeper base whose type
+            // arguments reference these parameters can be substituted.
+            if (c.Definition != null
+                && !c.TypeArguments.IsDefaultOrEmpty
+                && !c.Definition.TypeParameters.IsDefaultOrEmpty)
+            {
+                var defParams = c.Definition.TypeParameters;
+                var count = Math.Min(defParams.Length, c.TypeArguments.Length);
+                for (var i = 0; i < count; i++)
+                {
+                    var arg = c.TypeArguments[i];
+                    if (arg is TypeParameterSymbol tpArg && running != null
+                        && running.TryGetValue(tpArg, out var resolved))
+                    {
+                        arg = resolved;
+                    }
+
+                    running ??= new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                    running[defParams[i]] = arg;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #1248: tests whether a base-chain class <paramref name="c"/>, after
+    /// substituting its type arguments through <paramref name="running"/>, denotes
+    /// the same constructed type as <paramref name="toClass"/>.
+    /// </summary>
+    private static bool MatchesConstructedTarget(
+        StructSymbol c,
+        StructSymbol toClass,
+        Dictionary<TypeParameterSymbol, TypeSymbol> running)
+    {
+        if (!ReferenceEquals(c.Definition, toClass.Definition))
+        {
+            return false;
+        }
+
+        // Non-generic class along the chain: definition identity is sufficient.
+        if (c.TypeArguments.IsDefaultOrEmpty && toClass.TypeArguments.IsDefaultOrEmpty)
+        {
+            return true;
+        }
+
+        if (c.TypeArguments.IsDefaultOrEmpty
+            || toClass.TypeArguments.IsDefaultOrEmpty
+            || c.TypeArguments.Length != toClass.TypeArguments.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < c.TypeArguments.Length; i++)
+        {
+            var arg = c.TypeArguments[i];
+            if (arg is TypeParameterSymbol tp && running != null
+                && running.TryGetValue(tp, out var resolved))
+            {
+                arg = resolved;
+            }
+
+            if (!AreTypeArgumentsEquivalent(arg, toClass.TypeArguments[i]))
             {
                 return false;
             }
