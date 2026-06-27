@@ -3536,6 +3536,55 @@ public sealed class Binder
                 : type;
         }
 
+        // Issue #1250: a member-signature type that is itself a constructed
+        // generic G# user class (e.g. `Holder[T]` on `Box[T]`) must have its
+        // own type arguments substituted with the receiver's type-argument map
+        // so `Holder[T]` surfaces as `Holder[int32]` on `Box[int32]`. Without
+        // this branch the constructed type's arguments stay parametric and the
+        // bound member binds with `T` still open, failing argument/return/
+        // assignment conversions (GS0155 "Cannot convert 'Holder' to 'Holder'").
+        // Recurses so nested generics (`Holder[Holder[T]]`,
+        // `Dictionary[K, List[V]]`) are substituted too.
+        if (type is StructSymbol ss
+            && ss.Definition != null
+            && !ReferenceEquals(ss.Definition, ss)
+            && !ss.TypeArguments.IsDefaultOrEmpty)
+        {
+            var newStructArgs = ImmutableArray.CreateBuilder<TypeSymbol>(ss.TypeArguments.Length);
+            var structChanged = false;
+            foreach (var arg in ss.TypeArguments)
+            {
+                var substituted = SubstituteType(arg, substitution);
+                structChanged |= !ReferenceEquals(substituted, arg);
+                newStructArgs.Add(substituted);
+            }
+
+            return structChanged
+                ? StructSymbol.Construct(ss.Definition, newStructArgs.MoveToImmutable())
+                : type;
+        }
+
+        // Issue #1250: same recursion for a constructed generic user interface
+        // type appearing in a member signature (`IBox[T]` → `IBox[int32]`).
+        if (type is InterfaceSymbol ifaceType
+            && ifaceType.Definition != null
+            && !ReferenceEquals(ifaceType.Definition, ifaceType)
+            && !ifaceType.TypeArguments.IsDefaultOrEmpty)
+        {
+            var newIfaceArgs = ImmutableArray.CreateBuilder<TypeSymbol>(ifaceType.TypeArguments.Length);
+            var ifaceChanged = false;
+            foreach (var arg in ifaceType.TypeArguments)
+            {
+                var substituted = SubstituteType(arg, substitution);
+                ifaceChanged |= !ReferenceEquals(substituted, arg);
+                newIfaceArgs.Add(substituted);
+            }
+
+            return ifaceChanged
+                ? InterfaceSymbol.Construct(ifaceType.Definition, newIfaceArgs.MoveToImmutable())
+                : type;
+        }
+
         if (type is ImportedTypeSymbol it && it.HasTypeParameterArgument)
         {
             // #313: substitute a generic type parameterized by an in-scope type
