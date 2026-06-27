@@ -116,6 +116,14 @@ internal sealed class OverloadResolver
     private readonly Func<BoundExpression, ExpressionSyntax, ParameterSymbol, TypeSymbol, BoundExpression> tryRebindInlineOutVarPlaceholder;
     private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
     private readonly Func<string, TypeSymbol> lookupType;
+
+    // Issue #1263: arity-aware type lookup. When a construction carries an
+    // explicit type-argument list (`Op[int32](5)`), the constructed type name
+    // must be resolved by (name, arity) so a non-generic `Op` and a generic
+    // `Op[T]` can coexist — mirroring the #1051 disambiguation already used by
+    // the type-reference and struct-literal paths. A negative arity means "no
+    // preference" and falls back to the arity-0 type.
+    private readonly Func<string, int, TypeSymbol> lookupTypeWithArity;
     private readonly Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable;
     private readonly TryBindClrConstructorCallDelegate tryBindClrConstructorCall;
     private readonly TryBindIntrinsicCallDelegate tryBindIntrinsicCall;
@@ -165,6 +173,10 @@ internal sealed class OverloadResolver
     /// <see cref="TypeClauseSyntax"/> to a <see cref="TypeSymbol"/>.</param>
     /// <param name="lookupType">Callback to resolve a bare type name to a
     /// <see cref="TypeSymbol"/> in the current binding context.</param>
+    /// <param name="lookupTypeWithArity">Callback to resolve a type name by
+    /// (name, generic arity), used at construction sites so a non-generic and a
+    /// same-named generic type can be disambiguated by the supplied
+    /// type-argument count (issue #1263).</param>
     /// <param name="reportObsoleteUseIfApplicable">Callback that emits
     /// <c>GS0276</c> when a symbol is <c>[Obsolete]</c>.</param>
     /// <param name="tryBindClrConstructorCall">Callback that attempts to
@@ -235,6 +247,7 @@ internal sealed class OverloadResolver
         Func<BoundExpression, ExpressionSyntax, ParameterSymbol, TypeSymbol, BoundExpression> tryRebindInlineOutVarPlaceholder,
         Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
         Func<string, TypeSymbol> lookupType,
+        Func<string, int, TypeSymbol> lookupTypeWithArity,
         Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable,
         TryBindClrConstructorCallDelegate tryBindClrConstructorCall,
         TryBindIntrinsicCallDelegate tryBindIntrinsicCall,
@@ -264,6 +277,7 @@ internal sealed class OverloadResolver
         this.tryRebindInlineOutVarPlaceholder = tryRebindInlineOutVarPlaceholder ?? throw new ArgumentNullException(nameof(tryRebindInlineOutVarPlaceholder));
         this.bindTypeClause = bindTypeClause ?? throw new ArgumentNullException(nameof(bindTypeClause));
         this.lookupType = lookupType ?? throw new ArgumentNullException(nameof(lookupType));
+        this.lookupTypeWithArity = lookupTypeWithArity ?? throw new ArgumentNullException(nameof(lookupTypeWithArity));
         this.reportObsoleteUseIfApplicable = reportObsoleteUseIfApplicable ?? throw new ArgumentNullException(nameof(reportObsoleteUseIfApplicable));
         this.tryBindClrConstructorCall = tryBindClrConstructorCall ?? throw new ArgumentNullException(nameof(tryBindClrConstructorCall));
         this.tryBindIntrinsicCall = tryBindIntrinsicCall ?? throw new ArgumentNullException(nameof(tryBindIntrinsicCall));
@@ -3009,7 +3023,18 @@ internal sealed class OverloadResolver
             return clrCtorCall;
         }
 
-        if (syntax.Arguments.Count == 1 && lookupType(syntax.Identifier.Text) is TypeSymbol type)
+        // Issue #1263: when the construction carries an explicit type-argument
+        // list (`Op[int32](5)`), resolve the constructed type by (name, arity)
+        // so a non-generic `Op` and a generic `Op[T]` can coexist. With no type
+        // arguments the arity is -1 ("no preference"), preferring the arity-0
+        // type — so `Op(...)` keeps picking the non-generic `Op`. This reuses
+        // the same #1051 arity-keyed type-alias lookup the type-reference and
+        // struct-literal paths already use.
+        var ctorPreferredArity = syntax.TypeArgumentList != null
+            ? syntax.TypeArgumentList.Arguments.Count
+            : -1;
+
+        if (syntax.Arguments.Count == 1 && lookupTypeWithArity(syntax.Identifier.Text, ctorPreferredArity) is TypeSymbol type)
         {
             // Issue #663: when the call carries a `?` token (e.g. `string?(x)`),
             // wrap the resolved type in NullableTypeSymbol so the conversion
@@ -3049,7 +3074,7 @@ internal sealed class OverloadResolver
         // Issue #1069: a value struct (e.g. a `data struct`) declaring a
         // primary constructor is also positionally constructible —
         // `Entry(1, 2)` lowers to a struct literal initializing its fields.
-        if (lookupType(syntax.Identifier.Text) is StructSymbol classType
+        if (lookupTypeWithArity(syntax.Identifier.Text, ctorPreferredArity) is StructSymbol classType
             && (classType.IsClass || classType.IsInline || classType.HasPrimaryConstructor))
         {
             return BindConstructorCallExpression(syntax, classType);

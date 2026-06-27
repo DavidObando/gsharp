@@ -210,6 +210,7 @@ public sealed class Binder
             tryRebindInlineOutVarPlaceholder: (boundArg, slotSyntax, resolvedParameter, substitutedPointeeType) => expressions.TryRebindInlineOutVarPlaceholder(boundArg, slotSyntax, resolvedParameter, substitutedPointeeType),
             bindTypeClause: BindTypeClause,
             lookupType: LookupType,
+            lookupTypeWithArity: LookupType,
             reportObsoleteUseIfApplicable: ReportObsoleteUseIfApplicable,
             tryBindClrConstructorCall: (syntax, out result) => expressions.TryBindClrConstructorCall(syntax, out result),
             tryBindIntrinsicCall: (syntax, out result) => expressions.TryBindIntrinsicCall(syntax, out result),
