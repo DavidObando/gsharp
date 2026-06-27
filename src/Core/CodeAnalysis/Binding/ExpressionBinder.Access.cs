@@ -2903,19 +2903,29 @@ internal sealed partial class ExpressionBinder
         var element = GetIndexElementType(target.Type);
         if (element != null)
         {
-            var index = ConvertIndex(TypeSymbol.Int32);
+            // Issue #1279: array/slice element access accepts any integer-typed
+            // index (matching C#). `boundIndex` is non-null for every non-
+            // default/interpolated index; those two carry no natural type and
+            // keep the historical int32 conversion driven by the target type.
+            var index = boundIndex != null
+                ? ConvertArrayElementIndex(indexSyntax.Location, boundIndex)
+                : ConvertIndex(TypeSymbol.Int32);
             return new BoundIndexExpression(null, target, index, element);
         }
 
         // Issue #1129: `string` is the primitive `TypeSymbol.String` (not an
         // `ImportedTypeSymbol`), so it matches none of the indexer-resolution
         // branches below. Model `s[i]` against .NET's `String` indexer
-        // (`char this[int]` / `get_Chars(int)`), yielding a `char`. The index is
-        // converted to int32 exactly like array indexing. Emit already lowers a
-        // `BoundIndexExpression` whose target is `string` to `get_Chars` (#537).
+        // (`char this[int]` / `get_Chars(int)`), yielding a `char`. Issue #1279:
+        // any integer-typed index is accepted; because `get_Chars` takes an
+        // int32, the wider integer types convert (narrow) to int32. Emit already
+        // lowers a `BoundIndexExpression` whose target is `string` to `get_Chars`
+        // (#537).
         if (target.Type == TypeSymbol.String)
         {
-            var index = ConvertIndex(TypeSymbol.Int32);
+            var index = boundIndex != null
+                ? ConvertStringCharIndex(indexSyntax.Location, boundIndex)
+                : ConvertIndex(TypeSymbol.Int32);
             return new BoundIndexExpression(null, target, index, TypeSymbol.Char);
         }
 
@@ -3215,7 +3225,7 @@ internal sealed partial class ExpressionBinder
         var element = GetIndexElementType(variable.Type);
         if (element != null)
         {
-            var index = conversions.BindConversion(indexSyntax, TypeSymbol.Int32);
+            var index = BindArrayElementIndex(indexSyntax);
             var value = BindValue(element);
             return new BoundIndexAssignmentExpression(null, variable, index, value, element);
         }
@@ -4196,6 +4206,56 @@ internal sealed partial class ExpressionBinder
         lengthMember = lengthProp;
         sliceMethod = slice;
         return true;
+    }
+
+    // Issue #1279: array/slice element access accepts any integer-typed index
+    // (matching C#). Integer types that implicitly widen to int32
+    // (int8/uint8/int16/uint16/char/int32) convert to int32; the wider integer
+    // types (uint32/int64/uint64/nint/nuint) convert to native int (nint),
+    // which CIL ldelem/stelem/ldelema accept as the index operand. Non-integer
+    // indices fall through to the int32 conversion, which reports GS0156.
+    private static bool IsWideIntegerIndexType(TypeSymbol type) =>
+        type == TypeSymbol.UInt32 || type == TypeSymbol.Int64 || type == TypeSymbol.UInt64
+        || type == TypeSymbol.NInt || type == TypeSymbol.NUInt;
+
+    private BoundExpression ConvertArrayElementIndex(TextLocation location, BoundExpression boundIndex)
+    {
+        if (IsWideIntegerIndexType(boundIndex.Type))
+        {
+            return conversions.BindConversion(location, boundIndex, TypeSymbol.NInt, allowExplicit: true);
+        }
+
+        return conversions.BindConversion(location, boundIndex, TypeSymbol.Int32);
+    }
+
+    // Issue #1279: `string` char-indexing (`s[i]`) lowers to the CLR
+    // `get_Chars(int32)` accessor, so any integer index converts to int32 (an
+    // explicit narrowing for the wider integer types). Non-integer indices
+    // report GS0156 via the implicit int32 conversion.
+    private BoundExpression ConvertStringCharIndex(TextLocation location, BoundExpression boundIndex)
+    {
+        return conversions.BindConversion(
+            location, boundIndex, TypeSymbol.Int32, allowExplicit: IsWideIntegerIndexType(boundIndex.Type));
+    }
+
+    // Issue #1279: bind an array/slice element index from syntax. A
+    // default/interpolated index carries no natural type, so it keeps the
+    // historical target-typed int32 conversion; every other index is bound and
+    // then converted via the integer-aware element-index rule above.
+    private BoundExpression BindArrayElementIndex(ExpressionSyntax indexSyntax)
+    {
+        if (indexSyntax is DefaultExpressionSyntax || indexSyntax is InterpolatedStringExpressionSyntax)
+        {
+            return conversions.BindConversion(indexSyntax, TypeSymbol.Int32);
+        }
+
+        var boundIndex = BindExpression(indexSyntax);
+        if (boundIndex is BoundErrorExpression)
+        {
+            return boundIndex;
+        }
+
+        return ConvertArrayElementIndex(indexSyntax.Location, boundIndex);
     }
 
     private static TypeSymbol GetIndexElementType(TypeSymbol type)

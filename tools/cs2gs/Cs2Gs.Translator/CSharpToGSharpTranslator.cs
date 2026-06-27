@@ -3363,21 +3363,27 @@ public sealed class CSharpToGSharpTranslator
             return length;
         }
 
-        // G# array/indexer element access requires an `int32` index. C# accepts any
-        // integral index and implicitly widens the narrow ones (`byte`, `sbyte`,
-        // `short`, `ushort`, `char`) to `int`, but the wider/unsigned kinds
-        // (`uint`, `long`, `ulong`, `nint`, `nuint`) do NOT implicitly convert to
-        // `int32`, so gsc rejects them with GS0156. When the indexed target's index
-        // type is `int32` (an array, or an indexer whose single parameter is
-        // `int32` — e.g. `List<T>`/`Span<T>`/`IReadOnlyList<T>`) and the C# index
-        // expression has a non-`int32` integral type that does not widen, wrap the
-        // index in the conversion-call form `int32(<index>)`. Dictionary/other
-        // indexers whose key type is not `int32`, `System.Index`/`System.Range`
-        // indices, and indices already `int`/narrower are left untouched.
+        // G# array/indexer element access. Issue #1279: gsc now accepts ANY
+        // C#-supported integer type as an array/slice element index (it converts
+        // the wider/unsigned kinds — `uint`, `long`, `ulong`, `nint`, `nuint` —
+        // to native int), so an ARRAY index needs no `int32(...)` coercion and is
+        // emitted idiomatically. A user/CLR indexer (`List<T>`, `Span<T>`,
+        // `IReadOnlyList<T>`, ...) whose single parameter is `int32` still binds
+        // its argument to `int32` via normal conversion rules in gsc, so a wide
+        // index against such an indexer is still wrapped in `int32(<index>)`.
+        // Dictionary/other indexers keyed by a non-`int32` type, `System.Index`/
+        // `System.Range` indices, and indices already `int`/narrower are left
+        // untouched.
         private GExpression CoerceIndexToInt32(
             ElementAccessExpressionSyntax elementAccess, GExpression index)
         {
             if (elementAccess.ArgumentList.Arguments.Count != 1)
+            {
+                return index;
+            }
+
+            // Issue #1279: arrays accept any integer index in gsc — no coercion.
+            if (this.context.GetTypeInfo(elementAccess.Expression).Type is IArrayTypeSymbol)
             {
                 return index;
             }
