@@ -1387,6 +1387,22 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        // Issue #1239 / C# §12.15: when `??` computes a best common type that
+        // differs from the right operand's type (a reference upcast / interface
+        // implementation or a numeric widening), insert the implicit conversion
+        // on the right operand so both branches of the coalesce leave a value of
+        // the operator's result type. The left operand's non-null value is
+        // converted to the result type by the emitter / evaluator when the
+        // result widened the left's underlying numeric type (e.g.
+        // `int32? ?? int64` → `int64`); reference upcasts need no IL conversion
+        // because they are representation-preserving.
+        if (boundOperator.Kind == BoundBinaryOperatorKind.NullCoalesce
+            && boundRight.Type != boundOperator.Type
+            && boundRight.Type != TypeSymbol.Never)
+        {
+            boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type);
+        }
+
         return new BoundBinaryExpression(null, boundLeft, boundOperator, boundRight);
     }
 
