@@ -3378,16 +3378,27 @@ public sealed class CSharpToGSharpTranslator
             ITypeSymbol trueType = this.context.GetTypeInfo(conditional.WhenTrue).Type;
             ITypeSymbol falseType = this.context.GetTypeInfo(conditional.WhenFalse).Type;
 
+            // When C# computed a single numeric conditional type but an arm has a
+            // different numeric type (e.g. `cond ? 1u : 0`, whose `0` is `int32`
+            // while the result is `uint32`), coerce each mismatched arm to the
+            // result type: G# requires both arms to share a type (GS0263) and does
+            // no implicit promotion. Each arm is coerced independently so a ternary
+            // with only one mismatched arm is still aligned.
             if (resultType != null &&
                 IsNonNullableValueType(resultType) &&
-                TryGetNumericKind(resultType, out SpecialType resultUnderlying) &&
-                TryGetNumericKind(trueType, out SpecialType trueUnderlying) &&
-                TryGetNumericKind(falseType, out SpecialType falseUnderlying) &&
-                resultUnderlying != trueUnderlying &&
-                resultUnderlying != falseUnderlying)
+                TryGetNumericKind(resultType, out SpecialType resultUnderlying))
             {
-                whenTrue = this.CoerceOperandTo(whenTrue, resultType);
-                whenFalse = this.CoerceOperandTo(whenFalse, resultType);
+                if (TryGetNumericKind(trueType, out SpecialType trueUnderlying) &&
+                    trueUnderlying != resultUnderlying)
+                {
+                    whenTrue = this.CoerceOperandTo(whenTrue, resultType);
+                }
+
+                if (TryGetNumericKind(falseType, out SpecialType falseUnderlying) &&
+                    falseUnderlying != resultUnderlying)
+                {
+                    whenFalse = this.CoerceOperandTo(whenFalse, resultType);
+                }
             }
 
             return new IfExpression(condition, whenTrue, whenFalse);

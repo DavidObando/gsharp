@@ -324,8 +324,31 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("if b { 1u } else { 0 }", printed);
-        Assert.DoesNotContain("uint32(0)", printed);
+        // The 1u arm already matches the uint32 result type; the int32 literal 0
+        // arm must be coerced independently to uint32 so gsc does not reject the
+        // conditional with GS0263 (G# has no implicit cross-type numeric promotion
+        // and does not adapt an integer literal in a ternary arm to a sibling
+        // arm's unsigned type).
+        Assert.Contains("if b { 1u } else { uint32(0) }", printed);
+    }
+
+    /// <summary>
+    /// When the <em>first</em> arm is the mismatched one, it is the arm that gets
+    /// coerced; the already-matching arm is left untouched.
+    /// </summary>
+    [Fact]
+    public void Ternary_DivergingNumericArms_CoercesMismatchedTrueArm()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public uint F(bool b) => b ? 0 : 1u;
+    }
+}");
+
+        Assert.Contains("if b { uint32(0) } else { 1u }", printed);
     }
 
     /// <summary>
