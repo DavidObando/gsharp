@@ -2821,20 +2821,21 @@ public class Parser
                 {
                     body = ParseBlockStatement();
                 }
-                else if (IsAccessorExpressionBodyArrow())
-                {
-                    // Issue #1270: an expression-bodied accessor `get => e` /
-                    // `set => e`. Desugar at parse time into an equivalent block
-                    // body so binding and emit reuse the existing accessor-body
-                    // path: a getter becomes `{ return e }` and a setter/init
-                    // becomes `{ e }` (an expression statement). Without this the
-                    // `=> e` tokens were silently skipped, leaving a body-less
-                    // accessor that returned the type's default value.
-                    body = ParseAccessorExpressionBody(accessorKeyword.Text == "get");
-                }
                 else if (Current.Kind == SyntaxKind.SemicolonToken)
                 {
                     semicolon = NextToken();
+                }
+                else if (!IsAccessorListTerminator())
+                {
+                    // Issue #1273: a G# property accessor body is a block `{ }`
+                    // or `;` (bare/auto accessor) only. Unlike C#, G# has no
+                    // fat-arrow `=>` (or `->`) expression-bodied accessor form.
+                    // Anything else here (e.g. `get => e` or `get -> e`) is a
+                    // syntax error: report it loudly rather than silently
+                    // skipping the tokens, which previously left a body-less
+                    // accessor returning the type's default value.
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.OpenBraceToken);
+                    SkipMalformedAccessorBody();
                 }
 
                 // else: bare accessor (no body, no semicolon) — valid in interfaces
@@ -2862,47 +2863,40 @@ public class Parser
         return accessors.ToImmutable();
     }
 
-    // Issue #1270: detect the start of an expression-bodied accessor arrow
-    // `=>`. The lexer produces `=>` as adjacent `=` (EqualsToken) and `>`
-    // (GreaterToken) tokens, so a fat arrow is the pair with no intervening
-    // characters. Requiring adjacency avoids misreading a stray `= >`.
-    private bool IsAccessorExpressionBodyArrow()
-        => Current.Kind == SyntaxKind.EqualsToken
-            && Peek(1).Kind == SyntaxKind.GreaterToken
-            && Current.Position + (Current.Text?.Length ?? 0) == Peek(1).Position;
+    // Issue #1273: a bare (body-less) property accessor is only valid when it is
+    // immediately followed by another accessor keyword (`get`/`set`/`init`) or
+    // the closing brace of the accessor list. Any other token means the accessor
+    // body is malformed (e.g. a `=>`/`->` expression body, which G# does not
+    // support).
+    private bool IsAccessorListTerminator()
+        => Current.Kind == SyntaxKind.CloseBraceToken
+            || Current.Kind == SyntaxKind.EndOfFileToken
+            || (Current.Kind == SyntaxKind.IdentifierToken
+                && (Current.Text == "get" || Current.Text == "set" || Current.Text == "init"));
 
-    // Issue #1270: parse the `=> expr` tail of an expression-bodied accessor and
-    // synthesize an equivalent block body. A getter lowers to `{ return expr }`;
-    // a setter/init lowers to `{ expr }` (an expression statement). The
-    // synthesized braces reuse the arrow's source position so diagnostics and
-    // spans remain anchored at the accessor.
-    private BlockStatementSyntax ParseAccessorExpressionBody(bool isGetter)
+    // Issue #1273: recover from a malformed accessor body by skipping tokens
+    // until we reach the next accessor keyword, the closing brace, or `;`. This
+    // keeps the parser making progress without silently accepting the invalid
+    // body.
+    private void SkipMalformedAccessorBody()
     {
-        var equalsToken = NextToken();
-        var greaterToken = NextToken();
-        var arrowPosition = equalsToken.Position;
-
-        var expression = ParseExpression();
-
-        var openBrace = new SyntaxToken(syntaxTree, SyntaxKind.OpenBraceToken, arrowPosition, "{", null);
-        var closeBrace = new SyntaxToken(syntaxTree, SyntaxKind.CloseBraceToken, greaterToken.Position, "}", null);
-
-        StatementSyntax statement;
-        if (isGetter)
+        while (!IsAccessorListTerminator() && Current.Kind != SyntaxKind.SemicolonToken)
         {
-            var returnKeyword = new SyntaxToken(syntaxTree, SyntaxKind.ReturnKeyword, arrowPosition, "return", null);
-            statement = new ReturnStatementSyntax(syntaxTree, returnKeyword, expression);
-        }
-        else
-        {
-            statement = new ExpressionStatementSyntax(syntaxTree, expression);
+            if (Current.Kind == SyntaxKind.OpenBraceToken)
+            {
+                // A stray block — consume it as a whole so its inner braces do
+                // not confuse the accessor-list loop.
+                ParseBlockStatement();
+                continue;
+            }
+
+            NextToken();
         }
 
-        return new BlockStatementSyntax(
-            syntaxTree,
-            openBrace,
-            ImmutableArray.Create(statement),
-            closeBrace);
+        if (Current.Kind == SyntaxKind.SemicolonToken)
+        {
+            NextToken();
+        }
     }
 
     private FieldDeclarationSyntax ParseFieldDeclaration()
