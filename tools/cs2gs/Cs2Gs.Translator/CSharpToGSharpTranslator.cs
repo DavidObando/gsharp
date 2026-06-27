@@ -6064,7 +6064,7 @@ public sealed class CSharpToGSharpTranslator
             // target carries any constructor arguments, matching
             // `new(StringComparer.OrdinalIgnoreCase){ ... }`.
             if (creation.Initializer != null &&
-                this.TryTranslateCollectionInitializer(creation, type, arguments, out GExpression collectionInitializer))
+                this.TryTranslateCollectionInitializer(creation.Initializer, type, arguments, out GExpression collectionInitializer))
             {
                 return collectionInitializer;
             }
@@ -6076,25 +6076,7 @@ public sealed class CSharpToGSharpTranslator
                 creation.Initializer.IsKind(SyntaxKind.ObjectInitializerExpression) &&
                 !hasCtorArgs)
             {
-                var fieldInitializers = new List<FieldInitializer>();
-                foreach (ExpressionSyntax element in creation.Initializer.Expressions)
-                {
-                    if (element is AssignmentExpressionSyntax assignment &&
-                        assignment.Left is IdentifierNameSyntax name)
-                    {
-                        fieldInitializers.Add(new FieldInitializer(
-                            name.Identifier.Text,
-                            this.TranslateExpression(assignment.Right)));
-                    }
-                    else
-                    {
-                        this.context.ReportUnsupported(
-                            element,
-                            "object-initializer element is not a simple `Field = value` assignment; no canonical G# struct-literal form yet (ADR-0115 §B.11).");
-                    }
-                }
-
-                return new CompositeLiteralExpression(type, fieldInitializers);
+                return this.BuildObjectInitializerLiteral(creation.Initializer, type);
             }
 
             // A source-defined value aggregate (`struct` / `data struct`) has no
@@ -6109,9 +6091,17 @@ public sealed class CSharpToGSharpTranslator
             // the type's *properties*.
             if (typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Struct, SpecialType: SpecialType.None } valueType &&
                 !valueType.IsTupleType &&
-                !valueType.DeclaringSyntaxReferences.IsEmpty &&
-                arguments.Count > 0)
+                !valueType.DeclaringSyntaxReferences.IsEmpty)
             {
+                // A parameterless `new T()` on a source value struct has no callable
+                // constructor surface in G# either; the default (zero-initialised)
+                // value is the empty struct literal `T{}`. Emitting a `T()` call here
+                // would surface as GS0130 ("function 'T' doesn't exist").
+                if (arguments.Count == 0)
+                {
+                    return new CompositeLiteralExpression(type, new List<FieldInitializer>());
+                }
+
                 List<string> targetNames = OrderedValueMemberNames(valueType);
                 if (targetNames.Count == arguments.Count)
                 {
@@ -6125,7 +6115,7 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            return BuildConstruction(type, arguments, creation);
+            return BuildConstruction(type, arguments);
         }
 
         /// <summary>
@@ -6133,7 +6123,7 @@ public sealed class CSharpToGSharpTranslator
         /// a call on the type name carrying any bracket type arguments
         /// (<c>List[int32](...)</c>, ADR-0115 §B.7).
         /// </summary>
-        private static GExpression BuildConstruction(GTypeReference type, IReadOnlyList<GExpression> arguments, ObjectCreationExpressionSyntax creation)
+        private static GExpression BuildConstruction(GTypeReference type, IReadOnlyList<GExpression> arguments)
         {
             if (type is NamedTypeReference named)
             {
@@ -6146,7 +6136,7 @@ public sealed class CSharpToGSharpTranslator
                     typeArguments);
             }
 
-            return new InvocationExpression(new IdentifierExpression(creation.Type.ToString()), arguments);
+            return new InvocationExpression(new IdentifierExpression(type.ToString()), arguments);
         }
 
         /// <summary>
@@ -6160,19 +6150,47 @@ public sealed class CSharpToGSharpTranslator
             typeName == "object" ? "System.Object" : typeName;
 
         /// <summary>
+        /// Builds the canonical G# struct literal <c>T{Field: value, ...}</c> from a
+        /// C# object initializer (<c>{ Field = value, ... }</c>), used by both the
+        /// explicit (<c>new T { ... }</c>) and target-typed (<c>new() { ... }</c>)
+        /// construction paths (spec §Struct literals; ADR-0115 §B.11).
+        /// </summary>
+        private GExpression BuildObjectInitializerLiteral(InitializerExpressionSyntax initializer, GTypeReference type)
+        {
+            var fieldInitializers = new List<FieldInitializer>();
+            foreach (ExpressionSyntax element in initializer.Expressions)
+            {
+                if (element is AssignmentExpressionSyntax assignment &&
+                    assignment.Left is IdentifierNameSyntax name)
+                {
+                    fieldInitializers.Add(new FieldInitializer(
+                        name.Identifier.Text,
+                        this.TranslateExpression(assignment.Right)));
+                }
+                else
+                {
+                    this.context.ReportUnsupported(
+                        element,
+                        "object-initializer element is not a simple `Field = value` assignment; no canonical G# struct-literal form yet (ADR-0115 §B.11).");
+                }
+            }
+
+            return new CompositeLiteralExpression(type, fieldInitializers);
+        }
+
+        /// <summary>
         /// Attempts to translate a C# collection initializer into a canonical G#
         /// collection initializer (ADR-0117). Returns <see langword="false"/> when
         /// the initializer is not a collection initializer (e.g. a plain object
         /// initializer), leaving the caller's other mappings to apply.
         /// </summary>
         private bool TryTranslateCollectionInitializer(
-            ObjectCreationExpressionSyntax creation,
+            InitializerExpressionSyntax initializer,
             GTypeReference type,
             IReadOnlyList<GExpression> arguments,
             out GExpression result)
         {
             result = null;
-            InitializerExpressionSyntax initializer = creation.Initializer;
 
             bool isCollectionInitializer = initializer.IsKind(SyntaxKind.CollectionInitializerExpression);
             bool isIndexedObjectInitializer = initializer.IsKind(SyntaxKind.ObjectInitializerExpression) &&
@@ -6228,7 +6246,7 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            GExpression construction = BuildConstruction(type, arguments, creation);
+            GExpression construction = BuildConstruction(type, arguments);
             result = new CollectionInitializerExpression(construction, elements);
             return true;
         }
@@ -6521,6 +6539,25 @@ public sealed class CSharpToGSharpTranslator
                     .Select(a => this.TranslateArgument(a))
                     .ToList();
 
+            bool hasCtorArgs = arguments.Count > 0;
+
+            // A target-typed `new() { ... }` carries the same initializer forms as
+            // an explicit `new T() { ... }`; without this the initializer was
+            // silently dropped, emitting a bare `T()` call (GS0130 for value
+            // structs, lost members otherwise).
+            if (creation.Initializer != null &&
+                this.TryTranslateCollectionInitializer(creation.Initializer, type, arguments, out GExpression collectionInitializer))
+            {
+                return collectionInitializer;
+            }
+
+            if (creation.Initializer != null &&
+                creation.Initializer.IsKind(SyntaxKind.ObjectInitializerExpression) &&
+                !hasCtorArgs)
+            {
+                return this.BuildObjectInitializerLiteral(creation.Initializer, type);
+            }
+
             // A source-defined value aggregate is constructed with a composite
             // literal; a reference type — or an imported/BCL struct with a real
             // constructor — with a call on the (bracketed-generic) type name.
@@ -6529,8 +6566,15 @@ public sealed class CSharpToGSharpTranslator
                 !valueType.DeclaringSyntaxReferences.IsEmpty &&
                 creation.Initializer == null)
             {
+                // Parameterless target-typed `new()` on a source value struct → empty
+                // struct literal `T{}` (no callable constructor surface in G#).
+                if (arguments.Count == 0)
+                {
+                    return new CompositeLiteralExpression(type, new List<FieldInitializer>());
+                }
+
                 List<string> targetNames = OrderedValueMemberNames(valueType);
-                if (targetNames.Count == arguments.Count && arguments.Count > 0)
+                if (targetNames.Count == arguments.Count)
                 {
                     var fieldInitializers = new List<FieldInitializer>();
                     for (int i = 0; i < arguments.Count; i++)

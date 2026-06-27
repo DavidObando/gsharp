@@ -87,6 +87,67 @@ namespace Demo
         Assert.Contains("Y: 2", printed);
     }
 
+    /// <summary>
+    /// A parameterless <c>new T()</c> on a source-defined value <c>struct</c>
+    /// must render as the empty struct literal <c>T{}</c> — a value struct has
+    /// no callable constructor surface in G#, so emitting a <c>T()</c> call
+    /// would surface as GS0130 ("function 'T' doesn't exist").
+    /// </summary>
+    [Fact]
+    public void SourceStruct_ParameterlessNew_RendersEmptyStructLiteral()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public struct ChunkFrames
+    {
+        public uint FirstFrameIndex { get; init; }
+        public uint NumberOfFrames { get; init; }
+    }
+
+    public class C
+    {
+        public ChunkFrames Make() => new ChunkFrames();
+    }
+}");
+
+        Assert.Contains("ChunkFrames{}", printed);
+        Assert.DoesNotContain("ChunkFrames()", printed);
+    }
+
+    /// <summary>
+    /// A target-typed <c>new() { Field = value, ... }</c> on a source value
+    /// <c>struct</c> must render as the struct literal <c>T{Field: value, ...}</c>;
+    /// previously the target-typed object initializer was silently dropped, emitting
+    /// a bare <c>T()</c> call (GS0130).
+    /// </summary>
+    [Fact]
+    public void SourceStruct_TargetTypedNewWithInitializer_RendersStructLiteral()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public readonly record struct ChunkFrames
+    {
+        public uint FirstFrameIndex { get; init; }
+        public uint NumberOfFrames { get; init; }
+    }
+
+    public class C
+    {
+        public ChunkFrames Make(uint a, uint b)
+        {
+            ChunkFrames result = new() { FirstFrameIndex = a, NumberOfFrames = b };
+            return result;
+        }
+    }
+}");
+
+        Assert.Contains("FirstFrameIndex: a", printed);
+        Assert.Contains("NumberOfFrames: b", printed);
+        Assert.DoesNotContain("ChunkFrames()", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
