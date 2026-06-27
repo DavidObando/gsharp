@@ -123,4 +123,28 @@ public class Issue1278ArrowExpressionMemberParserTests
         Assert.Equal(3, funcs.Length);
         Assert.All(funcs, f => Assert.NotNull(f.Body));
     }
+
+    [Fact]
+    public void ArrowCallBody_FollowedByGenericReceiverFunc_ParsesCleanly()
+    {
+        // Issue #1294 follow-up: when the declaration following an arrow call
+        // body is a *generic* receiver method, its name is followed by a
+        // type-parameter list (`Name[...]`) rather than a value-parameter list
+        // (`Name(...)`). The trailing-lambda guard must recognise both shapes,
+        // otherwise the following `func (recv) Name[...]` is gobbled as a
+        // trailing lambda and reports GS0005. This is the exact Oahu.Decrypt
+        // InterleavedIterator shape (an arrow receiver method directly before a
+        // generic extension method with a constrained type parameter).
+        const string source =
+            "package P\n" +
+            "struct B { }\n" +
+            "func Q(b B) int32 { return 1 }\n" +
+            "func (b B) M() int32 -> Q(b)\n" +
+            "func (s B) N[T IComparable[T]](x T) int32 { return 2 }\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+        var funcs = tree.Root.Members.OfType<FunctionDeclarationSyntax>().ToArray();
+        Assert.Equal(3, funcs.Length);
+        Assert.All(funcs, f => Assert.NotNull(f.Body));
+    }
 }

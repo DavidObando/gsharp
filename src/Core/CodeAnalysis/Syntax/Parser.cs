@@ -8719,8 +8719,12 @@ public class Parser
                 depth--;
                 if (depth == 0)
                 {
+                    // After the receiver clause a method declaration continues
+                    // with its name followed by either a value-parameter list
+                    // `Name(` or a type-parameter list `Name[` (generic method).
                     return Peek(i + 1).Kind == SyntaxKind.IdentifierToken
-                        && Peek(i + 2).Kind == SyntaxKind.OpenParenthesisToken;
+                        && (Peek(i + 2).Kind == SyntaxKind.OpenParenthesisToken
+                            || Peek(i + 2).Kind == SyntaxKind.OpenSquareBracketToken);
                 }
             }
         }
