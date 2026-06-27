@@ -2636,6 +2636,24 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportUnableToFindMember(ne.Location, arrayMemberName);
                     return new BoundErrorExpression(null);
                 }
+                else if (receiver != null && receiver.Type is TypeParameterSymbol tpRecv)
+                {
+                    // Issue #1235: a value whose static type is a type parameter
+                    // constrained to a class (or interface) exposes that
+                    // constraint's FULL instance member surface — fields and
+                    // properties, not only methods (instance method calls are
+                    // resolved through the constraint in ExpressionBinder.Calls).
+                    // Field reads lower to a `box !!T; ldfld` against the
+                    // constraint class; property reads dispatch through a
+                    // verifiable `box !!T; callvirt get_X` (see the emitter).
+                    var tpMember = BindTypeParameterInstanceMemberAccess(tpRecv, receiver, ne);
+                    if (tpMember != null)
+                    {
+                        return tpMember;
+                    }
+
+                    Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
+                }
                 else
                 {
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
@@ -4262,6 +4280,83 @@ internal sealed partial class ExpressionBinder
         {
             Diagnostics.ReportValueTaskDirectGetResult(callSyntax.Identifier.Location);
         }
+    }
+
+    /// <summary>
+    /// Issue #1235: resolves an instance field/property read named on a
+    /// receiver whose static type is a <see cref="TypeParameterSymbol"/>,
+    /// against the type parameter's class constraint (including inherited
+    /// members) or interface constraint. Instance method <em>calls</em> are
+    /// handled separately in <c>ExpressionBinder.Calls</c>; this surfaces the
+    /// remaining member kinds (fields and properties) so a constrained type
+    /// parameter exposes its constraint's full instance member surface.
+    /// Returns <see langword="null"/> when no such member exists (so the caller
+    /// reports GS0158).
+    /// </summary>
+    /// <param name="tpRecv">The type-parameter receiver's type.</param>
+    /// <param name="receiver">The bound receiver expression.</param>
+    /// <param name="ne">The member-name syntax.</param>
+    /// <returns>The bound member access, or <see langword="null"/>.</returns>
+    private BoundExpression BindTypeParameterInstanceMemberAccess(
+        TypeParameterSymbol tpRecv,
+        BoundExpression receiver,
+        NameExpressionSyntax ne)
+    {
+        var memberName = ne.IdentifierToken.Text;
+
+        // Class constraint (issue #1056 surfaced methods; this adds the rest):
+        // fields and properties, walking the base chain of the constraint class.
+        if (tpRecv.ClassConstraint is StructSymbol classConstraint)
+        {
+            if (TypeMemberModel.TryGetFieldIncludingInherited(classConstraint, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
+            {
+                reportObsoleteUseIfApplicable(ne.IdentifierToken.Location, field, $"{fieldDeclaringType.Name}.{field.Name}");
+
+                if (!AccessibilityChecker.IsAccessible(field.Accessibility, fieldDeclaringType, this.function))
+                {
+                    Diagnostics.ReportProtectedMemberInaccessible(ne.IdentifierToken.Location, field.Name, fieldDeclaringType.Name);
+                }
+
+                return ApplyMemberNarrowing(new BoundFieldAccessExpression(null, receiver, fieldDeclaringType, field));
+            }
+
+            if (TypeMemberModel.TryGetProperty(classConstraint, memberName, out var prop, out var propDeclaringType))
+            {
+                if (!prop.HasGetter)
+                {
+                    Diagnostics.ReportCannotAssign(ne.Location, memberName);
+                    return new BoundErrorExpression(null);
+                }
+
+                if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
+                {
+                    Diagnostics.ReportProtectedMemberInaccessible(ne.IdentifierToken.Location, prop.Name, propDeclaringType.Name);
+                }
+
+                return ApplyMemberNarrowing(new BoundPropertyAccessExpression(null, receiver, propDeclaringType, prop));
+            }
+        }
+
+        // Interface constraint: an instance property declared on the (non-generic)
+        // interface or any base interface. The getter dispatches through a
+        // verifiable `box !!T; callvirt I::get_X` in the emitter.
+        if (tpRecv.InterfaceConstraint is InterfaceSymbol interfaceConstraint
+            && !interfaceConstraint.IsGenericDefinition
+            && interfaceConstraint.TypeArguments.IsDefaultOrEmpty)
+        {
+            if (TypeMemberModel.TryGetProperty(interfaceConstraint, memberName, out var ifaceProp, out _))
+            {
+                if (!ifaceProp.HasGetter)
+                {
+                    Diagnostics.ReportCannotAssign(ne.Location, memberName);
+                    return new BoundErrorExpression(null);
+                }
+
+                return new BoundPropertyAccessExpression(null, receiver, null, ifaceProp);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

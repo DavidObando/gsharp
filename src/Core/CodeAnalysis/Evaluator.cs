@@ -2033,23 +2033,52 @@ public sealed class Evaluator
 
         var receiverValue = EvaluateExpression(node.Receiver);
 
-        // Auto-property fallback: access backing field directly.
-        if (node.Property.IsAutoProperty && node.Property.BackingField != null)
+        // Issue #1235 / issue #1068: when the statically-bound property is
+        // declared on an interface (or, for a constrained type parameter, on the
+        // constraint type), resolve the concrete property implementation from
+        // the receiver's runtime type so the read dispatches virtually — the
+        // interpreter analogue of `callvirt get_X`. Walking the base chain also
+        // honours property overrides.
+        var property = node.Property;
+        if (receiverValue is StructValue concreteSv && concreteSv.StructType != null)
         {
-            if (receiverValue is StructValue sv && sv.Fields.TryGetValue(node.Property.BackingField.Name, out var value))
+            for (var t = concreteSv.StructType; t != null; t = t.BaseClass)
+            {
+                Symbols.PropertySymbol concrete = null;
+                foreach (var p in t.Properties)
+                {
+                    if (!p.IsIndexer && p.Name == property.Name)
+                    {
+                        concrete = p;
+                        break;
+                    }
+                }
+
+                if (concrete != null)
+                {
+                    property = concrete;
+                    break;
+                }
+            }
+        }
+
+        // Auto-property fallback: access backing field directly.
+        if (property.IsAutoProperty && property.BackingField != null)
+        {
+            if (receiverValue is StructValue sv && sv.Fields.TryGetValue(property.BackingField.Name, out var value))
             {
                 return value;
             }
 
-            return DefaultValue(node.Property.Type);
+            return DefaultValue(property.Type);
         }
 
         // Computed property: execute the bound getter body.
-        if (node.Property.GetterSymbol != null && program.Functions.TryGetValue(node.Property.GetterSymbol, out var getterBody))
+        if (property.GetterSymbol != null && program.Functions.TryGetValue(property.GetterSymbol, out var getterBody))
         {
             var frame = new Dictionary<Symbols.VariableSymbol, object>
             {
-                [node.Property.GetterSymbol.ThisParameter] = receiverValue,
+                [property.GetterSymbol.ThisParameter] = receiverValue,
             };
             locals.Push(frame);
             var result = EvaluateFunctionBody(getterBody);
@@ -2057,7 +2086,7 @@ public sealed class Evaluator
             return result;
         }
 
-        return DefaultValue(node.Property.Type);
+        return DefaultValue(property.Type);
     }
 
     private object EvaluatePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
