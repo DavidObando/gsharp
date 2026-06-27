@@ -5613,6 +5613,25 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
+            // A C# bare sibling static field/property reference (`FfAc3ChannelsTab`)
+            // carries an implicit type qualifier. A G# top-level `func` (e.g. a
+            // lifted extension method whose former `static class` keeps the field
+            // in a `shared { }` block) or `shared` body has no implicit type scope,
+            // so the reference must be qualified through the owning type
+            // (`Ec3Extensions.FfAc3ChannelsTab`) — the field/property analog of the
+            // bare static-call rule (ADR-0115 §B.18). Without this the binder reports
+            // GS0125 (the name is not in scope at top level).
+            if (this.context.GetSymbolInfo(identifier).Symbol is
+                    { IsStatic: true, Kind: SymbolKind.Field or SymbolKind.Property } staticMember &&
+                staticMember.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
+                !owner.IsImplicitlyDeclared &&
+                !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition))
+            {
+                return new MemberAccessExpression(
+                    new IdentifierExpression(owner.Name),
+                    identifier.Identifier.Text);
+            }
+
             return new IdentifierExpression(SanitizeIdentifier(identifier.Identifier.Text));
         }
 
