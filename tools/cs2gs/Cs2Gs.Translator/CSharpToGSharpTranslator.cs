@@ -11,6 +11,7 @@ using Cs2Gs.Translator.Loading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace Cs2Gs.Translator;
 
@@ -274,6 +275,28 @@ public sealed class CSharpToGSharpTranslator
             "package", "private", "protected", "public", "range", "return", "scope",
             "sealed", "select", "sequence", "struct", "switch", "throw", "true", "try",
             "type", "using", "var", "while",
+        };
+
+        // gsc's ADR-0044 implicit numeric widening lattice (mirrors
+        // Conversion.NumericWideningTargets), keyed on the C# SpecialType of the
+        // source → set of widening targets. `char` widens like an unsigned 16-bit
+        // integer; `decimal` is a widening target of every integral source. Used by
+        // the call-site argument coercion (issue #1281) to drop a redundant explicit
+        // conversion when gsc already widens the operand implicitly.
+        private static readonly Dictionary<SpecialType, HashSet<SpecialType>> NumericWideningTargets = new()
+        {
+            [SpecialType.System_SByte] = new() { SpecialType.System_Int16, SpecialType.System_Int32, SpecialType.System_Int64, SpecialType.System_IntPtr, SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal },
+            [SpecialType.System_Byte] = new() { SpecialType.System_Int16, SpecialType.System_UInt16, SpecialType.System_Int32, SpecialType.System_UInt32, SpecialType.System_Int64, SpecialType.System_UInt64, SpecialType.System_IntPtr, SpecialType.System_UIntPtr, SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal },
+            [SpecialType.System_Int16] = new() { SpecialType.System_Int32, SpecialType.System_Int64, SpecialType.System_IntPtr, SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal },
+            [SpecialType.System_UInt16] = new() { SpecialType.System_Int32, SpecialType.System_UInt32, SpecialType.System_Int64, SpecialType.System_UInt64, SpecialType.System_IntPtr, SpecialType.System_UIntPtr, SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal },
+            [SpecialType.System_Int32] = new() { SpecialType.System_Int64, SpecialType.System_IntPtr, SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal },
+            [SpecialType.System_UInt32] = new() { SpecialType.System_Int64, SpecialType.System_UInt64, SpecialType.System_UIntPtr, SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal },
+            [SpecialType.System_Int64] = new() { SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal },
+            [SpecialType.System_UInt64] = new() { SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal },
+            [SpecialType.System_IntPtr] = new() { SpecialType.System_Int64, SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal },
+            [SpecialType.System_UIntPtr] = new() { SpecialType.System_UInt64, SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal },
+            [SpecialType.System_Char] = new() { SpecialType.System_UInt16, SpecialType.System_Int32, SpecialType.System_UInt32, SpecialType.System_Int64, SpecialType.System_UInt64, SpecialType.System_IntPtr, SpecialType.System_UIntPtr, SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal },
+            [SpecialType.System_Single] = new() { SpecialType.System_Double },
         };
 
         // The C# program entry type (the static class containing `Main`). Its
@@ -6122,23 +6145,38 @@ public sealed class CSharpToGSharpTranslator
             // A C# argument whose declared numeric type differs from the type C#
             // implicitly converted it to at the call site (e.g. a `ushort` constant
             // passed where generic inference selected `int`, or a signed literal
-            // passed to an unsigned parameter) must carry that conversion explicitly:
-            // G# performs no implicit numeric promotion at the call site, and an
-            // un-coerced operand defeats generic inference (GS0159) or rejects the
-            // parameter (GS0156/GS0214). Honor Roslyn's converted type when both the
-            // source and converted types are numeric primitives that differ.
+            // passed to an unsigned parameter) may need that conversion made
+            // explicit: gsc applies the implicit lossless-widening lattice and the
+            // constant-expression narrowing at fixed parameters, but NOT a
+            // non-constant narrowing/cross-sign value, nor a widening-only argument
+            // to a generic CLR parameter (whose inference would fail — GS0159).
+            // CoerceNumericArgumentToConverted (issue #1281) emits the bare operand
+            // when gsc accepts the conversion on its own and keeps the explicit
+            // `T(x)` wrap only where gsc still needs it.
             return this.CoerceNumericArgumentToConverted(
-                argument.Expression,
+                argument,
                 this.TranslateExpression(argument.Expression));
         }
 
         // Coerce an argument expression to the numeric type C# implicitly converted
         // it to at the call site, when that converted type differs from the
-        // expression's own numeric type. This generalizes signed→unsigned constant
-        // coercion to any numeric widening/retyping (e.g. `uint16`→`int32`) that C#
-        // applies implicitly but G# does not.
-        private GExpression CoerceNumericArgumentToConverted(ExpressionSyntax expression, GExpression translated)
+        // expression's own numeric type AND gsc would not perform that conversion
+        // implicitly. Issue #1281: gsc already widens (ADR-0044) and constant-narrows
+        // (C# §10.2.11) at a concrete numeric parameter, so the explicit G# wrap is
+        // emitted only for the residual cases gsc still rejects — a non-constant
+        // narrowing/cross-sign value, or a widening argument bound to a generic
+        // (type-parameter) parameter.
+        private GExpression CoerceNumericArgumentToConverted(ArgumentSyntax argument, GExpression translated)
         {
+            ExpressionSyntax expression = argument.Expression;
+
+            // gsc performs this implicit numeric conversion at the call site
+            // itself — the explicit conversion would be redundant.
+            if (this.GSharpAcceptsImplicitNumericArgument(argument))
+            {
+                return translated;
+            }
+
             // A numeric literal is already retyped to its C# converted type by the
             // literal-translation path (a float-promoted literal becomes a float
             // literal `30.0`, ADR-0115 §B.12), so re-wrapping it here would double
@@ -6159,6 +6197,92 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return translated;
+        }
+
+        // Issue #1281: reports whether gsc applies, on its own, the implicit numeric
+        // conversion C# performed on this argument — so the explicit G# conversion
+        // wrap is redundant. True only when the source and C#-converted types are
+        // differing numeric primitives, the argument binds to a CONCRETE numeric
+        // parameter (a generic/type-parameter target still needs the wrap because
+        // CLR-method inference does not unify widening-only numeric args), and the
+        // conversion is either a gsc lossless widening (ADR-0044) or a constant
+        // integer LITERAL whose value C# already proved fits the target type
+        // (matching gsc's literal-only call-site constant folding, ADR-0129).
+        private bool GSharpAcceptsImplicitNumericArgument(ArgumentSyntax argument)
+        {
+            ExpressionSyntax expression = argument.Expression;
+            TypeInfo info = this.context.GetTypeInfo(expression);
+            if (!TryGetNumericKind(info.Type, out SpecialType source) ||
+                !TryGetNumericKind(info.ConvertedType, out SpecialType converted) ||
+                source == converted)
+            {
+                return false;
+            }
+
+            if (!this.TargetsConcreteNumericParameter(argument))
+            {
+                return false;
+            }
+
+            if (IsGSharpImplicitNumericWidening(source, converted))
+            {
+                return true;
+            }
+
+            // A non-widening (narrowing / cross-sign) conversion is implicit in gsc
+            // only for a constant integer literal (or unary +/- over one); C# already
+            // proved the value is in range by compiling the implicit conversion.
+            return IsFoldableIntegerLiteral(expression);
+        }
+
+        // Reports whether the argument binds to a parameter whose ORIGINAL-definition
+        // type is a concrete numeric primitive. For a generic method the constructed
+        // parameter type is the inferred concrete type, but the original is the type
+        // parameter `T` — which is excluded so a widening argument to a generic CLR
+        // method keeps its explicit conversion (issue #1281).
+        private bool TargetsConcreteNumericParameter(ArgumentSyntax argument)
+        {
+            if (this.context.SemanticModel.GetOperation(argument) is not IArgumentOperation argumentOperation)
+            {
+                return false;
+            }
+
+            IParameterSymbol parameter = argumentOperation.Parameter;
+            if (parameter == null)
+            {
+                return false;
+            }
+
+            return TryGetNumericKind(parameter.OriginalDefinition.Type, out _);
+        }
+
+        // Mirrors gsc's TryGetConstantIntegerValue (ExpressionBinder.Operators.cs):
+        // a foldable constant integer expression is an integer numeric literal, or a
+        // unary +/- applied (recursively) to one. Floating/decimal literals and any
+        // other constant form (e.g. a `const` field or `ushort.MaxValue`) are NOT
+        // folded by gsc and therefore keep their explicit call-site conversion.
+        private static bool IsFoldableIntegerLiteral(ExpressionSyntax expression)
+        {
+            switch (expression)
+            {
+                case LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.NumericLiteralExpression):
+                    return literal.Token.Value is sbyte or byte or short or ushort or int or uint or long or ulong;
+                case PrefixUnaryExpressionSyntax unary
+                    when unary.IsKind(SyntaxKind.UnaryMinusExpression) || unary.IsKind(SyntaxKind.UnaryPlusExpression):
+                    return IsFoldableIntegerLiteral(unary.Operand);
+                default:
+                    return false;
+            }
+        }
+
+        // gsc's ADR-0044 implicit numeric widening lattice (mirrors
+        // Conversion.NumericWideningTargets), keyed on the C# SpecialType of the
+        // source → set of widening targets. `char` widens like an unsigned 16-bit
+        // integer; `decimal` is a widening target of every integral source.
+        private static bool IsGSharpImplicitNumericWidening(SpecialType source, SpecialType target)
+        {
+            return NumericWideningTargets.TryGetValue(source, out HashSet<SpecialType> targets) &&
+                targets.Contains(target);
         }
 
         // `nameof(x)` takes a name reference, not a value, so its argument must

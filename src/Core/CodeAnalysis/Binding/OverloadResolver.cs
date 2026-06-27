@@ -466,6 +466,31 @@ internal sealed class OverloadResolver
     }
 
     /// <summary>
+    /// Issue #1281: C# §10.2.11 implicit constant expression conversion at a call
+    /// site. When <paramref name="argument"/> is a constant integer expression
+    /// whose value fits the (possibly narrower or cross-sign) integer parameter
+    /// type <paramref name="parameterType"/>, re-materialise it as a literal of
+    /// exactly that type through <see cref="ConversionClassifier.BindConversion(TextLocation, BoundExpression, TypeSymbol, bool)"/>
+    /// — mirroring the declaration/assignment behaviour (ADR-0129) so call sites
+    /// accept e.g. <c>f(5)</c> for a <c>uint16</c>/<c>uint32</c> parameter the same
+    /// way <c>var x uint16 = 5</c> already does. Returns <see langword="true"/>
+    /// (with <paramref name="converted"/> set to the retyped literal) when the rule
+    /// applies; otherwise <see langword="false"/> so genuine type-mismatch
+    /// diagnostics still fire on the regular path.
+    /// </summary>
+    private bool TryBindConstantNarrowingArgument(BoundExpression argument, TypeSymbol parameterType, TextLocation location, out BoundExpression converted)
+    {
+        converted = null;
+        if (!ExpressionBinder.IsImplicitConstantNarrowingArgument(argument, parameterType))
+        {
+            return false;
+        }
+
+        converted = conversions.BindConversion(location, argument, parameterType);
+        return true;
+    }
+
+    /// <summary>
     /// Issue #889: when a <c>func</c>/arrow literal argument has a value-typed
     /// natural return (e.g. <c>() -> called = called + 1</c> inferred as
     /// <c>() -> int32</c>) but the target parameter is a void-returning
@@ -869,6 +894,14 @@ internal sealed class OverloadResolver
 
             var conversion = Conversion.Classify(argType, paramType);
             if (conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity))
+            {
+                continue;
+            }
+
+            // Issue #1281: a constant integer argument that fits a narrower /
+            // cross-sign integer parameter is implicitly convertible there
+            // (C# §10.2.11), so it must not disqualify the candidate.
+            if (ExpressionBinder.IsImplicitConstantNarrowingArgument(boundArguments[i], paramType))
             {
                 continue;
             }
@@ -1808,6 +1841,12 @@ internal sealed class OverloadResolver
                 if (argument.Type != parameter.Type
                     && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
                 {
+                    if (TryBindConstantNarrowingArgument(argument, parameter.Type, parameterSyntaxV[i].Location, out var narrowedArg))
+                    {
+                        boundArguments[i] = narrowedArg;
+                        continue;
+                    }
+
                     if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, parameter.Type, out var convertedArg))
                     {
                         boundArguments[i] = convertedArg;
@@ -2037,6 +2076,13 @@ internal sealed class OverloadResolver
                 if (TryConvertLiteralArgumentToVoidDelegate(argument, parameter.Type, parameterSyntax[i].Location, out var voidDelegateArg))
                 {
                     boundArguments[i] = voidDelegateArg;
+                    continue;
+                }
+
+                // Issue #1281: implicit constant-expression narrowing argument.
+                if (TryBindConstantNarrowingArgument(argument, parameter.Type, parameterSyntax[i].Location, out var narrowedArg))
+                {
+                    boundArguments[i] = narrowedArg;
                     continue;
                 }
 
@@ -2421,6 +2467,13 @@ internal sealed class OverloadResolver
                     continue;
                 }
 
+                // Issue #1281: implicit constant-expression narrowing argument.
+                if (TryBindConstantNarrowingArgument(argument, paramType, argLocation, out var narrowedArg))
+                {
+                    convertedArguments.Add(narrowedArg);
+                    continue;
+                }
+
                 if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, paramType, out var convertedArg))
                 {
                     convertedArguments.Add(convertedArg);
@@ -2793,6 +2846,13 @@ internal sealed class OverloadResolver
                 if (TryConvertLiteralArgumentToVoidDelegate(argument, parameter.Type, argLocation, out var voidDelegateArg))
                 {
                     convertedArgs.Add(voidDelegateArg);
+                    continue;
+                }
+
+                // Issue #1281: implicit constant-expression narrowing argument.
+                if (TryBindConstantNarrowingArgument(argument, parameter.Type, argLocation, out var narrowedArg))
+                {
+                    convertedArgs.Add(narrowedArg);
                     continue;
                 }
 
@@ -4000,6 +4060,17 @@ internal sealed class OverloadResolver
                 if (TryConvertLiteralArgumentToVoidDelegate(argument, expectedType, voidDelegateLoc, out var voidDelegateArg))
                 {
                     boundArguments[i] = voidDelegateArg;
+                    continue;
+                }
+
+                // Issue #1281: a constant integer argument that fits a narrower /
+                // cross-sign integer parameter converts implicitly (C# §10.2.11).
+                // Re-materialise it as a literal of exactly the parameter type so
+                // emit produces a correctly-typed constant — matching `var x
+                // uint16 = 5` at a declaration target (ADR-0129).
+                if (TryBindConstantNarrowingArgument(argument, expectedType, voidDelegateLoc, out var narrowedArg))
+                {
+                    boundArguments[i] = narrowedArg;
                     continue;
                 }
 
