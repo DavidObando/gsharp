@@ -4414,13 +4414,29 @@ internal sealed partial class ExpressionBinder
                     // emitted as `constrained. !!T  call I::get_Prop()`.
                     var propName = ne.IdentifierToken.Text;
                     PropertySymbol slotProp = null;
+                    InterfaceSymbol slotIface = null;
                     foreach (var iface in tpSym.InterfaceConstraint.SelfAndAllBaseInterfaces())
                     {
-                        foreach (var candidate in iface.Properties)
+                        // Issue #1268: a constructed generic interface
+                        // constraint (e.g. `T : IData[int32]` or the
+                        // self-referential `T : IData[T]`) does not surface
+                        // its declared static-virtual *properties* on the
+                        // constructed instance — only methods are
+                        // substituted onto it. Walk the open definition's
+                        // property table so the slot is found regardless of
+                        // whether the constraint is open or constructed; the
+                        // getter resolved here is the open definition's
+                        // static-virtual accessor (keyed in the emitter's
+                        // MethodHandles), and the constructed interface is
+                        // retained for type-argument substitution / emit.
+                        var defIface = iface.Definition ?? iface;
+                        defIface.EnsureMembersResolved();
+                        foreach (var candidate in defIface.Properties)
                         {
                             if (candidate.IsStatic && candidate.Name == propName)
                             {
                                 slotProp = candidate;
+                                slotIface = iface;
                                 break;
                             }
                         }
@@ -4438,7 +4454,7 @@ internal sealed partial class ExpressionBinder
                         return new BoundErrorExpression(null);
                     }
 
-                    var propType = SubstituteThroughConstructedInterface(slotProp.Type, tpSym.InterfaceConstraint);
+                    var propType = SubstituteThroughConstructedInterface(slotProp.Type, slotIface);
 
                     return new BoundConstrainedStaticCallExpression(
                         ne,
