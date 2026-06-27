@@ -2567,6 +2567,7 @@ public sealed class CSharpToGSharpTranslator
             {
                 MethodDeclarationSyntax method => method.ParameterList,
                 OperatorDeclarationSyntax op => op.ParameterList,
+                ConversionOperatorDeclarationSyntax conversion => conversion.ParameterList,
                 ConstructorDeclarationSyntax ctor => ctor.ParameterList,
                 LocalFunctionStatementSyntax localFunction => localFunction.ParameterList,
                 _ => null,
@@ -2629,6 +2630,19 @@ public sealed class CSharpToGSharpTranslator
                     if (op.ExpressionBody != null)
                     {
                         return this.WrapExpressionBody(op.ExpressionBody.Expression, isVoid: false);
+                    }
+
+                    break;
+
+                case ConversionOperatorDeclarationSyntax conversion:
+                    if (conversion.Body != null)
+                    {
+                        return this.TranslateBlock(conversion.Body);
+                    }
+
+                    if (conversion.ExpressionBody != null)
+                    {
+                        return this.WrapExpressionBody(conversion.ExpressionBody.Expression, isVoid: false);
                     }
 
                     break;
@@ -5995,13 +6009,46 @@ public sealed class CSharpToGSharpTranslator
                 return new NonNullAssertionExpression(this.TranslateExpression(argument.Expression));
             }
 
-            // OD-T2: a C# integer literal implicitly converted to an unsigned
-            // parameter (e.g. `base(4)` where the parameter is `byte`) must be
-            // emitted as a typed G# literal (`uint8(4)`); G# performs no implicit
-            // signed→unsigned constant conversion at the call site (GS0214/GS0156).
-            return this.CoerceConstantToUnsigned(
+            // A C# argument whose declared numeric type differs from the type C#
+            // implicitly converted it to at the call site (e.g. a `ushort` constant
+            // passed where generic inference selected `int`, or a signed literal
+            // passed to an unsigned parameter) must carry that conversion explicitly:
+            // G# performs no implicit numeric promotion at the call site, and an
+            // un-coerced operand defeats generic inference (GS0159) or rejects the
+            // parameter (GS0156/GS0214). Honor Roslyn's converted type when both the
+            // source and converted types are numeric primitives that differ.
+            return this.CoerceNumericArgumentToConverted(
                 argument.Expression,
                 this.TranslateExpression(argument.Expression));
+        }
+
+        // Coerce an argument expression to the numeric type C# implicitly converted
+        // it to at the call site, when that converted type differs from the
+        // expression's own numeric type. This generalizes signed→unsigned constant
+        // coercion to any numeric widening/retyping (e.g. `uint16`→`int32`) that C#
+        // applies implicitly but G# does not.
+        private GExpression CoerceNumericArgumentToConverted(ExpressionSyntax expression, GExpression translated)
+        {
+            // A numeric literal is already retyped to its C# converted type by the
+            // literal-translation path (a float-promoted literal becomes a float
+            // literal `30.0`, ADR-0115 §B.12), so re-wrapping it here would double
+            // up the conversion. Constant signed→unsigned literal retyping is still
+            // applied below for integer targets.
+            if (expression is LiteralExpressionSyntax literal &&
+                literal.IsKind(SyntaxKind.NumericLiteralExpression))
+            {
+                return this.CoerceConstantToUnsigned(expression, translated);
+            }
+
+            TypeInfo info = this.context.GetTypeInfo(expression);
+            if (TryGetNumericKind(info.Type, out SpecialType sourceUnderlying) &&
+                TryGetNumericKind(info.ConvertedType, out SpecialType convertedUnderlying) &&
+                sourceUnderlying != convertedUnderlying)
+            {
+                return this.CoerceOperandTo(translated, info.ConvertedType);
+            }
+
+            return translated;
         }
 
         // `nameof(x)` takes a name reference, not a value, so its argument must
