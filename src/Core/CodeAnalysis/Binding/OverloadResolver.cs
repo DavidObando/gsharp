@@ -3357,6 +3357,54 @@ internal sealed class OverloadResolver
                 }
             }
 
+            // Issue #1201 (C# `using static`): an unqualified call may resolve
+            // to a `shared` (static) method of a type brought into scope by a
+            // type import (`import Ns.Type`). Mirror C#'s using-static
+            // semantics — search every type-import's static method set and bind
+            // against the single match. When two or more imported types expose a
+            // same-named static method the reference is ambiguous (GS0414), but
+            // only here, where the name is actually used. The shared static-call
+            // finalizer (`bindUserTypeStaticCall`) provides full
+            // optional/variadic/generic fidelity, so an unqualified
+            // `GetValues[TEnum]()` resolves exactly like `EnumUtil.GetValues[TEnum]()`.
+            if (bindUserTypeStaticCall != null)
+            {
+                StructSymbol matchedStaticImport = null;
+                var ambiguousStaticImport = false;
+                foreach (var importedType in binderCtx.GetStaticImportTypes())
+                {
+                    var importedStatics = TypeMemberModel.GetMethods(
+                        importedType,
+                        syntax.Identifier.Text,
+                        MemberQuery.Static(MemberKinds.Method));
+                    if (importedStatics.IsDefaultOrEmpty)
+                    {
+                        continue;
+                    }
+
+                    if (matchedStaticImport == null)
+                    {
+                        matchedStaticImport = importedType;
+                    }
+                    else if (!ReferenceEquals(matchedStaticImport, importedType))
+                    {
+                        ambiguousStaticImport = true;
+                        break;
+                    }
+                }
+
+                if (ambiguousStaticImport)
+                {
+                    Diagnostics.ReportAmbiguousImportedStaticMember(syntax.Identifier.Location, syntax.Identifier.Text);
+                    return new BoundErrorExpression(null);
+                }
+
+                if (matchedStaticImport != null)
+                {
+                    return bindUserTypeStaticCall(matchedStaticImport, syntax);
+                }
+            }
+
             Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.Text);
             return new BoundErrorExpression(null);
         }

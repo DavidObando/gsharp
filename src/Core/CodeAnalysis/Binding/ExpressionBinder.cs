@@ -393,6 +393,17 @@ internal sealed partial class ExpressionBinder
                 return methodGroup;
             }
 
+            // Issue #1201 (C# `using static`): an unqualified identifier may
+            // name a `shared` (static) field, property, or method group of a
+            // type brought into scope by a type import (`import Ns.Type`). This
+            // is the value/method-group analog of the call-site resolution in
+            // OverloadResolver and runs only after the name failed to resolve as
+            // a variable or free-function method group.
+            if (TryBindImportedStaticMember(syntax, out var importedStaticMember))
+            {
+                return importedStaticMember;
+            }
+
             // Not a method group: surface the suppressed diagnostics.
             if (scope.TryLookupSymbol(name) is null)
             {

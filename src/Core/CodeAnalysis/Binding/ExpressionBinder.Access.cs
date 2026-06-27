@@ -1776,6 +1776,73 @@ internal sealed partial class ExpressionBinder
         return false;
     }
 
+    /// <summary>
+    /// Issue #1201 (C# <c>using static</c>): attempts to resolve an unqualified
+    /// identifier against the <c>shared</c> (static) members — field, property,
+    /// or method group — of a type brought into scope by a non-alias type import
+    /// (<c>import Ns.Type</c>). Binds against the single match through the same
+    /// <see cref="BindUserTypeStaticMemberAccess"/> path used by an explicit
+    /// <c>Type.Member</c> access; reports GS0414 when two or more imported types
+    /// expose a member of that name (the value/identifier analog of the
+    /// call-site ambiguity rule in <c>OverloadResolver</c>).
+    /// </summary>
+    /// <param name="syntax">The bare-name reference being resolved.</param>
+    /// <param name="result">The bound static-member access, when one is produced.</param>
+    /// <returns><c>true</c> when an imported static member matched (or an ambiguity was reported).</returns>
+    private bool TryBindImportedStaticMember(NameExpressionSyntax syntax, out BoundExpression result)
+    {
+        result = null;
+        var name = syntax.IdentifierToken.Text;
+
+        StructSymbol match = null;
+        var ambiguous = false;
+        foreach (var importedType in binderCtx.GetStaticImportTypes())
+        {
+            if (!ImportedTypeExposesStaticMember(importedType, name))
+            {
+                continue;
+            }
+
+            if (match == null)
+            {
+                match = importedType;
+            }
+            else if (!ReferenceEquals(match, importedType))
+            {
+                ambiguous = true;
+                break;
+            }
+        }
+
+        if (ambiguous)
+        {
+            Diagnostics.ReportAmbiguousImportedStaticMember(syntax.IdentifierToken.Location, name);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        if (match != null)
+        {
+            result = BindUserTypeStaticMemberAccess(match, syntax);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #1201: whether <paramref name="structSym"/> declares a <c>shared</c>
+    /// (static) field, property, or method named <paramref name="name"/> —
+    /// i.e. a member a type import would expose for unqualified reference.
+    /// </summary>
+    /// <param name="structSym">The imported type.</param>
+    /// <param name="name">The member name.</param>
+    /// <returns><c>true</c> when a matching static member exists.</returns>
+    private static bool ImportedTypeExposesStaticMember(StructSymbol structSym, string name)
+        => TypeMemberModel.TryGetStaticField(structSym, name, out _)
+            || TypeMemberModel.TryGetStaticProperty(structSym, name, out _)
+            || !TypeMemberModel.GetMethods(structSym, name, MemberQuery.Static(MemberKinds.Method)).IsDefaultOrEmpty;
+
     private BoundExpression BindUserTypeStaticMemberAccess(StructSymbol structSym, NameExpressionSyntax ne)
     {
         var memberName = ne.IdentifierToken.Text;
