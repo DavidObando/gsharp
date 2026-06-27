@@ -756,6 +756,7 @@ internal sealed partial class ExpressionBinder
                     IsUserClassAssignableToInterface(boundArguments, argTypes, source, target);
             }
 
+            OverloadResolution.ConstantNarrowingArgumentCheck = MakeConstantNarrowingArgumentCheck(boundArguments);
             try
             {
                 var resolution = OverloadResolution.Resolve(ctors, argTypes, interpolatedStringArgs: ComputeInterpolatedStringArgFlags(syntax.Arguments, boundArguments.Count), argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
@@ -779,6 +780,8 @@ internal sealed partial class ExpressionBinder
                 {
                     OverloadResolution.SupplementaryInterfaceCheck = null;
                 }
+
+                OverloadResolution.ConstantNarrowingArgumentCheck = null;
             }
         }
 
@@ -2716,6 +2719,7 @@ internal sealed partial class ExpressionBinder
 
                 try
                 {
+                    OverloadResolution.ConstantNarrowingArgumentCheck = MakeConstantNarrowingArgumentCheck(arguments);
                     var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length), argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
                     switch (resolution.Outcome)
                     {
@@ -2760,6 +2764,8 @@ internal sealed partial class ExpressionBinder
                     {
                         OverloadResolution.SupplementaryInterfaceCheck = null;
                     }
+
+                    OverloadResolution.ConstantNarrowingArgumentCheck = null;
                 }
             }
         }
@@ -3365,6 +3371,7 @@ internal sealed partial class ExpressionBinder
         OverloadResolution.Result<MethodInfo> resolution;
         try
         {
+            OverloadResolution.ConstantNarrowingArgumentCheck = MakeConstantNarrowingArgumentCheck(arguments);
             resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
         }
         finally
@@ -3373,6 +3380,8 @@ internal sealed partial class ExpressionBinder
             {
                 OverloadResolution.SupplementaryInterfaceCheck = null;
             }
+
+            OverloadResolution.ConstantNarrowingArgumentCheck = null;
         }
 
         switch (resolution.Outcome)
@@ -3601,6 +3610,10 @@ internal sealed partial class ExpressionBinder
         OverloadResolution.Result<MethodInfo> resolution;
         try
         {
+            // Issue #1311: imported extension calls dispatch as
+            // `Class.Method(this receiver, args…)`, so argTypes slot 0 is the
+            // receiver and user argument `i` lives at slot `i + 1`.
+            OverloadResolution.ConstantNarrowingArgumentCheck = MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1);
             resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, argumentNames: extensionArgumentNames);
         }
         finally
@@ -3609,6 +3622,8 @@ internal sealed partial class ExpressionBinder
             {
                 OverloadResolution.SupplementaryInterfaceCheck = null;
             }
+
+            OverloadResolution.ConstantNarrowingArgumentCheck = null;
         }
 
         switch (resolution.Outcome)

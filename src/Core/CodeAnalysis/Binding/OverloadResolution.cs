@@ -172,6 +172,22 @@ internal static class OverloadResolution
         /// the target.
         /// </summary>
         DelegateReturnNumericWidening = 12,
+
+        /// <summary>
+        /// Issue #1311: a constant integer argument (an integer literal, or a
+        /// unary +/- over one) whose value lies within the parameter's
+        /// (possibly narrower or cross-sign) integer type range converts
+        /// implicitly with no cast — C# §10.2.11 implicit constant expression
+        /// conversion. This mirrors the user-method overload path
+        /// (<c>OverloadResolver.IsApplicableUserCallable</c> via
+        /// <c>ExpressionBinder.IsImplicitConstantNarrowingArgument</c>) for
+        /// imported/BCL candidates so e.g. <c>stream.WriteByte(0)</c> binds to
+        /// <c>Stream.WriteByte(byte)</c>. The binder's
+        /// <c>BindClrParameterConversions</c> pass then re-materialises the
+        /// correctly-typed (narrower) literal before emit. Ranked last (worst)
+        /// so an exact identity or widening match always wins when applicable.
+        /// </summary>
+        ConstantNarrowing = 13,
     }
 
     /// <summary>
@@ -226,6 +242,25 @@ internal static class OverloadResolution
 #pragma warning disable SA1401 // Field should be private
 #pragma warning disable SA1201 // Elements should appear in the correct order
     internal static Func<Type, Type, bool> SupplementaryInterfaceCheck;
+#pragma warning restore SA1201
+#pragma warning restore SA1401
+
+    /// <summary>
+    /// Issue #1311: per-call constant-narrowing applicability hook for imported/
+    /// BCL candidates. When set (non-null), <see cref="EvaluateCandidate{T}"/>
+    /// invokes it for an argument whose natural type has no implicit conversion
+    /// to the parameter type. The callback receives the source argument index
+    /// and the CLR parameter type and returns <see langword="true"/> when the
+    /// argument is a constant integer expression whose value fits that
+    /// (possibly narrower / cross-sign) integer parameter — i.e. C# §10.2.11
+    /// implicit constant expression conversion. The binder sets this from the
+    /// bound arguments before calling <see cref="Resolve{T}"/> and clears it
+    /// immediately after. Modelled on <see cref="SupplementaryInterfaceCheck"/>.
+    /// </summary>
+    [ThreadStatic]
+#pragma warning disable SA1401 // Field should be private
+#pragma warning disable SA1201 // Elements should appear in the correct order
+    internal static Func<int, Type, bool> ConstantNarrowingArgumentCheck;
 #pragma warning restore SA1201
 #pragma warning restore SA1401
 
@@ -1752,6 +1787,18 @@ internal static class OverloadResolution
                         && IsFormattableStringTarget(paramTypes[i]))
                     {
                         conv = ImplicitConversionKind.InterpolatedStringToFormattable;
+                    }
+                    else if (ConstantNarrowingArgumentCheck != null
+                        && ConstantNarrowingArgumentCheck(i, paramTypes[i]))
+                    {
+                        // Issue #1311: a constant integer argument that fits a
+                        // narrower / cross-sign integer parameter is implicitly
+                        // convertible there (C# §10.2.11), so it must not
+                        // disqualify the imported/BCL candidate. Mirrors the
+                        // user-method path (OverloadResolver). The binder's
+                        // BindClrParameterConversions pass re-materialises the
+                        // correctly-typed literal before emit.
+                        conv = ImplicitConversionKind.ConstantNarrowing;
                     }
                     else
                     {
