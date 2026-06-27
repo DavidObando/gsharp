@@ -57,6 +57,20 @@ internal sealed class BinderContext
     public int NullConditionalCaptureCounter;
 
     /// <summary>
+    /// Issue #1238: set transiently by the argument-binding loops just before
+    /// eagerly binding a top-level conditional (<c>if</c>/<c>else</c>),
+    /// ternary, or <c>switch</c>-expression argument that has no target type
+    /// yet. When set, those branchy binders suppress a no-common-type
+    /// unification failure (instead of reporting it) and return a placeholder
+    /// carrying the original syntax, so the argument can be re-bound with the
+    /// resolved parameter type as its target once overload resolution picks the
+    /// applicable method/constructor. The flag is read-and-cleared by the
+    /// branchy binder so nested sub-expressions bind with normal (non-deferred)
+    /// semantics.
+    /// </summary>
+    public bool DeferTargetlessConditional;
+
+    /// <summary>
     /// Counter used to allocate unique synthetic-local names for general
     /// binder-introduced temporaries. Mutated in place by callers via
     /// <see cref="System.Threading.Interlocked.Increment(ref int)"/>.

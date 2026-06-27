@@ -811,6 +811,73 @@ internal sealed partial class ExpressionBinder
             or BoundDereferenceExpression;
     }
 
+    /// <summary>
+    /// Issue #1238: returns true when <paramref name="syntax"/> (after peeling
+    /// any enclosing parentheses) is a target-typeable branchy expression — an
+    /// <c>if</c>/<c>else</c> expression, a ternary conditional, or a
+    /// <c>switch</c>-expression. Such an expression, when used directly as a
+    /// call/constructor argument, must be (re)bound with the corresponding
+    /// parameter type as its target so each branch is target-typed (mirroring
+    /// the <c>return</c>/typed-<c>let</c> paths).
+    /// </summary>
+    internal static bool IsTargetTypedBranchyArgumentSyntax(SyntaxNode syntax)
+    {
+        while (syntax is ParenthesizedExpressionSyntax parenthesized)
+        {
+            syntax = parenthesized.Expression;
+        }
+
+        return syntax is IfExpressionSyntax
+            or ConditionalExpressionSyntax
+            or SwitchExpressionSyntax;
+    }
+
+    /// <summary>
+    /// Issue #1238: detects a deferred branchy-argument placeholder produced by
+    /// the if/conditional/switch binders when they could not unify their
+    /// branches without a target type. The placeholder is a
+    /// <see cref="BoundErrorExpression"/> that retains the original branchy
+    /// syntax so the argument-conversion loops can re-bind it against the
+    /// resolved parameter type.
+    /// </summary>
+    internal static bool IsDeferredBranchyArgumentPlaceholder(BoundExpression expression, out ExpressionSyntax branchySyntax)
+    {
+        if (expression is BoundErrorExpression { Syntax: ExpressionSyntax syntax }
+            && IsTargetTypedBranchyArgumentSyntax(syntax))
+        {
+            branchySyntax = syntax;
+            return true;
+        }
+
+        branchySyntax = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #1238: binds a (named-argument-unwrapped) call argument value,
+    /// deferring a no-common-type unification failure when the value is a
+    /// target-typeable branchy expression (so it can be re-bound against the
+    /// resolved parameter type). See <see cref="BinderContext.DeferTargetlessConditional"/>.
+    /// </summary>
+    internal BoundExpression BindArgumentDeferringBranchy(ExpressionSyntax inner)
+    {
+        if (!IsTargetTypedBranchyArgumentSyntax(inner))
+        {
+            return BindExpression(inner);
+        }
+
+        var previous = binderCtx.DeferTargetlessConditional;
+        binderCtx.DeferTargetlessConditional = true;
+        try
+        {
+            return BindExpression(inner);
+        }
+        finally
+        {
+            binderCtx.DeferTargetlessConditional = previous;
+        }
+    }
+
     private static bool TryGetTaskElementType(TypeSymbol type, out TypeSymbol element)
     {
         element = null;

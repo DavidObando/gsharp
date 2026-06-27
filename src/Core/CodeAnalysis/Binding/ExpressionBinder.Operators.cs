@@ -603,6 +603,16 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindConditionalExpression(ConditionalExpressionSyntax syntax, TypeSymbol targetType)
     {
+        // Issue #1238: when this conditional is a bare call/constructor argument
+        // whose target parameter type is not yet known, the argument-binding
+        // loop set DeferTargetlessConditional so a no-common-type unification
+        // failure (e.g. a `nil`/narrower arm that needs the parameter's nullable
+        // type to widen) is deferred rather than reported here. Consume the flag
+        // immediately so nested sub-expressions bind with normal semantics.
+        var deferOnFailure = targetType == null && binderCtx.DeferTargetlessConditional;
+        binderCtx.DeferTargetlessConditional = false;
+        var diagMark = Diagnostics.Count;
+
         var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
 
         // ADR-0100 / issue #795: a bare `default` branch takes its type
@@ -654,6 +664,12 @@ internal sealed partial class ExpressionBinder
         var resultType = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType);
         if (resultType == null)
         {
+            if (deferOnFailure)
+            {
+                Diagnostics.TruncateTo(diagMark);
+                return new BoundErrorExpression(syntax);
+            }
+
             Diagnostics.ReportConditionalNoCommonResultType(
                 syntax.Location,
                 whenTrue.Type?.Name ?? "?",
@@ -665,6 +681,12 @@ internal sealed partial class ExpressionBinder
         var convertedFalse = ConvertConditionalBranch(syntax.WhenFalse.Location, whenFalse, resultType);
         if (convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression)
         {
+            if (deferOnFailure)
+            {
+                Diagnostics.TruncateTo(diagMark);
+                return new BoundErrorExpression(syntax);
+            }
+
             return new BoundErrorExpression(null);
         }
 
@@ -681,6 +703,14 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindIfExpression(IfExpressionSyntax syntax, TypeSymbol targetType)
     {
+        // Issue #1238: defer a no-common-type unification failure when this
+        // if-expression is a bare argument awaiting its parameter target type
+        // (see BindConditionalExpression for the full rationale). Consume the
+        // flag immediately so nested sub-expressions bind normally.
+        var deferOnFailure = targetType == null && binderCtx.DeferTargetlessConditional;
+        binderCtx.DeferTargetlessConditional = false;
+        var diagMark = Diagnostics.Count;
+
         // An if-expression in value position must have an else branch.
         if (syntax.ElseExpression == null)
         {
@@ -701,6 +731,12 @@ internal sealed partial class ExpressionBinder
         var resultType = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType);
         if (resultType == null)
         {
+            if (deferOnFailure)
+            {
+                Diagnostics.TruncateTo(diagMark);
+                return new BoundErrorExpression(syntax);
+            }
+
             Diagnostics.ReportConditionalNoCommonResultType(
                 syntax.Location,
                 whenTrue.Type?.Name ?? "?",
@@ -712,6 +748,12 @@ internal sealed partial class ExpressionBinder
         var convertedFalse = ConvertConditionalBranch(syntax.ElseExpression.Location, whenFalse, resultType);
         if (convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression)
         {
+            if (deferOnFailure)
+            {
+                Diagnostics.TruncateTo(diagMark);
+                return new BoundErrorExpression(syntax);
+            }
+
             return new BoundErrorExpression(null);
         }
 

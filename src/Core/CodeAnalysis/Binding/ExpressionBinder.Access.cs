@@ -1244,7 +1244,7 @@ internal sealed partial class ExpressionBinder
             var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argument);
             boundArguments.Add(argSyntax is RefArgumentExpressionSyntax refArg
                 ? BindRefArgumentExpression(refArg, parameter: null)
-                : BindExpression(argSyntax));
+                : BindArgumentDeferringBranchy(argSyntax));
         }
 
         var arguments = boundArguments.ToImmutable();
