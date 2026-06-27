@@ -3039,18 +3039,29 @@ public sealed class CSharpToGSharpTranslator
                 if (hasExplicitType)
                 {
                     bool emitType = initializer == null;
-                    ITypeSymbol declaredType = this.context.GetTypeInfo(declaration.Type).Type;
+
+                    // Prefer the local symbol's type: it carries the flow
+                    // nullable annotation (`SttsBox?`), whereas
+                    // `GetTypeInfo(declaration.Type)` reports the bare type and
+                    // silently drops the `?`, so a nullable-enabled local would
+                    // be rendered non-nullable and later `= nil`/`== nil` fail.
+                    ITypeSymbol declaredType =
+                        (this.context.GetDeclaredSymbol(declarator) as ILocalSymbol)?.Type
+                        ?? this.context.GetTypeInfo(declaration.Type).Type;
 
                     if (!emitType && initializer != null && declaredType != null)
                     {
                         // Preserve the explicit type only when it differs from the
                         // initializer's natural type (an implicit conversion). When
                         // they match, omit the clause and rely on inference — the
-                        // idiomatic common case.
+                        // idiomatic common case. A declared nullable reference
+                        // (`Box?`) whose initializer is non-null would infer the
+                        // narrower non-null type, so always emit it to keep the `?`.
                         ITypeSymbol naturalType =
                             this.context.GetTypeInfo(declarator.Initializer.Value).Type;
                         if (naturalType == null
-                            || !SymbolEqualityComparer.Default.Equals(declaredType, naturalType))
+                            || !SymbolEqualityComparer.Default.Equals(declaredType, naturalType)
+                            || IsAnnotatedNullableReference(declaredType))
                         {
                             emitType = true;
                         }
@@ -4412,6 +4423,13 @@ public sealed class CSharpToGSharpTranslator
         // is used as nullable in its scope (issue #1072). Value types and
         // already-nullable types are left untouched: this pass only covers
         // reference-type/array null-comparison and null-assignment.
+        // True for a `T?`-annotated reference type, array, or (interface/
+        // unconstrained) type parameter — the forms whose `?` the G# type mapper
+        // preserves and which inference over a non-null initializer would drop.
+        private static bool IsAnnotatedNullableReference(ITypeSymbol type) =>
+            type is { NullableAnnotation: NullableAnnotation.Annotated }
+                && (type.IsReferenceType || type is ITypeParameterSymbol);
+
         private GTypeReference PromoteIfUsedAsNullable(GTypeReference type, ISymbol symbol)
         {
             if (type == null || type.IsNullable)

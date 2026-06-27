@@ -388,6 +388,39 @@ namespace Demo
         Assert.DoesNotContain("?(x)", printed);
     }
 
+    /// <summary>
+    /// A nullable-enabled local declaration (`Box? t1 = null`) keeps its `?` in the
+    /// emitted G# type. The local symbol's flow annotation is honored (not the bare
+    /// type-syntax info, which drops `?`), so the binding is `var t1 Box? = nil` and
+    /// later `t1 = nil` / `t1 == nil` type-check.
+    /// </summary>
+    [Fact]
+    public void NullableLocal_AnnotatedReference_KeepsNullableType()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Box { }
+    public class C
+    {
+        Box Source() => new Box();
+        public Box? M(bool flag)
+        {
+            Box? t1 = null;
+            if (flag)
+            {
+                t1 = Source();
+                Use(t1);
+            }
+            return t1;
+        }
+        void Use(Box b) { }
+    }
+}");
+        Assert.Contains("var t1 Box? = nil", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
