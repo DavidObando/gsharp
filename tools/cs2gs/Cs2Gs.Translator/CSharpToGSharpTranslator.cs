@@ -4856,10 +4856,12 @@ public sealed class CSharpToGSharpTranslator
         private GExpression TranslateIsPattern(IsPatternExpressionSyntax isPattern)
         {
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
-            return this.TranslatePatternTest(receiver, isPattern.Pattern);
+            ITypeSymbol receiverType = this.context.GetTypeInfo(isPattern.Expression).Type;
+            return this.TranslatePatternTest(receiver, isPattern.Pattern, receiverType);
         }
 
-        private GExpression TranslatePatternTest(GExpression receiver, PatternSyntax pattern)
+        private GExpression TranslatePatternTest(
+            GExpression receiver, PatternSyntax pattern, ITypeSymbol receiverType = null)
         {
             switch (pattern)
             {
@@ -4871,18 +4873,26 @@ public sealed class CSharpToGSharpTranslator
                 case ConstantPatternSyntax constant:
                     // `x is 0` / `x is "moov"` / `x is true`. G# `is` only tests a
                     // type, so a constant pattern lowers to an equality test
-                    // (ADR-0115 §B).
+                    // (ADR-0115 §B). A numeric literal is retyped to the receiver's
+                    // type so `uint8? is 11` → `b == (11 as uint8?)` (G# has no
+                    // implicit numeric promotion: a bare `b == 11` is GS0129).
                     return new BinaryExpression(
                         receiver,
                         "==",
-                        this.TranslateExpression(constant.Expression));
+                        this.CoercePatternConstant(
+                            constant.Expression,
+                            this.TranslateExpression(constant.Expression),
+                            receiverType));
 
                 case RelationalPatternSyntax relational:
-                    // `x is > 0` → `x > 0`.
+                    // `x is > 0` → `x > 0` (with the same numeric retyping).
                     return new BinaryExpression(
                         receiver,
                         relational.OperatorToken.Text,
-                        this.TranslateExpression(relational.Expression));
+                        this.CoercePatternConstant(
+                            relational.Expression,
+                            this.TranslateExpression(relational.Expression),
+                            receiverType));
 
                 case DeclarationPatternSyntax declaration:
                     // `x is T t` → the boolean test `x is T`; the binder `t` is a
@@ -4910,7 +4920,7 @@ public sealed class CSharpToGSharpTranslator
                     return this.TranslateRecursivePatternTest(receiver, recursive);
 
                 case UnaryPatternSyntax unary when unary.IsKind(SyntaxKind.NotPattern):
-                    return this.TranslateNotPatternTest(receiver, unary.Pattern);
+                    return this.TranslateNotPatternTest(receiver, unary.Pattern, receiverType);
 
                 case BinaryPatternSyntax binaryPattern
                     when binaryPattern.OperatorToken.IsKind(SyntaxKind.OrKeyword)
@@ -4919,13 +4929,13 @@ public sealed class CSharpToGSharpTranslator
                     // `x is A and B` → `(x is A) && (x is B)`.
                     bool isOr = binaryPattern.OperatorToken.IsKind(SyntaxKind.OrKeyword);
                     return new BinaryExpression(
-                        this.TranslatePatternTest(receiver, binaryPattern.Left),
+                        this.TranslatePatternTest(receiver, binaryPattern.Left, receiverType),
                         isOr ? "||" : "&&",
-                        this.TranslatePatternTest(receiver, binaryPattern.Right));
+                        this.TranslatePatternTest(receiver, binaryPattern.Right, receiverType));
 
                 case ParenthesizedPatternSyntax parenthesized:
                     return new ParenthesizedExpression(
-                        this.TranslatePatternTest(receiver, parenthesized.Pattern));
+                        this.TranslatePatternTest(receiver, parenthesized.Pattern, receiverType));
 
                 default:
                     this.context.ReportUnsupported(
@@ -4935,7 +4945,8 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
-        private GExpression TranslateNotPatternTest(GExpression receiver, PatternSyntax inner)
+        private GExpression TranslateNotPatternTest(
+            GExpression receiver, PatternSyntax inner, ITypeSymbol receiverType = null)
         {
             switch (inner)
             {
@@ -4945,11 +4956,14 @@ public sealed class CSharpToGSharpTranslator
                     return new BinaryExpression(receiver, "!=", LiteralExpression.Null());
 
                 case ConstantPatternSyntax constant:
-                    // `x is not 6` → `x != 6`.
+                    // `x is not 6` → `x != 6` (with numeric retyping to the receiver).
                     return new BinaryExpression(
                         receiver,
                         "!=",
-                        this.TranslateExpression(constant.Expression));
+                        this.CoercePatternConstant(
+                            constant.Expression,
+                            this.TranslateExpression(constant.Expression),
+                            receiverType));
 
                 case RecursivePatternSyntax { Type: null } emptyRecursive
                     when emptyRecursive.PropertyPatternClause is null or { Subpatterns.Count: 0 }:
@@ -4982,8 +4996,36 @@ public sealed class CSharpToGSharpTranslator
                     // General negation: `!( <inner test> )`.
                     return new UnaryExpression(
                         "!",
-                        new ParenthesizedExpression(this.TranslatePatternTest(receiver, inner)));
+                        new ParenthesizedExpression(
+                            this.TranslatePatternTest(receiver, inner, receiverType)));
             }
+        }
+
+        // Retypes a constant/relational pattern's literal operand to the receiver's
+        // numeric type so the lowered `==`/`!=`/`<`… comparison type-checks. G# has
+        // no implicit numeric promotion, so `uint8? is 11` lowered to `b == 11`
+        // (where `11` is `int32`) is GS0129; coercing the literal yields the
+        // accepted `b == (11 as uint8?)`. Mirrors the constant branch of
+        // <see cref="TranslateBinaryExpression"/>. Non-numeric receivers/literals
+        // (string/enum/type tests) are left untouched.
+        private GExpression CoercePatternConstant(
+            ExpressionSyntax constantSyntax, GExpression constant, ITypeSymbol receiverType)
+        {
+            if (receiverType == null)
+            {
+                return constant;
+            }
+
+            ITypeSymbol constantType = this.context.GetTypeInfo(constantSyntax).Type;
+            if (TryGetNumericKind(receiverType, out SpecialType receiverUnderlying) &&
+                TryGetNumericKind(constantType, out SpecialType constantUnderlying) &&
+                receiverUnderlying != constantUnderlying &&
+                this.context.SemanticModel.GetConstantValue(constantSyntax).HasValue)
+            {
+                return this.CoerceOperandTo(constant, receiverType);
+            }
+
+            return constant;
         }
 
         private GExpression TranslateRecursivePatternTest(GExpression receiver, RecursivePatternSyntax recursive)
