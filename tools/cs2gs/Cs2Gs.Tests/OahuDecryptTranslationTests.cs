@@ -460,14 +460,14 @@ namespace Demo
 
         // The instance-member-dependent assignment is kept in an init() body.
         Assert.Contains("init()", printed);
-        Assert.Contains("buffer = System.GC.AllocateArray[TInput](InputBufferSize)", printed);
+        Assert.Contains("buffer = [InputBufferSize]TInput", printed);
 
         // The field itself carries no (invalid) initializer.
         Assert.Contains("var buffer []TInput", printed);
         Assert.DoesNotContain("var buffer []TInput = ", printed);
 
         // The static-RHS sibling assignment is still hoisted to a field initializer.
-        Assert.Contains("cache []int32 = System.GC.AllocateArray[int32](8)", printed);
+        Assert.Contains("cache []int32 = [8]int32", printed);
     }
 
     /// <summary>
