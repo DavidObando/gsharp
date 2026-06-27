@@ -199,16 +199,19 @@ public class MigrationPipelineTests
     }
 
     /// <summary>
-    /// Pointing the pipeline at <c>corpus/L3-Library</c> translates cleanly but
-    /// reaches the compile stage and captures a <c>compile-error</c> triage
-    /// artifact for residual compiler gaps (generic <c>IEnumerable</c>
-    /// implementation / <c>GetEnumerator</c> overload resolution). The artifact
+    /// Pointing the pipeline at <c>corpus/CompileGap-Library</c> translates
+    /// cleanly but reaches the compile stage and captures a
+    /// <c>compile-error</c> triage artifact. That fixture exists solely to
+    /// exercise this machinery: its body translates to valid G# yet references
+    /// an undefined helper, so <c>gsc</c> rejects it with a stable diagnostic
+    /// regardless of which real compiler gaps are open or closed (the earlier
+    /// anchor, <c>corpus/L3-Library</c>, now compiles green). The artifact
     /// carries a non-empty diagnostic id and a stable <c>sha256:</c>
     /// fingerprint. Gated on compiler presence (the pipeline resolves
     /// <c>gsc</c> up front).
     /// </summary>
     [Fact]
-    public async Task L3_CompileStageFailure_WritesTriageArtifact()
+    public async Task CompileStageFailure_WritesTriageArtifact()
     {
         string compiler = FindCompiler();
         if (compiler is null)
@@ -217,11 +220,11 @@ public class MigrationPipelineTests
         }
 
         string corpus = ResolveCorpusDir();
-        string outRoot = NewOutputRoot("l3-capture");
+        string outRoot = NewOutputRoot("compilegap-capture");
         var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
         var pipeline = new MigrationPipeline(options);
 
-        CorpusApp l3 = CorpusDiscovery.FindById(corpus, "corpus/L3-Library");
+        CorpusApp l3 = CorpusDiscovery.FindById(corpus, "corpus/CompileGap-Library");
         RunResult result = await pipeline.RunAsync(new[] { l3 });
         AppResult app = Assert.Single(result.Apps);
 
@@ -242,7 +245,9 @@ public class MigrationPipelineTests
     /// <summary>
     /// Re-running against the same <c>--gsc</c> carries the prior run forward in
     /// each fingerprint's <c>retryHistory</c> (the §C retry mechanism). Anchored
-    /// on <c>corpus/L3-Library</c>, which still fails at the compile stage.
+    /// on <c>corpus/CompileGap-Library</c>, whose synthetic body always fails at
+    /// the compile stage (an undefined-helper reference), so the machinery is
+    /// exercised independent of the corpus's evolving compile health.
     /// Gated on compiler presence.
     /// </summary>
     [Fact]
@@ -258,7 +263,7 @@ public class MigrationPipelineTests
         string outRoot = NewOutputRoot("retry");
         var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
 
-        CorpusApp l3 = CorpusDiscovery.FindById(corpus, "corpus/L3-Library");
+        CorpusApp l3 = CorpusDiscovery.FindById(corpus, "corpus/CompileGap-Library");
 
         RunResult first = await new MigrationPipeline(options).RunAsync(new[] { l3 });
         RunResult second = await new MigrationPipeline(options).RunAsync(new[] { l3 });
