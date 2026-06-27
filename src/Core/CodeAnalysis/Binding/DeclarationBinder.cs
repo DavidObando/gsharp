@@ -1272,6 +1272,15 @@ internal sealed class DeclarationBinder
         // BindProgram by walking StructSymbol.Methods. For value-type receivers
         // the emitter synthesizes a by-ref `this`, identical to the
         // receiver-clause owned-struct method lowering.
+        // Issue #1283: in-body user-defined conversion operators
+        // (`func operator implicit/explicit (x T) U` declared directly inside a
+        // struct/class body) are modelled exactly like the free-function form —
+        // a static `op_Implicit` / `op_Explicit` special-name method on the
+        // owning type. They are collected here and registered AFTER the
+        // shared-block static methods are installed (which replaces the static
+        // method table), so an in-body operator coexists with a `shared` block.
+        var pendingConversionOperators = new List<(FunctionDeclarationSyntax Syntax, ImmutableArray<ParameterSymbol> Parameters, TypeSymbol ReturnType, Accessibility Accessibility, ImmutableArray<BoundAttribute> Attributes)>();
+
         if (!syntax.Methods.IsDefaultOrEmpty)
         {
             var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
@@ -1385,6 +1394,29 @@ internal sealed class DeclarationBinder
                     var methodAccessibility = resolveAccessibility(methodSyntax.AccessibilityModifier);
                     var methodParameters = parameters.ToImmutable();
                     var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
+
+                    // Issue #1283: a conversion operator declared in the body is
+                    // not an instance method — defer it to the static
+                    // `op_Implicit` / `op_Explicit` registration below, reusing
+                    // the same machinery as the free-function form so the
+                    // conversion is recognised and applied at every target-typed
+                    // position.
+                    if (methodSyntax.IsConversionOperator)
+                    {
+                        var conversionAttributes = ImmutableArray<BoundAttribute>.Empty;
+                        if (!methodSyntax.Annotations.IsDefaultOrEmpty)
+                        {
+                            conversionAttributes = BindAttributes(
+                                methodSyntax.Annotations,
+                                AttributeTargetKind.Method,
+                                Binder.FunctionDeclarationAllowedTargets,
+                                "a method declaration",
+                                System.AttributeTargets.Method);
+                        }
+
+                        pendingConversionOperators.Add((methodSyntax, methodParameters, returnType, methodAccessibility, conversionAttributes));
+                        continue;
+                    }
 
                     // Issue #1071: the effective async flag (mirrors
                     // FunctionSymbol.IsAsync below) so override / shadow matching
@@ -2508,6 +2540,22 @@ internal sealed class DeclarationBinder
             }
 
             structSymbol.SetStaticEvents(staticEventsBuilder.ToImmutable());
+        }
+
+        // Issue #1283: register in-body conversion operators as static
+        // `op_Implicit` / `op_Explicit` methods now that the static-method table
+        // (which a `shared` block REPLACES via SetStaticMethods above) is final.
+        // BindConversionOperatorDeclaration appends via AddStaticMethods, so the
+        // operator coexists with any `shared`-block statics.
+        foreach (var conversionOperator in pendingConversionOperators)
+        {
+            BindConversionOperatorDeclaration(
+                conversionOperator.Syntax,
+                conversionOperator.Parameters,
+                conversionOperator.ReturnType,
+                conversionOperator.Accessibility,
+                package,
+                conversionOperator.Attributes);
         }
 
         // Issue #1070: consolidated field-initializer binding. Every static member
