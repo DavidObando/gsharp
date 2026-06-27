@@ -181,7 +181,7 @@ let ys = [3]int32{1, 2, 3}
 let grid = [][]int32{ []int32{1, 2}, []int32{3, 4, 5} }
 ```
 
-A runtime/zero-initialised array allocation is written `[n]T` (issue #1272), where `n` is an arbitrary length expression and there are no element initialisers. It allocates a fresh, zero-initialised slice `[]T` of length `n` (the idiomatic native form replacing the BCL call `System.GC.AllocateArray[T](n)`). The empty-initializer spelling `[n]T{}` is equivalent. The length is converted to `int32` (the same typing as array indices and the underlying CIL `newarr`):
+A runtime/zero-initialised array allocation is written `[n]T` (issue #1272), where `n` is an arbitrary length expression and there are no element initialisers. It allocates a fresh, zero-initialised slice `[]T` of length `n` (the idiomatic native form replacing the BCL call `System.GC.AllocateArray[T](n)`). The empty-initializer spelling `[n]T{}` is equivalent. The length is converted to `int32` (the typing the underlying CIL `newarr` requires):
 
 ```gsharp
 func zeros(n int32) []int32 {
@@ -192,6 +192,8 @@ let buffer = [8]int32     // length-8, all elements 0
 ```
 
 Slices are backed by CLR arrays. `len` and `cap` observe array length, and `append` allocates and copies into a new array in the current implementation. The `len`, `cap`, `append`, `delete`, and `make` built-ins are Go-style and require `import Gsharp.Extensions.Go` (ADR-0083); see [Go-style built-ins (`import Gsharp.Extensions.Go`)](#go-style-built-ins-import-gsharpextensionsgo) for the gate and the .NET-idiomatic alternatives (`.Length`, `.Count`, `.Remove(k)`, `List[T].Add`).
+
+Array and slice element access (`a[i]`, read or write) accepts **any** integer-typed index, matching C#'s element-access rule (issue #1279): `int8`, `uint8`, `int16`, `uint16`, `char`, `int32`, `uint32`, `int64`, `uint64`, `nint`, and `nuint`. The narrower kinds that implicitly widen to `int32` are converted to `int32`; the wider kinds (`uint32`, `int64`, `uint64`, `nint`, `nuint`) are converted to the native index type `nint`, which the underlying CIL `ldelem`/`stelem`/`ldelema` accept as the index operand. A non-integer index (`float32`/`float64`/`bool`/`string`/`decimal`/a user type) is rejected (`GS0156`). `string` char-indexing (`s[i]`) likewise accepts any integer index, converting to the `int32` the `get_Chars` accessor takes.
 
 ### Maps
 

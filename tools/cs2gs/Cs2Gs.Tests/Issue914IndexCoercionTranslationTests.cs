@@ -13,22 +13,25 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Translation tests for the array/indexer element-access index coercion defect
-/// discovered migrating <c>Oahu.Decrypt</c> (issue #914). G# array and indexer
-/// element access require an <c>int32</c> index; C# accepts any integral index
-/// and only widens the narrow kinds (<c>byte</c>, <c>sbyte</c>, <c>short</c>,
-/// <c>ushort</c>, <c>char</c>) to <c>int</c>. The wider/unsigned kinds
-/// (<c>uint</c>, <c>long</c>, <c>ulong</c>, <c>nint</c>, <c>nuint</c>) do not
-/// implicitly convert, so they must be coerced via the conversion-call form
-/// (<c>int32(i)</c>) (otherwise gsc reports GS0156).
+/// Translation tests for the array/indexer element-access index handling.
+/// Issue #1279: gsc now accepts ANY C#-supported integer type as an ARRAY/slice
+/// element index (it converts the wider/unsigned kinds — <c>uint</c>,
+/// <c>long</c>, <c>ulong</c>, <c>nint</c>, <c>nuint</c> — to native int), so an
+/// array index is emitted WITHOUT an <c>int32(...)</c> wrapper. A CLR/user
+/// indexer whose single parameter is <c>int32</c> (<c>List&lt;T&gt;</c>,
+/// <c>Span&lt;T&gt;</c>, <c>IReadOnlyList&lt;T&gt;</c>) still binds its argument
+/// to <c>int32</c> via normal conversion rules in gsc, so a wide index against
+/// such an indexer is still coerced via the conversion-call form
+/// (<c>int32(i)</c>). Originally tracked the #914 (<c>Oahu.Decrypt</c>) array
+/// coercion defect.
 /// </summary>
 public class Issue914IndexCoercionTranslationTests
 {
     /// <summary>
-    /// A <c>uint</c> array index is coerced to <c>int32</c>.
+    /// A <c>uint</c> array index is emitted uncoerced (gsc accepts it).
     /// </summary>
     [Fact]
-    public void ArrayIndex_UintIndex_CoercesToInt32()
+    public void ArrayIndex_UintIndex_NoCoercion()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -39,14 +42,15 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("arr[int32(i)]", printed);
+        Assert.Contains("arr[i]", printed);
+        Assert.DoesNotContain("int32(", printed);
     }
 
     /// <summary>
-    /// A <c>long</c> array index is coerced to <c>int32</c>.
+    /// A <c>long</c> array index is emitted uncoerced (gsc accepts it).
     /// </summary>
     [Fact]
-    public void ArrayIndex_LongIndex_CoercesToInt32()
+    public void ArrayIndex_LongIndex_NoCoercion()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -57,15 +61,16 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("arr[int32(i)]", printed);
+        Assert.Contains("arr[i]", printed);
+        Assert.DoesNotContain("int32(", printed);
     }
 
     /// <summary>
-    /// A computed <c>uint</c> index expression (<c>chunk - 1u</c>) is coerced to
-    /// <c>int32</c> as a whole.
+    /// A computed <c>uint</c> array-index expression (<c>chunk - 1u</c>) is
+    /// emitted uncoerced (gsc accepts the whole wide index).
     /// </summary>
     [Fact]
-    public void ArrayIndex_UintExpression_CoercesToInt32()
+    public void ArrayIndex_UintExpression_NoCoercion()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -76,8 +81,27 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("int32(", printed);
         Assert.Contains("chunk", printed);
+        Assert.DoesNotContain("int32(", printed);
+    }
+
+    /// <summary>
+    /// A <c>nint</c> array index is emitted uncoerced (gsc accepts it).
+    /// </summary>
+    [Fact]
+    public void ArrayIndex_NintIndex_NoCoercion()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public int Get(int[] arr, nint i) => arr[i];
+    }
+}");
+
+        Assert.Contains("arr[i]", printed);
+        Assert.DoesNotContain("int32(", printed);
     }
 
     /// <summary>
