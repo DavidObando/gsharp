@@ -330,6 +330,21 @@ internal sealed partial class ExpressionBinder
                 yield return baseClass;
             }
 
+            // Issue #1274: a user class's transitive base chain may end in an
+            // imported/BCL base class (e.g. `MyStream : System.IO.Stream`),
+            // recorded as `ImportedBaseType` rather than in the `BaseClass`
+            // chain. Surface that imported base as a candidate so two sibling
+            // subclasses of the same imported base unify to it. Walk the
+            // user-base chain to find the first class carrying an imported base.
+            for (var c = structSymbol; c != null; c = c.BaseClass)
+            {
+                if (c.ImportedBaseType != null)
+                {
+                    yield return c.ImportedBaseType;
+                    break;
+                }
+            }
+
             foreach (var iface in structSymbol.Interfaces)
             {
                 yield return iface;
