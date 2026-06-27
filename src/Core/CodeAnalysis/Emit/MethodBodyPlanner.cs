@@ -625,6 +625,27 @@ internal sealed class MethodBodyPlanner
 
             liftedBinarySlots[lifted] = new LiftedBinarySlots(lhsSlot, rhsSlot, resultSlot);
         }
+
+        // Issue #1236: each lifted Nullable<T1> -> Nullable<T2> numeric widening
+        // conversion needs two consecutive scratch slots — the source
+        // Nullable<T1> (spilled so the emitter can take its address for
+        // get_HasValue / GetValueOrDefault) and a result Nullable<T2> (to
+        // initobj a default value on the null branch). The slot index of the
+        // source is stored in receiverSpillSlots (already an aggregate of
+        // distinct-by-node scratch-slot kinds); the emitter derives the result
+        // slot as source + 1. Skip nodes already owned by another collector.
+        foreach (var widening in this.CollectNullableNumericWideningConversions(body))
+        {
+            if (receiverSpillSlots.ContainsKey(widening))
+            {
+                continue;
+            }
+
+            var srcSlot = localTypes.Count;
+            localTypes.Add(widening.Expression.Type);
+            localTypes.Add(widening.Type);
+            receiverSpillSlots[widening] = srcSlot;
+        }
     }
 
     // Phase B: walks the bound body to find every BoundPatternSwitchStatement
@@ -1241,6 +1262,13 @@ internal sealed class MethodBodyPlanner
     {
         var sink = new List<BoundBinaryExpression>();
         this.slotPlanner.CollectLiftedBinaryOperators((BoundStatement)root, sink);
+        return sink;
+    }
+
+    internal IEnumerable<BoundConversionExpression> CollectNullableNumericWideningConversions(BoundNode root)
+    {
+        var sink = new List<BoundConversionExpression>();
+        this.slotPlanner.CollectNullableNumericWideningConversions((BoundStatement)root, sink);
         return sink;
     }
 

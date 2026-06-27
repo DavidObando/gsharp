@@ -1314,6 +1314,82 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // Issue #1236: lifted (nullable) numeric widening + constant-integer-
+        // literal adaptation. The non-nullable paths above (#1144 literal
+        // adaptation, #1150 directional widening) only fire when BOTH operands
+        // are non-nullable integer types, so a nullable numeric operand never
+        // benefited from the implicit lossless widening lattice — only an exact
+        // same-underlying lifted operator was defined. Mirror those same rules
+        // on the UNDERLYING numeric types when at least one operand is a value-
+        // type Nullable<T>: pick a common underlying integer type via constant-
+        // literal adaptation or the directional widening lattice, convert both
+        // operands to the lifted (nullable) common type, and bind the
+        // homogeneous lifted operator. The inserted conversions are an implicit
+        // `T → T?` wrap (non-nullable side) and an implicit lifted `T1? → T2?`
+        // widening (nullable side, classified in Conversion.Classify); emit and
+        // the evaluator unwrap, convert the underlying value, and re-wrap,
+        // preserving the existing nullable-lifted operator null semantics. An
+        // out-of-range integer literal still fails adaptation (so GS0129 fires),
+        // and a pair where NEITHER underlying widens to the other (e.g.
+        // `int32? == uint32?`) stays unbound — consistent with the non-nullable
+        // forms.
+        if (boundOperator == null
+            && (boundLeft.Type is NullableTypeSymbol || boundRight.Type is NullableTypeSymbol))
+        {
+            var leftUnderlying = boundLeft.Type is NullableTypeSymbol leftNum ? leftNum.UnderlyingType : boundLeft.Type;
+            var rightUnderlying = boundRight.Type is NullableTypeSymbol rightNum ? rightNum.UnderlyingType : boundRight.Type;
+            TypeSymbol commonUnderlying = null;
+
+            if (leftUnderlying != null && rightUnderlying != null)
+            {
+                if (boundLeft is BoundLiteralExpression leftNumLit
+                    && IsIntegerLiteralValue(leftNumLit.Value)
+                    && boundRight is not BoundLiteralExpression
+                    && IsIntegerType(rightUnderlying)
+                    && TryAdaptIntegerLiteral(leftNumLit.Value, rightUnderlying, out var adaptedLeftNum))
+                {
+                    boundLeft = new BoundLiteralExpression(boundLeft.Syntax, adaptedLeftNum);
+                    commonUnderlying = rightUnderlying;
+                }
+                else if (boundRight is BoundLiteralExpression rightNumLit
+                    && IsIntegerLiteralValue(rightNumLit.Value)
+                    && boundLeft is not BoundLiteralExpression
+                    && IsIntegerType(leftUnderlying)
+                    && TryAdaptIntegerLiteral(rightNumLit.Value, leftUnderlying, out var adaptedRightNum))
+                {
+                    boundRight = new BoundLiteralExpression(boundRight.Syntax, adaptedRightNum);
+                    commonUnderlying = leftUnderlying;
+                }
+                else if (IsIntegerType(leftUnderlying)
+                    && IsIntegerType(rightUnderlying)
+                    && leftUnderlying != rightUnderlying
+                    && boundLeft is not BoundLiteralExpression
+                    && boundRight is not BoundLiteralExpression)
+                {
+                    if (Conversion.Classify(leftUnderlying, rightUnderlying).IsImplicit)
+                    {
+                        commonUnderlying = rightUnderlying;
+                    }
+                    else if (Conversion.Classify(rightUnderlying, leftUnderlying).IsImplicit)
+                    {
+                        commonUnderlying = leftUnderlying;
+                    }
+                }
+            }
+
+            if (commonUnderlying != null)
+            {
+                var commonNullable = NullableTypeSymbol.Get(commonUnderlying);
+                var lifted = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, commonNullable, commonNullable);
+                if (lifted != null)
+                {
+                    boundLeft = conversions.BindConversion(syntax.Left.Location, boundLeft, commonNullable);
+                    boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, commonNullable);
+                    boundOperator = lifted;
+                }
+            }
+        }
+
         if (boundOperator == null)
         {
             // Stream D: try user-defined `func (a T) operator <op>(b U) R` on

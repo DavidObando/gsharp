@@ -3751,10 +3751,22 @@ public sealed class Evaluator
         {
             return Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
         }
-        else if (node.Type is NullableTypeSymbol)
+        else if (node.Type is NullableTypeSymbol nullableTarget)
         {
             // Phase 3.C.1: nullability is a bind-time annotation; the runtime
-            // representation is identical to the underlying type.
+            // representation is identical to the underlying type. Issue #1236:
+            // a lifted numeric widening (`T1? → T2?`, e.g. `uint8? → int32?`)
+            // must still convert a present underlying value to the target
+            // underlying type so a lifted binary operator sees a homogeneous
+            // pair; a null source stays null (the lifted operator preserves it).
+            if (value != null
+                && nullableTarget.UnderlyingType?.ClrType is { } targetUnderlyingClr
+                && IsSupportedNumericClrType(targetUnderlyingClr)
+                && value.GetType() != targetUnderlyingClr)
+            {
+                return UncheckedNumericConvert(value, targetUnderlyingClr);
+            }
+
             return value;
         }
         else if (node.Type == TypeSymbol.Object

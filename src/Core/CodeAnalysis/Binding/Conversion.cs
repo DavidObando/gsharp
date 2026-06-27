@@ -254,7 +254,33 @@ public sealed class Conversion
 
             if (from is NullableTypeSymbol fromNullable)
             {
-                return fromNullable.UnderlyingType == toNullable.UnderlyingType ? Conversion.Identity : Conversion.None;
+                if (fromNullable.UnderlyingType == toNullable.UnderlyingType)
+                {
+                    return Conversion.Identity;
+                }
+
+                // Issue #1236: lifted numeric widening — `T1? → T2?` is an
+                // implicit conversion whenever the underlying `T1 → T2` is an
+                // implicit (lossless) numeric widening (e.g. `uint8? → int32?`,
+                // `int32? → int64?`). This mirrors C# §10.2.6 lifted conversions
+                // and lets nullable numeric operands participate in the same
+                // widening lattice as their non-nullable forms, so a lifted
+                // binary operator can bind at a common underlying type. The
+                // emitter / evaluator unwrap the source, convert the underlying
+                // value, and re-wrap, propagating null. Restricted to value-type
+                // numeric underlyings so reference-typed nullable wrappers (which
+                // share a CLR representation) keep their identity-only rule.
+                if (fromNullable.UnderlyingType?.ClrType is { IsValueType: true }
+                    && toNullable.UnderlyingType?.ClrType is { IsValueType: true })
+                {
+                    var liftedUnderlying = Classify(fromNullable.UnderlyingType, toNullable.UnderlyingType);
+                    if (liftedUnderlying.Exists && liftedUnderlying.IsImplicit && !liftedUnderlying.IsIdentity)
+                    {
+                        return Conversion.Implicit;
+                    }
+                }
+
+                return Conversion.None;
             }
 
             if (from == toNullable.UnderlyingType)
