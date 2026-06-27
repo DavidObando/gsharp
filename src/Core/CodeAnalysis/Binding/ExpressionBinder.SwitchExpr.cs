@@ -29,6 +29,14 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindSwitchExpression(SwitchExpressionSyntax syntax, TypeSymbol targetType)
     {
+        // Issue #1238: when this switch-expression is an eagerly-bound call
+        // argument with no target type yet, defer a no-common-type unification
+        // failure (instead of reporting GS0179) so the argument can be re-bound
+        // against the resolved parameter type. The flag is read-and-cleared up
+        // front so nested sub-expressions bind with normal semantics.
+        var deferOnFailure = targetType == null && binderCtx.DeferTargetlessConditional;
+        binderCtx.DeferTargetlessConditional = false;
+
         var discriminant = BindExpression(syntax.Expression);
         var switchType = discriminant.Type;
 
@@ -111,6 +119,8 @@ internal sealed partial class ExpressionBinder
         }
 
         var resultType = ComputeSwitchExpressionResultType(boundArmBuilders, targetType);
+        var diagMark = Diagnostics.Count;
+        var anyArmFailed = false;
         var arms = ImmutableArray.CreateBuilder<BoundSwitchExpressionArm>(boundArmBuilders.Count);
         foreach (var arm in boundArmBuilders)
         {
@@ -121,6 +131,7 @@ internal sealed partial class ExpressionBinder
                 if (result.Type != TypeSymbol.Error && resultType != TypeSymbol.Error)
                 {
                     Diagnostics.ReportSwitchExpressionArmTypeMismatch(arm.Syntax.Result.Location, result.Type, resultType);
+                    anyArmFailed = true;
                 }
 
                 result = new BoundErrorExpression(null);
@@ -139,6 +150,17 @@ internal sealed partial class ExpressionBinder
         }
 
         var boundArms = arms.ToImmutable();
+
+        // Issue #1238: a deferred argument switch-expression whose arms could not
+        // unify without a target — suppress the GS0179 diagnostics and return a
+        // syntax-carrying placeholder so the caller can re-bind against the
+        // resolved parameter type.
+        if (anyArmFailed && deferOnFailure)
+        {
+            Diagnostics.TruncateTo(diagMark);
+            return new BoundErrorExpression(syntax);
+        }
+
         ExhaustivenessAnalyzer.AnalyzeSwitchExpression(
             syntax.SwitchKeyword.Location,
             switchType,

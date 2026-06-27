@@ -18,6 +18,35 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
 {
     private readonly List<Diagnostic> diagnostics = new List<Diagnostic>();
 
+    /// <summary>
+    /// Gets the number of diagnostics currently held in the bag. Used together
+    /// with <see cref="TruncateTo"/> to discard speculative diagnostics emitted
+    /// while binding an expression that is subsequently re-bound (e.g. issue
+    /// #1238 target-typed conditional arguments).
+    /// </summary>
+    public int Count => diagnostics.Count;
+
+    /// <summary>
+    /// Removes every diagnostic added after the bag reached <paramref name="count"/>
+    /// entries, restoring it to an earlier marked state. Used to roll back the
+    /// speculative diagnostics produced while eagerly binding an expression that
+    /// will be re-bound against a now-known target type.
+    /// </summary>
+    /// <param name="count">The diagnostic count to truncate back to. Values
+    /// outside the current range are clamped.</param>
+    public void TruncateTo(int count)
+    {
+        if (count < 0)
+        {
+            count = 0;
+        }
+
+        if (count < diagnostics.Count)
+        {
+            diagnostics.RemoveRange(count, diagnostics.Count - count);
+        }
+    }
+
     /// <inheritdoc/>
     public IEnumerator<Diagnostic> GetEnumerator() => diagnostics.GetEnumerator();
 

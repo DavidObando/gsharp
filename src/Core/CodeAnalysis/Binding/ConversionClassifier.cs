@@ -273,6 +273,26 @@ internal sealed class ConversionClassifier
     /// <returns>The shaped bound expression.</returns>
     public BoundExpression BindConversion(TextLocation diagnosticLocation, BoundExpression expression, TypeSymbol type, bool allowExplicit = false)
     {
+        // Issue #1238: a deferred target-typed conditional/if/switch argument
+        // placeholder (a BoundErrorExpression retaining the branchy syntax,
+        // produced when the branches could not unify without a target type).
+        // Re-bind the retained syntax against the now-known target so each
+        // branch is target-typed (e.g. a `nil` arm widens to the parameter's
+        // nullable type). When the target is missing/in error, re-bind without
+        // a target so the original no-common-type diagnostic — suppressed at the
+        // deferral point — surfaces. This is the central finalization path that
+        // covers every call/constructor argument site routed through
+        // BindConversion.
+        if (ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(expression, out var branchySyntax))
+        {
+            if (type == null || type == TypeSymbol.Error || type == TypeSymbol.Void)
+            {
+                return bindExpression(branchySyntax);
+            }
+
+            return bindExpressionWithTargetType(branchySyntax, type);
+        }
+
         // Issue #1018: a throw-expression has the bottom (`never`) type and is
         // implicitly convertible to any target. Return it unwrapped — there is
         // no value to convert, and wrapping it in a BoundConversionExpression

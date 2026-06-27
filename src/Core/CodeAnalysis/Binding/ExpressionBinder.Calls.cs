@@ -2289,7 +2289,7 @@ internal sealed partial class ExpressionBinder
             }
             else
             {
-                boundArguments.Add(BindExpression(inner));
+                boundArguments.Add(BindArgumentDeferringBranchy(inner));
             }
 
             argSlot++;

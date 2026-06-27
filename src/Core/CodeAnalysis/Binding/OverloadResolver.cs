@@ -111,6 +111,7 @@ internal sealed class OverloadResolver
     private readonly ConversionClassifier conversions;
 
     private readonly Func<ExpressionSyntax, BoundExpression> bindExpression;
+    private readonly Func<ExpressionSyntax, TypeSymbol, BoundExpression> bindExpressionWithTargetType;
     private readonly Func<RefArgumentExpressionSyntax, ParameterSymbol, BoundExpression> bindRefArgumentExpression;
     private readonly Func<BoundExpression, ExpressionSyntax, ParameterSymbol, TypeSymbol, BoundExpression> tryRebindInlineOutVarPlaceholder;
     private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
@@ -149,6 +150,10 @@ internal sealed class OverloadResolver
     /// chosen.</param>
     /// <param name="bindExpression">Callback to re-bind a sub-expression
     /// through the still-on-Binder expression-binding entry point.</param>
+    /// <param name="bindExpressionWithTargetType">Issue #1238: callback that
+    /// (re)binds an expression with an explicit target type, used to finalize a
+    /// deferred target-typed conditional/if/switch argument against its resolved
+    /// parameter type.</param>
     /// <param name="bindRefArgumentExpression">Callback to bind a
     /// <see cref="RefArgumentExpressionSyntax"/> against a known parameter
     /// symbol (or <c>null</c> in the first, parameter-unknown, pass).</param>
@@ -225,6 +230,7 @@ internal sealed class OverloadResolver
         MemberLookup memberLookup,
         ConversionClassifier conversions,
         Func<ExpressionSyntax, BoundExpression> bindExpression,
+        Func<ExpressionSyntax, TypeSymbol, BoundExpression> bindExpressionWithTargetType,
         Func<RefArgumentExpressionSyntax, ParameterSymbol, BoundExpression> bindRefArgumentExpression,
         Func<BoundExpression, ExpressionSyntax, ParameterSymbol, TypeSymbol, BoundExpression> tryRebindInlineOutVarPlaceholder,
         Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
@@ -253,6 +259,7 @@ internal sealed class OverloadResolver
         this.memberLookup = memberLookup ?? throw new ArgumentNullException(nameof(memberLookup));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
         this.bindExpression = bindExpression ?? throw new ArgumentNullException(nameof(bindExpression));
+        this.bindExpressionWithTargetType = bindExpressionWithTargetType ?? throw new ArgumentNullException(nameof(bindExpressionWithTargetType));
         this.bindRefArgumentExpression = bindRefArgumentExpression ?? throw new ArgumentNullException(nameof(bindRefArgumentExpression));
         this.tryRebindInlineOutVarPlaceholder = tryRebindInlineOutVarPlaceholder ?? throw new ArgumentNullException(nameof(tryRebindInlineOutVarPlaceholder));
         this.bindTypeClause = bindTypeClause ?? throw new ArgumentNullException(nameof(bindTypeClause));
@@ -1030,6 +1037,72 @@ internal sealed class OverloadResolver
         => argument is NamedArgumentExpressionSyntax named ? named.Expression : argument;
 
     /// <summary>
+    /// Issue #1238: eagerly binds a (named-argument-unwrapped) call/constructor
+    /// argument value. When the argument is a target-typeable branchy
+    /// expression (<c>if</c>/<c>else</c>, ternary, or <c>switch</c>-expression)
+    /// the <see cref="BinderContext.DeferTargetlessConditional"/> flag is set so
+    /// a no-common-type unification failure is deferred (the binder returns a
+    /// placeholder retaining the syntax) instead of being reported prematurely
+    /// without the parameter's target type. The deferred placeholder is later
+    /// re-bound by <see cref="FinalizeBranchyArgument"/> (or centrally by
+    /// <c>ConversionClassifier.BindConversion</c>) once the applicable
+    /// parameter type is known.
+    /// </summary>
+    /// <param name="inner">The unwrapped argument value syntax.</param>
+    /// <returns>The eagerly-bound argument (a deferred placeholder when a
+    /// branchy argument could not unify without a target).</returns>
+    private BoundExpression BindOverloadArgumentValue(ExpressionSyntax inner)
+    {
+        if (!ExpressionBinder.IsTargetTypedBranchyArgumentSyntax(inner))
+        {
+            return bindExpression(inner);
+        }
+
+        var previous = binderCtx.DeferTargetlessConditional;
+        binderCtx.DeferTargetlessConditional = true;
+        try
+        {
+            return bindExpression(inner);
+        }
+        finally
+        {
+            binderCtx.DeferTargetlessConditional = previous;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1238: finalizes a deferred branchy-argument placeholder (produced
+    /// by <see cref="BindOverloadArgumentValue"/>) once the resolved parameter
+    /// type is known. The retained branchy syntax is re-bound with
+    /// <paramref name="expectedType"/> as its target so each branch is
+    /// target-typed (e.g. a <c>nil</c> arm widens to the parameter's nullable
+    /// type). When no usable target is available the syntax is re-bound without
+    /// a target so the original no-common-type diagnostic — suppressed at the
+    /// deferral point — surfaces. Non-placeholder arguments are returned
+    /// unchanged.
+    /// </summary>
+    /// <param name="argument">The (possibly placeholder) bound argument.</param>
+    /// <param name="expectedType">The resolved parameter target type.</param>
+    /// <returns>The finalized argument.</returns>
+    private BoundExpression FinalizeBranchyArgument(BoundExpression argument, TypeSymbol expectedType)
+    {
+        if (!ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(argument, out var branchySyntax))
+        {
+            return argument;
+        }
+
+        if (expectedType != null
+            && expectedType != TypeSymbol.Error
+            && expectedType != TypeSymbol.Void
+            && !TypeSymbol.ContainsTypeParameter(expectedType))
+        {
+            return bindExpressionWithTargetType(branchySyntax, expectedType);
+        }
+
+        return bindExpression(branchySyntax);
+    }
+
+    /// <summary>
     /// Issue #343: pre-validates the layout of call arguments — positional
     /// arguments must precede all named arguments, and no two named arguments
     /// may share the same name. Reports the corresponding diagnostic
@@ -1664,7 +1737,7 @@ internal sealed class OverloadResolver
         foreach (var argument in syntax.Arguments)
         {
             // Issue #343: bind the value behind any named-argument wrapper.
-            boundArguments.Add(bindExpression(UnwrapNamedArgumentValue(argument)));
+            boundArguments.Add(BindOverloadArgumentValue(UnwrapNamedArgumentValue(argument)));
         }
 
         // ADR-0101 follow-up / issue #819: a primary constructor may declare a
@@ -1925,6 +1998,14 @@ internal sealed class OverloadResolver
             var argument = boundArguments[i];
             var parameter = parameters[i];
 
+            // Issue #1238: re-bind a deferred target-typed conditional argument
+            // against the constructor parameter type before the convertibility
+            // checks below.
+            if (ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(argument, out _))
+            {
+                boundArguments[i] = argument = FinalizeBranchyArgument(argument, parameter.Type);
+            }
+
             // ADR-0055 Tier 4 (#369): an interpolated-string argument targeting an
             // IFormattable/FormattableString constructor parameter lowers to
             // FormattableStringFactory.Create rather than an eager string.
@@ -2044,7 +2125,7 @@ internal sealed class OverloadResolver
             }
             else
             {
-                boundArgumentsBuilder.Add(bindExpression(argument));
+                boundArgumentsBuilder.Add(BindOverloadArgumentValue(argument));
             }
         }
 
@@ -2264,6 +2345,14 @@ internal sealed class OverloadResolver
         {
             var argument = boundArguments[i];
             var parameter = parameters[i];
+
+            // Issue #1238: re-bind a deferred target-typed conditional argument
+            // against the constructor parameter type before the convertibility
+            // checks below.
+            if (ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(argument, out _))
+            {
+                boundArguments[i] = argument = FinalizeBranchyArgument(argument, effectiveParamTypes[i]);
+            }
 
             // Issue #1214: target the type-argument-substituted parameter type
             // for a closed generic construction (equal to parameter.Type for a
@@ -2645,6 +2734,14 @@ internal sealed class OverloadResolver
             var parameter = parameters[i];
             var argument = boundArgs[i];
             var argLocation = parameterSyntax[i]?.Location ?? syntax.Identifier.Location;
+
+            // Issue #1238: re-bind a deferred target-typed conditional argument
+            // against the constructor parameter type before the error/convert
+            // checks below.
+            if (ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(argument, out _))
+            {
+                argument = FinalizeBranchyArgument(argument, parameter.Type);
+            }
 
             if (argument.Type == TypeSymbol.Error)
             {
@@ -3032,7 +3129,7 @@ internal sealed class OverloadResolver
             }
             else
             {
-                boundArgument = bindExpression(argSyntax);
+                boundArgument = BindOverloadArgumentValue(argSyntax);
             }
 
             boundArguments.Add(boundArgument);
@@ -3623,7 +3720,16 @@ internal sealed class OverloadResolver
             var parameter = function.Parameters[i];
             var expectedType = substitution != null ? substituteType(parameter.Type, substitution) : parameter.Type;
 
-            // Issue #951: a deferred un-typed arrow lambda argument is now
+            // Issue #1238: a deferred target-typed conditional/if/switch
+            // argument is re-bound here against the resolved parameter type so
+            // each branch is target-typed before the convertibility checks
+            // below (which would otherwise reject the suppressed-error
+            // placeholder).
+            if (ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(argument, out _))
+            {
+                boundArguments[i] = argument = FinalizeBranchyArgument(argument, expectedType);
+            }
+
             // bound against the resolved parameter's delegate target so its
             // omitted parameter type(s) and inferred return type are filled in
             // from the parameter shape (e.g. `func F(f Func[int32, int32])`
