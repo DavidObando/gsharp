@@ -1479,6 +1479,29 @@ internal sealed partial class ExpressionBinder
             case NameExpressionSyntax ne:
                 return BindUserTypeStaticMemberAccess(structSym, ne);
 
+            // Issue #1291: element access on a qualified static field receiver
+            // (`Type.staticField[i]`). The parser folds the trailing `[...]` into
+            // the right-hand side of the `.`, so the indexer arrives here as the
+            // rightPart. Bind the static-member target through the static
+            // accessor path to get the correctly typed (array/map/...) receiver,
+            // then route the index resolution through the shared helper — exactly
+            // as the instance-receiver path does in BindAccessorStep. Without this
+            // case the indexer fell through to `default` and bound to the error
+            // type `?`.
+            case IndexExpressionSyntax ix:
+                var indexTarget = BindUserTypeStaticAccessorStep(structSym, ix.Target);
+                if (indexTarget is BoundErrorExpression)
+                {
+                    return indexTarget;
+                }
+
+                if (ix.IsNullConditional)
+                {
+                    return BindNullConditionalIndexFromBoundTarget(indexTarget, ix);
+                }
+
+                return BindIndexAgainstTarget(indexTarget, ix.Index, ix.Target.Location);
+
             default:
                 return new BoundErrorExpression(null);
         }
