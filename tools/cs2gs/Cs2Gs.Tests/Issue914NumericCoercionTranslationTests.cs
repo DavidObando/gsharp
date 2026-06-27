@@ -237,13 +237,13 @@ namespace Demo
     }
 
     /// <summary>
-    /// A shift count of a non-<c>int32</c> integral (here <c>byte</c>, which C#
-    /// implicitly widens to <c>int</c>) is wrapped as <c>int32(count)</c> so the
-    /// shift binds in G# (which requires an <c>int32</c> shift count; a
-    /// <c>uint8</c>/<c>uint32</c> count is GS0129).
+    /// Issue #1232: a shift count of a narrower-order integral (here <c>byte</c>,
+    /// which C# implicitly widens to <c>int</c>) is emitted idiomatically — gsc now
+    /// implicitly widens the count to <c>int32</c>, so no <c>int32(count)</c> wrap
+    /// is produced.
     /// </summary>
     [Fact]
-    public void Shift_NonInt32Count_WrapsInInt32Conversion()
+    public void Shift_NonInt32Count_LeftIdiomatic()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -254,7 +254,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("value << int32(count)", printed);
+        Assert.Contains("value << count", printed);
+        Assert.DoesNotContain("int32(count)", printed);
     }
 
     /// <summary>
@@ -278,12 +279,14 @@ namespace Demo
     }
 
     /// <summary>
-    /// A compound shift-assignment <c>value &lt;&lt;= count</c> coerces the count to
-    /// <c>int32</c>, NOT to the left operand's numeric type (the previous behavior
-    /// wrongly emitted <c>uint32(count)</c>, yielding GS0129).
+    /// Issue #1232: a compound shift-assignment <c>value &lt;&lt;= count</c> with a
+    /// narrower-order count is emitted idiomatically (no count coercion). gsc widens
+    /// the count to <c>int32</c>; the translator must NOT coerce it to the left
+    /// operand's numeric type (which previously produced the GS0129-rejected
+    /// <c>uint32(count)</c>).
     /// </summary>
     [Fact]
-    public void CompoundShiftAssignment_NonInt32Count_CoercesCountToInt32()
+    public void CompoundShiftAssignment_NonInt32Count_LeftIdiomatic()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -298,18 +301,19 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("value <<= int32(count)", printed);
+        Assert.Contains("value <<= count", printed);
+        Assert.DoesNotContain("int32(count)", printed);
         Assert.DoesNotContain("uint32(count)", printed);
     }
 
     /// <summary>
-    /// A ternary whose arms are differing numeric primitives coerces the diverging
-    /// arm to the conditional's non-nullable numeric result type (G# has no implicit
-    /// numeric promotion; mismatched arms are GS0263). Here C#'s common type of
-    /// <c>1u</c> and <c>0</c> is <c>uint</c>, so the <c>0</c> arm becomes <c>uint32(0)</c>.
+    /// Issue #1232: a ternary whose arms are differing numeric primitives where one
+    /// arm is an in-range constant literal is emitted idiomatically — gsc now adapts
+    /// the literal to the other arm's type, so `b ? 1u : 0` translates to
+    /// <c>if b { 1u } else { 0 }</c> with no <c>uint32(0)</c> cast.
     /// </summary>
     [Fact]
-    public void Ternary_DivergingNumericArms_CoercesToResultType()
+    public void Ternary_DivergingNumericArms_LeftIdiomatic()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -320,7 +324,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("uint32(0)", printed);
+        Assert.Contains("if b { 1u } else { 0 }", printed);
+        Assert.DoesNotContain("uint32(0)", printed);
     }
 
     /// <summary>

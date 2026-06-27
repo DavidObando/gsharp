@@ -661,6 +661,8 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        TryAdaptConditionalIntegerLiteralArm(ref whenTrue, ref whenFalse);
+
         var resultType = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType);
         if (resultType == null)
         {
@@ -727,6 +729,8 @@ internal sealed partial class ExpressionBinder
         {
             return new BoundErrorExpression(null);
         }
+
+        TryAdaptConditionalIntegerLiteralArm(ref whenTrue, ref whenFalse);
 
         var resultType = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType);
         if (resultType == null)
@@ -918,6 +922,38 @@ internal sealed partial class ExpressionBinder
         // (c) Best-common-type (least-upper-bound) fallback: unify sibling
         // subtypes to their shared base/interface.
         return ComputeBestCommonType(new[] { left, right });
+    }
+
+    /// <summary>
+    /// Issue #1232: value-producing if/conditional ergonomics. When exactly one
+    /// branch is a compile-time constant integer literal and the OTHER branch is
+    /// a (non-literal) integer-typed expression, adapt the literal to that
+    /// integer type when its value is representable there — mirroring the
+    /// constant-integer-literal adaptation that <c>BindBinaryExpression</c>
+    /// performs for binary operands (#1144). This lets idiomatic forms such as
+    /// <c>if cond { someUint32 } else { 0 }</c> (and the equivalent
+    /// <c>cond ? someUint32 : 0</c>) unify on the wider arm's type without an
+    /// explicit cast on the <c>0</c>, exactly as C# does. An out-of-range literal
+    /// is left unchanged so the no-common-type path still reports GS0263.
+    /// </summary>
+    private void TryAdaptConditionalIntegerLiteralArm(ref BoundExpression whenTrue, ref BoundExpression whenFalse)
+    {
+        if (whenTrue is BoundLiteralExpression trueLit
+            && IsIntegerLiteralValue(trueLit.Value)
+            && whenFalse is not BoundLiteralExpression
+            && IsIntegerType(whenFalse.Type)
+            && TryAdaptIntegerLiteral(trueLit.Value, whenFalse.Type, out var adaptedTrue))
+        {
+            whenTrue = new BoundLiteralExpression(whenTrue.Syntax, adaptedTrue);
+        }
+        else if (whenFalse is BoundLiteralExpression falseLit
+            && IsIntegerLiteralValue(falseLit.Value)
+            && whenTrue is not BoundLiteralExpression
+            && IsIntegerType(whenTrue.Type)
+            && TryAdaptIntegerLiteral(falseLit.Value, whenTrue.Type, out var adaptedFalse))
+        {
+            whenFalse = new BoundLiteralExpression(whenFalse.Syntax, adaptedFalse);
+        }
     }
 
     /// <summary>
@@ -1330,6 +1366,29 @@ internal sealed partial class ExpressionBinder
                 boundRight = new BoundLiteralExpression(boundRight.Syntax, adaptedRightValue);
                 boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
             }
+        }
+
+        // Issue #1232: shift-count widening. C# allows the shift COUNT (the RHS
+        // of `<<` / `>>` / `<<=` / `>>=`) to be any integer that implicitly
+        // converts to `int` (sbyte/byte/short/ushort/char), promoting it to
+        // int32; the left operand alone determines the result type. G#'s shift
+        // operators take an `int32` count, so a narrower-order count previously
+        // produced GS0129. When the count's integer type implicitly widens to
+        // int32, widen it and re-bind rather than erroring. Counts that do NOT
+        // implicitly convert to int32 (uint32/int64/uint64/nint/nuint) still
+        // error — matching C#, which also rejects those count types. This must
+        // run BEFORE the generic directional widening below, which would
+        // otherwise widen the count to the LEFT operand's type and leave the
+        // shift unbound.
+        if (boundOperator == null
+            && (operatorKind == SyntaxKind.ShiftLeftToken || operatorKind == SyntaxKind.ShiftRightToken)
+            && IsIntegerType(boundLeft.Type)
+            && (IsIntegerType(boundRight.Type) || boundRight.Type == TypeSymbol.Char)
+            && boundRight.Type != TypeSymbol.Int32
+            && Conversion.Classify(boundRight.Type, TypeSymbol.Int32).IsImplicit)
+        {
+            boundRight = conversions.BindConversion(rightLocation, boundRight, TypeSymbol.Int32);
+            boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
         }
 
         // Issue #1150: directional implicit integer widening between two TYPED
