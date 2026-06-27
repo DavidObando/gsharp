@@ -4183,6 +4183,16 @@ internal sealed class DeclarationBinder
             };
         }
 
+        // Issue #1232: fold `<<`/`>>` with C#/CLR shift semantics. The shift
+        // count is masked by the LEFT operand's width (32-bit types → count &
+        // 0x1F, 64-bit types → count & 0x3F) and right-shift uses the operand's
+        // actual signedness (arithmetic for signed, logical for unsigned), so
+        // the compile-time result matches the runtime `shl`/`shr` emission.
+        if (kind is BoundBinaryOperatorKind.ShiftLeft or BoundBinaryOperatorKind.ShiftRight)
+        {
+            return FoldShift(kind, left, right);
+        }
+
         if (!TryToInt64(left, out var li) || !TryToInt64(right, out var ri))
         {
             return null;
@@ -4195,13 +4205,50 @@ internal sealed class DeclarationBinder
             BoundBinaryOperatorKind.Product => li * ri,
             BoundBinaryOperatorKind.Quotient when ri != 0 => li / ri,
             BoundBinaryOperatorKind.Remainder when ri != 0 => li % ri,
-            BoundBinaryOperatorKind.ShiftLeft => li << (int)ri,
-            BoundBinaryOperatorKind.ShiftRight => li >> (int)ri,
             BoundBinaryOperatorKind.BitwiseAnd => li & ri,
             BoundBinaryOperatorKind.BitwiseOr => li | ri,
             BoundBinaryOperatorKind.BitwiseXor => li ^ ri,
             _ => (object)null,
         };
+    }
+
+    /// <summary>
+    /// Issue #1232: folds a left/right shift over two constant operands using
+    /// the same semantics the runtime emits (bare CLR <c>shl</c>/<c>shr</c>). The shift
+    /// count is masked by the left operand's CLR width and the operation is
+    /// computed in the left operand's actual type so masking, wrap-around and
+    /// sign-extension exactly match C#. C# promotes operands narrower than
+    /// <c>int</c> to <c>int</c> (32-bit, mask 0x1F); <c>uint</c> is 32-bit;
+    /// <c>long</c>/<c>ulong</c> are 64-bit (mask 0x3F). 32-bit results are
+    /// widened back to <see cref="long"/> to preserve the Int64 return-shape the
+    /// other folded arithmetic ops use; 64-bit results keep their CLR type so
+    /// downstream narrowing to the declared const field type stays correct.
+    /// </summary>
+    private static object FoldShift(BoundBinaryOperatorKind kind, object left, object right)
+    {
+        if (!TryToInt64(right, out var rawCount))
+        {
+            return null;
+        }
+
+        var is64 = left is long or ulong;
+        var count = (int)(rawCount & (is64 ? 0x3F : 0x1F));
+        var isLeft = kind == BoundBinaryOperatorKind.ShiftLeft;
+
+        switch (left)
+        {
+            case long l:
+                return isLeft ? l << count : l >> count;
+            case ulong ul:
+                return isLeft ? ul << count : ul >> count;
+            case uint u:
+                return (long)(isLeft ? u << count : u >> count);
+            case int or short or sbyte or byte or ushort or char:
+                var i = System.Convert.ToInt32(left, System.Globalization.CultureInfo.InvariantCulture);
+                return (long)(isLeft ? i << count : i >> count);
+            default:
+                return null;
+        }
     }
 
     private static bool TryToInt64(object value, out long result)
