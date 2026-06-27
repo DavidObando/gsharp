@@ -85,6 +85,14 @@ element-nullable array `[]int32?` is backed by `Nullable<int32>[]` (and reads
 and writes round-trip a nil element), while a reference-type `[]object?` is
 backed by `object[]` (the wrapper is a binder-level annotation).
 
+`NullableTypeSymbol` renders its G# display name so that a nullable array binds
+the `?` to the array, not the element: a `Nullable(Slice(T))` displays as
+`[]?T` and a `Nullable(Array(N, T))` as `[N]?T` (all other underlying types keep
+the trailing-`?` form `T?`). Without this, both `Slice(Nullable(int32))` and
+`Nullable(Slice(int32))` rendered as `[]int32?`, making diagnostics such as
+GS0116 ambiguous and self-contradictory (it would report the nullable array as
+`[]int32?`, the spelling that now means the indexable element-nullable array).
+
 ### 4. `cs2gs` translation
 
 The G# printer renders an array reference's own nullability as `[]?T` (the `?`

@@ -121,6 +121,33 @@ public class Issue1212NullableElementArrayIndexTests
         Assert.Empty(diagnostics.Where(d => d.IsError));
     }
 
+    [Fact]
+    public void NullableArray_DisplayName_BindsQuestionToArray_NotElement()
+    {
+        // Issue #1212: the GS0116 message must render the whole-array nullable
+        // spelling `[]?int32`, NOT `[]int32?` (which now means nullable elements).
+        var diagnostics = Bind("""
+            package p
+            func N(a []?int32) int32 { return a[0] }
+            """);
+        var gs0116 = Assert.Single(diagnostics, d => d.Id == "GS0116");
+        Assert.Contains("[]?int32", gs0116.Message);
+        Assert.DoesNotContain("[]int32?", gs0116.Message);
+    }
+
+    [Fact]
+    public void NullableElementSlice_DisplayName_BindsQuestionToElement()
+    {
+        // The element-nullable spelling renders `[]int32?` (no conversion to string).
+        var diagnostics = Bind("""
+            package p
+            func F(a []int32?) string { return a }
+            """);
+        var gs0156 = Assert.Single(diagnostics, d => d.Id == "GS0156");
+        Assert.Contains("[]int32?", gs0156.Message);
+        Assert.DoesNotContain("[]?int32", gs0156.Message);
+    }
+
     private static ImmutableArray<Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
