@@ -43,6 +43,15 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// that parents the emitted <c>MemberRef</c> for a constrained call. Default
     /// for ordinary imported instance calls.
     /// </param>
+    /// <param name="isNonVirtualBaseCall">
+    /// Issue #1260: when <see langword="true"/>, this call originates from a
+    /// <c>base.Member(...)</c> (or <c>base.Prop</c>) access into an imported/BCL
+    /// base class and must be emitted with a non-virtual <c>call</c> (not
+    /// <c>callvirt</c>), exactly like C# <c>base.M(...)</c> — otherwise the
+    /// virtual dispatch would re-enter the derived override and recurse
+    /// infinitely. Default <see langword="false"/> for ordinary imported
+    /// instance calls.
+    /// </param>
     public BoundImportedInstanceCallExpression(
         SyntaxNode syntax,
         BoundExpression receiver,
@@ -52,7 +61,8 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
         ImmutableArray<RefKind> argumentRefKinds = default,
         ImmutableArray<TypeSymbol> typeArgumentSymbols = default,
         TypeParameterSymbol constrainedReceiverTypeParameter = null,
-        TypeSymbol constrainedInterfaceType = null)
+        TypeSymbol constrainedInterfaceType = null,
+        bool isNonVirtualBaseCall = false)
         : base(syntax)
     {
         Receiver = receiver;
@@ -63,6 +73,7 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
         TypeArgumentSymbols = typeArgumentSymbols.IsDefault ? default : typeArgumentSymbols;
         ConstrainedReceiverTypeParameter = constrainedReceiverTypeParameter;
         ConstrainedInterfaceType = constrainedInterfaceType;
+        IsNonVirtualBaseCall = isNonVirtualBaseCall;
     }
 
     /// <inheritdoc/>
@@ -121,4 +132,13 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
 
     /// <summary>Gets a value indicating whether this call dispatches through a type-parameter interface constraint (issue #943).</summary>
     public bool IsConstrainedTypeParameterCall => ConstrainedReceiverTypeParameter != null;
+
+    /// <summary>
+    /// Gets a value indicating whether this call originates from a
+    /// <c>base.Member(...)</c>/<c>base.Prop</c> access into an imported/BCL base
+    /// class (issue #1260), which the emitter lowers with a non-virtual
+    /// <c>call</c> rather than <c>callvirt</c> so it does not re-enter the derived
+    /// override.
+    /// </summary>
+    public bool IsNonVirtualBaseCall { get; }
 }

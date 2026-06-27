@@ -125,15 +125,19 @@ func standalone() int64 {
     }
 
     [Fact]
-    public void BaseDotProperty_NoBaseClass_DiagnosticGS0383()
+    public void BaseDotProperty_NoBaseClass_MemberNotFound_DiagnosticGS0384()
     {
+        // Issue #1260: a class deriving only from System.Object now treats
+        // System.Object as its base, so a base property access naming a member
+        // that does not exist on object is a member-not-found error (GS0384),
+        // not the "no base class" GS0383.
         var source = @"
 class Solo() {
     func Read() int64 { return base.RenderSize }
 }
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0383");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0384");
     }
 
     [Fact]

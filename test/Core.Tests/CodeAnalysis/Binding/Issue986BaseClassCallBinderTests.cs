@@ -117,15 +117,20 @@ func standalone() string {
     }
 
     [Fact]
-    public void BaseCall_NoBaseClass_DiagnosticGS0383()
+    public void BaseCall_NoBaseClass_MemberNotFound_DiagnosticGS0384()
     {
+        // Issue #1260: a class deriving only from System.Object now treats
+        // System.Object as its base (so base.ToString() etc. work). A base call
+        // naming a member that does NOT exist on object is therefore a
+        // member-not-found error (GS0384), matching C# CS0117 — not the
+        // "no base class" GS0383.
         var source = @"
 class Solo() {
     func Describe() string { return base.Describe() }
 }
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0383");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0384");
     }
 
     [Fact]

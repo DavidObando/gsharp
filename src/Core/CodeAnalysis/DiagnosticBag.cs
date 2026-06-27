@@ -4174,10 +4174,12 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <summary>
     /// Issue #986: GS0383 — a <c>base.M(...)</c> (or
     /// <c>base[BaseClass].M(...)</c>) call appears outside an instance member
-    /// of a class that has a base class, so there is no base implementation to
-    /// delegate to. Fires for top-level functions, <c>shared</c> statics,
-    /// structs (which have no base class), and classes that derive only from
-    /// <c>System.Object</c>.
+    /// of a class, so there is no <c>base</c> to delegate to. Fires for
+    /// top-level functions, <c>shared</c> statics, and structs (which have no
+    /// base class). Issue #1260: a class deriving only from <c>System.Object</c>
+    /// (or another imported/BCL base) no longer fires this — those inherited
+    /// members are reachable via <c>base</c> — and a missing member is reported
+    /// as GS0384 instead.
     /// </summary>
     /// <param name="location">The source location of the offending <c>base</c> expression.</param>
     /// <param name="enclosingTypeName">The display name of the enclosing type, or a placeholder for non-member contexts.</param>
@@ -4229,6 +4231,28 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             location,
             "GS0385",
             $"'base[{selectorTypeName}]' is not valid: '{selectorTypeName}' is not a base class of '{enclosingTypeName}'. Use the immediate base class name, or the plain 'base.Member(...)' form (issue #986).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Issue #1260: GS0413 — a <c>base.M(...)</c> (or <c>base.Prop</c>) access
+    /// targets an <c>abstract</c> member of an imported/BCL base class that has
+    /// no base implementation to delegate to (e.g. <c>base.Read(...)</c> where
+    /// <c>System.IO.Stream.Read(byte[],int,int)</c> is abstract). Mirrors C#'s
+    /// CS0205 ("cannot call an abstract base member").
+    /// </summary>
+    /// <param name="location">The source location of the offending member identifier.</param>
+    /// <param name="baseTypeName">The imported base type that declares the abstract member.</param>
+    /// <param name="memberName">The abstract member's name.</param>
+    public void ReportBaseClassCallAbstractMember(
+        TextLocation location,
+        string baseTypeName,
+        string memberName)
+    {
+        Report(
+            location,
+            "GS0413",
+            $"Cannot call the abstract base member '{baseTypeName}.{memberName}' via 'base'; it has no base implementation to delegate to (issue #1260).",
             DiagnosticSeverity.Error);
     }
 
