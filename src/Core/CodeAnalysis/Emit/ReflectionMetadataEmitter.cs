@@ -9751,12 +9751,26 @@ internal sealed class ReflectionMetadataEmitter
                 continue;
             }
 
+            // Issue #1268: when the implemented interface is a constructed
+            // generic (e.g. `TrackNumber : IData[TrackNumber]`), its
+            // `StaticMethods` are substituted instances that are NOT keyed in
+            // `MethodHandles`; only the open definition's slots are. Resolve
+            // each substituted slot back to its open counterpart for the
+            // MethodDef lookup, and parent the MethodImpl's declaration at the
+            // constructed interface's TypeSpec (a MemberRef) so the runtime can
+            // pair the override against `IData`1<TrackNumber>::Method`.
+            var isGenericIface = IsUserGenericInterfaceReference(iface);
             foreach (var slot in iface.StaticMethods)
             {
-                if (!this.cache.MethodHandles.TryGetValue(slot, out var slotHandle))
+                var openSlot = ResolveOpenInterfaceStaticMethod(iface, slot);
+                if (!this.cache.MethodHandles.TryGetValue(openSlot, out var slotDefHandle))
                 {
                     continue;
                 }
+
+                EntityHandle slotHandle = isGenericIface
+                    ? this.ResolveUserInterfaceInstanceMethodToken(iface, openSlot)
+                    : slotDefHandle;
 
                 FunctionSymbol implMatch = null;
                 foreach (var candidate in structSymbol.GetStaticMethods(slot.Name))
@@ -9784,6 +9798,42 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #1268: maps a (possibly substituted) static-virtual method slot
+    /// on a constructed generic interface back to its open declaration on the
+    /// interface definition. Returns <paramref name="slot"/> unchanged when the
+    /// interface is not a constructed instance, or when no open counterpart is
+    /// found.
+    /// </summary>
+    private static FunctionSymbol ResolveOpenInterfaceStaticMethod(InterfaceSymbol iface, FunctionSymbol slot)
+    {
+        var def = iface.Definition ?? iface;
+        if (ReferenceEquals(def, iface))
+        {
+            return slot;
+        }
+
+        var constructedStatics = iface.StaticMethods;
+        var defStatics = def.StaticMethods;
+        for (var i = 0; i < constructedStatics.Length; i++)
+        {
+            if (ReferenceEquals(constructedStatics[i], slot) && i < defStatics.Length)
+            {
+                return defStatics[i];
+            }
+        }
+
+        foreach (var m in defStatics)
+        {
+            if (m.Name == slot.Name && m.Parameters.Length == slot.Parameters.Length)
+            {
+                return m;
+            }
+        }
+
+        return slot;
+    }
+
+    /// <summary>
     /// ADR-0089 / issue #1019: emit <c>MethodImpl</c> rows pairing the
     /// implementer's static property accessor methods (<c>get_Name</c> /
     /// <c>set_Name</c>) to the matching static-virtual interface property
@@ -9807,12 +9857,20 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var iface in structSymbol.Interfaces)
         {
-            if (iface.Properties.IsDefaultOrEmpty)
+            // Issue #1268: a constructed generic interface does not surface its
+            // declared properties on the constructed instance (only methods are
+            // substituted) — walk the open definition's property table so the
+            // static-virtual property slots are found, and parent the
+            // MethodImpl declaration at the constructed TypeSpec for generic
+            // interfaces.
+            var defIface = iface.Definition ?? iface;
+            if (defIface.Properties.IsDefaultOrEmpty)
             {
                 continue;
             }
 
-            foreach (var slotProp in iface.Properties)
+            var isGenericIface = IsUserGenericInterfaceReference(iface);
+            foreach (var slotProp in defIface.Properties)
             {
                 if (!slotProp.IsStatic)
                 {
@@ -9843,12 +9901,18 @@ internal sealed class ReflectionMetadataEmitter
 
                 if (slotProp.HasGetter && slotAccessors.Getter.HasValue && implAccessors.Getter.HasValue)
                 {
-                    this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Getter.Value, slotAccessors.Getter.Value);
+                    EntityHandle getterDecl = isGenericIface && slotProp.GetterSymbol != null
+                        ? this.ResolveUserInterfaceInstanceMethodToken(iface, slotProp.GetterSymbol)
+                        : slotAccessors.Getter.Value;
+                    this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Getter.Value, getterDecl);
                 }
 
                 if (slotProp.HasSetter && slotAccessors.Setter.HasValue && implAccessors.Setter.HasValue)
                 {
-                    this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Setter.Value, slotAccessors.Setter.Value);
+                    EntityHandle setterDecl = isGenericIface && slotProp.SetterSymbol != null
+                        ? this.ResolveUserInterfaceInstanceMethodToken(iface, slotProp.SetterSymbol)
+                        : slotAccessors.Setter.Value;
+                    this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Setter.Value, setterDecl);
                 }
             }
         }

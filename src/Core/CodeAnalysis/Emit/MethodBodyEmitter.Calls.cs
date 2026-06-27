@@ -633,11 +633,35 @@ internal sealed partial class MethodBodyEmitter
         // both shapes via TypeParameterSymbol.IsMethodTypeParameter.
         var typeParamToken = this.outer.GetElementTypeToken(call.TypeParameter);
 
-        // Resolve the interface static-virtual MethodDef handle. The
+        // Resolve the interface static-virtual member handle. The
         // BoundConstrainedStaticCallExpression carries the *interface
         // slot* FunctionSymbol; MethodHandles maps interface slots to
         // their planned MethodDef rows.
-        if (!this.outer.cache.MethodHandles.TryGetValue(call.InterfaceMethod, out var slotHandle))
+        //
+        // Issue #1268: when the constraint is a constructed generic
+        // interface (e.g. `T : IData[int32]` or the self-referential
+        // `T : IData[T]`), the bound slot is either the substituted
+        // static method on the constructed instance (methods) or the open
+        // definition's static-virtual property getter (properties).
+        // Neither is keyed in `cache.MethodHandles` against the
+        // *constructed* interface, so the target must be encoded as a
+        // MemberRef parented at the constructed interface's TypeSpec — the
+        // same way constructed-generic instance interface calls are emitted
+        // (ADR-0087 R5 / issue #765). Resolve back to the open definition
+        // slot and parent the MemberRef at the constructed TypeSpec.
+        var constraintIface = call.TypeParameter.InterfaceConstraint;
+        EntityHandle slotHandle;
+        if (constraintIface != null
+            && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(constraintIface))
+        {
+            var openSlot = ResolveOpenInterfaceMethod(constraintIface, call.InterfaceMethod);
+            slotHandle = this.outer.ResolveUserInterfaceInstanceMethodToken(constraintIface, openSlot);
+        }
+        else if (this.outer.cache.MethodHandles.TryGetValue(call.InterfaceMethod, out var slotDef))
+        {
+            slotHandle = slotDef;
+        }
+        else
         {
             throw new InvalidOperationException(
                 $"Static-virtual interface method '{call.InterfaceMethod.Name}' has no emitted handle.");
