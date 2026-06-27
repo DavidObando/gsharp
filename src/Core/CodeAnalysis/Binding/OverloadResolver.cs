@@ -4650,24 +4650,49 @@ internal sealed class OverloadResolver
 
     private static Dictionary<TypeParameterSymbol, TypeSymbol> TryBuildReceiverSubstitution(TypeSymbol receiverType)
     {
-        if (receiverType is StructSymbol s
-            && !s.TypeArguments.IsDefaultOrEmpty
-            && s.Definition != null
-            && !ReferenceEquals(s.Definition, s))
+        if (receiverType is not StructSymbol start)
         {
-            var defTps = s.Definition.TypeParameters;
-            if (!defTps.IsDefaultOrEmpty && defTps.Length == s.TypeArguments.Length)
+            return null;
+        }
+
+        // Issue #1250: an inherited method's signature is declared in terms of
+        // its declaring class's type parameters (e.g. `LinkTo(next FilterBase[TOut])`
+        // on `TransformBase[TIn, TOut]`). When the method is reached through a
+        // derived receiver (`AudioFilter : TransformBase[FrameEntry, FrameEntry]`),
+        // the substitution must compose every hop of the base chain so the
+        // inherited type parameters (TIn/TOut) resolve to the concrete arguments
+        // seen at the most-derived level. Walk the chain accumulating each
+        // class's declaration-parameter -> (resolved) argument mappings, exactly
+        // like Conversion.DerivesFromConstructed threads its map for subtyping.
+        Dictionary<TypeParameterSymbol, TypeSymbol> map = null;
+        for (var c = start; c != null; c = c.BaseClass)
+        {
+            if (c.Definition == null
+                || ReferenceEquals(c.Definition, c)
+                || c.TypeArguments.IsDefaultOrEmpty
+                || c.Definition.TypeParameters.IsDefaultOrEmpty)
             {
-                var map = new Dictionary<TypeParameterSymbol, TypeSymbol>(defTps.Length);
-                for (var i = 0; i < defTps.Length; i++)
+                continue;
+            }
+
+            var defTps = c.Definition.TypeParameters;
+            var count = System.Math.Min(defTps.Length, c.TypeArguments.Length);
+            for (var i = 0; i < count; i++)
+            {
+                var arg = c.TypeArguments[i];
+
+                // Resolve an argument that is itself one of a more-derived
+                // class's type parameters through the running map.
+                if (arg is TypeParameterSymbol tpArg && map != null && map.TryGetValue(tpArg, out var resolved))
                 {
-                    map[defTps[i]] = s.TypeArguments[i];
+                    arg = resolved;
                 }
 
-                return map;
+                map ??= new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                map[defTps[i]] = arg;
             }
         }
 
-        return null;
+        return map;
     }
 }

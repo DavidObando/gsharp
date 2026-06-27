@@ -1328,6 +1328,30 @@ public sealed class StructSymbol : TypeSymbol
             return subst.TryGetValue(tp, out var concrete) ? concrete : type;
         }
 
+        // Issue #1250: a member type that is itself a constructed generic G#
+        // user class (e.g. a field/property/primary-ctor parameter typed
+        // `Holder[T]` on `Box[T]`) must have its own type arguments substituted
+        // so it surfaces as `Holder[int32]` on `Box[int32]`. Recurses so nested
+        // generics (`Holder[Holder[T]]`, `Dictionary[K, List[V]]`) work too.
+        if (type is StructSymbol ss
+            && ss.Definition != null
+            && !ReferenceEquals(ss.Definition, ss)
+            && !ss.TypeArguments.IsDefaultOrEmpty)
+        {
+            var substitutedStructArgs = ImmutableArray.CreateBuilder<TypeSymbol>(ss.TypeArguments.Length);
+            var structChanged = false;
+            for (var i = 0; i < ss.TypeArguments.Length; i++)
+            {
+                var substituted = SubstituteTypeForConstruction(ss.TypeArguments[i], subst);
+                substitutedStructArgs.Add(substituted);
+                structChanged |= !ReferenceEquals(substituted, ss.TypeArguments[i]);
+            }
+
+            return structChanged
+                ? StructSymbol.Construct(ss.Definition, substitutedStructArgs.MoveToImmutable())
+                : type;
+        }
+
         if (type is InterfaceSymbol iface && !iface.TypeArguments.IsDefaultOrEmpty)
         {
             var substitutedArgs = ImmutableArray.CreateBuilder<TypeSymbol>(iface.TypeArguments.Length);
