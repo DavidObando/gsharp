@@ -269,7 +269,11 @@ internal sealed partial class MethodBodyEmitter
                     this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds);
                     var instCallHandle = this.outer.GetMethodEntityHandle(instCall.Method, instCall.TypeArgumentSymbols, receiverType);
 
-                    this.il.OpCode(useCall ? ILOpCode.Call : ILOpCode.Callvirt);
+                    // Issue #1260: a `base.Member(...)` access into an imported/BCL
+                    // base class emits a non-virtual `call` (never `callvirt`),
+                    // exactly like C# `base.M(...)`. `callvirt` would re-dispatch
+                    // through the v-table and re-enter the derived override.
+                    this.il.OpCode((useCall || instCall.IsNonVirtualBaseCall) ? ILOpCode.Call : ILOpCode.Callvirt);
                     this.il.Token(instCallHandle);
 
                     // Issue #832: when the receiver is a symbolic open-generic

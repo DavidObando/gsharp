@@ -3303,6 +3303,8 @@ internal sealed partial class ExpressionBinder
     /// <param name="typeArgSymbols">Explicit symbolic type arguments, when present.</param>
     /// <param name="argumentNames">Named-argument labels, when present.</param>
     /// <param name="mapEnumArgumentsToBaseClr">When <see langword="true"/>, enum-typed arguments resolve as the inherited base CLR type (<c>System.Enum</c>) instead of their erased underlying primitive, so members such as <c>HasFlag(System.Enum)</c> match.</param>
+    /// <param name="nonVirtualBaseCall">Issue #1260: when <see langword="true"/>, the resolved call is a <c>base.M(...)</c> access into an imported/BCL base and is flagged so the emitter writes a non-virtual <c>call</c>; an <c>abstract</c> best match is reported as GS0413.</param>
+    /// <param name="baseMemberLocation">Issue #1260: the location of the member identifier for the GS0413 abstract-base diagnostic (used only when <paramref name="nonVirtualBaseCall"/> is set).</param>
     /// <returns>True when the call resolved (or reported a precise ambiguity).</returns>
     private bool TryResolveAndBindClrInstanceCall(
         BoundExpression receiver,
@@ -3315,7 +3317,9 @@ internal sealed partial class ExpressionBinder
         System.Type[] explicitTypeArgs,
         ImmutableArray<TypeSymbol> typeArgSymbols,
         ImmutableArray<string> argumentNames,
-        bool mapEnumArgumentsToBaseClr = false)
+        bool mapEnumArgumentsToBaseClr = false,
+        bool nonVirtualBaseCall = false,
+        TextLocation? baseMemberLocation = null)
     {
         result = null;
 
@@ -3374,6 +3378,16 @@ internal sealed partial class ExpressionBinder
         switch (resolution.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
+                // Issue #1260: a `base.M(...)` into an abstract BCL member has no
+                // base implementation to delegate to (e.g. Stream.Read). Match C#
+                // (CS0205) with a clean diagnostic instead of emitting invalid IL.
+                if (nonVirtualBaseCall && resolution.Best.IsAbstract)
+                {
+                    Diagnostics.ReportBaseClassCallAbstractMember(baseMemberLocation ?? ce.Location, importedBaseClr?.Name ?? "object", methodName);
+                    result = new BoundErrorExpression(null);
+                    return true;
+                }
+
                 var inheritedSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(receiver?.Type, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
                 var inheritedSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(resolution.Best, typeArgSymbols, inheritedSymbolicArgs);
                 var inheritedTypeArgSymbolsForCall = !inheritedSymbolicTypeArgs.IsDefault ? inheritedSymbolicTypeArgs : typeArgSymbols;
@@ -3393,7 +3407,7 @@ internal sealed partial class ExpressionBinder
                 var inheritedArguments = OverloadResolver.BuildOrderedCallArguments(inheritedConvertedArgs, inheritedDownstreamMapping, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
                 overloads.ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
-                BoundExpression inheritedCall = new BoundImportedInstanceCallExpression(null, inheritedUpdatedReceiver ?? receiver, resolution.Best, returnType, inheritedArguments, refKinds, inheritedTypeArgSymbolsForCall);
+                BoundExpression inheritedCall = new BoundImportedInstanceCallExpression(null, inheritedUpdatedReceiver ?? receiver, resolution.Best, returnType, inheritedArguments, refKinds, inheritedTypeArgSymbolsForCall, isNonVirtualBaseCall: nonVirtualBaseCall);
                 result = WrapWithHandlerPrelude(inheritedCall, inheritedHandlerPrelude, ce);
                 return true;
             case OverloadResolution.ResolutionOutcome.Ambiguous:
@@ -4190,20 +4204,31 @@ internal sealed partial class ExpressionBinder
         StructSymbol explicitBaseType,
         TextLocation selectorLocation)
     {
-        if (!TryResolveBaseSearchType(baseLocation, explicitBaseType, selectorLocation, out var searchBase))
+        if (!TryResolveBaseSearchType(baseLocation, explicitBaseType, selectorLocation, out var searchBase, out var clrBaseFallback))
         {
             return new BoundErrorExpression(null);
         }
 
         var methodName = ce.Identifier.Text;
 
-        // Resolve the overload set on the base chain (this-first from the
-        // search base), which walks grandparents — so the nearest base
+        // Resolve the overload set on the user base chain (this-first from the
+        // search base), which walks grandparents — so the nearest user base
         // implementation of an inherited member is chosen.
-        var baseOverloads = TypeMemberModel.GetMethods(searchBase, methodName, MemberQuery.Instance(MemberKinds.Method));
+        var baseOverloads = searchBase != null
+            ? TypeMemberModel.GetMethods(searchBase, methodName, MemberQuery.Instance(MemberKinds.Method))
+            : ImmutableArray<FunctionSymbol>.Empty;
         if (baseOverloads.IsEmpty)
         {
-            Diagnostics.ReportBaseClassCallMemberNotFound(ce.Identifier.Location, searchBase.Name, methodName);
+            // Issue #1260: no GSharp base declares the member (the class derives
+            // directly from a BCL base, or the nearest user base does not declare
+            // it). Fall back to the imported/BCL base type so `base.Dispose(...)`,
+            // `base.ToString()`, etc. resolve and emit a non-virtual `call`.
+            if (TryBindBaseClrInstanceCall(ce, methodName, clrBaseFallback, out var bclResult))
+            {
+                return bclResult;
+            }
+
+            Diagnostics.ReportBaseClassCallMemberNotFound(ce.Identifier.Location, searchBase?.Name ?? ClrTypeDisplayName(clrBaseFallback), methodName);
             return new BoundErrorExpression(null);
         }
 
@@ -4246,27 +4271,145 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Issue #1104: resolves the base class to start a <c>base.Member</c> search
-    /// from, shared by the base-method-call path
+    /// Issue #1260: binds a <c>base.M(args)</c> call into an imported/BCL base
+    /// class. Resolves the overload set against <paramref name="clrBase"/>
+    /// (which walks the CLR base chain), runs the shared imported-instance
+    /// overload resolution, and produces a
+    /// <see cref="BoundImportedInstanceCallExpression"/> flagged as a non-virtual
+    /// base call so the emitter writes <c>call</c> (not <c>callvirt</c>) — exactly
+    /// like C# <c>base.M(...)</c>. A base call to an <c>abstract</c> BCL member
+    /// (no implementation to delegate to) is reported as GS0413.
+    /// </summary>
+    /// <param name="ce">The method-call syntax.</param>
+    /// <param name="methodName">The invoked method name.</param>
+    /// <param name="clrBase">The CLR base type to resolve the inherited member against.</param>
+    /// <param name="result">The bound non-virtual base call (or an error node) when handled.</param>
+    /// <returns><see langword="true"/> when the call resolved (or a precise diagnostic was reported); <see langword="false"/> when no candidate member exists.</returns>
+    private bool TryBindBaseClrInstanceCall(
+        CallExpressionSyntax ce,
+        string methodName,
+        System.Type clrBase,
+        out BoundExpression result)
+    {
+        result = null;
+
+        var candidates = CollectBaseClrMethodCandidates(clrBase, methodName);
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        if (!overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames))
+        {
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(ce.Arguments.Count);
+        foreach (var argument in ce.Arguments)
+        {
+            boundArguments.Add(BindExpression(OverloadResolver.UnwrapNamedArgumentValue(argument)));
+        }
+
+        var arguments = boundArguments.ToImmutable();
+        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        return TryResolveAndBindClrInstanceCall(
+            receiver,
+            candidates,
+            clrBase,
+            methodName,
+            arguments,
+            ce,
+            out result,
+            explicitTypeArgs: null,
+            typeArgSymbols: default,
+            argumentNames: argumentNames,
+            nonVirtualBaseCall: true,
+            baseMemberLocation: ce.Identifier.Location);
+    }
+
+    /// <summary>Issue #1260: a readable display name for a CLR base type used in base-call member-not-found diagnostics.</summary>
+    private static string ClrTypeDisplayName(System.Type clrType) => clrType?.Name ?? "object";
+
+    /// <summary>
+    /// Issue #1260: collects the candidate inherited CLR instance methods named
+    /// <paramref name="methodName"/> that are reachable for a <c>base.M(...)</c>
+    /// call against <paramref name="clrBase"/>. Unlike the ordinary inherited-CLR
+    /// lookup (public only), a base call may target a <c>protected</c> virtual
+    /// member (e.g. <c>System.IO.Stream.Dispose(bool)</c>), so this includes
+    /// non-public methods but excludes members a derived type cannot legally
+    /// call via <c>base</c> (<c>private</c>, and other-assembly <c>internal</c>).
+    /// </summary>
+    /// <param name="clrBase">The CLR base type to search (its base chain is walked by reflection).</param>
+    /// <param name="methodName">The invoked method name.</param>
+    /// <returns>The deduplicated candidate methods (most-derived signature wins).</returns>
+    private static IReadOnlyList<MethodInfo> CollectBaseClrMethodCandidates(System.Type clrBase, string methodName)
+    {
+        var result = new List<MethodInfo>();
+        if (clrBase == null)
+        {
+            return result;
+        }
+
+        foreach (var m in ClrTypeUtilities.SafeGetMethods(clrBase, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+        {
+            if (!string.Equals(m.Name, methodName, System.StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // Accessible to a derived type via `base`: public, protected
+            // (Family), or protected-internal (FamilyOrAssembly). Exclude
+            // private and (cross-assembly) internal members.
+            if (!(m.IsPublic || m.IsFamily || m.IsFamilyOrAssembly))
+            {
+                continue;
+            }
+
+            if (!MemberLookup.HasSameSignature(result, m))
+            {
+                result.Add(m);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Issue #1104 / #1260: resolves the base class to start a
+    /// <c>base.Member</c> search from, shared by the base-method-call path
     /// (<see cref="BindBaseClassCall"/>) and the base-property-access path
     /// (<see cref="BindBaseClassPropertyRead"/> /
     /// <see cref="BindBaseClassPropertyWrite"/>). Reports GS0383 when the call
-    /// site is not an instance member of a class (or the class has no base) and
-    /// GS0385 when a bracketed <c>base[Type]</c> selector does not name an actual
-    /// base class.
+    /// site is not an instance member of a class and GS0385 when a bracketed
+    /// <c>base[Type]</c> selector does not name an actual base class.
+    /// <para>
+    /// Issue #1260: a class with no GSharp base class still inherits the members
+    /// of its imported/BCL base (or <c>System.Object</c>), so when there is no
+    /// user <see cref="StructSymbol"/> base this no longer reports GS0383.
+    /// Instead it returns with <paramref name="searchBase"/> <see langword="null"/>
+    /// and <paramref name="clrBaseFallback"/> set to the CLR base type to resolve
+    /// inherited members against. <paramref name="clrBaseFallback"/> is always
+    /// non-<see langword="null"/> on success (defaulting to <c>typeof(object)</c>)
+    /// so a multi-level user → user → BCL chain can fall back when the nearest
+    /// user base does not declare the member.
+    /// </para>
     /// </summary>
     /// <param name="baseLocation">The location of the <c>base</c> token (for GS0383).</param>
     /// <param name="explicitBaseType">The class named in <c>base[BaseClass]</c>, or <see langword="null"/> for the plain form.</param>
     /// <param name="selectorLocation">The location of the bracketed selector (for GS0385).</param>
-    /// <param name="searchBase">The resolved base class to start the member search from on success.</param>
-    /// <returns><see langword="true"/> when a valid base class was resolved.</returns>
+    /// <param name="searchBase">The resolved GSharp base class to start the member search from, or <see langword="null"/> when the class derives only from an imported/BCL base.</param>
+    /// <param name="clrBaseFallback">The CLR base type to resolve inherited BCL members against (issue #1260); always set on success.</param>
+    /// <returns><see langword="true"/> when the access site is a valid class instance member.</returns>
     private bool TryResolveBaseSearchType(
         TextLocation baseLocation,
         StructSymbol explicitBaseType,
         TextLocation selectorLocation,
-        out StructSymbol searchBase)
+        out StructSymbol searchBase,
+        out System.Type clrBaseFallback)
     {
         searchBase = null;
+        clrBaseFallback = null;
 
         // The access site must live in an instance member of a class. Top-level
         // functions, `shared` statics, and structs (no base class) all fail.
@@ -4295,13 +4438,36 @@ internal sealed partial class ExpressionBinder
             searchBase = enclosingType.BaseClass;
         }
 
-        if (searchBase == null)
+        // Issue #1260: the CLR base type used for inherited-BCL member lookup —
+        // walk from the search base (or the enclosing type when there is no user
+        // base) to the topmost user class and take its imported CLR base,
+        // defaulting to System.Object so universally-inherited members
+        // (ToString/Equals/GetHashCode/GetType) resolve.
+        clrBaseFallback = ResolveClrBaseSearchType(searchBase ?? enclosingType);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1260: returns the CLR base type whose inherited instance members a
+    /// <c>base.Member</c> access resolves against. Walks the GSharp base-class
+    /// chain from <paramref name="from"/> to the topmost user class and returns
+    /// that class's imported/BCL base (<see cref="StructSymbol.ImportedBaseType"/>),
+    /// defaulting to <c>typeof(object)</c> when no class in the chain declares an
+    /// imported base.
+    /// </summary>
+    /// <param name="from">The GSharp class to start walking from.</param>
+    /// <returns>The CLR base type for inherited-member lookup.</returns>
+    private static System.Type ResolveClrBaseSearchType(StructSymbol from)
+    {
+        for (var t = from; t != null; t = t.BaseClass)
         {
-            Diagnostics.ReportBaseClassCallHasNoBaseClass(baseLocation, enclosingType.Name);
-            return false;
+            if (t.ImportedBaseType?.ClrType is System.Type clr)
+            {
+                return clr;
+            }
         }
 
-        return true;
+        return typeof(object);
     }
 
     /// <summary>
@@ -4325,15 +4491,23 @@ internal sealed partial class ExpressionBinder
         StructSymbol explicitBaseType,
         TextLocation selectorLocation)
     {
-        if (!TryResolveBaseSearchType(baseLocation, explicitBaseType, selectorLocation, out var searchBase))
+        if (!TryResolveBaseSearchType(baseLocation, explicitBaseType, selectorLocation, out var searchBase, out var clrBaseFallback))
         {
             return new BoundErrorExpression(null);
         }
 
         var memberName = member.IdentifierToken.Text;
-        if (!TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
+        if (searchBase == null || !TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
         {
-            Diagnostics.ReportBaseClassCallMemberNotFound(member.IdentifierToken.Location, searchBase.Name, memberName);
+            // Issue #1260: no GSharp base declares the property — fall back to the
+            // imported/BCL base type so `base.Prop` reads the inherited member
+            // non-virtually (e.g. a virtual/overridable BCL property).
+            if (TryBindBaseClrPropertyRead(member, clrBaseFallback, out var bclRead))
+            {
+                return bclRead;
+            }
+
+            Diagnostics.ReportBaseClassCallMemberNotFound(member.IdentifierToken.Location, searchBase?.Name ?? ClrTypeDisplayName(clrBaseFallback), memberName);
             return new BoundErrorExpression(null);
         }
 
@@ -4386,14 +4560,22 @@ internal sealed partial class ExpressionBinder
         StructSymbol explicitBaseType,
         TextLocation selectorLocation)
     {
-        if (!TryResolveBaseSearchType(baseLocation, explicitBaseType, selectorLocation, out var searchBase))
+        if (!TryResolveBaseSearchType(baseLocation, explicitBaseType, selectorLocation, out var searchBase, out var clrBaseFallback))
         {
             return new BoundErrorExpression(null);
         }
 
-        if (!TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
+        if (searchBase == null || !TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
         {
-            Diagnostics.ReportBaseClassCallMemberNotFound(memberLocation, searchBase.Name, memberName);
+            // Issue #1260: no GSharp base declares the property — fall back to the
+            // imported/BCL base type so `base.Prop = value` writes the inherited
+            // member non-virtually.
+            if (TryBindBaseClrPropertyWrite(memberName, memberLocation, value, valueLocation, equalsLocation, clrBaseFallback, out var bclWrite))
+            {
+                return bclWrite;
+            }
+
+            Diagnostics.ReportBaseClassCallMemberNotFound(memberLocation, searchBase?.Name ?? ClrTypeDisplayName(clrBaseFallback), memberName);
             return new BoundErrorExpression(null);
         }
 
@@ -4417,6 +4599,122 @@ internal sealed partial class ExpressionBinder
             declaringType,
             prop.SetterSymbol,
             ImmutableArray.Create(converted));
+    }
+
+    /// <summary>
+    /// Issue #1260: binds a <c>base.Prop</c> READ into an imported/BCL base
+    /// class. Resolves the inherited CLR property's getter and wraps it in a
+    /// non-virtual <see cref="BoundImportedInstanceCallExpression"/> so the
+    /// emitter produces <c>call instance R BaseClass::get_Prop()</c> — exactly
+    /// like C# <c>base.Prop</c>. An <c>abstract</c> getter (no implementation)
+    /// is reported as GS0413.
+    /// </summary>
+    /// <param name="member">The member-name syntax (<c>Prop</c>).</param>
+    /// <param name="clrBase">The CLR base type to resolve the inherited property against.</param>
+    /// <param name="result">The bound non-virtual property read (or an error node) when handled.</param>
+    /// <returns><see langword="true"/> when a readable inherited property was found (or a precise diagnostic was reported).</returns>
+    private bool TryBindBaseClrPropertyRead(
+        NameExpressionSyntax member,
+        System.Type clrBase,
+        out BoundExpression result)
+    {
+        result = null;
+
+        var memberName = member.IdentifierToken.Text;
+        var clrProp = ClrTypeUtilities.SafeGetProperty(clrBase, memberName, BindingFlags.Public | BindingFlags.Instance);
+        if (clrProp == null || clrProp.GetIndexParameters().Length != 0 || !clrProp.CanRead)
+        {
+            return false;
+        }
+
+        var getter = clrProp.GetGetMethod(nonPublic: false);
+        if (getter == null)
+        {
+            return false;
+        }
+
+        if (getter.IsAbstract)
+        {
+            Diagnostics.ReportBaseClassCallAbstractMember(member.IdentifierToken.Location, clrProp.DeclaringType?.Name ?? clrBase.Name, memberName);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        result = new BoundImportedInstanceCallExpression(
+            member,
+            receiver,
+            getter,
+            TypeSymbol.FromClrType(clrProp.PropertyType),
+            ImmutableArray<BoundExpression>.Empty,
+            isNonVirtualBaseCall: true);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1260: binds a <c>base.Prop = value</c> WRITE into an imported/BCL
+    /// base class. Resolves the inherited CLR property's setter and wraps it in a
+    /// non-virtual <see cref="BoundImportedInstanceCallExpression"/> so the
+    /// emitter produces <c>call instance void BaseClass::set_Prop(value)</c>.
+    /// An <c>abstract</c> setter (no implementation) is reported as GS0413.
+    /// </summary>
+    /// <param name="memberName">The property name.</param>
+    /// <param name="memberLocation">The location of the property name token.</param>
+    /// <param name="value">The already-bound right-hand value expression.</param>
+    /// <param name="valueLocation">The location of the value expression (for conversion diagnostics).</param>
+    /// <param name="equalsLocation">The location of the <c>=</c> token (for GS cannot-assign).</param>
+    /// <param name="clrBase">The CLR base type to resolve the inherited property against.</param>
+    /// <param name="result">The bound non-virtual property write (or an error node) when handled.</param>
+    /// <returns><see langword="true"/> when a writable inherited property was found (or a precise diagnostic was reported).</returns>
+    private bool TryBindBaseClrPropertyWrite(
+        string memberName,
+        TextLocation memberLocation,
+        BoundExpression value,
+        TextLocation valueLocation,
+        TextLocation equalsLocation,
+        System.Type clrBase,
+        out BoundExpression result)
+    {
+        result = null;
+
+        var clrProp = ClrTypeUtilities.SafeGetProperty(clrBase, memberName, BindingFlags.Public | BindingFlags.Instance);
+        if (clrProp == null || clrProp.GetIndexParameters().Length != 0)
+        {
+            return false;
+        }
+
+        if (!clrProp.CanWrite)
+        {
+            Diagnostics.ReportCannotAssign(equalsLocation, memberName);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        var setter = clrProp.GetSetMethod(nonPublic: false);
+        if (setter == null)
+        {
+            Diagnostics.ReportCannotAssign(equalsLocation, memberName);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        if (setter.IsAbstract)
+        {
+            Diagnostics.ReportBaseClassCallAbstractMember(memberLocation, clrProp.DeclaringType?.Name ?? clrBase.Name, memberName);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        var converted = conversions.BindConversion(valueLocation, value, TypeSymbol.FromClrType(clrProp.PropertyType));
+        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        result = new BoundImportedInstanceCallExpression(
+            value.Syntax,
+            receiver,
+            setter,
+            TypeSymbol.Void,
+            ImmutableArray.Create(converted),
+            isNonVirtualBaseCall: true);
+        return true;
     }
 
     /// <summary>
