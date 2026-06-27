@@ -1181,214 +1181,12 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        var boundOperator = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type);
-
-        // issue #1144: constant integer-literal adaptation (C#-style
-        // constant-expression conversion). When exactly one operand is a
-        // compile-time constant integer literal and the OTHER operand is a
-        // (non-literal) integer type, the literal implicitly adapts to that
-        // integer type provided its value is representable there. This makes
-        // `a + 1` (a: uint32) bind as `uint32 + uint32` without touching the
-        // general conversion path — conversions between two TYPED integer
-        // operands still require an explicit cast. An OUT-OF-RANGE literal is
-        // NOT adapted, so the GS0129 path below still reports an error (the
-        // value is never silently wrapped/truncated). Placed before the
-        // nullable mixed-mode lifts so it takes precedence for the
-        // non-nullable integer-literal case (lifts don't apply there anyway).
-        if (boundOperator == null)
-        {
-            if (boundLeft is BoundLiteralExpression leftLit
-                && IsIntegerLiteralValue(leftLit.Value)
-                && boundRight is not BoundLiteralExpression
-                && IsIntegerType(boundRight.Type)
-                && TryAdaptIntegerLiteral(leftLit.Value, boundRight.Type, out var adaptedLeftValue))
-            {
-                boundLeft = new BoundLiteralExpression(boundLeft.Syntax, adaptedLeftValue);
-                boundOperator = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type);
-            }
-            else if (boundRight is BoundLiteralExpression rightLit
-                && IsIntegerLiteralValue(rightLit.Value)
-                && boundLeft is not BoundLiteralExpression
-                && IsIntegerType(boundLeft.Type)
-                && TryAdaptIntegerLiteral(rightLit.Value, boundLeft.Type, out var adaptedRightValue))
-            {
-                boundRight = new BoundLiteralExpression(boundRight.Syntax, adaptedRightValue);
-                boundOperator = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type);
-            }
-        }
-
-        // Issue #1150: directional implicit integer widening between two TYPED
-        // integer operands. When the initial per-type operator bind failed and
-        // NEITHER operand is a constant integer literal (those are owned by the
-        // #1144 adaptation above), but exactly one operand's integer type
-        // implicitly, losslessly widens to the OTHER operand's integer type
-        // (per the conversion lattice — e.g. `uint32 + int64`, `uint8 + int32`,
-        // `int32 + int64`), widen the narrower operand and re-bind the operator
-        // at the wider type. This mirrors C#'s implicit-conversion behaviour for
-        // mixed-width integer operands. Strictly directional and lossless: when
-        // NEITHER operand widens to the other (e.g. `int32` vs `uint32`, where
-        // neither is an implicit conversion to the other) the operator stays
-        // unbound and the GS0129 diagnostic below still fires. Narrowing always
-        // requires an explicit cast.
-        if (boundOperator == null
-            && boundLeft is not BoundLiteralExpression
-            && boundRight is not BoundLiteralExpression
-            && IsIntegerType(boundLeft.Type)
-            && IsIntegerType(boundRight.Type)
-            && boundLeft.Type != boundRight.Type)
-        {
-            if (Conversion.Classify(boundLeft.Type, boundRight.Type).IsImplicit)
-            {
-                boundLeft = conversions.BindConversion(syntax.Left.Location, boundLeft, boundRight.Type);
-                boundOperator = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type);
-            }
-            else if (Conversion.Classify(boundRight.Type, boundLeft.Type).IsImplicit)
-            {
-                boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundLeft.Type);
-                boundOperator = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type);
-            }
-        }
-
-        // PR N-4 / §6.1 / C# §7.3.7: mixed-mode lift. When one operand is
-        // a value-type Nullable<T> and the other is its underlying T, lift
-        // T to T? via the existing implicit conversion and re-bind. The
-        // re-bound operator hits the lifted arm in BoundBinaryOperator.Bind
-        // which returns a (T?, T?) operator; the converted operands then
-        // match its declared operand types so emit can rely on both sides
-        // being Nullable<T> at the operator site.
-        if (boundOperator == null)
-        {
-            if (boundLeft.Type is NullableTypeSymbol leftNullable
-                && leftNullable.UnderlyingType?.ClrType is { IsValueType: true }
-                && boundRight.Type == leftNullable.UnderlyingType)
-            {
-                var lifted = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, leftNullable, leftNullable);
-                if (lifted != null)
-                {
-                    boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, leftNullable);
-                    boundOperator = lifted;
-                }
-            }
-            else if (boundRight.Type is NullableTypeSymbol rightNullable
-                && rightNullable.UnderlyingType?.ClrType is { IsValueType: true }
-                && boundLeft.Type == rightNullable.UnderlyingType)
-            {
-                var lifted = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, rightNullable, rightNullable);
-                if (lifted != null)
-                {
-                    boundLeft = conversions.BindConversion(syntax.Left.Location, boundLeft, rightNullable);
-                    boundOperator = lifted;
-                }
-            }
-        }
-
-        // 6.6 / §6.1: mixed-mode lift for heterogeneous nullable operands.
-        // Handles enum? + int32 → lift int32 to int32?, then re-bind as
-        // (enum?, int32?) which the heterogeneous lifted arm resolves.
-        // Also handles int32 + enum? → lift int32 to int32?.
-        if (boundOperator == null)
-        {
-            if (boundLeft.Type is NullableTypeSymbol leftN2
-                && boundRight.Type is not NullableTypeSymbol
-                && boundRight.Type?.ClrType is { IsValueType: true })
-            {
-                var rightLifted = NullableTypeSymbol.Get(boundRight.Type);
-                var lifted = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, leftN2, rightLifted);
-                if (lifted != null)
-                {
-                    boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, rightLifted);
-                    boundOperator = lifted;
-                }
-            }
-            else if (boundRight.Type is NullableTypeSymbol rightN2
-                && boundLeft.Type is not NullableTypeSymbol
-                && boundLeft.Type?.ClrType is { IsValueType: true })
-            {
-                var leftLifted = NullableTypeSymbol.Get(boundLeft.Type);
-                var lifted = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, leftLifted, rightN2);
-                if (lifted != null)
-                {
-                    boundLeft = conversions.BindConversion(syntax.Left.Location, boundLeft, leftLifted);
-                    boundOperator = lifted;
-                }
-            }
-        }
-
-        // Issue #1236: lifted (nullable) numeric widening + constant-integer-
-        // literal adaptation. The non-nullable paths above (#1144 literal
-        // adaptation, #1150 directional widening) only fire when BOTH operands
-        // are non-nullable integer types, so a nullable numeric operand never
-        // benefited from the implicit lossless widening lattice — only an exact
-        // same-underlying lifted operator was defined. Mirror those same rules
-        // on the UNDERLYING numeric types when at least one operand is a value-
-        // type Nullable<T>: pick a common underlying integer type via constant-
-        // literal adaptation or the directional widening lattice, convert both
-        // operands to the lifted (nullable) common type, and bind the
-        // homogeneous lifted operator. The inserted conversions are an implicit
-        // `T → T?` wrap (non-nullable side) and an implicit lifted `T1? → T2?`
-        // widening (nullable side, classified in Conversion.Classify); emit and
-        // the evaluator unwrap, convert the underlying value, and re-wrap,
-        // preserving the existing nullable-lifted operator null semantics. An
-        // out-of-range integer literal still fails adaptation (so GS0129 fires),
-        // and a pair where NEITHER underlying widens to the other (e.g.
-        // `int32? == uint32?`) stays unbound — consistent with the non-nullable
-        // forms.
-        if (boundOperator == null
-            && (boundLeft.Type is NullableTypeSymbol || boundRight.Type is NullableTypeSymbol))
-        {
-            var leftUnderlying = boundLeft.Type is NullableTypeSymbol leftNum ? leftNum.UnderlyingType : boundLeft.Type;
-            var rightUnderlying = boundRight.Type is NullableTypeSymbol rightNum ? rightNum.UnderlyingType : boundRight.Type;
-            TypeSymbol commonUnderlying = null;
-
-            if (leftUnderlying != null && rightUnderlying != null)
-            {
-                if (boundLeft is BoundLiteralExpression leftNumLit
-                    && IsIntegerLiteralValue(leftNumLit.Value)
-                    && boundRight is not BoundLiteralExpression
-                    && IsIntegerType(rightUnderlying)
-                    && TryAdaptIntegerLiteral(leftNumLit.Value, rightUnderlying, out var adaptedLeftNum))
-                {
-                    boundLeft = new BoundLiteralExpression(boundLeft.Syntax, adaptedLeftNum);
-                    commonUnderlying = rightUnderlying;
-                }
-                else if (boundRight is BoundLiteralExpression rightNumLit
-                    && IsIntegerLiteralValue(rightNumLit.Value)
-                    && boundLeft is not BoundLiteralExpression
-                    && IsIntegerType(leftUnderlying)
-                    && TryAdaptIntegerLiteral(rightNumLit.Value, leftUnderlying, out var adaptedRightNum))
-                {
-                    boundRight = new BoundLiteralExpression(boundRight.Syntax, adaptedRightNum);
-                    commonUnderlying = leftUnderlying;
-                }
-                else if (IsIntegerType(leftUnderlying)
-                    && IsIntegerType(rightUnderlying)
-                    && leftUnderlying != rightUnderlying
-                    && boundLeft is not BoundLiteralExpression
-                    && boundRight is not BoundLiteralExpression)
-                {
-                    if (Conversion.Classify(leftUnderlying, rightUnderlying).IsImplicit)
-                    {
-                        commonUnderlying = rightUnderlying;
-                    }
-                    else if (Conversion.Classify(rightUnderlying, leftUnderlying).IsImplicit)
-                    {
-                        commonUnderlying = leftUnderlying;
-                    }
-                }
-            }
-
-            if (commonUnderlying != null)
-            {
-                var commonNullable = NullableTypeSymbol.Get(commonUnderlying);
-                var lifted = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, commonNullable, commonNullable);
-                if (lifted != null)
-                {
-                    boundLeft = conversions.BindConversion(syntax.Left.Location, boundLeft, commonNullable);
-                    boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, commonNullable);
-                    boundOperator = lifted;
-                }
-            }
-        }
+        var boundOperator = BindBinaryOperatorWithNumericAdaptation(
+            syntax.OperatorToken.Kind,
+            ref boundLeft,
+            ref boundRight,
+            syntax.Left.Location,
+            syntax.Right.Location);
 
         if (boundOperator == null)
         {
@@ -1480,6 +1278,204 @@ internal sealed partial class ExpressionBinder
         }
 
         return new BoundBinaryExpression(null, boundLeft, boundOperator, boundRight);
+    }
+
+    /// <summary>
+    /// Issue #1246: shared numeric-operand adaptation for binding a binary
+    /// operator. Attempts an exact per-type bind first, then — when that fails —
+    /// applies, in order, the same adaptations <see cref="BindBinaryExpression"/>
+    /// performs: constant-integer-literal adaptation (#1144), directional
+    /// implicit integer widening (#1150), the value-type and heterogeneous
+    /// nullable mixed-mode lifts, and lifted (nullable) numeric widening (#1236).
+    /// Any inserted conversions mutate <paramref name="boundLeft"/> /
+    /// <paramref name="boundRight"/> in place. This is factored out so compound
+    /// assignment (<c>a op= b</c>) widens its right operand exactly like the
+    /// equivalent binary expression <c>a op b</c>. Returns the bound operator,
+    /// or <see langword="null"/> when no numeric adaptation makes the operator
+    /// bind (the caller then reports GS0129 or tries user/CLR operator
+    /// fallbacks).
+    /// </summary>
+    private BoundBinaryOperator BindBinaryOperatorWithNumericAdaptation(
+        SyntaxKind operatorKind,
+        ref BoundExpression boundLeft,
+        ref BoundExpression boundRight,
+        TextLocation leftLocation,
+        TextLocation rightLocation)
+    {
+        var boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+
+        // issue #1144: constant integer-literal adaptation (C#-style
+        // constant-expression conversion). When exactly one operand is a
+        // compile-time constant integer literal and the OTHER operand is a
+        // (non-literal) integer type, the literal implicitly adapts to that
+        // integer type provided its value is representable there. An OUT-OF-RANGE
+        // literal is NOT adapted, so the GS0129 path still reports an error.
+        if (boundOperator == null)
+        {
+            if (boundLeft is BoundLiteralExpression leftLit
+                && IsIntegerLiteralValue(leftLit.Value)
+                && boundRight is not BoundLiteralExpression
+                && IsIntegerType(boundRight.Type)
+                && TryAdaptIntegerLiteral(leftLit.Value, boundRight.Type, out var adaptedLeftValue))
+            {
+                boundLeft = new BoundLiteralExpression(boundLeft.Syntax, adaptedLeftValue);
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+            }
+            else if (boundRight is BoundLiteralExpression rightLit
+                && IsIntegerLiteralValue(rightLit.Value)
+                && boundLeft is not BoundLiteralExpression
+                && IsIntegerType(boundLeft.Type)
+                && TryAdaptIntegerLiteral(rightLit.Value, boundLeft.Type, out var adaptedRightValue))
+            {
+                boundRight = new BoundLiteralExpression(boundRight.Syntax, adaptedRightValue);
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+            }
+        }
+
+        // Issue #1150: directional implicit integer widening between two TYPED
+        // integer operands. When the initial per-type operator bind failed and
+        // NEITHER operand is a constant integer literal, but exactly one
+        // operand's integer type implicitly, losslessly widens to the OTHER
+        // operand's integer type, widen the narrower operand and re-bind. When
+        // NEITHER operand widens to the other the operator stays unbound.
+        if (boundOperator == null
+            && boundLeft is not BoundLiteralExpression
+            && boundRight is not BoundLiteralExpression
+            && IsIntegerType(boundLeft.Type)
+            && IsIntegerType(boundRight.Type)
+            && boundLeft.Type != boundRight.Type)
+        {
+            if (Conversion.Classify(boundLeft.Type, boundRight.Type).IsImplicit)
+            {
+                boundLeft = conversions.BindConversion(leftLocation, boundLeft, boundRight.Type);
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+            }
+            else if (Conversion.Classify(boundRight.Type, boundLeft.Type).IsImplicit)
+            {
+                boundRight = conversions.BindConversion(rightLocation, boundRight, boundLeft.Type);
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+            }
+        }
+
+        // PR N-4 / §6.1 / C# §7.3.7: mixed-mode lift. When one operand is a
+        // value-type Nullable<T> and the other is its underlying T, lift T to T?
+        // and re-bind the homogeneous lifted operator.
+        if (boundOperator == null)
+        {
+            if (boundLeft.Type is NullableTypeSymbol leftNullable
+                && leftNullable.UnderlyingType?.ClrType is { IsValueType: true }
+                && boundRight.Type == leftNullable.UnderlyingType)
+            {
+                var lifted = BoundBinaryOperator.Bind(operatorKind, leftNullable, leftNullable);
+                if (lifted != null)
+                {
+                    boundRight = conversions.BindConversion(rightLocation, boundRight, leftNullable);
+                    boundOperator = lifted;
+                }
+            }
+            else if (boundRight.Type is NullableTypeSymbol rightNullable
+                && rightNullable.UnderlyingType?.ClrType is { IsValueType: true }
+                && boundLeft.Type == rightNullable.UnderlyingType)
+            {
+                var lifted = BoundBinaryOperator.Bind(operatorKind, rightNullable, rightNullable);
+                if (lifted != null)
+                {
+                    boundLeft = conversions.BindConversion(leftLocation, boundLeft, rightNullable);
+                    boundOperator = lifted;
+                }
+            }
+        }
+
+        // 6.6 / §6.1: mixed-mode lift for heterogeneous nullable operands.
+        if (boundOperator == null)
+        {
+            if (boundLeft.Type is NullableTypeSymbol leftN2
+                && boundRight.Type is not NullableTypeSymbol
+                && boundRight.Type?.ClrType is { IsValueType: true })
+            {
+                var rightLifted = NullableTypeSymbol.Get(boundRight.Type);
+                var lifted = BoundBinaryOperator.Bind(operatorKind, leftN2, rightLifted);
+                if (lifted != null)
+                {
+                    boundRight = conversions.BindConversion(rightLocation, boundRight, rightLifted);
+                    boundOperator = lifted;
+                }
+            }
+            else if (boundRight.Type is NullableTypeSymbol rightN2
+                && boundLeft.Type is not NullableTypeSymbol
+                && boundLeft.Type?.ClrType is { IsValueType: true })
+            {
+                var leftLifted = NullableTypeSymbol.Get(boundLeft.Type);
+                var lifted = BoundBinaryOperator.Bind(operatorKind, leftLifted, rightN2);
+                if (lifted != null)
+                {
+                    boundLeft = conversions.BindConversion(leftLocation, boundLeft, leftLifted);
+                    boundOperator = lifted;
+                }
+            }
+        }
+
+        // Issue #1236: lifted (nullable) numeric widening + constant-integer-
+        // literal adaptation on the UNDERLYING numeric types when at least one
+        // operand is a value-type Nullable<T>.
+        if (boundOperator == null
+            && (boundLeft.Type is NullableTypeSymbol || boundRight.Type is NullableTypeSymbol))
+        {
+            var leftUnderlying = boundLeft.Type is NullableTypeSymbol leftNum ? leftNum.UnderlyingType : boundLeft.Type;
+            var rightUnderlying = boundRight.Type is NullableTypeSymbol rightNum ? rightNum.UnderlyingType : boundRight.Type;
+            TypeSymbol commonUnderlying = null;
+
+            if (leftUnderlying != null && rightUnderlying != null)
+            {
+                if (boundLeft is BoundLiteralExpression leftNumLit
+                    && IsIntegerLiteralValue(leftNumLit.Value)
+                    && boundRight is not BoundLiteralExpression
+                    && IsIntegerType(rightUnderlying)
+                    && TryAdaptIntegerLiteral(leftNumLit.Value, rightUnderlying, out var adaptedLeftNum))
+                {
+                    boundLeft = new BoundLiteralExpression(boundLeft.Syntax, adaptedLeftNum);
+                    commonUnderlying = rightUnderlying;
+                }
+                else if (boundRight is BoundLiteralExpression rightNumLit
+                    && IsIntegerLiteralValue(rightNumLit.Value)
+                    && boundLeft is not BoundLiteralExpression
+                    && IsIntegerType(leftUnderlying)
+                    && TryAdaptIntegerLiteral(rightNumLit.Value, leftUnderlying, out var adaptedRightNum))
+                {
+                    boundRight = new BoundLiteralExpression(boundRight.Syntax, adaptedRightNum);
+                    commonUnderlying = leftUnderlying;
+                }
+                else if (IsIntegerType(leftUnderlying)
+                    && IsIntegerType(rightUnderlying)
+                    && leftUnderlying != rightUnderlying
+                    && boundLeft is not BoundLiteralExpression
+                    && boundRight is not BoundLiteralExpression)
+                {
+                    if (Conversion.Classify(leftUnderlying, rightUnderlying).IsImplicit)
+                    {
+                        commonUnderlying = rightUnderlying;
+                    }
+                    else if (Conversion.Classify(rightUnderlying, leftUnderlying).IsImplicit)
+                    {
+                        commonUnderlying = leftUnderlying;
+                    }
+                }
+            }
+
+            if (commonUnderlying != null)
+            {
+                var commonNullable = NullableTypeSymbol.Get(commonUnderlying);
+                var lifted = BoundBinaryOperator.Bind(operatorKind, commonNullable, commonNullable);
+                if (lifted != null)
+                {
+                    boundLeft = conversions.BindConversion(leftLocation, boundLeft, commonNullable);
+                    boundRight = conversions.BindConversion(rightLocation, boundRight, commonNullable);
+                    boundOperator = lifted;
+                }
+            }
+        }
+
+        return boundOperator;
     }
 
     // issue #1144: the ten G# integer primitive types (signed + unsigned,
