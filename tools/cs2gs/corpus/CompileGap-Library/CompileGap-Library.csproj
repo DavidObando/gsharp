@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Corpus.CompileGap</RootNamespace>
+    <AssemblyName>CompileGap-Library</AssemblyName>
+  </PropertyGroup>
+
+</Project>

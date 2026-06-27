@@ -3455,6 +3455,33 @@ internal sealed partial class ExpressionBinder
         return TypeSymbol.FromClrType(propertyType);
     }
 
+    // Issue #1301: resolve the element type of a closed indexer against the
+    // receiver's symbolic type arguments, mirroring the normal `this[int]`
+    // index path. Routing the from-end (`a[^n]`) / `System.Index` indexer
+    // paths through here keeps a user-defined element type `T` (whose
+    // `ClrType` is null during binding) typed as `T` instead of erasing to
+    // `object`.
+    private static TypeSymbol ResolveIndexerElementType(TypeSymbol targetType, PropertyInfo indexer)
+    {
+        if (targetType is NullabilityAnnotatedTypeSymbol annot && annot.ClrType is System.Type)
+        {
+            return annot.GetTypeArgumentSymbolForClrType(indexer.PropertyType);
+        }
+
+        if (targetType is ImportedTypeSymbol imported)
+        {
+            return MapErasedIndexerElementType(imported, indexer);
+        }
+
+        var propertyType = indexer.PropertyType;
+        if (propertyType.IsByRef)
+        {
+            return ByRefTypeSymbol.Get(TypeSymbol.FromClrType(propertyType.GetElementType()!));
+        }
+
+        return TypeSymbol.FromClrType(propertyType);
+    }
+
     private static TypeSymbol MapClrMemberType(System.Type clrType)
     {
         if (clrType != null && clrType.IsByRef)
@@ -3648,7 +3675,7 @@ internal sealed partial class ExpressionBinder
                     indexCtor,
                     ImmutableArray.Create<BoundExpression>(offset, new BoundLiteralExpression(null, true)),
                     indexSym);
-                var resultType = TypeSymbol.FromClrType(indexIndexer.PropertyType);
+                var resultType = ResolveIndexerElementType(target.Type, indexIndexer);
                 return new BoundClrIndexExpression(fromEnd, target, indexIndexer, ImmutableArray.Create<BoundExpression>(indexValue), resultType);
             }
 
@@ -3658,7 +3685,7 @@ internal sealed partial class ExpressionBinder
                 var srcLocal = DeclareRangeTemp("src", target.Type, target, statements);
                 var lengthExpr = new BoundClrPropertyAccessExpression(null, new BoundVariableExpression(null, srcLocal), lengthMember, TypeSymbol.Int32);
                 var idx = MakeFromEndOffset(fromEnd, lengthExpr);
-                var resultType = TypeSymbol.FromClrType(intIndexer.PropertyType);
+                var resultType = ResolveIndexerElementType(target.Type, intIndexer);
                 var read = new BoundClrIndexExpression(
                     null,
                     new BoundVariableExpression(null, srcLocal),
