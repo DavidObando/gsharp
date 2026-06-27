@@ -421,6 +421,29 @@ namespace Demo
         Assert.Contains("var t1 Box? = nil", printed);
     }
 
+    /// <summary>
+    /// A C# constant `or` pattern on a nullable numeric (`b is 11 or 12`) lowers to
+    /// equality tests whose literals are retyped to the receiver's numeric type, so
+    /// the result type-checks under G#'s no-implicit-promotion rule (a bare
+    /// `b == 11` of `uint8?` vs `int32` is GS0129).
+    /// </summary>
+    [Fact]
+    public void ConstantOrPattern_NullableNumericReceiver_RetypesLiterals()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class C
+    {
+        public byte? Mode { get; set; }
+        public bool M() => Mode is 11 or 12 or 13;
+    }
+}");
+        Assert.Contains("Mode == (11 as uint8?)", printed);
+        Assert.Contains("Mode == (12 as uint8?)", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
