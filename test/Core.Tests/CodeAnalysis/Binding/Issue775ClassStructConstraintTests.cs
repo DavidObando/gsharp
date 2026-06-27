@@ -68,6 +68,54 @@ First[string](""hi"")
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    [Theory]
+    [InlineData("int32")]
+    [InlineData("uint32")]
+    [InlineData("uint16")]
+    [InlineData("uint8")]
+    [InlineData("int64")]
+    [InlineData("float64")]
+    [InlineData("char")]
+    [InlineData("bool")]
+    [InlineData("nint")]
+    public void StructConstraint_PrimitiveValueTypeArgument_Accepted(string primitive)
+    {
+        // Issue #1287: every non-nullable CLR value type — not just int32/bool —
+        // must satisfy the `struct` constraint. None of these should report
+        // GS0152.
+        var source = $@"
+func First[T struct](x T) T {{ return x }}
+func Use(v {primitive}) {primitive} {{ return First[{primitive}](v) }}
+";
+        var result = Evaluate(source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0152");
+    }
+
+    [Fact]
+    public void StructConstraint_UserStructArgument_Accepted()
+    {
+        var source = @"
+struct S { prop A int32 { get; init; } }
+func First[T struct](x T) T { return x }
+func Use(v S) S { return First[S](v) }
+";
+        var result = Evaluate(source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0152");
+    }
+
+    [Fact]
+    public void StructConstraint_ReferenceTypeArgument_ReportsGS0152()
+    {
+        // Issue #1287: reference-type primitives (e.g. string) must still be
+        // rejected by the `struct` constraint.
+        var source = @"
+func First[T struct](x T) T { return x }
+func Use(v string) string { return First[string](v) }
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0152");
+    }
+
     [Fact]
     public void NewConstraint_DefaultCtorTypeArgument_Accepted()
     {
