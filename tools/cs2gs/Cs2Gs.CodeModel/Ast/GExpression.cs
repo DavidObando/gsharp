@@ -307,6 +307,33 @@ public sealed class ArrayLiteralExpression : GExpression
 }
 
 /// <summary>
+/// A runtime/zero-initialised array allocation written in the native G# form
+/// <c>[n]T</c> (issue #1272). It allocates a zero-initialised slice <c>[]T</c>
+/// of length <c>n</c> — the idiomatic replacement for the BCL call
+/// <c>System.GC.AllocateArray[T](n)</c> that the C# <c>new T[n]</c> form (no
+/// initializer) was previously translated to.
+/// </summary>
+public sealed class ArrayAllocationExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ArrayAllocationExpression"/> class.
+    /// </summary>
+    /// <param name="elementType">The element type.</param>
+    /// <param name="length">The length expression.</param>
+    public ArrayAllocationExpression(GTypeReference elementType, GExpression length)
+    {
+        ElementType = elementType;
+        Length = length;
+    }
+
+    /// <summary>Gets the element type.</summary>
+    public GTypeReference ElementType { get; }
+
+    /// <summary>Gets the length expression.</summary>
+    public GExpression Length { get; }
+}
+
+/// <summary>
 /// A width-bearing numeric/value conversion written in the canonical G#
 /// conversion-call form <c>Type(expr)</c> (spec §Types and values; e.g.
 /// <c>uint8(5)</c>, <c>int32(expr)</c>). The C# explicit cast <c>(int)expr</c>

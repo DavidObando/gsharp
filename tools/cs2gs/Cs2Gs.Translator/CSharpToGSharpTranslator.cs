@@ -1095,7 +1095,7 @@ public sealed class CSharpToGSharpTranslator
                     // an assignment must remain in the constructor body — keep it as a
                     // residual `init(...)` statement instead of hoisting it to a field
                     // initializer (defect: GS0125 'Variable doesn't exist' + cascade
-                    // GS0159; e.g. `buffer = AllocateArray[T](InputBufferSize)` where
+                    // GS0159; e.g. `buffer = [InputBufferSize]T` where
                     // `InputBufferSize` is an abstract instance property). Static /
                     // constant RHS assignments still hoist normally.
                     if (this.ReferencesInstanceMember(assignment.Right, symbol))
@@ -3237,10 +3237,10 @@ public sealed class CSharpToGSharpTranslator
         }
 
         // C# array-creation lengths accept any integral type (`new T[uint]`,
-        // `new T[long]`, …), but the emitted `System.GC.AllocateArray[T]` takes an
-        // `int32`. Coerce a non-`int32` numeric length to int32 via the
-        // conversion-call form so the allocation binds (avoids GS0159). A nullable
-        // or non-numeric length is left unchanged.
+        // `new T[long]`, …), but the native G# allocation form `[n]T` (issue
+        // #1272) takes an `int32`. Coerce a non-`int32` numeric length to int32
+        // via the conversion-call form so the allocation binds. A nullable or
+        // non-numeric length is left unchanged.
         private GExpression CoerceLengthToInt32(
             ExpressionSyntax lengthSyntax, GExpression length)
         {
@@ -5171,13 +5171,12 @@ public sealed class CSharpToGSharpTranslator
                     creation.Initializer.Expressions.Select(this.TranslateExpression).ToList());
             }
 
-            // `new T[n]` (runtime/constant length, no initializer) → the canonical
-            // zero-initialised allocation `System.GC.AllocateArray[T](n)`, which
-            // returns a `T[]` of length `n` (the Go-style `make([]T, n)` form is a
-            // documented gsc gap, ADR-0083). C# accepts any integral length
-            // (`uint`/`long`/…); `GC.AllocateArray[T]` takes an `int32`, so a
-            // non-`int32` numeric length is coerced via the conversion-call form
-            // (`int32(n)`) to avoid GS0159 (no matching overload).
+            // `new T[n]` (runtime/constant length, no initializer) → the native
+            // G# zero-initialised allocation form `[n]T` (issue #1272), which
+            // yields a zero-initialised slice `[]T` of length `n`. C# accepts
+            // any integral length (`uint`/`long`/…); gsc's `[n]T` requires an
+            // `int32` length, so a non-`int32` numeric length is coerced via the
+            // conversion-call form (`int32(n)`).
             GExpression length;
             if (creation.Type.RankSpecifiers.Count > 0 &&
                 creation.Type.RankSpecifiers[0].Sizes.Count > 0 &&
@@ -5191,12 +5190,7 @@ public sealed class CSharpToGSharpTranslator
                 length = LiteralExpression.Int("0");
             }
 
-            return new InvocationExpression(
-                new MemberAccessExpression(
-                    new MemberAccessExpression(new IdentifierExpression("System"), "GC"),
-                    "AllocateArray"),
-                new List<GExpression> { length },
-                new List<GTypeReference> { elementType });
+            return new ArrayAllocationExpression(elementType, length);
         }
 
         private GExpression TranslateStackAlloc(StackAllocArrayCreationExpressionSyntax node)

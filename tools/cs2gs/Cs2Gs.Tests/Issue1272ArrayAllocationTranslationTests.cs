@@ -1,4 +1,4 @@
-// <copyright file="Issue914ArrayLengthCoercionTranslationTests.cs" company="GSharp">
+// <copyright file="Issue1272ArrayAllocationTranslationTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -13,73 +13,70 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Translation tests for the array-creation length coercion defect discovered
-/// migrating <c>Oahu.Decrypt</c> (issue #914). C# array-creation expressions
-/// accept any integral length (<c>new T[uint]</c>, <c>new T[long]</c>, …), but
-/// the native G# allocation form <c>[n]T</c> (issue #1272) takes an
-/// <c>int32</c>; a non-<c>int32</c> numeric length must be coerced via the
-/// conversion-call form (<c>int32(n)</c>) so the allocation binds.
+/// Issue #1272: a C# array creation with no initializer (<c>new T[n]</c>) must
+/// translate to the native G# zero-initialised allocation form <c>[n]T</c>
+/// rather than the BCL call <c>System.GC.AllocateArray[T](n)</c>. The
+/// <c>new T[]{…}</c> initializer form is unaffected and keeps mapping to the
+/// slice literal <c>[]T{…}</c>.
 /// </summary>
-public class Issue914ArrayLengthCoercionTranslationTests
+public class Issue1272ArrayAllocationTranslationTests
 {
     /// <summary>
-    /// A <c>uint</c> length is coerced to <c>int32</c> via the conversion-call
-    /// form inside the native <c>[n]T</c> allocation.
+    /// A constant-length allocation <c>new int[8]</c> maps to <c>[8]int32</c>.
     /// </summary>
     [Fact]
-    public void ArrayCreation_UintLength_CoercesToInt32()
-    {
-        string printed = TranslateUnit(@"
-namespace Demo
-{
-    public class S { public int X; }
-
-    public class C
-    {
-        public S[] Make(uint n) => new S[n];
-    }
-}");
-
-        Assert.Contains("[int32(n)]S", printed);
-    }
-
-    /// <summary>
-    /// A <c>long</c> length is likewise coerced to <c>int32</c>.
-    /// </summary>
-    [Fact]
-    public void ArrayCreation_LongLength_CoercesToInt32()
+    public void ArrayCreation_ConstantLength_EmitsNativeAllocation()
     {
         string printed = TranslateUnit(@"
 namespace Demo
 {
     public class C
     {
-        public byte[] Make(long n) => new byte[n];
+        public int[] Make() => new int[8];
     }
 }");
 
-        Assert.Contains("[int32(n)]uint8", printed);
+        Assert.Contains("[8]int32", printed);
+        Assert.DoesNotContain("AllocateArray", printed);
     }
 
     /// <summary>
-    /// An <c>int</c> length is already <c>int32</c>; no conversion call is added.
+    /// A runtime-length allocation <c>new int[n]</c> maps to <c>[n]int32</c>.
     /// </summary>
     [Fact]
-    public void ArrayCreation_IntLength_NoCoercion()
+    public void ArrayCreation_RuntimeLength_EmitsNativeAllocation()
     {
         string printed = TranslateUnit(@"
 namespace Demo
 {
-    public class S { public int X; }
-
     public class C
     {
-        public S[] Make(int n) => new S[n];
+        public int[] Make(int n) => new int[n];
     }
 }");
 
-        Assert.Contains("[n]S", printed);
-        Assert.DoesNotContain("int32(n)", printed);
+        Assert.Contains("[n]int32", printed);
+        Assert.DoesNotContain("AllocateArray", printed);
+    }
+
+    /// <summary>
+    /// The initializer form <c>new T[]{…}</c> still maps to the slice literal
+    /// <c>[]T{…}</c> (unchanged by issue #1272).
+    /// </summary>
+    [Fact]
+    public void ArrayCreation_WithInitializer_RemainsSliceLiteral()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public int[] Make() => new int[]{ 1, 2, 3 };
+    }
+}");
+
+        Assert.Contains("[]int32{1, 2, 3}", printed);
+        Assert.DoesNotContain("AllocateArray", printed);
     }
 
     private static string TranslateUnit(string source)

@@ -390,6 +390,9 @@ public static class GSharpPrinter
                 var elements = string.Join(", ", arrayLiteral.Elements.Select(e => RenderExpression(e, indent)));
                 return $"[]{RenderType(arrayLiteral.ElementType)}{{{elements}}}";
 
+            case ArrayAllocationExpression arrayAllocation:
+                return $"[{RenderExpression(arrayAllocation.Length, indent)}]{RenderType(arrayAllocation.ElementType)}";
+
             case TupleLiteralExpression tuple:
                 var tupleElements = string.Join(", ", tuple.Elements.Select(e => RenderExpression(e, indent)));
                 return $"({tupleElements})";

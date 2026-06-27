@@ -7368,10 +7368,25 @@ public class Parser
     private ExpressionSyntax ParseArrayCreationExpression()
     {
         var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
-        SyntaxToken length = null;
+
+        // Parse the optional length. A lone numeric literal immediately followed
+        // by `]` is captured as the literal `LengthToken` so the existing
+        // constant-count literal form (`[N]T{…}`, with its GS0115 check) and the
+        // count-inferred slice form (`[]T{…}`, empty brackets) are unchanged.
+        // Any other (runtime) length expression — issue #1272 — is captured as a
+        // full `LengthExpression`.
+        SyntaxToken lengthToken = null;
+        ExpressionSyntax lengthExpression = null;
         if (Current.Kind != SyntaxKind.CloseSquareBracketToken)
         {
-            length = MatchToken(SyntaxKind.NumberToken);
+            if (Current.Kind == SyntaxKind.NumberToken && Peek(1).Kind == SyntaxKind.CloseSquareBracketToken)
+            {
+                lengthToken = MatchToken(SyntaxKind.NumberToken);
+            }
+            else
+            {
+                lengthExpression = ParseExpression();
+            }
         }
 
         var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
@@ -7383,34 +7398,90 @@ public class Parser
         if (Current.Kind != SyntaxKind.IdentifierToken)
         {
             var nestedElementType = ParseTypeClause();
-            var nestedOpenBrace = MatchToken(SyntaxKind.OpenBraceToken);
-            var nestedElements = ParseArrayInitializerElements();
-            var nestedCloseBrace = MatchToken(SyntaxKind.CloseBraceToken);
+            var (nestedOpenBrace, nestedElements, nestedCloseBrace, nestedHasElements) = ParseOptionalArrayInitializer();
+
+            // Issue #1272: the no-initializer (or empty-initializer) form with a
+            // length yields the runtime/zero-initialised allocation `[n][]T`.
+            if (!nestedHasElements && (lengthExpression != null || lengthToken != null))
+            {
+                return new ArrayCreationExpressionSyntax(
+                    syntaxTree,
+                    openBracket,
+                    lengthExpression ?? new LiteralExpressionSyntax(syntaxTree, lengthToken),
+                    closeBracket,
+                    nestedElementType,
+                    nestedOpenBrace,
+                    nestedElements,
+                    nestedCloseBrace);
+            }
+
             return new ArrayCreationExpressionSyntax(
                 syntaxTree,
                 openBracket,
-                length,
+                lengthExpression == null ? lengthToken : ToLengthLiteralToken(lengthExpression),
                 closeBracket,
                 nestedElementType,
-                nestedOpenBrace,
-                nestedElements,
-                nestedCloseBrace);
+                nestedOpenBrace ?? MatchToken(SyntaxKind.OpenBraceToken),
+                nestedElements ?? new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty),
+                nestedCloseBrace ?? MatchToken(SyntaxKind.CloseBraceToken));
         }
 
         var elementType = MatchToken(SyntaxKind.IdentifierToken);
-        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
-        var elements = ParseArrayInitializerElements();
-        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        var (openBrace, elements, closeBrace, hasElements) = ParseOptionalArrayInitializer();
+
+        // Issue #1272: `[n]T` (no initializer) or `[n]T{}` (empty initializer)
+        // with a runtime length is the zero-initialised allocation form. A lone
+        // numeric literal length without a non-empty initializer (`[5]T`,
+        // `[5]T{}`) is likewise a (constant-length) zero-initialised allocation.
+        if (!hasElements && (lengthExpression != null || lengthToken != null))
+        {
+            return new ArrayCreationExpressionSyntax(
+                syntaxTree,
+                openBracket,
+                lengthExpression ?? new LiteralExpressionSyntax(syntaxTree, lengthToken),
+                closeBracket,
+                elementType,
+                openBrace,
+                elements,
+                closeBrace);
+        }
+
         return new ArrayCreationExpressionSyntax(
             syntaxTree,
             openBracket,
-            length,
+            lengthExpression == null ? lengthToken : ToLengthLiteralToken(lengthExpression),
             closeBracket,
             elementType,
-            openBrace,
-            elements,
-            closeBrace);
+            openBrace ?? MatchToken(SyntaxKind.OpenBraceToken),
+            elements ?? new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty),
+            closeBrace ?? MatchToken(SyntaxKind.CloseBraceToken));
     }
+
+    // Parses an optional brace-delimited array initializer. Returns null tokens
+    // when no `{` is present (the issue #1272 no-initializer form), and reports
+    // whether any element expressions were supplied (an empty `{}` counts as the
+    // zero-initialised allocation form, not a literal).
+    private (SyntaxToken OpenBrace, SeparatedSyntaxList<ExpressionSyntax> Elements, SyntaxToken CloseBrace, bool HasElements) ParseOptionalArrayInitializer()
+    {
+        if (Current.Kind != SyntaxKind.OpenBraceToken)
+        {
+            return (null, null, null, false);
+        }
+
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        var elements = ParseArrayInitializerElements();
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return (openBrace, elements, closeBrace, elements.Count > 0);
+    }
+
+    // Extracts the literal `LengthToken` for the constant-count literal form when
+    // a parsed length expression turns out to be a lone numeric literal (so the
+    // existing GS0115 count check and `[N]T{…}` path keep working even when the
+    // length was parsed via the general expression path). Non-literal lengths
+    // combined with a non-empty initializer are not a valid shape; the binder
+    // reports the mismatch.
+    private static SyntaxToken ToLengthLiteralToken(ExpressionSyntax lengthExpression)
+        => lengthExpression is LiteralExpressionSyntax { LiteralToken: { Kind: SyntaxKind.NumberToken } token } ? token : null;
 
     // ADR-0124 / issues #1024, #1057, #1041: parses a stack-allocation
     // expression in G#-style array grammar `stackalloc [n]T` (bracketed count

@@ -1029,7 +1029,19 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        var elements = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements.Count);
+        var elements = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements?.Count ?? 0);
+
+        // Issue #1272: the runtime/zero-initialised allocation form `[n]T`
+        // (and the empty-initializer spelling `[n]T{}`). The length is an
+        // arbitrary expression converted to int32 (mirroring how array indices
+        // and `newarr` lengths are typed); the result is a zero-initialised
+        // slice `[]T` of length `n` produced by the `newarr` emitter path.
+        if (syntax.LengthExpression != null)
+        {
+            var boundLength = conversions.BindConversion(syntax.LengthExpression, TypeSymbol.Int32);
+            return new BoundArrayCreationExpression(syntax, SliceTypeSymbol.Get(elementType), boundLength);
+        }
+
         foreach (var elementSyntax in syntax.Elements)
         {
             elements.Add(conversions.BindConversion(elementSyntax, elementType));

@@ -181,6 +181,16 @@ let ys = [3]int32{1, 2, 3}
 let grid = [][]int32{ []int32{1, 2}, []int32{3, 4, 5} }
 ```
 
+A runtime/zero-initialised array allocation is written `[n]T` (issue #1272), where `n` is an arbitrary length expression and there are no element initialisers. It allocates a fresh, zero-initialised slice `[]T` of length `n` (the idiomatic native form replacing the BCL call `System.GC.AllocateArray[T](n)`). The empty-initializer spelling `[n]T{}` is equivalent. The length is converted to `int32` (the same typing as array indices and the underlying CIL `newarr`):
+
+```gsharp
+func zeros(n int32) []int32 {
+    return [n]int32       // a zero-initialised []int32 of length n
+}
+
+let buffer = [8]int32     // length-8, all elements 0
+```
+
 Slices are backed by CLR arrays. `len` and `cap` observe array length, and `append` allocates and copies into a new array in the current implementation. The `len`, `cap`, `append`, `delete`, and `make` built-ins are Go-style and require `import Gsharp.Extensions.Go` (ADR-0083); see [Go-style built-ins (`import Gsharp.Extensions.Go`)](#go-style-built-ins-import-gsharpextensionsgo) for the gate and the .NET-idiomatic alternatives (`.Length`, `.Count`, `.Remove(k)`, `List[T].Add`).
 
 ### Maps
@@ -758,7 +768,7 @@ All four open forms (`lo..hi`, `lo..`, `..hi`, `..`) are supported. A bound beco
 
 ### Composite literals
 
-Struct literals use `TypeName{Field: value}`. Data structs also support copy/update with `expr with { Field = value }`. Array and slice literals use `[N]T{...}` or `[]T{...}`. Map literals use `map[K,V]{key: value}`.
+Struct literals use `TypeName{Field: value}`. Data structs also support copy/update with `expr with { Field = value }`. Array and slice literals use `[N]T{...}` or `[]T{...}`, and a runtime/zero-initialised array allocation is written `[n]T` (issue #1272). Map literals use `map[K,V]{key: value}`.
 
 ### Collection initializers (ADR-0117, issue #479)
 
