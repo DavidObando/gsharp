@@ -3884,14 +3884,9 @@ public sealed class Binder
             return !structSym.IsClass;
         }
 
-        if (type == TypeSymbol.Int32 || type == TypeSymbol.Bool)
+        if (type.ClrType is { } primitiveClr)
         {
-            return true;
-        }
-
-        if (type is ImportedTypeSymbol it && it.ClrType is { } clr)
-        {
-            return clr.IsValueType && !NullableLifting.IsValueTypeNullableClr(clr);
+            return primitiveClr.IsValueType && !NullableLifting.IsValueTypeNullableClr(primitiveClr);
         }
 
         return false;
