@@ -1364,7 +1364,10 @@ internal sealed class DeclarationBinder
                             isVariadic,
                             asyncOrIteratorKind: methodSyntax.IsAsync ? "async" : null);
 
-                        if (!seenParameterNames.Add(parameterName))
+                        // Issue #1262: `_` is the discard identifier — repeated `_` parameters are
+                        // permitted on named functions/methods. Each `_` occupies a positional slot
+                        // but is not added to the body scope, so non-`_` duplicates still error.
+                        if (parameterName != "_" && !seenParameterNames.Add(parameterName))
                         {
                             Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
                         }
@@ -2142,7 +2145,10 @@ internal sealed class DeclarationBinder
                             isVariadic,
                             asyncOrIteratorKind: methodSyntax.IsAsync ? "async" : null);
 
-                        if (!seenParameterNames.Add(parameterName))
+                        // Issue #1262: `_` is the discard identifier — repeated `_` parameters are
+                        // permitted on named functions/methods. Each `_` occupies a positional slot
+                        // but is not added to the body scope, so non-`_` duplicates still error.
+                        if (parameterName != "_" && !seenParameterNames.Add(parameterName))
                         {
                             Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
                         }
@@ -4546,7 +4552,10 @@ internal sealed class DeclarationBinder
                     isVariadic,
                     asyncOrIteratorKind: methodSyntax.IsAsync ? "async" : null);
 
-                if (!seenParameterNames.Add(parameterName))
+                // Issue #1262: `_` is the discard identifier — repeated `_` parameters are
+                // permitted on named functions/methods. Each `_` occupies a positional slot
+                // but is not added to the body scope, so non-`_` duplicates still error.
+                if (parameterName != "_" && !seenParameterNames.Add(parameterName))
                 {
                     Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
                 }
@@ -5138,7 +5147,11 @@ internal sealed class DeclarationBinder
                 var parameterSyntax = syntax.Parameters[pIndex];
                 var parameterName = parameterSyntax.Identifier.Text;
                 var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
-                if (!seenParameterNames.Add(parameterName))
+
+                // Issue #1262: `_` is the discard identifier — repeated `_` parameters are
+                // permitted on named functions/methods. Each `_` occupies a positional slot
+                // but is not added to the body scope, so non-`_` duplicates still error.
+                if (parameterName != "_" && !seenParameterNames.Add(parameterName))
                 {
                     Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
                 }
@@ -6968,7 +6981,10 @@ internal sealed class DeclarationBinder
                 isVariadic,
                 asyncOrIteratorKind: null);
 
-            if (!seenParameterNames.Add(parameterName))
+            // Issue #1262: `_` is the discard identifier — repeated `_` parameters are
+            // permitted on named functions/methods. Each `_` occupies a positional slot
+            // but is not added to the body scope, so non-`_` duplicates still error.
+            if (parameterName != "_" && !seenParameterNames.Add(parameterName))
             {
                 Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
             }
