@@ -1664,6 +1664,15 @@ public sealed class CSharpToGSharpTranslator
             // issue #1007 (`func F[T](...) R;`); the printer emits the
             // type-parameter list via the same path as a class method or free
             // func, so the `[T]` clause is retained on interface methods.
+            // Issue #1278 / ADR-0131: a C# expression-bodied method (`=> expr`)
+            // renders as the idiomatic G# arrow form `func F(...) T -> expr`
+            // when the translated body folds to a single inline statement.
+            GStatement arrowBody = node.ExpressionBody != null ? TryFoldArrowBody(body) : null;
+            if (arrowBody != null)
+            {
+                body = null;
+            }
+
             var method = new MethodDeclaration(
                 SanitizeIdentifier(node.Identifier.Text),
                 parameters: parameters,
@@ -1675,7 +1684,8 @@ public sealed class CSharpToGSharpTranslator
                 isOpen: isOpen,
                 isOverride: isOverride,
                 isAsync: symbol != null && symbol.IsAsync,
-                attributes: this.MapAttributes(node.AttributeLists));
+                attributes: this.MapAttributes(node.AttributeLists),
+                expressionBody: arrowBody);
 
             return (method, isStatic);
         }
@@ -1719,6 +1729,12 @@ public sealed class CSharpToGSharpTranslator
                 ? this.TranslateBody(node, $"operator '{operatorToken}'")
                 : null;
 
+            GStatement arrowBody = node.ExpressionBody != null ? TryFoldArrowBody(body) : null;
+            if (arrowBody != null)
+            {
+                body = null;
+            }
+
             var method = new MethodDeclaration(
                 $"operator {operatorToken}",
                 parameters: parameters,
@@ -1730,7 +1746,8 @@ public sealed class CSharpToGSharpTranslator
                 isOpen: false,
                 isOverride: false,
                 isAsync: false,
-                attributes: this.MapAttributes(node.AttributeLists));
+                attributes: this.MapAttributes(node.AttributeLists),
+                expressionBody: arrowBody);
 
             // Operators carry the receiver-clause form and are lifted to a top-level
             // sibling; returning IsStatic=false routes them through the existing
@@ -1760,12 +1777,19 @@ public sealed class CSharpToGSharpTranslator
                 ? this.TranslateBody(node, $"conversion operator '{kindKeyword}'")
                 : null;
 
+            GStatement arrowBody = node.ExpressionBody != null ? TryFoldArrowBody(body) : null;
+            if (arrowBody != null)
+            {
+                body = null;
+            }
+
             var method = new MethodDeclaration(
                 $"operator {kindKeyword}",
                 parameters: parameters,
                 returnType: returnType,
                 body: body,
-                attributes: this.MapAttributes(node.AttributeLists));
+                attributes: this.MapAttributes(node.AttributeLists),
+                expressionBody: arrowBody);
 
             // The conversion operator has no receiver clause, so it stays an
             // in-body member of the owning type (returning IsStatic=false routes it
@@ -1863,6 +1887,16 @@ public sealed class CSharpToGSharpTranslator
 
             List<PropertyAccessor> accessors = this.MapAccessors(node);
 
+            // Issue #1278 / ADR-0131: a C# expression-bodied read-only property
+            // (`string Name => expr;`) renders as the idiomatic G# property-level
+            // arrow `prop Name T -> expr` when its get body folds to a single
+            // inline statement.
+            GStatement arrowBody = TryFoldComputedPropertyArrow(node.ExpressionBody, accessors);
+            if (arrowBody != null)
+            {
+                accessors = new List<PropertyAccessor>();
+            }
+
             bool isOverride = symbol != null && symbol.IsOverride && !OverridesExternalBaseProperty(symbol);
 
             // Interface members are implicitly abstract; canonical G# interface
@@ -1879,7 +1913,8 @@ public sealed class CSharpToGSharpTranslator
                 visibility: MapVisibility(symbol, this.context, node),
                 isOpen: isOpen,
                 isOverride: isOverride,
-                attributes: this.MapAttributes(node.AttributeLists));
+                attributes: this.MapAttributes(node.AttributeLists),
+                expressionBody: arrowBody);
 
             return (property, isStatic);
         }
@@ -1887,6 +1922,26 @@ public sealed class CSharpToGSharpTranslator
         private List<PropertyAccessor> MapAccessors(PropertyDeclarationSyntax node)
         {
             return this.MapAccessors(node, $"property '{node.Identifier.Text}'");
+        }
+
+        // Issue #1278 / ADR-0131: fold a C# expression-bodied property/indexer
+        // into a property-level G# arrow `prop Name T -> expr`. Returns the
+        // foldable single statement when the C# member used `=> expr` and its
+        // translated get accessor is a single inline statement; otherwise null
+        // (the caller keeps the get-only block accessor list).
+        private static GStatement TryFoldComputedPropertyArrow(
+            ArrowExpressionClauseSyntax csExpressionBody,
+            List<PropertyAccessor> accessors)
+        {
+            if (csExpressionBody == null
+                || accessors.Count != 1
+                || accessors[0].Kind != AccessorKind.Get
+                || accessors[0].Body == null)
+            {
+                return null;
+            }
+
+            return TryFoldArrowBody(accessors[0].Body);
         }
 
         private (GMember Member, bool IsStatic) TranslateIndexer(IndexerDeclarationSyntax node)
@@ -1906,6 +1961,15 @@ public sealed class CSharpToGSharpTranslator
 
             List<PropertyAccessor> accessors = this.MapAccessors(node, "indexer 'this[]'");
 
+            // Issue #1278 / ADR-0131: a C# expression-bodied indexer
+            // (`public T this[int i] => expr;`) renders as the idiomatic G#
+            // indexer-level arrow `prop this[i T] U -> expr`.
+            GStatement arrowBody = TryFoldComputedPropertyArrow(node.ExpressionBody, accessors);
+            if (arrowBody != null)
+            {
+                accessors = new List<PropertyAccessor>();
+            }
+
             bool isOverride = symbol != null && symbol.IsOverride && !OverridesExternalBaseProperty(symbol);
             bool inInterface = symbol?.ContainingType?.TypeKind == TypeKind.Interface;
             bool isOpen = symbol != null && !inInterface && !symbol.IsSealed &&
@@ -1920,7 +1984,8 @@ public sealed class CSharpToGSharpTranslator
                 isOpen: isOpen,
                 isOverride: isOverride,
                 attributes: this.MapAttributes(node.AttributeLists),
-                indexerParameters: indexParameters);
+                indexerParameters: indexParameters,
+                expressionBody: arrowBody);
 
             return (property, isStatic);
         }
@@ -2011,7 +2076,18 @@ public sealed class CSharpToGSharpTranslator
                         accessor,
                         $"{displayName} {kind.ToString().ToLowerInvariant()}ter")
                     : null;
-                accessors.Add(new PropertyAccessor(kind, body));
+
+                // Issue #1278 / ADR-0131: a C# expression-bodied accessor
+                // (`get => e` / `set => e`) renders as the idiomatic G# arrow
+                // accessor `get -> e` / `set -> e` when its body folds to a
+                // single inline statement.
+                GStatement arrowBody = accessor.ExpressionBody != null ? TryFoldArrowBody(body) : null;
+                if (arrowBody != null)
+                {
+                    body = null;
+                }
+
+                accessors.Add(new PropertyAccessor(kind, body, expressionBody: arrowBody));
             }
 
             return accessors;
@@ -2557,6 +2633,31 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
+        // Issue #1278 / ADR-0131: a C# expression-bodied member (`=> expr`)
+        // translates to the idiomatic G# arrow form (`-> expr`) when the
+        // translated body folds to a single, inline-renderable statement. A
+        // value-returning body is `{ return expr }`; a void body is a single
+        // expression or assignment statement. Bodies that needed extra
+        // statements (parameter shadows, hoisted temporaries, a bare `throw`
+        // expression, or an `unsafe { }` wrap) do not fold and keep their block
+        // body so the emitted G# stays correct.
+        private static GStatement TryFoldArrowBody(BlockStatement block)
+        {
+            if (block == null || block.IsUnsafe || block.Statements.Count != 1)
+            {
+                return null;
+            }
+
+            GStatement only = block.Statements[0];
+            return only switch
+            {
+                ReturnStatement r when r.Expression != null => r,
+                ExpressionStatement => only,
+                AssignmentStatement => only,
+                _ => null,
+            };
+        }
+
         // G# function parameters are read-only (Kotlin-style); a C# method that
         // reassigns a value parameter must shadow it with a mutable local at the top
         // of the body (`var p = p`) so the later writes are legal. Parameters that
@@ -2678,6 +2779,10 @@ public sealed class CSharpToGSharpTranslator
                 case PropertyDeclarationSyntax property when property.ExpressionBody != null:
                     // An expression-bodied property is a get-only computed property.
                     return this.WrapExpressionBody(property.ExpressionBody.Expression, isVoid: false);
+
+                case IndexerDeclarationSyntax indexer when indexer.ExpressionBody != null:
+                    // An expression-bodied indexer is a get-only computed indexer.
+                    return this.WrapExpressionBody(indexer.ExpressionBody.Expression, isVoid: false);
 
                 case DestructorDeclarationSyntax destructor:
                     if (destructor.Body != null)

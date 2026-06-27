@@ -196,8 +196,10 @@ namespace Corpus.L1
             tuple.ElementTypes.Select(e => Assert.IsType<NamedTypeReference>(e).Name));
     }
 
-    /// <summary>B.11: an expression-bodied property (<c>int LineCount =&gt; ...</c>)
-    /// maps to a get-only property of width-bearing type <c>int32</c>.</summary>
+    /// <summary>B.11 / ADR-0131: an expression-bodied property
+    /// (<c>int LineCount =&gt; ...</c>) maps to a get-only computed property of
+    /// width-bearing type <c>int32</c>, rendered with the G# property-level arrow
+    /// (<c>prop LineCount int32 -&gt; expr</c>) via <see cref="PropertyDeclaration.ExpressionBody"/>.</summary>
     [Fact]
     public void L1Document_MapsExpressionBodiedPropertyToGetOnly()
     {
@@ -207,9 +209,9 @@ namespace Corpus.L1
             .Single(p => p.Name == "LineCount");
 
         Assert.Equal("int32", Assert.IsType<NamedTypeReference>(lineCount.Type).Name);
-        PropertyAccessor accessor = Assert.Single(lineCount.Accessors);
-        Assert.Equal(AccessorKind.Get, accessor.Kind);
-        Assert.NotNull(accessor.Body);
+        Assert.Empty(lineCount.Accessors);
+        Assert.NotNull(lineCount.ExpressionBody);
+        Assert.IsType<ReturnStatement>(lineCount.ExpressionBody);
     }
 
     /// <summary>B.5/B.12: <c>int Subtotal()</c> maps to an in-body method (no

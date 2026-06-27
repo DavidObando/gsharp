@@ -1206,6 +1206,13 @@ public static class GSharpPrinter
             sb.Append($"prop {property.Name} {RenderType(property.Type)}");
         }
 
+        if (property.ExpressionBody != null)
+        {
+            // Issue #1278 / ADR-0131: expression-bodied read-only property/indexer.
+            sb.Append($" -> {RenderArrowInline(property.ExpressionBody, indent)}");
+            return sb.ToString();
+        }
+
         if (property.Accessors.Count == 0)
         {
             return sb.ToString();
@@ -1241,6 +1248,12 @@ public static class GSharpPrinter
                     ? "set"
                     : $"set({accessor.SetterParameterName})";
                 break;
+        }
+
+        if (accessor.ExpressionBody != null)
+        {
+            // Issue #1278 / ADR-0131: expression-bodied accessor `get -> e` / `set -> e`.
+            return $"{pad}{head} -> {RenderArrowInline(accessor.ExpressionBody, indent)}";
         }
 
         if (accessor.Body == null)
@@ -1290,6 +1303,13 @@ public static class GSharpPrinter
             sb.Append(RenderType(method.ReturnType));
         }
 
+        if (method.ExpressionBody != null)
+        {
+            // Issue #1278 / ADR-0131: expression-bodied method/function.
+            sb.Append($" -> {RenderArrowInline(method.ExpressionBody, indent)}");
+            return sb.ToString();
+        }
+
         if (method.Body == null)
         {
             sb.Append(';');
@@ -1299,6 +1319,26 @@ public static class GSharpPrinter
         sb.Append(' ');
         sb.Append(RenderBlock(method.Body, indent));
         return sb.ToString();
+    }
+
+    // Issue #1278 / ADR-0131: render the inline content of an expression-bodied
+    // member's single statement as the right-hand side of the `->` arrow. A
+    // value-returning member's body is a `return expr` whose `return` keyword is
+    // dropped; a void member's body is an expression or assignment statement
+    // rendered as-is.
+    private static string RenderArrowInline(GStatement statement, int indent)
+    {
+        switch (statement)
+        {
+            case ReturnStatement ret:
+                return ret.Expression == null ? string.Empty : RenderExpression(ret.Expression, indent);
+            case ExpressionStatement expr:
+                return RenderExpression(expr.Expression, indent);
+            case AssignmentStatement assignment:
+                return $"{RenderExpression(assignment.Target, indent)} {assignment.Operator} {RenderExpression(assignment.Value, indent)}";
+            default:
+                return RenderStatement(statement, 0).TrimStart();
+        }
     }
 
     private static string RenderConstructor(ConstructorDeclaration constructor, int indent)

@@ -151,7 +151,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("async func DoubleAsync(n int32) int32 {", printed);
+        Assert.Contains("async func DoubleAsync(n int32) int32 -> await Task.FromResult(n * 2)", printed);
         Assert.Contains("await Task.FromResult(n * 2)", printed);
         Assert.DoesNotContain("Task[int32] {", printed);
     }
@@ -241,7 +241,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("func (value string) WordLen() int32 {", printed);
+        Assert.Contains("func (value string) WordLen() int32 -> value.Length", printed);
         Assert.DoesNotContain("class StringExtras", printed);
         Assert.DoesNotContain("shared {", printed);
     }

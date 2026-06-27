@@ -415,7 +415,7 @@ Functions use `func`. Receiver clauses declare extension functions on types this
 ```ebnf
 FunctionDecl      = "func" ReceiverClause? ( identifier | OperatorName | ConversionOperatorName ) TypeParamList? "(" Parameters? ")" RefReturnClause? FunctionBody .
 AsyncFunctionDecl = "async" FunctionDecl .
-FunctionBody      = Block | ";" .
+FunctionBody      = Block | "->" Expression | ";" .  (* "->" Expression = expression-bodied member, ADR-0131 / issue #1278 *)
 ReceiverClause    = "(" Parameter ")" .
 OperatorName      = "operator" OperatorToken .
 ConversionOperatorName = "operator" ( "implicit" | "explicit" ) .
@@ -432,6 +432,18 @@ A function declared `func f(...) ref T` returns a managed pointer and pairs with
 A function declared `func f(name ...T)` is **variadic**: the source-level element type is `T`, the parameter is seen inside the body as a slice `[]T`, and the call site may supply either *N* trailing positional arguments (packed into a freshly allocated `[]T`) or exactly one trailing `[]T` value (forwarded unwrapped — array identity is preserved). At most one variadic parameter is allowed per signature (`GS0364`) and it must be the last parameter (`GS0145`). Variadic declarations are accepted on top-level `func`, class instance / static methods, interface methods (including default-body methods), constructors, lambdas (function-literal and arrow form), named delegate declarations (ADR-0102), and primary-constructor parameter lists on `class` / `struct` / `data class` / `data struct` / `inline struct` (ADR-0103). On a primary-constructor parameter list the trailing variadic promotes to a `[]T` auto-field with the same name, exactly as the explicit `init(…)` lowering would. The emitter stamps `[System.ParamArrayAttribute]` on the last parameter so the method is consumable by C# / F# / VB callers using their native variadic syntax. The C# `params` keyword is not recognised in G# source; encountering it reports `GS0363` pointing at the canonical `...T` form. See [ADR-0101](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0101-variadic-params.md), [ADR-0102](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0102-variadic-params-additional-sites.md), and [ADR-0103](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0103-primary-ctor-variadic.md).
 
 A `;` in place of the `Block` body marks the declaration as "no managed body". Per ADR-0086, the body-less form is reserved for functions annotated with `@DllImport("libname", ...)` — see [Native interop (P/Invoke)](#native-interop-pinvoke). An unannotated `;` body is rejected with `GS0325`.
+
+An `-> Expression` in place of the `Block` body declares an **expression-bodied
+member** (ADR-0131, issue #1278), using the G# arrow `->` (never the C# fat
+arrow `=>`, which remains a `GS0005` syntax error in every member position).
+`func f(...) T -> expr` desugars to `{ return expr }` when the function has a
+return type, and to `{ expr }` (an expression statement) when it is void —
+mirroring C#'s expression-bodied void methods. Because operators and
+user-defined conversion operators route through the same function-declaration
+path, they accept the arrow form too (`func (a V) operator + (b V) V -> …`,
+`func operator implicit (c T) U -> …`). The arrow body lives in a member
+position that is syntactically distinct from expression position, so it does not
+collide with arrow lambdas (`(x int32) -> x + 1`).
 
 #### Overload resolution and generic constraints
 
@@ -474,22 +486,26 @@ ConstructorDecl  = "init" "(" Parameters? ")" ( ":" identifier "(" Arguments? ")
 SharedBlock      = "shared" "{" SharedMember* "}" .
 SharedMember     = Accessibility? ( MethodDecl | PropertyDecl | EventDecl | FieldDecl ) .
 FieldDecl        = Accessibility? ( "var" | "let" ) identifier TypeClause ( "=" Expression )? .
-PropertyDecl     = "prop" ( identifier | IndexerHeader ) TypeClause PropertyBody? .
+PropertyDecl     = "prop" ( identifier | IndexerHeader ) TypeClause ( PropertyBody | "->" Expression )? .  (* "->" Expression = read-only computed property/indexer, ADR-0131 *)
 IndexerHeader    = "this" "[" Parameters "]" .  (* ADR-0118: user indexer member, emitted as the CLR default `Item` property *)
-PropertyAccessor = ( "get" | ( "set" | "init" ) ( "(" identifier ")" )? ) ( Block | ";" )? .
+PropertyAccessor = ( "get" | ( "set" | "init" ) ( "(" identifier ")" )? ) ( Block | "->" Expression | ";" )? .  (* "->" Expression = expression-bodied accessor, ADR-0131 *)
 EventDecl        = "event" identifier TypeClause EventBody? .
 EventAccessor    = ( "add" | "remove" | "raise" ) ( Block | ";" )? .
 InterfaceBody    = "{" ( InterfaceMethodDecl | PropertyDecl | EventDecl )* "}" .
 InterfaceMethodDecl = "func" identifier "(" Parameters? ")" TypeClause? FunctionBody .  (* FunctionBody ";" = no-body (abstract) marker; issue #881 *)
 ```
 
-A property or event accessor body is a block `{ … }` or `;` (a bare/auto
-accessor) **only**. Unlike C#, G# has **no** fat-arrow `=>` expression-bodied
-accessor, and the G# lambda arrow `->` is likewise **not** a valid accessor-body
-form — a computed accessor must use an explicit block body (e.g.
-`get { return e }`). A `get => e`, `get -> e`, or `add => e` is a syntax error
-(GS0005). This mirrors G# having no expression-body arrow form for members in
-general (issue #1273).
+A property or event accessor body is a block `{ … }`, an `-> Expression`
+expression body, or `;` (a bare/auto accessor). The expression-body form
+(ADR-0131, issue #1278) uses the G# arrow `->`: `prop Name T -> expr` is a
+get-only computed property (and `prop this[i T] U -> expr` a get-only computed
+indexer), while `get -> expr`, `set -> expr`, and `init -> expr` are
+expression-bodied accessors — `get -> e` desugars to `{ return e }` and
+`set -> e` / `init -> e` to `{ e }` (the setter may use the implicit `value`
+parameter, or a named one via `set(name)`). The C# fat arrow `=>` is **not** a
+G# token: `get => e` or `add => e` remains a syntax error (GS0005). This narrows
+the issue #1273 rule, which previously rejected every non-block accessor body;
+event accessors (`add`/`remove`/`raise`) still take a block `{ … }` or `;` only.
 
 #### Protected accessibility (issue #950)
 
@@ -1342,8 +1358,8 @@ Async             ::= 'async'
 Annotation        ::= '@' (AnnotationTarget ':')? identifier ('.' identifier)* ('(' Arguments? ')')?
 AnnotationTarget  ::= 'field' | 'param' | 'return' | 'type' | 'method' | 'property' | 'event' | 'module' | 'assembly' | 'genericparam'
 
-FunctionDecl      ::= 'func' ReceiverClause? (identifier | OperatorName | ConversionOperatorName) TypeParamList? '(' Parameters? ')' 'ref'? TypeClause? (Block | ';')
-                      (* ';' is the no-body marker: P/Invoke (ADR-0086) and abstract members (issue #881) *)
+FunctionDecl      ::= 'func' ReceiverClause? (identifier | OperatorName | ConversionOperatorName) TypeParamList? '(' Parameters? ')' 'ref'? TypeClause? (Block | '->' Expression | ';')
+                      (* '->' Expression = expression-bodied member (ADR-0131); ';' is the no-body marker: P/Invoke (ADR-0086) and abstract members (issue #881) *)
 ReceiverClause    ::= '(' Parameter ')'
 OperatorName      ::= 'operator' OperatorToken
 ConversionOperatorName ::= 'operator' ('implicit' | 'explicit')
@@ -1381,10 +1397,10 @@ SharedBlock       ::= 'shared' '{' SharedMember* '}'
 SharedMember      ::= Annotation* Accessibility? (Async? MethodDecl | PropertyDecl | EventDecl | FieldDecl)
 MethodDecl        ::= FunctionDecl
 FieldDecl         ::= Accessibility? ('var' | 'let') identifier TypeClause ('=' Expression)?
-PropertyDecl      ::= 'prop' (identifier | IndexerHeader) TypeClause PropertyBody?
+PropertyDecl      ::= 'prop' (identifier | IndexerHeader) TypeClause (PropertyBody | '->' Expression)?   (* '->' Expression = read-only computed property/indexer, ADR-0131 *)
 IndexerHeader     ::= 'this' '[' Parameters ']'   (* ADR-0118: user indexer member; emitted as CLR default 'Item' property *)
 PropertyBody      ::= '{' PropertyAccessor* '}'
-PropertyAccessor  ::= ('get' | 'set' ('(' identifier ')')?) (Block | ';')?
+PropertyAccessor  ::= ('get' | 'set' ('(' identifier ')')?) (Block | '->' Expression | ';')?   (* '->' Expression = expression-bodied accessor, ADR-0131 *)
 EventDecl         ::= 'event' identifier TypeClause EventBody?
 EventBody         ::= '{' EventAccessor* '}'
 EventAccessor     ::= ('add' | 'remove' | 'raise') (Block | ';')?

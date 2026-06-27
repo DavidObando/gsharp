@@ -258,13 +258,48 @@ public class PropertyParserTests
     }
 
     [Fact]
-    public void ArrowGetter_ReportsDiagnostic()
+    public void ArrowGetter_ParsesCleanly()
     {
-        // Issue #1273: the G# lambda arrow `->` is also not a valid accessor
-        // body form; only a block `{ }` or `;` is allowed.
+        // Issue #1278 / ADR-0131: the G# lambda arrow `->` is now a valid
+        // accessor expression-body form: `get -> e` desugars to `{ return e }`.
         const string source = "package P\nclass Foo {\n  prop X int32 { get -> 5 }\n}\n";
         var tree = SyntaxTree.Parse(source);
-        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0005");
+        Assert.Empty(tree.Diagnostics);
+    }
+
+    [Fact]
+    public void ArrowGetterAndSetter_ParseCleanly()
+    {
+        // Issue #1278 / ADR-0131: `get -> e` and `set -> e` are expression-bodied
+        // accessors; a setter body may use the implicit `value` parameter.
+        const string source = "package P\nclass Foo {\n  var n int32\n  prop X int32 { get -> this.n set -> this.n = value }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+    }
+
+    [Fact]
+    public void PropertyLevelArrow_ParsesCleanly()
+    {
+        // Issue #1278 / ADR-0131: `prop Name T -> expr` is an expression-bodied
+        // read-only property that desugars to a single get-only accessor.
+        const string source = "package P\nclass Foo {\n  var n int32\n  prop Doubled int32 -> this.n * 2\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var propDecl = structDecl.Properties.Single();
+        var accessor = Assert.Single(propDecl.Accessors);
+        Assert.True(accessor.IsGetter);
+        Assert.NotNull(accessor.Body);
+    }
+
+    [Fact]
+    public void IndexerLevelArrow_ParsesCleanly()
+    {
+        // Issue #1278 / ADR-0131: `prop this[i T] U -> expr` is an
+        // expression-bodied read-only indexer.
+        const string source = "package P\nclass Repo {\n  var data []int32\n  prop this[i int32] int32 -> this.data[i]\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
     }
 
     [Fact]
