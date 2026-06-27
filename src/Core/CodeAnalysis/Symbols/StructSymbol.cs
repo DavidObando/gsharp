@@ -906,6 +906,7 @@ public sealed class StructSymbol : TypeSymbol
                         continue;
                     }
 
+                    var candidateSubst = levels[kk].Subst;
                     foreach (var candidate in derivedCls.Methods)
                     {
                         if (candidate.IsAbstract)
@@ -913,7 +914,7 @@ public sealed class StructSymbol : TypeSymbol
                             continue;
                         }
 
-                        if (AbstractMethodSatisfiedBy(abstractMethod, subst, candidate))
+                        if (AbstractMethodSatisfiedBy(abstractMethod, subst, candidate, candidateSubst))
                         {
                             implemented = true;
                             break;
@@ -1265,7 +1266,8 @@ public sealed class StructSymbol : TypeSymbol
     private static bool AbstractMethodSatisfiedBy(
         FunctionSymbol abstractMethod,
         Dictionary<TypeParameterSymbol, TypeSymbol> subst,
-        FunctionSymbol candidate)
+        FunctionSymbol candidate,
+        Dictionary<TypeParameterSymbol, TypeSymbol> candidateSubst)
     {
         if (!string.Equals(abstractMethod.Name, candidate.Name, System.StringComparison.Ordinal))
         {
@@ -1296,7 +1298,18 @@ public sealed class StructSymbol : TypeSymbol
             var baseType = subst != null
                 ? SubstituteTypeForConstruction(baseParams[i].Type, subst)
                 : baseParams[i].Type;
-            if (!DeclarationBinder.TypeSignaturesEquivalent(baseType, derivedParams[i].Type))
+
+            // Issue #1244: the override is declared on a (possibly still-generic)
+            // derived class whose own type parameters are distinct symbols from the
+            // base's — even when same-named. Substitute the candidate's parameter
+            // types with the derived level's construction map so a signature using
+            // the derived class type parameter (e.g. Der[T].Handle(T)) unifies with
+            // the substituted abstract signature (Base[T].Handle(T) -> Handle(int32)).
+            var derivedType = candidateSubst != null
+                ? SubstituteTypeForConstruction(derivedParams[i].Type, candidateSubst)
+                : derivedParams[i].Type;
+
+            if (!DeclarationBinder.TypeSignaturesEquivalent(baseType, derivedType))
             {
                 return false;
             }
