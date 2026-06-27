@@ -462,9 +462,18 @@ internal sealed partial class MethodBodyEmitter
 
         if (a is StructSymbol aClass && b is StructSymbol bClass && aClass.IsClass && bClass.IsClass)
         {
-            for (var c = aClass; c != null; c = c.BaseClass)
+            // Issue #1248: a constructed generic class's base-type reference is
+            // declared with the derived class's own type parameters (e.g.
+            // `TransformBase[TIn, TOut] : FilterBase[TIn]`) and is kept
+            // unsubstituted on the constructed symbol, so reference equality
+            // against the constructed target (`FilterBase[int32]`) fails. The
+            // upcast is a no-op reference conversion at the IL level regardless
+            // of type arguments, and the binder already validated argument
+            // compatibility, so matching by generic definition along the base
+            // chain correctly recognises it.
+            for (var c = aClass.BaseClass; c != null; c = c.BaseClass)
             {
-                if (c == bClass)
+                if (c == bClass || ReferenceEquals(c.Definition, bClass.Definition))
                 {
                     return true;
                 }
