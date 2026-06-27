@@ -503,6 +503,25 @@ internal sealed class ConversionClassifier
             return new BoundDefaultExpression(null, type);
         }
 
+        // Issue #1256: element-wise tuple conversion lowering. When the source
+        // and target are tuple types of the same arity and the classifier above
+        // accepted a non-identity (implicit) tuple conversion, the underlying
+        // `ValueTuple<…>` instantiations differ at the CLR level, so a direct
+        // reinterpret is not verifiable IL. Lower the conversion into a tuple
+        // literal whose elements are the per-element converted accesses of the
+        // source. The source is evaluated exactly once (spilled into a temp
+        // local when it is not already a tuple literal), and each element flows
+        // through `BindConversion` recursively so it picks up the correct
+        // element conversion (reference upcast no-op, boxing, numeric widening,
+        // nullable-reference upcast, …). The emitter then materialises this as a
+        // normal `newobj ValueTuple<…>` over the converted element values.
+        if (expression.Type is TupleTypeSymbol sourceTuple
+            && type is TupleTypeSymbol targetTuple
+            && sourceTuple.Arity == targetTuple.Arity)
+        {
+            return BindTupleConversion(diagnosticLocation, expression, sourceTuple, targetTuple, allowExplicit);
+        }
+
         return new BoundConversionExpression(null, type, expression);
     }
 
@@ -1743,5 +1762,65 @@ internal sealed class ConversionClassifier
         }
 
         return zero != null;
+    }
+
+    /// <summary>
+    /// Issue #1256: lowers a non-identity implicit tuple-to-tuple conversion
+    /// into a tuple literal of per-element converted accesses, rebuilding the
+    /// target <see cref="System.ValueTuple"/> so the emitted IL is verifiable.
+    /// </summary>
+    /// <param name="diagnosticLocation">The diagnostic location.</param>
+    /// <param name="expression">The source tuple expression.</param>
+    /// <param name="sourceTuple">The source tuple type.</param>
+    /// <param name="targetTuple">The target tuple type.</param>
+    /// <param name="allowExplicit">Whether explicit element conversions are allowed.</param>
+    /// <returns>The lowered expression building the target tuple.</returns>
+    private BoundExpression BindTupleConversion(
+        TextLocation diagnosticLocation,
+        BoundExpression expression,
+        TupleTypeSymbol sourceTuple,
+        TupleTypeSymbol targetTuple,
+        bool allowExplicit)
+    {
+        var arity = sourceTuple.Arity;
+
+        // Fast path: the source is already a tuple literal, so its element
+        // expressions are directly available — re-convert each to the target
+        // element type without introducing a temp or element accesses.
+        if (expression is BoundTupleLiteralExpression literalSource
+            && literalSource.Elements.Length == arity)
+        {
+            var convertedLiteralElements = ImmutableArray.CreateBuilder<BoundExpression>(arity);
+            for (var i = 0; i < arity; i++)
+            {
+                convertedLiteralElements.Add(
+                    BindConversion(diagnosticLocation, literalSource.Elements[i], targetTuple.ElementTypes[i], allowExplicit));
+            }
+
+            return new BoundTupleLiteralExpression(expression.Syntax, targetTuple, convertedLiteralElements.ToImmutable());
+        }
+
+        // General path: evaluate the source once into a temp local, then build
+        // a tuple literal of converted `ItemN` accesses off that local.
+        var temp = new LocalVariableSymbol("<>tupleConv", isReadOnly: true, type: sourceTuple);
+        var declaration = new BoundVariableDeclaration(expression.Syntax, temp, expression);
+
+        var convertedElements = ImmutableArray.CreateBuilder<BoundExpression>(arity);
+        for (var i = 0; i < arity; i++)
+        {
+            var elementAccess = new BoundTupleElementAccessExpression(
+                expression.Syntax,
+                new BoundVariableExpression(expression.Syntax, temp),
+                sourceTuple,
+                i);
+            convertedElements.Add(
+                BindConversion(diagnosticLocation, elementAccess, targetTuple.ElementTypes[i], allowExplicit));
+        }
+
+        var rebuilt = new BoundTupleLiteralExpression(expression.Syntax, targetTuple, convertedElements.ToImmutable());
+        return new BoundBlockExpression(
+            expression.Syntax,
+            ImmutableArray.Create<BoundStatement>(declaration),
+            rebuilt);
     }
 }

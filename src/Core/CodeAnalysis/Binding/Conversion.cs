@@ -221,6 +221,44 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
+        // Issue #1256: element-wise tuple conversion. A tuple `(T1, …, Tn)`
+        // converts implicitly to `(U1, …, Un)` when both are tuple types of
+        // the SAME arity and EACH element `Ti → Ui` has an implicit conversion
+        // (identity, reference/interface upcast, nullable-reference upcast,
+        // numeric widening, boxing, …). Mirrors C# §10.2.13 implicit tuple
+        // conversions — the element conversions are classified recursively via
+        // `Classify`, so this composes with every existing implicit rule
+        // (including the #1255 lifted nullable-reference upcast). Identical
+        // tuples are already returned as identity by the `from == to`
+        // short-circuit (tuple symbols are cached per element sequence), so a
+        // match here is always a NON-identity implicit conversion: the emitter
+        // (via binder lowering in ConversionClassifier) rebuilds the target
+        // `ValueTuple<…>` from per-element converted accesses, because two
+        // distinct `ValueTuple<…>` instantiations are not IL-reinterpretable.
+        // When any element lacks an implicit conversion (e.g. a downcast
+        // `Base → Derived`, or `int32 → string`) or the arities differ, this
+        // branch declines and the conversion falls through to `None`, so such
+        // tuples remain errors exactly as C# requires.
+        if (from is TupleTypeSymbol fromTuple && to is TupleTypeSymbol toTuple
+            && fromTuple.Arity == toTuple.Arity)
+        {
+            var allElementsImplicit = true;
+            for (var i = 0; i < fromTuple.Arity; i++)
+            {
+                var elementConversion = Classify(fromTuple.ElementTypes[i], toTuple.ElementTypes[i]);
+                if (!elementConversion.Exists || !elementConversion.IsImplicit)
+                {
+                    allElementsImplicit = false;
+                    break;
+                }
+            }
+
+            if (allElementsImplicit)
+            {
+                return Conversion.Implicit;
+            }
+        }
+
         // #313: two erased generics constructed over the same open definition
         // with structurally-equivalent symbolic arguments (e.g. the `List[T]`
         // parameter type and the `List[T]` declared return type) are distinct

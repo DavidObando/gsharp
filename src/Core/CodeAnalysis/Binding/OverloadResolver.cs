@@ -3946,6 +3946,26 @@ internal sealed class OverloadResolver
                 continue;
             }
 
+            // Issue #1256: an element-wise tuple conversion `(T1, …) -> (U1, …)`
+            // is implicit but NOT representation-preserving — the source and
+            // target `ValueTuple<…>` are different CLR instantiations, so the
+            // argument must be lowered (rebuilt) via BindConversion rather than
+            // passed through unchanged. The generic implicit-conversion branch
+            // below only inserts a conversion node for value-type nullable
+            // targets, leaving every other "implicit" conversion as a no-op, so
+            // tuple arguments would otherwise reach the call site still typed as
+            // the source tuple and produce unverifiable IL.
+            if (argument.Type is TupleTypeSymbol argTuple
+                && expectedType is TupleTypeSymbol paramTuple
+                && argTuple.Arity == paramTuple.Arity
+                && argTuple != paramTuple
+                && Conversion.Classify(argTuple, paramTuple).IsImplicit)
+            {
+                var tupleLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
+                boundArguments[i] = conversions.BindConversion(tupleLoc, argument, expectedType);
+                continue;
+            }
+
             if (argument.Type != expectedType
                 && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
                 && !Conversion.Classify(argument.Type, expectedType).IsImplicit)
