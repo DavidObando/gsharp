@@ -646,6 +646,31 @@ public sealed class Conversion
                     return Conversion.Implicit;
                 }
             }
+
+            // Issue #1274: a G# class that (transitively) derives from an
+            // imported/BCL base class (e.g. `MyStream : System.IO.Stream`)
+            // implicitly upcasts to that imported base class — or any base of
+            // it. The user class carries no ClrType during binding, so the
+            // general #521 reference upcast above (which requires
+            // `from.ClrType != null`) cannot fire. Walk the user base chain and
+            // match the first imported base class (`ImportedBaseType`) by name
+            // against the target's CLR type using IsAssignableByName, which
+            // covers the full CLR base chain of the imported base.
+            if (to?.ClrType is Type toClrClass
+                && !toClrClass.IsInterface
+                && !toClrClass.IsValueType
+                && !toClrClass.IsPointer
+                && !toClrClass.IsByRef)
+            {
+                for (var c = fromClass; c != null; c = c.BaseClass)
+                {
+                    if (c.ImportedBaseType?.ClrType is Type importedBaseClr
+                        && ClrTypeUtilities.IsAssignableByName(toClrClass, importedBaseClr))
+                    {
+                        return Conversion.Implicit;
+                    }
+                }
+            }
         }
 
         // Issue #528: a G# slice `[]T` is backed by a CLR `T[]` at runtime

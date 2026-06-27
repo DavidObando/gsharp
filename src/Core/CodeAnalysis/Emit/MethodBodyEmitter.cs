@@ -524,6 +524,26 @@ internal sealed partial class MethodBodyEmitter
             }
         }
 
+        // Issue #1274: class → imported CLR base class upcast. A user class
+        // that (transitively) derives from an imported/BCL base class (e.g.
+        // `MyStream : System.IO.Stream`) has no ClrType during emit, so the
+        // general #521 rule below cannot match. Recognise the relation
+        // structurally through the user base chain's `ImportedBaseType` so the
+        // upcast emits as a no-op reference conversion.
+        if (a is StructSymbol srcClass3 && srcClass3.IsClass
+            && b?.ClrType is System.Type bClrClass
+            && !bClrClass.IsInterface && !bClrClass.IsValueType)
+        {
+            for (var c = srcClass3; c != null; c = c.BaseClass)
+            {
+                if (c.ImportedBaseType?.ClrType is System.Type importedBaseClr
+                    && ClrTypeUtilities.IsAssignableByName(bClrClass, importedBaseClr))
+                {
+                    return true;
+                }
+            }
+        }
+
         // Issue #323: any delegate-typed value (named/generic CLR delegate
         // such as Func[string]) widens to System.Delegate /
         // System.MulticastDelegate as a no-op reference upcast.
