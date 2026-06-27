@@ -118,6 +118,37 @@ public sealed class BoundBinaryOperator
             return new BoundBinaryOperator(syntaxKind, enumKind, leftType, rightType, enumResultType);
         }
 
+        // Issue #1298: lifted equality / inequality over a nullable user-defined
+        // enum (`E? == E`, `E? != E`, `E? == E?`, …). A user-declared
+        // EnumSymbol has no static CLR type, so the generic value-type lifted
+        // arms further below (gated on `UnderlyingType.ClrType.IsValueType`)
+        // skip it, and BCL nullable enums never reach here because their
+        // underlying carries a real ClrType. Bind the comparison directly to
+        // `bool` whenever both operands denote the SAME user enum and at least
+        // one side is its nullable form; the emitter lowers it via
+        // `box Nullable<E>` + `Object.Equals` (C# `Nullable<T>` lifted
+        // equality semantics). Operands are left unlifted so each side boxes
+        // with its own type token. Non-nullable `E == E` is already handled by
+        // the EnumOperatorTable arm above; `E? == nil` by the IsNullCompare arm
+        // below.
+        if (syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken)
+        {
+            var leftEnum = leftType is NullableTypeSymbol leftNullableEnum
+                ? leftNullableEnum.UnderlyingType as EnumSymbol
+                : leftType as EnumSymbol;
+            var rightEnum = rightType is NullableTypeSymbol rightNullableEnum
+                ? rightNullableEnum.UnderlyingType as EnumSymbol
+                : rightType as EnumSymbol;
+            var eitherNullable = leftType is NullableTypeSymbol || rightType is NullableTypeSymbol;
+            if (leftEnum != null && rightEnum != null && leftEnum == rightEnum && eitherNullable)
+            {
+                var enumCmpKind = syntaxKind == SyntaxKind.EqualsEqualsToken
+                    ? BoundBinaryOperatorKind.Equals
+                    : BoundBinaryOperatorKind.NotEquals;
+                return new BoundBinaryOperator(syntaxKind, enumCmpKind, leftType, rightType, TypeSymbol.Bool);
+            }
+        }
+
         // Phase 3.B.2 / ADR-0029 + ADR-0033: structural == / != on data and inline struct values.
         //
         // Issue #614 audit: intentionally a single arm — only 2 operators (== / !=)
