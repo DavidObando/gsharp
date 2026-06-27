@@ -5600,6 +5600,21 @@ public sealed class CSharpToGSharpTranslator
             GExpression target;
             IReadOnlyList<GTypeReference> typeArguments = null;
 
+            // C# delegate/event invocation `d.Invoke(args)` / `d?.Invoke(args)` maps
+            // to G#'s direct function-call form `d(args)` / `d?(args)`: G# invokes a
+            // function-typed value (delegate field or event) directly and has no
+            // `.Invoke` member (`.Invoke` would be GS0159). Detected via the
+            // delegate's synthesized `Invoke` method (MethodKind.DelegateInvoke).
+            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
+                    { MethodKind: MethodKind.DelegateInvoke }
+                && TryGetDelegateInvokeReceiver(invocation.Expression, out GExpression invokeTarget))
+            {
+                var invokeArguments = invocation.ArgumentList.Arguments
+                    .Select(a => this.TranslateArgument(a))
+                    .ToList();
+                return new InvocationExpression(invokeTarget, invokeArguments, null);
+            }
+
             // A C# extension method whose receiver is an enum is emitted as a
             // plain static helper (a receiver clause is rejected on enums,
             // GS0103). Rewrite the call `x.M(args)` to the positional form
@@ -5673,6 +5688,56 @@ public sealed class CSharpToGSharpTranslator
                 .ToList();
 
             return new InvocationExpression(target, arguments, typeArguments);
+        }
+
+        // Resolves the receiver of a delegate/event `.Invoke(...)` call to the value
+        // that G# invokes directly. `d.Invoke(...)` → `d`; the null-conditional
+        // `d?.Invoke(...)` form reaches here as a member-binding whose receiver is the
+        // conditional-receiver placeholder (so the enclosing `?.` renders `d?(...)`).
+        // The null-conditional rewrite is only applied when the conditional-access
+        // receiver is a simple identifier/member/`this` expression: G# parses
+        // `complexExpr?(args)` (e.g. a call or index receiver ending in `)`/`]`) as
+        // the ternary operator (`expr ? a : b`), so those keep the explicit `.Invoke`.
+        private bool TryGetDelegateInvokeReceiver(
+            ExpressionSyntax callee, out GExpression receiver)
+        {
+            switch (callee)
+            {
+                case MemberAccessExpressionSyntax member
+                    when member.Name.Identifier.Text == "Invoke":
+                    receiver = this.TranslateExpression(member.Expression);
+                    return true;
+
+                case MemberBindingExpressionSyntax binding
+                    when binding.Name.Identifier.Text == "Invoke"
+                        && IsSimpleConditionalInvokeReceiver(binding):
+                    receiver = new ConditionalReceiverExpression();
+                    return true;
+
+                default:
+                    receiver = null;
+                    return false;
+            }
+        }
+
+        // Reports whether the conditional-access receiver enclosing a `?.Invoke(...)`
+        // member-binding is a form G# can null-conditionally invoke as `recv?(args)`
+        // without colliding with the ternary operator — i.e. an identifier, a member
+        // access, or `this` (its last token is an identifier), but NOT a call/index/
+        // parenthesized receiver (whose trailing `)`/`]` makes `recv?(` parse as a
+        // ternary condition).
+        private static bool IsSimpleConditionalInvokeReceiver(
+            MemberBindingExpressionSyntax binding)
+        {
+            if (binding.Parent is not InvocationExpressionSyntax invocation ||
+                invocation.Parent is not ConditionalAccessExpressionSyntax conditional)
+            {
+                return false;
+            }
+
+            return conditional.Expression is IdentifierNameSyntax
+                or MemberAccessExpressionSyntax
+                or ThisExpressionSyntax;
         }
 
         /// <summary>

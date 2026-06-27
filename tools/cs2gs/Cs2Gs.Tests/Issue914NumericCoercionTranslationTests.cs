@@ -323,6 +323,71 @@ namespace Demo
         Assert.Contains("uint32(0)", printed);
     }
 
+    /// <summary>
+    /// A direct delegate/event <c>Invoke(...)</c> is rewritten to G#'s native
+    /// invocation form (<c>d(args)</c>); G# has no <c>Delegate.Invoke</c> member.
+    /// </summary>
+    [Fact]
+    public void DelegateInvoke_IdentifierReceiver_RewritesToNativeCall()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        private System.Action<int> handler;
+        public void Raise(int x) => handler.Invoke(x);
+    }
+}");
+
+        Assert.Contains("handler(x)", printed);
+        Assert.DoesNotContain(".Invoke(x)", printed);
+    }
+
+    /// <summary>
+    /// A null-conditional delegate invocation with a simple identifier receiver
+    /// renders as G#'s <c>d?(args)</c> (the parser disambiguates <c>name?(</c> as a
+    /// null-conditional invoke).
+    /// </summary>
+    [Fact]
+    public void NullConditionalInvoke_IdentifierReceiver_RewritesToNullConditionalCall()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        private System.Action<int> handler;
+        public void Raise(int x) => handler?.Invoke(x);
+    }
+}");
+
+        Assert.Contains("handler?(x)", printed);
+        Assert.DoesNotContain(".Invoke(x)", printed);
+    }
+
+    /// <summary>
+    /// A null-conditional delegate invocation whose receiver is a call (its text ends
+    /// in <c>)</c>) keeps the explicit <c>?.Invoke(...)</c>: G# would parse
+    /// <c>GetHandler()?(args)</c> as the ternary operator, so the rewrite is skipped.
+    /// </summary>
+    [Fact]
+    public void NullConditionalInvoke_CallReceiver_KeepsExplicitInvoke()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        private System.Action<int> GetHandler() => null;
+        public void Raise(int x) => GetHandler()?.Invoke(x);
+    }
+}");
+
+        Assert.Contains("GetHandler()?.Invoke(x)", printed);
+        Assert.DoesNotContain("?(x)", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
