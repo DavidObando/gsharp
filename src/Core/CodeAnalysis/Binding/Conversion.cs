@@ -496,6 +496,20 @@ public sealed class Conversion
         // conversion, so no representation change is needed.
         if (from is StructSymbol fromClass && fromClass.IsClass)
         {
+            // Issue #1229: every user-declared `class` is a reference type
+            // whose implicit root base is System.Object. The class carries no
+            // ClrType during binding (its TypeDef only exists in the assembly
+            // being emitted), so the general object-widening rule above (which
+            // requires `from.ClrType != null`) cannot fire. This is a plain
+            // reference upcast — NO boxing, since classes are reference types —
+            // mirroring the user-to-user-base case below; the emitter lowers it
+            // to a no-op (Issue #990). The nullable `object?` target is routed
+            // through this same path by the #1121 nullable-wrapping rule above.
+            if (to == TypeSymbol.Object || to?.ClrType?.IsSameAs(typeof(object)) == true)
+            {
+                return Conversion.Implicit;
+            }
+
             if (to is InterfaceSymbol toInterface)
             {
                 for (var c = fromClass; c != null; c = c.BaseClass)
