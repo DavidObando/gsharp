@@ -404,6 +404,13 @@ internal sealed partial class MethodBodyEmitter
         var containing = fa.StructType;
         bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(containing);
 
+        // Issue #1254: an inherited field declared on a generic base type but
+        // accessed through a (non-generic) derived receiver must be read via a
+        // MemberRef parented at the constructed base TypeSpec.
+        var inheritedFieldBase = isGeneric
+            ? null
+            : ResolveInheritedGenericBaseForField(fa.Receiver?.Type as StructSymbol, fa.Field);
+
         EntityHandle fieldHandle;
         if (fa.InterfaceType != null)
         {
@@ -415,6 +422,10 @@ internal sealed partial class MethodBodyEmitter
         else if (isGeneric)
         {
             fieldHandle = this.outer.ResolveFieldToken(containing, fa.Field);
+        }
+        else if (inheritedFieldBase != null)
+        {
+            fieldHandle = this.outer.GetUserStructFieldRef(inheritedFieldBase, fa.Field);
         }
         else if (this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var defHandle))
         {
@@ -500,6 +511,13 @@ internal sealed partial class MethodBodyEmitter
         var containing = fas.StructType;
         bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(containing);
 
+        // Issue #1254: inherited field on a generic base via a non-generic
+        // derived receiver — write through a MemberRef parented at the
+        // constructed base TypeSpec.
+        var inheritedFieldBase = isGeneric
+            ? null
+            : ResolveInheritedGenericBaseForField(fas.Receiver?.Type as StructSymbol, fas.Field);
+
         EntityHandle fieldHandle;
         if (fas.InterfaceType != null)
         {
@@ -510,6 +528,10 @@ internal sealed partial class MethodBodyEmitter
         else if (isGeneric)
         {
             fieldHandle = this.outer.ResolveFieldToken(containing, fas.Field);
+        }
+        else if (inheritedFieldBase != null)
+        {
+            fieldHandle = this.outer.GetUserStructFieldRef(inheritedFieldBase, fas.Field);
         }
         else if (this.outer.cache.StructFieldDefs.TryGetValue(fas.Field, out var defHandle))
         {
@@ -665,9 +687,12 @@ internal sealed partial class MethodBodyEmitter
         // parameter is read with the substitution applied. The non-generic case
         // keeps using the plain accessor MethodDef.
         EntityHandle getterHandle;
-        if (ReflectionMetadataEmitter.IsUserGenericTypeReference(access.StructType))
+        var getterContainer = ReflectionMetadataEmitter.IsUserGenericTypeReference(access.StructType)
+            ? access.StructType
+            : ResolveInheritedGenericBaseForProperty(access.Receiver?.Type as StructSymbol, access.Property);
+        if (getterContainer != null)
         {
-            getterHandle = this.outer.ResolveUserPropertyAccessorToken(access.StructType, access.Property, wantSetter: false);
+            getterHandle = this.outer.ResolveUserPropertyAccessorToken(getterContainer, access.Property, wantSetter: false);
         }
         else if (this.outer.cache.PropertyAccessorHandles.TryGetValue(access.Property, out var handles) && handles.Getter.HasValue)
         {
@@ -730,9 +755,12 @@ internal sealed partial class MethodBodyEmitter
         // Issue #989: route generic constructed receivers through the
         // TypeSpec-parented MemberRef (mirrors EmitPropertyAccess).
         EntityHandle setterHandle;
-        if (ReflectionMetadataEmitter.IsUserGenericTypeReference(assn.StructType))
+        var setterContainer = ReflectionMetadataEmitter.IsUserGenericTypeReference(assn.StructType)
+            ? assn.StructType
+            : ResolveInheritedGenericBaseForProperty(assn.Receiver?.Type as StructSymbol, assn.Property);
+        if (setterContainer != null)
         {
-            setterHandle = this.outer.ResolveUserPropertyAccessorToken(assn.StructType, assn.Property, wantSetter: true);
+            setterHandle = this.outer.ResolveUserPropertyAccessorToken(setterContainer, assn.Property, wantSetter: true);
         }
         else if (this.outer.cache.PropertyAccessorHandles.TryGetValue(assn.Property, out var handles) && handles.Setter.HasValue)
         {
@@ -1417,5 +1445,68 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.OpCode(ILOpCode.Stind_ref);
         }
+    }
+
+    // Issue #1254: when an inherited property is accessed through a (non-generic)
+    // derived receiver but the property is declared on a generic base type, the
+    // accessor must be referenced via a MemberRef parented at the CONSTRUCTED
+    // base TypeSpec. Returns that constructed base, or null when the property is
+    // not inherited from a generic base.
+    private static StructSymbol ResolveInheritedGenericBaseForProperty(StructSymbol receiver, PropertySymbol property)
+    {
+        if (receiver == null || property == null)
+        {
+            return null;
+        }
+
+        return receiver.FindConstructedGenericBase(def => DefDeclaresProperty(def, property));
+    }
+
+    private static bool DefDeclaresProperty(StructSymbol def, PropertySymbol property)
+    {
+        var set = property.IsStatic ? def.StaticProperties : def.Properties;
+        if (set.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var candidate in set)
+        {
+            if (candidate.Name == property.Name && candidate.IsIndexer == property.IsIndexer)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Issue #1254: the field analogue of ResolveInheritedGenericBaseForProperty.
+    private static StructSymbol ResolveInheritedGenericBaseForField(StructSymbol receiver, FieldSymbol field)
+    {
+        if (receiver == null || field == null)
+        {
+            return null;
+        }
+
+        return receiver.FindConstructedGenericBase(def => DefDeclaresField(def, field));
+    }
+
+    private static bool DefDeclaresField(StructSymbol def, FieldSymbol field)
+    {
+        if (def.Fields.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var candidate in def.Fields)
+        {
+            if (candidate.Name == field.Name)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

@@ -178,10 +178,25 @@ internal sealed partial class MethodBodyEmitter
         // at the constructed TypeSpec via <see cref="ResolveUserInterfaceInstanceMethodToken"/>.
         var receiverIface = call.Receiver.Type as InterfaceSymbol;
 
+        // Issue #1254: an inherited instance method declared on a generic base
+        // type, invoked through a (non-generic) derived receiver, must be
+        // referenced via a MemberRef parented at the CONSTRUCTED base TypeSpec
+        // (e.g. `Base`1<int32>`) — never the bare MethodDef on the open generic
+        // definition, which the runtime rejects with "the containing type is
+        // not fully instantiated". The `isGenericReceiver` branch already covers
+        // the case where the receiver itself is the generic type.
+        var inheritedGenericBase = !isGenericReceiver
+            ? this.ResolveInheritedGenericBase(call.Receiver.Type as StructSymbol, call.Method)
+            : null;
+
         EntityHandle methodHandle;
         if (isGenericReceiver)
         {
             methodHandle = this.outer.ResolveUserInstanceMethodToken(receiverType, call.Method);
+        }
+        else if (inheritedGenericBase != null)
+        {
+            methodHandle = this.outer.ResolveUserInstanceMethodToken(inheritedGenericBase, call.Method);
         }
         else if (receiverIface != null
             && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(receiverIface))
@@ -222,6 +237,45 @@ internal sealed partial class MethodBodyEmitter
         // ADR-0087 §3 R3+R4: after R2, a user-instance call returns the
         // method's reified signature (substituted at the TypeSpec / MethodSpec
         // level). No erasure-widening is required at the call boundary.
+    }
+
+    // Issue #1254: returns the constructed generic base instantiation that
+    // declares an inherited <paramref name="method"/>, when the call's receiver
+    // inherits it from a generic base (e.g. `Derived : Base[int32]` calling an
+    // inherited `Base.Hello()`). Returns null when the method is not inherited
+    // from a generic base — including when the receiver itself is the declaring
+    // type or the declaring type is non-generic.
+    private StructSymbol ResolveInheritedGenericBase(StructSymbol receiver, FunctionSymbol method)
+    {
+        if (receiver == null || method == null)
+        {
+            return null;
+        }
+
+        if (!this.outer.cache.MethodHandles.ContainsKey(method))
+        {
+            return null;
+        }
+
+        var declaring = method.ReceiverType as StructSymbol;
+        if (declaring == null)
+        {
+            return null;
+        }
+
+        var declaringDef = declaring.Definition ?? declaring;
+        if (declaringDef.TypeParameters.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        // Not inherited — the receiver itself declares the method.
+        if (ReferenceEquals(receiver.Definition ?? receiver, declaringDef))
+        {
+            return null;
+        }
+
+        return receiver.FindConstructedGenericBase(def => ReferenceEquals(def, declaringDef));
     }
 
     // ADR-0087 R5 / issue #765: bridges from a substituted FunctionSymbol on
@@ -647,7 +701,28 @@ internal sealed partial class MethodBodyEmitter
         // Resolve the MethodDef of the base implementation. For a non-generic
         // base this is the bare MethodDef row; for a constructed generic base
         // it is a MemberRef parented at the base TypeSpec.
-        var methodToken = this.outer.ResolveUserInstanceMethodToken(call.BaseClass, call.Method);
+        // Issue #1254: when the base is named by its OPEN generic definition
+        // (no type arguments) — as it is for an inherited method whose
+        // declaring type is generic — resolve the CONSTRUCTED base
+        // instantiation from the receiver's hierarchy so the MemberRef is
+        // parented at e.g. `Base`1<int32>` rather than the open `Base`1<!0>`
+        // (which the runtime rejects with BadImageFormat / "not fully
+        // instantiated").
+        var baseClass = call.BaseClass;
+        if (baseClass != null
+            && baseClass.TypeArguments.IsDefaultOrEmpty
+            && !baseClass.TypeParameters.IsDefaultOrEmpty
+            && call.Receiver.Type is StructSymbol baseReceiver)
+        {
+            var baseDef = baseClass.Definition ?? baseClass;
+            var constructedBase = baseReceiver.FindConstructedGenericBase(d => ReferenceEquals(d, baseDef));
+            if (constructedBase != null)
+            {
+                baseClass = constructedBase;
+            }
+        }
+
+        var methodToken = this.outer.ResolveUserInstanceMethodToken(baseClass, call.Method);
 
         // Issue #986: non-virtual `call`, NOT `callvirt`. callvirt would
         // re-dispatch through the v-table and re-enter the derived override.

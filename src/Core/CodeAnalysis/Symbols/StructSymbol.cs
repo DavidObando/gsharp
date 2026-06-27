@@ -1018,6 +1018,82 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>
+    /// Issue #1254: finds the constructed generic base instantiation in this
+    /// type's base-class chain whose definition satisfies
+    /// <paramref name="declaringDefinitionPredicate"/>, composing the
+    /// type-argument substitution across each inheritance hop so the returned
+    /// symbol carries fully-resolved type arguments in this type's context.
+    /// </summary>
+    /// <remarks>
+    /// A deeper base's type arguments are expressed in terms of a shallower
+    /// base's type parameters (e.g. for <c>Derived : Mid[int32] : Base[T]</c>
+    /// the <c>Base</c> instantiation is written <c>Base[Mid.T]</c>), so each
+    /// argument is resolved through the running substitution accumulated from
+    /// the more-derived levels. Looking up <c>Base</c> therefore yields the
+    /// fully-closed <c>Base[int32]</c>. Returns <see langword="null"/> when no
+    /// matching generic base exists. The walk includes the receiver itself.
+    /// </remarks>
+    /// <param name="declaringDefinitionPredicate">Predicate matched against each ancestor's definition (or itself when non-generic).</param>
+    /// <returns>The constructed generic base instantiation, or null.</returns>
+    public StructSymbol FindConstructedGenericBase(Func<StructSymbol, bool> declaringDefinitionPredicate)
+    {
+        if (declaringDefinitionPredicate == null)
+        {
+            return null;
+        }
+
+        Dictionary<TypeParameterSymbol, TypeSymbol> running = null;
+        for (var c = this; c != null; c = c.BaseClass)
+        {
+            // Compose this level's type-argument mapping into the running
+            // substitution before testing the predicate so a matching base's
+            // arguments are already resolved in this type's context.
+            var cDef = c.Definition ?? c;
+            if (c.Definition != null
+                && !c.TypeArguments.IsDefaultOrEmpty
+                && !c.Definition.TypeParameters.IsDefaultOrEmpty)
+            {
+                var defParams = c.Definition.TypeParameters;
+                var count = System.Math.Min(defParams.Length, c.TypeArguments.Length);
+                for (var i = 0; i < count; i++)
+                {
+                    var arg = c.TypeArguments[i];
+                    if (arg is TypeParameterSymbol tpArg && running != null && running.TryGetValue(tpArg, out var resolved))
+                    {
+                        arg = resolved;
+                    }
+
+                    running ??= new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                    running[defParams[i]] = arg;
+                }
+            }
+
+            if (cDef.TypeParameters.IsDefaultOrEmpty || !declaringDefinitionPredicate(cDef))
+            {
+                continue;
+            }
+
+            var tps = cDef.TypeParameters;
+            var args = ImmutableArray.CreateBuilder<TypeSymbol>(tps.Length);
+            foreach (var tp in tps)
+            {
+                if (running != null && running.TryGetValue(tp, out var concrete))
+                {
+                    args.Add(concrete);
+                }
+                else
+                {
+                    args.Add(tp);
+                }
+            }
+
+            return Construct(cDef, args.MoveToImmutable());
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Issue #1087: gets the parameter types of <paramref name="constructor"/>
     /// as observed on this (possibly constructed) symbol. For a constructed
     /// closed generic type, the open-definition constructor's parameter types
