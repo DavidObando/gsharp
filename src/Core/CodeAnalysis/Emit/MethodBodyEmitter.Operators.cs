@@ -219,6 +219,16 @@ internal sealed partial class MethodBodyEmitter
                     this.il.LoadLocalAddress(slot);
                     this.il.OpCode(ILOpCode.Call);
                     this.il.Token(this.outer.wellKnown.GetNullableGetValueOrDefaultReference(innerClr));
+
+                    // Issue #1239: when the best common type widened the left's
+                    // underlying numeric type (e.g. `int32? ?? int64` → `int64`),
+                    // convert the unwrapped underlying value to the result type so
+                    // the non-null branch leaves a value of `b.Type` on the stack,
+                    // matching the (already-converted) right branch.
+                    if (b.Type != leftNullable.UnderlyingType)
+                    {
+                        this.TryEmitNumericConversion(leftNullable.UnderlyingType, b.Type);
+                    }
                 }
 
                 this.il.Branch(ILOpCode.Br, end);

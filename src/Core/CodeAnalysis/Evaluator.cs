@@ -2277,7 +2277,24 @@ public sealed class Evaluator
         if (b.Op.Kind == BoundBinaryOperatorKind.NullCoalesce)
         {
             var leftValue = EvaluateExpression(b.Left);
-            return leftValue ?? EvaluateExpression(b.Right);
+            if (leftValue != null)
+            {
+                // Issue #1239: when the best common type widened the left's
+                // underlying numeric type (e.g. `int32? ?? int64` → `int64`),
+                // convert the non-null left value to the result type. Reference
+                // results are representation-preserving and need no conversion.
+                var leftUnderlying = b.Left.Type is NullableTypeSymbol ln ? ln.UnderlyingType : b.Left.Type;
+                if (b.Type != leftUnderlying
+                    && b.Type?.ClrType is { IsValueType: true } resultClr
+                    && IsSupportedNumericClrType(resultClr))
+                {
+                    return UncheckedNumericConvert(leftValue, resultClr);
+                }
+
+                return leftValue;
+            }
+
+            return EvaluateExpression(b.Right);
         }
 
         var left = EvaluateExpression(b.Left);

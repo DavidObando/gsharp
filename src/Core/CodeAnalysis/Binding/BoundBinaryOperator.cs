@@ -178,6 +178,49 @@ public sealed class BoundBinaryOperator
                 var result = rightType is NullableTypeSymbol ? (TypeSymbol)NullableTypeSymbol.Get(leftUnderlying) : leftUnderlying;
                 return new BoundBinaryOperator(syntaxKind, BoundBinaryOperatorKind.NullCoalesce, leftType, rightType, result);
             }
+
+            // Issue #1239 / C# §12.15: best common type. When the underlyings
+            // differ but a valid implicit conversion exists between them, `??`
+            // computes the best common type instead of requiring an exact match:
+            //   * if the right operand implicitly converts to the left's non-null
+            //     type A0 (reference downcast target, numeric widening source),
+            //     the result is A0 (e.g. `int32? ?? uint16` → `int32`);
+            //   * otherwise, if A0 implicitly converts to the right operand's
+            //     type, the result is the right type (reference upcast / interface
+            //     implementation, e.g. `Foo? ?? IFoo` → `IFoo`, or numeric
+            //     widening, e.g. `int32? ?? int64` → `int64`).
+            // Restricted to a non-nullable right operand so the result is a plain
+            // (non-nullable) type; ExpressionBinder.BindBinaryExpression inserts
+            // the operand conversions required for correct emit/evaluation. A
+            // mismatched nullable right operand still falls through to GS0129
+            // (unchanged behaviour) because lifted nullable numeric conversions
+            // are not part of the implicit-conversion lattice.
+            if (rightType is not NullableTypeSymbol
+                && leftUnderlying != null
+                && rightUnderlying != null
+                && leftType != TypeSymbol.Error
+                && rightType != TypeSymbol.Error)
+            {
+                TypeSymbol common = null;
+                var rightToLeft = Conversion.Classify(rightUnderlying, leftUnderlying);
+                if (rightToLeft.Exists && rightToLeft.IsImplicit)
+                {
+                    common = leftUnderlying;
+                }
+                else
+                {
+                    var leftToRight = Conversion.Classify(leftUnderlying, rightUnderlying);
+                    if (leftToRight.Exists && leftToRight.IsImplicit)
+                    {
+                        common = rightUnderlying;
+                    }
+                }
+
+                if (common != null)
+                {
+                    return new BoundBinaryOperator(syntaxKind, BoundBinaryOperatorKind.NullCoalesce, leftType, rightType, common);
+                }
+            }
         }
 
         // PR N-4 / §6.1 / C# §7.3.7: lifted binary operators over a
