@@ -6734,7 +6734,8 @@ internal sealed class DeclarationBinder
             var argument = boundArguments[i];
             var parameter = baseParams[i];
             if (argument.Type != parameter.Type
-                && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
+                && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit
+                && !ExpressionBinder.IsImplicitConstantNarrowingArgument(argument, parameter.Type))
             {
                 if (argument.Type != TypeSymbol.Error)
                 {
@@ -6805,6 +6806,15 @@ internal sealed class DeclarationBinder
                 // Error-typed arguments don't disqualify a candidate: a prior
                 // diagnostic already explains the bad argument.
                 if (argType == TypeSymbol.Error)
+                {
+                    continue;
+                }
+
+                // Issue #1307: a constant integer argument that fits a narrower /
+                // cross-sign integer parameter is implicitly convertible there
+                // (C# §10.2.11, issue #1281), so it must not disqualify the
+                // candidate even though the lattice conversion is not implicit.
+                if (ExpressionBinder.IsImplicitConstantNarrowingArgument(boundArguments[i], paramType))
                 {
                     continue;
                 }
