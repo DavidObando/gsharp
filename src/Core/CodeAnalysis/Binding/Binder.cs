@@ -540,6 +540,15 @@ public sealed class Binder
                     continue;
                 }
 
+                // Issue #1262: a discard parameter (`_`) is non-referenceable —
+                // it occupies a positional slot in the signature but is not
+                // added to the body's lookup scope, so `_` does not resolve to
+                // a parameter and repeated `_` parameters never collide.
+                if (p.Name == "_")
+                {
+                    continue;
+                }
+
                 scope.TryDeclareVariable(p);
             }
 

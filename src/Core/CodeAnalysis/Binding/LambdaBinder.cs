@@ -229,7 +229,11 @@ internal sealed class LambdaBinder
                 ptype = SliceTypeSymbol.Get(ptype);
             }
 
-            if (!seen.Add(pname))
+            // Issue #1262: the discard identifier `_` is not a real binding —
+            // C# allows repeated `_` discard parameters (e.g. `(_, _) => ...`).
+            // Skip the uniqueness check for `_` so a second discard is not a
+            // duplicate; each `_` still occupies its positional slot below.
+            if (pname != "_" && !seen.Add(pname))
             {
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
             }
@@ -285,6 +289,14 @@ internal sealed class LambdaBinder
         setCurrentFunction(synthetic);
         foreach (var ps in synthetic.Parameters)
         {
+            // Issue #1262: discard parameters (`_`) are non-referenceable —
+            // do not add them to the lookup scope so `_` in the body does not
+            // resolve to a parameter (and repeated `_` slots never collide).
+            if (ps.Name == "_")
+            {
+                continue;
+            }
+
             Scope.TryDeclareVariable(ps);
         }
 
@@ -448,7 +460,10 @@ internal sealed class LambdaBinder
                 ptype = SliceTypeSymbol.Get(ptype);
             }
 
-            if (!seen.Add(pname))
+            // Issue #1262: skip the uniqueness check for the discard `_` so a
+            // second discard parameter is permitted (C# `(_, _) => ...`). Each
+            // `_` still occupies its positional slot.
+            if (pname != "_" && !seen.Add(pname))
             {
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
             }
@@ -483,6 +498,14 @@ internal sealed class LambdaBinder
         setCurrentFunction(placeholder);
         foreach (var ps in placeholder.Parameters)
         {
+            // Issue #1262: discard parameters (`_`) are non-referenceable —
+            // do not add them to the lookup scope so `_` in the body does not
+            // resolve to a parameter (and repeated `_` slots never collide).
+            if (ps.Name == "_")
+            {
+                continue;
+            }
+
             Scope.TryDeclareVariable(ps);
         }
 
