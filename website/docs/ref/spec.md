@@ -473,6 +473,14 @@ InterfaceBody    = "{" ( InterfaceMethodDecl | PropertyDecl | EventDecl )* "}" .
 InterfaceMethodDecl = "func" identifier "(" Parameters? ")" TypeClause? FunctionBody .  (* FunctionBody ";" = no-body (abstract) marker; issue #881 *)
 ```
 
+A property or event accessor body is a block `{ … }` or `;` (a bare/auto
+accessor) **only**. Unlike C#, G# has **no** fat-arrow `=>` expression-bodied
+accessor, and the G# lambda arrow `->` is likewise **not** a valid accessor-body
+form — a computed accessor must use an explicit block body (e.g.
+`get { return e }`). A `get => e`, `get -> e`, or `add => e` is a syntax error
+(GS0005). This mirrors G# having no expression-body arrow form for members in
+general (issue #1273).
+
 #### Protected accessibility (issue #950)
 
 The `protected` modifier (CIL `family`) makes a member accessible **within its

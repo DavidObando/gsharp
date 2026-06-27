@@ -247,52 +247,50 @@ public class PropertyParserTests
     }
 
     [Fact]
-    public void ParsesExpressionBodiedGetter_NoDiagnostics()
+    public void FatArrowGetter_ReportsDiagnostic()
     {
-        // Issue #1270: `prop P T { get => e }` is an expression-bodied getter.
+        // Issue #1273: G# has no fat-arrow `=>` expression-bodied accessor (that
+        // is C# syntax). `get => e` must be a syntax error, not silently
+        // accepted or desugared.
         const string source = "package P\nclass Foo {\n  prop X int32 { get => 5 }\n}\n";
         var tree = SyntaxTree.Parse(source);
-        Assert.Empty(tree.Diagnostics);
+        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0005");
     }
 
     [Fact]
-    public void ExpressionBodiedGetter_DesugarsToBlockWithReturn()
+    public void ArrowGetter_ReportsDiagnostic()
     {
-        // Issue #1270: the parser desugars `get => e` into a synthesized block
-        // `{ return e }` so binding/emit reuse the existing accessor-body path.
-        const string source = "package P\nclass Foo {\n  prop X int32 { get => 5 }\n}\n";
+        // Issue #1273: the G# lambda arrow `->` is also not a valid accessor
+        // body form; only a block `{ }` or `;` is allowed.
+        const string source = "package P\nclass Foo {\n  prop X int32 { get -> 5 }\n}\n";
         var tree = SyntaxTree.Parse(source);
-        Assert.Empty(tree.Diagnostics);
-
-        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
-        var accessor = structDecl.Properties.Single().Accessors.Single();
-        Assert.True(accessor.IsGetter);
-        Assert.NotNull(accessor.Body);
-        var statement = Assert.Single(accessor.Body.Statements);
-        Assert.IsType<ReturnStatementSyntax>(statement);
+        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0005");
     }
 
     [Fact]
-    public void ExpressionBodiedSetter_DesugarsToBlockWithExpressionStatement()
+    public void FatArrowSetter_ReportsDiagnostic()
     {
-        // Issue #1270: a `set => e` desugars to `{ e }` (an expression
-        // statement), NOT an implicit return, because the setter is void.
-        const string source = "package P\nclass Foo {\n  var n int32\n  prop X int32 { get => this.n  set => this.n = value }\n}\n";
+        // Issue #1273: `set => e` is rejected just like the fat-arrow getter.
+        const string source = "package P\nclass Foo {\n  var n int32\n  prop X int32 { get { return this.n } set => this.n = value }\n}\n";
         var tree = SyntaxTree.Parse(source);
-        Assert.Empty(tree.Diagnostics);
-
-        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
-        var setter = structDecl.Properties.Single().Accessors.Single(a => a.IsSetter);
-        Assert.NotNull(setter.Body);
-        var statement = Assert.Single(setter.Body.Statements);
-        Assert.IsType<ExpressionStatementSyntax>(statement);
+        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0005");
     }
 
     [Fact]
-    public void ParsesExpressionBodiedGetterOnInterface_NoDiagnostics()
+    public void FatArrowGetterOnInterface_ReportsDiagnostic()
     {
-        // Issue #1270: default interface getter via expression body.
+        // Issue #1273: the rejection applies on interfaces too.
         const string source = "package P\ninterface I {\n  prop X int32 { get => 5 }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0005");
+    }
+
+    [Fact]
+    public void BlockBodiedAndBareAccessors_ParseCleanly()
+    {
+        // Issue #1273: a block body and a bare (auto) accessor remain the only
+        // valid accessor forms and parse without diagnostics.
+        const string source = "package P\nclass Foo {\n  var n int32\n  prop X int32 { get { return this.n } set(v) { this.n = v } }\n  prop Y int32 { get; set; }\n}\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
