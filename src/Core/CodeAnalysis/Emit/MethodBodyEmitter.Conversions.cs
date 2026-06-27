@@ -141,6 +141,21 @@ internal sealed partial class MethodBodyEmitter
                 + "ldloca/initobj/ldloc. Reaching EmitConversion indicates a missing lowering path.");
         }
 
+        // Issue #1298: value-type `E → E?` lift where E is a user-declared
+        // enum. The enum has no runtime CLR type, so the BCL-backed ctor path
+        // below (which closes `Nullable<>` over a real `Type`) cannot fire;
+        // instead emit `newobj Nullable<E>::.ctor(!0)` against a TypeSpec
+        // parent that closes `Nullable<>` over the enum's emitted TypeDef.
+        // Mirrors the open-type-parameter branch in the value-type lift below.
+        if (to is NullableTypeSymbol toUserEnumNullableLift
+            && toUserEnumNullableLift.UnderlyingType is EnumSymbol
+            && from == toUserEnumNullableLift.UnderlyingType)
+        {
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetNullableCtorMemberRefForUserEnum(toUserEnumNullableLift));
+            return;
+        }
+
         // Issue #504: value-type `T → Nullable<T>` is a true CLR widening;
         // emit `newobj Nullable<T>::.ctor(T)`. This must run before the
         // reference-compatibility shortcut below, which would otherwise

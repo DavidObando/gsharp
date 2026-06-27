@@ -327,6 +327,23 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #1298: lifted equality / inequality over a nullable
+        // user-defined enum (`E? == E?`, `E? == E`, `E? == nil`, …). A
+        // user EnumSymbol has no static CLR type, so the value-type
+        // Nullable<T> machinery above (gated on `ClrType`) never owns these
+        // nodes. `box Nullable<E>` yields a managed-null reference when the
+        // wrapper has no value and a boxed `E` otherwise (ECMA-335 III.4.1),
+        // so dispatching through static `Object.Equals(object, object)`
+        // reproduces C# `Nullable<T>` lifted equality: nil == nil → true,
+        // nil == value → false, value == value → underlying compare. The
+        // `nil`-literal arm boxes the single nullable operand and compares to
+        // `ldnull`.
+        if ((b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+            && this.TryEmitNullableUserEnumEquality(b))
+        {
+            return;
+        }
+
         // String concatenation / equality go through BCL helpers.
         if (b.Left.Type == TypeSymbol.String && b.Right.Type == TypeSymbol.String)
         {
@@ -577,6 +594,75 @@ internal sealed partial class MethodBodyEmitter
 
         EmitNarrowingTruncationIfNeeded(b.Op.Kind, b.Type);
     }
+
+    // Issue #1298: returns true when this binary node is a nullable
+    // user-defined enum equality / inequality and emits the lifted
+    // comparison via `box` + `Object.Equals` (or `box` + `ldnull; ceq`
+    // for the `nil`-literal form). Returns false (emitting nothing) when
+    // the node is not such a comparison, so the caller can fall through.
+    private bool TryEmitNullableUserEnumEquality(BoundBinaryExpression b)
+    {
+        var left = b.Left;
+        var right = b.Right;
+        bool leftIsNullableEnum = IsNullableUserEnum(left.Type);
+        bool rightIsNullableEnum = IsNullableUserEnum(right.Type);
+
+        // `E? == nil` / `nil == E?` (and `!=`): box the nullable operand
+        // and compare the resulting reference against null.
+        if (leftIsNullableEnum && right.Type == TypeSymbol.Null)
+        {
+            this.EmitBoxedEnumOperand(left);
+            this.il.OpCode(ILOpCode.Ldnull);
+            this.il.OpCode(ILOpCode.Ceq);
+            this.EmitEqualityNegationIfNeeded(b.Op.Kind);
+            return true;
+        }
+
+        if (rightIsNullableEnum && left.Type == TypeSymbol.Null)
+        {
+            this.EmitBoxedEnumOperand(right);
+            this.il.OpCode(ILOpCode.Ldnull);
+            this.il.OpCode(ILOpCode.Ceq);
+            this.EmitEqualityNegationIfNeeded(b.Op.Kind);
+            return true;
+        }
+
+        // `E? == E?`, `E? == E`, `E == E?`: at least one operand is a
+        // nullable user enum and the other is the same user enum (nullable
+        // or not). Box both operands with their own type token and dispatch
+        // through static Object.Equals.
+        bool leftIsEnum = leftIsNullableEnum || left.Type is EnumSymbol;
+        bool rightIsEnum = rightIsNullableEnum || right.Type is EnumSymbol;
+        if ((leftIsNullableEnum || rightIsNullableEnum) && leftIsEnum && rightIsEnum)
+        {
+            this.EmitBoxedEnumOperand(left);
+            this.EmitBoxedEnumOperand(right);
+            this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
+            this.EmitEqualityNegationIfNeeded(b.Op.Kind);
+            return true;
+        }
+
+        return false;
+    }
+
+    private void EmitBoxedEnumOperand(BoundExpression operand)
+    {
+        this.EmitExpression(operand);
+        this.il.OpCode(ILOpCode.Box);
+        this.il.Token(this.outer.GetElementTypeToken(operand.Type));
+    }
+
+    private void EmitEqualityNegationIfNeeded(BoundBinaryOperatorKind kind)
+    {
+        if (kind == BoundBinaryOperatorKind.NotEquals)
+        {
+            this.il.LoadConstantI4(0);
+            this.il.OpCode(ILOpCode.Ceq);
+        }
+    }
+
+    private static bool IsNullableUserEnum(TypeSymbol type)
+        => type is NullableTypeSymbol nullable && nullable.UnderlyingType is EnumSymbol;
 
     /// <summary>
     /// Issue #831: matches `T? == nil` / `T? != nil` (and the symmetric

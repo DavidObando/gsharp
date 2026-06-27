@@ -148,6 +148,16 @@ internal sealed class MetadataTokenCache
         = new Dictionary<TypeParameterSymbol, MemberReferenceHandle>();
 
     /// <summary>
+    /// Gets the cache mapping a user-defined <see cref="EnumSymbol"/> to the
+    /// <see cref="MemberReferenceHandle"/> for
+    /// <c>System.Nullable`1&lt;E&gt;::.ctor(!0)</c> (issue #1298). The parent
+    /// TypeSpec closes <c>Nullable&lt;&gt;</c> over the enum's emitted TypeDef,
+    /// so one MemberRef per enum serves every <c>E -&gt; E?</c> lift site.
+    /// </summary>
+    public Dictionary<EnumSymbol, MemberReferenceHandle> NullableUserEnumCtorMemberRefs { get; }
+        = new Dictionary<EnumSymbol, MemberReferenceHandle>();
+
+    /// <summary>
     /// Gets the cache mapping a <see cref="FieldInfo"/> to its
     /// <see cref="MemberReferenceHandle"/>.
     /// </summary>

@@ -5618,6 +5618,18 @@ internal sealed class ReflectionMetadataEmitter
             return this.GetElementTypeToken(nullableTpInner);
         }
 
+        // Issue #1298: `E?` over a user-declared enum tokenises as a TypeSpec
+        // naming the generic instantiation `System.Nullable<E>`. This is the
+        // token consumed by `box Nullable<E>` in the lifted enum-equality emit
+        // (and by `initobj` when zero-initialising such a slot).
+        if (element is NullableTypeSymbol nullableEnumElement
+            && nullableEnumElement.UnderlyingType is EnumSymbol)
+        {
+            var sigBlob = new BlobBuilder();
+            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), nullableEnumElement);
+            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        }
+
         if (element == TypeSymbol.Int32)
         {
             return this.GetTypeReference(this.emitCtx.CoreInt32Type);
@@ -8163,6 +8175,52 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #1298: gets a MemberRef for <c>System.Nullable`1&lt;E&gt;::.ctor(!0)</c>
+    /// where <c>E</c> is a user-declared enum emitted in this assembly. The
+    /// enum has no runtime CLR type, so the BCL-backed
+    /// <see cref="WellKnownReferences"/> ctor path cannot construct it; instead
+    /// the parent TypeSpec closes <c>Nullable&lt;&gt;</c> over the enum's TypeDef
+    /// and the ctor signature refers to that argument as <c>!0</c>. Mirrors
+    /// <see cref="GetNullableCtorMemberRefForOpenTypeParameter"/>.
+    /// </summary>
+    /// <param name="nullableOfEnum">A <c>Nullable&lt;E&gt;</c> over a user enum.</param>
+    /// <returns>The constructor MemberRef.</returns>
+    internal MemberReferenceHandle GetNullableCtorMemberRefForUserEnum(NullableTypeSymbol nullableOfEnum)
+    {
+        if (nullableOfEnum?.UnderlyingType is not EnumSymbol enumSym)
+        {
+            throw new InvalidOperationException(
+                "GetNullableCtorMemberRefForUserEnum requires Nullable<EnumSymbol>.");
+        }
+
+        if (this.cache.NullableUserEnumCtorMemberRefs.TryGetValue(enumSym, out var cached))
+        {
+            return cached;
+        }
+
+        var parentBlob = new BlobBuilder();
+        this.EncodeTypeSymbol(new BlobEncoder(parentBlob).TypeSpecificationSignature(), nullableOfEnum);
+        var parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob));
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                parameterCount: 1,
+                returnType: r => r.Void(),
+                parameters: ps =>
+                {
+                    ps.AddParameter().Type().GenericTypeParameter(0);
+                });
+
+        var handle = this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.cache.NullableUserEnumCtorMemberRefs[enumSym] = handle;
+        return handle;
+    }
+
+    /// <summary>
     /// Phase 4 emit parity: get a MemberRef for a CLR field on a possibly
     /// generic declaring type (e.g. <c>KeyValuePair&lt;K, V&gt;.Key</c>).
     /// </summary>
@@ -8542,8 +8600,23 @@ internal sealed class ReflectionMetadataEmitter
 
             if (inner is EnumSymbol nestedEnum)
             {
-                throw new NotSupportedException(
-                    $"Nullable user-defined enum '{nestedEnum.Name}?' is not yet supported by the emitter.");
+                // Issue #1298: `E?` over a user-declared enum lowers to
+                // `System.Nullable<E>` — a generic instantiation whose single
+                // argument is the enum's own emitted TypeDef. Mirrors the
+                // struct-constrained type-parameter branch above.
+                if (!this.cache.EnumTypeDefs.ContainsKey(nestedEnum))
+                {
+                    throw new InvalidOperationException(
+                        $"Enum '{nestedEnum.Name}' has no emitted TypeDef.");
+                }
+
+                var nullableOpenForEnum = typeof(System.Nullable<>);
+                var giNullableEnum = encoder.GenericInstantiation(
+                    this.GetTypeReference(nullableOpenForEnum),
+                    genericArgumentCount: 1,
+                    isValueType: true);
+                this.EncodeTypeSymbol(giNullableEnum.AddArgument(), nestedEnum);
+                return;
             }
 
             EncodeTypeSymbol(encoder, inner);
@@ -8996,6 +9069,17 @@ internal sealed class ReflectionMetadataEmitter
         if (type is NullableTypeSymbol nullableTp
             && nullableTp.UnderlyingType is TypeParameterSymbol tp
             && tp.HasValueTypeConstraint)
+        {
+            return true;
+        }
+
+        // Issue #1298: `E?` over a user-declared enum lowers to the CLR struct
+        // `System.Nullable<E>`. The enum has no ClrType on the symbol, so the
+        // ClrType-based branch below misses it; recognise the symbolic form so
+        // default-init (`ldloca; initobj; ldloc`) and boxing decisions treat it
+        // as a value type.
+        if (type is NullableTypeSymbol nullableEnum
+            && nullableEnum.UnderlyingType is EnumSymbol)
         {
             return true;
         }
