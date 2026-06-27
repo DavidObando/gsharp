@@ -713,6 +713,32 @@ internal sealed partial class ExpressionBinder
     /// 1. An event subscription on the implicit <c>this</c> if the name matches an event.
     /// 2. A compound assignment fallback (<c>x += 1</c>) otherwise.
     /// </summary>
+    /// <summary>
+    /// Issue #1246: binds the underlying binary operation of a compound
+    /// assignment (<c>lhs op= rhs</c> ⇒ <c>lhs op rhs</c>) so that the right
+    /// operand participates in the SAME implicit numeric widening and constant-
+    /// integer-literal adaptation that the binary operator <c>lhs op rhs</c>
+    /// applies (via <see cref="BindBinaryOperatorWithNumericAdaptation"/>).
+    /// Returns the bound binary expression, or <see langword="null"/> when no
+    /// operator binds even after adaptation (the caller reports GS0129). The
+    /// caller is responsible for converting the result back to the LHS type for
+    /// the store, which preserves the C#-style guardrail that a compound
+    /// assignment whose result does not implicitly convert back to the LHS type
+    /// (e.g. <c>uint8 += int32</c>) is still rejected — exactly as
+    /// <c>lhs = lhs op rhs</c> is.
+    /// </summary>
+    private BoundBinaryExpression TryBindCompoundBinaryOperation(
+        SyntaxKind baseOperatorKind,
+        BoundExpression leftRead,
+        BoundExpression boundRhs,
+        TextLocation rhsLocation)
+    {
+        var left = leftRead;
+        var right = boundRhs;
+        var op = BindBinaryOperatorWithNumericAdaptation(baseOperatorKind, ref left, ref right, rhsLocation, rhsLocation);
+        return op == null ? null : new BoundBinaryExpression(null, left, op, right);
+    }
+
     private BoundExpression BindBareEventOrCompoundAssignment(NameExpressionSyntax bareName, EventSubscriptionExpressionSyntax syntax)
     {
         var name = bareName.IdentifierToken.Text;
@@ -756,14 +782,13 @@ internal sealed partial class ExpressionBinder
         var leftExpr = BindNameExpressionCore(bareName);
         var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
         var leftType = leftExpr.Type;
-        var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, leftType, boundRhs.Type);
-        if (op == null)
+        var binaryResult = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftExpr, boundRhs, syntax.Value.Location);
+        if (binaryResult == null)
         {
             Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, leftType, boundRhs.Type);
             return new BoundErrorExpression(null);
         }
 
-        var binaryResult = new BoundBinaryExpression(null, leftExpr, op, boundRhs);
         var convertedResult = conversions.BindConversion(syntax.Value.Location, binaryResult, leftType);
 
         // Route through the correct assignment path depending on variable kind.
@@ -859,8 +884,8 @@ internal sealed partial class ExpressionBinder
         if (TypeMemberModel.TryGetStaticField(staticStruct, memberName, out var staticField))
         {
             var leftRead = new BoundFieldAccessExpression(null, receiver: null, staticStruct, staticField);
-            var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, staticField.Type, boundRhs.Type);
-            if (op == null)
+            var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
+            if (binary == null)
             {
                 Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, staticField.Type, boundRhs.Type);
                 result = new BoundErrorExpression(null);
@@ -872,7 +897,6 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             }
 
-            var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
             var converted = conversions.BindConversion(syntax.Value.Location, binary, staticField.Type);
             result = new BoundFieldAssignmentExpression(null, null, staticStruct, staticField, converted);
             return true;
@@ -888,15 +912,14 @@ internal sealed partial class ExpressionBinder
             }
 
             var leftRead = new BoundPropertyAccessExpression(null, receiver: null, staticStruct, prop);
-            var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, prop.Type, boundRhs.Type);
-            if (op == null)
+            var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
+            if (binary == null)
             {
                 Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, prop.Type, boundRhs.Type);
                 result = new BoundErrorExpression(null);
                 return true;
             }
 
-            var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
             var converted = conversions.BindConversion(syntax.Value.Location, binary, prop.Type);
             result = new BoundPropertyAssignmentExpression(null, receiver: null, staticStruct, prop, converted);
             return true;
@@ -940,8 +963,8 @@ internal sealed partial class ExpressionBinder
 
         var boundRhs = BindExpression(syntax.Value);
         var leftRead = new BoundFieldAccessExpression(null, staticField, interfaceSym);
-        var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, staticField.Type, boundRhs.Type);
-        if (op == null)
+        var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
+        if (binary == null)
         {
             Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, staticField.Type, boundRhs.Type);
             result = new BoundErrorExpression(null);
@@ -953,7 +976,6 @@ internal sealed partial class ExpressionBinder
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
         }
 
-        var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
         var converted = conversions.BindConversion(syntax.Value.Location, binary, staticField.Type);
         result = new BoundFieldAssignmentExpression(null, staticField, interfaceSym, converted);
         return true;
@@ -994,14 +1016,13 @@ internal sealed partial class ExpressionBinder
             }
 
             var leftRead = new BoundFieldAccessExpression(null, boundReceiver, declaringType, field);
-            var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, field.Type, boundRhs.Type);
-            if (op == null)
+            var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
+            if (binary == null)
             {
                 Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, field.Type, boundRhs.Type);
                 return new BoundErrorExpression(null);
             }
 
-            var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
             var converted = conversions.BindConversion(syntax.Value.Location, binary, field.Type);
             return BoundFieldAssignmentExpression.WithExpressionReceiver(null, boundReceiver, declaringType, field, converted);
         }
@@ -1023,14 +1044,13 @@ internal sealed partial class ExpressionBinder
             }
 
             var leftRead = new BoundPropertyAccessExpression(null, boundReceiver, structSym, prop);
-            var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, prop.Type, boundRhs.Type);
-            if (op == null)
+            var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
+            if (binary == null)
             {
                 Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, prop.Type, boundRhs.Type);
                 return new BoundErrorExpression(null);
             }
 
-            var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
             var converted = conversions.BindConversion(syntax.Value.Location, binary, prop.Type);
             EnforceInitOnlyAssignment(prop, boundReceiver, syntax.OperatorToken.Location);
             return new BoundPropertyAssignmentExpression(null, boundReceiver, structSym, prop, converted);
@@ -1080,14 +1100,13 @@ internal sealed partial class ExpressionBinder
 
         var boundRhs = BindExpression(syntax.Value);
         var leftRead = new BoundClrPropertyAccessExpression(null, boundReceiver, instanceMember, targetSymbol);
-        var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, targetSymbol, boundRhs.Type);
-        if (op == null)
+        var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
+        if (binary == null)
         {
             Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, targetSymbol, boundRhs.Type);
             return new BoundErrorExpression(null);
         }
 
-        var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
         var converted = conversions.BindConversion(syntax.Value.Location, binary, targetSymbol);
         return new BoundClrPropertyAssignmentExpression(null, boundReceiver, instanceMember, converted, targetSymbol);
     }
