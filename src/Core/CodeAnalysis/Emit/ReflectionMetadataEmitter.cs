@@ -597,6 +597,7 @@ internal sealed class ReflectionMetadataEmitter
             this.GetTypeReference,
             this.GetUserStructTypeSpec,
             this.ResolveConstructedBaseParameterlessCtorToken,
+            this.ResolveConstructedBaseExplicitCtorToken,
             this.customAttrEncoder.NextParameterHandle,
             this.customAttrEncoder.EmitUserAttributes,
             this.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter,
@@ -7080,6 +7081,57 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 });
         return this.GetUserStructMethodRef(structType, primaryDef, ".ctor", sigBlob);
+    }
+
+    /// <summary>
+    /// Issue #1254: resolves the base-constructor token for an explicit
+    /// <c>: base(args)</c> initializer whose base is a CONSTRUCTED generic user
+    /// class (e.g. <c>Derived : Base[int32]</c> chaining to <c>Base</c>'s
+    /// primary or an explicit <c>init(...)</c> ctor). The base ctor's MethodDef
+    /// is keyed by the open definition, so a bare token is invalid for a generic
+    /// type; a MemberRef parented at the constructed base's TypeSpec is emitted
+    /// with the open ctor's signature (type-parameter slots encode as VAR).
+    /// </summary>
+    internal EntityHandle ResolveConstructedBaseExplicitCtorToken(StructSymbol constructedBase, ConstructorSymbol ctor)
+    {
+        if (ctor == null || !this.cache.ExplicitCtorHandles.TryGetValue(ctor, out var ctorDef))
+        {
+            return this.ResolveConstructedBaseParameterlessCtorToken(constructedBase);
+        }
+
+        var function = ctor.Function;
+
+        // The receiver `this` is not part of the encoded parameter list. It may
+        // or may not appear in Function.Parameters, so count (and emit) only the
+        // non-receiver parameters rather than assuming a fixed offset.
+        var paramCount = 0;
+        foreach (var p in function.Parameters)
+        {
+            if (!ReferenceEquals(p, function.ThisParameter))
+            {
+                paramCount++;
+            }
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob)
+            .MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                paramCount,
+                r => r.Void(),
+                ps =>
+                {
+                    foreach (var p in function.Parameters)
+                    {
+                        if (ReferenceEquals(p, function.ThisParameter))
+                        {
+                            continue;
+                        }
+
+                        EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                    }
+                });
+        return this.GetUserStructMethodRef(constructedBase, ctorDef, ".ctor", sigBlob);
     }
 
     /// <summary>

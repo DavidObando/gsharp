@@ -93,6 +93,7 @@ internal sealed class TypeDefEmitter
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
     private readonly Func<StructSymbol, EntityHandle> getUserStructTypeSpec;
     private readonly Func<StructSymbol, EntityHandle> resolveConstructedBaseCtorToken;
+    private readonly Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveConstructedBaseExplicitCtorToken;
     private readonly Func<ParameterHandle> nextParameterHandle;
     private readonly Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes;
     private readonly Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter;
@@ -114,6 +115,7 @@ internal sealed class TypeDefEmitter
         Func<Type, TypeReferenceHandle> getTypeReference,
         Func<StructSymbol, EntityHandle> getUserStructTypeSpec,
         Func<StructSymbol, EntityHandle> resolveConstructedBaseCtorToken,
+        Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveConstructedBaseExplicitCtorToken,
         Func<ParameterHandle> nextParameterHandle,
         Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes,
         Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter,
@@ -134,6 +136,7 @@ internal sealed class TypeDefEmitter
         this.getTypeReference = getTypeReference ?? throw new ArgumentNullException(nameof(getTypeReference));
         this.getUserStructTypeSpec = getUserStructTypeSpec ?? throw new ArgumentNullException(nameof(getUserStructTypeSpec));
         this.resolveConstructedBaseCtorToken = resolveConstructedBaseCtorToken ?? throw new ArgumentNullException(nameof(resolveConstructedBaseCtorToken));
+        this.resolveConstructedBaseExplicitCtorToken = resolveConstructedBaseExplicitCtorToken ?? throw new ArgumentNullException(nameof(resolveConstructedBaseExplicitCtorToken));
         this.nextParameterHandle = nextParameterHandle ?? throw new ArgumentNullException(nameof(nextParameterHandle));
         this.emitUserAttributes = emitUserAttributes ?? throw new ArgumentNullException(nameof(emitUserAttributes));
         this.emitIsReadOnlyAttributeOnParameter = emitIsReadOnlyAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitIsReadOnlyAttributeOnParameter));
@@ -1593,6 +1596,20 @@ internal sealed class TypeDefEmitter
         }
 
         var gsharpBase = init.GSharpBaseType;
+
+        // Issue #1254: when the base is a CONSTRUCTED generic user class, the
+        // base ctor's MethodDef is keyed by the open definition and a bare token
+        // is invalid for a generic type. Emit a MemberRef parented at the
+        // constructed base's TypeSpec for the selected ctor (primary or explicit
+        // `init(...)`), mirroring the parameter-less #1055 path.
+        var constructedGenericBase =
+            (classSym.BaseClass != null && !classSym.BaseClass.TypeArguments.IsDefaultOrEmpty)
+                ? classSym.BaseClass
+                : ((gsharpBase != null && !gsharpBase.TypeArguments.IsDefaultOrEmpty) ? gsharpBase : null);
+        if (constructedGenericBase != null)
+        {
+            return this.resolveConstructedBaseExplicitCtorToken(constructedGenericBase, init.GSharpConstructor);
+        }
 
         // Issue #1060: when the base initializer resolved to a specific explicit
         // `init(...)` constructor on the GSharp base class, target that exact
