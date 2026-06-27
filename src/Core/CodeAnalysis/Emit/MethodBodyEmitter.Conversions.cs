@@ -231,7 +231,12 @@ internal sealed partial class MethodBodyEmitter
         // covers cross-width conversions that would otherwise be mishandled
         // by TryEmitNumericConversion below (which sees NullableTypeSymbol.ClrType
         // as the raw underlying type and emits only the conv.* without wrapping).
-        if (to is NullableTypeSymbol toValueNullableWiden
+        // Restricted to a non-nullable source — a Nullable<T1> source is a lifted
+        // conversion handled by the dedicated #1236 arm below (TryEmitNumericConversion
+        // would otherwise read the source's ClrType as its bare underlying and
+        // emit a conv.* against the Nullable<T1> struct value on the stack).
+        if (from is not NullableTypeSymbol
+            && to is NullableTypeSymbol toValueNullableWiden
             && ReflectionMetadataEmitter.IsValueTypeNullable(toValueNullableWiden)
             && from != toValueNullableWiden.UnderlyingType
             && TryEmitNumericConversion(from, toValueNullableWiden.UnderlyingType, conv.IsChecked))
@@ -252,6 +257,25 @@ internal sealed partial class MethodBodyEmitter
                     $"Nullable<{widenNullableInnerArg.FullName}> has no single-arg constructor.");
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.GetCtorReference(widenCtor));
+            return;
+        }
+
+        // Issue #1236: lifted numeric widening between two distinct value-type
+        // `Nullable<T>` operands (e.g. `uint8? → int32?`, `int32? → int64?`).
+        // The source struct is already on the stack; spill it, branch on
+        // HasValue, and either re-wrap the converted underlying value as a fresh
+        // `Nullable<T2>` (HasValue == true) or materialise default(Nullable<T2>)
+        // (HasValue == false). Two consecutive scratch slots — the source
+        // `Nullable<T1>` and the result `Nullable<T2>` — are pre-allocated by
+        // the planner (CollectNullableNumericWideningConversions) and keyed in
+        // receiverSpillSlots by this conversion node (dest = source + 1).
+        if (from is NullableTypeSymbol fromValueNullableLift
+            && ReflectionMetadataEmitter.IsValueTypeNullable(fromValueNullableLift)
+            && to is NullableTypeSymbol toValueNullableLift2
+            && ReflectionMetadataEmitter.IsValueTypeNullable(toValueNullableLift2)
+            && fromValueNullableLift.UnderlyingType != toValueNullableLift2.UnderlyingType)
+        {
+            this.EmitLiftedNullableNumericWidening(conv, fromValueNullableLift, toValueNullableLift2);
             return;
         }
 
@@ -355,6 +379,77 @@ internal sealed partial class MethodBodyEmitter
 
         throw new NotSupportedException(
             $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
+    }
+
+    // Issue #1236: emit a lifted numeric widening between two distinct value-type
+    // `Nullable<T>` operands. On entry the source `Nullable<T1>` value is already
+    // on the stack. Uses two consecutive planner scratch slots (source, result)
+    // keyed in receiverSpillSlots by the conversion node.
+    private void EmitLiftedNullableNumericWidening(
+        BoundConversionExpression conv,
+        NullableTypeSymbol fromNullable,
+        NullableTypeSymbol toNullable)
+    {
+        if (!this.receiverSpillSlots.TryGetValue(conv, out var srcSlot))
+        {
+            throw new InvalidOperationException(
+                "No scratch slot pre-allocated for lifted Nullable<T1> -> Nullable<T2> numeric widening — "
+                + "check CollectNullableNumericWideningConversions and the prepass in CollectLocalsAndLabels.");
+        }
+
+        var dstSlot = srcSlot + 1;
+
+        var fromUnderlying = fromNullable.UnderlyingType;
+        var toUnderlying = toNullable.UnderlyingType;
+        var fromUnderlyingClr = fromUnderlying.ClrType
+            ?? throw new InvalidOperationException(
+                $"Lifted Nullable<{fromUnderlying.Name}> widening: source underlying has no CLR type.");
+        var toUnderlyingClr = toUnderlying.ClrType
+            ?? throw new InvalidOperationException(
+                $"Lifted Nullable<{toUnderlying.Name}> widening: target underlying has no CLR type.");
+
+        if (!NullableLifting.TryConstructNullable(this.outer.emitCtx.References, toUnderlyingClr, out var toNullableClr))
+        {
+            throw new InvalidOperationException(
+                $"Cannot construct Nullable<{toUnderlyingClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+        }
+
+        var toNullableInnerArg = toNullableClr.GetGenericArguments()[0];
+        var toCtor = toNullableClr.GetConstructor(new[] { toNullableInnerArg })
+            ?? throw new InvalidOperationException(
+                $"Nullable<{toNullableInnerArg.FullName}> has no single-arg constructor.");
+        var toNullableToken = this.outer.GetTypeHandleForMember(toNullableClr);
+
+        var getHasValue = this.outer.wellKnown.GetNullableGetHasValueReference(fromUnderlyingClr);
+        var getValueOrDefault = this.outer.wellKnown.GetNullableGetValueOrDefaultReference(fromUnderlyingClr);
+
+        var nullBranch = this.il.DefineLabel();
+        var end = this.il.DefineLabel();
+
+        // Spill the source Nullable<T1> and branch on HasValue.
+        this.il.StoreLocal(srcSlot);
+        this.il.LoadLocalAddress(srcSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getHasValue);
+        this.il.Branch(ILOpCode.Brfalse, nullBranch);
+
+        // Present: unwrap, convert the underlying value, re-wrap as Nullable<T2>.
+        this.il.LoadLocalAddress(srcSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getValueOrDefault);
+        this.TryEmitNumericConversion(fromUnderlying, toUnderlying);
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(this.outer.GetCtorReference(toCtor));
+        this.il.Branch(ILOpCode.Br, end);
+
+        // Absent: materialise default(Nullable<T2>).
+        this.il.MarkLabel(nullBranch);
+        this.il.LoadLocalAddress(dstSlot);
+        this.il.OpCode(ILOpCode.Initobj);
+        this.il.Token(toNullableToken);
+        this.il.LoadLocal(dstSlot);
+
+        this.il.MarkLabel(end);
     }
 
     private void EmitErasedObjectReturnWidening(TypeSymbol runtimeReturnType, TypeSymbol expectedType)

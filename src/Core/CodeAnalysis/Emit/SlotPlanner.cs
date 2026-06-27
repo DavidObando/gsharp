@@ -169,6 +169,9 @@ internal sealed class SlotPlanner
     public void CollectLiftedBinaryOperators(BoundStatement root, List<BoundBinaryExpression> sink)
         => new LiftedBinaryOperatorCollector(sink).Visit(root);
 
+    public void CollectNullableNumericWideningConversions(BoundStatement root, List<BoundConversionExpression> sink)
+        => new NullableNumericWideningConversionCollector(sink).Visit(root);
+
     public void RunPatternSwitchAllocator(
         BoundNode node,
         Dictionary<VariableSymbol, int> locals,
@@ -1309,6 +1312,36 @@ internal sealed class SlotPlanner
                 default:
                     return false;
             }
+        }
+    }
+
+    // Issue #1236: walks the bound tree collecting every BoundConversionExpression
+    // that is a lifted numeric widening between two distinct value-type
+    // Nullable<T> operands (e.g. `uint8? -> int32?`). Each such conversion needs
+    // two consecutive scratch slots so the emitter can spill the source
+    // Nullable<T1> (to call get_HasValue / GetValueOrDefault off its address) and
+    // initobj a default Nullable<T2> on the null branch.
+    private sealed class NullableNumericWideningConversionCollector : BoundTreeWalker
+    {
+        private readonly List<BoundConversionExpression> sink;
+
+        public NullableNumericWideningConversionCollector(List<BoundConversionExpression> sink)
+        {
+            this.sink = sink;
+        }
+
+        protected override void VisitConversionExpression(BoundConversionExpression node)
+        {
+            if (node.Expression.Type is NullableTypeSymbol from
+                && node.Type is NullableTypeSymbol to
+                && from.UnderlyingType?.ClrType is { IsValueType: true }
+                && to.UnderlyingType?.ClrType is { IsValueType: true }
+                && from.UnderlyingType != to.UnderlyingType)
+            {
+                this.sink.Add(node);
+            }
+
+            base.VisitConversionExpression(node);
         }
     }
 }
