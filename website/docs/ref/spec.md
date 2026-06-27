@@ -169,7 +169,7 @@ Integral types are `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64
 
 ### Object and nil
 
-`object` is the universal upper bound. Values backed by CLR types and user value types can implicitly convert or box to `object`; explicit conversions can unbox to CLR value types. Nullable types are written by appending `?` to a type clause. `nil` converts implicitly to nullable types but not to non-nullable types. Postfix `!!` asserts non-null and `??` is null coalescing.
+`object` is the universal upper bound. Values backed by CLR types and user value types can implicitly convert or box to `object`; explicit conversions can unbox to CLR value types. Nullable types are written by appending `?` to a type clause. `nil` converts implicitly to nullable types but not to non-nullable types. A reference upcast lifts through nullable annotations: when `U` is a base class or implemented interface of `T`, both `T → U?` (issue #1121) and `T? → U?` (issue #1255) are implicit reference conversions — for reference types a nullable annotation shares the underlying reference representation, so the lifted upcast is a metadata-only no-op that maps `nil` to `nil` and reference-upcasts a non-null value. The narrowing `T? → U` (dropping the nullable annotation) is not implicit and still requires `!!`. Postfix `!!` asserts non-null and `??` is null coalescing.
 
 ### Arrays and slices
 
