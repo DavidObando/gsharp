@@ -138,6 +138,104 @@ func operator explicit (b Box) int32 {
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0395");
     }
 
+    [Fact]
+    public void InBodyImplicitConversion_AppliedAtAssignment_BindsAndEvaluates()
+    {
+        // Issue #1283: a conversion operator declared INSIDE the struct body
+        // (rather than as a free function) is registered as a static
+        // op_Implicit and applied implicitly at a target-typed position.
+        var source = @"
+struct Meters {
+    var v int32
+    func operator implicit (n int32) Meters {
+        return Meters{v: n}
+    }
+}
+
+var m Meters = 5
+var got = m.v
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(5, result.Value);
+    }
+
+    [Fact]
+    public void InBodyImplicitConversion_AppliedAtReturn_BindsAndEvaluates()
+    {
+        var source = @"
+struct Meters {
+    var v int32
+    func operator implicit (n int32) Meters {
+        return Meters{v: n}
+    }
+}
+
+func make() Meters {
+    return 9
+}
+
+var got = make().v
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(9, result.Value);
+    }
+
+    [Fact]
+    public void InBodyExplicitConversion_NotAppliedImplicitly_ReportsGS0155()
+    {
+        // Issue #1283: op_Explicit must STILL require the explicit U(x) form.
+        // An explicit-only in-body operator at an implicit position errors.
+        var source = @"
+struct Meters {
+    var v int32
+    func operator explicit (n int32) Meters {
+        return Meters{v: n}
+    }
+}
+
+var m Meters = 5
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0155");
+    }
+
+    [Fact]
+    public void InBodyExplicitConversion_AppliedAtCast_BindsAndEvaluates()
+    {
+        var source = @"
+struct Meters {
+    var v int32
+    func operator explicit (n int32) Meters {
+        return Meters{v: n}
+    }
+}
+
+var m = Meters(5)
+var got = m.v
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(5, result.Value);
+    }
+
+    [Fact]
+    public void ImplicitConversion_NoOperator_ReportsGS0155()
+    {
+        // A source type with NO implicit user conversion to the target still
+        // reports GS0155 — real errors are not suppressed by the new lookup.
+        var source = @"
+struct Meters {
+    var v int32
+}
+
+var m Meters = 5
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0155");
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

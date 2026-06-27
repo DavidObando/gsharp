@@ -432,6 +432,25 @@ internal sealed class ConversionClassifier
                 return new BoundCallExpression(null, userConvOp, ImmutableArray.Create(converted));
             }
 
+            // Issue #1283: lifted user-defined conversion to a nullable target.
+            // When the target is `U?` and the source `T` has a user-defined
+            // op_Implicit (or op_Explicit at an explicit position) producing the
+            // underlying `U`, apply the operator and then nullable-wrap the
+            // result (`U` -> `U?`). The recursive BindConversion call performs
+            // the standard nullable-wrap; it cannot recurse into a second
+            // user-defined operator because the produced value already has type
+            // `U`, the nullable's underlying type.
+            if (type is NullableTypeSymbol nullableTarget
+                && nullableTarget.UnderlyingType != expression.Type
+                && TryResolveUserDefinedSymbolConversion(expression.Type, nullableTarget.UnderlyingType, allowExplicit, out var liftedConvOp))
+            {
+                var liftedArg = liftedConvOp.Parameters.Length == 1
+                    ? BindConversion(diagnosticLocation, expression, liftedConvOp.Parameters[0].Type, allowExplicit)
+                    : expression;
+                var producedUnderlying = new BoundCallExpression(null, liftedConvOp, ImmutableArray.Create(liftedArg));
+                return BindConversion(diagnosticLocation, producedUnderlying, type, allowExplicit);
+            }
+
             // Stream E: fall back to a user-defined op_Implicit (and
             // op_Explicit when allowed) on either source or target CLR type.
             if (expression.Type?.ClrType != null && type?.ClrType != null
