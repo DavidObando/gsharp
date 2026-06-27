@@ -3800,6 +3800,12 @@ public class Parser
 
             var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
 
+            // Issue #1212: a `?` placed immediately after the `]` (before the
+            // element type) marks the *whole array reference* nullable —
+            // `[]?T` / `[N]?T` is `([]T)?`. This is distinct from a trailing
+            // `?` after the element (`[]T?`), which binds to the element type.
+            var arrayNullableQuestion = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+
             // Issue #1046: a jagged/nested array element — the element type is
             // itself a non-identifier type clause (`[][]T`, `[]*T`, `[]map[K,V]`,
             // `[]chan T`, `[]func(...) R`, `[](T1, T2)`, …). When the token after
@@ -3818,7 +3824,8 @@ public class Parser
                     length,
                     closeBracket,
                     nestedElement,
-                    nestedQuestion);
+                    nestedQuestion,
+                    arrayNullableQuestion);
             }
 
             var elementIdentifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -3866,7 +3873,8 @@ public class Parser
                 arrayTypeArgOpen,
                 arrayTypeArgs,
                 arrayTypeArgClose,
-                arrayQuestion);
+                arrayQuestion,
+                arrayNullableQuestion);
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -7543,6 +7551,42 @@ public class Parser
         }
 
         var elementType = MatchToken(SyntaxKind.IdentifierToken);
+
+        // Issue #1212: an element-nullable array literal `[]T?{ … }` /
+        // `[N]T?{ … }`. The `?` binds to the element identifier, so route the
+        // element through a nullable-suffixed type clause (the nested-element
+        // path) instead of the bare-identifier fast path, yielding a
+        // `Slice(Nullable(T))` / `Array(Nullable(T), N)`.
+        if (Current.Kind == SyntaxKind.QuestionToken)
+        {
+            var questionToken = MatchToken(SyntaxKind.QuestionToken);
+            var elementClause = new TypeClauseSyntax(syntaxTree, openBracketToken: null, lengthToken: null, closeBracketToken: null, elementType, questionToken);
+            var (nElemOpenBrace, nElemElements, nElemCloseBrace, nElemHasElements) = ParseOptionalArrayInitializer();
+
+            if (!nElemHasElements && (lengthExpression != null || lengthToken != null))
+            {
+                return new ArrayCreationExpressionSyntax(
+                    syntaxTree,
+                    openBracket,
+                    lengthExpression ?? new LiteralExpressionSyntax(syntaxTree, lengthToken),
+                    closeBracket,
+                    elementClause,
+                    nElemOpenBrace,
+                    nElemElements,
+                    nElemCloseBrace);
+            }
+
+            return new ArrayCreationExpressionSyntax(
+                syntaxTree,
+                openBracket,
+                lengthExpression == null ? lengthToken : ToLengthLiteralToken(lengthExpression),
+                closeBracket,
+                elementClause,
+                nElemOpenBrace ?? MatchToken(SyntaxKind.OpenBraceToken),
+                nElemElements ?? new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty),
+                nElemCloseBrace ?? MatchToken(SyntaxKind.CloseBraceToken));
+        }
+
         var (openBrace, elements, closeBrace, hasElements) = ParseOptionalArrayInitializer();
 
         // Issue #1272: `[n]T` (no initializer) or `[n]T{}` (empty initializer)

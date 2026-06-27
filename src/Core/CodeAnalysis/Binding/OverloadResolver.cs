@@ -702,7 +702,7 @@ internal sealed class OverloadResolver
         // wholly-inapplicable overload (e.g. F(string) for a []uint8 argument)
         // can tie — and thus be reported ambiguous (GS0266) — with the unique
         // genuinely-applicable overload that merely needs an implicit
-        // nullable/reference widening (e.g. []uint8 -> []uint8?). Drop such
+        // nullable/reference widening (e.g. []uint8 -> []?uint8). Drop such
         // non-convertible candidates here, conservatively (see skips below), so
         // the unique applicable overload is selected without a spurious GS0266.
         if (applicable.Count > 1 && !HasNamedArguments(argumentNames))

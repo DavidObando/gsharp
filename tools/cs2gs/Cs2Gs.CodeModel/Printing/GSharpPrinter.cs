@@ -106,6 +106,15 @@ public static class GSharpPrinter
 
     private static string RenderType(GTypeReference type)
     {
+        // Issue #1212: an array's own nullability is spelled `[]?T` (the `?`
+        // sits right after `]`), distinct from an array of nullable elements
+        // `[]T?` (where the element rendering carries its own trailing `?`).
+        if (type is ArrayTypeReference array)
+        {
+            var arrayMarker = array.IsNullable ? "?" : string.Empty;
+            return $"[]{arrayMarker}{RenderType(array.ElementType)}";
+        }
+
         var rendered = RenderTypeCore(type);
         return type != null && type.IsNullable ? rendered + "?" : rendered;
     }

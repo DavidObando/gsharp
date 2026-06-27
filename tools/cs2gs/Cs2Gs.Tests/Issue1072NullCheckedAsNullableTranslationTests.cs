@@ -58,7 +58,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("key []uint8?", printed);
+        Assert.Contains("key []?uint8", printed);
     }
 
     [Fact]
@@ -78,7 +78,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("iv []uint8?", printed);
+        Assert.Contains("iv []?uint8", printed);
     }
 
     [Fact]

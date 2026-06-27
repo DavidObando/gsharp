@@ -12,12 +12,12 @@ import System.Collections.Generic
 
 var calls int32 = 0
 
-func bump() []int32? {
+func bump() []?int32 {
     calls = calls + 1
     return []int32{7, 8, 9}
 }
 
-func nilBump() []int32? {
+func nilBump() []?int32 {
     calls = calls + 1
     return nil
 }
@@ -25,11 +25,11 @@ func nilBump() []int32? {
 func main() {
     // 1. Slice receiver. The first read indexes a live slice; the second
     // reads through a nil slice and short-circuits to nil.
-    var live []int32? = []int32{10, 20, 30}
+    var live []?int32 = []int32{10, 20, 30}
     var first = live?[1]
     Console.WriteLine(first)
 
-    var missing []int32? = nil
+    var missing []?int32 = nil
     var firstMissing = missing?[0]
     if firstMissing == nil {
         Console.WriteLine("nil-slice")

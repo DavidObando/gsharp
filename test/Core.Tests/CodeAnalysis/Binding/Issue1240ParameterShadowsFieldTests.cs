@@ -31,18 +31,18 @@ public class Issue1240ParameterShadowsFieldTests
     public void Constructor_NullableParam_ShadowsNonNullableField_NoDiagnostics()
     {
         // Faithful repro from the issue: the field is non-nullable []uint8 while
-        // the parameter is nullable []uint8?. Bare `iv` must bind to the
+        // the parameter is nullable []?uint8. Bare `iv` must bind to the
         // PARAMETER, so `iv == nil` typechecks; binding to the field would emit
         // GS0129 ('==' not defined for '[]uint8' and 'nil').
         var source = @"
 package p
 class C {
     private let iv []uint8
-    init(iv []uint8?) {
+    init(iv []?uint8) {
         if iv == nil { throw System.ArgumentException(""x"") }
         this.iv = iv!!
     }
-    func M(iv []uint8?) bool {
+    func M(iv []?uint8) bool {
         return iv == nil
     }
 }

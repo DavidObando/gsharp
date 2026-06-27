@@ -22,7 +22,7 @@ public class Issue710NullConditionalIndexingInterpreterTests
     public void Slice_NullReceiver_YieldsNil()
     {
         var source = """
-            var a []int32? = nil
+            var a []?int32 = nil
             var x = a?[0]
             if x == nil {
                 Console.WriteLine("nil")
@@ -39,7 +39,7 @@ public class Issue710NullConditionalIndexingInterpreterTests
     public void Slice_NonNullReceiver_YieldsLiftedValue()
     {
         var source = """
-            var a []int32? = []int32{10, 20, 30}
+            var a []?int32 = []int32{10, 20, 30}
             var x = a?[1]
             Console.WriteLine(x)
             """;
@@ -107,12 +107,12 @@ public class Issue710NullConditionalIndexingInterpreterTests
             var receiverCalls int32 = 0
             var indexCalls int32 = 0
 
-            func getSlice() []int32? {
+            func getSlice() []?int32 {
                 receiverCalls = receiverCalls + 1
                 return []int32{7, 8, 9}
             }
 
-            func getNilSlice() []int32? {
+            func getNilSlice() []?int32 {
                 receiverCalls = receiverCalls + 1
                 return nil
             }
@@ -153,7 +153,7 @@ public class Issue710NullConditionalIndexingInterpreterTests
     {
         var source = """
             class Holder {
-                var Data []int32?
+                var Data []?int32
             }
 
             func main() {

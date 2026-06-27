@@ -31,14 +31,14 @@ public class Issue1154NullableWideningOverloadTests
     [Fact]
     public void Repro_NullableWidening_UniqueApplicable_BindsWithoutGS0266()
     {
-        // REPRO: F(string), F([]uint8?); arg is non-nullable []uint8.
-        // Only F([]uint8?) is applicable ([]uint8 -> []uint8? implicit widening).
+        // REPRO: F(string), F([]?uint8); arg is non-nullable []uint8.
+        // Only F([]?uint8) is applicable ([]uint8 -> []?uint8 implicit widening).
         const string source = @"
 package p
 class C {
     shared { func Make() []uint8 { var r []uint8 return r } }
     func F(a string) { F(C.Make()) }
-    func F(a []uint8?) { var n = 1 }
+    func F(a []?uint8) { var n = 1 }
 }
 ";
         var compilation = Compile(source);
@@ -78,12 +78,12 @@ class C {
     [Fact]
     public void VariantB_NullableWideningOnly_StillBinds()
     {
-        // F([]uint8?) only; arg []uint8 -> nullable widening applicable.
+        // F([]?uint8) only; arg []uint8 -> nullable widening applicable.
         const string source = @"
 package p
 class C {
     shared { func Make() []uint8 { var r []uint8 return r } }
-    func F(a []uint8?) { F(C.Make()) }
+    func F(a []?uint8) { F(C.Make()) }
 }
 ";
         var compilation = Compile(source);
@@ -100,13 +100,13 @@ class C {
     [Fact]
     public void VariantC_ExactNullableMatch_StillBinds()
     {
-        // F(string), F([]uint8?); arg is []uint8? -> exact match to T?.
+        // F(string), F([]?uint8); arg is []?uint8 -> exact match to T?.
         const string source = @"
 package p
 class C {
-    shared { func Make() []uint8? { var r []uint8? return r } }
+    shared { func Make() []?uint8 { var r []?uint8 return r } }
     func F(a string) { F(C.Make()) }
-    func F(a []uint8?) { var n = 1 }
+    func F(a []?uint8) { var n = 1 }
 }
 ";
         var compilation = Compile(source);

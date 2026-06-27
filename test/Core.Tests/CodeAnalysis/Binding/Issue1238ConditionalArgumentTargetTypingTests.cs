@@ -53,7 +53,7 @@ class C {
 import System.Text
 
 class C {
-    func Sink(name string, data []uint8?) { }
+    func Sink(name string, data []?uint8) { }
     func Call(data string?) {
         Sink(""x"", if data == nil { nil } else { Encoding.UTF8.GetBytes(data!!) })
     }
@@ -135,14 +135,14 @@ class C {
 import System.Text
 
 class C {
-    func R(data string?) []uint8? {
+    func R(data string?) []?uint8 {
         return if data == nil { nil } else { Encoding.UTF8.GetBytes(data!!) }
     }
-    func L(data string?) []uint8? {
-        let r []uint8? = if data == nil { nil } else { Encoding.UTF8.GetBytes(data!!) }
+    func L(data string?) []?uint8 {
+        let r []?uint8 = if data == nil { nil } else { Encoding.UTF8.GetBytes(data!!) }
         return r
     }
-    func Sink(data []uint8?) { }
+    func Sink(data []?uint8) { }
     func PlainNil() { Sink(nil) }
 }
 ";
