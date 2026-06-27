@@ -576,6 +576,28 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // Issue #1302: a constructed BCL value struct (e.g.
+        // `List[T].Enumerator`) whose element `T` is a same-compilation user
+        // type has a null `ClrType` during binding — `MakeGenericType` could
+        // not close the type because the argument lives in the assembly being
+        // emitted — so `IsValueTypeLikeFrom`/`IsInterfaceLikeType` cannot fire
+        // and the value-type → interface box above is skipped. The target
+        // generic interface (`IEnumerator[T]`) is likewise unclosed. Match the
+        // target interface's open definition against the generic interfaces the
+        // struct's open definition implements, substituting the struct's
+        // symbolic type arguments by generic-parameter position and comparing
+        // each element via `AreTypeArgumentsEquivalent`, so
+        // `List[Ch].Enumerator -> IEnumerator[Ch]` boxes implicitly while a
+        // genuine element mismatch still reports GS0155.
+        if (from is ImportedTypeSymbol fromCtorStruct
+            && fromCtorStruct.OpenDefinition is { IsValueType: true }
+            && to is ImportedTypeSymbol toCtorIface
+            && toCtorIface.OpenDefinition is { IsInterface: true }
+            && ConstructedValueTypeImplementsInterfaceSymbolically(fromCtorStruct, toCtorIface))
+        {
+            return Conversion.Implicit;
+        }
+
         // Reference upcast: a class implicitly converts to any interface in
         // its (transitive) implements-list or to any of its (transitive)
         // base classes. The interpreter stores instances as objects of the
@@ -1657,5 +1679,82 @@ public sealed class Conversion
         }
 
         return AreTypeArgumentsEquivalent(imported.TypeArguments[0], slice.ElementType);
+    }
+
+    /// <summary>
+    /// Issue #1302: symbolic struct → generic-interface implementation check for
+    /// a constructed BCL value struct (e.g. <c>List[T].Enumerator</c>) whose
+    /// element <c>T</c> is a same-compilation user type, so its
+    /// <see cref="TypeSymbol.ClrType"/> (and the target interface's) is
+    /// <see langword="null"/> during binding. Walk the generic interfaces the
+    /// struct's OPEN definition implements, match the target interface's open
+    /// definition by full name, then substitute each interface argument through
+    /// the struct's symbolic <see cref="ImportedTypeSymbol.TypeArguments"/> by
+    /// generic-parameter position and compare to the target's arguments via
+    /// <see cref="AreTypeArgumentsEquivalent"/>. A genuine element mismatch
+    /// returns <see langword="false"/> (GS0155).
+    /// </summary>
+    private static bool ConstructedValueTypeImplementsInterfaceSymbolically(
+        ImportedTypeSymbol from,
+        ImportedTypeSymbol toInterface)
+    {
+        var fromOpen = from.OpenDefinition;
+        var toOpen = toInterface.OpenDefinition;
+        if (fromOpen is null || toOpen?.FullName is null || toInterface.TypeArguments.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var iface in fromOpen.GetInterfaces())
+        {
+            if (!iface.IsGenericType)
+            {
+                continue;
+            }
+
+            if (!string.Equals(
+                    iface.GetGenericTypeDefinition().FullName,
+                    toOpen.FullName,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var ifaceArgs = iface.GetGenericArguments();
+            if (ifaceArgs.Length != toInterface.TypeArguments.Length)
+            {
+                continue;
+            }
+
+            var allMatch = true;
+            for (var i = 0; i < ifaceArgs.Length; i++)
+            {
+                var ifaceArg = ifaceArgs[i];
+                TypeSymbol substituted;
+                if (ifaceArg.IsGenericParameter
+                    && ifaceArg.GenericParameterPosition >= 0
+                    && ifaceArg.GenericParameterPosition < from.TypeArguments.Length)
+                {
+                    substituted = from.TypeArguments[ifaceArg.GenericParameterPosition];
+                }
+                else
+                {
+                    substituted = TypeSymbol.FromClrType(ifaceArg);
+                }
+
+                if (!AreTypeArgumentsEquivalent(substituted, toInterface.TypeArguments[i]))
+                {
+                    allMatch = false;
+                    break;
+                }
+            }
+
+            if (allMatch)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
