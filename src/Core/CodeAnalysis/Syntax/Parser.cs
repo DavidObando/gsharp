@@ -8641,6 +8641,25 @@ public class Parser
             return arguments;
         }
 
+        // Issue #1294: the `func (` lookahead above also matches a RECEIVER-form
+        // method declaration `func (recv Type) Name(...)`, whose leading
+        // `(recv Type)` is a receiver clause rather than a function-literal
+        // parameter list. This collides with expression-bodied members from
+        // issue #1278: an arrow body that ends in a call (`-> Q(b)`) followed by
+        // a receiver-form declaration on the next line would otherwise gobble
+        // that declaration's `func (recv Type)` as a trailing lambda. A function
+        // LITERAL never has a method name after its parameter list (its `)` is
+        // followed by `{` or a return-type clause, then `{`); a receiver-form
+        // declaration is uniquely `func (recv Type) Identifier (` — an
+        // identifier (the method name) immediately followed by its own `(`. When
+        // we see that shape, the following `func` is a declaration: leave it for
+        // the declaration parser and do not attach it as a trailing lambda.
+        var funcOffset = isAsyncLiteral ? 1 : 0;
+        if (LooksLikeReceiverMethodDeclaration(funcOffset))
+        {
+            return arguments;
+        }
+
         var lambda = ParseFunctionLiteralExpression();
         var existing = arguments.GetWithSeparators();
         var builder = ImmutableArray.CreateBuilder<SyntaxNode>(existing.Length + 2);
@@ -8658,6 +8677,53 @@ public class Parser
 
         builder.Add(lambda);
         return new SeparatedSyntaxList<ExpressionSyntax>(builder.ToImmutable());
+    }
+
+    // Issue #1294: disambiguate a function LITERAL `func (params) ...` from a
+    // RECEIVER-form method DECLARATION `func (recv Type) Name(...)` that happens
+    // to follow a call's closing `)` (e.g. an expression-bodied member from
+    // issue #1278 whose arrow body ends in a call). Both begin `func (`, so the
+    // single-token lookahead used by the trailing-lambda heuristic cannot tell
+    // them apart. This scans the balanced parens immediately after the `func`
+    // keyword (whose offset relative to <see cref="Current"/> is
+    // <paramref name="funcOffset"/>) and reports whether the token after the
+    // matching `)` is an identifier followed by its own `(` — the method-name +
+    // parameter-list shape unique to a receiver-form declaration. A function
+    // literal's parameter `)` is instead followed by `{` (a body) or a
+    // return-type clause that opens with a type token, never an
+    // `Identifier (` pair, so this never misclassifies a genuine trailing
+    // lambda.
+    private bool LooksLikeReceiverMethodDeclaration(int funcOffset)
+    {
+        var openParenOffset = funcOffset + 1;
+        if (Peek(openParenOffset).Kind != SyntaxKind.OpenParenthesisToken)
+        {
+            return false;
+        }
+
+        var depth = 0;
+        for (var i = openParenOffset; ; i++)
+        {
+            var kind = Peek(i).Kind;
+            if (kind == SyntaxKind.EndOfFileToken)
+            {
+                return false;
+            }
+
+            if (kind == SyntaxKind.OpenParenthesisToken)
+            {
+                depth++;
+            }
+            else if (kind == SyntaxKind.CloseParenthesisToken)
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    return Peek(i + 1).Kind == SyntaxKind.IdentifierToken
+                        && Peek(i + 2).Kind == SyntaxKind.OpenParenthesisToken;
+                }
+            }
+        }
     }
 
     private SeparatedSyntaxList<ExpressionSyntax> ParseArguments()

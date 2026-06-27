@@ -79,4 +79,48 @@ public class Issue1278ArrowExpressionMemberParserTests
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
     }
+
+    [Fact]
+    public void ArrowCallBody_FollowedByReceiverFunc_ParsesCleanly()
+    {
+        // Issue #1294 regression: an expression-bodied arrow member whose body
+        // is a call (`-> Q(b)`, ending in `)`) immediately followed by a
+        // declaration that begins with a receiver clause (`func (b B) N()...`)
+        // must terminate the arrow body before the next `func`. Previously the
+        // trailing-lambda heuristic misread the following `func (b B)` receiver
+        // clause as a `func(...)` literal attaching to the call, gobbling the
+        // declaration and reporting GS0005.
+        const string source =
+            "package P\n" +
+            "struct B { }\n" +
+            "func Q(b B) int32 { return 1 }\n" +
+            "func (b B) M() int32 -> Q(b)\n" +
+            "func (b B) N() int32 { return 2 }\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+        var funcs = tree.Root.Members.OfType<FunctionDeclarationSyntax>().ToArray();
+        Assert.Equal(3, funcs.Length);
+        Assert.All(funcs, f => Assert.NotNull(f.Body));
+    }
+
+    [Fact]
+    public void ArrowGenericCallBody_FollowedByReceiverGenericFunc_ParsesCleanly()
+    {
+        // Issue #1294: the real-world Oahu.Decrypt shape — an arrow body that is
+        // a call returning a generic type, on a receiver method, followed by
+        // another receiver method with a generic return type. The arrow body
+        // must still terminate before the next `func (recv Type)`.
+        const string source =
+            "package P\n" +
+            "struct ChunkEntry { }\n" +
+            "struct TrakBox { }\n" +
+            "func ChunkEntryList(t TrakBox) List[ChunkEntry] { return nil }\n" +
+            "func (track TrakBox) ChunkEntries() List[ChunkEntry] -> ChunkEntryList(track)\n" +
+            "func (track TrakBox) Other() List[ChunkEntry] -> ChunkEntryList(track)\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+        var funcs = tree.Root.Members.OfType<FunctionDeclarationSyntax>().ToArray();
+        Assert.Equal(3, funcs.Length);
+        Assert.All(funcs, f => Assert.NotNull(f.Body));
+    }
 }
