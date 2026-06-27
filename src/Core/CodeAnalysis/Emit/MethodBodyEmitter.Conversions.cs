@@ -189,6 +189,21 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #1255: lifted nullable reference upcast `T? -> U?` where U is a
+        // base class or implemented interface of T. Both sides are reference-
+        // type Nullable<T>, which share the underlying reference's CLR
+        // representation, so the upcast (and null propagation) is metadata-only —
+        // the reference already on the stack is a valid U?. This mirrors the
+        // `T -> U?` (#1121) and `T -> U` reference upcasts as a no-op.
+        if (from is NullableTypeSymbol fromRefNullable
+            && to is NullableTypeSymbol toRefNullable
+            && !ReflectionMetadataEmitter.IsValueTypeNullable(fromRefNullable)
+            && !ReflectionMetadataEmitter.IsValueTypeNullable(toRefNullable)
+            && IsReferenceCompatible(fromRefNullable.UnderlyingType, toRefNullable.UnderlyingType))
+        {
+            return;
+        }
+
         // Phase 3 exit: widening to a nullable reference type (`T` -> `T?`)
         // is metadata-only because reference nullability shares the CLR
         // representation. The same applies to narrowing back via `!!`.

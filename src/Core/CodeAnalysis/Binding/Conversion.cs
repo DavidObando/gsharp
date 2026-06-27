@@ -280,6 +280,29 @@ public sealed class Conversion
                     }
                 }
 
+                // Issue #1255: lifted nullable reference upcast — `T? → U?` is an
+                // implicit conversion whenever the underlying `T → U` is an
+                // implicit reference/interface upcast (T derives from or
+                // implements U). This mirrors the non-null #1121 rule (`T → U?`)
+                // for the nullable-source case so the two stay consistent. For
+                // reference-type underlyings a nullable wrapper shares the CLR
+                // representation of the bare reference (null stays null, a
+                // non-null value reference-upcasts), so this is a representation-
+                // preserving no-op conversion — never boxing or wrapping. The
+                // value-type underlying case is handled by the lifted numeric
+                // rule above and intentionally excluded here. Note this never
+                // makes `T? → U` (non-nullable target, handled below) implicit,
+                // so the narrowing null-dropping conversion still errors.
+                if (IsReferenceLikeTarget(fromNullable.UnderlyingType)
+                    && IsReferenceLikeTarget(toNullable.UnderlyingType))
+                {
+                    var underlyingConversion = Classify(fromNullable.UnderlyingType, toNullable.UnderlyingType);
+                    if (underlyingConversion.Exists && underlyingConversion.IsImplicit)
+                    {
+                        return Conversion.Implicit;
+                    }
+                }
+
                 return Conversion.None;
             }
 
