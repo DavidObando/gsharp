@@ -109,9 +109,12 @@ public class ProjectStateTests
     [Fact]
     public void ProjectDirectory_DerivedFromProjectFilePath()
     {
-        var project = new ProjectState("/test/myapp/myapp.gsproj");
+        var projectFilePath = "/test/myapp/myapp.gsproj";
 
-        Assert.Equal("/test/myapp", project.ProjectDirectory);
+        var project = new ProjectState(projectFilePath);
+        var expected = Path.GetDirectoryName(Path.GetFullPath(projectFilePath));
+
+        Assert.Equal(expected, project.ProjectDirectory);
     }
 
     [Fact]

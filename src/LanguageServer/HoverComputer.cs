@@ -2122,7 +2122,7 @@ public static class CompletionComputer
         // also surfaces that interface's (and its transitive CLR bases')
         // members on an interface-typed receiver — keep the completion surface
         // consistent with the binder's member resolution.
-        foreach (var clrBaseIface in MemberLookup.GetTransitiveClrBaseInterfaces(interfaceType))
+        foreach (var clrBaseIface in ClrTypeUtilities.GetTransitiveClrBaseInterfaces(interfaceType))
         {
             AddClrMembers(items, seen, clrBaseIface, staticMembers: false);
         }

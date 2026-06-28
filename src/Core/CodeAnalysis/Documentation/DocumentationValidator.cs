@@ -11,7 +11,11 @@ using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Documentation;
 
-internal static class DocumentationValidator
+/// <summary>
+/// Validates documentation comments across a compilation or syntax tree,
+/// emitting diagnostics for missing, floating, or unknown doc tags.
+/// </summary>
+public static class DocumentationValidator
 {
     private static readonly HashSet<string> KnownTags = new(StringComparer.Ordinal)
     {

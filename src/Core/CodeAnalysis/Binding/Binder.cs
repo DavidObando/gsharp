@@ -1701,7 +1701,7 @@ public sealed class Binder
     /// <param name="additionalLocals">In-scope locals/parameters to declare before binding, or <c>null</c>.</param>
     /// <param name="expression">The receiver expression to infer a type for.</param>
     /// <returns>The inferred non-error, non-void type, or <c>null</c> when inference fails.</returns>
-    internal static TypeSymbol TryInferExpressionType(
+    public static TypeSymbol TryInferExpressionType(
         BoundGlobalScope globalScope,
         ReferenceResolver references,
         FunctionSymbol containingFunction,

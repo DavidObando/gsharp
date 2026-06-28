@@ -17,7 +17,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// <see cref="Type.IsAssignableFrom"/> only work within a single context, so
 /// cross-context comparisons must fall back to name-based matching.
 /// </summary>
-internal static class ClrTypeUtilities
+public static class ClrTypeUtilities
 {
     /// <summary>
     /// Returns whether two <see cref="Type"/>s refer to the same logical CLR
@@ -576,11 +576,74 @@ internal static class ClrTypeUtilities
     }
 
     /// <summary>
-    /// Issue #529: tolerantly retrieves the transitive interface set
-    /// for a type, guarding against metadata-load failures.
+    /// Issue #1181: collects the transitive closure of imported/BCL base
+    /// interfaces declared on <paramref name="interfaceSymbol"/> or on any of
+    /// its user base interfaces. A user interface
+    /// <c>interface IBox : System.IDisposable</c> records <c>IDisposable</c> in
+    /// <see cref="InterfaceSymbol.BaseClrInterfaces"/>; this walk surfaces that
+    /// CLR interface plus every interface IT extends (e.g.
+    /// <c>IEnumerable&lt;T&gt;</c> → <c>IEnumerable</c>) so the binder and the
+    /// language server can project the inherited CLR members onto an
+    /// <c>IBox</c>-typed receiver. The result is deduplicated structurally via
+    /// <see cref="ClrTypeUtilities.AreSame"/> (FullName-based, robust across
+    /// metadata-load contexts).
     /// </summary>
-    /// <param name="type">The type whose interfaces to retrieve.</param>
-    /// <returns>The transitive interface set, or empty on failure.</returns>
+    /// <param name="interfaceSymbol">The user interface whose imported base interfaces to collect.</param>
+    /// <returns>The transitive CLR base interface <see cref="Type"/>s, each appearing once.</returns>
+    public static IReadOnlyList<Type> GetTransitiveClrBaseInterfaces(InterfaceSymbol interfaceSymbol)
+    {
+        if (interfaceSymbol == null)
+        {
+            return Array.Empty<Type>();
+        }
+
+        var result = new List<Type>();
+
+        void AddClr(Type clr)
+        {
+            if (clr == null || !clr.IsInterface)
+            {
+                return;
+            }
+
+            foreach (var existing in result)
+            {
+                if (AreSame(existing, clr))
+                {
+                    return;
+                }
+            }
+
+            result.Add(clr);
+
+            foreach (var transitive in SafeGetInterfaces(clr))
+            {
+                AddClr(transitive);
+            }
+        }
+
+        // A user base interface may itself extend a CLR interface, so walk the
+        // whole user interface hierarchy (this-first) and harvest each level's
+        // imported base interfaces.
+        foreach (var iface in interfaceSymbol.SelfAndAllBaseInterfaces())
+        {
+            if (iface.BaseClrInterfaces.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var clrBase in iface.BaseClrInterfaces)
+            {
+                if (clrBase?.ClrType is Type clrType)
+                {
+                    AddClr(clrType);
+                }
+            }
+        }
+
+        return result;
+    }
+
     internal static Type[] SafeGetInterfaces(Type type)
     {
         if (type is null)
