@@ -421,7 +421,7 @@ internal sealed partial class ExpressionBinder
 
         // nint/nuint and pointer-to-pointer are pointer-sized; the supported
         // execution targets are 64-bit.
-        return System.IntPtr.Size;
+        return nint.Size;
     }
 
     /// <summary>
