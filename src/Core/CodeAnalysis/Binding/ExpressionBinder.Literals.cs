@@ -137,6 +137,15 @@ internal sealed partial class ExpressionBinder
                 name = call.Identifier.Text;
                 return !string.IsNullOrEmpty(name);
 
+            case GenericNameExpressionSyntax generic:
+                // Issue #1329: a constructed-generic *type* reference such as
+                // `IAppleData[TData]`, `List[int32]` or `Dictionary[string, int32]`
+                // is parsed (issue #1323) as a GenericNameExpression. `nameof` of
+                // a generic type yields the unqualified type name with the type
+                // arguments dropped (matches C# `nameof(List<int>)` -> "List").
+                name = generic.Identifier.Text;
+                return !string.IsNullOrEmpty(name);
+
             case ParenthesizedExpressionSyntax p:
                 return TryExtractNameOfName(p.Expression, out name);
 

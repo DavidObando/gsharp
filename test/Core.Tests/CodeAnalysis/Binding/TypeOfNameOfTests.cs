@@ -122,6 +122,51 @@ var n = nameof(Console.WriteLine(""hi""))
         Assert.Contains(diagnostics, d => d.Id == "GS0190");
     }
 
+    [Fact]
+    public void NameOf_Generic_Type_Returns_Unqualified_Name()
+    {
+        // Issue #1329: nameof of a constructed-generic type yields the bare
+        // type name with the type arguments dropped (C# nameof(List<int>) -> "List").
+        var (eval, vars) = EvaluateWithVariables(@"
+var n = nameof(List[int32])
+");
+        Assert.Empty(eval.Diagnostics);
+        Assert.Equal("List", vars["n"]);
+    }
+
+    [Fact]
+    public void NameOf_MultiArg_Generic_Type_Returns_Unqualified_Name()
+    {
+        // Issue #1329: a multi-type-argument generic is accepted and folds to
+        // the bare type name (C# nameof(Dictionary<string, int>) -> "Dictionary").
+        var (eval, vars) = EvaluateWithVariables(@"
+var n = nameof(Dictionary[string, int32])
+");
+        Assert.Empty(eval.Diagnostics);
+        Assert.Equal("Dictionary", vars["n"]);
+    }
+
+    [Fact]
+    public void NameOf_Nested_Generic_Type_Returns_Unqualified_Name()
+    {
+        // Issue #1329: a nested generic type argument is accepted and folds to
+        // the outer type's bare name (C# nameof(List<List<int>>) -> "List").
+        var (eval, vars) = EvaluateWithVariables(@"
+var n = nameof(List[List[int32]])
+");
+        Assert.Empty(eval.Diagnostics);
+        Assert.Equal("List", vars["n"]);
+    }
+
+    [Fact]
+    public void NameOf_Generic_Type_Result_Type_Is_String()
+    {
+        var tree = SyntaxTree.Parse(SourceText.From("var n = nameof(List[int32])\n"));
+        var compilation = new Compilation(tree);
+        var variable = FindVariable(compilation, "n");
+        Assert.Same(TypeSymbol.String, variable.Type);
+    }
+
     private static VariableSymbol FindVariable(Compilation compilation, string name)
     {
         foreach (var symbol in compilation.GlobalScope.Variables)
