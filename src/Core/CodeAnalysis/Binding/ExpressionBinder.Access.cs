@@ -2187,13 +2187,37 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
+            // Issue #1379: a `shared` (static) method on a generic user type may
+            // reference the type's own type parameter(s) in its return type
+            // and/or parameter types (`func Make(v T) Box[T]`). When the receiver
+            // is a closed construction (`Box[int32]`), seed the substitution map
+            // with the struct's type parameters -> the construction's type
+            // arguments so the call's return (and parameter) types are surfaced
+            // closed (`Box[int32]`), not the raw/open form (which fails the
+            // conversion to the closed type, GS0155). This is the user-defined
+            // counterpart of the imported-generic fix in issue #1216 and exercises
+            // the binding receiver added in issue #1323.
+            Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;
+            if (structSym.Definition != null
+                && !ReferenceEquals(structSym.Definition, structSym)
+                && !structSym.TypeArguments.IsDefaultOrEmpty
+                && !structSym.Definition.TypeParameters.IsDefaultOrEmpty)
+            {
+                substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                var defParams = structSym.Definition.TypeParameters;
+                var count = Math.Min(defParams.Length, structSym.TypeArguments.Length);
+                for (var i = 0; i < count; i++)
+                {
+                    substitution[defParams[i]] = structSym.TypeArguments[i];
+                }
+            }
+
             // Issue #312 / ADR-0020: resolve a generic static method's own type
             // arguments from an explicit `[T1, T2]` list at the call site or by
             // left-to-right inference from argument types.
-            Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;
             if (method.IsGeneric)
             {
-                substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                substitution ??= new Dictionary<TypeParameterSymbol, TypeSymbol>();
                 if (ce.TypeArgumentList != null)
                 {
                     var explicitArgs = ce.TypeArgumentList.Arguments;
@@ -2356,7 +2380,13 @@ internal sealed partial class ExpressionBinder
                     continue;
                 }
 
-                if (paramType is TypeParameterSymbol)
+                // Issue #1379: a parameter typed by the GENERIC STRUCT's own type
+                // parameter (`func Make(v T)` on `Box[T]`) is substituted to the
+                // closed receiver type argument (`int32`) so the argument is
+                // converted to the concrete type. A parameter typed by an
+                // unsubstituted (method) type parameter still passes through.
+                if (paramType is TypeParameterSymbol typeParamParam
+                    && (substitution == null || !substitution.ContainsKey(typeParamParam)))
                 {
                     convertedArgs.Add(permutedArgs[i]);
                     continue;
