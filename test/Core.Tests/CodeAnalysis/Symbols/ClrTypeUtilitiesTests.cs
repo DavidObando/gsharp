@@ -195,7 +195,7 @@ public class ClrTypeUtilitiesTests
 /// </summary>
 #pragma warning disable CS0067 // event is never used; only its signature is reflected over.
 #pragma warning disable CS0649 // field is never assigned; only its signature is reflected over.
-internal sealed class Fixture338
+file sealed class Fixture338
 {
     public Fixture338()
     {
