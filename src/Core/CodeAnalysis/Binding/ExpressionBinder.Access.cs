@@ -713,6 +713,34 @@ internal sealed partial class ExpressionBinder
                         implicitStaticProp.StructType,
                         implicitStaticProp.Property);
                 }
+                else if (variable is ImplicitPropertyVariableSymbol implicitProp)
+                {
+                    // Issue #1339: a bare instance-property name used as the
+                    // receiver of a member access (`Prop.Member`, e.g.
+                    // `Entries.Values`/`Items.Count`) must rebind as
+                    // `this.Prop` so the getter call is emitted before the
+                    // member access. Without this the property falls through to
+                    // the bare-variable case below and emits as a load of a
+                    // non-existent local slot named after the property (GS9998).
+                    // Mirrors the static-property arm above and the standalone
+                    // bare-name path in BindNameExpression.
+                    reportObsoleteUseIfApplicable(
+                        leftName.IdentifierToken.Location,
+                        implicitProp.Property,
+                        $"{implicitProp.StructType.Name}.{implicitProp.Property.Name}");
+
+                    if (!implicitProp.Property.HasGetter)
+                    {
+                        Diagnostics.ReportCannotAssign(leftName.IdentifierToken.Location, implicitProp.Property.Name);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    receiver = new BoundPropertyAccessExpression(
+                        null,
+                        new BoundVariableExpression(null, implicitProp.Receiver),
+                        implicitProp.StructType,
+                        implicitProp.Property);
+                }
                 else
                 {
                     receiver = new BoundVariableExpression(null, variable, TryGetNarrowedType(variable));
