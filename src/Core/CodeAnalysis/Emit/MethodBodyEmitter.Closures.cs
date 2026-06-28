@@ -378,6 +378,11 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal, Type overrideDelegateType)
     {
+        this.EmitFunctionLiteral(literal, overrideDelegateType, symbolicDelegateCtorRef: null);
+    }
+
+    private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal, Type overrideDelegateType, EntityHandle? symbolicDelegateCtorRef)
+    {
         if (this.outer.closures.ClosureInfos.TryGetValue(literal, out var closure))
         {
             // Capture-bearing literal: instantiate the closure class,
@@ -437,7 +442,11 @@ internal sealed partial class MethodBodyEmitter
             // reflect over. Use a MemberRef parented at the reified
             // `Func<...>` / `Action<...>` TypeSpec instead — the .ctor
             // signature is the canonical `(object, IntPtr)`.
-            if (overrideDelegateType == null && literal.FunctionType.ClrType == null)
+            if (symbolicDelegateCtorRef.HasValue)
+            {
+                this.il.Token(symbolicDelegateCtorRef.Value);
+            }
+            else if (overrideDelegateType == null && literal.FunctionType.ClrType == null)
             {
                 this.il.Token(this.outer.GetFunctionDelegateCtorRef(literal.FunctionType));
             }
@@ -470,7 +479,11 @@ internal sealed partial class MethodBodyEmitter
 
         // ADR-0087 §3 R6: see capture-bearing branch above — reified
         // ctor MemberRef when the function shape is type-parameter-bearing.
-        if (overrideDelegateType == null && literal.FunctionType.ClrType == null)
+        if (symbolicDelegateCtorRef.HasValue)
+        {
+            this.il.Token(symbolicDelegateCtorRef.Value);
+        }
+        else if (overrideDelegateType == null && literal.FunctionType.ClrType == null)
         {
             this.il.Token(this.outer.GetFunctionDelegateCtorRef(literal.FunctionType));
         }

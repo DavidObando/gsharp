@@ -49,6 +49,27 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #1330: a function literal converted to a delegate type closed
+        // over an in-scope generic type parameter (e.g. `Comparison[TResult]`,
+        // the parameter of `Comparer[TResult].Create(...)`). The target has no
+        // usable ClrType (it is the type-erased `Comparison<object>`), so the
+        // general CLR-delegate path below cannot reach the constructed shape.
+        // Materialise the delegate with a `.ctor` MemberRef parented at the
+        // constructed `Comparison<!TResult>` TypeSpec so the runtime instance
+        // matches the callee's reified parameter.
+        if (conv.Expression is BoundFunctionLiteralExpression constructedDelegateLiteral
+            && conv.Type is ImportedTypeSymbol constructedDelegateTarget
+            && constructedDelegateTarget.OpenDefinition != null
+            && constructedDelegateTarget.HasTypeParameterArgument
+            && ClrTypeUtilities.IsDelegateType(constructedDelegateTarget.ClrType))
+        {
+            this.EmitFunctionLiteral(
+                constructedDelegateLiteral,
+                overrideDelegateType: null,
+                symbolicDelegateCtorRef: this.outer.GetConstructedDelegateCtorRef(constructedDelegateTarget));
+            return;
+        }
+
         // ADR-0059 / issue #255: GSharp function value → user-declared
         // named delegate type. The named delegate has no ClrType (its
         // TypeDef only exists in the assembly being emitted), so the

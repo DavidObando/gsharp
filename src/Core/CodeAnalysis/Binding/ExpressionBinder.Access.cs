@@ -1852,11 +1852,20 @@ internal sealed partial class ExpressionBinder
         var clrArgs = new Type[typeArgs.Length];
         for (var i = 0; i < typeArgs.Length; i++)
         {
-            var clr = NullableTypeSymbol.GetEffectiveClrType(typeArgs[i]);
-            if (clr == null)
-            {
-                return false;
-            }
+            // Issue #1330 (#313 / #671): an in-scope generic type-parameter
+            // argument (`Comparer[TResult].Create(...)`, `Comparer[U].Default`)
+            // — or any other symbolic type that has no CLR type yet (a
+            // not-yet-emitted user type) — has no concrete System.Type to close
+            // the imported generic over. Mirror ConstructIfGeneric's type-erased
+            // generic model and project such an argument onto System.Object for
+            // the closed CLR shape, so the constructed-generic *type* receiver is
+            // well formed and static-member access / static calls resolve. This
+            // keeps the type-parameter receiver consistent with how the same
+            // `Comparer[TResult]` shape binds in type-clause position.
+            var clr = TypeSymbol.ContainsTypeParameter(typeArgs[i])
+                ? typeof(object)
+                : NullableTypeSymbol.GetEffectiveClrType(typeArgs[i]);
+            clr ??= typeof(object);
 
             // Project the host CLR type argument onto the resolver's reference
             // set so it shares the open type's load context (its
@@ -1868,7 +1877,21 @@ internal sealed partial class ExpressionBinder
         try
         {
             var closed = openClrType.MakeGenericType(clrArgs);
-            constructedImported = new ImportedClassSymbol(closed, receiverSyntax);
+
+            // Issue #1330: when any type argument is symbolic (an in-scope
+            // generic type parameter, or a user type with no CLR type yet), the
+            // closed CLR shape above is type-erased to `object`. Carry the
+            // symbolic constructed view alongside it so static-member access and
+            // static calls recover symbolic member/return types
+            // (`Comparer[TResult].Default : Comparer[TResult]`) and the emitter
+            // parents the static member reference at the constructed
+            // `Comparer<!TResult>` TypeSpec instead of the erased
+            // `Comparer<object>` — yielding verifiable IL exactly as the
+            // concrete-argument receiver does.
+            var symbolicReceiver = typeArgs.Any(static a => TypeSymbol.ContainsTypeParameter(a) || a.ClrType == null)
+                ? ImportedTypeSymbol.GetConstructed(closed, openClrType, typeArgs)
+                : null;
+            constructedImported = new ImportedClassSymbol(closed, receiverSyntax, symbolicReceiver);
             return true;
         }
         catch (ArgumentException)
@@ -2533,6 +2556,27 @@ internal sealed partial class ExpressionBinder
                         FieldInfo sf => TypeSymbol.FromClrType(sf.FieldType),
                         _ => TypeSymbol.Error,
                     };
+
+                    // Issue #1330: when the receiver is a generic type
+                    // constructed over an in-scope generic type parameter
+                    // (`Comparer[TResult].Default`), the closed CLR member type
+                    // is type-erased (`Comparer<object>`). Recover the symbolic
+                    // member type (`Comparer[TResult]`) by substituting the
+                    // receiver's symbolic arguments through the open member, and
+                    // carry the symbolic container so the emitter parents the
+                    // static read at the constructed `Comparer<!TResult>`
+                    // TypeSpec rather than the erased `Comparer<object>`.
+                    if (classSymbol.SymbolicReceiver != null)
+                    {
+                        var symbolicMemberType = ResolveStaticMemberTypeFromSymbolicReceiver(classSymbol.SymbolicReceiver, staticMember);
+                        if (symbolicMemberType != null)
+                        {
+                            staticType = symbolicMemberType;
+                        }
+
+                        return new BoundClrPropertyAccessExpression(null, null, staticMember, staticType, classSymbol.SymbolicReceiver);
+                    }
+
                     return new BoundClrPropertyAccessExpression(null, null, staticMember, staticType);
                 }
                 else if (receiver != null && receiver.Type is StructSymbol structSym)
@@ -3784,6 +3828,53 @@ internal sealed partial class ExpressionBinder
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #1330: recover the symbolic type of a static member read on a
+    /// generic type constructed over an in-scope generic type parameter (e.g.
+    /// <c>Comparer[TResult].Default</c>). The receiver's closed CLR shape is
+    /// type-erased (<c>Comparer&lt;object&gt;</c>), so reflection reports the
+    /// member's open type closed over <c>object</c>. Walk the open member on the
+    /// receiver's <see cref="ImportedTypeSymbol.OpenDefinition"/> and project its
+    /// type using the receiver's symbolic <see cref="ImportedTypeSymbol.TypeArguments"/>.
+    /// Returns <see langword="null"/> when no substitution applies.
+    /// </summary>
+    private static TypeSymbol ResolveStaticMemberTypeFromSymbolicReceiver(ImportedTypeSymbol symbolicReceiver, MemberInfo closedMember)
+    {
+        if (symbolicReceiver?.OpenDefinition == null
+            || symbolicReceiver.TypeArguments.IsDefaultOrEmpty
+            || closedMember == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            const BindingFlags staticFlags = BindingFlags.Public | BindingFlags.Static;
+            Type openMemberType = closedMember switch
+            {
+                PropertyInfo => ClrTypeUtilities.SafeGetProperty(symbolicReceiver.OpenDefinition, closedMember.Name, staticFlags)?.PropertyType,
+                FieldInfo => symbolicReceiver.OpenDefinition.GetField(closedMember.Name, staticFlags)?.FieldType,
+                _ => null,
+            };
+            if (openMemberType == null)
+            {
+                return null;
+            }
+
+            var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openMemberType, symbolicReceiver.OpenDefinition, symbolicReceiver.TypeArguments);
+            return TypeSymbol.ContainsTypeParameter(mapped)
+                || TypeSymbol.IsSameCompilationUserTypeTopLevel(mapped)
+                || openMemberType.IsGenericParameter
+                || openMemberType.IsGenericType
+                ? mapped
+                : null;
+        }
+        catch (System.Reflection.AmbiguousMatchException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

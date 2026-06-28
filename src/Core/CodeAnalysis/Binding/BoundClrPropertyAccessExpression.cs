@@ -20,17 +20,30 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrPropertyAccessExpression : BoundExpression
 {
-    public BoundClrPropertyAccessExpression(SyntaxNode syntax, BoundExpression receiver, MemberInfo member, TypeSymbol resultType)
+    public BoundClrPropertyAccessExpression(SyntaxNode syntax, BoundExpression receiver, MemberInfo member, TypeSymbol resultType, TypeSymbol staticContainerType = null)
         : base(syntax)
     {
         Receiver = receiver;
         Member = member;
         Type = resultType;
+        StaticContainerType = staticContainerType;
     }
 
     public BoundExpression Receiver { get; }
 
     public MemberInfo Member { get; }
+
+    /// <summary>
+    /// Gets, for a static member read on a generic type constructed over
+    /// an in-scope generic type parameter (e.g. <c>Comparer[TResult].Default</c>),
+    /// the symbolic constructed container (an <see cref="ImportedTypeSymbol"/>
+    /// over the open definition with symbolic type arguments). The emitter
+    /// parents the static getter/field reference at this constructed TypeSpec
+    /// (<c>Comparer&lt;!TResult&gt;</c>) instead of the erased
+    /// <c>Comparer&lt;object&gt;</c>. <c>null</c> for an ordinary static or
+    /// instance member access.
+    /// </summary>
+    public TypeSymbol StaticContainerType { get; }
 
     public override TypeSymbol Type { get; }
 
