@@ -1,4 +1,6 @@
-﻿// <copyright file="ParameterSymbol.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="ParameterSymbol.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

@@ -1,4 +1,6 @@
-﻿// <copyright file="BoundGlobalScope.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="BoundGlobalScope.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

@@ -1,4 +1,6 @@
-﻿// <copyright file="BoundForInfiniteStatement.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="BoundForInfiniteStatement.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

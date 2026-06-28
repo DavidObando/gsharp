@@ -5,6 +5,7 @@
     <RootNamespace>GSharp.Extensions.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
     <Nullable>enable</Nullable>
+      <Nullable>disable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>

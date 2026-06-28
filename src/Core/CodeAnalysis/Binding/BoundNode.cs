@@ -1,4 +1,6 @@
-﻿// <copyright file="BoundNode.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="BoundNode.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

@@ -1,4 +1,6 @@
-﻿// <copyright file="BoundBinaryOperator.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="BoundBinaryOperator.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

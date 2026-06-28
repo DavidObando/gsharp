@@ -1,4 +1,6 @@
-﻿// <copyright file="BoundVariableExpression.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="BoundVariableExpression.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

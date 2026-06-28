@@ -1,4 +1,6 @@
-﻿// <copyright file="TextWriterExtensions.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="TextWriterExtensions.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

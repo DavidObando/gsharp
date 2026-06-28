@@ -4,6 +4,7 @@
     <RootNamespace>Corpus.L3.Tests</RootNamespace>
     <AssemblyName>L3-Library.Tests</AssemblyName>
     <IsTestProject>true</IsTestProject>
+      <Nullable>disable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>

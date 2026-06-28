@@ -65,7 +65,7 @@
   <!-- Compiler Options -->
   <PropertyGroup>
     <LangVersion>latest</LangVersion>
-    <Nullable>disable</Nullable>
+    <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <HighEntropyVA>true</HighEntropyVA>

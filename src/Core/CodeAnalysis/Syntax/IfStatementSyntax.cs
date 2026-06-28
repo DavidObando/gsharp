@@ -1,4 +1,6 @@
-﻿// <copyright file="IfStatementSyntax.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="IfStatementSyntax.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

@@ -1,4 +1,6 @@
-﻿// <copyright file="SeparatedSyntaxList{T}.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="SeparatedSyntaxList{T}.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

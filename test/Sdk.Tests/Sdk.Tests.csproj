@@ -4,6 +4,7 @@
     <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
     <RootNamespace>GSharp.Sdk.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
+      <Nullable>disable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>

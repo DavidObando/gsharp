@@ -4,6 +4,7 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>Corpus.L5</RootNamespace>
     <AssemblyName>L5-Console</AssemblyName>
+      <Nullable>disable</Nullable>
   </PropertyGroup>
 
 </Project>

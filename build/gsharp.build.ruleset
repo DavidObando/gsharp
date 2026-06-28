@@ -87,5 +87,8 @@
     <Rule Id="SA1601" Action="None" />
     <!-- Don't require the use of a copyright header (we still keep them, but don't fail builds). -->
     <Rule Id="SA1633" Action="None" />
+    <!-- Allow `#nullable` directives without requiring blank lines around comments. -->
+    <Rule Id="SA1512" Action="None" />
+    <Rule Id="SA1515" Action="None" />
   </Rules>
 </RuleSet>

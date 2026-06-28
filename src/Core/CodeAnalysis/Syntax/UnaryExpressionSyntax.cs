@@ -1,4 +1,6 @@
-﻿// <copyright file="UnaryExpressionSyntax.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="UnaryExpressionSyntax.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

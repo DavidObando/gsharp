@@ -1,4 +1,6 @@
-﻿// <copyright file="AccessorExpressionSyntax.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="AccessorExpressionSyntax.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

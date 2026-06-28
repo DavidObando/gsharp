@@ -1,3 +1,5 @@
+#nullable disable
+
 // <copyright file="TryStatementSyntax.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>

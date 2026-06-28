@@ -3,6 +3,7 @@
   <PropertyGroup>
     <RootNamespace>Corpus.L3</RootNamespace>
     <AssemblyName>L3-Library</AssemblyName>
+      <Nullable>disable</Nullable>
   </PropertyGroup>
 
 </Project>

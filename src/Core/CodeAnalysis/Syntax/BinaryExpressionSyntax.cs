@@ -1,4 +1,6 @@
-﻿// <copyright file="BinaryExpressionSyntax.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="BinaryExpressionSyntax.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

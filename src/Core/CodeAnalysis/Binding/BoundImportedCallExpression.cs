@@ -1,4 +1,6 @@
-﻿// <copyright file="BoundImportedCallExpression.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="BoundImportedCallExpression.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

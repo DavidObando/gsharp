@@ -3,6 +3,7 @@
   <PropertyGroup>
     <RootNamespace>Corpus.CompileGap</RootNamespace>
     <AssemblyName>CompileGap-Library</AssemblyName>
+      <Nullable>disable</Nullable>
   </PropertyGroup>
 
 </Project>

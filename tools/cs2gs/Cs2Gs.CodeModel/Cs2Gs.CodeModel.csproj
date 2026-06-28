@@ -3,6 +3,7 @@
   <PropertyGroup>
     <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
     <RootNamespace>Cs2Gs.CodeModel</RootNamespace>
+    <Nullable>disable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>

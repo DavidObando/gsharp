@@ -3,6 +3,7 @@
   <PropertyGroup>
     <RootNamespace>Corpus.L2</RootNamespace>
     <AssemblyName>L2-Library</AssemblyName>
+      <Nullable>disable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,4 +1,6 @@
-﻿// <copyright file="BoundLoopStatement.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="BoundLoopStatement.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

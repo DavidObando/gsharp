@@ -1,8 +1,9 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
     <RootNamespace>Cs2Gs.Report</RootNamespace>
+      <Nullable>disable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>

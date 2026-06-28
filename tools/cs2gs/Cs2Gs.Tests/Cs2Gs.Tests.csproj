@@ -1,10 +1,11 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
     <RootNamespace>Cs2Gs.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+      <Nullable>disable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>

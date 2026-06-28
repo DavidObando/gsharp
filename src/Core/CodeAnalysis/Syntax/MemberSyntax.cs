@@ -1,4 +1,6 @@
-﻿// <copyright file="MemberSyntax.cs" company="GSharp">
+#nullable disable
+
+// <copyright file="MemberSyntax.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
