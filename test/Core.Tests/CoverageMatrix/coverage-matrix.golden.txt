@@ -103,6 +103,7 @@ FromEndIndexExpression
 FuncKeyword
 FunctionDeclaration
 FunctionLiteralExpression
+GenericNameExpression
 GlobalStatement
 GoKeyword
 GoStatement

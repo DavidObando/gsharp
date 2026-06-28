@@ -7888,14 +7888,16 @@ public class Parser
         }
 
         var typeArgumentCount = 0;
+        var sawComplexTypeArgument = false;
         while (true)
         {
-            if (!TryScanTypeClause(ref pos))
+            if (!TryScanTypeClause(ref pos, out var argumentIsComplex))
             {
                 return false;
             }
 
             typeArgumentCount++;
+            sawComplexTypeArgument |= argumentIsComplex;
 
             if (Peek(pos).Kind == SyntaxKind.CommaToken)
             {
@@ -7939,17 +7941,31 @@ public class Parser
             return true;
         }
 
-        // Issue #942: only a multi-type-argument list (which cannot be an
-        // indexer) commits to a generic call site on a trailing `.`. A single
-        // bracketed argument followed by `.` is an indexer-then-member access.
-        return nextKind == SyntaxKind.DotToken && typeArgumentCount > 1;
+        // Issue #942 / Issue #1323: a multi-type-argument list (which cannot be
+        // an indexer) always commits to a generic call site on a trailing `.`.
+        // A single bracketed argument followed by `.` is normally treated as an
+        // indexer-then-member access (`dict[key].Prop`, `Box[int32].Make` — the
+        // latter resolves later in the binder). But a single argument whose
+        // shape is unambiguously a TYPE — it carries a nullable suffix (`T?`),
+        // an array/slice prefix (`[]T`), or its own nested type-argument list
+        // (`List[T]`) — cannot be a legal index expression, so it must be a
+        // generic call site (`Box[int32?].Make`, `Box[[]int32].Make`,
+        // `Box[List[int32]].Make`).
+        return nextKind == SyntaxKind.DotToken
+            && (typeArgumentCount > 1 || sawComplexTypeArgument);
     }
 
-    private bool TryScanTypeClause(ref int pos)
+    private bool TryScanTypeClause(ref int pos) => TryScanTypeClause(ref pos, out _);
+
+    private bool TryScanTypeClause(ref int pos, out bool isComplex)
     {
+        isComplex = false;
+
         // Optional leading bracketed segment: '[' ']' or '[' Number ']' for slice/array shapes.
         if (Peek(pos).Kind == SyntaxKind.OpenSquareBracketToken)
         {
+            // An array/slice prefix is unambiguously a type shape (Issue #1323).
+            isComplex = true;
             pos++;
             if (Peek(pos).Kind == SyntaxKind.NumberToken)
             {
@@ -7976,6 +7992,8 @@ public class Parser
         // tuple-type clause `(T1, T2, ...)`. Both start with '('.
         if (Peek(pos).Kind == SyntaxKind.OpenParenthesisToken)
         {
+            // A function/tuple type clause is unambiguously a type shape.
+            isComplex = true;
             pos++;
             if (Peek(pos).Kind != SyntaxKind.CloseParenthesisToken)
             {
@@ -8025,6 +8043,8 @@ public class Parser
         // Phase 4.7: legacy `func(T) R` function-type clause.
         if (Peek(pos).Kind == SyntaxKind.FuncKeyword)
         {
+            // A legacy function-type clause is unambiguously a type shape.
+            isComplex = true;
             pos++;
             if (Peek(pos).Kind != SyntaxKind.OpenParenthesisToken)
             {
@@ -8084,10 +8104,14 @@ public class Parser
         pos++;
 
         // Nested type-argument list, e.g. `List[int]`.
-        if (!TryScanOptionalTypeArgumentList(ref pos))
+        if (!TryScanOptionalTypeArgumentList(ref pos, out var headHadTypeArgumentList))
         {
             return false;
         }
+
+        // A nested type-argument list makes this unambiguously a type shape
+        // (`List[int32]`) rather than a plain index expression (Issue #1323).
+        isComplex |= headHadTypeArgumentList;
 
         // Issue #1174: a dotted tail names a (possibly nested, possibly
         // generic) type — `Container.Nested`, `A.B.C`, or `Outer.Generic[T]`.
@@ -8102,15 +8126,19 @@ public class Parser
             && Peek(pos + 1).Kind == SyntaxKind.IdentifierToken)
         {
             pos += 2;
-            if (!TryScanOptionalTypeArgumentList(ref pos))
+            if (!TryScanOptionalTypeArgumentList(ref pos, out var segmentHadTypeArgumentList))
             {
                 return false;
             }
+
+            isComplex |= segmentHadTypeArgumentList;
         }
 
         // Optional trailing `?` for nullables.
         if (Peek(pos).Kind == SyntaxKind.QuestionToken)
         {
+            // A nullable suffix is unambiguously a type shape (Issue #1323).
+            isComplex = true;
             pos++;
         }
 
@@ -8120,19 +8148,24 @@ public class Parser
     /// <summary>
     /// Issue #1174: scans an optional bracketed type-argument list
     /// (<c>[T1, T2, ...]</c>) starting at <paramref name="pos"/>. A missing list
-    /// is a success (no-op). Used by <see cref="TryScanTypeClause"/> for both the
+    /// is a success (no-op). Used by <see cref="TryScanTypeClause(ref int)"/> for both the
     /// head identifier and each dotted-tail segment so a nested generic type such
     /// as <c>Outer.Generic[T]</c> scans as one type clause.
     /// </summary>
     /// <param name="pos">The scan position, advanced past the list when present.</param>
     /// <returns><see langword="true"/> when there is no list or it scans cleanly.</returns>
     private bool TryScanOptionalTypeArgumentList(ref int pos)
+        => TryScanOptionalTypeArgumentList(ref pos, out _);
+
+    private bool TryScanOptionalTypeArgumentList(ref int pos, out bool present)
     {
         if (Peek(pos).Kind != SyntaxKind.OpenSquareBracketToken)
         {
+            present = false;
             return true;
         }
 
+        present = true;
         pos++;
         while (true)
         {
@@ -8185,6 +8218,18 @@ public class Parser
             var literal = new StructLiteralExpressionSyntax(syntaxTree, identifier, openBrace, initializers, closeBrace);
             literal.TypeArgumentList = typeArguments;
             return literal;
+        }
+
+        // Issue #1323: a `[…]` type-argument list followed by `.` is a member
+        // access on the constructed generic *type* (`Box[int32?].Make(5)`,
+        // `Pair[int, string].Default`). The committed-to-generic decision was
+        // already made by LooksLikeGenericCallSite (multi-arg, or a single
+        // unambiguously type-shaped argument). Emit a generic-name expression so
+        // ParsePostfixChain attaches the `.Member(...)` accessor and the binder
+        // resolves the closed construction as the static-access receiver.
+        if (Current.Kind == SyntaxKind.DotToken)
+        {
+            return new GenericNameExpressionSyntax(syntaxTree, identifier, typeArguments);
         }
 
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
