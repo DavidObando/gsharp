@@ -3664,7 +3664,27 @@ internal sealed partial class ExpressionBinder
             }
 
             var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openPropType, imp.OpenDefinition, imp.TypeArguments);
-            return TypeSymbol.ContainsTypeParameter(mapped) ? mapped : null;
+
+            // Issue #794 surfaced this projection for in-scope type parameters
+            // (e.g. `Dictionary[K, V].Keys` -> `ICollection[K]`). Issue #1304
+            // extends it to same-compilation user-defined type arguments: a
+            // member whose open type is a generic parameter — e.g.
+            // `IEnumerator[Ch].Current` -> `Ch` — must keep the user element
+            // `Ch` instead of erasing to `object`. A user-defined `Ch` has a
+            // null `ClrType` during binding, so the closed reflection property
+            // reports the erased `object`; surface the symbolic projection.
+            //
+            // The override is restricted to a TOP-LEVEL user type (after
+            // unwrapping nullable/slice/array). A member typed as a constructed
+            // generic over a user element (e.g. a `ChannelWriter[Entry]`
+            // property) is intentionally left to the closed reflection
+            // fallback, because method/extension lookup on such a non-interned
+            // constructed generic is not yet supported (#1305); surfacing it
+            // here would regress those call sites.
+            return TypeSymbol.ContainsTypeParameter(mapped)
+                || TypeSymbol.IsSameCompilationUserTypeTopLevel(mapped)
+                ? mapped
+                : null;
         }
         catch (System.Reflection.AmbiguousMatchException)
         {
