@@ -186,6 +186,22 @@ internal sealed class PatternBinder
         }
 
         var conversion = Conversion.Classify(expression.Type, discriminantType);
+
+        // Issue #1333: a `nil` constant pattern against a non-nullable
+        // reference discriminant (class/interface/imported-ref/array/delegate/
+        // string/object, or a non-`struct` generic type parameter). The
+        // CLR reference can still be null at runtime, so `case nil` is a
+        // meaningful test even though `nil` is not assignable to the
+        // non-nullable type (Conversion.Classify returns None per Phase
+        // 3.C.2). Bind it directly to a nil-literal pattern; the emitter
+        // lowers it to `loadValue; brtrue fail`, which is verifier-clean
+        // for any managed reference.
+        if (isNilLiteral(expression)
+            && BoundBinaryOperator.IsReferenceTypeNilComparable(discriminantType))
+        {
+            return new BoundConstantPattern(syntax, discriminantType, expression);
+        }
+
         if (!conversion.Exists || conversion.IsExplicit)
         {
             if (expression.Type != TypeSymbol.Error && discriminantType != TypeSymbol.Error)

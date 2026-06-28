@@ -316,6 +316,43 @@ public sealed class BoundBinaryOperator
     }
 
     /// <summary>
+    /// Issue #1333: returns <see langword="true"/> when <paramref name="type"/>
+    /// is a reference type (or a generic type parameter that is a reference at
+    /// runtime) so that comparing it to <c>nil</c> with <c>==</c> / <c>!=</c>
+    /// (or matching it against a <c>nil</c> constant pattern) is meaningful.
+    /// Non-nullable value types — numeric/bool/char/enum/struct and
+    /// <c>struct</c>-constrained type parameters — return <see langword="false"/>.
+    /// </summary>
+    /// <param name="type">The non-<c>nil</c> operand type to classify.</param>
+    /// <returns><see langword="true"/> for reference-typed operands.</returns>
+    internal static bool IsReferenceTypeNilComparable(TypeSymbol type)
+    {
+        if (type is null)
+        {
+            return false;
+        }
+
+        // A generic type parameter is a managed reference at runtime unless it
+        // is `struct`-constrained. `class`-constrained and unconstrained
+        // parameters can hold null, so the nil-comparison is meaningful;
+        // `[T struct]` is a value type and stays rejected.
+        if (type is TypeParameterSymbol tp)
+        {
+            return !tp.HasValueTypeConstraint;
+        }
+
+        // `object` and `string` are reference types that the constraint
+        // helper does not special-case (they are plain TypeSymbols, not
+        // ImportedTypeSymbols).
+        if (type == TypeSymbol.Object || type == TypeSymbol.String)
+        {
+            return true;
+        }
+
+        return Binder.IsReferenceTypeForConstraint(type);
+    }
+
+    /// <summary>
     /// PR N-4: returns true for operator kinds that have a lifted
     /// counterpart per C# §7.3.7 — arithmetic, bitwise, equality, and
     /// ordering. Logical short-circuit (&amp;&amp;, ||), null-coalesce, and
@@ -382,22 +419,25 @@ public sealed class BoundBinaryOperator
             return true;
         }
 
-        // Issue #796: extend `== nil` / `!= nil` to reference-shaped types
-        // whose CLR representation is a managed reference. The binder
-        // already accepts `T? == nil` for any nullable wrapper; the
-        // language has no `T?` spelling for these structural shapes,
-        // so allow the comparison directly. Emit falls through to the
-        // generic `ldnull; ceq` path (verifier-clean for any reference).
+        // Issue #796 / #1333: extend `== nil` / `!= nil` to reference-shaped
+        // types whose CLR representation is a managed reference. The binder
+        // already accepts `T? == nil` for any nullable wrapper; the language
+        // has no `T?` spelling for these structural shapes (and the defensive
+        // `x == nil` / `x != nil` pattern is legal on any reference even when
+        // it is not null-annotated, because a CLR reference can still be null
+        // at runtime — default field value, uninitialised auto-property,
+        // interop). Allow the comparison directly. Emit falls through to the
+        // generic `ldnull; ceq` path (verifier-clean for any reference), or to
+        // the `box; ldnull; ceq` path for open type parameters.
         //
-        // Covered shapes (all reference-typed at the CLR level):
-        //   * `(T) -> R` / `func(T) U` — FunctionTypeSymbol, lowered to a
-        //     System.MulticastDelegate-derived closure.
-        //   * Named delegate types declared with `delegate` — DelegateTypeSymbol.
-        //   * `sequence[T]` / `asyncSequence[T]` — IEnumerable<T> / IAsyncEnumerable<T>.
-        return nullableOrUnderlying is FunctionTypeSymbol
-            || nullableOrUnderlying is DelegateTypeSymbol
-            || nullableOrUnderlying is SequenceTypeSymbol
-            || nullableOrUnderlying is AsyncSequenceTypeSymbol;
+        // Covered shapes (all references at the CLR level): user classes,
+        // interfaces, imported reference types, arrays, slices, maps, channels,
+        // delegates, anonymous functions, sequences, `string`, `object`, and
+        // `class`-constrained or unconstrained generic type parameters.
+        // Non-nullable value types (numeric/bool/char/enum/struct and
+        // `struct`-constrained type parameters) are intentionally excluded so
+        // a meaningless `int32 == nil` still reports GS0129.
+        return IsReferenceTypeNilComparable(nullableOrUnderlying);
     }
 
     private static BoundBinaryOperator[] BuildSupportedOperators()
