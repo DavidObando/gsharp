@@ -4446,7 +4446,22 @@ internal sealed class OverloadResolver
         if (substitution != null)
         {
             var returnType = substituteType(extension.Type, substitution);
+            if (extension.IsAsync && !isAsyncIteratorReturnType(extension.Type))
+            {
+                returnType = wrapAsTask(returnType);
+            }
+
             return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable(), returnType);
+        }
+
+        // Issue #1376: an async receiver-clause (extension) function's call-site
+        // return type is Task / Task[T], not the underlying void / T. Wrap here
+        // so awaiting the call sees a value-bearing Task, mirroring the async
+        // free-function and user-instance-call paths.
+        if (extension.IsAsync && !isAsyncIteratorReturnType(extension.Type))
+        {
+            var asyncReturn = wrapAsTask(extension.Type);
+            return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable(), asyncReturn);
         }
 
         return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable());
