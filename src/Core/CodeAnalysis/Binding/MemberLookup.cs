@@ -747,11 +747,23 @@ internal sealed class MemberLookup
             // ImportedTypeSymbol.GetConstructed callers (#313 / #671): ClrType
             // remains a real closed `Type` that reflection can probe for
             // members, while TypeArguments carries the symbolic projection.
+            //
+            // Issue #1305: when this projection runs over a method-level
+            // return type (e.g. `Where<TSource>(…) → IEnumerable<TSource>`)
+            // whose `openDef` was loaded by the references' MetadataLoadContext,
+            // a live `typeof(object)` cannot close it ("type was not loaded by
+            // the MetadataLoadContext"). The construction then fell into the
+            // catch below and surfaced the *open* `IEnumerable<TSource>` as the
+            // result's ClrType, so the next chained extension lookup
+            // (`e.Where(…).Where(…)`) matched against an unbound method type
+            // parameter and reported GS0159. Erase using an `object` resolved
+            // in the same context as `openDef`.
             var openParams = openDef.GetGenericArguments();
             var erasedArgs = new Type[openParams.Length];
+            var contextObject = ResolveErasedObjectInContext(openDef);
             for (int i = 0; i < openParams.Length; i++)
             {
-                erasedArgs[i] = typeof(object);
+                erasedArgs[i] = contextObject;
             }
 
             Type erasedClosed;
@@ -2001,6 +2013,41 @@ internal sealed class MemberLookup
     /// <returns>The parameters visible to a non-extension caller.</returns>
     private static ImmutableArray<ParameterSymbol> GetCallableParameters(FunctionSymbol method)
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
+
+    /// <summary>
+    /// Issue #1305 / #821: resolves the <c>System.Object</c> used to erase the
+    /// type arguments when closing <paramref name="openDef"/> via
+    /// <see cref="Type.MakeGenericType"/>. When <paramref name="openDef"/> was
+    /// loaded by the references' <c>MetadataLoadContext</c> (reference-pack
+    /// assemblies), passing a live <c>typeof(object)</c> raises an
+    /// <see cref="ArgumentException"/> ("type was not loaded by the
+    /// MetadataLoadContext that loaded the generic type or method"). A generic
+    /// parameter's effective base type is <c>System.Object</c> in that same
+    /// context, so reuse it. Falls back to the host <c>typeof(object)</c> when
+    /// <paramref name="openDef"/> lives in the host runtime or no
+    /// <c>System.Object</c> base can be recovered.
+    /// </summary>
+    /// <param name="openDef">The open generic type definition being closed.</param>
+    /// <returns>An <c>object</c> <see cref="Type"/> loaded in the same context as <paramref name="openDef"/>.</returns>
+    private static Type ResolveErasedObjectInContext(Type openDef)
+    {
+        var hostObject = typeof(object);
+        if (openDef == null || openDef.Assembly == hostObject.Assembly)
+        {
+            return hostObject;
+        }
+
+        foreach (var p in openDef.GetGenericArguments())
+        {
+            var baseType = p.BaseType;
+            if (baseType != null && baseType.FullName == "System.Object")
+            {
+                return baseType;
+            }
+        }
+
+        return hostObject;
+    }
 
     private static bool ReturnTypeMatchesSubstituted(TypeSymbol candidateReturn, Type openReturn, ImmutableArray<TypeSymbol> symbolicArgs)
     {
