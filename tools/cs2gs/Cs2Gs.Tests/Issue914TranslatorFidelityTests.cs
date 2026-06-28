@@ -51,7 +51,31 @@ namespace Demo
     }
 
     [Fact]
-    public void PositivePattern_UsedOnlyInsideThen_KeepsSmartCastNoHoist()
+    public void PositivePattern_LocalScrutinee_UsedOnlyInsideThen_KeepsSmartCastNoHoist()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class E { public int X; }
+    public class Box { public E? Esds => null; }
+    public class C
+    {
+        public void F(Box b)
+        {
+            var local = b.Esds;
+            if (local is E esds) { System.Console.WriteLine(esds.X); }
+        }
+    }
+}");
+
+        // A bare local scrutinee smart-casts in gsc, so no hoist: the existing
+        // smart-cast `is` test is kept and `esds` rewrites to the local.
+        Assert.Contains("local is E", printed);
+        Assert.DoesNotContain("as E", printed);
+    }
+
+    [Fact]
+    public void PositivePattern_PropertyScrutinee_UsedOnlyInsideThen_HoistsLocal()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -67,9 +91,37 @@ namespace Demo
     }
 }");
 
-        // No hoist: the existing smart-cast `is` test is kept.
-        Assert.Contains("b.Esds is E", printed);
-        Assert.DoesNotContain("as E", printed);
+        // A property-access scrutinee cannot be smart-cast by gsc, so even when the
+        // binder is used only inside the then-block it must hoist into a local
+        // (rewriting `esds` to `b.Esds` would yield `b.Esds.X` → GS0158).
+        Assert.Contains("let esds E? = b.Esds as E", printed);
+        Assert.Contains("if esds != nil", printed);
+    }
+
+    [Fact]
+    public void PositivePattern_MethodCallScrutinee_UsedOnlyInsideThen_HoistsLocalOnce()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class E { public int X; }
+    public class Box { public T? GetChild<T>() where T : class => null; }
+    public class C
+    {
+        public void F(Box b)
+        {
+            if (b.GetChild<E>() is E child) { System.Console.WriteLine(child.X + child.X); }
+        }
+    }
+}");
+
+        // A method-call scrutinee must be evaluated once into a hoisted local; the
+        // side-effecting call must not be re-emitted at each use of the binder.
+        Assert.Contains("let child E? = b.GetChild[E]() as E", printed);
+        Assert.Contains("if child != nil", printed);
+        // The method call is emitted exactly once (in the hoist), not per binder use.
+        string[] occurrences = printed.Split("GetChild[E]()");
+        Assert.Equal(2, occurrences.Length);
     }
 
     [Fact]

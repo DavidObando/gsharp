@@ -4269,11 +4269,23 @@ public sealed class CSharpToGSharpTranslator
                 return false;
             }
 
-            // Only hoist when the pattern variable escapes the then-block. If it is
-            // used solely inside the guarded block the existing smart cast (rewriting
-            // `t` to the receiver) is correct and avoids an unnecessary local.
-            if (this.context.GetDeclaredSymbol(single) is not ILocalSymbol patternSymbol ||
-                !this.IsSymbolReferencedOutside(patternSymbol, ifStatement.Statement))
+            // Hoist when EITHER the pattern variable escapes the then-block, OR the
+            // scrutinee is a non-trivial expression that gsc cannot smart-cast. gsc
+            // narrows only a bare local/parameter (ADR-0069); a method-call result,
+            // member-access chain or field reference re-emitted at each use of `t`
+            // would not smart-cast (→ GS0158) and, for a side-effecting scrutinee
+            // such as `M(out var x)`, would be re-evaluated (→ GS0102). When the
+            // scrutinee IS a smart-castable local and `t` is used solely inside the
+            // guarded block, the existing smart cast (rewriting `t` to the receiver)
+            // is correct and avoids an unnecessary local.
+            if (this.context.GetDeclaredSymbol(single) is not ILocalSymbol patternSymbol)
+            {
+                return false;
+            }
+
+            bool escapesThenBlock =
+                this.IsSymbolReferencedOutside(patternSymbol, ifStatement.Statement);
+            if (!escapesThenBlock && this.IsSmartCastableScrutinee(isPattern.Expression))
             {
                 return false;
             }
@@ -4311,6 +4323,25 @@ public sealed class CSharpToGSharpTranslator
 
             result = new GStatement[] { hoist, new IfStatement(guard, then, elseBranch) };
             return true;
+        }
+
+        /// <summary>
+        /// A scrutinee is smart-castable by gsc only when it is a bare local or
+        /// parameter reference; gsc narrows locals, not method-call results,
+        /// member-access chains, or field references (ADR-0069). When the scrutinee
+        /// is not smart-castable, an <c>x is T t</c> whose binder is used in the
+        /// guarded block must hoist the scrutinee into a local (so the local
+        /// smart-casts) rather than re-emit the expression at each use of <c>t</c>.
+        /// </summary>
+        private bool IsSmartCastableScrutinee(ExpressionSyntax expression)
+        {
+            if (expression is not IdentifierNameSyntax)
+            {
+                return false;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            return symbol is ILocalSymbol or IParameterSymbol;
         }
 
         // Extracts the target type and single-variable designation from a positive
