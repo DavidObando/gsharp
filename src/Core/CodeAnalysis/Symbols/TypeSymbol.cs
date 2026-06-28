@@ -457,4 +457,41 @@ public class TypeSymbol : Symbol
                 return false;
         }
     }
+
+    /// <summary>
+    /// Returns true when <paramref name="type"/> — after unwrapping nullable,
+    /// slice and array wrappers — is itself a same-compilation user-defined
+    /// type (struct/class/enum/interface/delegate with a null <c>ClrType</c>).
+    /// Unlike <see cref="ContainsSameCompilationUserType"/>, this does NOT
+    /// recurse into the type arguments of a constructed imported generic: a
+    /// constructed generic over a user element (e.g. <c>ChannelWriter[Entry]</c>)
+    /// is NOT a top-level user type, because method/extension lookup on such a
+    /// non-interned constructed generic is not yet supported (#1305).
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns>
+    /// <c>true</c> if the unwrapped top-level type is a same-compilation
+    /// user-defined type; otherwise <c>false</c>.
+    /// </returns>
+    public static bool IsSameCompilationUserTypeTopLevel(TypeSymbol type)
+    {
+        switch (type)
+        {
+            case null:
+                return false;
+            case NullableTypeSymbol n:
+                return IsSameCompilationUserTypeTopLevel(n.UnderlyingType);
+            case SliceTypeSymbol s:
+                return IsSameCompilationUserTypeTopLevel(s.ElementType);
+            case ArrayTypeSymbol a:
+                return IsSameCompilationUserTypeTopLevel(a.ElementType);
+            case StructSymbol:
+            case EnumSymbol:
+            case InterfaceSymbol:
+            case DelegateTypeSymbol:
+                return type.ClrType == null;
+            default:
+                return false;
+        }
+    }
 }
