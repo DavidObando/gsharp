@@ -287,6 +287,7 @@ internal sealed class LambdaBinder
         var outerFunction = getCurrentFunction();
         Scope = new BoundScope(outerScope);
         setCurrentFunction(synthetic);
+        synthetic.LexicalEnclosingType = ResolveLexicalEnclosingType(outerFunction);
         foreach (var ps in synthetic.Parameters)
         {
             // Issue #1262: discard parameters (`_`) are non-referenceable —
@@ -496,6 +497,7 @@ internal sealed class LambdaBinder
         var outerFunction = getCurrentFunction();
         Scope = new BoundScope(outerScope);
         setCurrentFunction(placeholder);
+        placeholder.LexicalEnclosingType = ResolveLexicalEnclosingType(outerFunction);
         foreach (var ps in placeholder.Parameters)
         {
             // Issue #1262: discard parameters (`_`) are non-referenceable —
@@ -554,6 +556,7 @@ internal sealed class LambdaBinder
 
         var synthetic = new FunctionSymbol(syntheticName, placeholder.Parameters, returnType);
         synthetic.IsAsync = isAsync;
+        synthetic.LexicalEnclosingType = placeholder.LexicalEnclosingType;
 
         // ADR-0076 / issue #716: rewrite the bound body so every return
         // statement's expression is converted to the inferred return type.
@@ -756,6 +759,11 @@ internal sealed class LambdaBinder
 
         return element;
     }
+
+    private static TypeSymbol ResolveLexicalEnclosingType(FunctionSymbol outerFunction)
+        => outerFunction?.ReceiverType
+            ?? outerFunction?.StaticOwnerType
+            ?? outerFunction?.LexicalEnclosingType;
 
     // Issue #893: rewrite a value-returning function-literal block body so a bare
     // trailing expression statement becomes the implicit `return` value. This is

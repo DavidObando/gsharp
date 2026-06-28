@@ -249,6 +249,18 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>Gets or sets the type that owns this static method (ADR-0053 for struct/class owners; ADR-0089 for interface owners). <c>null</c> for non-static or top-level functions.</summary>
     public TypeSymbol StaticOwnerType { get; set; }
 
+    /// <summary>
+    /// Gets or sets the nearest enclosing user-defined type whose member body
+    /// lexically contains this function (issue #1335). This is set on synthetic
+    /// lambda / function-literal symbols so that <c>protected</c>/<c>private</c>
+    /// accessibility checks performed while binding a closure body resolve the
+    /// same access context as the enclosing member — a closure nested in a
+    /// member of type <c>C</c> has the same access to <c>C</c>'s members as the
+    /// member itself. <c>null</c> for ordinary methods and top-level functions
+    /// (which carry their context via <see cref="ReceiverType"/>/<see cref="StaticOwnerType"/>).
+    /// </summary>
+    public TypeSymbol LexicalEnclosingType { get; set; }
+
     /// <summary>Gets or sets a value indicating whether this function should be emitted with <c>MethodAttributes.SpecialName</c> (e.g., event accessor methods).</summary>
     public bool IsSpecialName { get; set; }
 

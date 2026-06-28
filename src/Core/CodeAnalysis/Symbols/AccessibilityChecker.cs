@@ -42,7 +42,8 @@ internal static class AccessibilityChecker
         }
 
         var enclosingType = (currentFunction?.ReceiverType as StructSymbol)
-            ?? (currentFunction?.StaticOwnerType as StructSymbol);
+            ?? (currentFunction?.StaticOwnerType as StructSymbol)
+            ?? (currentFunction?.LexicalEnclosingType as StructSymbol);
 
         for (var t = enclosingType; t != null; t = t.BaseClass)
         {

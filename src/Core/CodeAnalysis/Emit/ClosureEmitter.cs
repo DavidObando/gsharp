@@ -219,6 +219,24 @@ internal sealed class ClosureEmitter
                 invokeName: "Invoke");
 
             this.ClosureInfos[literal] = info;
+
+            // Issue #1335: a closure declared inside a member of a user type must
+            // be able to reach that type's `protected`/`private` members (matching
+            // C#, which nests display classes inside the containing type). Emitting
+            // the closure as a CLR type nested in the enclosing user type grants it
+            // the CLR nested-type access to the encloser's family/private members
+            // (and the encloser's inherited protected members). Without nesting the
+            // synthesized Invoke method triggers MethodAccessException/
+            // FieldAccessException at runtime. Generic enclosing types are skipped:
+            // a nested type would have to re-declare the encloser's type parameters,
+            // which the closure synthesis does not model, and the public-member case
+            // those closures already handle does not need nesting.
+            if (literal.Function?.LexicalEnclosingType is StructSymbol enclosing
+                && enclosing.TypeParameters.IsDefaultOrEmpty
+                && info.ClassSym.ContainingType == null)
+            {
+                info.ClassSym.SetContainingType(enclosing);
+            }
         }
     }
 
