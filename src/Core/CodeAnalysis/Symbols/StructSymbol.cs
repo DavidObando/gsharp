@@ -20,6 +20,37 @@ public sealed class StructSymbol : TypeSymbol
 {
     private static readonly ConcurrentDictionary<(StructSymbol Def, string ArgsKey), StructSymbol> ConstructedCache = new();
 
+    // Issue #1341: backing stores for the generically-erased member tables whose
+    // reads are forwarded to Definition on a constructed instance. On a
+    // definition (or non-generic type) these hold the canonical member set; on a
+    // constructed instance they are unused (the forwarding getter reads
+    // Definition's store) so a late-bound definition body is always observed.
+    private ImmutableArray<FunctionSymbol> methods = ImmutableArray<FunctionSymbol>.Empty;
+    private ImmutableArray<FunctionSymbol> staticMethods = ImmutableArray<FunctionSymbol>.Empty;
+    private ImmutableArray<FieldSymbol> staticFields = ImmutableArray<FieldSymbol>.Empty;
+    private ImmutableArray<FieldSymbol> constFields = ImmutableArray<FieldSymbol>.Empty;
+    private ImmutableArray<FieldSymbol> fieldsStore = ImmutableArray<FieldSymbol>.Empty;
+    private ImmutableArray<PropertySymbol> propertiesStore = ImmutableArray<PropertySymbol>.Empty;
+    private ImmutableArray<PropertySymbol> staticPropertiesStore = ImmutableArray<PropertySymbol>.Empty;
+
+    // Issue #1341: memoized substitution of the definition's instance-member
+    // tables (whose member types may mention the type parameters) for a
+    // constructed instance. These are recomputed when the definition's source
+    // array changes reference — which happens exactly once, when the
+    // definition's body is bound — so a construction materialized before the
+    // definition's body still observes the substituted members afterward,
+    // making member lookup independent of source-file binding order.
+    private Dictionary<TypeParameterSymbol, TypeSymbol> substitutionMap;
+    private ImmutableArray<FieldSymbol> substitutedFields;
+    private ImmutableArray<FieldSymbol> substitutedFieldsSource;
+    private bool substitutedFieldsComputed;
+    private ImmutableArray<PropertySymbol> substitutedProperties;
+    private ImmutableArray<PropertySymbol> substitutedPropertiesSource;
+    private bool substitutedPropertiesComputed;
+    private ImmutableArray<PropertySymbol> substitutedStaticProperties;
+    private ImmutableArray<PropertySymbol> substitutedStaticPropertiesSource;
+    private bool substitutedStaticPropertiesComputed;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="StructSymbol"/> class.
     /// </summary>
@@ -153,7 +184,12 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>Gets the field declarations in source order.</summary>
-    public ImmutableArray<FieldSymbol> Fields { get; private set; }
+    /// <remarks>Issue #1341: on a constructed instance, fields are substituted lazily from <see cref="Definition"/> so a late-bound definition body is observed (order-independent member lookup).</remarks>
+    public ImmutableArray<FieldSymbol> Fields
+    {
+        get => Definition != null && !ReferenceEquals(Definition, this) ? GetSubstitutedFields() : fieldsStore;
+        private set => fieldsStore = value;
+    }
 
     /// <summary>Gets the struct CLR accessibility.</summary>
     public Accessibility Accessibility { get; }
@@ -237,16 +273,41 @@ public sealed class StructSymbol : TypeSymbol
     public ImmutableArray<TypeSymbol> ImplementedClrInterfaces { get; private set; } = ImmutableArray<TypeSymbol>.Empty;
 
     /// <summary>Gets the methods declared inside the class body (Phase 3.B.3 sub-step 2b). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
-    public ImmutableArray<FunctionSymbol> Methods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
+    /// <remarks>
+    /// Issue #1341: methods are erased generically (ADR-0004) and carried on a
+    /// constructed instance without per-construction substitution, so a
+    /// constructed instance always reflects its <see cref="Definition"/>'s
+    /// current method set by forwarding the read. This keeps member lookup on a
+    /// constructed generic user type independent of the order in which source
+    /// files are bound: even when the construction is materialized (and cached)
+    /// before the definition's body — and therefore its methods — has been
+    /// bound, reads observe the methods once they are populated rather than an
+    /// empty snapshot captured at construction time.
+    /// </remarks>
+    public ImmutableArray<FunctionSymbol> Methods
+    {
+        get => Definition != null && !ReferenceEquals(Definition, this) ? Definition.Methods : methods;
+        private set => methods = value;
+    }
 
     /// <summary>Gets the properties declared on this type (ADR-0051). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
-    public ImmutableArray<PropertySymbol> Properties { get; private set; } = ImmutableArray<PropertySymbol>.Empty;
+    /// <remarks>Issue #1341: on a constructed instance, properties are substituted lazily from <see cref="Definition"/> so a late-bound definition body is observed (order-independent member lookup).</remarks>
+    public ImmutableArray<PropertySymbol> Properties
+    {
+        get => Definition != null && !ReferenceEquals(Definition, this) ? GetSubstitutedProperties() : propertiesStore;
+        private set => propertiesStore = value;
+    }
 
     /// <summary>Gets the events declared on this type (ADR-0052). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
     public ImmutableArray<EventSymbol> Events { get; private set; } = ImmutableArray<EventSymbol>.Empty;
 
     /// <summary>Gets the static fields declared inside a <c>shared</c> block (ADR-0053). Populated by the binder; defaults to empty.</summary>
-    public ImmutableArray<FieldSymbol> StaticFields { get; private set; } = ImmutableArray<FieldSymbol>.Empty;
+    /// <remarks>Issue #1341: forwarded from <see cref="Definition"/> on a constructed instance (static members are shared by identity per issue #1209) so reads are order-independent.</remarks>
+    public ImmutableArray<FieldSymbol> StaticFields
+    {
+        get => Definition != null && !ReferenceEquals(Definition, this) ? Definition.StaticFields : staticFields;
+        private set => staticFields = value;
+    }
 
     /// <summary>
     /// Gets the compile-time constant fields declared with <c>const</c>
@@ -256,13 +317,27 @@ public sealed class StructSymbol : TypeSymbol
     /// emitter never produces a runtime static field or a <c>.cctor</c>
     /// assignment for them. Populated by the binder; defaults to empty.
     /// </summary>
-    public ImmutableArray<FieldSymbol> ConstFields { get; private set; } = ImmutableArray<FieldSymbol>.Empty;
+    public ImmutableArray<FieldSymbol> ConstFields
+    {
+        get => Definition != null && !ReferenceEquals(Definition, this) ? Definition.ConstFields : constFields;
+        private set => constFields = value;
+    }
 
     /// <summary>Gets the static methods declared inside a <c>shared</c> block (ADR-0053). Populated by the binder; defaults to empty.</summary>
-    public ImmutableArray<FunctionSymbol> StaticMethods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
+    /// <remarks>Issue #1341: forwarded from <see cref="Definition"/> on a constructed instance (static members are shared by identity per issue #1209) so reads are order-independent.</remarks>
+    public ImmutableArray<FunctionSymbol> StaticMethods
+    {
+        get => Definition != null && !ReferenceEquals(Definition, this) ? Definition.StaticMethods : staticMethods;
+        private set => staticMethods = value;
+    }
 
     /// <summary>Gets the static properties declared inside a <c>shared</c> block (ADR-0053). Populated by the binder; defaults to empty.</summary>
-    public ImmutableArray<PropertySymbol> StaticProperties { get; private set; } = ImmutableArray<PropertySymbol>.Empty;
+    /// <remarks>Issue #1341: on a constructed instance, static properties are substituted lazily from <see cref="Definition"/> so a late-bound definition body is observed (order-independent member lookup).</remarks>
+    public ImmutableArray<PropertySymbol> StaticProperties
+    {
+        get => Definition != null && !ReferenceEquals(Definition, this) ? GetSubstitutedStaticProperties() : staticPropertiesStore;
+        private set => staticPropertiesStore = value;
+    }
 
     /// <summary>Gets the static events declared inside a <c>shared</c> block (ADR-0053). Populated by the binder; defaults to empty.</summary>
     public ImmutableArray<EventSymbol> StaticEvents { get; private set; } = ImmutableArray<EventSymbol>.Empty;
@@ -1231,8 +1306,14 @@ public sealed class StructSymbol : TypeSymbol
             constructed.SetImplementedClrInterfaces(substitutedClrIfaces.MoveToImmutable());
         }
 
-        constructed.SetMethods(definition.Methods);
-
+        // Issue #1341: Methods and the static-member tables below are
+        // generically erased (ADR-0004) and shared with the definition by
+        // identity (no per-construction substitution). They are NOT snapshotted
+        // here: the constructed instance forwards their reads to Definition so
+        // member lookup observes the definition's members even when this
+        // construction is materialized (and cached) before the definition's
+        // body has been bound — making lookup independent of source-file order.
+        //
         // Issue #1209: a constructed generic class/struct must surface the open
         // definition's static members so a qualified static reference on the
         // construction (`Box[int32].Default`, `Box[int32].Make()`) resolves the
@@ -1242,28 +1323,126 @@ public sealed class StructSymbol : TypeSymbol
         // identity (no per-construction substitution at emit). The constructed
         // symbol is still carried as the owner of the bound access so member
         // resolution and diagnostics see the closed type.
-        constructed.SetStaticMethods(definition.StaticMethods);
-        constructed.SetStaticFields(definition.StaticFields);
-        constructed.SetConstFields(definition.ConstFields);
 
-        // Issue #989: a generic auto-property (or computed property) whose type
-        // mentions the class type parameter must resolve on a constructed
-        // instance with `T` substituted — exactly like instance fields above.
-        // Carry the property tables across with substituted property/indexer
-        // types so `TryGetProperty` finds them and the bound access reports the
-        // substituted type. Accessor FunctionSymbols and backing fields are
-        // shared with the open definition (only the definition is emitted; the
-        // external accessor call is parented at the constructed TypeSpec by the
-        // emitter, and inside-the-type access lowers against the definition).
-        constructed.SetProperties(SubstituteProperties(definition.Properties, subst));
-        constructed.SetStaticProperties(SubstituteProperties(definition.StaticProperties, subst));
-
+        // Issue #989 / #1341: a generic auto-property (or computed property)
+        // whose type mentions the class type parameter must resolve on a
+        // constructed instance with `T` substituted — exactly like instance
+        // fields. The property tables are NOT snapshotted here: the constructed
+        // instance substitutes them lazily from the definition (see
+        // GetSubstitutedProperties) so a property bound after this construction
+        // is materialized is still observed. Accessor FunctionSymbols and
+        // backing fields are shared with the open definition (only the
+        // definition is emitted; the external accessor call is parented at the
+        // constructed TypeSpec by the emitter, and inside-the-type access lowers
+        // against the definition).
         if (definition.ImportedBaseType != null)
         {
             constructed.SetImportedBaseType(definition.ImportedBaseType);
         }
 
         return constructed;
+    }
+
+    // Issue #1341: builds (once) the type-parameter -> type-argument map used to
+    // substitute the definition's instance-member types for this constructed
+    // instance. Generic definitions are immutable in their type parameters and
+    // a construction's type arguments are fixed, so the map is cached.
+    private Dictionary<TypeParameterSymbol, TypeSymbol> GetSubstitutionMap()
+    {
+        if (substitutionMap != null)
+        {
+            return substitutionMap;
+        }
+
+        var def = Definition;
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>(
+            def.TypeParameters.IsDefaultOrEmpty ? 0 : def.TypeParameters.Length);
+        if (!def.TypeParameters.IsDefaultOrEmpty && !TypeArguments.IsDefaultOrEmpty)
+        {
+            var count = System.Math.Min(def.TypeParameters.Length, TypeArguments.Length);
+            for (var i = 0; i < count; i++)
+            {
+                map[def.TypeParameters[i]] = TypeArguments[i];
+            }
+        }
+
+        substitutionMap = map;
+        return map;
+    }
+
+    // Issue #1341: lazily substitutes the definition's instance fields for this
+    // constructed instance, memoized against the definition's current field
+    // array. The array is replaced (by reference) exactly when the definition's
+    // body is bound, so reading after that point recomputes the substitution —
+    // making member lookup independent of the order the definition is bound.
+    private ImmutableArray<FieldSymbol> GetSubstitutedFields()
+    {
+        var source = Definition.Fields;
+        if (substitutedFieldsComputed && substitutedFieldsSource.Equals(source))
+        {
+            return substitutedFields;
+        }
+
+        var subst = GetSubstitutionMap();
+        ImmutableArray<FieldSymbol> result;
+        if (source.IsDefaultOrEmpty || subst.Count == 0)
+        {
+            result = source;
+        }
+        else
+        {
+            var builder = ImmutableArray.CreateBuilder<FieldSymbol>(source.Length);
+            foreach (var f in source)
+            {
+                var newType = SubstituteTypeForConstruction(f.Type, subst);
+                builder.Add(ReferenceEquals(newType, f.Type)
+                    ? f
+                    : new FieldSymbol(f.Name, newType, f.Accessibility));
+            }
+
+            result = builder.MoveToImmutable();
+        }
+
+        substitutedFields = result;
+        substitutedFieldsSource = source;
+        substitutedFieldsComputed = true;
+        return result;
+    }
+
+    // Issue #1341: lazily substitutes the definition's instance properties for
+    // this constructed instance, memoized against the definition's current
+    // property array (see GetSubstitutedFields for the ordering rationale).
+    private ImmutableArray<PropertySymbol> GetSubstitutedProperties()
+    {
+        var source = Definition.Properties;
+        if (substitutedPropertiesComputed && substitutedPropertiesSource.Equals(source))
+        {
+            return substitutedProperties;
+        }
+
+        var result = SubstituteProperties(source, GetSubstitutionMap());
+        substitutedProperties = result;
+        substitutedPropertiesSource = source;
+        substitutedPropertiesComputed = true;
+        return result;
+    }
+
+    // Issue #1341: lazily substitutes the definition's static properties for this
+    // constructed instance, memoized against the definition's current static
+    // property array (see GetSubstitutedFields for the ordering rationale).
+    private ImmutableArray<PropertySymbol> GetSubstitutedStaticProperties()
+    {
+        var source = Definition.StaticProperties;
+        if (substitutedStaticPropertiesComputed && substitutedStaticPropertiesSource.Equals(source))
+        {
+            return substitutedStaticProperties;
+        }
+
+        var result = SubstituteProperties(source, GetSubstitutionMap());
+        substitutedStaticProperties = result;
+        substitutedStaticPropertiesSource = source;
+        substitutedStaticPropertiesComputed = true;
+        return result;
     }
 
     private static ImmutableArray<PropertySymbol> SubstituteProperties(
