@@ -125,6 +125,30 @@ namespace Demo
     }
 
     [Fact]
+    public void PositivePattern_JaggedArrayTarget_PropertyScrutinee_FallsBackToSmartCast()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Chunk { public byte[][] ExtraData => null; }
+    public class C
+    {
+        public int F(Chunk chunk)
+        {
+            if (chunk.ExtraData is byte[][] ivs) { return ivs.Length; }
+            return 0;
+        }
+    }
+}");
+
+        // A nullable jagged-array local annotation (`[]?[]uint8`) does not yet
+        // round-trip-parse in gsc, so an array target that does not escape keeps the
+        // smart-cast `is` test instead of hoisting a malformed nullable local.
+        Assert.Contains("chunk.ExtraData is [][]uint8", printed);
+        Assert.DoesNotContain("[]?[]", printed);
+    }
+
+    [Fact]
     public void PositivePattern_UsedAfterIf_NeverReassigned_HoistsAsLet()
     {
         string printed = TranslateUnit(@"

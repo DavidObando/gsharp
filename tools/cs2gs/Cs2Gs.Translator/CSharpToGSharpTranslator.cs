@@ -4283,16 +4283,24 @@ public sealed class CSharpToGSharpTranslator
                 return false;
             }
 
+            GTypeReference targetType = this.MapTypeSyntax(typeSyntax);
             bool escapesThenBlock =
                 this.IsSymbolReferencedOutside(patternSymbol, ifStatement.Statement);
-            if (!escapesThenBlock && this.IsSmartCastableScrutinee(isPattern.Expression))
+
+            // The broadened "non-smart-castable scrutinee" hoist requires a
+            // well-formed nullable local annotation. Only a NamedTypeReference target
+            // nullable-annotates cleanly (`T?`); a nullable jagged/array target
+            // (`[]?[]T`) does not yet round-trip-parse in gsc, so for array/pointer/
+            // tuple targets that do not escape, keep the existing smart cast.
+            if (!escapesThenBlock &&
+                (this.IsSmartCastableScrutinee(isPattern.Expression) ||
+                 targetType is not NamedTypeReference))
             {
                 return false;
             }
 
             string localName = SanitizeIdentifier(single.Identifier.Text);
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
-            GTypeReference targetType = this.MapTypeSyntax(typeSyntax);
 
             // `var t T? = receiver as T` when the leaked variable is reassigned
             // anywhere in the body (C# allows it); otherwise an immutable `let`.
