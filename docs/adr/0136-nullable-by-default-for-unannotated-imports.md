@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-07-04
 - **Phase**: Phase 9 — language surface completeness
-- **Related**: ADR-0001 (nullable types `T?`), issues [#1354](https://github.com/DavidObando/gsharp/issues/1354), [#914](https://github.com/DavidObando/gsharp/issues/914), [#1333](https://github.com/DavidObando/gsharp/issues/1333) and PR [#1349](https://github.com/DavidObando/gsharp/pull/1349)
+- **Related**: ADR-0001 (nullable types `T?`), issues [#1354](https://github.com/DavidObando/gsharp/issues/1354), [#914](https://github.com/DavidObando/gsharp/issues/914), [#1333](https://github.com/DavidObando/gsharp/issues/1333) and PRs [#1349](https://github.com/DavidObando/gsharp/pull/1349), [#1374](https://github.com/DavidObando/gsharp/pull/1374)
 
 ## Context
 
@@ -124,6 +124,49 @@ path `ClrNullability` uses; each member re-reads with the correct nullability
 (non-null stays non-null, `T?` stays nullable, inner `string?` stays nullable).
 This is covered by `Issue1354NullabilityRoundTripEmitTests`.
 
+### 4. Call-site return-type nullability (imported method calls)
+
+The new reading rule reached imported **fields**, **properties**, **parameters**,
+and the return of **static** method calls (the latter via
+`ImportedFunctionSymbol.Type`, which already routes through `ClrNullability`).
+It did **not** reach imported **instance** method-call result types: the
+instance-call return-type resolution in `ExpressionBinder.Calls` ended in a
+fallback chain whose terminal arm mapped the CLR return type with a bare
+`TypeSymbol.FromClrType(method.ReturnType)` / `MapClrMemberType(method.ReturnType)`,
+bypassing `ClrNullability` entirely. For a non-generic instance method such as
+`Factory.Make()` returning an oblivious `Widget`, the result was a **non-null**
+`Widget`, so `f.Make() == nil` was wrongly rejected with GS0129 — the exact hole
+this ADR exists to close, just on the call-return path.
+
+The fix introduces a single helper `MapClrMethodReturnType(MethodInfo method)`
+(in `ExpressionBinder.Access`) that preserves the existing by-ref-return handling
+(`ref T` returns still map through `ByRefTypeSymbol`) and otherwise delegates to
+`ClrNullability.GetReturnTypeSymbol(method)`, so both the oblivious default and
+explicit `[Nullable]` / `[NullableContext]` annotations are honored. It replaces
+the terminal fallback at every imported call-return site:
+
+- the non-generic / regular instance-call fallback (`?? MapClrMemberType(resolution.Best.ReturnType)`);
+- the inherited / `base.M(...)` call fallback (`?? TypeSymbol.FromClrType(resolution.Best.ReturnType)`);
+- the constraint-interface instance-call fallback (`?? MapClrMemberType(method.ReturnType)`).
+
+The earlier arms of each chain (`ResolveImportedGenericReturnType`,
+`ResolveCallReturnTypeFromSymbolicTypeArgs`, `ResolveInstanceReturnTypeFromReceiver`)
+are unchanged and run first, so generic / symbolic projections still win; the new
+helper only applies on the terminal, type-erased fallback. The static-call path is
+untouched, so it does not double-wrap. Value-type, `void`, by-ref, and bare
+generic type-parameter returns are unaffected.
+
+A visible BCL consequence: `System.Object.ToString()` is genuinely annotated to
+return `string?`, so `base.ToString()` / `obj.ToString()` on a reference receiver
+now correctly bind as `string?` and must be coalesced (`?? ""`) or null-checked
+before being used as a non-null `string`. Tests that previously relied on the
+buggy non-null reading were updated accordingly. Coverage:
+`Issue1354InstanceMethodReturnEmitTests` (annotated-nullable instance return →
+compare-to-nil compiles; annotated-non-null instance return → GS0129) and the
+oblivious-instance-method case via the Core.Tests oblivious fixture
+(`ImportedTypeInFunctionBodyTests`, whose `ImportedGreeter.Greet` now returns
+`string?`).
+
 ## Consequences
 
 - The non-null guarantee is sound again: a value the compiler admits as a
@@ -146,3 +189,21 @@ parameters/returns — are complete. The following lower-priority positions are
 These affect only the nullability of generic arguments appearing in a type's
 base/interface list or constraints; the common member-signature surface
 round-trips correctly today.
+
+### Call-return nullability: generic-substituted returns (deferred sub-case)
+
+The call-return fix (section 4) applies the method's own nullability on the
+**terminal, type-erased** fallback — covering the common non-generic
+instance-method case (`Factory.Make()`), the inherited / `base.M(...)` case, and
+the constraint-interface case. When an **earlier** arm of the chain recovers a
+generic / symbolic projection — `ResolveInstanceReturnTypeFromReceiver` /
+`MemberLookup.MapOpenClrTypeToSymbolic` for a constructed generic return whose
+type references a type parameter or same-compilation user type (e.g.
+`Queue[Entry].Dequeue()` → `Entry`) — that projection wins and the **per-position
+nullability of the substituted generic argument is not yet applied** on this
+path. Doing so soundly requires threading the closed method's DFS nullable-flags
+through the open→symbolic substitution (mapping each substituted position back to
+its flag byte), which is a deeper change than this fix warrants. The common case
+(a non-generic instance method returning a plain reference type) is fully fixed;
+the generic-substituted-return nullability is the only remaining call-return gap
+and is tracked here as best-effort follow-up.

@@ -217,7 +217,7 @@ public class Issue570SliceToInterfaceConversionEmitTests
             package Probe.Tests
             import System
 
-            func takeObj(o object) string { return o.ToString() }
+            func takeObj(o object) string { return o.ToString() ?? "" }
             Console.WriteLine(takeObj([]int32{1, 2, 3}).StartsWith("System.Int32"))
             """;
 

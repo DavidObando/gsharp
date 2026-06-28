@@ -38,7 +38,7 @@ import System
 class C {
     func F() int32 {
         let h int32 = this.GetHashCode()
-        let s string = this.ToString()
+        let s string? = this.ToString()
         let t Type = this.GetType()
         let e bool = this.Equals(this)
         return h
@@ -55,10 +55,10 @@ class C {
 import System
 class C { }
 class D {
-    func F() string {
+    func F() string? {
         let c = C{ }
         let t Type = c.GetType()
-        let s string = c.ToString()
+        let s string? = c.ToString()
         return s
     }
 }
@@ -105,7 +105,7 @@ class C {
         let a = S{ X: 1 }
         let b = S{ X: 1 }
         let h int32 = a.GetHashCode()
-        let s string = a.ToString()
+        let s string? = a.ToString()
         let t Type = a.GetType()
         let e bool = a.Equals(b)
         return h

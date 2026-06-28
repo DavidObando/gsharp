@@ -44,9 +44,11 @@ class MyStream : Stream {
     [Fact]
     public void BaseCall_ObjectToString_BindsClean_WhenDerivingOnlyFromObject()
     {
+        // Issue #1354: object.ToString() is annotated to return string?, so the
+        // override's declared return type must be string? to receive it.
         var source = @"
 class Greeter {
-    open func ToString() string { return base.ToString() }
+    open func ToString() string? { return base.ToString() }
 }
 ";
         AssertNoErrors(Evaluate(source));
