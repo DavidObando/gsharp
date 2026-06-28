@@ -187,6 +187,19 @@ public sealed class ImportedClassSymbol : Symbol
         var hasUserClassArg = false;
         for (var i = 0; i < arguments.Length; i++)
         {
+            // Issue #1391: the untyped `default` literal (bound as a
+            // BoundDefaultExpression whose type is the Error sentinel until a
+            // target type is known) is convertible to any parameter type. Pass
+            // the dedicated overload-resolution sentinel so it stays applicable
+            // against an imported generic method closed over an explicit type
+            // argument; the concrete-typed default is materialized downstream by
+            // BindClrParameterConversions against the resolved parameter type.
+            if (arguments[i] is BoundDefaultExpression { Type: var defType } && defType == TypeSymbol.Error)
+            {
+                argTypes[i] = OverloadResolution.DefaultLiteralArgumentType;
+                continue;
+            }
+
             // Issue #530: use effective CLR type so nullable value types
             // (e.g. int32?) are matched as Nullable<T> in overload resolution.
             // Issue #533: allow null (nil literal) through; overload resolution
