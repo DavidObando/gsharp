@@ -387,6 +387,34 @@ namespace Demo
             d => d.IsUnsupported && d.ConstructKind == "TypeParameterConstraintClause");
     }
 
+    /// <summary>
+    /// Issue #1336: C# <c>where T : unmanaged</c> maps to the G# <c>unmanaged</c>
+    /// flag constraint (which gsc supports for <c>sizeof(T)</c> / <c>*T</c>). It
+    /// subsumes <c>struct</c>, so the translator emits <c>unmanaged</c> only — gsc
+    /// reports a conflict if both <c>unmanaged</c> and <c>struct</c> are spelled.
+    /// </summary>
+    [Fact]
+    public void UnmanagedConstraint_EmitsUnmanagedFlagNotStruct()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    using System;
+    public static class ConstraintHost
+    {
+        public static int Size<T>() where T : unmanaged, IComparable<T>
+        {
+            return 0;
+        }
+    }
+}");
+
+        Assert.Contains("unmanaged", printed);
+        Assert.DoesNotContain("struct]", printed);
+        Assert.DoesNotContain("unmanaged struct", printed);
+        Assert.DoesNotContain("struct unmanaged", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         (string printed, _) = Translate(source);
