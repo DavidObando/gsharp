@@ -4269,18 +4269,38 @@ public sealed class CSharpToGSharpTranslator
                 return false;
             }
 
-            // Only hoist when the pattern variable escapes the then-block. If it is
-            // used solely inside the guarded block the existing smart cast (rewriting
-            // `t` to the receiver) is correct and avoids an unnecessary local.
-            if (this.context.GetDeclaredSymbol(single) is not ILocalSymbol patternSymbol ||
-                !this.IsSymbolReferencedOutside(patternSymbol, ifStatement.Statement))
+            // Hoist when EITHER the pattern variable escapes the then-block, OR the
+            // scrutinee is a non-trivial expression that gsc cannot smart-cast. gsc
+            // narrows only a bare local/parameter (ADR-0069); a method-call result,
+            // member-access chain or field reference re-emitted at each use of `t`
+            // would not smart-cast (→ GS0158) and, for a side-effecting scrutinee
+            // such as `M(out var x)`, would be re-evaluated (→ GS0102). When the
+            // scrutinee IS a smart-castable local and `t` is used solely inside the
+            // guarded block, the existing smart cast (rewriting `t` to the receiver)
+            // is correct and avoids an unnecessary local.
+            if (this.context.GetDeclaredSymbol(single) is not ILocalSymbol patternSymbol)
+            {
+                return false;
+            }
+
+            GTypeReference targetType = this.MapTypeSyntax(typeSyntax);
+            bool escapesThenBlock =
+                this.IsSymbolReferencedOutside(patternSymbol, ifStatement.Statement);
+
+            // The broadened "non-smart-castable scrutinee" hoist requires a
+            // well-formed nullable local annotation. Only a NamedTypeReference target
+            // nullable-annotates cleanly (`T?`); a nullable jagged/array target
+            // (`[]?[]T`) does not yet round-trip-parse in gsc, so for array/pointer/
+            // tuple targets that do not escape, keep the existing smart cast.
+            if (!escapesThenBlock &&
+                (this.IsSmartCastableScrutinee(isPattern.Expression) ||
+                 targetType is not NamedTypeReference))
             {
                 return false;
             }
 
             string localName = SanitizeIdentifier(single.Identifier.Text);
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
-            GTypeReference targetType = this.MapTypeSyntax(typeSyntax);
 
             // `var t T? = receiver as T` when the leaked variable is reassigned
             // anywhere in the body (C# allows it); otherwise an immutable `let`.
@@ -4311,6 +4331,25 @@ public sealed class CSharpToGSharpTranslator
 
             result = new GStatement[] { hoist, new IfStatement(guard, then, elseBranch) };
             return true;
+        }
+
+        /// <summary>
+        /// A scrutinee is smart-castable by gsc only when it is a bare local or
+        /// parameter reference; gsc narrows locals, not method-call results,
+        /// member-access chains, or field references (ADR-0069). When the scrutinee
+        /// is not smart-castable, an <c>x is T t</c> whose binder is used in the
+        /// guarded block must hoist the scrutinee into a local (so the local
+        /// smart-casts) rather than re-emit the expression at each use of <c>t</c>.
+        /// </summary>
+        private bool IsSmartCastableScrutinee(ExpressionSyntax expression)
+        {
+            if (expression is not IdentifierNameSyntax)
+            {
+                return false;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            return symbol is ILocalSymbol or IParameterSymbol;
         }
 
         // Extracts the target type and single-variable designation from a positive
