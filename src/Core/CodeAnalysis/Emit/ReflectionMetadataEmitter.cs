@@ -113,6 +113,11 @@ internal sealed class ReflectionMetadataEmitter
     // body is emitted via the same EmitFunction path.
     private readonly Dictionary<FunctionSymbol, BoundBlockStatement> lambdaBodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
 
+    // Issue #1336: cached TypeSpec for the `unmanaged` constraint's
+    // modreq-decorated System.ValueType GenericParamConstraint. Built lazily and
+    // shared across every `where T : unmanaged` type parameter in the module.
+    private EntityHandle unmanagedConstraintTypeSpec;
+
     // PR-E-9: closure-environment metadata and synthesized display classes
     // moved onto ClosureEmitter. Where this file used to declare:
     //   closureInfos                  -> closures.ClosureInfos
@@ -2761,7 +2766,7 @@ internal sealed class ReflectionMetadataEmitter
         // MethodDefs are emitted in interleaved visit orders, the rows
         // were buffered into emitCtx.PendingGenericParameters and are
         // flushed in sorted order here, just before PE serialisation.
-        TypeDefEmitter.FlushPendingGenericParameters(this.emitCtx, this.GetElementTypeToken);
+        TypeDefEmitter.FlushPendingGenericParameters(this.emitCtx, this.GetElementTypeToken, this.BuildUnmanagedConstraintTypeSpec);
         var peHeaderBuilder = new PEHeaderBuilder(
             imageCharacteristics: entryHandle.IsNil
                 ? Characteristics.Dll | Characteristics.ExecutableImage
@@ -5800,6 +5805,43 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return fallback;
+    }
+
+    /// <summary>
+    /// Issue #1336: builds the <c>TypeSpec</c> used as the <c>Constraint</c> of
+    /// the <c>GenericParamConstraint</c> row that encodes a <c>where T :
+    /// unmanaged</c> constraint. The signature is
+    /// <c>System.ValueType modreq(System.Runtime.InteropServices.UnmanagedType)</c>
+    /// — the exact metadata shape C# emits — written as a raw type signature
+    /// blob: <c>ELEMENT_TYPE_CMOD_REQD &lt;UnmanagedType&gt;
+    /// ELEMENT_TYPE_CLASS &lt;System.ValueType&gt;</c>.
+    /// </summary>
+    /// <returns>The TypeSpec handle for the modreq-decorated ValueType constraint.</returns>
+    private EntityHandle BuildUnmanagedConstraintTypeSpec()
+    {
+        if (!this.unmanagedConstraintTypeSpec.IsNil)
+        {
+            return this.unmanagedConstraintTypeSpec;
+        }
+
+        var unmanagedTypeRef = this.GetTypeReference(
+            this.ResolveCoreType("System.Runtime.InteropServices.UnmanagedType", typeof(System.Runtime.InteropServices.UnmanagedType)));
+        var valueTypeRef = this.GetTypeReference(this.emitCtx.CoreValueType);
+
+        var blob = new BlobBuilder();
+        blob.WriteByte((byte)SignatureTypeCode.RequiredModifier);
+        blob.WriteCompressedInteger(CodedIndex.TypeDefOrRefOrSpec(unmanagedTypeRef));
+
+        // System.ValueType is itself a reference type (an abstract class), so it
+        // must be encoded as ELEMENT_TYPE_CLASS (0x12) — NOT ELEMENT_TYPE_VALUETYPE
+        // (0x11). This matches exactly what the C# compiler emits; encoding it as
+        // VALUETYPE makes the CLR loader reject the type with a "value type
+        // mismatch" TypeLoadException at runtime.
+        blob.WriteByte((byte)SignatureTypeKind.Class);
+        blob.WriteCompressedInteger(CodedIndex.TypeDefOrRefOrSpec(valueTypeRef));
+
+        this.unmanagedConstraintTypeSpec = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(blob));
+        return this.unmanagedConstraintTypeSpec;
     }
 
     internal EntityHandle GetTypeOfToken(TypeSymbol type)

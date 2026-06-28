@@ -2299,14 +2299,19 @@ public sealed class Binder
                 if (pointeeType != TypeSymbol.Void
                     && !TypeSymbol.IsLegalPointeeType(pointeeType)
                     && pointeeType is not PointerTypeSymbol
-                    && !BlittableDetector.IsBlittableValueStructPointee(pointeeType))
+                    && !BlittableDetector.IsBlittableValueStructPointee(pointeeType)
+                    && pointeeType is not TypeParameterSymbol { HasUnmanagedConstraint: true })
                 {
                     // ADR-0122 §4 / issue #1034: a pointer to a blittable user
                     // struct (`*Point`) is legal — accepted by the
-                    // BlittableDetector check above. A pointer to a non-blittable
-                    // struct (one that contains a managed reference / string /
-                    // class field) or to any managed reference type is still
-                    // rejected here with GS0398, matching C#'s unmanaged-type rule.
+                    // BlittableDetector check above. Issue #1336: a pointer to a
+                    // generic type parameter constrained `unmanaged` (`*T`) is
+                    // likewise legal — the `unmanaged` constraint guarantees the
+                    // pointee is a GC-free value type, exactly as in C#. A
+                    // pointer to a non-blittable struct (one that contains a
+                    // managed reference / string / class field) or to any
+                    // managed reference type is still rejected here with GS0398,
+                    // matching C#'s unmanaged-type rule.
                     Diagnostics.ReportUnmanagedPointerIllegalPointee(syntax.PointerPointeeType.Location, pointeeType.Name);
                     return PointerTypeSymbol.Get(pointeeType);
                 }
@@ -3768,6 +3773,14 @@ public sealed class Binder
             return false;
         }
 
+        // Issue #1336: enforce the `unmanaged` constraint — the type argument
+        // must be an unmanaged type (a non-nullable value type whose fields are
+        // recursively unmanaged).
+        if (tp.HasUnmanagedConstraint && !IsUnmanagedTypeForConstraint(typeArgument))
+        {
+            return false;
+        }
+
         if (tp.HasDefaultConstructorConstraint && !HasDefaultConstructorForConstraint(typeArgument))
         {
             return false;
@@ -3916,6 +3929,33 @@ public sealed class Binder
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issue #1336: returns <see langword="true"/> when <paramref name="type"/>
+    /// satisfies a <c>where T : unmanaged</c> constraint — it is an unmanaged
+    /// (blittable, GC-free) type. Blittable primitives, enums, pointers and
+    /// non-nullable value structs whose fields are recursively unmanaged
+    /// qualify, as does another type parameter constrained <c>unmanaged</c>.
+    /// Managed reference types, nullable value types, and structs containing a
+    /// managed field do not. Mirrors C#'s unmanaged-type rule (ECMA-335 /
+    /// ADR-0093 blittability).
+    /// </summary>
+    /// <param name="type">The candidate type argument.</param>
+    /// <returns><see langword="true"/> when the type is unmanaged.</returns>
+    internal static bool IsUnmanagedTypeForConstraint(TypeSymbol type)
+    {
+        if (type is null || type is NullableTypeSymbol)
+        {
+            return false;
+        }
+
+        if (type is TypeParameterSymbol tp)
+        {
+            return tp.HasUnmanagedConstraint;
+        }
+
+        return new BlittableDetector().IsUnmanaged(type);
     }
 
     /// <summary>
@@ -4258,9 +4298,14 @@ public sealed class Binder
             flags.Add("class");
         }
 
-        if (tp.HasValueTypeConstraint)
+        if (tp.HasValueTypeConstraint && !tp.HasUnmanagedConstraint)
         {
             flags.Add("struct");
+        }
+
+        if (tp.HasUnmanagedConstraint)
+        {
+            flags.Add("unmanaged");
         }
 
         if (tp.HasDefaultConstructorConstraint && !tp.HasValueTypeConstraint)

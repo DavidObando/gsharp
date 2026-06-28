@@ -5828,6 +5828,26 @@ internal sealed class DeclarationBinder
                 var hasRefType = p.HasClassConstraint;
                 var hasValueType = p.HasStructConstraint;
                 var hasDefaultCtor = p.HasInitConstraint;
+                var hasUnmanaged = p.HasUnmanagedConstraint;
+
+                // Issue #1336: the `unmanaged` constraint subsumes `struct` —
+                // an unmanaged type is necessarily a non-nullable value type —
+                // so it implies the value-type (and therefore default-ctor)
+                // CLR flag bits. Spelling both `unmanaged` and `struct` is
+                // redundant; flag the explicit `struct`.
+                if (hasUnmanaged && hasValueType)
+                {
+                    Diagnostics.ReportTypeParameterConstraintConflict(p.StructConstraintKeyword.Location, name, "unmanaged", "struct");
+                    hasValueType = false;
+                }
+
+                // `unmanaged` is a value-type constraint and cannot be combined
+                // with the reference-type (`class`) constraint.
+                if (hasUnmanaged && hasRefType)
+                {
+                    Diagnostics.ReportTypeParameterConstraintConflict(p.ClassConstraintKeyword.Location, name, "class", "unmanaged");
+                    hasUnmanaged = false;
+                }
 
                 if (hasRefType && hasValueType)
                 {
@@ -5844,9 +5864,22 @@ internal sealed class DeclarationBinder
                     hasDefaultCtor = false;
                 }
 
+                // Issue #1336: `unmanaged` likewise implies the default-ctor
+                // flag (it is a value-type constraint); flag a redundant
+                // explicit `init()`.
+                if (hasUnmanaged && hasDefaultCtor)
+                {
+                    Diagnostics.ReportTypeParameterConstraintConflict(p.InitConstraintKeyword.Location, name, "unmanaged", "init()");
+                    hasDefaultCtor = false;
+                }
+
+                // Issue #1336: project `unmanaged` onto the value-type CLR flag
+                // bits. The dedicated modreq(UnmanagedType) GenericParamConstraint
+                // is emitted by TypeDefEmitter from HasUnmanagedConstraint.
                 symbol.HasReferenceTypeConstraint = hasRefType;
-                symbol.HasValueTypeConstraint = hasValueType;
+                symbol.HasValueTypeConstraint = hasValueType || hasUnmanaged;
                 symbol.HasDefaultConstructorConstraint = hasDefaultCtor;
+                symbol.HasUnmanagedConstraint = hasUnmanaged;
             }
         }
         finally

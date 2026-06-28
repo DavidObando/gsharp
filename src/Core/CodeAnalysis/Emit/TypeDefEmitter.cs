@@ -1801,7 +1801,8 @@ internal sealed class TypeDefEmitter
                 Attributes: attrs,
                 Name: tp.Name,
                 Index: (ushort)i,
-                InterfaceConstraintType: tp.ConstraintReferenceType));
+                InterfaceConstraintType: tp.ConstraintReferenceType,
+                HasUnmanagedConstraint: tp.HasUnmanagedConstraint));
         }
     }
 
@@ -1816,9 +1817,15 @@ internal sealed class TypeDefEmitter
     /// <c>TypeDefOrRefOrSpec</c> handle for the matching <c>GenericParamConstraint</c>
     /// row. Supplied by the emitter (its <c>GetElementTypeToken</c>).
     /// </param>
+    /// <param name="resolveUnmanagedConstraintHandle">
+    /// Issue #1336: builds the <c>TypeSpec</c> handle for the <c>unmanaged</c>
+    /// constraint's modreq-decorated <c>System.ValueType</c>
+    /// <c>GenericParamConstraint</c>. Supplied by the emitter.
+    /// </param>
     internal static void FlushPendingGenericParameters(
         EmitContext emitCtx,
-        Func<TypeSymbol, EntityHandle> resolveConstraintHandle)
+        Func<TypeSymbol, EntityHandle> resolveConstraintHandle,
+        Func<EntityHandle> resolveUnmanagedConstraintHandle)
     {
         var pending = emitCtx.PendingGenericParameters;
         if (pending.Count == 0)
@@ -1859,6 +1866,23 @@ internal sealed class TypeDefEmitter
                 metadata.AddGenericParameterConstraint(
                     gpHandle,
                     resolveConstraintHandle(row.InterfaceConstraintType));
+            }
+
+            // Issue #1336: emit the `unmanaged` constraint as a
+            // GenericParamConstraint to `System.ValueType` carrying a required
+            // custom modifier (`modreq`) of
+            // `System.Runtime.InteropServices.UnmanagedType` — the exact
+            // metadata shape C# emits for `where T : unmanaged`. This is what
+            // makes a pointer to the type parameter (`*T`) and `sizeof(T)` over
+            // it verifiable. A parameter may carry BOTH an interface constraint
+            // and the unmanaged constraint (e.g. `[T IComparable[T] unmanaged]`),
+            // producing two constraint rows for the same owner; both share the
+            // same gpHandle so the table stays sorted by Owner.
+            if (row.HasUnmanagedConstraint)
+            {
+                metadata.AddGenericParameterConstraint(
+                    gpHandle,
+                    resolveUnmanagedConstraintHandle());
             }
         }
 

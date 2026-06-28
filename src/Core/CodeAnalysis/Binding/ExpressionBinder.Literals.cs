@@ -60,6 +60,30 @@ internal sealed partial class ExpressionBinder
         return new BoundTypeOfExpression(null, typeSymbol, systemType);
     }
 
+    internal BoundExpression BindSizeOfExpression(SizeOfExpressionSyntax syntax)
+    {
+        // Issue #1336: `sizeof(T)` returns the unmanaged byte size of T as an
+        // int32, emitted via the CIL `sizeof <T>` opcode (which accepts a
+        // generic type token). The operand must be an unmanaged type — a
+        // blittable primitive, an enum, a pointer, a blittable value struct, or
+        // a generic type parameter constrained `unmanaged`. This mirrors C#'s
+        // `sizeof` over unmanaged types and shares the emit path the
+        // unmanaged-pointer arithmetic lowering already uses (ADR-0122 §4).
+        var typeSymbol = bindTypeClause(syntax.TypeClause);
+        if (typeSymbol == null || typeSymbol == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        if (!Binder.IsUnmanagedTypeForConstraint(typeSymbol))
+        {
+            Diagnostics.ReportSizeOfRequiresUnmanagedType(syntax.TypeClause.Location, typeSymbol.Name);
+            return new BoundErrorExpression(null);
+        }
+
+        return new BoundSizeOfExpression(null, typeSymbol);
+    }
+
     internal BoundExpression BindDefaultExpression(DefaultExpressionSyntax syntax)
     {
         // ADR-0100 / issue #795: `default(T)` and bare `default`.

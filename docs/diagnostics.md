@@ -825,6 +825,20 @@ GS0414 fires — but only at the use site, mirroring C# `using static`
 ambiguity. Qualify the call or identifier with the owning type
 (`EnumUtil.GetValues()`) to disambiguate. See ADR-0134.
 
+## `sizeof` operand diagnostic (GS0415)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0415 | Error | The operand of `sizeof(T)` must be an unmanaged type — a blittable primitive, an enum, a value struct whose fields are all unmanaged, a pointer, or a generic type parameter constrained `unmanaged`. |
+
+GS0415 supports the user-facing `sizeof(T)` expression (issue #1336, ADR-0135).
+`sizeof` yields the size in bytes of an unmanaged type and lowers to the CIL
+`sizeof` opcode, which accepts a generic type token. A reference type
+(`sizeof(string)`), or a generic type parameter that is *not* constrained
+`unmanaged` (`func F[T any]() int32 { return sizeof(T) }`), has no statically
+known unmanaged size and is rejected with GS0415. Constrain the type parameter
+`unmanaged` (`[T unmanaged]`) to make `sizeof(T)` legal.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

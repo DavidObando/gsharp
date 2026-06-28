@@ -258,6 +258,9 @@ public enum SyntaxKind
     TypeOfExpression,
     NameOfExpression,
 
+    // Issue #1336: sizeof(T) contextual operator over an unmanaged type
+    SizeOfExpression,
+
     // Issue #141 / ADR-0047: attribute (annotation) syntax
     Annotation,
     AnnotationTarget,
