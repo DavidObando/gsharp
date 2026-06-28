@@ -793,42 +793,51 @@ public sealed class Lowerer : BoundTreeRewriter
 
         if (isDictionary)
         {
-            // Issue #774: when `currentAccess.Type` is a symbolic open
-            // KeyValuePair[K, V] (because the receiver was an open
-            // `Dictionary[K, V]`), the closed CLR `Key`/`Value` properties
-            // both report `object`. Honour the symbolic arguments so the
-            // synthesised key/value declarations carry the user's `K`/`V`.
-            var kvpType = currentAccess.Type;
-            var kvpClr = kvpType.ClrType;
-            var keyProp = kvpClr.GetProperty("Key");
-            var valueProp = kvpClr.GetProperty("Value");
-
-            TypeSymbol keyAccessType = TypeSymbol.FromClrType(keyProp.PropertyType);
-            TypeSymbol valueAccessType = TypeSymbol.FromClrType(valueProp.PropertyType);
-            if (kvpType is ImportedTypeSymbol kvpImp
-                && kvpImp.HasSubstitutableTypeArgument
-                && kvpImp.TypeArguments.Length == 2)
+            // Issue #1328: a single-identifier dictionary iteration
+            // (`for kv in dict`) binds the whole `KeyValuePair[K, V]` element —
+            // there is no key variable, so assign `Current` (the pair) directly
+            // to the loop variable. The two-var form (`for k, v in dict`)
+            // continues to destructure into `Current.Key` / `Current.Value`.
+            if (node.KeyVariable == null)
             {
-                keyAccessType = kvpImp.TypeArguments[0];
-                valueAccessType = kvpImp.TypeArguments[1];
+                statements.Add(new BoundVariableDeclaration(node.Syntax, node.ValueVariable, currentAccess));
             }
-
-            var kvpSymbol = new LocalVariableSymbol("$kvp", isReadOnly: true, type: kvpType);
-            statements.Add(new BoundVariableDeclaration(node.Syntax, kvpSymbol, currentAccess));
-            var kvpExpr = new BoundVariableExpression(node.Syntax, kvpSymbol);
-
-            if (node.KeyVariable != null)
+            else
             {
+                // Issue #774: when `currentAccess.Type` is a symbolic open
+                // KeyValuePair[K, V] (because the receiver was an open
+                // `Dictionary[K, V]`), the closed CLR `Key`/`Value` properties
+                // both report `object`. Honour the symbolic arguments so the
+                // synthesised key/value declarations carry the user's `K`/`V`.
+                var kvpType = currentAccess.Type;
+                var kvpClr = kvpType.ClrType;
+                var keyProp = kvpClr.GetProperty("Key");
+                var valueProp = kvpClr.GetProperty("Value");
+
+                TypeSymbol keyAccessType = TypeSymbol.FromClrType(keyProp.PropertyType);
+                TypeSymbol valueAccessType = TypeSymbol.FromClrType(valueProp.PropertyType);
+                if (kvpType is ImportedTypeSymbol kvpImp
+                    && kvpImp.HasSubstitutableTypeArgument
+                    && kvpImp.TypeArguments.Length == 2)
+                {
+                    keyAccessType = kvpImp.TypeArguments[0];
+                    valueAccessType = kvpImp.TypeArguments[1];
+                }
+
+                var kvpSymbol = new LocalVariableSymbol("$kvp", isReadOnly: true, type: kvpType);
+                statements.Add(new BoundVariableDeclaration(node.Syntax, kvpSymbol, currentAccess));
+                var kvpExpr = new BoundVariableExpression(node.Syntax, kvpSymbol);
+
                 statements.Add(new BoundVariableDeclaration(
                     node.Syntax,
                     node.KeyVariable,
                     new BoundClrPropertyAccessExpression(node.Syntax, kvpExpr, keyProp, keyAccessType)));
-            }
 
-            statements.Add(new BoundVariableDeclaration(
-                node.Syntax,
-                node.ValueVariable,
-                new BoundClrPropertyAccessExpression(node.Syntax, kvpExpr, valueProp, valueAccessType)));
+                statements.Add(new BoundVariableDeclaration(
+                    node.Syntax,
+                    node.ValueVariable,
+                    new BoundClrPropertyAccessExpression(node.Syntax, kvpExpr, valueProp, valueAccessType)));
+            }
         }
         else
         {

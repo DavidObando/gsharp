@@ -3448,7 +3448,18 @@ internal sealed class StatementBinder
         else
         {
             // `for v := range coll` — single var binds the value/element.
-            valueVariable = bindLocalVariable(syntax.FirstIdentifier, isReadOnly: false, type: valueType);
+            //
+            // Issue #1328: a SINGLE-identifier iteration over a dictionary
+            // binds the whole `KeyValuePair[K, V]` element (the static type of
+            // `Current`), matching `foreach (var kv in dict)` and single-var
+            // iteration over an `IEnumerable[KeyValuePair[K, V]]`. The two-var
+            // form `for k, v in dict` continues to destructure into K and V.
+            // The symbolic `[K, V]` arguments are preserved so `kv.Key`/`kv.Value`
+            // expose the user element types rather than erasing to `object`.
+            var singleVarType = iterationKind == ForRangeKind.Dictionary
+                ? BuildKeyValuePairType(keyType, valueType)
+                : valueType;
+            valueVariable = bindLocalVariable(syntax.FirstIdentifier, isReadOnly: false, type: singleVarType);
         }
 
         var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel);
@@ -3496,6 +3507,27 @@ internal sealed class StatementBinder
     /// <returns>The mapped <see cref="TypeSymbol"/>.</returns>
     private static TypeSymbol MapOpenClrTypeToSymbolic(Type openClr, ImportedTypeSymbol openImp)
         => MemberLookup.MapOpenClrTypeToSymbolic(openClr, openImp);
+
+    /// <summary>
+    /// Issue #1328: builds the symbolic <c>KeyValuePair[K, V]</c> element type
+    /// for a single-identifier dictionary iteration. The closed
+    /// <c>ImportedTypeSymbol.ClrType</c> is the type-erased
+    /// <c>KeyValuePair&lt;object, object&gt;</c> (mirroring the #313/#671
+    /// convention) while the symbolic <c>[K, V]</c> arguments are preserved so
+    /// member access on the loop variable (<c>kv.Key</c>/<c>kv.Value</c>)
+    /// recovers the user element types instead of erasing to <c>object</c>.
+    /// This matches the element type the lowerer synthesises for the same loop
+    /// (<see cref="System.Collections.Generic.IEnumerable{T}"/> of
+    /// <c>KeyValuePair[K, V]</c>).
+    /// </summary>
+    /// <param name="keyType">The symbolic key type <c>K</c>.</param>
+    /// <param name="valueType">The symbolic value type <c>V</c>.</param>
+    /// <returns>The constructed <c>KeyValuePair[K, V]</c> symbol.</returns>
+    private static TypeSymbol BuildKeyValuePairType(TypeSymbol keyType, TypeSymbol valueType)
+        => ImportedTypeSymbol.GetConstructed(
+            typeof(System.Collections.Generic.KeyValuePair<object, object>),
+            typeof(System.Collections.Generic.KeyValuePair<,>),
+            ImmutableArray.Create(keyType, valueType));
 
     private BoundStatement BindForConditionStatement(ForConditionStatementSyntax syntax)
     {
