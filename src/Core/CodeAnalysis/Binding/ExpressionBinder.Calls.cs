@@ -2420,7 +2420,20 @@ internal sealed partial class ExpressionBinder
                 var staticArguments = OverloadResolver.BuildOrderedCallArguments(staticConvertedArgs, staticDownstreamMapping, staticParameters);
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
                 overloads.ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
-                BoundExpression staticCall = new BoundImportedCallExpression(null, staticFn, staticArguments, refKinds, typeArgSymbols);
+
+                // Issue #1325: when the type arguments were inferred (no explicit
+                // `[...]` list), recover the symbolic method type-argument vector
+                // from the argument symbols so a same-compilation user value type
+                // (erased to `object` in the closed CLR method) is emitted as its
+                // real TypeDef token in the MethodSpec — e.g.
+                // `MemoryMarshal.AsBytes<E>` rather than the constraint-violating
+                // `AsBytes<object>`. Mirrors the instance/inherited call paths.
+                var staticSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
+                    receiverType: null,
+                    ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+                var staticSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(staticFn.Method, typeArgSymbols, staticSymbolicArgs);
+                var staticTypeArgSymbolsForCall = !staticSymbolicTypeArgs.IsDefault ? staticSymbolicTypeArgs : typeArgSymbols;
+                BoundExpression staticCall = new BoundImportedCallExpression(null, staticFn, staticArguments, refKinds, staticTypeArgSymbolsForCall);
                 return WrapWithHandlerPrelude(staticCall, staticHandlerPrelude, ce);
             }
 
