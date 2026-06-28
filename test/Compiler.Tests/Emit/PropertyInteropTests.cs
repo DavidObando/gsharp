@@ -415,6 +415,7 @@ public class PropertyInteropTests
                   <PropertyGroup>
                     <OutputType>Exe</OutputType>
                     <TargetFramework>net10.0</TargetFramework>
+                    <Nullable>enable</Nullable>
                   </PropertyGroup>
                   <ItemGroup>
                     <Reference Include="MyLib">

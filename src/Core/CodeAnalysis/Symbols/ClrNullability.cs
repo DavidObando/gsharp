@@ -290,6 +290,43 @@ public static class ClrNullability
     }
 
     /// <summary>
+    /// Issue #1354: applies the "unannotated imported reference types are nullable
+    /// by default" (Kotlin-style) reading rule to a single reference-type position.
+    /// Given the nullable-flags array returned by <see cref="ReadNullableFlags"/>
+    /// and the DFS position <paramref name="index"/>:
+    /// <list type="bullet">
+    /// <item><description><paramref name="flags"/> empty (no <c>[Nullable]</c> and no
+    /// <c>[NullableContext]</c> anywhere) → <b>nullable</b> (<c>T?</c>).</description></item>
+    /// <item><description>A single scalar/context byte (<c>flags.Length == 1</c>) applies
+    /// to <b>every</b> position: non-null iff that byte is <c>1</c>.</description></item>
+    /// <item><description>A per-position array (<c>flags.Length &gt; 1</c>): non-null iff
+    /// <c>flags[index] == 1</c>.</description></item>
+    /// </list>
+    /// Only an explicit <c>1</c> (NotAnnotated) means a non-null reference type; <c>2</c>
+    /// (Annotated), <c>0</c> (oblivious) and absent all mean nullable.
+    /// </summary>
+    /// <param name="flags">The nullable-flags byte array (possibly empty or scalar).</param>
+    /// <param name="index">The DFS position index of the reference-type position.</param>
+    /// <returns><c>true</c> when the position is non-null, <c>false</c> when nullable.</returns>
+    internal static bool IsPositionNonNull(ImmutableArray<byte> flags, int index)
+    {
+        if (flags.IsDefaultOrEmpty)
+        {
+            // No annotation and no context anywhere → unannotated/oblivious → nullable.
+            return false;
+        }
+
+        if (flags.Length == 1)
+        {
+            // Scalar/context byte applies to every position.
+            return flags[0] == 1;
+        }
+
+        // Per-position array: index directly; beyond-length positions are nullable.
+        return index < flags.Length && flags[index] == 1;
+    }
+
+    /// <summary>
     /// Constructs a <see cref="TypeSymbol"/> for <paramref name="clrType"/> by
     /// reading the nullability byte at <paramref name="offset"/> within
     /// <paramref name="flags"/>, and (for generic types with further inner bytes)
@@ -316,8 +353,9 @@ public static class ClrNullability
             return baseSymbol;
         }
 
-        byte flag = offset < flags.Length ? flags[offset] : (byte)0;
-        bool isNullable = flag == 2;
+        // Issue #1354: a reference position is non-null only for an explicit `1`;
+        // absent / oblivious / annotated all mean nullable.
+        bool isNullable = !IsPositionNonNull(flags, offset);
         TypeSymbol result = isNullable ? NullableTypeSymbol.Get(baseSymbol) : baseSymbol;
 
         // Propagate inner flags when the type is a closed generic.
@@ -326,8 +364,7 @@ public static class ClrNullability
             // Slice from `offset` so that NullabilityAnnotatedTypeSymbol.NullableFlags[0]
             // is the byte for this type itself, matching the layout convention.
             var slicedFlags = flags.Skip(offset).ToImmutableArray();
-            var annotationBase = isNullable ? baseSymbol : result;
-            var annotated = new NullabilityAnnotatedTypeSymbol(annotationBase, slicedFlags);
+            var annotated = new NullabilityAnnotatedTypeSymbol(baseSymbol, slicedFlags);
             result = isNullable ? (TypeSymbol)NullableTypeSymbol.Get(annotated) : annotated;
         }
 
@@ -349,19 +386,17 @@ public static class ClrNullability
 
         var flags = ReadNullableFlags(declaration, enclosingMember);
 
-        // Determine the top-level flag (byte 0 of the array, or the context fallback).
-        byte topFlag = flags.Length > 0 ? flags[0] : (byte)0;
-
-        // Wrap top-level nullability.
-        TypeSymbol result = topFlag == 2 ? (TypeSymbol)NullableTypeSymbol.Get(baseSymbol) : baseSymbol;
+        // Issue #1354: the top-level reference position is non-null only when the
+        // flags array explicitly marks it `1`; empty/oblivious/annotated → nullable.
+        bool topNonNull = IsPositionNonNull(flags, 0);
+        TypeSymbol result = topNonNull ? baseSymbol : (TypeSymbol)NullableTypeSymbol.Get(baseSymbol);
 
         // If there are inner-position bytes, wrap with NullabilityAnnotatedTypeSymbol so
         // that callers (for-range, CLR indexers …) can recover element-type nullability.
         if (flags.Length > 1 && clrType.IsGenericType && !clrType.IsGenericTypeDefinition)
         {
-            var annotationBase = topFlag == 2 ? baseSymbol : result;
-            var annotated = new NullabilityAnnotatedTypeSymbol(annotationBase, flags);
-            result = topFlag == 2 ? (TypeSymbol)NullableTypeSymbol.Get(annotated) : annotated;
+            var annotated = new NullabilityAnnotatedTypeSymbol(baseSymbol, flags);
+            result = topNonNull ? (TypeSymbol)annotated : NullableTypeSymbol.Get(annotated);
         }
 
         return result;

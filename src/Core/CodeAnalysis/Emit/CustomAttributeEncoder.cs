@@ -160,6 +160,79 @@ internal sealed class CustomAttributeEncoder
     /// <param name="flags">The DFS pre-order nullability byte array.</param>
     public void EmitNullableAttributeOnParameter(ParameterHandle paramHandle, ImmutableArray<byte> flags)
     {
+        this.EmitNullableAttributeOnEntity(paramHandle, flags);
+    }
+
+    /// <summary>
+    /// Issue #1354: emits a per-field
+    /// <c>System.Runtime.CompilerServices.NullableAttribute</c> on a Field row
+    /// when <paramref name="type"/> has at least one position that deviates from
+    /// the non-null default (i.e. the computed flags array contains a byte other
+    /// than <see cref="NullableFlagsBuilder.NotAnnotated"/>). All-non-null
+    /// reference fields rely on the enclosing type's <c>NullableContextAttribute(1)</c>
+    /// instead, matching the compact C#/Roslyn emit shape and keeping round-trip
+    /// fidelity (importer reads non-null via the type-chain context walk).
+    /// </summary>
+    /// <param name="fieldHandle">The Field row to attach the attribute to.</param>
+    /// <param name="type">The field's declared type.</param>
+    public void EmitNullableAttributeOnField(FieldDefinitionHandle fieldHandle, TypeSymbol type)
+    {
+        var flags = NullableFlagsBuilder.Build(type);
+        if (ShouldEmitPerPositionNullable(flags))
+        {
+            this.EmitNullableAttributeOnEntity(fieldHandle, flags);
+        }
+    }
+
+    /// <summary>
+    /// Issue #1354: emits a per-property
+    /// <c>System.Runtime.CompilerServices.NullableAttribute</c> on a Property row
+    /// under the same "deviates from non-null default" condition as
+    /// <see cref="EmitNullableAttributeOnField"/>. Properties have no dedicated
+    /// return-parameter row, so the attribute lands on the Property row itself
+    /// (mirrors <c>ClrNullability.GetPropertyTypeSymbol</c>'s read path).
+    /// </summary>
+    /// <param name="propertyHandle">The Property row to attach the attribute to.</param>
+    /// <param name="type">The property's declared type.</param>
+    public void EmitNullableAttributeOnProperty(PropertyDefinitionHandle propertyHandle, TypeSymbol type)
+    {
+        var flags = NullableFlagsBuilder.Build(type);
+        if (ShouldEmitPerPositionNullable(flags))
+        {
+            this.EmitNullableAttributeOnEntity(propertyHandle, flags);
+        }
+    }
+
+    /// <summary>
+    /// Issue #1354: returns <c>true</c> when a per-position
+    /// <c>[NullableAttribute]</c> must be emitted for a field/property — i.e. the
+    /// flags array is non-empty AND contains at least one byte that is not
+    /// <see cref="NullableFlagsBuilder.NotAnnotated"/> (a <c>2</c> nullable
+    /// position or a <c>0</c> oblivious position). When every position is
+    /// non-null the type-level <c>NullableContextAttribute(1)</c> covers it.
+    /// </summary>
+    /// <param name="flags">The DFS pre-order nullability byte array.</param>
+    /// <returns><c>true</c> when the attribute must be emitted.</returns>
+    internal static bool ShouldEmitPerPositionNullable(ImmutableArray<byte> flags)
+    {
+        if (flags.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var b in flags)
+        {
+            if (b != NullableFlagsBuilder.NotAnnotated)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void EmitNullableAttributeOnEntity(EntityHandle parent, ImmutableArray<byte> flags)
+    {
         if (flags.IsDefaultOrEmpty)
         {
             return;
@@ -197,7 +270,7 @@ internal sealed class CustomAttributeEncoder
         valueBlob.WriteUInt16(0);
 
         this.emitCtx.Metadata.AddCustomAttribute(
-            parent: paramHandle,
+            parent: parent,
             constructor: ctorRef,
             value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
@@ -226,6 +299,38 @@ internal sealed class CustomAttributeEncoder
 
         this.emitCtx.Metadata.AddCustomAttribute(
             parent: methodHandle,
+            constructor: ctorRef,
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
+
+    /// <summary>
+    /// Issue #1354: emits
+    /// <c>System.Runtime.CompilerServices.NullableContextAttribute(<paramref name="flag"/>)</c>
+    /// on a TypeDef row to declare the type-level default nullability context.
+    /// This is the linchpin of gsc→gsc round-trip: the metadata importer's
+    /// <c>ReadNullableFlags</c> fallback walks the <c>DeclaringType</c> chain, so a
+    /// non-null reference field/property emitted with no per-position
+    /// <c>[NullableAttribute]</c> is re-read as non-null only when this type-level
+    /// context is present (otherwise, post-#1354, the absence would read as
+    /// nullable). Mirrors what C#/Roslyn emits on every nullable-aware type.
+    /// </summary>
+    /// <param name="typeHandle">The TypeDef row to attach the attribute to.</param>
+    /// <param name="flag">The nullability flag (0/1/2).</param>
+    public void EmitNullableContextAttributeOnType(TypeDefinitionHandle typeHandle, byte flag)
+    {
+        var ctorRef = this.wellKnown.GetNullableContextAttributeByteCtorRef();
+        if (ctorRef.IsNil)
+        {
+            return;
+        }
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteByte(flag);
+        valueBlob.WriteUInt16(0);
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: typeHandle,
             constructor: ctorRef,
             value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }

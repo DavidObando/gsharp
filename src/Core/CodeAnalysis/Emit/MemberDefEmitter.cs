@@ -77,6 +77,7 @@ internal sealed class MemberDefEmitter
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
     private readonly Func<Type, EntityHandle> getTypeHandleForMember;
     private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken;
+    private readonly Action<PropertyDefinitionHandle, TypeSymbol> emitNullableAttributeOnProperty;
 
     public MemberDefEmitter(
         EmitContext emitCtx,
@@ -87,7 +88,8 @@ internal sealed class MemberDefEmitter
         Func<ParameterHandle> nextParameterHandle,
         Func<Type, TypeReferenceHandle> getTypeReference,
         Func<Type, EntityHandle> getTypeHandleForMember,
-        Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken)
+        Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken,
+        Action<PropertyDefinitionHandle, TypeSymbol> emitNullableAttributeOnProperty)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -98,6 +100,7 @@ internal sealed class MemberDefEmitter
         this.getTypeReference = getTypeReference ?? throw new ArgumentNullException(nameof(getTypeReference));
         this.getTypeHandleForMember = getTypeHandleForMember ?? throw new ArgumentNullException(nameof(getTypeHandleForMember));
         this.resolveFieldToken = resolveFieldToken ?? throw new ArgumentNullException(nameof(resolveFieldToken));
+        this.emitNullableAttributeOnProperty = emitNullableAttributeOnProperty ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnProperty));
     }
 
     public void EmitPropertyAccessors(StructSymbol structSym)
@@ -181,6 +184,8 @@ internal sealed class MemberDefEmitter
             {
                 this.emitCtx.Metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Setter, emittedSetter.Value);
             }
+
+            this.emitNullableAttributeOnProperty(propDef, prop.Type);
         }
 
         // PropertyMap row: links the TypeDef to its first PropertyDef.
@@ -426,6 +431,8 @@ internal sealed class MemberDefEmitter
             {
                 this.emitCtx.Metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Setter, emittedSetter.Value);
             }
+
+            this.emitNullableAttributeOnProperty(propDef, prop.Type);
         }
 
         // PropertyMap row: links the TypeDef to its first PropertyDef.
@@ -1462,6 +1469,8 @@ internal sealed class MemberDefEmitter
             {
                 this.emitCtx.Metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Setter, emittedSetter.Value);
             }
+
+            this.emitNullableAttributeOnProperty(propDef, prop.Type);
         }
 
         // PropertyMap row: links the TypeDef to its first PropertyDef.

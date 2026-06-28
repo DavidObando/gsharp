@@ -338,6 +338,7 @@ public class Issue605AwaitUsingLetEmitTests
                   <PropertyGroup>
                     <OutputType>Library</OutputType>
                     <TargetFramework>net10.0</TargetFramework>
+                    <Nullable>enable</Nullable>
                     <AssemblyName>Helper</AssemblyName>
                   </PropertyGroup>
                 </Project>

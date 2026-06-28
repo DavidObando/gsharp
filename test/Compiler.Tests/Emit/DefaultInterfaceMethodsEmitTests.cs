@@ -276,6 +276,7 @@ public class DefaultInterfaceMethodsEmitTests
                   <PropertyGroup>
                     <OutputType>Exe</OutputType>
                     <TargetFramework>net10.0</TargetFramework>
+                    <Nullable>enable</Nullable>
                     <AssemblyName>Consumer</AssemblyName>
                     <RootNamespace>Consumer</RootNamespace>
                   </PropertyGroup>

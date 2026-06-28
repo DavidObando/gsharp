@@ -242,6 +242,7 @@ public class Issue606FieldRwPropertyTests
                   <PropertyGroup>
                     <OutputType>Library</OutputType>
                     <TargetFramework>net10.0</TargetFramework>
+                    <Nullable>enable</Nullable>
                     <AssemblyName>{siblingName}</AssemblyName>
                     <RootNamespace>{siblingName}</RootNamespace>
                   </PropertyGroup>
@@ -336,6 +337,7 @@ public class Issue606FieldRwPropertyTests
                   <PropertyGroup>
                     <OutputType>Library</OutputType>
                     <TargetFramework>net10.0</TargetFramework>
+                    <Nullable>enable</Nullable>
                     <AssemblyName>{siblingName}</AssemblyName>
                     <RootNamespace>{siblingName}</RootNamespace>
                   </PropertyGroup>

@@ -503,6 +503,7 @@ public class StaticVirtualInterfaceMembersEmitTests
                   <PropertyGroup>
                     <OutputType>Exe</OutputType>
                     <TargetFramework>net10.0</TargetFramework>
+                    <Nullable>enable</Nullable>
                     <AssemblyName>Consumer</AssemblyName>
                     <RootNamespace>Consumer</RootNamespace>
                     <LangVersion>preview</LangVersion>

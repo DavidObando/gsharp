@@ -96,6 +96,8 @@ internal sealed class TypeDefEmitter
     private readonly Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveConstructedBaseExplicitCtorToken;
     private readonly Func<ParameterHandle> nextParameterHandle;
     private readonly Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes;
+    private readonly Action<TypeDefinitionHandle> emitNullableContextOnType;
+    private readonly Action<FieldDefinitionHandle, TypeSymbol> emitNullableAttributeOnField;
     private readonly Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter;
     private readonly Action<ParameterHandle> emitParamArrayAttributeOnParameter;
     private readonly Func<ConstructorInfo, MemberReferenceHandle> getCtorReference;
@@ -118,6 +120,8 @@ internal sealed class TypeDefEmitter
         Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveConstructedBaseExplicitCtorToken,
         Func<ParameterHandle> nextParameterHandle,
         Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes,
+        Action<TypeDefinitionHandle> emitNullableContextOnType,
+        Action<FieldDefinitionHandle, TypeSymbol> emitNullableAttributeOnField,
         Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter,
         Action<ParameterHandle> emitParamArrayAttributeOnParameter,
         Func<ConstructorInfo, MemberReferenceHandle> getCtorReference,
@@ -139,6 +143,8 @@ internal sealed class TypeDefEmitter
         this.resolveConstructedBaseExplicitCtorToken = resolveConstructedBaseExplicitCtorToken ?? throw new ArgumentNullException(nameof(resolveConstructedBaseExplicitCtorToken));
         this.nextParameterHandle = nextParameterHandle ?? throw new ArgumentNullException(nameof(nextParameterHandle));
         this.emitUserAttributes = emitUserAttributes ?? throw new ArgumentNullException(nameof(emitUserAttributes));
+        this.emitNullableContextOnType = emitNullableContextOnType ?? throw new ArgumentNullException(nameof(emitNullableContextOnType));
+        this.emitNullableAttributeOnField = emitNullableAttributeOnField ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnField));
         this.emitIsReadOnlyAttributeOnParameter = emitIsReadOnlyAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitIsReadOnlyAttributeOnParameter));
         this.emitParamArrayAttributeOnParameter = emitParamArrayAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitParamArrayAttributeOnParameter));
         this.getCtorReference = getCtorReference ?? throw new ArgumentNullException(nameof(getCtorReference));
@@ -217,6 +223,7 @@ internal sealed class TypeDefEmitter
             // the field symbol onto the FieldDef row so attributes like
             // @Obsolete round-trip into CustomAttribute rows.
             this.emitUserAttributes(handle, field, AttributeTargetKind.Field);
+            this.emitNullableAttributeOnField(handle, field.Type);
 
             // ADR-0122 §10 / issue #1035: a fixed-size buffer field carries a
             // `[FixedBuffer(typeof(T), N)]` attribute pointing at the element
@@ -312,6 +319,7 @@ internal sealed class TypeDefEmitter
                 }
 
                 this.cache.StructFieldDefs[staticField] = handle;
+                this.emitNullableAttributeOnField(handle, staticField.Type);
             }
         }
 
@@ -339,6 +347,7 @@ internal sealed class TypeDefEmitter
                 this.emitCtx.Metadata.AddConstant(handle, constField.ConstantValue);
                 this.cache.StructFieldDefs[constField] = handle;
                 this.emitUserAttributes(handle, constField, AttributeTargetKind.Field);
+                this.emitNullableAttributeOnField(handle, constField.Type);
             }
         }
 
@@ -518,6 +527,7 @@ internal sealed class TypeDefEmitter
 
         // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
         this.emitUserAttributes(handle2, structSym, AttributeTargetKind.Type);
+        this.emitNullableContextOnType(handle2);
     }
 
     /// <summary>
@@ -731,6 +741,7 @@ internal sealed class TypeDefEmitter
         // enum type onto the TypeDef row, and per-member annotations onto
         // each literal-field row.
         this.emitUserAttributes(enumTypeDef, enumSym, AttributeTargetKind.Type);
+        this.emitNullableContextOnType(enumTypeDef);
         for (int i = 0; i < enumSym.Members.Length; i++)
         {
             this.emitUserAttributes(memberFieldHandles[i], enumSym.Members[i], AttributeTargetKind.Field);
@@ -824,6 +835,7 @@ internal sealed class TypeDefEmitter
 
         // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
         this.emitUserAttributes(handle, ifaceSym, AttributeTargetKind.Type);
+        this.emitNullableContextOnType(handle);
     }
 
     /// <summary>
@@ -992,6 +1004,7 @@ internal sealed class TypeDefEmitter
         // ADR-0047 §3: user annotations targeting the delegate type land on
         // the TypeDef row (same as struct/interface/enum).
         this.emitUserAttributes(delegateTypeDef, delegateSym, AttributeTargetKind.Type);
+        this.emitNullableContextOnType(delegateTypeDef);
     }
 
     /// <summary>

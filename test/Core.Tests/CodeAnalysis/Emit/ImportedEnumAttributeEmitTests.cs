@@ -77,9 +77,22 @@ public class ImportedEnumAttributeEmitTests
             .Select(md.GetTypeDefinition)
             .Single(td => md.GetString(td.Name) == "Tagged");
 
-        // The Tagged type must carry exactly one custom attribute: our fixture.
-        var attrHandle = Assert.Single(taggedDef.GetCustomAttributes());
-        var attr = md.GetCustomAttribute(attrHandle);
+        // The Tagged type carries our fixture attribute plus an emitter-injected
+        // [NullableContext(1)] (ADR-0136). Select the fixture attribute by its
+        // constructor's declaring type rather than asserting a single attribute.
+        var attr = taggedDef.GetCustomAttributes()
+            .Select(md.GetCustomAttribute)
+            .Single(a =>
+            {
+                if (a.Constructor.Kind != HandleKind.MemberReference)
+                {
+                    return false;
+                }
+
+                var cr = md.GetMemberReference((MemberReferenceHandle)a.Constructor);
+                return cr.Parent.Kind == HandleKind.TypeReference
+                    && md.GetString(md.GetTypeReference((TypeReferenceHandle)cr.Parent).Name) == "ImportedEnumArgAttribute";
+            });
 
         // The constructor reference must point at ImportedEnumArgAttribute..ctor.
         var ctorRef = md.GetMemberReference((MemberReferenceHandle)attr.Constructor);

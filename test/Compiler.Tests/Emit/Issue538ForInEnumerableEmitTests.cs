@@ -311,6 +311,7 @@ public class Issue538ForInEnumerableEmitTests
               <PropertyGroup>
                 <OutputType>Library</OutputType>
                 <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
                 <AssemblyName>Probe</AssemblyName>
                 <RootNamespace>Probe</RootNamespace>
               </PropertyGroup>
