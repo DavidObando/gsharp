@@ -4,6 +4,7 @@
 
 using System.Collections;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -16,7 +17,7 @@ namespace GSharp.Core.CodeAnalysis;
 /// </summary>
 public sealed class DiagnosticBag : IEnumerable<Diagnostic>
 {
-    private readonly List<Diagnostic> diagnostics = new List<Diagnostic>();
+    private readonly ImmutableArray<Diagnostic>.Builder diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
 
     /// <summary>
     /// Gets the number of diagnostics currently held in the bag. Used together
@@ -25,6 +26,12 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// #1238 target-typed conditional arguments).
     /// </summary>
     public int Count => diagnostics.Count;
+
+    /// <summary>
+    /// Creates an immutable snapshot of the diagnostics currently held in the bag.
+    /// </summary>
+    /// <returns>An immutable array of diagnostics in insertion order.</returns>
+    public ImmutableArray<Diagnostic> ToImmutableArray() => diagnostics.ToImmutable();
 
     /// <summary>
     /// Removes every diagnostic added after the bag reached <paramref name="count"/>
@@ -43,7 +50,10 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
 
         if (count < diagnostics.Count)
         {
-            diagnostics.RemoveRange(count, diagnostics.Count - count);
+            while (diagnostics.Count > count)
+            {
+                diagnostics.RemoveAt(diagnostics.Count - 1);
+            }
         }
     }
 

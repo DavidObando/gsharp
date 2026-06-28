@@ -16,11 +16,14 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundScope
 {
-    private Dictionary<string, Symbol> symbols;
-    private Dictionary<string, List<FunctionSymbol>> functions;
-    private List<ImportSymbol> imports;
-    private Dictionary<string, TypeSymbol> typeAliases;
-    private List<FunctionSymbol> extensionFunctions;
+    private ImmutableDictionary<string, Symbol>.Builder symbols;
+    private ImmutableArray<string>.Builder symbolKeys;
+    private ImmutableDictionary<string, ImmutableArray<FunctionSymbol>.Builder>.Builder functions;
+    private ImmutableArray<string>.Builder functionKeys;
+    private ImmutableArray<ImportSymbol>.Builder imports;
+    private ImmutableDictionary<string, TypeSymbol>.Builder typeAliases;
+    private ImmutableArray<string>.Builder typeAliasKeys;
+    private ImmutableArray<FunctionSymbol>.Builder extensionFunctions;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundScope"/> class.
@@ -55,8 +58,11 @@ public sealed class BoundScope
     public BoundScope(BoundScope parent, ReferenceResolver references, ImmutableHashSet<string> preprocessorSymbols)
     {
         Parent = parent;
-        imports = parent?.imports ?? new List<ImportSymbol>();
-        typeAliases = parent?.typeAliases ?? new Dictionary<string, TypeSymbol>();
+        symbolKeys = parent?.symbolKeys?.ToImmutable().ToBuilder();
+        functionKeys = parent?.functionKeys?.ToImmutable().ToBuilder();
+        imports = parent?.imports.ToImmutable().ToBuilder() ?? ImmutableArray.CreateBuilder<ImportSymbol>();
+        typeAliases = parent?.typeAliases.ToImmutable().ToBuilder() ?? ImmutableDictionary.CreateBuilder<string, TypeSymbol>();
+        typeAliasKeys = parent?.typeAliasKeys.ToImmutable().ToBuilder() ?? ImmutableArray.CreateBuilder<string>();
         References = references ?? parent?.References ?? ReferenceResolver.Default();
         PreprocessorSymbols = preprocessorSymbols ?? parent?.PreprocessorSymbols ?? ImmutableHashSet<string>.Empty;
     }
@@ -86,11 +92,6 @@ public sealed class BoundScope
     /// <returns>Whether the import was registered or not.</returns>
     public bool TryImport(ImportSymbol import)
     {
-        if (imports == null)
-        {
-            imports = new List<ImportSymbol>();
-        }
-
         imports.Add(import);
         return true;
     }
@@ -124,11 +125,13 @@ public sealed class BoundScope
             return false;
         }
 
-        functions ??= new Dictionary<string, List<FunctionSymbol>>();
+        functions ??= ImmutableDictionary.CreateBuilder<string, ImmutableArray<FunctionSymbol>.Builder>();
         if (!functions.TryGetValue(function.Name, out var bucket))
         {
-            bucket = new List<FunctionSymbol>();
+            bucket = ImmutableArray.CreateBuilder<FunctionSymbol>();
             functions.Add(function.Name, bucket);
+            functionKeys ??= ImmutableArray.CreateBuilder<string>();
+            functionKeys.Add(function.Name);
         }
         else
         {
@@ -145,10 +148,10 @@ public sealed class BoundScope
 
         // Keep the first overload visible through the legacy `symbols` map so
         // existing TryLookupSymbol/Get*<FunctionSymbol> callers see the name.
-        symbols ??= new Dictionary<string, Symbol>();
+        symbols ??= ImmutableDictionary.CreateBuilder<string, Symbol>();
         if (!symbols.ContainsKey(function.Name))
         {
-            symbols.Add(function.Name, function);
+            AddSymbol(function.Name, function);
         }
 
         return true;
@@ -255,10 +258,7 @@ public sealed class BoundScope
     /// <returns>True if the extension was registered; false if an overload-identical (receiver, name, signature) extension already exists in this scope.</returns>
     public bool TryDeclareExtensionFunction(FunctionSymbol function)
     {
-        if (extensionFunctions == null)
-        {
-            extensionFunctions = new List<FunctionSymbol>();
-        }
+        extensionFunctions ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
 
         foreach (var existing in extensionFunctions)
         {
@@ -463,7 +463,7 @@ public sealed class BoundScope
     public bool TryLookupImportedGenericClass(string name, int arity, out System.Type type)
     {
         type = null;
-        if (imports == null || arity <= 0)
+        if (arity <= 0)
         {
             return false;
         }
@@ -493,11 +493,6 @@ public sealed class BoundScope
     {
         importedClass = null;
 
-        if (imports == null)
-        {
-            return false;
-        }
-
         foreach (var import in imports)
         {
             var typeName = import.Target + "." + name;
@@ -521,11 +516,6 @@ public sealed class BoundScope
     public bool TryLookupImport(string name, out ImportSymbol import)
     {
         import = null;
-
-        if (imports == null)
-        {
-            return false;
-        }
 
         foreach (var candidate in imports)
         {
@@ -559,9 +549,12 @@ public sealed class BoundScope
         }
 
         var builder = ImmutableArray.CreateBuilder<FunctionSymbol>();
-        foreach (var bucket in functions.Values)
+        foreach (var key in functionKeys)
         {
-            builder.AddRange(bucket);
+            if (functions.TryGetValue(key, out var bucket))
+            {
+                builder.AddRange(bucket);
+            }
         }
 
         return builder.ToImmutable();
@@ -572,7 +565,7 @@ public sealed class BoundScope
     /// </summary>
     /// <returns>The declared imports.</returns>
     public ImmutableArray<ImportSymbol> GetDeclaredImports()
-        => imports.ToImmutableArray();
+        => imports.ToImmutable();
 
     /// <summary>
     /// Tries to declare a type alias.
@@ -587,11 +580,6 @@ public sealed class BoundScope
             return false;
         }
 
-        if (typeAliases == null)
-        {
-            typeAliases = new Dictionary<string, TypeSymbol>();
-        }
-
         // Issue #1051: key by (simple name, generic arity) so that a type and a
         // same-named generic of different arity coexist. A genuine duplicate —
         // same name AND same arity — still collides and reports GS0102.
@@ -599,7 +587,7 @@ public sealed class BoundScope
         var key = MangleArity(name, arity);
         if (!typeAliases.ContainsKey(key))
         {
-            typeAliases.Add(key, target);
+            AddTypeAlias(key, target);
             return true;
         }
 
@@ -633,7 +621,7 @@ public sealed class BoundScope
                 return false;
             }
 
-            typeAliases[existingQualifiedKey] = existing;
+            AddTypeAlias(existingQualifiedKey, existing);
             typeAliases[key] = target;
             return true;
         }
@@ -648,7 +636,7 @@ public sealed class BoundScope
             return false;
         }
 
-        typeAliases.Add(qualifiedKey, target);
+        AddTypeAlias(qualifiedKey, target);
         return true;
     }
 
@@ -669,17 +657,12 @@ public sealed class BoundScope
             return false;
         }
 
-        if (typeAliases == null)
-        {
-            typeAliases = new Dictionary<string, TypeSymbol>();
-        }
-
         if (typeAliases.ContainsKey(key))
         {
             return false;
         }
 
-        typeAliases.Add(key, target);
+        AddTypeAlias(key, target);
         return true;
     }
 
@@ -864,43 +847,56 @@ public sealed class BoundScope
     /// </summary>
     /// <returns>The map of alias names to underlying types.</returns>
     public ImmutableDictionary<string, TypeSymbol> GetDeclaredTypeAliases()
-        => typeAliases == null ? ImmutableDictionary<string, TypeSymbol>.Empty : typeAliases.ToImmutableDictionary();
+        => typeAliases.ToImmutable();
 
     /// <summary>
     /// Gets the set of declared user-defined struct types in this scope chain.
     /// </summary>
     /// <returns>The structs in declaration order.</returns>
     public ImmutableArray<StructSymbol> GetDeclaredStructs()
-        => typeAliases == null
-            ? ImmutableArray<StructSymbol>.Empty
-            : typeAliases.Values.OfType<StructSymbol>().ToImmutableArray();
+        => GetDeclaredTypeSymbols<StructSymbol>();
 
     /// <summary>
     /// Gets the set of declared user-defined interface types in this scope chain (Phase 3.B.4).
     /// </summary>
     /// <returns>The interfaces in declaration order.</returns>
     public ImmutableArray<InterfaceSymbol> GetDeclaredInterfaces()
-        => typeAliases == null
-            ? ImmutableArray<InterfaceSymbol>.Empty
-            : typeAliases.Values.OfType<InterfaceSymbol>().ToImmutableArray();
+        => GetDeclaredTypeSymbols<InterfaceSymbol>();
 
     /// <summary>
     /// Gets the set of declared user-defined enum types in this scope chain (#193).
     /// </summary>
     /// <returns>The enums in declaration order.</returns>
     public ImmutableArray<EnumSymbol> GetDeclaredEnums()
-        => typeAliases == null
-            ? ImmutableArray<EnumSymbol>.Empty
-            : typeAliases.Values.OfType<EnumSymbol>().ToImmutableArray();
+        => GetDeclaredTypeSymbols<EnumSymbol>();
 
     /// <summary>
     /// Gets the set of declared user-defined named delegate types in this scope chain (ADR-0059 / issue #255).
     /// </summary>
     /// <returns>The named delegate types in declaration order.</returns>
     public ImmutableArray<DelegateTypeSymbol> GetDeclaredDelegates()
-        => typeAliases == null
-            ? ImmutableArray<DelegateTypeSymbol>.Empty
-            : typeAliases.Values.OfType<DelegateTypeSymbol>().ToImmutableArray();
+        => GetDeclaredTypeSymbols<DelegateTypeSymbol>();
+
+    private void AddTypeAlias(string key, TypeSymbol target)
+    {
+        typeAliases.Add(key, target);
+        typeAliasKeys.Add(key);
+    }
+
+    private ImmutableArray<TSymbol> GetDeclaredTypeSymbols<TSymbol>()
+        where TSymbol : TypeSymbol
+    {
+        var builder = ImmutableArray.CreateBuilder<TSymbol>();
+        foreach (var key in typeAliasKeys)
+        {
+            if (typeAliases.TryGetValue(key, out var symbol) && symbol is TSymbol typed)
+            {
+                builder.Add(typed);
+            }
+        }
+
+        return builder.ToImmutable();
+    }
 
     /// <summary>
     /// Issue #1051: computes the generic arity (number of type parameters) of a
@@ -1138,6 +1134,13 @@ public sealed class BoundScope
         return -1;
     }
 
+    private void AddSymbol(string name, Symbol symbol)
+    {
+        symbols.Add(name, symbol);
+        symbolKeys ??= ImmutableArray.CreateBuilder<string>();
+        symbolKeys.Add(name);
+    }
+
     private bool TryDeclareSymbol<TSymbol>(TSymbol symbol)
         where TSymbol : Symbol
     {
@@ -1146,16 +1149,13 @@ public sealed class BoundScope
             return false;
         }
 
-        if (symbols == null)
-        {
-            symbols = new Dictionary<string, Symbol>();
-        }
-        else if (symbols.ContainsKey(symbol.Name))
+        symbols ??= ImmutableDictionary.CreateBuilder<string, Symbol>();
+        if (symbols.ContainsKey(symbol.Name))
         {
             return false;
         }
 
-        symbols.Add(symbol.Name, symbol);
+        AddSymbol(symbol.Name, symbol);
         return true;
     }
 
@@ -1167,7 +1167,16 @@ public sealed class BoundScope
             return ImmutableArray<TSymbol>.Empty;
         }
 
-        return symbols.Values.OfType<TSymbol>().ToImmutableArray();
+        var builder = ImmutableArray.CreateBuilder<TSymbol>();
+        foreach (var key in symbolKeys)
+        {
+            if (symbols.TryGetValue(key, out var symbol) && symbol is TSymbol typed)
+            {
+                builder.Add(typed);
+            }
+        }
+
+        return builder.ToImmutable();
     }
 
     /// <summary>
