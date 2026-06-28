@@ -3557,6 +3557,33 @@ public sealed class Evaluator
     private object EvaluateBaseClassCallExpression(BoundBaseClassCallExpression node)
     {
         var receiverValue = EvaluateExpression(node.Receiver);
+
+        // Issue #1347: a base auto-property access has no accessor
+        // FunctionSymbol — read/write its synthesized backing field directly on
+        // the receiver, mirroring the ordinary auto-property fallback paths.
+        if (node.Method == null && node.Property != null)
+        {
+            var backingField = node.Property.BackingField;
+            if (node.IsSetterAccessor)
+            {
+                var value = EvaluateExpression(node.Arguments[0]);
+                if (receiverValue is StructValue target && backingField != null)
+                {
+                    target.Fields[backingField.Name] = value;
+                }
+
+                return value;
+            }
+
+            if (receiverValue is StructValue sv && backingField != null
+                && sv.Fields.TryGetValue(backingField.Name, out var fieldValue))
+            {
+                return fieldValue;
+            }
+
+            return DefaultValue(node.Property.Type);
+        }
+
         var method = node.Method;
 
         var frame = new Dictionary<VariableSymbol, object>

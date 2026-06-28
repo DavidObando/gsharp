@@ -980,7 +980,7 @@ public static class SpillSequenceSpiller
                 return Trivial(call);
             }
 
-            var value = new BoundBaseClassCallExpression(null, receiver, call.BaseClass, call.Method, args.ToImmutable(), call.Type);
+            var value = new BoundBaseClassCallExpression(null, receiver, call.BaseClass, call.Method, args.ToImmutable(), call.Type, call.Property, call.IsSetterAccessor);
             return new BoundSpillSequenceExpression(
                 null,
                 locals.ToImmutable(),

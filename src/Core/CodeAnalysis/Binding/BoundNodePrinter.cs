@@ -1554,7 +1554,7 @@ public static class BoundNodePrinter
         writer.WriteIdentifier(node.BaseClass.Name);
         writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
         writer.WritePunctuation(SyntaxKind.DotToken);
-        writer.WriteIdentifier(node.Method.Name);
+        writer.WriteIdentifier(node.Method?.Name ?? ((node.IsSetterAccessor ? "set_" : "get_") + node.Property?.Name));
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
         for (var i = 0; i < node.Arguments.Length; i++)
         {
