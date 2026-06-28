@@ -4476,6 +4476,25 @@ internal sealed class OverloadResolver
             && method.Parameters[method.Parameters.Length - 1].IsVariadic;
         var fixedCallableParamCount = isVariadic ? callableParameterCount - 1 : callableParameterCount;
 
+        // ADR-0063 / issue #1319: count the leading non-optional callable
+        // parameters. An instance / constructor call may omit any trailing
+        // parameter that declares a default value; the omitted slots are
+        // synthesized from each parameter's captured default constant below,
+        // mirroring the top-level and static (`shared`) call paths. The
+        // receiver parameter (when present) is excluded via `parameterOffset`.
+        var requiredCallableParamCount = callableParameterCount;
+        for (var i = callableParameterCount - 1; i >= 0; i--)
+        {
+            if (method.Parameters[i + parameterOffset].HasExplicitDefaultValue)
+            {
+                requiredCallableParamCount = i;
+            }
+            else
+            {
+                break;
+            }
+        }
+
         // Issue #343: variadic functions and named arguments do not compose.
         if (isVariadic && !argumentNames.IsDefault)
         {
@@ -4491,15 +4510,16 @@ internal sealed class OverloadResolver
                 return new BoundErrorExpression(null);
             }
         }
-        else if (arguments.Length != callableParameterCount)
+        else if (arguments.Length < requiredCallableParamCount || arguments.Length > callableParameterCount)
         {
             Diagnostics.ReportWrongArgumentCount(ce.Location, method.Name, callableParameterCount, arguments.Length);
             return new BoundErrorExpression(null);
         }
 
         // Issue #343: reorder named arguments into the method's parameter
-        // order. User-defined methods have no default parameter values, so
-        // every parameter slot must be filled.
+        // order. ADR-0063 / issue #1319: positional calls may omit trailing
+        // optional parameters; the omitted slots are padded from each
+        // parameter's captured default value after the reorder below.
         ExpressionSyntax[] permutedSyntax;
         ImmutableArray<BoundExpression> permutedArguments;
         if (!argumentNames.IsDefault)
@@ -4525,6 +4545,24 @@ internal sealed class OverloadResolver
             }
 
             permutedArguments = arguments;
+        }
+
+        // ADR-0063 / issue #1319: pad any omitted trailing optional parameters
+        // with their captured default values so the per-position conversion loop
+        // binds the full callable parameter list (matching the top-level and
+        // static call paths). Variadic methods never reach here with a short
+        // slice (their trailing slot is packed below), so the optional pad is
+        // gated on the non-variadic shape.
+        if (argumentNames.IsDefault && !isVariadic && permutedArguments.Length < callableParameterCount)
+        {
+            var padded = ImmutableArray.CreateBuilder<BoundExpression>(callableParameterCount);
+            padded.AddRange(permutedArguments);
+            for (var i = permutedArguments.Length; i < callableParameterCount; i++)
+            {
+                padded.Add(CreateOptionalUserDefaultArgument(method.Parameters[i + parameterOffset]));
+            }
+
+            permutedArguments = padded.MoveToImmutable();
         }
 
         // Phase 4.3b / ADR-0020: if the receiver is a constructed generic
