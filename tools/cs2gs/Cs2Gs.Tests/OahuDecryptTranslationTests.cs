@@ -357,6 +357,60 @@ namespace Demo
     }
 
     /// <summary>
+    /// A C# <c>await foreach</c> over an <c>IAsyncEnumerable&lt;T&gt;</c> lowers to
+    /// G#'s asynchronous-iteration form <c>await for x in seq</c> (spec
+    /// AwaitForRangeStmt). A plain <c>for x in seq</c> over an async sequence is
+    /// rejected by gsc (GS0116 "not indexable").
+    /// </summary>
+    [Fact]
+    public void AwaitForeach_LowersToAwaitForLoop()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public async System.Threading.Tasks.Task F(System.Collections.Generic.IAsyncEnumerable<int> src)
+        {
+            await foreach (var x in src)
+            {
+                System.Console.WriteLine(x);
+            }
+        }
+    }
+}");
+
+        Assert.Contains("await for x in src", printed);
+        Assert.DoesNotMatch(@"(?<!await )for x in src", printed);
+    }
+
+    /// <summary>
+    /// A non-async <c>foreach</c> still lowers to a plain <c>for x in seq</c>
+    /// (no spurious <c>await</c>).
+    /// </summary>
+    [Fact]
+    public void Foreach_NonAsync_LowersToPlainForLoop()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public void F(System.Collections.Generic.IEnumerable<int> src)
+        {
+            foreach (var x in src)
+            {
+                System.Console.WriteLine(x);
+            }
+        }
+    }
+}");
+
+        Assert.Contains("for x in src", printed);
+        Assert.DoesNotContain("await for", printed);
+    }
+
+    /// <summary>
     /// A control character inside a string literal (here NUL from C# <c>\0</c>)
     /// is re-escaped as a <c>\uXXXX</c> escape so the emitted G# string stays
     /// terminated and round-trips (ADR-0115 §B).
