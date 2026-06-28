@@ -1142,6 +1142,75 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #1320: a <c>sequence[T]</c> / <c>asyncsequence[T]</c> (iterator
+    /// return types, aliases for <c>IEnumerable&lt;T&gt;</c> /
+    /// <c>IAsyncEnumerable&lt;T&gt;</c>) or a user-element array receiver over a
+    /// same-compilation user element type has a <see langword="null"/>
+    /// <see cref="TypeSymbol.ClrType"/> during binding (the element type is not
+    /// yet emitted). That null ClrType caused instance-method lookup
+    /// (e.g. <c>GetEnumerator</c>) to dead-end with GS0159, even though the same
+    /// call resolves on an explicitly-typed <c>IEnumerable[T]</c> parameter
+    /// (whose ClrType type-erases to <c>IEnumerable&lt;object&gt;</c>) and on a
+    /// primitive-element <c>sequence[int32]</c> / array. Normalize such a
+    /// receiver to the equivalent type-erased shape so the shared CLR
+    /// member-lookup + symbolic return-type recovery path resolves it uniformly:
+    /// <list type="bullet">
+    /// <item><c>sequence[T]</c> → a constructed <see cref="ImportedTypeSymbol"/>
+    /// over <c>IEnumerable&lt;&gt;</c> with the symbolic <c>[T]</c> argument
+    /// (so the generic <c>GetEnumerator() → IEnumerator[T]</c> overload and its
+    /// element-typed return are recovered, exactly as for an
+    /// <c>IEnumerable[T]</c> parameter).</item>
+    /// <item><c>asyncsequence[T]</c> → the <c>IAsyncEnumerable&lt;&gt;</c>
+    /// counterpart.</item>
+    /// <item>user-element array / slice → a plain
+    /// <see cref="ImportedTypeSymbol"/> over the erased array CLR type
+    /// (e.g. <c>object[]</c>), reaching parity with a primitive-element array
+    /// (which finds the non-generic <c>GetEnumerator()</c>).</item>
+    /// </list>
+    /// The bound call keeps the original receiver expression; the emitter
+    /// already normalizes sequence/array receivers
+    /// (<c>TryNormalizeToSymbolicContainer</c>), so emission is unaffected.
+    /// Returns <see langword="false"/> when no normalization applies.
+    /// </summary>
+    /// <param name="receiverType">The receiver's static type symbol.</param>
+    /// <param name="normalized">The normalized receiver type, on success.</param>
+    /// <returns><see langword="true"/> when a normalized receiver type was produced.</returns>
+    private static bool TryNormalizeSymbolicEnumerableReceiver(TypeSymbol receiverType, out TypeSymbol normalized)
+    {
+        normalized = null;
+        if (receiverType == null || receiverType.ClrType != null)
+        {
+            return false;
+        }
+
+        switch (receiverType)
+        {
+            case SequenceTypeSymbol seq:
+                normalized = ImportedTypeSymbol.GetConstructed(
+                    typeof(System.Collections.Generic.IEnumerable<object>),
+                    typeof(System.Collections.Generic.IEnumerable<>),
+                    ImmutableArray.Create(seq.ElementType));
+                return true;
+            case AsyncSequenceTypeSymbol aseq:
+                normalized = ImportedTypeSymbol.GetConstructed(
+                    typeof(System.Collections.Generic.IAsyncEnumerable<object>),
+                    typeof(System.Collections.Generic.IAsyncEnumerable<>),
+                    ImmutableArray.Create(aseq.ElementType));
+                return true;
+            case ArrayTypeSymbol or SliceTypeSymbol:
+                if (MemberLookup.TryProjectErasedClrType(receiverType, out var erasedArray))
+                {
+                    normalized = ImportedTypeSymbol.Get(erasedArray);
+                    return true;
+                }
+
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
     /// Issue #794: when an instance call is dispatched against a receiver whose
     /// <see cref="ImportedTypeSymbol"/> carries symbolic type arguments
     /// (e.g. <c>List[T]</c>, <c>Dictionary[K, V]</c>) — including the
@@ -2385,7 +2454,20 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        if (receiver == null || receiver.Type?.ClrType == null)
+        // Issue #1320: normalize a sequence[T]/asyncsequence[T] or user-element
+        // array receiver (whose ClrType is null during binding) to its erased
+        // CLR shape so the shared CLR-instance member-lookup path below resolves
+        // its enumerable surface (GetEnumerator, ...) uniformly with an
+        // explicitly-typed IEnumerable[T] parameter and a primitive-element
+        // receiver. The bound call keeps the original receiver expression.
+        var effectiveReceiverType = receiver?.Type;
+        if (receiver?.Type != null
+            && TryNormalizeSymbolicEnumerableReceiver(receiver.Type, out var normalizedReceiverType))
+        {
+            effectiveReceiverType = normalizedReceiverType;
+        }
+
+        if (receiver == null || effectiveReceiverType?.ClrType == null)
         {
             // ADR-0059 / issue #255: a value of a user-declared named delegate
             // type supports member-style invocation `del.Invoke(args)` (same as
@@ -2660,7 +2742,7 @@ internal sealed partial class ExpressionBinder
             && nullableRecv.UnderlyingType?.ClrType is { IsValueType: true } nullableInnerVt
             && this.memberLookup.TryGetNullableConstructedType(nullableInnerVt, out var nullableConstructed)
             ? nullableConstructed
-            : receiver.Type.ClrType;
+            : effectiveReceiverType.ClrType;
 
         // Issue #529: use interface-aware method enumeration so that
         // methods declared on a base interface (e.g.
@@ -2729,12 +2811,12 @@ internal sealed partial class ExpressionBinder
                             // against the resolved by-ref parameter so the new
                             // local is declared with the inferred pointee type.
                             arguments = RebindInlineOutVarArguments(ce, arguments, resolution.Best, resolution.ParameterMapping, receiver?.Type);
-                            var instSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(receiver?.Type, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+                            var instSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(effectiveReceiverType, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
                             var instSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(resolution.Best, typeArgSymbols, instSymbolicArgs);
                             var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : typeArgSymbols;
                             var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
-                                ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(resolution.Best, instSymbolicTypeArgs, receiver?.Type)
-                                ?? ResolveInstanceReturnTypeFromReceiver(receiver?.Type, resolution.Best)
+                                ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(resolution.Best, instSymbolicTypeArgs, effectiveReceiverType)
+                                ?? ResolveInstanceReturnTypeFromReceiver(effectiveReceiverType, resolution.Best)
                                 ?? MapClrMemberType(resolution.Best.ReturnType);
                             var instParameters = resolution.Best.GetParameters();
                             var instMapping = resolution.ParameterMapping;
