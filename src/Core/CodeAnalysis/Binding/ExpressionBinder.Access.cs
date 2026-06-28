@@ -1715,7 +1715,13 @@ internal sealed partial class ExpressionBinder
         // binding the bracket contents as type arguments, so that we never emit
         // spurious type diagnostics for a non-generic-type target.
         var arity = FlattenCommaList(index.Index).Count();
-        var userGenericDef = scope.TryLookupTypeAlias(name, out var alias)
+
+        // Issue #1395: when a non-generic (arity-0) type and a generic type
+        // share the same simple name (arity overloading, e.g. `Box` and
+        // `Box[T]`), the arity-unaware lookup prefers the arity-0 type and the
+        // generic receiver fails to resolve. Disambiguate using the bracketed
+        // type-argument count so `Box[int32]` selects the arity-1 `Box[T]`.
+        var userGenericDef = scope.TryLookupTypeAlias(name, preferredArity: arity, out var alias)
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
         Type openClrType = null;
@@ -1790,7 +1796,12 @@ internal sealed partial class ExpressionBinder
 
         var argClauses = generic.TypeArgumentList.Arguments;
         var arity = argClauses.Count;
-        var userGenericDef = scope.TryLookupTypeAlias(name, out var alias)
+
+        // Issue #1395: same arity-collision disambiguation as the
+        // index-expression overload — select the same-name type whose generic
+        // arity matches the supplied type-argument count so `Box[int32]`
+        // resolves to `Box[T]` rather than the non-generic `Box`.
+        var userGenericDef = scope.TryLookupTypeAlias(name, preferredArity: arity, out var alias)
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
         Type openClrType = null;
