@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using GSharp.Core.CodeAnalysis.Diagnostics;
 using GSharp.LanguageServer.Protocol;
 using GSharp.LanguageServer.Server;
 using StreamJsonRpc;
@@ -25,20 +26,17 @@ public class Program
     /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
     public static async Task Main(string[] args)
     {
+        ILogger logger = NullLogger.Instance;
         var logFile = GetLogPath(args);
-        var logEnabled = logFile != null;
-
-        if (logEnabled)
+        if (logFile != null)
         {
-            File.AppendAllText(logFile, $"\n\n--- SERVER START ---\nArgs: {string.Join(" ", args)}\n");
+            logger = new FileLogger(logFile);
+            logger.LogInfo($"Server start. Args: {string.Join(" ", args)}");
         }
 
         AppDomain.CurrentDomain.UnhandledException += (s, e) =>
         {
-            if (logEnabled)
-            {
-                File.AppendAllText(logFile, $"UNHANDLED EXCEPTION: {e.ExceptionObject}\n");
-            }
+            logger.LogError("Unhandled exception", e.ExceptionObject as Exception);
         };
 
         var pipeName = GetPipeName(args);
@@ -59,23 +57,19 @@ public class Program
             receiving = Console.OpenStandardInput();
         }
 
-        if (logEnabled)
+        if (logger.IsEnabled(LogLevel.Debug))
         {
-            sending = new LoggingStream(sending, logFile, "OUT");
-            receiving = new LoggingStream(receiving, logFile, "IN");
+            sending = new LoggingStream(sending, logger, "OUT");
+            receiving = new LoggingStream(receiving, logger, "IN");
         }
 
         try
         {
-            await RunAsync(sending, receiving);
+            await RunAsync(sending, receiving, logger);
         }
         catch (Exception ex)
         {
-            if (logEnabled)
-            {
-                File.AppendAllText(logFile, $"FATAL ERROR: {ex}\n");
-            }
-
+            logger.LogError("Fatal error", ex);
             throw;
         }
         finally
@@ -84,14 +78,16 @@ public class Program
             {
                 await stream.DisposeAsync();
             }
+
+            (logger as IDisposable)?.Dispose();
         }
     }
 
-    private static async Task RunAsync(Stream sending, Stream receiving)
+    private static async Task RunAsync(Stream sending, Stream receiving, ILogger logger)
     {
         var documentContentService = new DocumentContentService();
         var workspaceState = new WorkspaceState();
-        var target = new LspServer(documentContentService, workspaceState);
+        var target = new LspServer(documentContentService, workspaceState, logger);
 
         var formatter = new SystemTextJsonFormatter { JsonSerializerOptions = LspJson.Options };
         var handler = new HeaderDelimitedMessageHandler(sending, receiving, formatter);
@@ -156,22 +152,19 @@ public class Program
             }
         }
 
-        return System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows)
-            ? Path.Combine(Path.GetTempPath(), "gsharp-lsp-debug.log")
-            : "/tmp/gsharp-lsp-debug.log";
+        return DiagnosticLogPaths.GetDefaultFilePath("gsharp-lsp-debug.log");
     }
 
     private sealed class LoggingStream : Stream
     {
         private readonly Stream inner;
-        private readonly string logFile;
+        private readonly ILogger logger;
         private readonly string prefix;
-        private readonly object lockObj = new object();
 
-        public LoggingStream(Stream inner, string logFile, string prefix)
+        public LoggingStream(Stream inner, ILogger logger, string prefix)
         {
             this.inner = inner;
-            this.logFile = logFile;
+            this.logger = logger;
             this.prefix = prefix;
         }
 
@@ -237,10 +230,7 @@ public class Program
             }
 
             var text = System.Text.Encoding.UTF8.GetString(buffer, offset, count);
-            lock (this.lockObj)
-            {
-                File.AppendAllText(this.logFile, $"[{this.prefix}] {text}\n");
-            }
+            this.logger.LogDebug($"[{this.prefix}] {text}");
         }
     }
 }

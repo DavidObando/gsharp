@@ -9,6 +9,7 @@ using System.Linq;
 using System.Text;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Diagnostics;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -91,15 +92,18 @@ public class Program
             var references = parsed.References.Count > 0
                 ? ReferenceResolver.WithReferences(parsed.References)
                 : null;
+            ILogger logger = parsed.LogPath is not null ? new FileLogger(parsed.LogPath) : NullLogger.Instance;
 
             try
             {
+                logger.LogInfo($"Starting compiler. Sources: {parsed.SourceFiles.Count}; Output: {parsed.OutputPath ?? "<none>"}");
                 ReportMissingTransitiveReferences(references, parsed);
 
                 var compilation = new Compilation(references, syntaxTrees.ToArray())
                 {
                     ImplicitSystemImport = parsed.ImplicitSystemImport,
                     IsLibrary = parsed.Target == OutputTarget.Library,
+                    Logger = logger,
                     DebugInformation =
                     {
                         Format = parsed.DebugFormat,
@@ -120,6 +124,7 @@ public class Program
             }
             finally
             {
+                (logger as IDisposable)?.Dispose();
                 references?.Dispose();
             }
         }
@@ -504,9 +509,14 @@ public class Program
             if (IsSwitch(raw))
             {
                 var body = raw.Substring(1);
-                var colon = body.IndexOf(':');
-                var name = colon < 0 ? body : body.Substring(0, colon);
-                var value = colon < 0 ? string.Empty : body.Substring(colon + 1);
+                if (body.StartsWith("-", StringComparison.Ordinal))
+                {
+                    body = body.Substring(1);
+                }
+
+                var separator = IndexOfSwitchValueSeparator(body);
+                var name = separator < 0 ? body : body.Substring(0, separator);
+                var value = separator < 0 ? string.Empty : body.Substring(separator + 1);
 
                 switch (name.ToLowerInvariant())
                 {
@@ -677,6 +687,12 @@ public class Program
                         result.EmbedAllSources = false;
                         break;
 
+                    case "log":
+                        result.LogPath = string.IsNullOrWhiteSpace(value)
+                            ? DiagnosticLogPaths.GetDefaultFilePath("gsharp-compiler-debug.log")
+                            : value.Trim();
+                        break;
+
                     case "?":
                     case "help":
                         result.ShowHelp = true;
@@ -796,6 +812,23 @@ public class Program
         };
     }
 
+    private static int IndexOfSwitchValueSeparator(string value)
+    {
+        var colon = value.IndexOf(':');
+        var equals = value.IndexOf('=');
+        if (colon < 0)
+        {
+            return equals;
+        }
+
+        if (equals < 0)
+        {
+            return colon;
+        }
+
+        return Math.Min(colon, equals);
+    }
+
     private static bool IsSwitch(string arg)
     {
         if (arg.Length == 0)
@@ -891,6 +924,9 @@ public class Program
 
         /// <summary>Gets or sets the informational version string stamped on the output assembly (from /version:).</summary>
         public string Version { get; set; }
+
+        /// <summary>Gets or sets the log file path (from /log:&lt;file&gt;). When non-null, a <see cref="FileLogger"/> is created and attached to the compilation.</summary>
+        public string LogPath { get; set; }
     }
 
     private sealed class CommandLineException : Exception
