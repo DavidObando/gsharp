@@ -4951,6 +4951,22 @@ public sealed class CSharpToGSharpTranslator
                     return this.TranslateIdentifierName(identifier);
 
                 case GenericNameSyntax generic:
+                    // A generic name used as an expression is most often a generic
+                    // *method* group (`Method<T>(...)`), whose bracket type arguments
+                    // are applied by the enclosing invocation — there the bare
+                    // identifier is correct. But it can also be a constructed generic
+                    // *type* used as the receiver of a static member access
+                    // (`Mp4Operation<ChapterInfo?>.FromCompleted(...)`); dropping the
+                    // type arguments there picks the wrong (non-generic) overload
+                    // (GS0144). Render the type with its arguments as `T[args]` so the
+                    // static member resolves on the constructed generic type.
+                    if (this.context.GetSymbolInfo(generic).Symbol is INamedTypeSymbol genericType)
+                    {
+                        GTypeReference typeRef = this.typeMapper.Map(
+                            genericType, this.context, generic.GetLocation());
+                        return new TypeExpression(typeRef);
+                    }
+
                     return new IdentifierExpression(generic.Identifier.Text);
 
                 case ThisExpressionSyntax:
