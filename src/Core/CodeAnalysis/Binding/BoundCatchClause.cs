@@ -9,7 +9,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <summary>
 /// Bound catch clause attached to a <see cref="BoundTryStatement"/>.
 /// </summary>
-public sealed class BoundCatchClause
+public sealed record BoundCatchClause
 {
     /// <summary>Initializes a new instance of the <see cref="BoundCatchClause"/> class.</summary>
     /// <param name="exceptionType">The exception type filter; <c>null</c> matches the base exception type.</param>

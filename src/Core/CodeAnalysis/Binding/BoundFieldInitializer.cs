@@ -16,7 +16,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <see cref="PropertySymbol"/> (a <c>prop</c> auto-property with a
 /// <c>set</c>/<c>init</c> accessor).
 /// </summary>
-public sealed class BoundFieldInitializer
+public sealed record BoundFieldInitializer
 {
     public BoundFieldInitializer(FieldSymbol field, BoundExpression value)
     {

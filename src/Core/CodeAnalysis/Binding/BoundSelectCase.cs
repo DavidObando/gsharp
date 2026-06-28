@@ -10,7 +10,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <summary>
 /// A single bound arm of a <c>select</c> statement (Phase 5.6 / ADR-0022).
 /// </summary>
-public sealed class BoundSelectCase
+public sealed record BoundSelectCase
 {
     /// <summary>Initializes a new instance of the <see cref="BoundSelectCase"/> class.</summary>
     /// <param name="caseKind">Which arm shape this is.</param>

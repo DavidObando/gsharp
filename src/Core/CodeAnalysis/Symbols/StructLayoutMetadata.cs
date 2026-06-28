@@ -30,7 +30,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// <c>struct</c> and <see cref="LayoutKind.Auto"/> for <c>class</c>.
 /// </para>
 /// </remarks>
-public sealed class StructLayoutMetadata
+public sealed record StructLayoutMetadata
 {
     /// <summary>Initializes a new instance of the <see cref="StructLayoutMetadata"/> class.</summary>
     /// <param name="layout">The validated layout kind (Sequential or Explicit).</param>

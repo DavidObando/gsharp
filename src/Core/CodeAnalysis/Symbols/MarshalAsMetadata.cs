@@ -26,7 +26,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// it as a <c>CustomAttribute</c> row (see
 /// <see cref="Binding.KnownAttributes.IsPseudoCustomAttribute"/>).
 /// </remarks>
-public sealed class MarshalAsMetadata
+public sealed record MarshalAsMetadata
 {
     /// <summary>Initializes a new instance of the <see cref="MarshalAsMetadata"/> class.</summary>
     /// <param name="unmanagedType">The primary <see cref="UnmanagedType"/> override.</param>

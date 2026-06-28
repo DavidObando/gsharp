@@ -17,7 +17,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// marshalling stub that calls a hidden blittable P/Invoke inner method
 /// (LibraryImport).
 /// </summary>
-public sealed class PInvokeMetadata
+public sealed record PInvokeMetadata
 {
     /// <summary>Initializes a new instance of the <see cref="PInvokeMetadata"/> class.</summary>
     /// <param name="libraryName">The unmanaged library name (required positional argument).</param>

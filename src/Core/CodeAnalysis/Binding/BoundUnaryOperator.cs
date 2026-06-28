@@ -10,7 +10,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <summary>
 /// Bound unary operator.
 /// </summary>
-public sealed class BoundUnaryOperator
+public sealed record BoundUnaryOperator
 {
     private static BoundUnaryOperator[] supportedOperators = BuildSupportedOperators();
 

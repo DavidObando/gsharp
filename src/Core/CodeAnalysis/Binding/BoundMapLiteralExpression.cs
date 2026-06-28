@@ -44,7 +44,7 @@ public sealed class BoundMapLiteralExpression : BoundExpression
 /// <summary>
 /// A single bound <c>key: value</c> entry in a <see cref="BoundMapLiteralExpression"/>.
 /// </summary>
-public sealed class BoundMapEntry
+public sealed record BoundMapEntry
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundMapEntry"/> class.
