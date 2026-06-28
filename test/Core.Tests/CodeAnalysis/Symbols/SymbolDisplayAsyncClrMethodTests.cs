@@ -72,7 +72,7 @@ public class SymbolDisplayAsyncClrMethodTests
 }
 
 #pragma warning disable CS1998 // async method without await: intentional — the test only inspects metadata, not runtime behavior.
-internal static class AsyncClrMethodSamples
+file static class AsyncClrMethodSamples
 {
     public static async Task<int> AsyncResult(string name) => name.Length;
 
