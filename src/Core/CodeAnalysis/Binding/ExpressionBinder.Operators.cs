@@ -1740,4 +1740,41 @@ internal sealed partial class ExpressionBinder
             && TryGetConstantIntegerValue(argument, out var value)
             && TryAdaptIntegerLiteral(value, parameterType, out _);
     }
+
+    // Issue #1311: builds the per-call constant-narrowing applicability hook for
+    // imported/BCL overload resolution (OverloadResolution.Resolve). The hook
+    // receives the source-argument index (into argTypes) and the candidate's CLR
+    // parameter type; it returns true when the corresponding bound argument is a
+    // constant integer expression whose value fits that (possibly narrower /
+    // cross-sign) integer parameter — i.e. the same §10.2.11 rule applied on the
+    // user-method path. `argumentOffset` accounts for a synthesised leading
+    // receiver slot (imported extension calls pass [receiver, args…], offset 1).
+    internal static Func<int, System.Type, bool> MakeConstantNarrowingArgumentCheck(
+        IReadOnlyList<BoundExpression> boundArguments,
+        int argumentOffset = 0)
+    {
+        if (boundArguments == null)
+        {
+            return null;
+        }
+
+        return (index, clrParameterType) =>
+        {
+            var argIndex = index - argumentOffset;
+            if (argIndex < 0 || argIndex >= boundArguments.Count || clrParameterType == null)
+            {
+                return false;
+            }
+
+            // A constant literal can never bind by-ref; peel defensively so a
+            // by-ref parameter maps to its element type rather than a managed
+            // pointer (which TypeSymbol.FromClrType cannot represent).
+            if (clrParameterType.IsByRef)
+            {
+                clrParameterType = clrParameterType.GetElementType();
+            }
+
+            return IsImplicitConstantNarrowingArgument(boundArguments[argIndex], TypeSymbol.FromClrType(clrParameterType));
+        };
+    }
 }
