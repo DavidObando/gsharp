@@ -855,10 +855,23 @@ internal sealed partial class MethodBodyEmitter
                 // List<object>. Static getters and CLR receivers fall back
                 // to the plain MemberRef path inside the overload.
                 var getterRef = isStatic
-                    ? (EntityHandle)this.outer.GetMethodReference(getter)
+                    ? (access.StaticContainerType != null
+                        ? this.outer.GetMethodEntityHandle(getter, access.StaticContainerType)
+                        : (EntityHandle)this.outer.GetMethodReference(getter))
                     : this.outer.GetMethodEntityHandle(getter, access.Receiver.Type);
                 this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
                 this.il.Token(getterRef);
+
+                // Issue #1330: when the static read is parented at a symbolic
+                // constructed container (`Comparer[TResult].Default`), the
+                // MemberRef encodes the call against the open generic property,
+                // so the runtime stack value is the substituted symbolic type
+                // (`Comparer<!TResult>`), not the erased `object`. Skip widening
+                // exactly as the instance symbolic-container path does below.
+                if (isStatic && access.StaticContainerType != null)
+                {
+                    break;
+                }
 
                 // Issue #774: when the receiver is a symbolic open container,
                 // the symbolic MemberRef encodes the call against the open

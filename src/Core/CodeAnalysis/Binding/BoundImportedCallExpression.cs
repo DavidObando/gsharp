@@ -28,13 +28,20 @@ public sealed class BoundImportedCallExpression : BoundExpression
     /// generic method specification so user-defined type arguments are written as
     /// their own TypeDef token. Default when there are no explicit type arguments.
     /// </param>
-    public BoundImportedCallExpression(SyntaxNode syntax, ImportedFunctionSymbol function, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds = default, ImmutableArray<TypeSymbol> typeArgumentSymbols = default)
+    /// <param name="staticContainerType">
+    /// Issue #1330: the symbolic constructed container for a static call on a
+    /// generic type constructed over an in-scope generic type parameter (e.g.
+    /// <c>Comparer[TResult].Create(...)</c>), used by the emitter to parent the
+    /// call at the constructed generic TypeSpec. Default for an ordinary call.
+    /// </param>
+    public BoundImportedCallExpression(SyntaxNode syntax, ImportedFunctionSymbol function, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds = default, ImmutableArray<TypeSymbol> typeArgumentSymbols = default, TypeSymbol staticContainerType = null)
         : base(syntax)
     {
         Function = function;
         Arguments = arguments;
         ArgumentRefKinds = argumentRefKinds.IsDefault ? default : argumentRefKinds;
         TypeArgumentSymbols = typeArgumentSymbols.IsDefault ? default : typeArgumentSymbols;
+        StaticContainerType = staticContainerType;
     }
 
     /// <inheritdoc/>
@@ -64,4 +71,15 @@ public sealed class BoundImportedCallExpression : BoundExpression
     /// method (issue #320). Default when there are no explicit type arguments.
     /// </summary>
     public ImmutableArray<TypeSymbol> TypeArgumentSymbols { get; }
+
+    /// <summary>
+    /// Gets the symbolic constructed container (#1330) for a static call on a
+    /// generic type constructed over an in-scope generic type parameter (e.g.
+    /// <c>Comparer[TResult].Create(...)</c>). An <see cref="ImportedTypeSymbol"/>
+    /// over the open definition with symbolic type arguments; the emitter parents
+    /// the static call at this constructed <c>Comparer&lt;!TResult&gt;</c>
+    /// TypeSpec instead of the type-erased <c>Comparer&lt;object&gt;</c>.
+    /// <c>null</c> for an ordinary imported call.
+    /// </summary>
+    public TypeSymbol StaticContainerType { get; }
 }

@@ -1534,6 +1534,180 @@ internal sealed partial class ExpressionBinder
         }
     }
 
+    /// <summary>
+    /// Issue #1330: binds a static method call on a generic type constructed
+    /// over an in-scope generic type parameter (e.g.
+    /// <c>Comparer[TResult].Create(...)</c>) by substituting the receiver's
+    /// symbolic type arguments through the resolved method's open parameter and
+    /// return types. A delegate parameter surfaces as its symbolic shape
+    /// (<c>Comparison[TResult]</c>) so a function-literal argument flows through
+    /// as an identity adapter hosted in the enclosing generic context rather than
+    /// a type-erased <c>&lt;object&gt;</c> adapter referencing an out-of-scope
+    /// type parameter; the result is the symbolic <c>Comparer[TResult]</c>; and
+    /// the produced <see cref="BoundImportedCallExpression"/> carries the
+    /// symbolic container so the emitter parents the call at the constructed
+    /// <c>Comparer&lt;!TResult&gt;</c> TypeSpec. Returns <see langword="false"/>
+    /// (deferring to the ordinary erased path) when the symbolic open method or a
+    /// parameter projection cannot be recovered.
+    /// </summary>
+    private bool TryBindSymbolicImportedStaticCall(
+        CallExpressionSyntax ce,
+        ImportedClassSymbol classSymbol,
+        ImportedFunctionSymbol staticFn,
+        ImmutableArray<BoundExpression> arguments,
+        out BoundExpression result)
+    {
+        result = null;
+        var symbolicReceiver = classSymbol.SymbolicReceiver;
+        if (symbolicReceiver?.OpenDefinition == null
+            || symbolicReceiver.TypeArguments.IsDefaultOrEmpty
+            || !TryResolveOpenStaticMethod(symbolicReceiver.OpenDefinition, staticFn.Method, out var openMethod))
+        {
+            return false;
+        }
+
+        var openParameters = openMethod.GetParameters();
+        if (openParameters.Length != arguments.Length)
+        {
+            // Optional/params/defaulted parameter shapes are not handled by this
+            // narrow symbolic path; fall back to the ordinary resolution.
+            return false;
+        }
+
+        var openDef = symbolicReceiver.OpenDefinition;
+        var symbolicArgs = symbolicReceiver.TypeArguments;
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var argument = arguments[i];
+            var openParamType = openParameters[i].ParameterType;
+            var symbolicParamType = MemberLookup.MapOpenClrTypeToSymbolic(openParamType, openDef, symbolicArgs);
+
+            if (LambdaBinder.TryGetFunctionLiteral(argument, out var functionLiteral)
+                && symbolicParamType is ImportedTypeSymbol symbolicDelegateParam
+                && symbolicDelegateParam.OpenDefinition != null
+                && symbolicDelegateParam.HasTypeParameterArgument
+                && TryBuildSymbolicDelegateTarget(openParamType, openDef, symbolicArgs, out var symbolicDelegateTarget))
+            {
+                // The substituted delegate target matches the literal's declared
+                // (TResult-typed) shape, so the adapter returns the literal
+                // unchanged (IsIdentityAdapter) — the lambda MethodDef is hosted
+                // in the enclosing generic context. Wrap it in a conversion to
+                // the symbolic constructed delegate type (`Comparison[TResult]`)
+                // so the emitter materialises a `Comparison<!TResult>` instance
+                // (rather than the natural `Func<...>` or the type-erased
+                // `Comparison<object>`) that the callee's reified parameter
+                // accepts. The classifier would reject this (the erased
+                // `Comparison<object>` Invoke shape differs from the TResult
+                // literal), so build the conversion node directly.
+                var adapter = lambdas.CreateErasedFunctionLiteralAdapter(functionLiteral, symbolicDelegateTarget);
+                convertedArgs.Add(new BoundConversionExpression(null, symbolicDelegateParam, adapter));
+                continue;
+            }
+
+            if (symbolicParamType is TypeParameterSymbol || symbolicParamType == TypeSymbol.Error)
+            {
+                convertedArgs.Add(argument);
+                continue;
+            }
+
+            var argLoc = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
+            convertedArgs.Add(conversions.BindConversion(argLoc, argument, symbolicParamType));
+        }
+
+        var symbolicReturn = MemberLookup.MapOpenClrTypeToSymbolic(openMethod.ReturnType, openDef, symbolicArgs);
+        var overriddenFn = new ImportedFunctionSymbol(
+            staticFn.Name,
+            classSymbol,
+            staticFn.Method,
+            staticFn.Declaration,
+            returnTypeOverride: symbolicReturn);
+        var refKinds = ComputeArgumentRefKinds(staticFn.Method.GetParameters());
+        result = new BoundImportedCallExpression(
+            null,
+            overriddenFn,
+            convertedArgs.MoveToImmutable(),
+            refKinds,
+            typeArgumentSymbols: default,
+            staticContainerType: symbolicReceiver);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1330: resolves the open generic <em>type</em> definition's method
+    /// corresponding to <paramref name="closedMethod"/> (a static method on the
+    /// type-erased closed shape, e.g. <c>Comparer&lt;object&gt;.Create</c>) by
+    /// metadata-token identity, yielding e.g. <c>Comparer&lt;&gt;.Create</c>
+    /// whose parameter/return types are stated in terms of the type's open
+    /// generic parameters.
+    /// </summary>
+    private static bool TryResolveOpenStaticMethod(Type openDefinition, MethodInfo closedMethod, out MethodInfo openMethod)
+    {
+        openMethod = null;
+        if (openDefinition == null || closedMethod == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            foreach (var candidate in openDefinition.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                if (candidate.MetadataToken == closedMethod.MetadataToken && candidate.Module == closedMethod.Module)
+                {
+                    openMethod = candidate;
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #1330: builds a <see cref="FunctionTypeSymbol"/> for an open
+    /// delegate parameter type (e.g. <c>Comparison&lt;T&gt;</c>) by substituting
+    /// the receiver's symbolic type arguments into the delegate's
+    /// <c>Invoke</c> signature, producing the symbolic target
+    /// <c>(TResult, TResult) -&gt; int32</c>. Returns <see langword="false"/> when
+    /// the parameter is not a delegate type.
+    /// </summary>
+    private static bool TryBuildSymbolicDelegateTarget(
+        Type openParameterType,
+        Type openDefinition,
+        ImmutableArray<TypeSymbol> symbolicArgs,
+        out FunctionTypeSymbol target)
+    {
+        target = null;
+        if (openParameterType == null)
+        {
+            return false;
+        }
+
+        var invoke = openParameterType.GetMethod("Invoke");
+        if (invoke == null)
+        {
+            return false;
+        }
+
+        var invokeParameters = invoke.GetParameters();
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(invokeParameters.Length);
+        foreach (var parameter in invokeParameters)
+        {
+            parameterTypes.Add(MemberLookup.MapOpenClrTypeToSymbolic(parameter.ParameterType, openDefinition, symbolicArgs));
+        }
+
+        var returnType = invoke.ReturnType.IsSameAs(typeof(void))
+            ? TypeSymbol.Void
+            : MemberLookup.MapOpenClrTypeToSymbolic(invoke.ReturnType, openDefinition, symbolicArgs);
+        target = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), returnType);
+        return true;
+    }
+
     private void ResolveDeferredArrowLambdaArguments(
         BoundExpression receiver,
         ImportedClassSymbol classSymbol,
@@ -2400,6 +2574,27 @@ internal sealed partial class ExpressionBinder
         {
             if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticMapping, out var staticAmbiguous, out var staticAmbiguousMethods, out var staticIsExpanded, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences, argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames))
             {
+                // Issue #1330: when the receiver is a generic type constructed
+                // over an in-scope generic type parameter (`Comparer[TResult]`),
+                // bind the static call symbolically — substituting the receiver's
+                // symbolic arguments through the resolved method's parameter and
+                // return types — so a delegate parameter surfaces as
+                // `Comparison[TResult]` (the lambda flows through as an identity
+                // adapter hosted in the enclosing generic context rather than a
+                // type-erased `<object>` adapter referencing an out-of-scope
+                // type parameter), the call's result type is the symbolic
+                // `Comparer[TResult]`, and the emitter parents the call at the
+                // constructed `Comparer<!TResult>` TypeSpec. Yields verifiable IL
+                // exactly as the concrete-argument receiver does.
+                if (classSymbol.SymbolicReceiver != null
+                    && argumentNames.IsDefault
+                    && !staticIsExpanded
+                    && staticMapping.IsDefault
+                    && TryBindSymbolicImportedStaticCall(ce, classSymbol, staticFn, arguments, out var symbolicStaticCall))
+                {
+                    return symbolicStaticCall;
+                }
+
                 var staticParameters = staticFn.Method.GetParameters();
                 var staticExpandedArgs = staticIsExpanded
                     ? overloads.ExpandParamsArguments(arguments, staticParameters, ce, parameterMapping: staticMapping)

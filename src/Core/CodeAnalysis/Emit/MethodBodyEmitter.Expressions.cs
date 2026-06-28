@@ -172,6 +172,21 @@ internal sealed partial class MethodBodyEmitter
                 break;
             case BoundImportedCallExpression impCall:
                 this.EmitImportedCallArguments(impCall.Arguments, impCall.ArgumentRefKinds);
+
+                // Issue #1330: a static call on a generic type constructed over
+                // an in-scope generic type parameter (`Comparer[TResult].Create`)
+                // must be referenced through a MemberRef parented at the
+                // constructed `Comparer<!TResult>` TypeSpec — the symbolic
+                // container — rather than the type-erased `Comparer<object>`. The
+                // call then leaves the symbolic return (`Comparer<!TResult>`) on
+                // the stack, so skip the erased widening exactly as the symbolic
+                // instance/extension paths do.
+                if (impCall.StaticContainerType != null)
+                {
+                    this.il.Call(this.outer.GetMethodEntityHandle(impCall.Function.Method, impCall.StaticContainerType));
+                    break;
+                }
+
                 this.il.Call(this.outer.GetMethodEntityHandle(impCall.Function.Method, impCall.TypeArgumentSymbols));
 
                 // Issue #903: when this generic imported (extension) call was

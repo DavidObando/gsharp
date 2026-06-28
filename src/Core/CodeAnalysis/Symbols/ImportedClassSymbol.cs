@@ -22,11 +22,22 @@ public sealed class ImportedClassSymbol : Symbol
     /// </summary>
     /// <param name="type">The imported class type.</param>
     /// <param name="declaration">The imported class declaration.</param>
-    public ImportedClassSymbol(Type type, ExpressionSyntax declaration)
+    /// <param name="symbolicReceiver">
+    /// Issue #1330: when this imported class is the type-erased closed form of a
+    /// generic type constructed over an in-scope generic type parameter — e.g.
+    /// the <c>Comparer&lt;object&gt;</c> backing a <c>Comparer[TResult]</c>
+    /// static-member receiver — the symbolic constructed view (open definition +
+    /// symbolic type arguments) used to recover symbolic member/return types and
+    /// to emit static member references parented at the constructed
+    /// <c>Comparer&lt;!TResult&gt;</c> TypeSpec rather than the erased
+    /// <c>Comparer&lt;object&gt;</c>. <c>null</c> for an ordinary imported class.
+    /// </param>
+    public ImportedClassSymbol(Type type, ExpressionSyntax declaration, ImportedTypeSymbol symbolicReceiver = null)
         : base(type.FullName)
     {
         ClassType = type;
         Declaration = declaration;
+        SymbolicReceiver = symbolicReceiver;
     }
 
     /// <inheritdoc/>
@@ -36,6 +47,16 @@ public sealed class ImportedClassSymbol : Symbol
     /// Gets the imported class type.
     /// </summary>
     public Type ClassType { get; }
+
+    /// <summary>
+    /// Gets the symbolic constructed view of this receiver (#1330) when it
+    /// is a generic type closed over an in-scope generic type parameter (e.g.
+    /// <c>Comparer[TResult]</c>), or <c>null</c> for an ordinary imported class.
+    /// Carries the open CLR definition and the symbolic type arguments so static
+    /// member access recovers symbolic member types and the emitter parents
+    /// static member references at the constructed generic TypeSpec.
+    /// </summary>
+    public ImportedTypeSymbol SymbolicReceiver { get; }
 
     /// <summary>
     /// Gets the imported class declaration.

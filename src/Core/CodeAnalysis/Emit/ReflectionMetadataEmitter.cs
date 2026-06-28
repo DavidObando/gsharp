@@ -9518,6 +9518,39 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #1330: returns the MemberRef handle for the canonical delegate
+    /// <c>.ctor(object, IntPtr)</c> parented at the constructed-generic TypeSpec
+    /// of <paramref name="symbolicDelegate"/> — a delegate type closed over an
+    /// in-scope generic type parameter (e.g. <c>Comparison&lt;!TResult&gt;</c>).
+    /// Lets a function literal passed to a static generic factory
+    /// (<c>Comparer[TResult].Create(...)</c>) materialise the exact delegate the
+    /// callee expects rather than the natural <c>Func</c>/<c>Action</c> shape or
+    /// the type-erased <c>Comparison&lt;object&gt;</c>.
+    /// </summary>
+    internal EntityHandle GetConstructedDelegateCtorRef(ImportedTypeSymbol symbolicDelegate)
+    {
+        var parentBlob = new BlobBuilder();
+        this.EncodeTypeSymbol(new BlobEncoder(parentBlob).TypeSpecificationSignature(), symbolicDelegate);
+        var parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob));
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                2,
+                returnType: r => r.Void(),
+                parameters: ps =>
+                {
+                    ps.AddParameter().Type().Object();
+                    ps.AddParameter().Type().IntPtr();
+                });
+
+        return this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
     /// ADR-0087 §3 R6: returns the MemberRef handle for the reified
     /// delegate's <c>.ctor(object, IntPtr)</c>, parented at the
     /// <c>TypeSpec</c> for <paramref name="fnType"/>. Used by
