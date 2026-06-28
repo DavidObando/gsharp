@@ -653,7 +653,7 @@ internal sealed class SlotPlanner
 
     private sealed class BlockExpressionLocalCollector : BoundTreeWalker
     {
-        public List<VariableSymbol> Variables { get; } = new List<VariableSymbol>();
+        public List<VariableSymbol> Variables { get; } = [];
 
         protected override void VisitBlockExpression(BoundBlockExpression node)
         {

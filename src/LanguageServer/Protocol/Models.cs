@@ -291,13 +291,13 @@ public sealed class CompletionList
     {
     }
 
-    public CompletionList(IEnumerable<CompletionItem> items) => this.Items = items?.ToList() ?? new List<CompletionItem>();
+    public CompletionList(IEnumerable<CompletionItem> items) => this.Items = items?.ToList() ?? [];
 
     [JsonPropertyName("isIncomplete")]
     public bool IsIncomplete { get; set; }
 
     [JsonPropertyName("items")]
-    public List<CompletionItem> Items { get; set; } = new List<CompletionItem>();
+    public List<CompletionItem> Items { get; set; } = [];
 }
 
 public enum SymbolKind
@@ -488,10 +488,10 @@ public sealed class CommandOrCodeActionContainer : IEnumerable<CommandOrCodeActi
 {
     private readonly List<CommandOrCodeAction> items;
 
-    public CommandOrCodeActionContainer() => this.items = new List<CommandOrCodeAction>();
+    public CommandOrCodeActionContainer() => this.items = [];
 
     public CommandOrCodeActionContainer(IEnumerable<CommandOrCodeAction> items)
-        => this.items = items?.ToList() ?? new List<CommandOrCodeAction>();
+        => this.items = items?.ToList() ?? [];
 
     public IEnumerator<CommandOrCodeAction> GetEnumerator() => this.items.GetEnumerator();
 

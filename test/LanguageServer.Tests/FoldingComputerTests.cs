@@ -45,7 +45,7 @@ public class FoldingComputerTests
     public void ComputeFoldings_NoFunctions_ReturnsEmpty()
     {
         var tree = SyntaxTree.Parse("package P\n");
-        var content = new DocumentContent(tree, new List<int> { 9 });
+        var content = new DocumentContent(tree, [9]);
         Assert.Empty(FoldingComputer.ComputeFoldings(content));
     }
 }
