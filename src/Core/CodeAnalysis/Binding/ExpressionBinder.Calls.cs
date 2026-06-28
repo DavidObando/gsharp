@@ -3872,6 +3872,18 @@ internal sealed partial class ExpressionBinder
     // target (the common LINQ case: Where/Single/Select with bool/string
     // selectors) are left completely untouched, preserving their natural
     // concrete delegate signature.
+    //
+    // Issue #1334: the widening gate is deliberately restricted to NUMERIC
+    // (value-type primitive) return widening — matching the equivalent guard on
+    // the BindConversion path. A non-numeric implicit widening (a reference
+    // covariance, or a same-compilation user-type return widening to the
+    // type-erased `object` of a generic LINQ projection such as
+    // `Select<TSource, TResult>` where `TResult` is recovered symbolically) must
+    // NOT be erased here: doing so materialised the lambda as `Func<object,
+    // object>` while the call site re-closed `Select<Entry, Filter>`, producing
+    // an ilverify StackUnexpected mismatch. Reference covariance is handled by
+    // the CLR delegate's natural variance at emit, so leaving such literals at
+    // their concrete delegate signature is both correct and verifiable.
     private ImmutableArray<BoundExpression> RebindNumericReturnWideningDelegateArguments(
         ImmutableArray<BoundExpression> arguments,
         ParameterInfo[] parameters,
@@ -3893,7 +3905,7 @@ internal sealed partial class ExpressionBinder
                 && targetFunctionType.ReturnType != TypeSymbol.Error
                 && targetFunctionType.Arity == literalFnType.Arity
                 && !ReferenceEquals(literalFnType.ReturnType, targetFunctionType.ReturnType)
-                && Conversion.Classify(literalFnType.ReturnType, targetFunctionType.ReturnType).IsImplicit)
+                && ConversionClassifier.IsNumericReturnWidening(literalFnType.ReturnType, targetFunctionType.ReturnType))
             {
                 rebound = lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
             }

@@ -2314,6 +2314,39 @@ internal sealed class MemberLookup
                 return;
             }
 
+            // Issue #1334: open formal is a delegate shape (Func<…, TResult> /
+            // Action<…>) and actual is a G# arrow/lambda (FunctionTypeSymbol).
+            // Unify each delegate parameter with the lambda's parameter type and
+            // — for Func — the trailing return slot with the lambda's return
+            // type. This recovers a method type parameter that only appears in
+            // the projection result (e.g. the `TResult` of
+            // `Select<TSource, TResult>(this IEnumerable<TSource>,
+            // Func<TSource, TResult>)`) when that result is a same-compilation
+            // user type whose CLR backing is still erased to `object` during
+            // binding. Without this, `dict.Values.Select((e Entry) -> e.Member)`
+            // surfaces `IEnumerable<object>` and the loop variable loses the
+            // user element identity (GS0159). The receiver still supplies
+            // `TSource` via Pattern C.
+            if (actual is FunctionTypeSymbol fn)
+            {
+                var fnVoid = FunctionTypeSymbol.IsVoidReturn(fn.ReturnType);
+                var expectedArgs = fnVoid ? fn.ParameterTypes.Length : fn.ParameterTypes.Length + 1;
+                if (openArgs.Length == expectedArgs)
+                {
+                    for (int j = 0; j < fn.ParameterTypes.Length; j++)
+                    {
+                        UnifyForMethodTypeArgs(openArgs[j], fn.ParameterTypes[j], openMethod, result);
+                    }
+
+                    if (!fnVoid)
+                    {
+                        UnifyForMethodTypeArgs(openArgs[openArgs.Length - 1], fn.ReturnType, openMethod, result);
+                    }
+                }
+
+                return;
+            }
+
             // Pattern B: open formal is IEnumerable<T> / IEnumerable<...> and
             // actual is a slice/array/sequence — the element type lifts as the
             // single substitution.
