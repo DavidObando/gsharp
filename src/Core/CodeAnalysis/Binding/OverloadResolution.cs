@@ -230,6 +230,22 @@ internal static class OverloadResolution
 #pragma warning restore SA1201
 
     /// <summary>
+    /// Issue #1391: sentinel argument type representing the untyped <c>default</c>
+    /// literal whose concrete type is supplied by the chosen parameter. The bare
+    /// <c>default</c> is implicitly convertible to <em>any</em> type (its value is
+    /// the zero/null of whatever parameter type it lands on), so during overload
+    /// resolution against an imported (CLR) method it must classify as applicable
+    /// to every (non-by-ref) parameter — mirroring the user-defined generic method
+    /// path, which already accepts <c>default</c>. Using a dedicated marker keeps
+    /// the literal neutral during betterness ranking (always an identity
+    /// conversion) while the concrete-typed default is materialized by
+    /// <c>BindClrParameterConversions</c> against the resolved parameter type.
+    /// </summary>
+#pragma warning disable SA1201 // Elements should appear in the correct order
+    public static readonly Type DefaultLiteralArgumentType = typeof(DefaultLiteralArgumentMarker);
+#pragma warning restore SA1201
+
+    /// <summary>
     /// Issue #658: per-call supplementary interface check for user-defined G#
     /// classes whose CLR type does not exist at bind time. When set (non-null),
     /// <see cref="ClassifyImplicit"/> invokes this callback as a final
@@ -286,6 +302,17 @@ internal static class OverloadResolution
         if (ReferenceEquals(source, InlineOutVarArgumentType))
         {
             return target.IsByRef ? ImplicitConversionKind.Identity : ImplicitConversionKind.None;
+        }
+
+        // Issue #1391: the untyped `default` literal is implicitly convertible to
+        // any (non-by-ref) parameter type — its value is the zero/null of whatever
+        // type it lands on. Classify it as an identity conversion so an imported
+        // generic method invoked with an explicit type argument (e.g.
+        // `Task.FromResult[int32](default)`) stays applicable; the concrete-typed
+        // default is materialized against the resolved parameter after selection.
+        if (ReferenceEquals(source, DefaultLiteralArgumentType))
+        {
+            return target.IsByRef ? ImplicitConversionKind.None : ImplicitConversionKind.Identity;
         }
 
         // Issue #533: a null source represents the `nil` literal in G#.
@@ -3559,6 +3586,15 @@ internal static class OverloadResolution
     /// arguments during overload resolution. Never instantiated.
     /// </summary>
     private sealed class InlineOutVarArgumentMarker
+    {
+    }
+
+    /// <summary>
+    /// Issue #1391: private marker type whose <see cref="Type"/> identity is used
+    /// as the <see cref="DefaultLiteralArgumentType"/> sentinel for an untyped
+    /// <c>default</c> literal argument during overload resolution. Never instantiated.
+    /// </summary>
+    private sealed class DefaultLiteralArgumentMarker
     {
     }
 }

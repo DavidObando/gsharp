@@ -592,7 +592,25 @@ internal sealed class ConversionClassifier
             if (paramIndex < parameters.Length)
             {
                 var parameterType = parameters[paramIndex].ParameterType;
-                if (!parameterType.IsByRef && argument.Type != TypeSymbol.Error)
+
+                // Issue #1391: an untyped `default` literal (bound as a
+                // BoundDefaultExpression with the Error sentinel type) survives
+                // overload resolution against an imported method via the
+                // DefaultLiteralArgumentType wildcard. Materialize it here at the
+                // resolved (substituted) parameter type so the emitter lowers it
+                // to the correct typed default — `default(int32)` = 0 for
+                // `Task.FromResult[int32](default)` — instead of leaking an
+                // Error-typed default that produces invalid IL.
+                if (!parameterType.IsByRef && argument is BoundDefaultExpression { Type: var defType } && defType == TypeSymbol.Error)
+                {
+                    var defSubstituted = TrySubstituteParameterTypeFromReceiver(method, paramIndex, receiverType);
+                    var defTargetType = defSubstituted ?? TypeSymbol.FromClrType(parameterType);
+                    if (defTargetType != null && defTargetType != TypeSymbol.Error)
+                    {
+                        rebound = new BoundDefaultExpression(argument.Syntax, defTargetType);
+                    }
+                }
+                else if (!parameterType.IsByRef && argument.Type != TypeSymbol.Error)
                 {
                     // ADR-0087 §3 R5 / issue #765: when the call dispatches
                     // through a constructed CLR generic whose type arguments
