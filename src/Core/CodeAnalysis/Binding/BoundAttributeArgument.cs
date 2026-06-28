@@ -13,7 +13,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// Per ADR-0047 §3 / ECMA-335 II.23.3 only compile-time constants of the
 /// recognised attribute-argument value space are permitted.
 /// </summary>
-public sealed class BoundAttributeArgument
+public sealed record BoundAttributeArgument
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundAttributeArgument"/> class.
