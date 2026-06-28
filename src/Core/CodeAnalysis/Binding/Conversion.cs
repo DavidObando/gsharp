@@ -1374,7 +1374,30 @@ public sealed class Conversion
             return false;
         }
 
-        return WidensNumerically(fromReturn.ClrType, toReturn.ClrType);
+        if (WidensNumerically(fromReturn.ClrType, toReturn.ClrType))
+        {
+            return true;
+        }
+
+        // Issue #1356: a function returning a bare type `T` widens to a function
+        // returning `T?` (the nullable form of the same type). This mirrors the
+        // scalar `T → T?` implicit conversion and is the return-covariance
+        // analogue that, until now, only `WidensNumerically` handled for
+        // concrete numeric returns. It is essential for a return type that is a
+        // bare type parameter `T` widening to `T?`: such a type parameter carries
+        // no CLR backing during binding, so the numeric path never fires, yet
+        // widening a non-null value to its nullable form is always safe.
+        //
+        // The reverse direction (`T? → T`, a null-dropping narrowing) is
+        // intentionally NOT recognized here — it requires the bang operator — so
+        // an unsafe `(T) -> T?` to `(T) -> T` conversion stays rejected.
+        if (toReturn is NullableTypeSymbol toNullable
+            && toNullable.UnderlyingType == fromReturn)
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static bool IsEnumLikeType(TypeSymbol type)

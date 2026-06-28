@@ -97,6 +97,25 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #1356: a function-typed value `(P...) -> R` flowing into a
+        // `(P...) -> R?` slot where the two differ only by a nullable annotation
+        // on the return type of the same underlying type (`T -> T?`). The
+        // nullable annotation is a binder-level concept only — a
+        // NullableTypeSymbol erases to its UnderlyingType.ClrType — so both
+        // function types materialise to the identical CLR delegate. The
+        // conversion is therefore a representation-preserving no-op: emit the
+        // source value unchanged. This is the only path that reaches here for a
+        // return type built over a bare type parameter `T`, whose ClrType is
+        // null during binding so the concrete CLR-delegate path above cannot
+        // fire.
+        if (conv.Expression.Type is FunctionTypeSymbol fnNoOpFrom
+            && conv.Type is FunctionTypeSymbol fnNoOpTo
+            && IsReturnNullableWideningFunctionConversion(fnNoOpFrom, fnNoOpTo))
+        {
+            this.EmitExpression(conv.Expression);
+            return;
+        }
+
         this.EmitExpression(conv.Expression);
         var from = conv.Expression.Type;
         var to = conv.Type;
@@ -430,6 +449,34 @@ internal sealed partial class MethodBodyEmitter
 
         throw new NotSupportedException(
             $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
+    }
+
+    // Issue #1356: returns true when two function types differ only by a
+    // return-type nullable widening (`(P...) -> T` to `(P...) -> T?`, same
+    // underlying type), with identical parameter shapes. Such a conversion is a
+    // representation-preserving no-op because a nullable annotation erases to its
+    // underlying CLR type, so both function types materialise to the same
+    // delegate. The reverse direction (`T? -> T`) is not recognised — the binder
+    // already rejects it — so this never widens a narrowing.
+    private static bool IsReturnNullableWideningFunctionConversion(
+        FunctionTypeSymbol from,
+        FunctionTypeSymbol to)
+    {
+        if (from.Arity != to.Arity)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < from.Arity; i++)
+        {
+            if (from.ParameterTypes[i] != to.ParameterTypes[i])
+            {
+                return false;
+            }
+        }
+
+        return to.ReturnType is NullableTypeSymbol toNullableReturn
+            && toNullableReturn.UnderlyingType == from.ReturnType;
     }
 
     // Issue #1236: emit a lifted numeric widening between two distinct value-type
