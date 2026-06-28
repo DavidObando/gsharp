@@ -35,6 +35,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 internal sealed class BlittableDetector
 {
     private readonly Dictionary<TypeSymbol, bool> cache = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<TypeSymbol, bool> unmanagedCache = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
     /// Returns <c>true</c> when <paramref name="type"/> is blittable per
@@ -44,7 +45,25 @@ internal sealed class BlittableDetector
     /// <returns><c>true</c> when blittable.</returns>
     public bool IsBlittable(TypeSymbol type)
     {
-        return type != null && IsBlittableImpl(type, new HashSet<StructSymbol>(ReferenceEqualityComparer.Instance));
+        return type != null && IsBlittableImpl(type, new HashSet<StructSymbol>(ReferenceEqualityComparer.Instance), unmanaged: false);
+    }
+
+    /// <summary>
+    /// Issue #1336. Returns <c>true</c> when <paramref name="type"/> is an
+    /// <em>unmanaged</em> type — bit-for-bit representable with no GC-tracked
+    /// references. This is a strict superset of <see cref="IsBlittable"/>:
+    /// <c>bool</c>, <c>char</c> and <c>decimal</c> are unmanaged (they satisfy
+    /// C#'s <c>where T : unmanaged</c> and are valid <c>sizeof</c> operands)
+    /// even though they are not blittable for P/Invoke marshalling. Enums,
+    /// pointers, and value structs whose fields are recursively unmanaged also
+    /// qualify; managed reference types and structs containing a managed field
+    /// do not.
+    /// </summary>
+    /// <param name="type">The bound type symbol to classify.</param>
+    /// <returns><c>true</c> when unmanaged.</returns>
+    public bool IsUnmanaged(TypeSymbol type)
+    {
+        return type != null && IsBlittableImpl(type, new HashSet<StructSymbol>(ReferenceEqualityComparer.Instance), unmanaged: true);
     }
 
     /// <summary>
@@ -75,7 +94,7 @@ internal sealed class BlittableDetector
         return new BlittableDetector().IsBlittable(type);
     }
 
-    private bool IsBlittableImpl(TypeSymbol type, HashSet<StructSymbol> visiting)
+    private bool IsBlittableImpl(TypeSymbol type, HashSet<StructSymbol> visiting, bool unmanaged)
     {
         if (type == null || type == TypeSymbol.Error)
         {
@@ -83,19 +102,29 @@ internal sealed class BlittableDetector
             return true;
         }
 
-        if (cache.TryGetValue(type, out var cached))
+        var modeCache = unmanaged ? unmanagedCache : cache;
+        if (modeCache.TryGetValue(type, out var cached))
         {
             return cached;
         }
 
-        var result = ClassifyImpl(type, visiting);
-        cache[type] = result;
+        var result = ClassifyImpl(type, visiting, unmanaged);
+        modeCache[type] = result;
         return result;
     }
 
-    private bool ClassifyImpl(TypeSymbol type, HashSet<StructSymbol> visiting)
+    private bool ClassifyImpl(TypeSymbol type, HashSet<StructSymbol> visiting, bool unmanaged)
     {
         if (IsBlittablePrimitive(type))
+        {
+            return true;
+        }
+
+        // Issue #1336: `bool`, `char` and `decimal` are unmanaged (no GC
+        // references) even though they are not blittable for P/Invoke
+        // marshalling. In unmanaged mode they are accepted here; in blittable
+        // mode they fall through to the known-non-blittable rejection below.
+        if (unmanaged && IsUnmanagedOnlyPrimitive(type))
         {
             return true;
         }
@@ -117,9 +146,22 @@ internal sealed class BlittableDetector
             return byRef.PointeeType != null;
         }
 
+        // Issue #1336: a raw unmanaged pointer (`*T`) and an enum are unmanaged
+        // (and blittable — a pointer is an address-sized integer, an enum is
+        // its integral underlying type).
+        if (type is PointerTypeSymbol)
+        {
+            return true;
+        }
+
+        if (type is EnumSymbol)
+        {
+            return true;
+        }
+
         if (type is StructSymbol structSym)
         {
-            return IsBlittableStruct(structSym, visiting);
+            return IsBlittableStruct(structSym, visiting, unmanaged);
         }
 
         // Imported CLR types: defer to the runtime's classification by
@@ -128,6 +170,11 @@ internal sealed class BlittableDetector
         var clr = type.ClrType;
         if (clr != null && clr.IsValueType)
         {
+            if (clr.IsEnum)
+            {
+                return true;
+            }
+
             try
             {
                 System.Runtime.InteropServices.Marshal.SizeOf(clr);
@@ -142,6 +189,13 @@ internal sealed class BlittableDetector
         return false;
     }
 
+    private static bool IsUnmanagedOnlyPrimitive(TypeSymbol type)
+    {
+        return type == TypeSymbol.Bool
+            || type == TypeSymbol.Char
+            || type == TypeSymbol.Decimal;
+    }
+
     private static bool IsKnownNonBlittablePrimitive(TypeSymbol type)
     {
         return type == TypeSymbol.Bool
@@ -152,13 +206,19 @@ internal sealed class BlittableDetector
             || type == TypeSymbol.Null;
     }
 
-    private bool IsBlittableStruct(StructSymbol structSym, HashSet<StructSymbol> visiting)
+    private bool IsBlittableStruct(StructSymbol structSym, HashSet<StructSymbol> visiting, bool unmanaged)
     {
         // ADR-0093 §4: a class is blittable only when it carries an
         // explicit @StructLayout annotation and every field is blittable.
         // The default class layout is Auto, which is not P/Invoke-portable.
         if (structSym.IsClass)
         {
+            // Issue #1336: a class is a managed reference type — never unmanaged.
+            if (unmanaged)
+            {
+                return false;
+            }
+
             var layout = structSym.LayoutMetadata;
             if (layout == null)
             {
@@ -184,7 +244,7 @@ internal sealed class BlittableDetector
         {
             foreach (var field in structSym.Fields)
             {
-                if (!IsBlittableImpl(field.Type, visiting))
+                if (!IsBlittableImpl(field.Type, visiting, unmanaged))
                 {
                     return false;
                 }

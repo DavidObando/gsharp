@@ -214,6 +214,7 @@ ShiftLeftEqualsToken
 ShiftLeftToken
 ShiftRightEqualsToken
 ShiftRightToken
+SizeOfExpression
 SlashEqualsToken
 SlashToken
 StackAllocExpression

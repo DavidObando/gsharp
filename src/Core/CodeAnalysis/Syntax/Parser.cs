@@ -3419,6 +3419,7 @@ public class Parser
         SyntaxToken initKw = null;
         SyntaxToken initOpenParen = null;
         SyntaxToken initCloseParen = null;
+        SyntaxToken unmanagedKw = null;
         while (true)
         {
             if (Current.Kind == SyntaxKind.ClassKeyword)
@@ -3437,6 +3438,19 @@ public class Parser
                 if (structKw == null)
                 {
                     structKw = NextToken();
+                }
+                else
+                {
+                    break;
+                }
+            }
+            else if (Current.Kind == SyntaxKind.IdentifierToken
+                     && Current.Text == "unmanaged")
+            {
+                // Issue #1336: contextual `unmanaged` constraint keyword.
+                if (unmanagedKw == null)
+                {
+                    unmanagedKw = NextToken();
                 }
                 else
                 {
@@ -3477,7 +3491,8 @@ public class Parser
             structKw,
             initKw,
             initOpenParen,
-            initCloseParen);
+            initCloseParen,
+            unmanagedKw);
     }
 
     /// <summary>
@@ -3492,6 +3507,12 @@ public class Parser
     private bool IsAdditionalConstraintStart(SyntaxToken token)
     {
         if (token.Kind == SyntaxKind.ClassKeyword || token.Kind == SyntaxKind.StructKeyword)
+        {
+            return true;
+        }
+
+        // Issue #1336: contextual `unmanaged` constraint keyword.
+        if (token.Kind == SyntaxKind.IdentifierToken && token.Text == "unmanaged")
         {
             return true;
         }
@@ -7807,6 +7828,13 @@ public class Parser
             current = ParseTypeOfExpression();
         }
         else if (Current.Kind == SyntaxKind.IdentifierToken
+            && Current.Text == "sizeof"
+            && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            // Issue #1336: contextual `sizeof(T)` — argument is a type clause.
+            current = ParseSizeOfExpression();
+        }
+        else if (Current.Kind == SyntaxKind.IdentifierToken
             && Current.Text == "nameof"
             && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
         {
@@ -8670,6 +8698,16 @@ public class Parser
         var typeClause = ParseTypeClause();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         return new TypeOfExpressionSyntax(syntaxTree, typeOfIdentifier, openParen, typeClause, closeParen);
+    }
+
+    private ExpressionSyntax ParseSizeOfExpression()
+    {
+        // Issue #1336: `sizeof(T)` — the argument is a type clause, not an expression.
+        var sizeOfIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var typeClause = ParseTypeClause();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new SizeOfExpressionSyntax(syntaxTree, sizeOfIdentifier, openParen, typeClause, closeParen);
     }
 
     private DefaultExpressionSyntax ParseDefaultExpression()

@@ -80,6 +80,51 @@ public sealed class TypeParameterSyntax : SyntaxNode
         SyntaxToken initConstraintKeyword,
         SyntaxToken initConstraintOpenParenToken,
         SyntaxToken initConstraintCloseParenToken)
+        : this(
+            syntaxTree,
+            varianceModifier,
+            identifier,
+            constraint,
+            constraintTypeArgumentOpenBracketToken,
+            constraintTypeArguments,
+            constraintTypeArgumentCloseBracketToken,
+            classConstraintKeyword,
+            structConstraintKeyword,
+            initConstraintKeyword,
+            initConstraintOpenParenToken,
+            initConstraintCloseParenToken,
+            unmanagedConstraintKeyword: null)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="TypeParameterSyntax"/> class with an optional <c>unmanaged</c> constraint (issue #1336).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="varianceModifier">Optional variance contextual keyword.</param>
+    /// <param name="identifier">The type-parameter identifier token.</param>
+    /// <param name="constraint">Optional legacy constraint identifier (<c>any</c>, <c>comparable</c>, or a sealed-interface name).</param>
+    /// <param name="constraintTypeArgumentOpenBracketToken">Optional opening <c>[</c> of the constraint's type-argument list.</param>
+    /// <param name="constraintTypeArguments">Optional comma-separated list of type-argument clauses for the constraint.</param>
+    /// <param name="constraintTypeArgumentCloseBracketToken">Optional closing <c>]</c> of the constraint's type-argument list.</param>
+    /// <param name="classConstraintKeyword">Optional <c>class</c> keyword token (ADR-0097).</param>
+    /// <param name="structConstraintKeyword">Optional <c>struct</c> keyword token (ADR-0097).</param>
+    /// <param name="initConstraintKeyword">Optional <c>init</c> contextual keyword token (ADR-0097 / issue #997); when set, the parens MUST also be set.</param>
+    /// <param name="initConstraintOpenParenToken">Optional <c>(</c> token of the <c>init()</c> constraint (issue #997).</param>
+    /// <param name="initConstraintCloseParenToken">Optional <c>)</c> token of the <c>init()</c> constraint (issue #997).</param>
+    /// <param name="unmanagedConstraintKeyword">Optional <c>unmanaged</c> contextual keyword token (issue #1336).</param>
+    public TypeParameterSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken varianceModifier,
+        SyntaxToken identifier,
+        SyntaxToken constraint,
+        SyntaxToken constraintTypeArgumentOpenBracketToken,
+        SeparatedSyntaxList<TypeClauseSyntax> constraintTypeArguments,
+        SyntaxToken constraintTypeArgumentCloseBracketToken,
+        SyntaxToken classConstraintKeyword,
+        SyntaxToken structConstraintKeyword,
+        SyntaxToken initConstraintKeyword,
+        SyntaxToken initConstraintOpenParenToken,
+        SyntaxToken initConstraintCloseParenToken,
+        SyntaxToken unmanagedConstraintKeyword)
         : base(syntaxTree)
     {
         VarianceModifier = varianceModifier;
@@ -93,6 +138,7 @@ public sealed class TypeParameterSyntax : SyntaxNode
         InitConstraintKeyword = initConstraintKeyword;
         InitConstraintOpenParenToken = initConstraintOpenParenToken;
         InitConstraintCloseParenToken = initConstraintCloseParenToken;
+        UnmanagedConstraintKeyword = unmanagedConstraintKeyword;
     }
 
     /// <inheritdoc/>
@@ -131,6 +177,9 @@ public sealed class TypeParameterSyntax : SyntaxNode
     /// <summary>Gets the optional closing <c>)</c> of the <c>init()</c> constraint (issue #997).</summary>
     public SyntaxToken InitConstraintCloseParenToken { get; }
 
+    /// <summary>Gets the optional <c>unmanaged</c> contextual keyword token introducing an unmanaged-type constraint (issue #1336).</summary>
+    public SyntaxToken UnmanagedConstraintKeyword { get; }
+
     /// <summary>Gets a value indicating whether this type parameter carries a generic-instance constraint (ADR-0089).</summary>
     public bool HasConstraintTypeArguments => ConstraintTypeArgumentOpenBracketToken != null;
 
@@ -142,4 +191,7 @@ public sealed class TypeParameterSyntax : SyntaxNode
 
     /// <summary>Gets a value indicating whether this type parameter carries an <c>init()</c> constraint (ADR-0097 / issue #997).</summary>
     public bool HasInitConstraint => InitConstraintKeyword != null;
+
+    /// <summary>Gets a value indicating whether this type parameter carries an <c>unmanaged</c> constraint (issue #1336).</summary>
+    public bool HasUnmanagedConstraint => UnmanagedConstraintKeyword != null;
 }

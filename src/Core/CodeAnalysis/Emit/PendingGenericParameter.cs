@@ -25,9 +25,17 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// constraint. (G# static-virtual sealed-interface constraints, ADR-0089, are
 /// not emitted here.)
 /// </param>
+/// <param name="HasUnmanagedConstraint">
+/// Issue #1336: <see langword="true"/> when the type parameter carries an
+/// <c>unmanaged</c> constraint, requiring an additional
+/// <c>GenericParamConstraint</c> row to <c>System.ValueType</c> decorated with
+/// a required custom modifier of
+/// <c>System.Runtime.InteropServices.UnmanagedType</c>.
+/// </param>
 internal readonly record struct PendingGenericParameter(
     EntityHandle Owner,
     GenericParameterAttributes Attributes,
     string Name,
     ushort Index,
-    GSharp.Core.CodeAnalysis.Symbols.TypeSymbol InterfaceConstraintType);
+    GSharp.Core.CodeAnalysis.Symbols.TypeSymbol InterfaceConstraintType,
+    bool HasUnmanagedConstraint = false);

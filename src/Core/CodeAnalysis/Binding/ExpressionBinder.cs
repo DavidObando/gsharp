@@ -298,6 +298,8 @@ internal sealed partial class ExpressionBinder
                 return BindMakeChannelExpression((MakeChannelExpressionSyntax)syntax);
             case SyntaxKind.TypeOfExpression:
                 return BindTypeOfExpression((TypeOfExpressionSyntax)syntax);
+            case SyntaxKind.SizeOfExpression:
+                return BindSizeOfExpression((SizeOfExpressionSyntax)syntax);
             case SyntaxKind.NameOfExpression:
                 return BindNameOfExpression((NameOfExpressionSyntax)syntax);
             case SyntaxKind.DefaultExpression:

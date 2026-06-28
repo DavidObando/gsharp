@@ -120,6 +120,23 @@ public sealed class TypeParameterSymbol : TypeSymbol
     public bool HasDefaultConstructorConstraint { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether this type parameter carries an
+    /// <c>unmanaged</c> constraint (issue #1336). Type arguments must be an
+    /// unmanaged type — a non-nullable value type whose fields are recursively
+    /// unmanaged (blittable primitives, enums, pointers, or other unmanaged
+    /// structs). The <c>unmanaged</c> constraint implies the value-type
+    /// (<c>struct</c>) and default-constructor flags at the CLR level, and the
+    /// emitter additionally projects a <c>GenericParamConstraint</c> to
+    /// <c>System.ValueType</c> carrying a required custom modifier
+    /// (<c>modreq</c>) of
+    /// <c>System.Runtime.InteropServices.UnmanagedType</c> — the exact metadata
+    /// shape C# emits for <c>where T : unmanaged</c>. That modreq is what makes
+    /// a pointer to the type parameter (<c>*T</c>) and <c>sizeof(T)</c> over it
+    /// verifiable.
+    /// </summary>
+    public bool HasUnmanagedConstraint { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether this type parameter is declared
     /// on a generic method (as opposed to a generic type). When
     /// <see langword="true"/> the emitter encodes it as

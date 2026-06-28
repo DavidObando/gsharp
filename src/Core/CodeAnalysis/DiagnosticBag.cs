@@ -4277,6 +4277,25 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #1336: GS0415 — a <c>sizeof(T)</c> expression names a type that is
+    /// not an unmanaged type. <c>sizeof</c> measures the unmanaged byte size of
+    /// its operand, so the operand must be a blittable primitive, an enum, a
+    /// pointer, a blittable value struct, or a generic type parameter
+    /// constrained <c>unmanaged</c>; managed reference types and non-blittable
+    /// structs are rejected (mirrors C#'s <c>sizeof</c> over unmanaged types).
+    /// </summary>
+    /// <param name="location">The text location of the measured type clause.</param>
+    /// <param name="typeName">The illegal measured type name.</param>
+    public void ReportSizeOfRequiresUnmanagedType(TextLocation location, string typeName)
+    {
+        Report(
+            location,
+            "GS0415",
+            $"'sizeof' operand '{typeName}' must be an unmanaged type — a blittable primitive, an enum, a pointer, a blittable value struct, or a type parameter constrained 'unmanaged' (issue #1336).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Issue #987: GS0386 — an attempt to construct (instantiate) an abstract
     /// class. A class is abstract when it declares (or inherits without
     /// overriding) an abstract method — a no-body <c>open func F() R;</c>. Like
