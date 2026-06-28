@@ -158,6 +158,7 @@ public enum SyntaxKind
     InterpolatedStringExpression,
     NameExpression,
     CallExpression,
+    GenericNameExpression,
     AccessorExpression,
     ArrayCreationExpression,
     StackAllocExpression,

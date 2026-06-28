@@ -483,8 +483,26 @@ internal sealed partial class ExpressionBinder
         return false;
     }
 
+    /// <summary>
+    /// Issue #1323: binds a <see cref="GenericNameExpressionSyntax"/> that
+    /// appears in value position rather than as a member-access receiver. A
+    /// constructed generic type reference is not itself a value, so this reports
+    /// a diagnostic. (In practice the parser only emits this node immediately
+    /// before a `.` member access, which <see cref="BindAccessorExpression"/>
+    /// handles via the accessor leftPart switch.)
+    /// </summary>
+    private BoundExpression BindGenericNameExpression(GenericNameExpressionSyntax syntax)
+    {
+        Diagnostics.ReportExpressionMustHaveValue(syntax.Location);
+        return new BoundErrorExpression(null);
+    }
+
     private BoundExpression BindAccessorExpression(AccessorExpressionSyntax syntax)
     {
+        // Issue #1323: a GenericNameExpression only arises from the parser as the
+        // receiver of a member access; the accessor leftPart switch below resolves
+        // it to a constructed generic type. See BindGenericNameExpression for the
+        // standalone (non-receiver) diagnostic path.
         // Phase 3.C.3b / ADR-0001: null-conditional access `lhs?.rhs`.
         // Evaluate the receiver once, capture it into a synthetic local,
         // then bind the rest of the access against the capture so the
@@ -787,6 +805,33 @@ internal sealed partial class ExpressionBinder
             else
             {
                 classSymbol = constructedImported;
+            }
+        }
+        else if (leftPart is GenericNameExpressionSyntax genericTypeName
+            && TryResolveConstructedGenericTypeReceiver(
+                genericTypeName,
+                out var genericConstructedStruct,
+                out var genericConstructedInterface,
+                out var genericConstructedImported))
+        {
+            // Issue #1323: a constructed generic *type* reference used as a
+            // member-access receiver where the type argument is unambiguously a
+            // type (`Box[int32?].Make(5)`, `Box[[]int32].Make(5)`,
+            // `Box[List[int32]].Make(5)`, `Pair[int, string].Default`). The
+            // parser emits a GenericNameExpression here (the bracket contents
+            // cannot be reshaped from an index expression), so bind the closed
+            // construction directly as the static-access receiver.
+            if (genericConstructedInterface != null)
+            {
+                userInterfaceSymbol = genericConstructedInterface;
+            }
+            else if (genericConstructedStruct != null)
+            {
+                userStructSymbol = genericConstructedStruct;
+            }
+            else
+            {
+                classSymbol = genericConstructedImported;
             }
         }
         else if (leftPart is AccessorExpressionSyntax qualifiedNestedType
@@ -1678,6 +1723,104 @@ internal sealed partial class ExpressionBinder
         // ArrayPool<byte>) and surface it as an imported class so the existing
         // static-member / static-call binding path resolves members against the
         // closed construction.
+        return TryCloseImportedGenericTypeReceiver(openClrType, typeArgs, index, out constructedImported);
+    }
+
+    /// <summary>
+    /// Issue #1323: resolves a constructed generic type receiver from a
+    /// <see cref="GenericNameExpressionSyntax"/> (<c>Box[int32?]</c>,
+    /// <c>Pair[int, string]</c>, <c>List[List[int32]]</c>). Unlike the
+    /// index-expression form, the type arguments are real
+    /// <see cref="TypeClauseSyntax"/> nodes, so nullable/array/nested-generic
+    /// arguments bind directly without needing to be reshaped from an
+    /// expression. Mirrors the gating of the index-expression overload: the name
+    /// must NOT be a value and must name a generic type definition (user
+    /// class/struct/interface or imported CLR generic) of matching arity.
+    /// </summary>
+    /// <param name="generic">The constructed-generic type reference.</param>
+    /// <param name="constructedStruct">The constructed generic class/struct on success.</param>
+    /// <param name="constructedInterface">The constructed generic interface on success.</param>
+    /// <param name="constructedImported">The constructed imported CLR generic type on success.</param>
+    /// <returns>Whether a constructed generic type receiver was resolved.</returns>
+    private bool TryResolveConstructedGenericTypeReceiver(
+        GenericNameExpressionSyntax generic,
+        out StructSymbol constructedStruct,
+        out InterfaceSymbol constructedInterface,
+        out ImportedClassSymbol constructedImported)
+    {
+        constructedStruct = null;
+        constructedInterface = null;
+        constructedImported = null;
+
+        var name = generic.Identifier.Text;
+
+        // A value-named receiver is genuine element access, never a type.
+        if (scope.TryLookupSymbol(name) is VariableSymbol)
+        {
+            return false;
+        }
+
+        var argClauses = generic.TypeArgumentList.Arguments;
+        var arity = argClauses.Count;
+        var userGenericDef = scope.TryLookupTypeAlias(name, out var alias)
+            && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
+                || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
+        Type openClrType = null;
+        var clrGenericDef = !userGenericDef
+            && scope.TryLookupImportedGenericClass(name, arity, out openClrType);
+
+        if (!userGenericDef && !clrGenericDef)
+        {
+            return false;
+        }
+
+        var typeArgsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(arity);
+        foreach (var clause in argClauses)
+        {
+            var bound = bindTypeClause(clause);
+            if (bound == null)
+            {
+                return false;
+            }
+
+            typeArgsBuilder.Add(bound);
+        }
+
+        var typeArgs = typeArgsBuilder.ToImmutable();
+
+        if (userGenericDef)
+        {
+            switch (alias)
+            {
+                case StructSymbol structDef:
+                    constructedStruct = StructSymbol.Construct(structDef, typeArgs);
+                    return true;
+                case InterfaceSymbol ifaceDef:
+                    constructedInterface = InterfaceSymbol.Construct(ifaceDef, typeArgs);
+                    return true;
+            }
+        }
+
+        return TryCloseImportedGenericTypeReceiver(openClrType, typeArgs, generic, out constructedImported);
+    }
+
+    /// <summary>
+    /// Closes an open imported CLR generic definition over the CLR types of the
+    /// bound type arguments (e.g. <c>ArrayPool`1</c> + <c>byte</c> -&gt;
+    /// <c>ArrayPool&lt;byte&gt;</c>) and surfaces it as an
+    /// <see cref="ImportedClassSymbol"/> so the existing static-member /
+    /// static-call binding path resolves members against the closed
+    /// construction. Shared by the index-expression and generic-name receiver
+    /// resolvers (Issue #1209 / Issue #1323).
+    /// </summary>
+    private bool TryCloseImportedGenericTypeReceiver(
+        Type openClrType,
+        ImmutableArray<TypeSymbol> typeArgs,
+        ExpressionSyntax receiverSyntax,
+        out ImportedClassSymbol constructedImported)
+    {
+        constructedImported = null;
+
         var clrArgs = new Type[typeArgs.Length];
         for (var i = 0; i < typeArgs.Length; i++)
         {
@@ -1697,7 +1840,7 @@ internal sealed partial class ExpressionBinder
         try
         {
             var closed = openClrType.MakeGenericType(clrArgs);
-            constructedImported = new ImportedClassSymbol(closed, index);
+            constructedImported = new ImportedClassSymbol(closed, receiverSyntax);
             return true;
         }
         catch (ArgumentException)
