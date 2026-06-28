@@ -1900,7 +1900,9 @@ public abstract class BoundTreeRewriter
             node.BaseClass,
             node.Method,
             builder?.ToImmutable() ?? node.Arguments,
-            node.Type);
+            node.Type,
+            node.Property,
+            node.IsSetterAccessor);
     }
 
     /// <summary>Rewrites a field read.</summary>

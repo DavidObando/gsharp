@@ -746,7 +746,9 @@ internal sealed partial class MethodBodyEmitter
             }
         }
 
-        var methodToken = this.outer.ResolveUserInstanceMethodToken(baseClass, call.Method);
+        var methodToken = call.Method != null
+            ? this.outer.ResolveUserInstanceMethodToken(baseClass, call.Method)
+            : this.outer.ResolveUserPropertyAccessorToken(baseClass, call.Property, call.IsSetterAccessor);
 
         // Issue #986: non-virtual `call`, NOT `callvirt`. callvirt would
         // re-dispatch through the v-table and re-enter the derived override.

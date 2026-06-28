@@ -4828,7 +4828,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        if (!prop.HasGetter || prop.GetterSymbol == null)
+        if (!prop.HasGetter)
         {
             Diagnostics.ReportCannotAssign(member.IdentifierToken.Location, memberName);
             return new BoundErrorExpression(null);
@@ -4841,6 +4841,25 @@ internal sealed partial class ExpressionBinder
         }
 
         var receiver = new BoundVariableExpression(null, function.ThisParameter);
+
+        // Issue #1347: an auto-property has no getter FunctionSymbol — its
+        // getter is a compiler-synthesized backing-field read. Route the base
+        // access through the property so the emitter resolves the synthesized
+        // `get_Prop` MethodDef and the interpreter reads the backing field,
+        // rather than mis-binding the read as a write (GS0127).
+        if (prop.GetterSymbol == null)
+        {
+            return new BoundBaseClassCallExpression(
+                member,
+                receiver,
+                declaringType,
+                method: null,
+                ImmutableArray<BoundExpression>.Empty,
+                prop.Type,
+                property: prop,
+                isSetterAccessor: false);
+        }
+
         return new BoundBaseClassCallExpression(
             member,
             receiver,
@@ -4896,7 +4915,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        if (!prop.HasSetter || prop.SetterSymbol == null)
+        if (!prop.HasSetter)
         {
             Diagnostics.ReportCannotAssign(equalsLocation, memberName);
             return new BoundErrorExpression(null);
@@ -4910,6 +4929,25 @@ internal sealed partial class ExpressionBinder
 
         var converted = conversions.BindConversion(valueLocation, value, prop.Type);
         var receiver = new BoundVariableExpression(null, function.ThisParameter);
+
+        // Issue #1347: an auto-property has no setter FunctionSymbol — its
+        // setter is a compiler-synthesized backing-field write. Route the base
+        // assignment through the property so the emitter resolves the
+        // synthesized `set_Prop` MethodDef and the interpreter writes the
+        // backing field.
+        if (prop.SetterSymbol == null)
+        {
+            return new BoundBaseClassCallExpression(
+                value.Syntax,
+                receiver,
+                declaringType,
+                method: null,
+                ImmutableArray.Create(converted),
+                TypeSymbol.Void,
+                property: prop,
+                isSetterAccessor: true);
+        }
+
         return new BoundBaseClassCallExpression(
             value.Syntax,
             receiver,
