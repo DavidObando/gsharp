@@ -3820,12 +3820,39 @@ internal sealed partial class ExpressionBinder
             // The override is restricted to a TOP-LEVEL user type (after
             // unwrapping nullable/slice/array). A member typed as a constructed
             // generic over a user element (e.g. a `ChannelWriter[Entry]`
-            // property) is intentionally left to the closed reflection
-            // fallback, because method/extension lookup on such a non-interned
-            // constructed generic is not yet supported (#1305); surfacing it
-            // here would regress those call sites.
+            // property) is generally left to the closed reflection fallback,
+            // because method/extension lookup on such a non-interned constructed
+            // generic is not yet supported (#1305); surfacing it would regress
+            // those call sites.
+            //
+            // Issue #1328: an exception is a constructed generic that is itself
+            // an enumerable COLLECTION over a same-compilation user element —
+            // e.g. `Dictionary[K, V].Values` -> `ValueCollection[K, V]` (and
+            // `.Keys` -> `KeyCollection[K, V]`). Such a wrapper's erased
+            // `ClrType` (`ValueCollection<K, object>`) still implements
+            // `IEnumerable<V>`, so member/extension lookup (`.Single()`,
+            // `.ToList()`, the `for … in` enumerable surface) resolves against
+            // it exactly as for an `IEnumerable[V]`/`List[V]` receiver, while
+            // the symbolic `[K, V]` arguments let the element-type recovery
+            // surface the user `V` instead of erasing to `object`. This matches
+            // the #903/#1305 machinery already proven for `IEnumerable[User]`.
+            //
+            // Issue #1328 also: when the OPEN property type is itself a bare
+            // generic parameter (e.g. `KeyValuePair[K, V].Key` -> `K`,
+            // `.Value` -> `V`), the receiver's closed `ClrType` may have erased
+            // *every* type argument to `object` because a SIBLING argument is a
+            // same-compilation user type (a constructed generic over a user
+            // element erases the whole closed shape — so `KeyValuePair[uint32,
+            // E]` closes to `KeyValuePair<object, object>`, erasing the
+            // perfectly concrete `uint32` too). The symbolic projection is then
+            // authoritative for the member, so prefer it. This is safe because
+            // a bare-parameter property cannot be a constructed generic over a
+            // user element (the #1305 ChannelWriter[Entry] concern), so it does
+            // not regress those call sites.
             return TypeSymbol.ContainsTypeParameter(mapped)
                 || TypeSymbol.IsSameCompilationUserTypeTopLevel(mapped)
+                || IsUserElementEnumerableCollection(mapped)
+                || openPropType.IsGenericParameter
                 ? mapped
                 : null;
         }
@@ -3834,6 +3861,29 @@ internal sealed partial class ExpressionBinder
             return null;
         }
     }
+
+    /// <summary>
+    /// Issue #1328: returns <see langword="true"/> when <paramref name="mapped"/>
+    /// is a constructed imported generic that (a) carries a same-compilation
+    /// user type among its symbolic arguments and (b) whose type-erased
+    /// <see cref="TypeSymbol.ClrType"/> still implements
+    /// <c>IEnumerable&lt;T&gt;</c> — i.e. an enumerable collection wrapper such
+    /// as <c>Dictionary[K, V].Values</c> (<c>ValueCollection[K, V]</c>) or
+    /// <c>.Keys</c> (<c>KeyCollection[K, V]</c>). Surfacing the symbolic form
+    /// of such a wrapper preserves the user element type through the
+    /// <c>for … in</c> enumerable surface and LINQ terminals
+    /// (<c>.Single()</c>/<c>.ToList()</c>), while member/extension lookup still
+    /// resolves against the erased CLR shape (which implements the same
+    /// <c>IEnumerable&lt;object&gt;</c>). Unlike a general constructed generic
+    /// (e.g. <c>ChannelWriter[Entry]</c>, #1305), the enumerable surface is the
+    /// proven #903/#1304 path, so this is safe to surface.
+    /// </summary>
+    /// <param name="mapped">The symbolic projection produced by <see cref="MemberLookup.MapOpenClrTypeToSymbolic(Type, ImportedTypeSymbol)"/>.</param>
+    /// <returns><see langword="true"/> when the mapped type is a user-element enumerable collection wrapper.</returns>
+    private static bool IsUserElementEnumerableCollection(TypeSymbol mapped)
+        => mapped is ImportedTypeSymbol { ClrType: { } clr }
+            && TypeSymbol.ContainsSameCompilationUserType(mapped)
+            && MemberLookup.TryGetClrEnumerableElementType(clr, out _);
 
     private static bool IsReadOnlyRefReturn(PropertyInfo indexer, MethodInfo getter)
     {
