@@ -247,12 +247,23 @@ public class Compilation
     {
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var diagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
-        if (diagnostics.Any(d => d.IsError))
-        {
-            return new EvaluationResult(diagnostics, null);
-        }
 
         var program = Binder.BindProgram(GlobalScope, References);
+
+        var allErrors = diagnostics
+            .Concat(program.Diagnostics)
+            .Where(d => d.IsError)
+            .ToImmutableArray();
+
+        var allWarnings = diagnostics
+            .Concat(program.Diagnostics)
+            .Where(d => !d.IsError)
+            .ToImmutableArray();
+
+        if (allErrors.Any())
+        {
+            return new EvaluationResult(allWarnings.Concat(allErrors).ToImmutableArray(), null);
+        }
 
         var appPath = Environment.GetCommandLineArgs()[0];
         var appDirectory = Path.GetDirectoryName(appPath);
@@ -264,19 +275,6 @@ public class Compilation
         using (var streamWriter = new StreamWriter(cfgPath))
         {
             cfg.WriteTo(streamWriter);
-        }
-
-        // ADR-0047 Phase 6 / #141: combine all non-error diagnostics (warnings,
-        // info) collected so far so they surface to the REPL alongside the
-        // evaluated value, mirroring the emit pipeline's IsError filter.
-        var allWarnings = diagnostics
-            .Concat(program.Diagnostics)
-            .Where(d => !d.IsError)
-            .ToImmutableArray();
-
-        if (program.Diagnostics.Any(d => d.IsError))
-        {
-            return new EvaluationResult(allWarnings.Concat(program.Diagnostics.Where(d => d.IsError)).ToImmutableArray(), null);
         }
 
         var evaluator = new Evaluator(program, variables);
@@ -334,15 +332,13 @@ public class Compilation
     {
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
-        if (syntaxDiagnostics.Any(d => d.IsError))
-        {
-            return new EmitResult(success: false, syntaxDiagnostics);
-        }
 
         var program = Binder.BindProgram(GlobalScope, References);
-        if (program.Diagnostics.Any(d => d.IsError))
+
+        var allDiagnostics = syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray();
+        if (allDiagnostics.Any(d => d.IsError))
         {
-            return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
+            return new EmitResult(success: false, allDiagnostics);
         }
 
         var documentationDiagnostics = new DiagnosticBag();
@@ -445,15 +441,13 @@ public class Compilation
     {
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
-        if (syntaxDiagnostics.Any(d => d.IsError))
-        {
-            return new EmitResult(success: false, syntaxDiagnostics);
-        }
 
         var program = Binder.BindProgram(GlobalScope, References);
-        if (program.Diagnostics.Any(d => d.IsError))
+
+        var allDiagnostics = syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray();
+        if (allDiagnostics.Any(d => d.IsError))
         {
-            return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
+            return new EmitResult(success: false, allDiagnostics);
         }
 
         var documentationDiagnostics = new DiagnosticBag();
