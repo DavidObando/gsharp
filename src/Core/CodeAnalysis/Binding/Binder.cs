@@ -2178,7 +2178,8 @@ public sealed class Binder
             }
 
             var variadicFlags = anyVariadic ? variadicFlagsBuilder.MoveToImmutable() : default;
-            return FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), variadicFlags, ret ?? TypeSymbol.Void);
+            var functionType = FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), variadicFlags, ret ?? TypeSymbol.Void);
+            return functionType;
         }
 
         if (syntax.IsTuple)

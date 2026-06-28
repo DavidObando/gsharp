@@ -13,11 +13,11 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #1049: emitting a nullable function (delegate) type whose return type
-/// is <c>void</c> — e.g. <c>(Args) -> void?</c> — crashed the compiler with
+/// is <c>void</c> — e.g. <c>((Args) -> void)?</c> — crashed the compiler with
 /// <c>GS9998: ArgumentException: The type 'System.Void' may not be used as a
-/// type argument</c>. A function type cannot be parenthesised in G#
-/// (<c>(() -> void)?</c> is a parse error), so <c>(Args) -> void?</c> is the
-/// only way to spell a nullable delegate; its underlying return is still
+/// type argument</c>. Issue #1399 / ADR-0137 makes nullable function types use
+/// parenthesized spelling, so <c>(Args) -> void?</c> remains a nullable return
+/// and <c>((Args) -> void)?</c> is the nullable delegate. Its underlying return is still
 /// <c>void</c>, so it must map to <c>System.Action&lt;...&gt;</c> rather than
 /// the illegal <c>System.Func&lt;..., System.Void&gt;</c>.
 /// </summary>
@@ -29,7 +29,7 @@ public class Issue1049NullableVoidDelegateEmitTests
         var asm = LoadCompiled("""
             package p
             class C {
-                var f () -> void?
+                var f (() -> void)?
             }
             """);
 
@@ -43,7 +43,7 @@ public class Issue1049NullableVoidDelegateEmitTests
         var asm = LoadCompiled("""
             package p
             class C {
-                var g (int32) -> void?
+                var g ((int32) -> void)?
             }
             """);
 

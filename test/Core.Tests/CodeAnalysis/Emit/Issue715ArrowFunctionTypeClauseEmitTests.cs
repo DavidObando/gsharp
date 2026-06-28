@@ -280,6 +280,89 @@ func runEach(cb func(int32) int32) {
         Assert.Single(warnings);
     }
 
+    [Fact]
+    public void ParenthesizedNullableArrowFunctionType_OnProperty_AcceptsMethodGroupAndNil()
+    {
+        const string Source = @"package Issue1399NullableFunctionProperty
+
+class Args { }
+
+class C {
+    prop H ((Args) -> void)?
+
+    func cb(a Args) { }
+
+    func F() { H = cb }
+
+    func G() { H = nil }
+}
+";
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ParenthesizedNullableArrowFunctionType_OnProperty_AcceptsMethodGroupAndNil));
+        try
+        {
+            var c = asm.GetTypes().Single(t => t.Name == "C");
+            var h = c.GetProperty("H", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.NotNull(h);
+            Assert.Equal(typeof(System.Action<>).Name, h!.PropertyType.GetGenericTypeDefinition().Name);
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
+    [Fact]
+    public void NullableReturnArrowFunctionType_OnProperty_EmitsFuncDelegate()
+    {
+        const string Source = @"package Issue1399NullableReturnFunctionProperty
+
+class C {
+    prop H (int32) -> int32?
+
+    func maybe(a int32) int32? { return a + 1 }
+
+    func F() { H = maybe }
+}
+";
+        var (asm, ctx) = CompileToAssembly(Source, nameof(NullableReturnArrowFunctionType_OnProperty_EmitsFuncDelegate));
+        try
+        {
+            var c = asm.GetTypes().Single(t => t.Name == "C");
+            var h = c.GetProperty("H", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.NotNull(h);
+            Assert.Equal(typeof(System.Func<,>).Name, h!.PropertyType.GetGenericTypeDefinition().Name);
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
+    [Fact]
+    public void ParenthesizedNullableArrowFunctionType_NonVoid_OnProperty_AcceptsNil()
+    {
+        const string Source = @"package Issue1399NullableNonVoidFunctionProperty
+
+class C {
+    prop H ((int32) -> int32)?
+
+    func G() { H = nil }
+}
+";
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ParenthesizedNullableArrowFunctionType_NonVoid_OnProperty_AcceptsNil));
+        try
+        {
+            var c = asm.GetTypes().Single(t => t.Name == "C");
+            var h = c.GetProperty("H", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.NotNull(h);
+            Assert.Equal(typeof(System.Func<,>).Name, h!.PropertyType.GetGenericTypeDefinition().Name);
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
     private static MethodInfo GetProgramMethod(Assembly asm, string name)
     {
         var programType = asm.GetTypes().FirstOrDefault(t => t.Name == "<Program>");

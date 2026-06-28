@@ -121,6 +121,53 @@ public class Issue715ArrowFunctionTypeClauseParserTests
     }
 
     [Fact]
+    public void Parses_ParenthesizedArrowFunctionType_AsNullableFunctionType()
+    {
+        const string source = """
+            package P
+            var cb ((int32) -> void)? = nil
+            """;
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var clause = FindAll<TypeClauseSyntax>(tree).First(t => t.IsArrowFunction);
+        Assert.True(clause.IsNullable);
+        Assert.Single(clause.FunctionParameterTypes);
+        Assert.Equal("void", clause.ReturnTypeClause.Identifier.Text);
+    }
+
+    [Fact]
+    public void Parses_ParenthesizedAsyncArrowFunctionType_AsNullableFunctionType()
+    {
+        const string source = """
+            package P
+            var cb async ((int32) -> int32)? = nil
+            """;
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var clause = FindAll<TypeClauseSyntax>(tree).First(t => t.IsArrowFunction);
+        Assert.True(clause.IsNullable);
+        Assert.NotNull(clause.AsyncModifier);
+        Assert.Equal("int32", clause.ReturnTypeClause.Identifier.Text);
+    }
+
+    [Fact]
+    public void Parses_NullableReturnArrowFunctionType_WithoutNullableFunctionType()
+    {
+        const string source = """
+            package P
+            var cb (int32) -> int32? = nil
+            """;
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var clause = FindAll<TypeClauseSyntax>(tree).First(t => t.IsArrowFunction);
+        Assert.False(clause.IsNullable);
+        Assert.True(clause.ReturnTypeClause.IsNullable);
+    }
+
+    [Fact]
     public void Parses_ArrowFunctionType_InParameterPosition()
     {
         const string source = """

@@ -311,7 +311,7 @@ Console.WriteLine(len(nums))     // 4
 
 ### Function types
 
-Function types are written `(T1, T2) -> R` (ADR-0075) — fully-parenthesized parameter type list, a single `->` arrow, then a return type clause. A void-returning function uses `void` as the return type: `(T1, T2) -> void`. Multi-return shapes use a tuple return type: `() -> (T1, T2)`. Async function type clauses are written `async (T) -> R`; they represent functions returning `Task<R>` or `Task` for no result. G# function values can convert to compatible CLR delegate types. The legacy `func(T1, T2) R` and `async func(T) R` type-clause spellings continue to parse for one release; each occurrence emits a `GS0303` deprecation warning.
+Function types are written `(T1, T2) -> R` (ADR-0075) — fully-parenthesized parameter type list, a single `->` arrow, then a return type clause. A void-returning function uses `void` as the return type: `(T1, T2) -> void`. Multi-return shapes use a tuple return type: `() -> (T1, T2)`. A nullable return is written on the return type, so `(T) -> R?` is a non-null function returning `R?`. A nullable function type must parenthesize the whole function type before `?`: `((T) -> R)?`; both can combine as `((T) -> R?)?` (ADR-0137). Async function type clauses are written `async (T) -> R`; nullable async function types use the same outer parentheses, `async ((T) -> R)?`. G# function values can convert to compatible CLR delegate types. The legacy `func(T1, T2) R` and `async func(T) R` type-clause spellings continue to parse for one release; each occurrence emits a `GS0303` deprecation warning.
 
 ### Structs, classes, data classes/structs, and inline value classes
 
@@ -1443,8 +1443,10 @@ InterfaceSharedMember ::= 'private'? 'func' identifier TypeParamList? '(' Parame
 TypeClause        ::= identifier ('.' identifier)* TypeArgList? '?'?
                     | '[' Number? ']' identifier ('.' identifier)* '?'?
                     | '(' TypeClause (',' TypeClause)+ ')' '?'?                          (* tuple type *)
-                    | '(' FnTypeParamList? ')' '->' TypeClause '?'?                       (* arrow function type, ADR-0075 *)
-                    | 'async' '(' FnTypeParamList? ')' '->' TypeClause '?'?
+                    | '(' FnTypeParamList? ')' '->' TypeClause                            (* arrow function type, ADR-0075; `?` in TypeClause is return nullability *)
+                    | '(' '(' FnTypeParamList? ')' '->' TypeClause ')' '?'?               (* parenthesized arrow function type, ADR-0137 *)
+                    | 'async' '(' FnTypeParamList? ')' '->' TypeClause
+                    | 'async' '(' '(' FnTypeParamList? ')' '->' TypeClause ')' '?'?       (* parenthesized async arrow function type, ADR-0137 *)
                     | 'map' '[' TypeClause ',' TypeClause ']' '?'?                        (* canonical, ADR-0104 *)
                     | 'map' '[' TypeClause ']' TypeClause '?'?                            (* legacy; GS0366 *)
                     | 'chan' TypeClause '?'?

@@ -3749,6 +3749,11 @@ public class Parser
                 return ParseArrowFunctionTypeClause(asyncModifier: null);
             }
 
+            if (LooksLikeParenthesizedArrowFunctionTypeClauseStart())
+            {
+                return ParseParenthesizedArrowFunctionTypeClause(asyncModifier: null);
+            }
+
             return ParseTupleTypeClause();
         }
 
@@ -4091,6 +4096,11 @@ public class Parser
             return ParseArrowFunctionTypeClause(asyncModifier);
         }
 
+        if (Current.Kind == SyntaxKind.OpenParenthesisToken && LooksLikeParenthesizedArrowFunctionTypeClauseStart())
+        {
+            return ParseParenthesizedArrowFunctionTypeClause(asyncModifier);
+        }
+
         if (Current.Kind != SyntaxKind.SequenceKeyword)
         {
             Diagnostics.ReportAsyncModifierInTypeClauseRequiresSequenceOrFunc(asyncModifier.Location, Current.Kind);
@@ -4270,6 +4280,42 @@ public class Parser
             question);
     }
 
+    private TypeClauseSyntax ParseParenthesizedArrowFunctionTypeClause(SyntaxToken asyncModifier)
+    {
+        // Issue #1399 / ADR-0137: a nullable function type is spelled by
+        // parenthesizing the whole arrow function type, then applying `?`:
+        // `((T) -> R)?`. Without these outer parens, `(T) -> R?` keeps the
+        // nullable marker on the return type.
+        _ = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var inner = ParseArrowFunctionTypeClause(asyncModifier);
+        _ = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+
+        if (inner.AsyncModifier != null)
+        {
+            return TypeClauseSyntax.CreateAsyncArrowFunction(
+                syntaxTree,
+                inner.AsyncModifier,
+                inner.OpenParenToken,
+                inner.FunctionParameterTypes,
+                inner.FunctionParameterEllipsisTokens,
+                inner.CloseParenToken,
+                inner.ArrowToken,
+                inner.ReturnTypeClause,
+                question);
+        }
+
+        return TypeClauseSyntax.CreateArrowFunction(
+            syntaxTree,
+            inner.OpenParenToken,
+            inner.FunctionParameterTypes,
+            inner.FunctionParameterEllipsisTokens,
+            inner.CloseParenToken,
+            inner.ArrowToken,
+            inner.ReturnTypeClause,
+            question);
+    }
+
     /// <summary>
     /// ADR-0095 / issue #761: parses the raw function-pointer type clause
     /// <c>unmanaged[CC] (T1, T2, ...) -&gt; R</c>. The leading
@@ -4384,7 +4430,19 @@ public class Parser
     // shape of the parenthesised list to decide which grammar to apply.
     private bool LooksLikeArrowFunctionTypeClauseStart()
     {
-        if (Current.Kind != SyntaxKind.OpenParenthesisToken)
+        return LooksLikeArrowFunctionTypeClauseStart(0);
+    }
+
+    private bool LooksLikeParenthesizedArrowFunctionTypeClauseStart()
+    {
+        return Current.Kind == SyntaxKind.OpenParenthesisToken
+            && Peek(1).Kind == SyntaxKind.OpenParenthesisToken
+            && LooksLikeArrowFunctionTypeClauseStart(1);
+    }
+
+    private bool LooksLikeArrowFunctionTypeClauseStart(int startOffset)
+    {
+        if (Peek(startOffset).Kind != SyntaxKind.OpenParenthesisToken)
         {
             return false;
         }
@@ -4392,7 +4450,7 @@ public class Parser
         var parenDepth = 1;
         var bracketDepth = 0;
         var braceDepth = 0;
-        var offset = 1;
+        var offset = startOffset + 1;
         const int maxScan = 4096;
         while (offset < maxScan)
         {

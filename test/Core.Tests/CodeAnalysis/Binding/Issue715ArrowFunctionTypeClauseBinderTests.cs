@@ -169,6 +169,58 @@ greet()
         Assert.Equal(1, result.Value);
     }
 
+    [Fact]
+    public void ParenthesizedNullableArrowFunctionType_AcceptsMethodGroupAndNil()
+    {
+        var result = Evaluate(@"
+func cb(a int32) { }
+let h ((int32) -> void)? = cb
+let n ((int32) -> void)? = nil
+let ah async ((int32) -> void)? = async func(a int32) { }
+let an async ((int32) -> void)? = nil
+1
+");
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void NonNullableArrowFunctionType_RejectsNil()
+    {
+        var result = Evaluate(@"
+func cb(a int32) { }
+let h (int32) -> void = cb
+let n (int32) -> void = nil
+1
+");
+        Assert.Contains(result.Diagnostics, d => d.IsError && d.Id == "GS0155");
+    }
+
+    [Fact]
+    public void NullableReturnArrowFunctionType_NonVoidAndAsyncForms_StillWork()
+    {
+        var result = Evaluate(@"
+func maybe(a int32) int32? { return a + 1 }
+let h (int32) -> int32? = maybe
+let v int32? = h(41)
+let ah async (int32) -> int32? = async func(a int32) int32? { return a + 1 }
+v!!
+");
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ParenthesizedNullableArrowFunctionType_NonVoid_AcceptsNil()
+    {
+        var result = Evaluate(@"
+let n ((int32) -> int32)? = nil
+1
+");
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(1, result.Value);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
