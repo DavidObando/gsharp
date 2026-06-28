@@ -1035,6 +1035,30 @@ internal sealed class MemberLookup
                 }
 
                 return false;
+            case SequenceTypeSymbol seq:
+                // Issue #1320: `sequence[T]` (an iterator return, alias for
+                // `IEnumerable<T>`) over a same-compilation user element type has
+                // a null ClrType during binding. Erase the element so the
+                // constructed enumerable still passes the ClrType gate; the
+                // symbolic-argument recovery downstream re-derives the real
+                // element type for the member's return projection.
+                if (TryProjectErasedClrType(seq.ElementType, out var seqElement))
+                {
+                    erased = typeof(System.Collections.Generic.IEnumerable<>).MakeGenericType(seqElement);
+                    return true;
+                }
+
+                return false;
+            case AsyncSequenceTypeSymbol aseq:
+                // Issue #1320: the async-iterator counterpart, alias for
+                // `IAsyncEnumerable<T>`.
+                if (TryProjectErasedClrType(aseq.ElementType, out var aseqElement))
+                {
+                    erased = typeof(System.Collections.Generic.IAsyncEnumerable<>).MakeGenericType(aseqElement);
+                    return true;
+                }
+
+                return false;
             case NullableTypeSymbol nullable when nullable.UnderlyingType != null:
                 return TryProjectErasedClrType(nullable.UnderlyingType, out erased);
             case FunctionTypeSymbol fn:
