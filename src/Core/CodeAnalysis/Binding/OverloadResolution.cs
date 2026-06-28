@@ -571,7 +571,15 @@ internal static class OverloadResolution
     /// the bound arguments into parameter order before emit.
     /// </param>
     /// <returns>The resolution result.</returns>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null)
+    /// <param name="recoverTypeArgSymbols">
+    /// Issue #1325: optional callback that, given the closed candidate method,
+    /// returns its recovered symbolic type-argument vector (open-arity order).
+    /// Used so the generic value-type/struct constraint check can see through
+    /// the <c>object</c> erasure of same-compilation user value types. When
+    /// <see langword="null"/>, the constraint check relies solely on the CLR
+    /// type arguments (prior behaviour).
+    /// </param>
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)>();
@@ -595,7 +603,7 @@ internal static class OverloadResolution
             // rest.
             try
             {
-                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames);
+                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols);
             }
             catch (Exception ex) when (IsMetadataLoadFailure(ex))
             {
@@ -614,7 +622,7 @@ internal static class OverloadResolution
             {
                 try
                 {
-                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames);
+                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames, recoverTypeArgSymbols);
                 }
                 catch (Exception ex) when (IsMetadataLoadFailure(ex))
                 {
@@ -1622,11 +1630,11 @@ internal static class OverloadResolution
     /// <summary>
     /// Evaluates a single candidate for applicability against the supplied
     /// argument types, appending it to <paramref name="applicable"/> when it
-    /// applies. Factored out of <see cref="Resolve{T}(IEnumerable{T}, IReadOnlyList{Type}, IReadOnlyList{Type}, Func{Type, Type}, IReadOnlyList{bool}, IReadOnlyList{string})"/>
+    /// applies. Factored out of <see cref="Resolve{T}(IEnumerable{T}, IReadOnlyList{Type}, IReadOnlyList{Type}, Func{Type, Type}, IReadOnlyList{bool}, IReadOnlyList{string}, Func{MethodInfo, ImmutableArray{TypeSymbol}})"/>
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null)
         where T : MethodBase
     {
         {
@@ -1638,6 +1646,19 @@ internal static class OverloadResolution
             // violations drop the candidate silently (matches C# §7.5.2 "if
             // type inference fails, the method is not applicable").
             T candidate = rawCandidate;
+
+            // Issue #1325: when a candidate must be closed over a
+            // same-compilation user value type — erased to a `System.Object`
+            // placeholder — live-reflection `MakeGenericMethod` rejects the
+            // `object` argument against a `where T : struct` parameter (unlike
+            // the MetadataLoadContext overload, which never validates). The
+            // fallback below closes the method over a value-type placeholder so
+            // a valid closed `MethodInfo` is obtained, and rewrites the closed
+            // parameter types back to the `object`-erased shape so applicability
+            // still matches the `object`-erased argument types. Emit uses the
+            // recovered symbolic type arguments, so the placeholder never leaks
+            // into the produced IL.
+            Func<Type, Type> paramTypeRewrite = null;
             if (explicitTypeArgs != null)
             {
                 // Issue #311: explicit type-argument path. Only open generic
@@ -1648,20 +1669,30 @@ internal static class OverloadResolution
                     && gmi.GetGenericArguments().Length == explicitTypeArgs.Count)
                 {
                     MethodInfo closed;
+                    var explicitTypeArgsArray = explicitTypeArgs.ToArray();
                     try
                     {
-                        closed = gmi.MakeGenericMethod(explicitTypeArgs.ToArray());
+                        closed = gmi.MakeGenericMethod(explicitTypeArgsArray);
                     }
                     catch (ArgumentException)
                     {
-                        // Generic constraints not satisfied — drop this candidate.
-                        return;
+                        // Issue #1325: live reflection rejects the `object`
+                        // erasure of a user value type against a `struct`
+                        // constraint. Retry over a value-type placeholder when
+                        // the recovered symbols satisfy the real constraints.
+                        if (!TryCloseOverUserValueTypePlaceholders(gmi, explicitTypeArgsArray, recoverTypeArgSymbols?.Invoke(gmi) ?? default, out closed))
+                        {
+                            // Generic constraints not satisfied — drop this candidate.
+                            return;
+                        }
+
+                        paramTypeRewrite = static t => SubstituteClrType(t, typeof(UserValueTypeConstraintPlaceholder), typeof(object));
                     }
 
                     // Issue #750 / ADR-0088: same constraint check as the
                     // inference path. Required because MetadataLoadContext's
                     // MakeGenericMethod does not validate constraints.
-                    if (!SatisfiesGenericConstraints(gmi, explicitTypeArgs.ToArray()))
+                    if (!SatisfiesGenericConstraints(gmi, explicitTypeArgsArray, recoverTypeArgSymbols?.Invoke(closed) ?? default))
                     {
                         return;
                     }
@@ -1718,8 +1749,17 @@ internal static class OverloadResolution
                 }
                 catch (ArgumentException)
                 {
-                    // Generic constraints not satisfied — drop this candidate.
-                    return;
+                    // Issue #1325: live reflection rejects the `object` erasure
+                    // of a user value type against a `struct` constraint. Retry
+                    // over a value-type placeholder when the recovered symbols
+                    // satisfy the real constraints.
+                    if (!TryCloseOverUserValueTypePlaceholders(mi, typeArgs, recoverTypeArgSymbols?.Invoke(mi) ?? default, out closed))
+                    {
+                        // Generic constraints not satisfied — drop this candidate.
+                        return;
+                    }
+
+                    paramTypeRewrite = static t => SubstituteClrType(t, typeof(UserValueTypeConstraintPlaceholder), typeof(object));
                 }
 
                 // Issue #750 / ADR-0088: explicitly validate generic-parameter
@@ -1730,7 +1770,7 @@ internal static class OverloadResolution
                 // bound with T = Nullable<int> survives applicability and the
                 // resolver picks the wrong overload, emitting IL that fails
                 // verification at runtime.
-                if (!SatisfiesGenericConstraints(mi, typeArgs))
+                if (!SatisfiesGenericConstraints(mi, typeArgs, recoverTypeArgSymbols?.Invoke(closed) ?? default))
                 {
                     return;
                 }
@@ -1770,7 +1810,9 @@ internal static class OverloadResolution
             for (var i = 0; i < argTypes.Count; i++)
             {
                 var paramIndex = mapping != null ? mapping[i] : i;
-                paramTypes[i] = parameters[paramIndex].ParameterType;
+                paramTypes[i] = paramTypeRewrite != null
+                    ? paramTypeRewrite(parameters[paramIndex].ParameterType)
+                    : parameters[paramIndex].ParameterType;
                 var conv = ClassifyImplicit(paramTypes[i], argTypes[i]);
                 if (conv == ImplicitConversionKind.None)
                 {
@@ -1830,7 +1872,7 @@ internal static class OverloadResolution
     /// applicability check in <see cref="EvaluateCandidate"/> but rewrites the
     /// trailing parameter type to the element type for ranking purposes.
     /// </summary>
-    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<string> argumentNames = null)
+    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null)
         where T : MethodBase
     {
         T candidate = rawCandidate;
@@ -1855,7 +1897,7 @@ internal static class OverloadResolution
                     return;
                 }
 
-                if (!SatisfiesGenericConstraints(gmi, explicitTypeArgs.ToArray()))
+                if (!SatisfiesGenericConstraints(gmi, explicitTypeArgs.ToArray(), recoverTypeArgSymbols?.Invoke(closed) ?? default))
                 {
                     return;
                 }
@@ -1892,7 +1934,7 @@ internal static class OverloadResolution
                 return;
             }
 
-            if (!SatisfiesGenericConstraints(mi, typeArgs))
+            if (!SatisfiesGenericConstraints(mi, typeArgs, recoverTypeArgSymbols?.Invoke(closed) ?? default))
             {
                 return;
             }
@@ -2757,8 +2799,14 @@ internal static class OverloadResolution
     /// </summary>
     /// <param name="openMethod">The open generic method definition.</param>
     /// <param name="typeArgs">The candidate type arguments in declaration order.</param>
+    /// <param name="typeArgSymbols">
+    /// Issue #1325: the recovered symbolic type-argument vector (open-arity
+    /// order), or <see langword="default"/>. Lets the value-type/struct
+    /// constraint checks see through the <c>object</c> erasure of
+    /// same-compilation user value types.
+    /// </param>
     /// <returns><see langword="true"/> when every constraint is satisfied.</returns>
-    private static bool SatisfiesGenericConstraints(MethodInfo openMethod, Type[] typeArgs)
+    private static bool SatisfiesGenericConstraints(MethodInfo openMethod, Type[] typeArgs, ImmutableArray<TypeSymbol> typeArgSymbols = default)
     {
         if (openMethod is null || typeArgs is null)
         {
@@ -2801,11 +2849,23 @@ internal static class OverloadResolution
 
             var special = attrs & GenericParameterAttributes.SpecialConstraintMask;
 
+            // Issue #1325: a same-compilation user value type (a non-class
+            // `StructSymbol` or an `EnumSymbol`) is erased to a `System.Object`
+            // placeholder in the CLR `typeArgs` vector because its symbol carries
+            // no reference-context CLR type during binding. The recovered
+            // symbolic vector lets the value-type/reference-type constraint
+            // checks see through that erasure so a `where T : struct` candidate
+            // (e.g. MemoryMarshal.Cast/AsBytes) is not wrongly filtered out and a
+            // `where T : class` candidate is not wrongly admitted.
+            var argIsUserValueType = !typeArgSymbols.IsDefaultOrEmpty
+                && i < typeArgSymbols.Length
+                && IsUserValueTypeSymbol(typeArgSymbols[i]);
+
             if ((special & GenericParameterAttributes.ReferenceTypeConstraint) != 0)
             {
                 // `where T : class` — arg must be a reference type (not a
                 // value type, not Nullable<T>).
-                if (arg.IsValueType)
+                if (arg.IsValueType || argIsUserValueType)
                 {
                     return false;
                 }
@@ -2814,7 +2874,10 @@ internal static class OverloadResolution
             if ((special & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0)
             {
                 // `where T : struct` — arg must be a non-nullable value type.
-                if (!arg.IsValueType || NullableLifting.IsValueTypeNullableClr(arg))
+                // A user struct/enum (erased to `object`) satisfies this even
+                // though `arg.IsValueType` is false for the placeholder.
+                if (!argIsUserValueType
+                    && (!arg.IsValueType || NullableLifting.IsValueTypeNullableClr(arg)))
                 {
                     return false;
                 }
@@ -2826,7 +2889,7 @@ internal static class OverloadResolution
                 // `where T : new()` — arg must have a public parameterless
                 // constructor. Value types always satisfy this implicitly;
                 // reference types require an actual ctor.
-                if (!arg.IsValueType)
+                if (!arg.IsValueType && !argIsUserValueType)
                 {
                     try
                     {
@@ -2869,6 +2932,19 @@ internal static class OverloadResolution
                     continue;
                 }
 
+                // Issue #1325: a `where T : struct` parameter carries an implicit
+                // `System.ValueType` base constraint in metadata (and an enum a
+                // `System.Enum` one). A same-compilation user value type is erased
+                // to a `System.Object` placeholder, which is not name-assignable
+                // to `ValueType`/`Enum`, so without this guard the candidate is
+                // wrongly rejected here even though the struct check above passed.
+                if (argIsUserValueType
+                    && (string.Equals(constraint.FullName, "System.ValueType", StringComparison.Ordinal)
+                        || string.Equals(constraint.FullName, "System.Enum", StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
                 try
                 {
                     if (!ClrTypeUtilities.IsAssignableByName(constraint, arg))
@@ -2884,6 +2960,127 @@ internal static class OverloadResolution
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #1325: recognizes a type-argument symbol that is a same-compilation
+    /// user value type — a non-class <see cref="StructSymbol"/> or an
+    /// <see cref="EnumSymbol"/>. These are erased to a <c>System.Object</c>
+    /// placeholder in the CLR type-argument vector, so the value-type/struct
+    /// generic constraint checks need the symbol to classify them correctly. A
+    /// user class (<c>StructSymbol { IsClass: true }</c>) and a nullable value
+    /// type are deliberately excluded.
+    /// </summary>
+    /// <param name="symbol">The recovered type-argument symbol.</param>
+    /// <returns><see langword="true"/> when the symbol is a user struct or enum.</returns>
+    private static bool IsUserValueTypeSymbol(TypeSymbol symbol)
+        => symbol is StructSymbol { IsClass: false } or EnumSymbol;
+
+    /// <summary>
+    /// Issue #1325: attempts to close <paramref name="openDef"/> over a value-type
+    /// placeholder for every type-argument slot whose CLR type was erased to a
+    /// non-value-type placeholder but whose recovered symbol is a user value
+    /// type (a non-class <see cref="StructSymbol"/> or an <see cref="EnumSymbol"/>).
+    /// Succeeds only when at least one such slot exists, the recovered symbols
+    /// satisfy the method's generic constraints, and the placeholder closure is
+    /// accepted by <see cref="MethodInfo.MakeGenericMethod(Type[])"/>.
+    /// </summary>
+    /// <param name="openDef">The open generic method definition.</param>
+    /// <param name="typeArgs">The CLR type arguments (with user value types erased).</param>
+    /// <param name="recoveredSymbols">The recovered symbolic type-argument vector, or default.</param>
+    /// <param name="closed">On success, the method closed over the placeholder.</param>
+    /// <returns><see langword="true"/> when a placeholder closure was produced.</returns>
+    private static bool TryCloseOverUserValueTypePlaceholders(
+        MethodInfo openDef,
+        Type[] typeArgs,
+        ImmutableArray<TypeSymbol> recoveredSymbols,
+        out MethodInfo closed)
+    {
+        closed = null;
+        if (openDef is null || typeArgs is null || recoveredSymbols.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        var substituted = (Type[])typeArgs.Clone();
+        var anyUserValueType = false;
+        for (var i = 0; i < substituted.Length && i < recoveredSymbols.Length; i++)
+        {
+            if (substituted[i] != null
+                && !substituted[i].IsValueType
+                && IsUserValueTypeSymbol(recoveredSymbols[i]))
+            {
+                substituted[i] = typeof(UserValueTypeConstraintPlaceholder);
+                anyUserValueType = true;
+            }
+        }
+
+        if (!anyUserValueType || !SatisfiesGenericConstraints(openDef, typeArgs, recoveredSymbols))
+        {
+            return false;
+        }
+
+        try
+        {
+            closed = openDef.MakeGenericMethod(substituted);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1325: structurally rewrites every occurrence of
+    /// <paramref name="from"/> within <paramref name="type"/> to
+    /// <paramref name="to"/>, recursing through by-ref, array and constructed
+    /// generic types. Used to map a placeholder-closed parameter type
+    /// (e.g. <c>Span&lt;Placeholder&gt;</c>) back to the <c>object</c>-erased
+    /// shape (<c>Span&lt;object&gt;</c>) for applicability.
+    /// </summary>
+    /// <param name="type">The type to rewrite.</param>
+    /// <param name="from">The type to replace.</param>
+    /// <param name="to">The replacement type.</param>
+    /// <returns>The rewritten type, or the original when no occurrence is found.</returns>
+    private static Type SubstituteClrType(Type type, Type from, Type to)
+    {
+        if (type is null || type == from)
+        {
+            return type == from ? to : type;
+        }
+
+        if (type.IsByRef)
+        {
+            return SubstituteClrType(type.GetElementType(), from, to).MakeByRefType();
+        }
+
+        if (type.IsArray)
+        {
+            var element = SubstituteClrType(type.GetElementType(), from, to);
+            var rank = type.GetArrayRank();
+            return rank == 1 ? element.MakeArrayType() : element.MakeArrayType(rank);
+        }
+
+        if (type.IsGenericType && !type.IsGenericTypeDefinition)
+        {
+            var args = type.GetGenericArguments();
+            var changed = false;
+            for (var i = 0; i < args.Length; i++)
+            {
+                var rewritten = SubstituteClrType(args[i], from, to);
+                if (!ReferenceEquals(rewritten, args[i]))
+                {
+                    args[i] = rewritten;
+                    changed = true;
+                }
+            }
+
+            return changed ? type.GetGenericTypeDefinition().MakeGenericType(args) : type;
+        }
+
+        return type;
     }
 
     /// <summary>
@@ -3337,6 +3534,23 @@ internal static class OverloadResolution
         internal static Result<T> Single(T best, ImmutableArray<int> parameterMapping, bool isExpanded) => new(ResolutionOutcome.Resolved, best, ImmutableArray<T>.Empty, parameterMapping, isExpanded);
 
         internal static Result<T> AmbiguousResult(ImmutableArray<T> tied) => new(ResolutionOutcome.Ambiguous, default, tied, default, false);
+    }
+
+    /// <summary>
+    /// Issue #1325: a value-type stand-in used to close a generic method over a
+    /// same-compilation user value type under live reflection. The user value
+    /// type has no reference-context CLR type during binding (it is erased to
+    /// <c>System.Object</c>), and the live-reflection
+    /// <see cref="MethodInfo.MakeGenericMethod(Type[])"/> rejects <c>object</c>
+    /// against a <c>where T : struct</c> parameter. Closing over this
+    /// placeholder yields a valid <see cref="MethodInfo"/>; the placeholder is
+    /// then rewritten back to <c>object</c> in the candidate's parameter types
+    /// (see <see cref="SubstituteClrType"/>) so applicability still matches the
+    /// <c>object</c>-erased argument types, and emit uses the recovered symbolic
+    /// type arguments rather than this placeholder.
+    /// </summary>
+    private struct UserValueTypeConstraintPlaceholder
+    {
     }
 
     /// <summary>

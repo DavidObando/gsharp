@@ -222,7 +222,14 @@ public sealed class ImportedClassSymbol : Symbol
         OverloadResolution.Result<MethodInfo> result;
         try
         {
-            result = OverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs, projectTypeArgument, ComputeInterpolatedStringArgFlags(callExpression, arguments.Length), argumentNames);
+            // Issue #1325: recover the symbolic type-argument vector per candidate
+            // so the generic-constraint check can see through the `object`
+            // erasure of same-compilation user value types (a user struct must
+            // satisfy `where T : struct`, e.g. MemoryMarshal.Cast/AsBytes).
+            var symbolicArgVector = MemberLookup.BuildSymbolicArgTypeVector(
+                receiverType: null,
+                ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+            result = OverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs, projectTypeArgument, ComputeInterpolatedStringArgFlags(callExpression, arguments.Length), argumentNames, closed => MemberLookup.BuildSymbolicMethodTypeArgs(closed, typeArgSymbols, symbolicArgVector));
         }
         finally
         {
