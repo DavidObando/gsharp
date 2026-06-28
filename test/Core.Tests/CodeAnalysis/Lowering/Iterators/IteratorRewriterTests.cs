@@ -20,7 +20,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Lowering.Iterators;
 /// </summary>
 public class IteratorRewriterTests
 {
-    private static readonly PackageSymbol Package = new PackageSymbol("main", declaration: null);
+    private static readonly PackageSymbol Package = new("main", declaration: null);
 
     [Fact]
     public void Rewrite_SingleYield_CreatesIteratorPlan()

@@ -1,4 +1,4 @@
-﻿// <copyright file="Repl.cs" company="GSharp">
+// <copyright file="Repl.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -14,7 +14,7 @@ namespace GSharp.Interpreter;
 /// </summary>
 public abstract class Repl
 {
-    private readonly List<string> submissionHistory = new List<string>();
+    private readonly List<string> submissionHistory = new();
     private int submissionHistoryIndex;
 
     private bool done;

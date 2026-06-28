@@ -1,4 +1,4 @@
-﻿// <copyright file="DiagnosticBag.cs" company="GSharp">
+// <copyright file="DiagnosticBag.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -16,7 +16,7 @@ namespace GSharp.Core.CodeAnalysis;
 /// </summary>
 public sealed class DiagnosticBag : IEnumerable<Diagnostic>
 {
-    private readonly List<Diagnostic> diagnostics = new List<Diagnostic>();
+    private readonly List<Diagnostic> diagnostics = new();
 
     /// <summary>
     /// Gets the number of diagnostics currently held in the bag. Used together
@@ -2372,7 +2372,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
 
     /// <summary>
     /// Issue #343: reports a positional call argument written after a named call
-    /// argument. Named arguments must come last; positional → named ordering is
+    /// argument. Named arguments must come last; positional ? named ordering is
     /// fixed by the parser to support unambiguous matching against the parameter
     /// list.
     /// </summary>
@@ -3696,7 +3696,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(
             location,
             "GS0358",
-            $"'@MarshalAs(UnmanagedType.{unmanagedType})' is not valid on parameter '{parameterName}' of type '{parameterType}'. See ADR-0096 §3 for the parameter-type ↔ UnmanagedType compatibility table.");
+            $"'@MarshalAs(UnmanagedType.{unmanagedType})' is not valid on parameter '{parameterName}' of type '{parameterType}'. See ADR-0096 §3 for the parameter-type ? UnmanagedType compatibility table.");
     }
 
     /// <summary>

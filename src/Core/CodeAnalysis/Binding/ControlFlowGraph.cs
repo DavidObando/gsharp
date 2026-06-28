@@ -1,4 +1,4 @@
-﻿// <copyright file="ControlFlowGraph.cs" company="GSharp">
+// <copyright file="ControlFlowGraph.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -164,17 +164,17 @@ public sealed class ControlFlowGraph
         /// <summary>
         /// Gets the list of statements in this block.
         /// </summary>
-        public List<BoundStatement> Statements { get; } = new List<BoundStatement>();
+        public List<BoundStatement> Statements { get; } = new();
 
         /// <summary>
         /// Gets the list of incoming branches to this block.
         /// </summary>
-        public List<BasicBlockBranch> Incoming { get; } = new List<BasicBlockBranch>();
+        public List<BasicBlockBranch> Incoming { get; } = new();
 
         /// <summary>
         /// Gets the list of outgoing branches from this block.
         /// </summary>
-        public List<BasicBlockBranch> Outgoing { get; } = new List<BasicBlockBranch>();
+        public List<BasicBlockBranch> Outgoing { get; } = new();
 
         /// <inheritdoc/>
         public override string ToString()
@@ -254,8 +254,8 @@ public sealed class ControlFlowGraph
     /// </summary>
     public sealed class BasicBlockBuilder
     {
-        private readonly List<BoundStatement> statements = new List<BoundStatement>();
-        private readonly List<BasicBlock> blocks = new List<BasicBlock>();
+        private readonly List<BoundStatement> statements = new();
+        private readonly List<BasicBlock> blocks = new();
 
         /// <summary>
         /// Builds a basic block from the provided bound block statement and adds
@@ -332,11 +332,11 @@ public sealed class ControlFlowGraph
     /// </summary>
     public sealed class GraphBuilder
     {
-        private readonly Dictionary<BoundStatement, BasicBlock> blockFromStatement = new Dictionary<BoundStatement, BasicBlock>();
-        private readonly Dictionary<BoundLabel, BasicBlock> blockFromLabel = new Dictionary<BoundLabel, BasicBlock>();
-        private readonly List<BasicBlockBranch> branches = new List<BasicBlockBranch>();
-        private readonly BasicBlock start = new BasicBlock(isStart: true);
-        private readonly BasicBlock end = new BasicBlock(isStart: false);
+        private readonly Dictionary<BoundStatement, BasicBlock> blockFromStatement = new();
+        private readonly Dictionary<BoundLabel, BasicBlock> blockFromLabel = new();
+        private readonly List<BasicBlockBranch> branches = new();
+        private readonly BasicBlock start = new(isStart: true);
+        private readonly BasicBlock end = new(isStart: false);
 
         /// <summary>
         /// Builds a control flow graph from the provided list of basic blocks.

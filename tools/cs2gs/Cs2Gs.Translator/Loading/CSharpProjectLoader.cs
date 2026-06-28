@@ -37,7 +37,7 @@ namespace Cs2Gs.Translator.Loading;
 /// </summary>
 public static class CSharpProjectLoader
 {
-    private static readonly object MSBuildRegistrationLock = new object();
+    private static readonly object MSBuildRegistrationLock = new();
     private static bool msbuildRegistered;
 
     /// <summary>

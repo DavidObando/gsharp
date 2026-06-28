@@ -33,9 +33,9 @@ public sealed class LspServer
 {
     private readonly DocumentContentService documentContentService;
     private readonly WorkspaceState workspaceState;
-    private readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
-    private readonly TaskCompletionSource<int> exitSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly object refreshLock = new object();
+    private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly TaskCompletionSource<int> exitSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly object refreshLock = new();
 
     private JsonRpc rpc;
     private bool shutdownRequested;
@@ -977,7 +977,7 @@ public sealed class LspServer
         // Debounce: coalesce bursts of changes into a single workspace/diagnostic/refresh request.
         lock (this.refreshLock)
         {
-            this.refreshTimer ??= new Timer(_ => this.SendDiagnosticRefresh(), null, Timeout.Infinite, Timeout.Infinite);
+            this.refreshTimer ??= new(_ => this.SendDiagnosticRefresh(), null, Timeout.Infinite, Timeout.Infinite);
             this.refreshTimer.Change(500, Timeout.Infinite);
         }
     }
@@ -1038,7 +1038,7 @@ public sealed class LspServer
         {
             new TextEdit
             {
-                Range = new Range(new Position(0, 0), new Position(lastLine, lastChar)),
+                Range = new(new Position(0, 0), new Position(lastLine, lastChar)),
                 NewText = formatted,
             },
         };

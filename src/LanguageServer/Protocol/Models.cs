@@ -297,7 +297,7 @@ public sealed class CompletionList
     public bool IsIncomplete { get; set; }
 
     [JsonPropertyName("items")]
-    public List<CompletionItem> Items { get; set; } = new List<CompletionItem>();
+    public List<CompletionItem> Items { get; set; } = new();
 }
 
 public enum SymbolKind

@@ -500,7 +500,7 @@ internal sealed partial class ExpressionBinder
         // StructSymbol object).
         if (structSymbol.IsGenericDefinition)
         {
-            Dictionary<TypeParameterSymbol, TypeSymbol> substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            Dictionary<TypeParameterSymbol, TypeSymbol> substitution = new();
             var tps = structSymbol.TypeParameters;
 
             if (syntax.TypeArgumentList != null)

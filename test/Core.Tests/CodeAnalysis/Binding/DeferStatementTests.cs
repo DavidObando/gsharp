@@ -162,7 +162,7 @@ DeferFixture.Snapshot()
 /// <summary>Side-effect helpers exposed to GSharp defer tests.</summary>
 public static class DeferFixture
 {
-    private static readonly List<string> Events = new List<string>();
+    private static readonly List<string> Events = new();
 
     /// <summary>Clears the recorded event log.</summary>
     public static void Reset() => Events.Clear();

@@ -27,7 +27,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// </summary>
 internal sealed class TypeIdentityComparer : IEqualityComparer<Type>
 {
-    public static readonly TypeIdentityComparer Instance = new TypeIdentityComparer();
+    public static readonly TypeIdentityComparer Instance = new();
 
     private TypeIdentityComparer()
     {

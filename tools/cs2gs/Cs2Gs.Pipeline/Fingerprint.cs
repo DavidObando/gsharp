@@ -24,21 +24,21 @@ namespace Cs2Gs.Pipeline;
 public static class Fingerprint
 {
     // Identifiers: a letter/underscore start then word chars. Collapsed to `id`.
-    private static readonly Regex IdentifierPattern = new Regex(
+    private static readonly Regex IdentifierPattern = new(
         @"[A-Za-z_][A-Za-z0-9_]*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     // String/char/interpolated literals (single- and double-quoted, with simple
     // escape tolerance) and numeric literals. Collapsed to `lit`.
-    private static readonly Regex StringLiteralPattern = new Regex(
+    private static readonly Regex StringLiteralPattern = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static readonly Regex NumberLiteralPattern = new Regex(
+    private static readonly Regex NumberLiteralPattern = new(
         @"\b\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static readonly Regex WhitespacePattern = new Regex(
+    private static readonly Regex WhitespacePattern = new(
         @"\s+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 

@@ -43,7 +43,7 @@ public sealed class RunResult
     /// <summary>Gets or sets the per-app results.</summary>
     [JsonPropertyName("apps")]
     [JsonPropertyOrder(5)]
-    public List<AppResult> Apps { get; set; } = new List<AppResult>();
+    public List<AppResult> Apps { get; set; } = new();
 }
 
 /// <summary>
@@ -70,17 +70,17 @@ public sealed class AppResult
     /// <summary>Gets or sets the per-stage results, in execution order.</summary>
     [JsonPropertyName("stages")]
     [JsonPropertyOrder(3)]
-    public List<StageResult> Stages { get; set; } = new List<StageResult>();
+    public List<StageResult> Stages { get; set; } = new();
 
     /// <summary>Gets or sets the run-relative paths of the triage artifacts produced for this app.</summary>
     [JsonPropertyName("artifacts")]
     [JsonPropertyOrder(4)]
-    public List<string> Artifacts { get; set; } = new List<string>();
+    public List<string> Artifacts { get; set; } = new();
 
     /// <summary>Gets or sets the distinct fingerprints captured for this app.</summary>
     [JsonPropertyName("fingerprints")]
     [JsonPropertyOrder(5)]
-    public List<string> Fingerprints { get; set; } = new List<string>();
+    public List<string> Fingerprints { get; set; } = new();
 }
 
 /// <summary>

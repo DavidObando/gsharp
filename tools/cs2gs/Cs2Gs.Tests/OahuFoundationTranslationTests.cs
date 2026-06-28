@@ -202,7 +202,7 @@ namespace Demo
 {
     public class LockX
     {
-        private readonly object gate = new object();
+        private readonly object gate = new();
         public int Run(int n)
         {
             int Twice(int v) => v * 2;

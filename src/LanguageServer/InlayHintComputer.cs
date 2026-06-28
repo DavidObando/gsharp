@@ -75,7 +75,7 @@ public static class InlayHintComputer
 
             hints.Add(new InlayHint
             {
-                Position = new Position(line, character),
+                Position = new(line, character),
                 Label = new StringOrInlayHintLabelParts($"{param.Name}:"),
                 Kind = InlayHintKind.Parameter,
                 PaddingRight = true,

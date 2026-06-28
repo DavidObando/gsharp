@@ -1,4 +1,4 @@
-﻿// <copyright file="BuiltinFunctions.cs" company="GSharp">
+// <copyright file="BuiltinFunctions.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -18,7 +18,7 @@ public static class BuiltinFunctions
     /// <summary>
     /// Prints to the console.
     /// </summary>
-    public static readonly FunctionSymbol Print = new FunctionSymbol(
+    public static readonly FunctionSymbol Print = new(
         name: "print",
         parameters: ImmutableArray.Create(new ParameterSymbol("text", TypeSymbol.String)),
         type: TypeSymbol.Void);
@@ -26,7 +26,7 @@ public static class BuiltinFunctions
     /// <summary>
     /// Reads from the console.
     /// </summary>
-    public static readonly FunctionSymbol Input = new FunctionSymbol(
+    public static readonly FunctionSymbol Input = new(
         name: "input",
         parameters: ImmutableArray<ParameterSymbol>.Empty,
         type: TypeSymbol.String);
@@ -34,7 +34,7 @@ public static class BuiltinFunctions
     /// <summary>
     /// Produces a random number.
     /// </summary>
-    public static readonly FunctionSymbol Rnd = new FunctionSymbol(
+    public static readonly FunctionSymbol Rnd = new(
         name: "rnd",
         parameters: ImmutableArray.Create(new ParameterSymbol("max", TypeSymbol.Int32)),
         type: TypeSymbol.Int32);

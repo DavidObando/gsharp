@@ -316,7 +316,7 @@ public sealed class CSharpToGSharpTranslator
         // The set of hard G# keywords (Cs2Gs.Compiler SyntaxFacts.GetKeywordKind).
         // A C# identifier that collides with one of these cannot be emitted bare; it
         // is suffixed with `_` consistently at every declaration and reference site.
-        private static readonly HashSet<string> GSharpReservedWords = new HashSet<string>(System.StringComparer.Ordinal)
+        private static readonly HashSet<string> GSharpReservedWords = new(System.StringComparer.Ordinal)
         {
             "as", "async", "await", "break", "case", "catch", "chan", "class", "const",
             "continue", "default", "defer", "do", "else", "enum", "false", "fallthrough",
@@ -360,7 +360,7 @@ public sealed class CSharpToGSharpTranslator
         // top-level receiver-clause `func`s emitted as siblings of the type
         // (issue #938, ADR-0115 §B.5). Collected here per aggregate and drained
         // by the document translator.
-        private readonly List<GMember> pendingTopLevelDeclarations = new List<GMember>();
+        private readonly List<GMember> pendingTopLevelDeclarations = new();
 
         // While translating a switch-expression arm whose C# pattern bound a
         // variable through a property subpattern (`Circle { Radius: var r }`), the
@@ -369,7 +369,7 @@ public sealed class CSharpToGSharpTranslator
         // from the bound local symbol to its replacement expression is consulted
         // by reference-translation (ADR-0115 §B switch lowering).
         private readonly Dictionary<ISymbol, GExpression> patternBindings =
-            new Dictionary<ISymbol, GExpression>(SymbolEqualityComparer.Default);
+            new(SymbolEqualityComparer.Default);
 
         // C# post-increment/decrement (`i++`, `i--`) sub-expressions that the
         // surrounding statement seam has hoisted into trailing `i++` statements
@@ -377,14 +377,14 @@ public sealed class CSharpToGSharpTranslator
         // While a node is in this set, `TranslateExpression` renders it as a bare
         // read of its operand (the pre-increment value).
         private readonly HashSet<SyntaxNode> suppressedPostfix =
-            new HashSet<SyntaxNode>();
+            new();
 
         // Static-field initializers lifted out of a `static` constructor body
         // (`static T() { Field = value; }`). G# has no static constructor, so a
         // simple static ctor is folded into the corresponding `shared { }` field
         // initializers and the ctor itself is dropped (ADR-0115 §B.11).
         private readonly Dictionary<ISymbol, GExpression> staticFieldInitializers =
-            new Dictionary<ISymbol, GExpression>(SymbolEqualityComparer.Default);
+            new(SymbolEqualityComparer.Default);
 
         // The syntax node whose body is currently being translated. It bounds the
         // data-flow scan that decides whether a local is mutable (var) or
@@ -7097,7 +7097,7 @@ public sealed class CSharpToGSharpTranslator
             // `foreach ((a, b) in xs)` / `foreach (var (a, b) in xs)` map to the
             // G# two-name iteration `for a, b in xs` (ForInStatement key/value form;
             // ADR-0115 §B). Tuple element names are collected from the designation.
-            List<string> names = new List<string>();
+            List<string> names = new();
             CollectForEachVariableNames(node.Variable, names);
 
             if (names.Count == 2)
@@ -7383,7 +7383,7 @@ public sealed class CSharpToGSharpTranslator
         /// </summary>
         private sealed class ConstructorLift
         {
-            public static readonly ConstructorLift None = new ConstructorLift();
+            public static readonly ConstructorLift None = new();
 
             public ConstructorDeclarationSyntax Constructor { get; init; }
 
@@ -7391,9 +7391,9 @@ public sealed class CSharpToGSharpTranslator
 
             public IReadOnlyList<Parameter> PrimaryParameters { get; init; } = new List<Parameter>();
 
-            public HashSet<string> FieldsAsPrimaryParameters { get; init; } = new HashSet<string>();
+            public HashSet<string> FieldsAsPrimaryParameters { get; init; } = new();
 
-            public HashSet<string> PropertiesAsPrimaryParameters { get; init; } = new HashSet<string>();
+            public HashSet<string> PropertiesAsPrimaryParameters { get; init; } = new();
 
             public Dictionary<string, GExpression> FieldInitializers { get; init; } =
                 new Dictionary<string, GExpression>();

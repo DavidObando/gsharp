@@ -1,4 +1,4 @@
-﻿// <copyright file="TypeSymbol.cs" company="GSharp">
+// <copyright file="TypeSymbol.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -14,100 +14,100 @@ public class TypeSymbol : Symbol
     /// <summary>
     /// The type error symbol.
     /// </summary>
-    public static readonly TypeSymbol Error = new TypeSymbol("?");
+    public static readonly TypeSymbol Error = new("?");
 
     /// <summary>
     /// The `bool` symbol.
     /// </summary>
-    public static readonly TypeSymbol Bool = new TypeSymbol("bool", typeof(bool));
+    public static readonly TypeSymbol Bool = new("bool", typeof(bool));
 
     /// <summary>
     /// The `uint8` symbol (8-bit unsigned integer, <c>System.Byte</c>). Renamed from `byte` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol UInt8 = new TypeSymbol("uint8", typeof(byte));
+    public static readonly TypeSymbol UInt8 = new("uint8", typeof(byte));
 
     /// <summary>
     /// The `int8` symbol (8-bit signed integer, <c>System.SByte</c>). Renamed from `sbyte` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol Int8 = new TypeSymbol("int8", typeof(sbyte));
+    public static readonly TypeSymbol Int8 = new("int8", typeof(sbyte));
 
     /// <summary>
     /// The `int16` symbol (16-bit signed integer, <c>System.Int16</c>). Renamed from `short` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol Int16 = new TypeSymbol("int16", typeof(short));
+    public static readonly TypeSymbol Int16 = new("int16", typeof(short));
 
     /// <summary>
     /// The `uint16` symbol (16-bit unsigned integer, <c>System.UInt16</c>). Renamed from `ushort` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol UInt16 = new TypeSymbol("uint16", typeof(ushort));
+    public static readonly TypeSymbol UInt16 = new("uint16", typeof(ushort));
 
     /// <summary>
     /// The `int32` symbol (32-bit signed integer, <c>System.Int32</c>). Renamed from `int` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol Int32 = new TypeSymbol("int32", typeof(int));
+    public static readonly TypeSymbol Int32 = new("int32", typeof(int));
 
     /// <summary>
     /// The `uint32` symbol (32-bit unsigned integer, <c>System.UInt32</c>). Renamed from `uint` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol UInt32 = new TypeSymbol("uint32", typeof(uint));
+    public static readonly TypeSymbol UInt32 = new("uint32", typeof(uint));
 
     /// <summary>
     /// The `int64` symbol (64-bit signed integer, <c>System.Int64</c>). Renamed from `long` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol Int64 = new TypeSymbol("int64", typeof(long));
+    public static readonly TypeSymbol Int64 = new("int64", typeof(long));
 
     /// <summary>
     /// The `uint64` symbol (64-bit unsigned integer, <c>System.UInt64</c>). Renamed from `ulong` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol UInt64 = new TypeSymbol("uint64", typeof(ulong));
+    public static readonly TypeSymbol UInt64 = new("uint64", typeof(ulong));
 
     /// <summary>
     /// The `nint` symbol (native-width signed integer, <c>System.IntPtr</c>). Added by ADR-0044.
     /// </summary>
-    public static readonly TypeSymbol NInt = new TypeSymbol("nint", typeof(nint));
+    public static readonly TypeSymbol NInt = new("nint", typeof(nint));
 
     /// <summary>
     /// The `nuint` symbol (native-width unsigned integer, <c>System.UIntPtr</c>). Added by ADR-0044.
     /// </summary>
-    public static readonly TypeSymbol NUInt = new TypeSymbol("nuint", typeof(nuint));
+    public static readonly TypeSymbol NUInt = new("nuint", typeof(nuint));
 
     /// <summary>
     /// The `float32` symbol (IEEE 754 binary32, <c>System.Single</c>). Added by ADR-0044.
     /// </summary>
-    public static readonly TypeSymbol Float32 = new TypeSymbol("float32", typeof(float));
+    public static readonly TypeSymbol Float32 = new("float32", typeof(float));
 
     /// <summary>
     /// The `float64` symbol (IEEE 754 binary64, <c>System.Double</c>). Added by ADR-0044.
     /// </summary>
-    public static readonly TypeSymbol Float64 = new TypeSymbol("float64", typeof(double));
+    public static readonly TypeSymbol Float64 = new("float64", typeof(double));
 
     /// <summary>
     /// The `decimal` symbol (128-bit base-10, <c>System.Decimal</c>). Added by ADR-0044.
     /// </summary>
-    public static readonly TypeSymbol Decimal = new TypeSymbol("decimal", typeof(decimal));
+    public static readonly TypeSymbol Decimal = new("decimal", typeof(decimal));
 
     /// <summary>
     /// The `char` symbol (UTF-16 code unit, <c>System.Char</c>). Added by ADR-0044.
     /// </summary>
-    public static readonly TypeSymbol Char = new TypeSymbol("char", typeof(char));
+    public static readonly TypeSymbol Char = new("char", typeof(char));
 
     /// <summary>
     /// The `string` symbol.
     /// </summary>
-    public static readonly TypeSymbol String = new TypeSymbol("string", typeof(string));
+    public static readonly TypeSymbol String = new("string", typeof(string));
 
     /// <summary>
     /// The `object` symbol (universal upper bound, <c>System.Object</c>). Added by ADR-0044 / ADR-0045.
     /// </summary>
-    public static readonly TypeSymbol Object = new TypeSymbol("object", typeof(object));
+    public static readonly TypeSymbol Object = new("object", typeof(object));
 
     /// <summary>
     /// The void type symbol.
     /// </summary>
-    public static readonly TypeSymbol Void = new TypeSymbol("void", typeof(void));
+    public static readonly TypeSymbol Void = new("void", typeof(void));
 
     /// <summary>The static type of the <c>nil</c> literal (Phase 3.C.2 / ADR-0001). Implicitly convertible to any <see cref="NullableTypeSymbol"/>; not assignable to a non-nullable type.</summary>
-    public static readonly TypeSymbol Null = new TypeSymbol("nil");
+    public static readonly TypeSymbol Null = new("nil");
 
     /// <summary>
     /// Issue #1018: the bottom ("never") type of a <c>throw</c> expression. A
@@ -117,7 +117,7 @@ public class TypeSymbol : Symbol
     /// conversion source, and the conditional/null-coalesce common-type logic
     /// resolves to the sibling operand's type.
     /// </summary>
-    public static readonly TypeSymbol Never = new TypeSymbol("never");
+    public static readonly TypeSymbol Never = new("never");
 
     private protected TypeSymbol(string name)
         : base(name)

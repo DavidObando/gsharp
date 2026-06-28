@@ -37,14 +37,14 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 internal sealed class PortablePdbEmitter
 {
     // ECMA-335 / Portable PDB hash algorithm GUIDs (spec § "Document").
-    private static readonly Guid HashAlgorithmSha256 = new Guid("8829D00F-11B8-4213-878B-770E8597AC16");
+    private static readonly Guid HashAlgorithmSha256 = new("8829D00F-11B8-4213-878B-770E8597AC16");
 
     // Portable PDB CustomDebugInformation kind GUIDs
     // (spec § "CustomDebugInformation").
-    private static readonly Guid EmbeddedSourceKind = new Guid("0E8A571B-6926-466E-B4AD-8AB04611F5FE");
-    private static readonly Guid SourceLinkKind = new Guid("CC110556-A091-4D38-9FEC-25AB9A351A6A");
-    private static readonly Guid CompilationOptionsKind = new Guid("B5FEEC05-8CD0-4A83-96DA-466284BB4BD8");
-    private static readonly Guid CompilationMetadataReferencesKind = new Guid("7E4D4708-096E-4C5C-AEDA-CB10BA6A740D");
+    private static readonly Guid EmbeddedSourceKind = new("0E8A571B-6926-466E-B4AD-8AB04611F5FE");
+    private static readonly Guid SourceLinkKind = new("CC110556-A091-4D38-9FEC-25AB9A351A6A");
+    private static readonly Guid CompilationOptionsKind = new("B5FEEC05-8CD0-4A83-96DA-466284BB4BD8");
+    private static readonly Guid CompilationMetadataReferencesKind = new("7E4D4708-096E-4C5C-AEDA-CB10BA6A740D");
 
     /// <summary>
     /// Stable GSharp language GUID. Once a tool keys off this value (debugger,
@@ -52,11 +52,11 @@ internal sealed class PortablePdbEmitter
     /// <c>docs/debug-info.md</c>. Generated specifically for this language and
     /// not shared with any other compiler.
     /// </summary>
-    public static readonly Guid GSharpLanguageGuid = new Guid("4F4D7B6A-0E33-4C2E-A3D7-2E5F8B7F9C00");
+    public static readonly Guid GSharpLanguageGuid = new("4F4D7B6A-0E33-4C2E-A3D7-2E5F8B7F9C00");
 
-    private readonly MetadataBuilder pdbMetadata = new MetadataBuilder();
-    private readonly Dictionary<SyntaxTree, DocumentHandle> documentsByTree = new Dictionary<SyntaxTree, DocumentHandle>();
-    private readonly Dictionary<int, RecordedMethod> recordedMethods = new Dictionary<int, RecordedMethod>();
+    private readonly MetadataBuilder pdbMetadata = new();
+    private readonly Dictionary<SyntaxTree, DocumentHandle> documentsByTree = new();
+    private readonly Dictionary<int, RecordedMethod> recordedMethods = new();
     private readonly DebugInformationOptions options;
     private IReadOnlyDictionary<SyntaxTree, ImmutableArray<ImportSymbol>> importsPerTree;
     private ImmutableArray<ReferenceInfo> referenceInfos;

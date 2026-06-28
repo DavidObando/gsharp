@@ -21,8 +21,8 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 /// </remarks>
 public sealed class AsyncStateMachineFieldMap
 {
-    private readonly Dictionary<ParameterSymbol, FieldSymbol> parameterFields = new Dictionary<ParameterSymbol, FieldSymbol>();
-    private readonly Dictionary<VariableSymbol, FieldSymbol> localFields = new Dictionary<VariableSymbol, FieldSymbol>();
+    private readonly Dictionary<ParameterSymbol, FieldSymbol> parameterFields = new();
+    private readonly Dictionary<VariableSymbol, FieldSymbol> localFields = new();
 
     private AsyncStateMachineFieldMap(SynthesizedStateMachineType stateMachine, StructSymbol structType)
     {

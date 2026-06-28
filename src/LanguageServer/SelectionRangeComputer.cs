@@ -40,7 +40,7 @@ public static class SelectionRangeComputer
             var lastChar = text.Lines[lastLine].Length;
             current = new SelectionRange
             {
-                Range = new Range(
+                Range = new(
                     new Position(0, 0),
                     new Position(lastLine, lastChar)),
             };

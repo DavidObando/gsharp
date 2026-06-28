@@ -1,4 +1,4 @@
-﻿// <copyright file="Conversion.cs" company="GSharp">
+// <copyright file="Conversion.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -16,25 +16,25 @@ public sealed class Conversion
     /// <summary>
     /// States that there's no conversion between the given types.
     /// </summary>
-    public static readonly Conversion None = new Conversion(exists: false, isIdentity: false, isImplicit: false);
+    public static readonly Conversion None = new(exists: false, isIdentity: false, isImplicit: false);
 
     /// <summary>
     /// States that there's an identity conversion between the given types.
     /// </summary>
-    public static readonly Conversion Identity = new Conversion(exists: true, isIdentity: true, isImplicit: true);
+    public static readonly Conversion Identity = new(exists: true, isIdentity: true, isImplicit: true);
 
     /// <summary>
     /// States that there's an implicit conversion between the given types.
     /// </summary>
-    public static readonly Conversion Implicit = new Conversion(exists: true, isIdentity: false, isImplicit: true);
+    public static readonly Conversion Implicit = new(exists: true, isIdentity: false, isImplicit: true);
 
     /// <summary>
     /// States that there's an explicit conversion between the given types.
     /// </summary>
-    public static readonly Conversion Explicit = new Conversion(exists: true, isIdentity: false, isImplicit: false);
+    public static readonly Conversion Explicit = new(exists: true, isIdentity: false, isImplicit: false);
 
     // ADR-0044 implicit numeric widening lattice, keyed by source CLR full
-    // name → set of target CLR full names. Mirrors C# §6.1.2 plus the
+    // name ? set of target CLR full names. Mirrors C# §6.1.2 plus the
     // ADR-0044 inclusion of `decimal` as a widening target for every
     // integral source. Native-width integers (nint/nuint) follow C#'s
     // rules: nint widens to int64/single/double/decimal; nuint widens to
@@ -223,7 +223,7 @@ public sealed class Conversion
 
         // Issue #1256: element-wise tuple conversion. A tuple `(T1, …, Tn)`
         // converts implicitly to `(U1, …, Un)` when both are tuple types of
-        // the SAME arity and EACH element `Ti → Ui` has an implicit conversion
+        // the SAME arity and EACH element `Ti ? Ui` has an implicit conversion
         // (identity, reference/interface upcast, nullable-reference upcast,
         // numeric widening, boxing, …). Mirrors C# §10.2.13 implicit tuple
         // conversions — the element conversions are classified recursively via
@@ -236,7 +236,7 @@ public sealed class Conversion
         // `ValueTuple<…>` from per-element converted accesses, because two
         // distinct `ValueTuple<…>` instantiations are not IL-reinterpretable.
         // When any element lacks an implicit conversion (e.g. a downcast
-        // `Base → Derived`, or `int32 → string`) or the arities differ, this
+        // `Base ? Derived`, or `int32 ? string`) or the arities differ, this
         // branch declines and the conversion falls through to `None`, so such
         // tuples remain errors exactly as C# requires.
         if (from is TupleTypeSymbol fromTuple && to is TupleTypeSymbol toTuple
@@ -280,8 +280,8 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
-        // Phase 3.C.1 / ADR-0001: T → T? is an implicit widening; T? → T?
-        // when underlyings match is identity. T? → T requires the bang
+        // Phase 3.C.1 / ADR-0001: T ? T? is an implicit widening; T? ? T?
+        // when underlyings match is identity. T? ? T requires the bang
         // operator (Phase 3.C.3) and is not implicit here.
         if (to is NullableTypeSymbol toNullable)
         {
@@ -297,10 +297,10 @@ public sealed class Conversion
                     return Conversion.Identity;
                 }
 
-                // Issue #1236: lifted numeric widening — `T1? → T2?` is an
-                // implicit conversion whenever the underlying `T1 → T2` is an
-                // implicit (lossless) numeric widening (e.g. `uint8? → int32?`,
-                // `int32? → int64?`). This mirrors C# §10.2.6 lifted conversions
+                // Issue #1236: lifted numeric widening — `T1? ? T2?` is an
+                // implicit conversion whenever the underlying `T1 ? T2` is an
+                // implicit (lossless) numeric widening (e.g. `uint8? ? int32?`,
+                // `int32? ? int64?`). This mirrors C# §10.2.6 lifted conversions
                 // and lets nullable numeric operands participate in the same
                 // widening lattice as their non-nullable forms, so a lifted
                 // binary operator can bind at a common underlying type. The
@@ -318,10 +318,10 @@ public sealed class Conversion
                     }
                 }
 
-                // Issue #1255: lifted nullable reference upcast — `T? → U?` is an
-                // implicit conversion whenever the underlying `T → U` is an
+                // Issue #1255: lifted nullable reference upcast — `T? ? U?` is an
+                // implicit conversion whenever the underlying `T ? U` is an
                 // implicit reference/interface upcast (T derives from or
-                // implements U). This mirrors the non-null #1121 rule (`T → U?`)
+                // implements U). This mirrors the non-null #1121 rule (`T ? U?`)
                 // for the nullable-source case so the two stay consistent. For
                 // reference-type underlyings a nullable wrapper shares the CLR
                 // representation of the bare reference (null stays null, a
@@ -329,7 +329,7 @@ public sealed class Conversion
                 // preserving no-op conversion — never boxing or wrapping. The
                 // value-type underlying case is handled by the lifted numeric
                 // rule above and intentionally excluded here. Note this never
-                // makes `T? → U` (non-nullable target, handled below) implicit,
+                // makes `T? ? U` (non-nullable target, handled below) implicit,
                 // so the narrowing null-dropping conversion still errors.
                 if (IsReferenceLikeTarget(fromNullable.UnderlyingType)
                     && IsReferenceLikeTarget(toNullable.UnderlyingType))
@@ -356,9 +356,9 @@ public sealed class Conversion
             // conversion — a non-null reference is always a valid U?. For a
             // reference-type underlying U the nullable wrap is a representation
             // no-op, so we defer to the full implicit-conversion classification
-            // of `T → U` (identity, reference/upcast, interface implementation,
+            // of `T ? U` (identity, reference/upcast, interface implementation,
             // boxing-to-object). Restricted to reference-like underlying targets
-            // so numeric nullable lifting (e.g. int32 → int64?) is unaffected.
+            // so numeric nullable lifting (e.g. int32 ? int64?) is unaffected.
             if (IsReferenceLikeTarget(toNullable.UnderlyingType))
             {
                 var underlyingConversion = Classify(from, toNullable.UnderlyingType);
@@ -416,7 +416,7 @@ public sealed class Conversion
         // `Invoke` signature is assignment-compatible. This lifts the
         // materialization that previously only happened in argument position
         // into a general rule, so assignment, return, and cast positions all
-        // accept func → delegate conversions (Action/Func/Predicate and named
+        // accept func ? delegate conversions (Action/Func/Predicate and named
         // delegate types alike).
         if (from is FunctionTypeSymbol fnSource && to?.ClrType != null
             && IsFunctionToDelegateConvertible(fnSource, to.ClrType))
@@ -425,7 +425,7 @@ public sealed class Conversion
         }
 
         // ADR-0059 / issue #255: same rule for user-declared named delegate
-        // types. They have no ClrType during binding, so the func→delegate
+        // types. They have no ClrType during binding, so the func?delegate
         // path above does not fire — classify the conversion structurally
         // against the delegate's parameter/return signature instead.
         if (from is FunctionTypeSymbol fnSource2 && to is DelegateTypeSymbol toDelegate
@@ -468,8 +468,8 @@ public sealed class Conversion
 
         // Issue #421 P2-5: user-defined and imported enums convert to/from
         // their underlying numeric primitive, and one enum converts to
-        // another. Mirrors C# §10.2.4: every enum⇄numeric direction is an
-        // explicit conversion (even enum→its own underlying), since enum
+        // another. Mirrors C# §10.2.4: every enum?numeric direction is an
+        // explicit conversion (even enum?its own underlying), since enum
         // identity is intentionally distinct from the integral identity.
         if (TryClassifyEnumConversion(from, to, out var enumConversion))
         {
@@ -478,8 +478,8 @@ public sealed class Conversion
 
         // ADR-0044 numeric lattice. Both operands must be CLR primitives in
         // the numeric set; the widening map decides implicit vs. explicit.
-        // Decimal narrowings (decimal → int etc.) and signed/unsigned
-        // mismatches at the same width (int ↔ uint) are explicit per C#.
+        // Decimal narrowings (decimal ? int etc.) and signed/unsigned
+        // mismatches at the same width (int ? uint) are explicit per C#.
         var fromClr = from?.ClrType?.FullName;
         var toClr = to?.ClrType?.FullName;
         if (fromClr != null && toClr != null
@@ -581,7 +581,7 @@ public sealed class Conversion
         // type has a null `ClrType` during binding — `MakeGenericType` could
         // not close the type because the argument lives in the assembly being
         // emitted — so `IsValueTypeLikeFrom`/`IsInterfaceLikeType` cannot fire
-        // and the value-type → interface box above is skipped. The target
+        // and the value-type ? interface box above is skipped. The target
         // generic interface (`IEnumerator[T]`) is likewise unclosed. Match the
         // target interface's open definition against the generic interfaces the
         // struct's open definition implements, substituting the struct's
@@ -697,12 +697,12 @@ public sealed class Conversion
 
         // Issue #528: a G# slice `[]T` is backed by a CLR `T[]` at runtime
         // (`SliceTypeSymbol.ClrType` is built via `MakeArrayType()` on the
-        // element's `ClrType`). The reverse direction (`T[] → []T`) is
+        // element's `ClrType`). The reverse direction (`T[] ? []T`) is
         // already classified above; this branch documents and enforces the
-        // forward direction (`[]T → T[]`) explicitly so it survives any
+        // forward direction (`[]T ? T[]`) explicitly so it survives any
         // future refactor of the generic #521 reference upcast below.
         // Element-type identity is required (matched by CLR full name to
-        // bridge live ↔ MetadataLoadContext types), preserving slice
+        // bridge live ? MetadataLoadContext types), preserving slice
         // invariance: `[]string` does NOT convert to `object[]` even though
         // the CLR allows array reference covariance, because G# slices are
         // invariant in their element type. The IL is a no-op since the
@@ -938,7 +938,7 @@ public sealed class Conversion
     /// a substitution map mapping each class's declaration type parameters onto
     /// the concrete type arguments seen at the most-derived level, composing the
     /// map down every hop, so the base reference is fully substituted before the
-    /// comparison. Handles multi-level chains (concrete leaf → generic mid →
+    /// comparison. Handles multi-level chains (concrete leaf ? generic mid ?
     /// generic base), type-parameter renaming, and partial type-parameter flow
     /// (only some of the derived's parameters reaching the base). A wrong type
     /// argument or an unrelated definition still fails (GS0155).
@@ -1037,7 +1037,7 @@ public sealed class Conversion
     /// recovering same-compilation user types whose <see cref="TypeSymbol.ClrType"/>
     /// has erased to <c>object</c> (or is <see langword="null"/>). Same-compilation
     /// symbols are reference-equal; distinct user types differ by reference / name
-    /// so genuine negative conversions (e.g. <c>Channel[A]</c> → <c>Channel[B]</c>)
+    /// so genuine negative conversions (e.g. <c>Channel[A]</c> ? <c>Channel[B]</c>)
     /// still report GS0155.
     /// </summary>
     private static bool AreTypeArgumentsEquivalent(TypeSymbol a, TypeSymbol b)
@@ -1278,7 +1278,7 @@ public sealed class Conversion
             }
 
             // Parameter types are contravariant in C#; G# v1 mirrors the
-            // existing CLR-typed func→delegate rule, which is name-based
+            // existing CLR-typed func?delegate rule, which is name-based
             // assignability — i.e., identity or an implicit conversion.
             var conv = Classify(fromType, toType);
             if (!conv.Exists || !conv.IsImplicit)
@@ -1303,7 +1303,7 @@ public sealed class Conversion
         return retConv.Exists && retConv.IsImplicit;
     }
 
-    // Issue #421 P2-5: enum⇄numeric and enum⇄enum conversions. Both
+    // Issue #421 P2-5: enum?numeric and enum?enum conversions. Both
     // directions are explicit per C# §10.3.3 / §10.3.4 — the binder must
     // permit them so the cast syntax (`int32(myEnum)`) reaches the emitter,
     // which then routes them through the underlying numeric primitive.
@@ -1318,7 +1318,7 @@ public sealed class Conversion
             return false;
         }
 
-        // enum → enum (any pair, including the same enum). Identity already
+        // enum ? enum (any pair, including the same enum). Identity already
         // returned above, so this only fires for distinct enum types.
         if (fromIsEnum && toIsEnum)
         {
@@ -1326,14 +1326,14 @@ public sealed class Conversion
             return true;
         }
 
-        // enum → numeric primitive.
+        // enum ? numeric primitive.
         if (fromIsEnum && to?.ClrType?.FullName is string toName && NumericClrFullNames.Contains(toName))
         {
             conversion = Conversion.Explicit;
             return true;
         }
 
-        // numeric primitive → enum.
+        // numeric primitive ? enum.
         if (toIsEnum && from?.ClrType?.FullName is string fromName && NumericClrFullNames.Contains(fromName))
         {
             conversion = Conversion.Explicit;
@@ -1347,7 +1347,7 @@ public sealed class Conversion
     /// <summary>
     /// Issue #1150: determines whether the CLR type <paramref name="fromClr"/>
     /// implicitly, losslessly widens to the CLR type <paramref name="toClr"/>
-    /// per the standard numeric-widening lattice (e.g. <c>uint16</c> →
+    /// per the standard numeric-widening lattice (e.g. <c>uint16</c> ?
     /// <c>int64</c>). Compared by <see cref="Type.FullName"/> so it is safe
     /// across reflection contexts. Narrowing and signed/unsigned same-width
     /// mismatches return <see langword="false"/>.
@@ -1363,7 +1363,7 @@ public sealed class Conversion
     /// <summary>
     /// Issue #1150: determines whether <paramref name="fromReturn"/> implicitly,
     /// losslessly widens to <paramref name="toReturn"/> per the numeric-widening
-    /// lattice. Used for the function-type → function-type return-type
+    /// lattice. Used for the function-type ? function-type return-type
     /// relaxation. Both types must be non-void numeric CLR primitives.
     /// </summary>
     private static bool ReturnTypeWidens(TypeSymbol fromReturn, TypeSymbol toReturn)
@@ -1477,7 +1477,7 @@ public sealed class Conversion
 
     private static bool IsValueTypeAssignableToInterface(TypeSymbol from, TypeSymbol to)
     {
-        // User-declared struct → user-declared interface: walk the struct's
+        // User-declared struct ? user-declared interface: walk the struct's
         // declared interface list.
         if (from is StructSymbol fromStruct && to is InterfaceSymbol toInterface)
         {
@@ -1492,7 +1492,7 @@ public sealed class Conversion
             return false;
         }
 
-        // Issue #976: a user-declared value-type struct → imported CLR
+        // Issue #976: a user-declared value-type struct ? imported CLR
         // interface declared in its `: …` clause. The struct symbol has no
         // ClrType during binding, so the general CLR-assignability path below
         // cannot fire — match structurally against `ImplementedClrInterfaces`,
@@ -1682,7 +1682,7 @@ public sealed class Conversion
     }
 
     /// <summary>
-    /// Issue #1302: symbolic struct → generic-interface implementation check for
+    /// Issue #1302: symbolic struct ? generic-interface implementation check for
     /// a constructed BCL value struct (e.g. <c>List[T].Enumerator</c>) whose
     /// element <c>T</c> is a same-compilation user type, so its
     /// <see cref="TypeSymbol.ClrType"/> (and the target interface's) is

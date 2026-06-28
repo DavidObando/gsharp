@@ -320,7 +320,7 @@ internal static class CrossAssemblyDefinitionResolver
             location = new Location
             {
                 Uri = DocumentUri.FromFileSystemPath(sourceFile),
-                Range = new Range(new Position(line, character), new Position(line, character + simpleName.Length)),
+                Range = new(new Position(line, character), new Position(line, character + simpleName.Length)),
             };
             return true;
         }
@@ -401,7 +401,7 @@ internal static class CrossAssemblyDefinitionResolver
             location = new Location
             {
                 Uri = DocumentUri.FromFileSystemPath(sourceFile),
-                Range = new Range(new Position(line, character), new Position(line, character + memberName.Length)),
+                Range = new(new Position(line, character), new Position(line, character + memberName.Length)),
             };
             return true;
         }
@@ -802,7 +802,7 @@ internal static class CrossAssemblyDefinitionResolver
         return new Location
         {
             Uri = DocumentUri.FromFileSystemPath(source.FilePath),
-            Range = new Range(new Position(startLine, startCol), new Position(endLine, endCol)),
+            Range = new(new Position(startLine, startCol), new Position(endLine, endCol)),
         };
     }
 

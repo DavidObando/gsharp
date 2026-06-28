@@ -80,7 +80,7 @@ public static class MoveNextBodyRewriter
         private readonly Dictionary<BoundAwaitExpression, AwaitResumePoint> awaitResumeMap;
         private readonly LocalVariableSymbol cachedStateLocal;
         private readonly LocalVariableSymbol retValLocal;
-        private readonly List<LocalVariableSymbol> allLocals = new List<LocalVariableSymbol>();
+        private readonly List<LocalVariableSymbol> allLocals = new();
 
         public RewriteContext(AsyncStateMachinePlan plan)
         {

@@ -763,13 +763,13 @@ internal static class PortablePdbEmitterTestHelpers
     // Mirror of PortablePdbEmitter.GSharpLanguageGuid for cross-assembly assertion.
     // Kept in sync via the unit test in PortablePdbEmitTests — if the
     // emitter ever reissues the GUID this constant must move with it.
-    public static readonly Guid GSharpLanguageGuid = new Guid("4F4D7B6A-0E33-4C2E-A3D7-2E5F8B7F9C00");
+    public static readonly Guid GSharpLanguageGuid = new("4F4D7B6A-0E33-4C2E-A3D7-2E5F8B7F9C00");
 
     // Mirror of PortablePdbEmitter's CustomDebugInformation kind GUIDs;
     // used by Phase 6 acceptance tests to look up specific CDI rows.
-    public static readonly Guid EmbeddedSourceKind = new Guid("0E8A571B-6926-466E-B4AD-8AB04611F5FE");
-    public static readonly Guid SourceLinkKind = new Guid("CC110556-A091-4D38-9FEC-25AB9A351A6A");
-    public static readonly Guid CompilationOptionsKind = new Guid("B5FEEC05-8CD0-4A83-96DA-466284BB4BD8");
+    public static readonly Guid EmbeddedSourceKind = new("0E8A571B-6926-466E-B4AD-8AB04611F5FE");
+    public static readonly Guid SourceLinkKind = new("CC110556-A091-4D38-9FEC-25AB9A351A6A");
+    public static readonly Guid CompilationOptionsKind = new("B5FEEC05-8CD0-4A83-96DA-466284BB4BD8");
 }
 
 public class PortablePdbPhase6Tests
@@ -1424,7 +1424,7 @@ func main() {
 /// </summary>
 public class PortablePdbPhase219Tests
 {
-    public static readonly Guid CompilationMetadataReferencesKind = new Guid("7E4D4708-096E-4C5C-AEDA-CB10BA6A740D");
+    public static readonly Guid CompilationMetadataReferencesKind = new("7E4D4708-096E-4C5C-AEDA-CB10BA6A740D");
 
     private const string SimpleProgram = @"package main
 

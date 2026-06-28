@@ -154,7 +154,7 @@ internal sealed class ClosureEmitter
     /// <c>enclosingClosure</c>) and by <c>BodyEmitter</c> itself (for the
     /// <c>EmitFunctionLiteral</c> path).
     /// </summary>
-    public Dictionary<BoundFunctionLiteralExpression, ClosureInfo> ClosureInfos { get; } = new Dictionary<BoundFunctionLiteralExpression, ClosureInfo>();
+    public Dictionary<BoundFunctionLiteralExpression, ClosureInfo> ClosureInfos { get; } = new();
 
     /// <summary>
     /// Gets per-<c>go</c>-site closure metadata. The display class wraps the
@@ -162,7 +162,7 @@ internal sealed class ClosureEmitter
     /// <c>InvokeAsync</c> for async <c>go</c>) that <c>Task.Run</c> can
     /// bind to.
     /// </summary>
-    public Dictionary<BoundGoStatement, ClosureInfo> GoClosureInfos { get; } = new Dictionary<BoundGoStatement, ClosureInfo>();
+    public Dictionary<BoundGoStatement, ClosureInfo> GoClosureInfos { get; } = new();
 
     /// <summary>
     /// Gets the reverse map from a closure-invoke <see cref="FunctionSymbol"/> to
@@ -171,7 +171,7 @@ internal sealed class ClosureEmitter
     /// captures (issue #503 follow-up) route through the enclosing
     /// display class.
     /// </summary>
-    public Dictionary<FunctionSymbol, ClosureInfo> ClosureInvokeToInfo { get; } = new Dictionary<FunctionSymbol, ClosureInfo>();
+    public Dictionary<FunctionSymbol, ClosureInfo> ClosureInvokeToInfo { get; } = new();
 
     /// <summary>
     /// Gets every synthesized aggregate class emitted on behalf of a closure,
@@ -181,7 +181,7 @@ internal sealed class ClosureEmitter
     /// PR-E-10) also append to this list directly, which is why the
     /// collection is exposed as a mutable <see cref="List{T}"/>.
     /// </summary>
-    public List<StructSymbol> SynthesizedClosureClasses { get; } = new List<StructSymbol>();
+    public List<StructSymbol> SynthesizedClosureClasses { get; } = new();
 
     // Phase 4 emit parity (E2): for each lambda that captures outer variables,
     // synthesize a sealed closure class on the entry-point package with:
@@ -451,7 +451,7 @@ internal sealed class ClosureEmitter
     /// </summary>
     public sealed class ConstructedTypeCollector : BoundTreeRewriter
     {
-        public HashSet<StructSymbol> Constructed { get; } = new HashSet<StructSymbol>();
+        public HashSet<StructSymbol> Constructed { get; } = new();
 
         protected override BoundExpression RewriteExpression(BoundExpression node)
         {

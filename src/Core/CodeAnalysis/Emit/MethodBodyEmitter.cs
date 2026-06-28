@@ -96,14 +96,14 @@ internal sealed partial class MethodBodyEmitter
     // bound labels defined lexically within that region (including nested
     // protected sub-regions). Used to translate goto/conditional-goto whose
     // target lies outside the innermost region into the CLR-required `leave`.
-    private readonly Stack<HashSet<BoundLabel>> protectedRegionStack = new Stack<HashSet<BoundLabel>>();
+    private readonly Stack<HashSet<BoundLabel>> protectedRegionStack = new();
 
     // Phase 4 (ADR-0027 §7.7a) Portable PDB sequence-point capture. Always
     // allocated (cheap) so EmitStatement can append without a null check;
     // the outer harvests this list via SequencePoints after EmitBlock and
     // hands it to PortablePdbEmitter only when PDB emit is enabled. Empty
     // for synthesized methods that go through other emit paths.
-    private readonly List<SequencePoint> sequencePoints = new List<SequencePoint>();
+    private readonly List<SequencePoint> sequencePoints = new();
     private int lastSequencePointIlOffset = -1;
 
     public MethodBodyEmitter(

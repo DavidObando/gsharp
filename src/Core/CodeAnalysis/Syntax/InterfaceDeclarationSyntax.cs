@@ -205,7 +205,7 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     /// Empty when the interface declares no base interfaces. Each clause must
     /// resolve to an interface; the binder rejects class/struct bases.
     /// </summary>
-    public SeparatedSyntaxList<TypeClauseSyntax> BaseTypeClauses { get; set; } = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
+    public SeparatedSyntaxList<TypeClauseSyntax> BaseTypeClauses { get; set; } = new(ImmutableArray<SyntaxNode>.Empty);
 
     /// <summary>Gets a value indicating whether this interface declares one or more base interfaces (issue #1006).</summary>
     public bool HasBaseInterfaces => BaseColonToken != null;

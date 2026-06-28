@@ -79,7 +79,7 @@ public sealed class TriageArtifact
     /// <summary>Gets or sets the prior <c>{runId, gscVersion, result}</c> records for this fingerprint.</summary>
     [JsonPropertyName("retryHistory")]
     [JsonPropertyOrder(12)]
-    public List<TriageRetryEntry> RetryHistory { get; set; } = new List<TriageRetryEntry>();
+    public List<TriageRetryEntry> RetryHistory { get; set; } = new();
 }
 
 /// <summary>
@@ -180,7 +180,7 @@ public sealed class TriageSuggestedIssue
     /// <summary>Gets or sets the issue labels (always includes <c>Oats</c>).</summary>
     [JsonPropertyName("labels")]
     [JsonPropertyOrder(2)]
-    public List<string> Labels { get; set; } = new List<string>();
+    public List<string> Labels { get; set; } = new();
 }
 
 /// <summary>

@@ -56,17 +56,17 @@ public sealed class ReportModel
     /// <summary>Gets or sets the stage names in execution order (Translate→Compile→IlVerify→TestParity).</summary>
     [JsonPropertyName("stageOrder")]
     [JsonPropertyOrder(6)]
-    public List<string> StageOrder { get; set; } = new List<string>();
+    public List<string> StageOrder { get; set; } = new();
 
     /// <summary>Gets or sets the per-app results, sorted by app id, each with its stages in execution order.</summary>
     [JsonPropertyName("apps")]
     [JsonPropertyOrder(7)]
-    public List<AppReport> Apps { get; set; } = new List<AppReport>();
+    public List<AppReport> Apps { get; set; } = new();
 
     /// <summary>Gets or sets the discovered gaps, grouped by fingerprint and sorted by fingerprint.</summary>
     [JsonPropertyName("gaps")]
     [JsonPropertyOrder(8)]
-    public List<GapReport> Gaps { get; set; } = new List<GapReport>();
+    public List<GapReport> Gaps { get; set; } = new();
 
     /// <summary>
     /// Builds a <see cref="ReportModel"/> from a run directory by reading its
@@ -294,17 +294,17 @@ public sealed class AppReport
     /// <summary>Gets or sets the per-stage statuses, in execution order.</summary>
     [JsonPropertyName("stages")]
     [JsonPropertyOrder(3)]
-    public List<StageReport> Stages { get; set; } = new List<StageReport>();
+    public List<StageReport> Stages { get; set; } = new();
 
     /// <summary>Gets or sets the run-relative triage artifact paths for this app.</summary>
     [JsonPropertyName("artifacts")]
     [JsonPropertyOrder(4)]
-    public List<string> Artifacts { get; set; } = new List<string>();
+    public List<string> Artifacts { get; set; } = new();
 
     /// <summary>Gets or sets the distinct fingerprints captured for this app.</summary>
     [JsonPropertyName("fingerprints")]
     [JsonPropertyOrder(5)]
-    public List<string> Fingerprints { get; set; } = new List<string>();
+    public List<string> Fingerprints { get; set; } = new();
 }
 
 /// <summary>
@@ -368,12 +368,12 @@ public sealed class GapReport
     /// <summary>Gets or sets the per-app occurrences (appId + source location), sorted by app id.</summary>
     [JsonPropertyName("occurrences")]
     [JsonPropertyOrder(6)]
-    public List<GapOccurrence> Occurrences { get; set; } = new List<GapOccurrence>();
+    public List<GapOccurrence> Occurrences { get; set; } = new();
 
     /// <summary>Gets or sets the merged, deduped retry history for this fingerprint.</summary>
     [JsonPropertyName("retryHistory")]
     [JsonPropertyOrder(7)]
-    public List<TriageRetryEntry> RetryHistory { get; set; } = new List<TriageRetryEntry>();
+    public List<TriageRetryEntry> RetryHistory { get; set; } = new();
 }
 
 /// <summary>

@@ -44,7 +44,7 @@ public class AggressiveInliningTests
     private static readonly System.Type OptionalHost = ResolveHost("Gsharp.Extensions.Optional");
     private static readonly System.Type SequencesHost = ResolveHost("Gsharp.Extensions.Sequences");
 
-    private static readonly (System.Type Type, string Method)[] InlinedMethods = new (System.Type, string)[]
+    private static readonly (System.Type Type, string Method)[] InlinedMethods = new(System.Type, string)[]
     {
         // OptionalExtensions — both class-receiver and struct-receiver
         // overloads carry [AggressiveInlining] per ADR-0084. The test iterates
@@ -71,7 +71,7 @@ public class AggressiveInliningTests
         (typeof(Sequences), nameof(Sequences.Empty)),
     };
 
-    private static readonly (System.Type Type, string Method)[] NotInlinedMethods = new (System.Type, string)[]
+    private static readonly (System.Type Type, string Method)[] NotInlinedMethods = new(System.Type, string)[]
     {
         // OrThrow intentionally preserves its stack frame on both the class
         // and struct overloads.

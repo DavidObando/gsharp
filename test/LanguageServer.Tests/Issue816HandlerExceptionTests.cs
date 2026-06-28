@@ -137,10 +137,10 @@ type ScreenImpl class : ITabScreen {
             _ = await server.CodeLensAsync(new CodeLensParams { TextDocument = id });
             _ = await server.SemanticTokensFullAsync(new SemanticTokensParams { TextDocument = id });
             _ = await server.SemanticTokensRangeAsync(new SemanticTokensRangeParams { TextDocument = id });
-            _ = await server.HoverAsync(new HoverParams { TextDocument = id, Position = new Position(0, 0) });
+            _ = await server.HoverAsync(new HoverParams { TextDocument = id, Position = new(0, 0) });
             _ = await server.DocumentSymbolAsync(new DocumentSymbolParams { TextDocument = id });
             _ = await server.FoldingRangeAsync(new FoldingRangeParams { TextDocument = id });
-            _ = await server.CompletionAsync(new CompletionParams { TextDocument = id, Position = new Position(0, 0) });
+            _ = await server.CompletionAsync(new CompletionParams { TextDocument = id, Position = new(0, 0) });
         }
         finally
         {
@@ -166,7 +166,7 @@ type ScreenImpl class : ITabScreen {
         var id = new TextDocumentIdentifier { Uri = uri };
 
         // Each of these handler types would historically tear down with NRE.
-        Assert.Null(await server.HoverAsync(new HoverParams { TextDocument = id, Position = new Position(0, 0) }));
+        Assert.Null(await server.HoverAsync(new HoverParams { TextDocument = id, Position = new(0, 0) }));
         Assert.Empty(await server.InlayHintAsync(new InlayHintParams { TextDocument = id }) ?? Array.Empty<InlayHint>());
         Assert.Empty(await server.CodeLensAsync(new CodeLensParams { TextDocument = id }) ?? Array.Empty<CodeLens>());
 

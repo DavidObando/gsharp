@@ -130,7 +130,7 @@ internal sealed class BinderContext
     /// <summary>
     /// Gets the diagnostics bag for the binder this context backs.
     /// </summary>
-    public DiagnosticBag Diagnostics { get; } = new DiagnosticBag();
+    public DiagnosticBag Diagnostics { get; } = new();
 
     /// <summary>
     /// Gets the reference resolver associated with the binder's scope chain.

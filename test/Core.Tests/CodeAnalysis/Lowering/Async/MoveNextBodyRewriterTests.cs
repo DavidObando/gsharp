@@ -20,7 +20,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Lowering.Async;
 /// </summary>
 public class MoveNextBodyRewriterTests
 {
-    private static readonly PackageSymbol Package = new PackageSymbol("main", declaration: null);
+    private static readonly PackageSymbol Package = new("main", declaration: null);
     private static readonly ReferenceResolver Resolver = ReferenceResolver.Default();
 
     [Fact]

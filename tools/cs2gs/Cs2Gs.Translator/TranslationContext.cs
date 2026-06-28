@@ -20,7 +20,7 @@ namespace Cs2Gs.Translator;
 /// </summary>
 public sealed class TranslationContext
 {
-    private readonly List<TranslationDiagnostic> diagnostics = new List<TranslationDiagnostic>();
+    private readonly List<TranslationDiagnostic> diagnostics = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TranslationContext"/> class.

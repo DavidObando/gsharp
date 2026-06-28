@@ -105,7 +105,7 @@ namespace Demo
 {
     public class C
     {
-        private object box = new object();
+        private object box = new();
         public bool HasBox() => box != null;
     }
 }");

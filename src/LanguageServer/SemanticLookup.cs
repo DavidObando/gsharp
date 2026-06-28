@@ -1293,7 +1293,7 @@ public static class SemanticLookup
         private readonly Dictionary<(string FileName, int SpanStart, int SpanEnd), Symbol> declarationsBySpan;
         private readonly Dictionary<string, Symbol> globals;
         private readonly Dictionary<SyntaxNode, Dictionary<string, Symbol>> localDeclarations;
-        private readonly object referencesLock = new object();
+        private readonly object referencesLock = new();
         private Dictionary<Symbol, List<SyntaxToken>> referencesIndex;
 
         // Cached tree-walk results. Resolve's fallback path used to call

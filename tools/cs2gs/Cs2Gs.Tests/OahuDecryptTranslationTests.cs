@@ -490,7 +490,7 @@ namespace Demo
 
     public class Repo<T> : IEnumerable<T>
     {
-        private readonly List<T> items = new List<T>();
+        private readonly List<T> items = new();
 
         public IEnumerator<T> GetEnumerator()
         {

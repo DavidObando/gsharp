@@ -102,7 +102,7 @@ namespace Demo
     {
         public void F()
         {
-            IBox b = new Box();
+            IBox b = new();
             b = null!;
             System.Console.WriteLine(b);
         }

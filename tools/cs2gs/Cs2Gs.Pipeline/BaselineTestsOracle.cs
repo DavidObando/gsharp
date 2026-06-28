@@ -58,7 +58,7 @@ public sealed class BaselineTestsOracle
     /// <summary>Gets or sets the per-test name/outcome records.</summary>
     [JsonPropertyName("tests")]
     [JsonPropertyOrder(7)]
-    public List<TestCaseOutcome> Tests { get; set; } = new List<TestCaseOutcome>();
+    public List<TestCaseOutcome> Tests { get; set; } = new();
 
     /// <summary>
     /// Loads and parses a <c>baseline.tests.json</c> oracle from disk.

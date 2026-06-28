@@ -111,7 +111,7 @@ internal sealed class ReflectionMetadataEmitter
     // Each lambda's synthetic FunctionSymbol is registered alongside user
     // functions in functionsByPackage so it gets a MethodDef row, and its
     // body is emitted via the same EmitFunction path.
-    private readonly Dictionary<FunctionSymbol, BoundBlockStatement> lambdaBodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+    private readonly Dictionary<FunctionSymbol, BoundBlockStatement> lambdaBodies = new();
 
     // PR-E-9: closure-environment metadata and synthesized display classes
     // moved onto ClosureEmitter. Where this file used to declare:
@@ -312,7 +312,7 @@ internal sealed class ReflectionMetadataEmitter
     // creates each generic state-machine. Used to auto-push the remap inside
     // GetUserStructFieldRef when the containing type is a generic SM class
     // (so its field-signature MemberRef matches the FieldDef blob exactly).
-    internal readonly Dictionary<StructSymbol, Dictionary<TypeParameterSymbol, int>> iteratorStateMachineRemapsByClass = new Dictionary<StructSymbol, Dictionary<TypeParameterSymbol, int>>();
+    internal readonly Dictionary<StructSymbol, Dictionary<TypeParameterSymbol, int>> iteratorStateMachineRemapsByClass = new();
 
     /// <summary>
     /// Issue #810: push the SM remap for <paramref name="smClass"/> so that
@@ -9451,13 +9451,13 @@ internal sealed class ReflectionMetadataEmitter
     // is cached by its parameter/return symbol identities (see
     // FunctionTypeSymbol.Get) so reference-equality is sufficient.
     private readonly Dictionary<FunctionTypeSymbol, EntityHandle> functionDelegateTypeSpecCache =
-        new Dictionary<FunctionTypeSymbol, EntityHandle>(ReferenceEqualityComparer.Instance);
+        new(ReferenceEqualityComparer.Instance);
 
     private readonly Dictionary<FunctionTypeSymbol, EntityHandle> functionDelegateCtorRefCache =
-        new Dictionary<FunctionTypeSymbol, EntityHandle>(ReferenceEqualityComparer.Instance);
+        new(ReferenceEqualityComparer.Instance);
 
     private readonly Dictionary<FunctionTypeSymbol, EntityHandle> functionDelegateInvokeRefCache =
-        new Dictionary<FunctionTypeSymbol, EntityHandle>(ReferenceEqualityComparer.Instance);
+        new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
     /// ADR-0087 §3 R6: encodes a <see cref="FunctionTypeSymbol"/> whose
@@ -9700,7 +9700,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private sealed class FunctionEmitOrderComparer : IComparer<FunctionSymbol>
     {
-        public static readonly FunctionEmitOrderComparer Instance = new FunctionEmitOrderComparer();
+        public static readonly FunctionEmitOrderComparer Instance = new();
 
         private FunctionEmitOrderComparer()
         {

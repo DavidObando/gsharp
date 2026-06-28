@@ -225,7 +225,7 @@ public static class AsyncIteratorRewriter
     /// </summary>
     public sealed class YieldStateCollector : BoundTreeWalker
     {
-        private readonly ResumableStateAllocator allocator = new ResumableStateAllocator();
+        private readonly ResumableStateAllocator allocator = new();
         private readonly ImmutableDictionary<BoundYieldStatement, int>.Builder states =
             ImmutableDictionary.CreateBuilder<BoundYieldStatement, int>();
 
@@ -242,7 +242,7 @@ public static class AsyncIteratorRewriter
     /// </summary>
     public sealed class AwaitStateCollector : BoundTreeWalker
     {
-        private readonly ResumableStateAllocator allocator = new ResumableStateAllocator();
+        private readonly ResumableStateAllocator allocator = new();
         private readonly ImmutableDictionary<BoundAwaitExpression, int>.Builder states =
             ImmutableDictionary.CreateBuilder<BoundAwaitExpression, int>();
 
@@ -257,7 +257,7 @@ public static class AsyncIteratorRewriter
 
     private sealed class LocalCollector : BoundTreeWalker
     {
-        public List<VariableSymbol> Locals { get; } = new List<VariableSymbol>();
+        public List<VariableSymbol> Locals { get; } = new();
 
         protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
         {
@@ -282,7 +282,7 @@ public static class AsyncIteratorRewriter
 
     private sealed class AwaiterTypeCollector : BoundTreeWalker
     {
-        public List<Type> AwaiterTypes { get; } = new List<Type>();
+        public List<Type> AwaiterTypes { get; } = new();
 
         protected override void VisitAwaitExpression(BoundAwaitExpression node)
         {

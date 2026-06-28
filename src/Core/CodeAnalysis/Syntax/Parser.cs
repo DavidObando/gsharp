@@ -23,7 +23,7 @@ public class Parser
     // enums, which expand into a sealed base + one class per case), the
     // expander stages the additional siblings here. `ParseMembers` drains the
     // queue after each `ParseMember` call so they appear in declaration order.
-    private readonly Queue<MemberSyntax> pendingSyntheticMembers = new Queue<MemberSyntax>();
+    private readonly Queue<MemberSyntax> pendingSyntheticMembers = new();
 
     private int position;
 
@@ -103,7 +103,7 @@ public class Parser
     /// <summary>
     /// Gets tiagnostic bag associated to this parser.
     /// </summary>
-    public DiagnosticBag Diagnostics { get; } = new DiagnosticBag();
+    public DiagnosticBag Diagnostics { get; } = new();
 
     /// <summary>
     /// Gets the documentation comment tokens collected during lexing (ADR-0057 §7).
@@ -469,7 +469,7 @@ public class Parser
         // intervening tokens (we use it to disambiguate "annotation with no
         // args" from "annotation followed by something that opens a `(`").
         SyntaxToken openParen = null;
-        SeparatedSyntaxList<ExpressionSyntax> arguments = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        SeparatedSyntaxList<ExpressionSyntax> arguments = new(ImmutableArray<SyntaxNode>.Empty);
         SyntaxToken closeParen = null;
         if (Current.Kind == SyntaxKind.OpenParenthesisToken)
         {
@@ -1538,7 +1538,7 @@ public class Parser
         // primary constructor parameter list.
         SyntaxToken primaryCtorOpenParen = null;
         SyntaxToken primaryCtorCloseParen = null;
-        SeparatedSyntaxList<ParameterSyntax> primaryCtorParameters = new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        SeparatedSyntaxList<ParameterSyntax> primaryCtorParameters = new(ImmutableArray<SyntaxNode>.Empty);
         if (Current.Kind == SyntaxKind.OpenParenthesisToken)
         {
             primaryCtorOpenParen = MatchToken(SyntaxKind.OpenParenthesisToken);
@@ -1556,7 +1556,7 @@ public class Parser
         SyntaxToken baseColon = null;
         SyntaxToken baseTypeIdentifier = null;
         SyntaxToken baseCtorOpenParen = null;
-        SeparatedSyntaxList<ExpressionSyntax> baseCtorArguments = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        SeparatedSyntaxList<ExpressionSyntax> baseCtorArguments = new(ImmutableArray<SyntaxNode>.Empty);
         SyntaxToken baseCtorCloseParen = null;
         var additionalBaseIdentifiers = ImmutableArray.CreateBuilder<SyntaxToken>();
         var baseTypeClauseNodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
@@ -2114,7 +2114,7 @@ public class Parser
         SyntaxToken baseColon = null;
         SyntaxToken baseKeyword = null;
         SyntaxToken baseOpenParen = null;
-        SeparatedSyntaxList<ExpressionSyntax> baseArguments = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        SeparatedSyntaxList<ExpressionSyntax> baseArguments = new(ImmutableArray<SyntaxNode>.Empty);
         SyntaxToken baseCloseParen = null;
         if (Current.Kind == SyntaxKind.ColonToken)
         {

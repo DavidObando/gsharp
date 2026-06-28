@@ -46,7 +46,7 @@ func Add(a int32, b int32) int32 {
         // client cancelled via $/cancelRequest) must abort instead of computing to
         // completion and tying up a thread.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => server.HoverAsync(new HoverParams { TextDocument = id, Position = new Position(2, 9) }, cancelled));
+            () => server.HoverAsync(new HoverParams { TextDocument = id, Position = new(2, 9) }, cancelled));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => server.SemanticTokensFullAsync(new SemanticTokensParams { TextDocument = id }, cancelled));
@@ -75,7 +75,7 @@ func Add(a int32, b int32) int32 {
             await server.DocumentSymbolAsync(new DocumentSymbolParams { TextDocument = id });
             await server.FoldingRangeAsync(new FoldingRangeParams { TextDocument = id });
             await server.SemanticTokensFullAsync(new SemanticTokensParams { TextDocument = id });
-            await server.HoverAsync(new HoverParams { TextDocument = id, Position = new Position(2, 9) });
+            await server.HoverAsync(new HoverParams { TextDocument = id, Position = new(2, 9) });
         }));
 
         await Task.WhenAll(reads);

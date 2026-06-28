@@ -68,8 +68,8 @@ public static class AsyncIteratorMoveNextBodyBuilder
         private readonly Dictionary<int, BoundLabel> awaitResumeLabels = new();
         private readonly Dictionary<int, BoundLabel> awaitResumeAfterLabels = new();
 
-        private readonly BoundLabel exitLabel = new BoundLabel("<>ai_exit");
-        private readonly BoundLabel endOfBodyLabel = new BoundLabel("<>ai_end");
+        private readonly BoundLabel exitLabel = new("<>ai_exit");
+        private readonly BoundLabel endOfBodyLabel = new("<>ai_end");
 
         public BuildContext(
             AsyncIteratorPlan plan,

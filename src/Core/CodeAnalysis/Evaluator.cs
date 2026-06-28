@@ -1,4 +1,4 @@
-﻿// <copyright file="Evaluator.cs" company="GSharp">
+// <copyright file="Evaluator.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -22,18 +22,18 @@ public sealed class Evaluator
 {
     private readonly BoundProgram program;
     private readonly Dictionary<VariableSymbol, object> globals;
-    private readonly Stack<Dictionary<VariableSymbol, object>> locals = new Stack<Dictionary<VariableSymbol, object>>();
-    private readonly object goLock = new object();
-    private readonly Stack<ScopeFrame> scopeFrames = new Stack<ScopeFrame>();
-    private readonly Stack<System.Collections.IList> iteratorSinks = new Stack<System.Collections.IList>();
-    private readonly Dictionary<Symbols.FunctionSymbol, bool> iteratorFunctionCache = new Dictionary<Symbols.FunctionSymbol, bool>();
-    private readonly Dictionary<(Symbols.StructSymbol, Symbols.FieldSymbol), object> staticFields = new Dictionary<(Symbols.StructSymbol, Symbols.FieldSymbol), object>();
+    private readonly Stack<Dictionary<VariableSymbol, object>> locals = new();
+    private readonly object goLock = new();
+    private readonly Stack<ScopeFrame> scopeFrames = new();
+    private readonly Stack<System.Collections.IList> iteratorSinks = new();
+    private readonly Dictionary<Symbols.FunctionSymbol, bool> iteratorFunctionCache = new();
+    private readonly Dictionary<(Symbols.StructSymbol, Symbols.FieldSymbol), object> staticFields = new();
 
     // ADR-0089 / issue #1030: interface static-field storage. Keyed by the
     // owning interface symbol so each closed construction of a generic interface
     // (`IBox[int32]` vs `IBox[string]`) owns independent storage, matching CLR
     // static-field semantics. The non-generic case keys by the single interface.
-    private readonly Dictionary<(Symbols.InterfaceSymbol, Symbols.FieldSymbol), object> interfaceStaticFields = new Dictionary<(Symbols.InterfaceSymbol, Symbols.FieldSymbol), object>();
+    private readonly Dictionary<(Symbols.InterfaceSymbol, Symbols.FieldSymbol), object> interfaceStaticFields = new();
     private Random random;
 
     private object lastValue;
@@ -2280,7 +2280,7 @@ public sealed class Evaluator
             if (leftValue != null)
             {
                 // Issue #1239: when the best common type widened the left's
-                // underlying numeric type (e.g. `int32? ?? int64` → `int64`),
+                // underlying numeric type (e.g. `int32? ?? int64` ? `int64`),
                 // convert the non-null left value to the result type. Reference
                 // results are representation-preserving and need no conversion.
                 var leftUnderlying = b.Left.Type is NullableTypeSymbol ln ? ln.UnderlyingType : b.Left.Type;
@@ -2593,7 +2593,7 @@ public sealed class Evaluator
     private static object NarrowToResultType(object value, TypeSymbol resultType)
     {
         // C# arithmetic on sub-int types promotes to int. To preserve the
-        // operator's declared result type (e.g. byte + byte → byte) we
+        // operator's declared result type (e.g. byte + byte ? byte) we
         // narrow back here. Other widths already match their CLR type.
         if (resultType == TypeSymbol.Int8)
         {
@@ -2633,7 +2633,7 @@ public sealed class Evaluator
 
     /// <summary>
     /// Issue #615: converts a boxed CLR enum value to its underlying primitive
-    /// (e.g. DayOfWeek.Monday → int 1) so that the pattern-matching arms in
+    /// (e.g. DayOfWeek.Monday ? int 1) so that the pattern-matching arms in
     /// NumericAdd/Sub/Compare/OnesComplement etc. can match the value. Non-enum
     /// values pass through unchanged.
     /// </summary>
@@ -3124,14 +3124,14 @@ public sealed class Evaluator
         // produces `ldnull` for reference types (e.g. `string`), zero for
         // primitive value types, and `initobj` for arbitrary value types.
         // The interpreter mirrors this:
-        //   - reference types and nullable types → nil
-        //   - value types → zero / zeroed struct
+        //   - reference types and nullable types ? nil
+        //   - value types ? zero / zeroed struct
         // Prior to ADR-0100 the interpreter returned `""` for
         // `default(string)` (the Go-style zero), which diverged from the
         // compiled behaviour. Both shapes now produce `nil`.
 
         // Issue #504: a NullableTypeSymbol's default is `nil`, not the
-        // underlying type's zero. The binder lowers `nil → Nullable<T>`
+        // underlying type's zero. The binder lowers `nil ? Nullable<T>`
         // (value-type) to a BoundDefaultExpression so the emitter can
         // materialise `default(Nullable<T>)` via ldloca/initobj/ldloc; the
         // interpreter must mirror that by producing the absent-value sentinel
@@ -3187,8 +3187,8 @@ public sealed class Evaluator
 
     private object EvaluateMakeChannelExpression(BoundMakeChannelExpression node)
     {
-        // Phase 5.4 / ADR-0022: `make(chan T)` → Channel.CreateUnbounded<T>();
-        // `make(chan T, capacity)` → Channel.CreateBounded<T>(new BoundedChannelOptions(capacity)).
+        // Phase 5.4 / ADR-0022: `make(chan T)` ? Channel.CreateUnbounded<T>();
+        // `make(chan T, capacity)` ? Channel.CreateBounded<T>(new BoundedChannelOptions(capacity)).
         var elementClr = node.ChannelType.ElementType.ClrType ?? typeof(object);
         if (node.Capacity == null)
         {
@@ -3729,7 +3729,7 @@ public sealed class Evaluator
         {
             // Phase 3.C.1: nullability is a bind-time annotation; the runtime
             // representation is identical to the underlying type. Issue #1236:
-            // a lifted numeric widening (`T1? → T2?`, e.g. `uint8? → int32?`)
+            // a lifted numeric widening (`T1? ? T2?`, e.g. `uint8? ? int32?`)
             // must still convert a present underlying value to the target
             // underlying type so a lifted binary operator sees a homogeneous
             // pair; a null source stays null (the lifted operator preserves it).
@@ -3748,8 +3748,8 @@ public sealed class Evaluator
             || (node.Type is StructSymbol upcastTarget && upcastTarget.IsClass)
             || (node.Type?.ClrType != null && !node.Type.ClrType.IsValueType))
         {
-            // Reference upcast (class → implemented interface, derived class
-            // → base class, or any → object). Also covers issue #521: a CLR
+            // Reference upcast (class ? implemented interface, derived class
+            // ? base class, or any ? object). Also covers issue #521: a CLR
             // class or interface widening. The interpreter stores instances
             // as boxed objects, so the upcast is a no-op at runtime — only
             // the bind-time static type changes.
@@ -3785,7 +3785,7 @@ public sealed class Evaluator
         // Convert.ChangeType is checked and throws OverflowException instead.
         if (value is decimal dv)
         {
-            // decimal → primitive is checked at the BCL level even for
+            // decimal ? primitive is checked at the BCL level even for
             // unchecked casts; route through (long) first when applicable.
             if (to.IsSameAs(typeof(float)))
             {
@@ -4443,8 +4443,8 @@ public sealed class Evaluator
 
     private sealed class ScopeFrame
     {
-        public List<Task> Tasks { get; } = new List<Task>();
+        public List<Task> Tasks { get; } = new();
 
-        public System.Threading.CancellationTokenSource Cts { get; } = new System.Threading.CancellationTokenSource();
+        public System.Threading.CancellationTokenSource Cts { get; } = new();
     }
 }

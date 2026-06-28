@@ -35,8 +35,8 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 /// </remarks>
 public sealed class SynthesizedStateMachineType : TypeSymbol
 {
-    private readonly List<FieldSymbol> fields = new List<FieldSymbol>();
-    private readonly Dictionary<Type, FieldSymbol> awaiterPoolFields = new Dictionary<Type, FieldSymbol>();
+    private readonly List<FieldSymbol> fields = new();
+    private readonly Dictionary<Type, FieldSymbol> awaiterPoolFields = new();
     private StructSymbol materializedStruct;
 
     /// <summary>

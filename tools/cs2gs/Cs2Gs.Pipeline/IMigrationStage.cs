@@ -76,7 +76,7 @@ public sealed class StageExecutionContext
     public TriageBuilder Triage { get; }
 
     /// <summary>Gets the G# files emitted by the Translate stage for downstream stages.</summary>
-    public List<EmittedGsFile> EmittedFiles { get; } = new List<EmittedGsFile>();
+    public List<EmittedGsFile> EmittedFiles { get; } = new();
 
     /// <summary>
     /// Gets or sets the absolute path of the assembly emitted by the Compile

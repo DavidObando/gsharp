@@ -71,7 +71,7 @@ public class LspServerMemberFeatureTests
             var completion = await server.CompletionAsync(new CompletionParams
             {
                 TextDocument = id,
-                Position = new Position(dotPos.Line, dotPos.Character + "Width.".Length),
+                Position = new(dotPos.Line, dotPos.Character + "Width.".Length),
             });
             Assert.NotNull(completion);
             Assert.NotEmpty(completion.Items);

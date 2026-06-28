@@ -94,14 +94,14 @@ internal sealed class DeclarationBinder
     // Method bodies already see fully-populated constructors because they are
     // bound in a later phase; deferring base-initializer argument binding to a
     // post-pass gives it the same guarantee, regardless of source-file order.
-    private readonly List<Action> pendingBaseInitializerBindings = new List<Action>();
+    private readonly List<Action> pendingBaseInitializerBindings = new();
 
     // Issue #1194: field-initializer binding is deferred until after all
     // top-level functions are declared in Binder.BindGlobalScope, so a field
     // initializer can resolve an unqualified call to a free function or a
     // sibling static method/const. Each entry re-establishes the captured
     // scope and the enclosing type's static-member scope before binding.
-    private readonly List<Action> pendingFieldInitializerBindings = new List<Action>();
+    private readonly List<Action> pendingFieldInitializerBindings = new();
 
     // Issue #1069: nested struct/class and interface type-name shells declared in
     // phase 1 (DeclareNestedTypeShells) so a sibling member signature can
@@ -110,9 +110,9 @@ internal sealed class DeclarationBinder
     // type alias. Nested enums are fully bound during the shell phase (their
     // members reference no user types) and so are not tracked here.
     private readonly Dictionary<StructDeclarationSyntax, StructSymbol> nestedStructShells
-        = new Dictionary<StructDeclarationSyntax, StructSymbol>();
+        = new();
     private readonly Dictionary<InterfaceDeclarationSyntax, InterfaceSymbol> nestedInterfaceShells
-        = new Dictionary<InterfaceDeclarationSyntax, InterfaceSymbol>();
+        = new();
 
     public DeclarationBinder(
         BinderContext binderCtx,

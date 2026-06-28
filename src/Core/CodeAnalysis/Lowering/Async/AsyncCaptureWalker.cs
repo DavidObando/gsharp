@@ -118,8 +118,8 @@ public static class AsyncCaptureWalker
 
     private sealed class ReferenceCollector : BoundTreeRewriter
     {
-        private readonly HashSet<LocalVariableSymbol> seen = new HashSet<LocalVariableSymbol>();
-        private readonly List<LocalVariableSymbol> orderedLocals = new List<LocalVariableSymbol>();
+        private readonly HashSet<LocalVariableSymbol> seen = new();
+        private readonly List<LocalVariableSymbol> orderedLocals = new();
 
         public IReadOnlyList<LocalVariableSymbol> Locals => orderedLocals;
 

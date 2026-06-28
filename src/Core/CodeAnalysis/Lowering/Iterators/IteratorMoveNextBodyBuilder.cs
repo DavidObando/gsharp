@@ -504,7 +504,7 @@ public static class IteratorMoveNextBodyBuilder
         // before jumping to endLabel, mirroring the CLR's normal stack
         // unwinding on `leave`. Yields do NOT consume this stack — the
         // finally is run lazily by Dispose on premature termination.
-        private readonly Stack<BoundStatement> pendingFinallies = new Stack<BoundStatement>();
+        private readonly Stack<BoundStatement> pendingFinallies = new();
 
         public FieldAccessYieldRewriter(
             StructSymbol smClass,

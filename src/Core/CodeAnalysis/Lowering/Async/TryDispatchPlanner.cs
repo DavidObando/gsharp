@@ -60,10 +60,10 @@ internal static class TryDispatchPlanner
     private sealed class WalkVisitor : BoundTreeWalker
     {
         private readonly IReadOnlyDictionary<BoundAwaitExpression, AwaitResumePoint> awaitResumeMap;
-        private readonly Stack<BoundTryStatement> tryStack = new Stack<BoundTryStatement>();
-        private readonly Dictionary<BoundTryStatement, BoundLabel> entryLabels = new Dictionary<BoundTryStatement, BoundLabel>();
-        private readonly Dictionary<int, BoundLabel> outerDispatch = new Dictionary<int, BoundLabel>();
-        private readonly Dictionary<BoundTryStatement, List<TryDispatchEntry>> internalDispatch = new Dictionary<BoundTryStatement, List<TryDispatchEntry>>();
+        private readonly Stack<BoundTryStatement> tryStack = new();
+        private readonly Dictionary<BoundTryStatement, BoundLabel> entryLabels = new();
+        private readonly Dictionary<int, BoundLabel> outerDispatch = new();
+        private readonly Dictionary<BoundTryStatement, List<TryDispatchEntry>> internalDispatch = new();
         private int entryOrdinal;
 
         public WalkVisitor(IReadOnlyDictionary<BoundAwaitExpression, AwaitResumePoint> awaitResumeMap)

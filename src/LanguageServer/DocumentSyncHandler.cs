@@ -129,7 +129,7 @@ public static class DocumentSyncHandler
         {
             Code = new DiagnosticCode(code),
             Message = message,
-            Range = new Range(ToPosition(start, sourceText), ToPosition(end, sourceText)),
+            Range = new(ToPosition(start, sourceText), ToPosition(end, sourceText)),
             Severity = severity,
             Source = Constants.LanguageIdentifier,
         };

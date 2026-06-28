@@ -24,7 +24,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </remarks>
 public sealed class FunctionPointerTypeSymbol : TypeSymbol
 {
-    private static readonly ConcurrentDictionary<string, FunctionPointerTypeSymbol> Cache = new ConcurrentDictionary<string, FunctionPointerTypeSymbol>();
+    private static readonly ConcurrentDictionary<string, FunctionPointerTypeSymbol> Cache = new();
 
     private FunctionPointerTypeSymbol(string name, bool isManaged, CallingConvention callingConvention, ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
         : base(name, typeof(System.IntPtr))

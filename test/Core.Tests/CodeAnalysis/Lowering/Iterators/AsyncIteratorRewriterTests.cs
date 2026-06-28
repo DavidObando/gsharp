@@ -23,7 +23,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Lowering.Iterators;
 /// </summary>
 public class AsyncIteratorRewriterTests
 {
-    private static readonly PackageSymbol Package = new PackageSymbol("main", declaration: null);
+    private static readonly PackageSymbol Package = new("main", declaration: null);
 
     [Fact]
     public void Rewrite_YieldOnly_CreatesAsyncIteratorPlan()

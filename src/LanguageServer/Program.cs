@@ -166,7 +166,7 @@ public class Program
         private readonly Stream inner;
         private readonly string logFile;
         private readonly string prefix;
-        private readonly object lockObj = new object();
+        private readonly object lockObj = new();
 
         public LoggingStream(Stream inner, string logFile, string prefix)
         {

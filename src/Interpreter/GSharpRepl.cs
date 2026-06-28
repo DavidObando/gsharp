@@ -1,4 +1,4 @@
-﻿// <copyright file="GSharpRepl.cs" company="GSharp">
+// <copyright file="GSharpRepl.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -17,13 +17,13 @@ namespace GSharp.Interpreter;
 /// </summary>
 public class GSharpRepl : Repl
 {
-    private readonly Dictionary<VariableSymbol, object> variables = new Dictionary<VariableSymbol, object>();
+    private readonly Dictionary<VariableSymbol, object> variables = new();
 
     private Compilation previous;
     private bool showTree;
     private bool showProgram;
 
-    private List<int> linesWithOpenMultilineComments = new List<int>();
+    private List<int> linesWithOpenMultilineComments = new();
 
     /// <inheritdoc/>
     public override void EvaluateSubmission(string text)

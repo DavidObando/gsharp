@@ -15,9 +15,9 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </summary>
 public sealed class FunctionTypeSymbol : TypeSymbol
 {
-    private static readonly ConcurrentDictionary<string, FunctionTypeSymbol> Cache = new ConcurrentDictionary<string, FunctionTypeSymbol>();
+    private static readonly ConcurrentDictionary<string, FunctionTypeSymbol> Cache = new();
 
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TypeParameterSymbol, object> TypeParameterIds = new System.Runtime.CompilerServices.ConditionalWeakTable<TypeParameterSymbol, object>();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TypeParameterSymbol, object> TypeParameterIds = new();
 
     private static long typeParameterIdSeed;
 

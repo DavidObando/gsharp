@@ -168,7 +168,7 @@ public static class AsyncStateMachineRewriter
 
     private sealed class AwaitStateCollector : BoundTreeWalker
     {
-        private readonly ResumableStateAllocator allocator = new ResumableStateAllocator();
+        private readonly ResumableStateAllocator allocator = new();
         private readonly ImmutableDictionary<BoundAwaitExpression, int>.Builder states =
             ImmutableDictionary.CreateBuilder<BoundAwaitExpression, int>();
 

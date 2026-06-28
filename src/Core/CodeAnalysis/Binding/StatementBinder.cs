@@ -2550,7 +2550,7 @@ internal sealed class StatementBinder
     /// </summary>
     private sealed class YieldFinder : BoundTreeWalker
     {
-        private readonly List<TextLocation> locations = new List<TextLocation>();
+        private readonly List<TextLocation> locations = new();
 
         public static bool ContainsYieldInOwnTryBlock(BoundStatement tryBlock)
         {

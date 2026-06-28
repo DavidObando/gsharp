@@ -51,13 +51,13 @@ internal static class IteratorTryDispatchPlanner
     private sealed class Walker : BoundTreeWalker
     {
         private readonly IReadOnlyDictionary<BoundYieldStatement, int> yieldStates;
-        private readonly Stack<BoundTryStatement> tryStack = new Stack<BoundTryStatement>();
-        private readonly Dictionary<BoundTryStatement, BoundLabel> entryLabels = new Dictionary<BoundTryStatement, BoundLabel>();
-        private readonly Dictionary<int, BoundLabel> outerDispatch = new Dictionary<int, BoundLabel>();
-        private readonly Dictionary<BoundTryStatement, List<IteratorTryDispatchEntry>> internalDispatch = new Dictionary<BoundTryStatement, List<IteratorTryDispatchEntry>>();
-        private readonly Dictionary<BoundTryStatement, List<int>> tryYieldStates = new Dictionary<BoundTryStatement, List<int>>();
-        private readonly List<BoundTryStatement> finallyTrysInnermostFirst = new List<BoundTryStatement>();
-        private readonly Dictionary<int, BoundLabel> resumeLabels = new Dictionary<int, BoundLabel>();
+        private readonly Stack<BoundTryStatement> tryStack = new();
+        private readonly Dictionary<BoundTryStatement, BoundLabel> entryLabels = new();
+        private readonly Dictionary<int, BoundLabel> outerDispatch = new();
+        private readonly Dictionary<BoundTryStatement, List<IteratorTryDispatchEntry>> internalDispatch = new();
+        private readonly Dictionary<BoundTryStatement, List<int>> tryYieldStates = new();
+        private readonly List<BoundTryStatement> finallyTrysInnermostFirst = new();
+        private readonly Dictionary<int, BoundLabel> resumeLabels = new();
         private int entryOrdinal;
 
         public Walker(IReadOnlyDictionary<BoundYieldStatement, int> yieldStates)

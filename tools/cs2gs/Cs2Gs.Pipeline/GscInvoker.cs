@@ -22,7 +22,7 @@ public sealed class GscInvoker
 {
     // Matches a gsc diagnostic line: `<file>(l,c,el,ec): <severity> GSxxxx: <message>`
     // as emitted by TextWriterExtensions.WriteDiagnostics in src/Core/IO.
-    private static readonly Regex DiagnosticPattern = new Regex(
+    private static readonly Regex DiagnosticPattern = new(
         @"^(?<file>.*)\((?<line>\d+),(?<col>\d+),(?<eline>\d+),(?<ecol>\d+)\):\s+" +
         @"(?<sev>error|warning|info)\s+(?<id>GS\d+):\s+(?<msg>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);

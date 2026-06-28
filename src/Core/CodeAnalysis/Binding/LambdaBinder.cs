@@ -1210,7 +1210,7 @@ internal sealed class LambdaBinder
     // outer lambda's candidate set.
     private sealed class ReturnTypeCollector : BoundTreeWalker
     {
-        public List<TypeSymbol> ReturnTypes { get; } = new List<TypeSymbol>();
+        public List<TypeSymbol> ReturnTypes { get; } = new();
 
         protected override void VisitReturnStatement(BoundReturnStatement node)
         {

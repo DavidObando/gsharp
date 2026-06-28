@@ -38,7 +38,7 @@ public sealed class IlVerifyRunner
     // the `<assembly> : <Type>::<Method>(<sig>)` skeleton up to the `[offset …]`
     // marker (lazy so the `]` inside array types like `string[]` is not mistaken
     // for the location's closing bracket); `message` is the rest.
-    private static readonly Regex ErrorPattern = new Regex(
+    private static readonly Regex ErrorPattern = new(
         @"^\[IL\]:\s*Error\s*\[(?<code>[^\]]+)\]:\s*" +
         @"(?:\[(?<location>.*?)\]\s*\[offset[^\]]*\]\s*)?(?<message>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);

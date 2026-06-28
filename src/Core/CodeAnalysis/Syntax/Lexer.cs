@@ -1,4 +1,4 @@
-﻿// <copyright file="Lexer.cs" company="GSharp">
+// <copyright file="Lexer.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -37,7 +37,7 @@ public sealed class Lexer
     /// <summary>
     /// Gets the lexer diagnostics.
     /// </summary>
-    public DiagnosticBag Diagnostics { get; } = new DiagnosticBag();
+    public DiagnosticBag Diagnostics { get; } = new();
 
     private char Current => Peek(0);
 
@@ -1224,7 +1224,7 @@ public sealed class Lexer
         }
 
         // Disallow leading underscore in a decimal literal (which is impossible
-        // here because the dispatcher only routes digits → ReadNumber, but kept
+        // here because the dispatcher only routes digits ? ReadNumber, but kept
         // explicit for clarity). Underscore IS allowed immediately after a
         // base prefix per Go's spec (e.g., `0x_FF`).
         bool sawIntDigit = false;
@@ -1493,7 +1493,7 @@ public sealed class Lexer
             return (uint)parsed;
         }
 
-        // No suffix → C# §6.4.5.3 integer-literal type inference. The literal
+        // No suffix ? C# §6.4.5.3 integer-literal type inference. The literal
         // takes the type of the first of int32, uint32, int64, uint64 in which
         // its value can be represented. A bare literal that fits int32 stays
         // int32; larger in-range values widen to the smallest fitting type and
@@ -1512,7 +1512,7 @@ public sealed class Lexer
             return (int)(uint)parsed;
         }
 
-        // §6.4.5.3 widening lattice: uint32 → int64 → uint64. `parsed` is a
+        // §6.4.5.3 widening lattice: uint32 ? int64 ? uint64. `parsed` is a
         // ulong, so a value that overflowed uint64 already threw above and was
         // reported; anything reaching here is representable as uint64.
         if (parsed <= uint.MaxValue)
