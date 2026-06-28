@@ -355,6 +355,7 @@ public class Issue6_6EnumArithmeticEmitTests
                   <PropertyGroup>
                     <OutputType>Library</OutputType>
                     <TargetFramework>net10.0</TargetFramework>
+                    <Nullable>enable</Nullable>
                     <AssemblyName>{siblingName}</AssemblyName>
                     <RootNamespace>{siblingName}</RootNamespace>
                   </PropertyGroup>

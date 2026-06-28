@@ -50,7 +50,7 @@ public class Issue520ClrArrayForRangeTests
                 import System
                 import Probe
 
-                var arr = Helper.GetColors()
+                var arr = Helper.GetColors()!!
                 for c in arr {
                   Console.WriteLine(int32(c))
                 }
@@ -81,7 +81,7 @@ public class Issue520ClrArrayForRangeTests
                 import System
                 import Probe
 
-                var arr = Helper.GetColors()
+                var arr = Helper.GetColors()!!
                 for c in arr {
                   if Enum.IsDefined(typeof(Color), c) {
                     Console.WriteLine("ok")

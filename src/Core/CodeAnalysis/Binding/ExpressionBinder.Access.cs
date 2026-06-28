@@ -3774,6 +3774,36 @@ internal sealed partial class ExpressionBinder
         return TypeSymbol.FromClrType(clrType);
     }
 
+    /// <summary>
+    /// Issue #1354: maps an imported method's return type to a
+    /// <see cref="TypeSymbol"/>, applying the reference-type nullability rule
+    /// (oblivious/unannotated → <c>T?</c>, explicit <c>[Nullable(1)]</c> →
+    /// non-null) via <see cref="ClrNullability.GetReturnTypeSymbol"/>. This is
+    /// the call-return-type counterpart of <see cref="MapClrMemberType"/>:
+    /// without it, the non-generic instance-method fallback chain would land on
+    /// a bare <see cref="TypeSymbol.FromClrType"/> and treat oblivious imported
+    /// reference returns as non-null. The existing by-ref-return handling
+    /// (e.g. <c>ref T</c> returns) is preserved.
+    /// </summary>
+    /// <param name="method">The imported method whose return type to map.</param>
+    /// <returns>The nullability-aware return type symbol.</returns>
+    private static TypeSymbol MapClrMethodReturnType(System.Reflection.MethodInfo method)
+    {
+        if (method == null)
+        {
+            return TypeSymbol.FromClrType(null);
+        }
+
+        var returnClrType = method.ReturnType;
+        if (returnClrType != null && returnClrType.IsByRef)
+        {
+            // Preserve by-ref-return handling exactly as MapClrMemberType does.
+            return ByRefTypeSymbol.Get(TypeSymbol.FromClrType(returnClrType.GetElementType()!));
+        }
+
+        return ClrNullability.GetReturnTypeSymbol(method);
+    }
+
     // ADR-0118 / issue #944: locate a user-declared indexer member on a (possibly
     // constructed-generic) user type and, for a constructed type, build the
     // type-parameter substitution from the receiver's type arguments. The

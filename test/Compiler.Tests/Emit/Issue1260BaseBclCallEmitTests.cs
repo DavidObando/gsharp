@@ -31,7 +31,10 @@ public class Issue1260BaseBclCallEmitTests
             import System
 
             class Greeter {
-                open func ToString() string { return base.ToString() + "!" }
+                // Issue #1354: object.ToString() is annotated to return string?,
+                // so base.ToString() is nullable here and must be coalesced
+                // before concatenation.
+                open func ToString() string { return (base.ToString() ?? "") + "!" }
             }
 
             func Main() {

@@ -582,7 +582,8 @@ internal sealed class ReflectionMetadataEmitter
             this.customAttrEncoder.NextParameterHandle,
             this.GetTypeReference,
             this.GetTypeHandleForMember,
-            this.ResolveFieldToken);
+            this.ResolveFieldToken,
+            this.customAttrEncoder.EmitNullableAttributeOnProperty);
 
         // PR-E-8: TypeDefEmitter wires up after MemberDefEmitter. It depends
         // on the same EmitContext/MetadataTokenCache/WellKnownReferences
@@ -605,6 +606,8 @@ internal sealed class ReflectionMetadataEmitter
             this.ResolveConstructedBaseExplicitCtorToken,
             this.customAttrEncoder.NextParameterHandle,
             this.customAttrEncoder.EmitUserAttributes,
+            handle => this.customAttrEncoder.EmitNullableContextAttributeOnType(handle, NullableFlagsBuilder.NotAnnotated),
+            this.customAttrEncoder.EmitNullableAttributeOnField,
             this.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter,
             this.customAttrEncoder.EmitParamArrayAttributeOnParameter,
             this.GetCtorReference,
@@ -2044,6 +2047,7 @@ internal sealed class ReflectionMetadataEmitter
                 fieldList: MetadataTokens.FieldDefinitionHandle(programFirstFieldRow),
                 methodList: MetadataTokens.MethodDefinitionHandle(packageCtorRows[globalsHostPkg]));
             programTypeDefHandles[globalsHostPkg] = programHandle;
+            this.customAttrEncoder.EmitNullableContextAttributeOnType(programHandle, NullableFlagsBuilder.NotAnnotated);
         }
 
         foreach (var pkg in packages)
@@ -2067,6 +2071,7 @@ internal sealed class ReflectionMetadataEmitter
                 fieldList: MetadataTokens.FieldDefinitionHandle(fieldListRow),
                 methodList: MetadataTokens.MethodDefinitionHandle(packageCtorRows[pkg]));
             programTypeDefHandles[pkg] = programHandle;
+            this.customAttrEncoder.EmitNullableContextAttributeOnType(programHandle, NullableFlagsBuilder.NotAnnotated);
         }
 
         // Issue #792 / ADR-0084. Stamp [ExtensionAttribute] on every
@@ -2971,22 +2976,15 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private void EmitNullableContextAttribute(AssemblyDefinitionHandle assemblyHandle)
     {
-        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableContextAttribute", out var attrType))
+        // Reuse the cached NullableContextAttribute(byte) ctor MemberRef so the
+        // assembly-, type-, and method-level emitters all share one row (the
+        // P3-11 dedup invariant; see DeterministicEmitTests).
+        var ctorRef = this.wellKnown.GetNullableContextAttributeByteCtorRef();
+        if (ctorRef.IsNil)
         {
             // The attribute may not exist in older TFMs — skip silently.
             return;
         }
-
-        var attrTypeRef = this.GetTypeReference(attrType);
-
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(1, r => r.Void(), p => p.AddParameter().Type().Byte());
-
-        var ctorRef = this.emitCtx.Metadata.AddMemberReference(
-            attrTypeRef,
-            this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
 
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001); // Prolog
@@ -3049,6 +3047,7 @@ internal sealed class ReflectionMetadataEmitter
             // Route any @-annotations bound by #187 onto the FieldDef row so
             // attributes like @Obsolete round-trip into CustomAttribute rows.
             this.customAttrEncoder.EmitUserAttributes(handle, g, AttributeTargetKind.Field);
+            this.customAttrEncoder.EmitNullableAttributeOnField(handle, g.Type);
         }
     }
 

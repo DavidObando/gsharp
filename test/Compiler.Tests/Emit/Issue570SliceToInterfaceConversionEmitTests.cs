@@ -217,7 +217,7 @@ public class Issue570SliceToInterfaceConversionEmitTests
             package Probe.Tests
             import System
 
-            func takeObj(o object) string { return o.ToString() }
+            func takeObj(o object) string { return o.ToString() ?? "" }
             Console.WriteLine(takeObj([]int32{1, 2, 3}).StartsWith("System.Int32"))
             """;
 
@@ -458,6 +458,7 @@ public class Issue570SliceToInterfaceConversionEmitTests
               <PropertyGroup>
                 <OutputType>Library</OutputType>
                 <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
                 <AssemblyName>{siblingName}</AssemblyName>
                 <RootNamespace>{siblingName}</RootNamespace>
               </PropertyGroup>

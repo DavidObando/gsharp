@@ -2409,7 +2409,32 @@ public sealed class Binder
                     return ApplyArraySuffix(syntax, ImportedTypeSymbol.GetConstructed(closed, clrOpenType, symbolicArgs.MoveToImmutable()));
                 }
 
-                return ApplyArraySuffix(syntax, TypeSymbol.FromClrType(closed));
+                // Issue #1354: a fully-concrete closed generic whose argument is a
+                // nullable *reference* type (e.g. `List[string?]`) loses the inner
+                // `?` when projected onto the CLR closed type (`string?` collapses
+                // to `string`). Preserve it by attaching the DFS nullable-flags
+                // array — the exact shape the metadata importer produces for
+                // imported members (see ClrNullability) — so the emitter re-stamps
+                // a `[NullableAttribute]` and the inner nullability round-trips.
+                var concrete = TypeSymbol.FromClrType(closed);
+                if (!closed.IsValueType)
+                {
+                    var symArgs = symbolicArgs.ToImmutable();
+                    var flagsBuilder = ImmutableArray.CreateBuilder<byte>();
+                    flagsBuilder.Add(1);
+                    foreach (var symArg in symArgs)
+                    {
+                        flagsBuilder.AddRange(GSharp.Core.CodeAnalysis.Emit.NullableFlagsBuilder.Build(symArg));
+                    }
+
+                    var flags = flagsBuilder.ToImmutable();
+                    if (flags.Contains((byte)2))
+                    {
+                        return ApplyArraySuffix(syntax, new NullabilityAnnotatedTypeSymbol(concrete, flags));
+                    }
+                }
+
+                return ApplyArraySuffix(syntax, concrete);
             }
             catch (System.ArgumentException)
             {

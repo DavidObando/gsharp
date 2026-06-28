@@ -493,6 +493,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
                   <PropertyGroup>
                     <OutputType>Library</OutputType>
                     <TargetFramework>net10.0</TargetFramework>
+                    <Nullable>enable</Nullable>
                     <AssemblyName>{siblingName}</AssemblyName>
                     <Nullable>enable</Nullable>
                     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>

@@ -186,6 +186,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
                   <PropertyGroup>
                     <OutputType>Library</OutputType>
                     <TargetFramework>net10.0</TargetFramework>
+                    <Nullable>enable</Nullable>
                     <AssemblyName>{siblingName}</AssemblyName>
                     <RootNamespace>{siblingName}</RootNamespace>
                   </PropertyGroup>
@@ -280,6 +281,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
                   <PropertyGroup>
                     <OutputType>Library</OutputType>
                     <TargetFramework>net10.0</TargetFramework>
+                    <Nullable>enable</Nullable>
                     <AssemblyName>{siblingName}</AssemblyName>
                     <RootNamespace>{siblingName}</RootNamespace>
                   </PropertyGroup>

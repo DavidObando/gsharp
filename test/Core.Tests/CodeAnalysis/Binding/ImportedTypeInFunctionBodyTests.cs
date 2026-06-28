@@ -52,7 +52,7 @@ public class ImportedTypeInFunctionBodyTests
             package Demo
             import GSharp.Core.Tests.Fixtures
 
-            func Run() string {
+            func Run() string? {
                 var g = ImportedGreeter()
                 return g.Greet("world")
             }
@@ -69,7 +69,7 @@ public class ImportedTypeInFunctionBodyTests
             import GSharp.Core.Tests.Fixtures
 
             class Host {
-                func Run() string {
+                func Run() string? {
                     var g = ImportedGreeter()
                     return g.Greet("world")
                 }

@@ -3025,7 +3025,7 @@ internal sealed partial class ExpressionBinder
                             var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
                                 ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(resolution.Best, instSymbolicTypeArgs, effectiveReceiverType)
                                 ?? ResolveInstanceReturnTypeFromReceiver(effectiveReceiverType, resolution.Best)
-                                ?? MapClrMemberType(resolution.Best.ReturnType);
+                                ?? MapClrMethodReturnType(resolution.Best);
                             var instParameters = resolution.Best.GetParameters();
                             var instMapping = resolution.ParameterMapping;
                             var instExpandedArgs = resolution.IsExpanded
@@ -3693,7 +3693,7 @@ internal sealed partial class ExpressionBinder
                 var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
                     ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(resolution.Best, inheritedSymbolicTypeArgs, receiver?.Type)
                     ?? ResolveInstanceReturnTypeFromReceiver(receiver?.Type, resolution.Best)
-                    ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
+                    ?? MapClrMethodReturnType(resolution.Best);
                 var inheritedParameters = resolution.Best.GetParameters();
                 var inheritedMapping = resolution.ParameterMapping;
                 var inheritedExpandedArgs = resolution.IsExpanded
@@ -5168,7 +5168,7 @@ internal sealed partial class ExpressionBinder
         // a concrete return (e.g. IComparable.CompareTo -> int32) falls back to
         // the direct CLR mapping.
         var returnType = ResolveInstanceReturnTypeFromReceiver(constraintInterface, method)
-            ?? MapClrMemberType(method.ReturnType);
+            ?? MapClrMethodReturnType(method);
 
         // Order positionally for named arguments; deliberately skip the CLR
         // boxing/conversion pass — the emitted MemberRef parameter is the
