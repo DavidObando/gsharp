@@ -1,4 +1,4 @@
-// <copyright file="ReflectionMetadataEmitter.cs" company="GSharp">
+// <copyright file="ReflectionMetadataEmitter.Types.4.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 #pragma warning disable // Split partial file preserves original layout
@@ -54,37 +54,23 @@ internal sealed partial class ReflectionMetadataEmitter
 {
 
 
-    private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
+    // Map a host-runtime Type onto the MetadataLoadContext type from the
+    // emitter's references when an equivalent exists. Returns the input
+    // unchanged when no mapping is found — non-primitive host types whose
+    // FullName isn't resolvable will keep their original identity (and may
+    // still encode fine via EncodeClrType's primitive matching).
+    internal Type MapToReferenceClrType(Type hostType)
     {
-        this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
-        this.cache = new MetadataTokenCache();
-        this.slotPlanner = new SlotPlanner(this.emitCtx, this.cache, this.NeedsRvalueReceiverSpill);
+        if (hostType == null)
+        {
+            return null;
+        }
+
+        if (this.emitCtx.References.TryResolveType(hostType.FullName ?? hostType.Name, out var mapped))
+        {
+            return mapped;
+        }
+
+        return hostType;
     }
-
-    private readonly Dictionary<StructSymbol, EntityHandle> userStructTypeSpecCache = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<(StructSymbol Containing, FieldSymbol DefField), EntityHandle> userStructFieldRefCache = new();
-    private readonly Dictionary<(StructSymbol Containing, EntityHandle OpenMember), EntityHandle> userStructMethodRefCache = new();
-    private readonly Dictionary<InterfaceSymbol, EntityHandle> userInterfaceTypeSpecCache = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<(InterfaceSymbol Containing, EntityHandle OpenMember), EntityHandle> userInterfaceMethodRefCache = new();
-    private readonly Dictionary<(InterfaceSymbol Containing, FieldSymbol DefField), EntityHandle> userInterfaceFieldRefCache = new();
-
-    /// <summary>
-    /// Phase 4 emit parity: get a MemberRef for a CLR instance constructor.
-    /// Handles both non-generic types (<c>StringBuilder()</c>) and constructed
-    /// generic types (<c>List&lt;int&gt;()</c>, <c>Dictionary&lt;string, int&gt;()</c>).
-    /// </summary>
-    internal MemberReferenceHandle GetCtorReference(ConstructorInfo ctor)
-        => this.GetCtorReference(ctor, containingTypeSymbol: null);
-
-    private static bool IsAsyncUserDefinedResultType(TypeSymbol type)
-        => type is StructSymbol or InterfaceSymbol or EnumSymbol;
-
-    private void EncodeReturnSymbol(ReturnTypeEncoder encoder, TypeSymbol type)
-        => EncodeReturnSymbol(encoder, type, RefKind.None);
-
-    private readonly Dictionary<FunctionTypeSymbol, EntityHandle> functionDelegateCtorRefCache =
-        new Dictionary<FunctionTypeSymbol, EntityHandle>(ReferenceEqualityComparer.Instance);
-
-    private readonly Dictionary<FunctionTypeSymbol, EntityHandle> functionDelegateInvokeRefCache =
-        new Dictionary<FunctionTypeSymbol, EntityHandle>(ReferenceEqualityComparer.Instance);
 }

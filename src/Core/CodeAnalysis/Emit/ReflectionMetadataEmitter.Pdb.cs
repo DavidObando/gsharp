@@ -1,4 +1,4 @@
-// <copyright file="ReflectionMetadataEmitter.cs" company="GSharp">
+// <copyright file="ReflectionMetadataEmitter.Pdb.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 #pragma warning disable // Split partial file preserves original layout
@@ -54,37 +54,58 @@ internal sealed partial class ReflectionMetadataEmitter
 {
 
 
-    private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
+    /// <summary>
+    /// Computes the SHA-256 checksum of the serialized Portable PDB content,
+    /// matching the algorithm name written into the <c>PdbChecksum</c> debug
+    /// directory entry. Returning a fresh byte array keeps callers from
+    /// having to thread <see cref="IncrementalHash"/> through the call site.
+    /// </summary>
+    private static byte[] ComputePdbChecksum(BlobBuilder pdbBlob)
     {
-        this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
-        this.cache = new MetadataTokenCache();
-        this.slotPlanner = new SlotPlanner(this.emitCtx, this.cache, this.NeedsRvalueReceiverSpill);
+        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var blob in pdbBlob.GetBlobs())
+        {
+            var bytes = blob.GetBytes();
+            sha.AppendData(bytes.Array, bytes.Offset, bytes.Count);
+        }
+
+        return sha.GetHashAndReset();
     }
 
-    private readonly Dictionary<StructSymbol, EntityHandle> userStructTypeSpecCache = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<(StructSymbol Containing, FieldSymbol DefField), EntityHandle> userStructFieldRefCache = new();
-    private readonly Dictionary<(StructSymbol Containing, EntityHandle OpenMember), EntityHandle> userStructMethodRefCache = new();
-    private readonly Dictionary<InterfaceSymbol, EntityHandle> userInterfaceTypeSpecCache = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<(InterfaceSymbol Containing, EntityHandle OpenMember), EntityHandle> userInterfaceMethodRefCache = new();
-    private readonly Dictionary<(InterfaceSymbol Containing, FieldSymbol DefField), EntityHandle> userInterfaceFieldRefCache = new();
-
     /// <summary>
-    /// Phase 4 emit parity: get a MemberRef for a CLR instance constructor.
-    /// Handles both non-generic types (<c>StringBuilder()</c>) and constructed
-    /// generic types (<c>List&lt;int&gt;()</c>, <c>Dictionary&lt;string, int&gt;()</c>).
+    /// Emits <c>System.Diagnostics.DebuggableAttribute(true, true)</c> when
+    /// debug information is present so managed debuggers treat the assembly as
+    /// JIT-tracked and non-optimized.
     /// </summary>
-    internal MemberReferenceHandle GetCtorReference(ConstructorInfo ctor)
-        => this.GetCtorReference(ctor, containingTypeSymbol: null);
+    private void EmitDebuggableAttribute(AssemblyDefinitionHandle assemblyHandle)
+    {
+        var attrType = this.emitCtx.References.TryResolveType("System.Diagnostics.DebuggableAttribute", out var resolved)
+            ? resolved
+            : typeof(System.Diagnostics.DebuggableAttribute);
+        var attrTypeRef = this.GetTypeReference(attrType);
 
-    private static bool IsAsyncUserDefinedResultType(TypeSymbol type)
-        => type is StructSymbol or InterfaceSymbol or EnumSymbol;
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(2, r => r.Void(), p =>
+            {
+                p.AddParameter().Type().Boolean();
+                p.AddParameter().Type().Boolean();
+            });
 
-    private void EncodeReturnSymbol(ReturnTypeEncoder encoder, TypeSymbol type)
-        => EncodeReturnSymbol(encoder, type, RefKind.None);
+        var ctorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
 
-    private readonly Dictionary<FunctionTypeSymbol, EntityHandle> functionDelegateCtorRefCache =
-        new Dictionary<FunctionTypeSymbol, EntityHandle>(ReferenceEqualityComparer.Instance);
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001); // Prolog
+        valueBlob.WriteBoolean(true);  // isJITTrackingEnabled
+        valueBlob.WriteBoolean(true);  // isJITOptimizerDisabled
+        valueBlob.WriteUInt16(0);      // NumNamed
 
-    private readonly Dictionary<FunctionTypeSymbol, EntityHandle> functionDelegateInvokeRefCache =
-        new Dictionary<FunctionTypeSymbol, EntityHandle>(ReferenceEqualityComparer.Instance);
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: assemblyHandle,
+            constructor: ctorRef,
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
 }
