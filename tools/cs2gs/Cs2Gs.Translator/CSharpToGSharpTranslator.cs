@@ -7094,24 +7094,38 @@ public sealed class CSharpToGSharpTranslator
 
         private GStatement TranslateForEachVariable(ForEachVariableStatementSyntax node)
         {
-            // `foreach ((a, b) in xs)` / `foreach (var (a, b) in xs)` map to the
-            // G# two-name iteration `for a, b in xs` (ForInStatement key/value form;
-            // ADR-0115 §B). Tuple element names are collected from the designation.
+            // `foreach (var (a, b) in xs)` is a C# TUPLE DECONSTRUCTION over a
+            // sequence whose element is a tuple. G#'s two-name `for k, v in xs`
+            // form is NOT tuple deconstruction — it is index/element iteration
+            // (the key is the int32 index), so emitting `for a, b in xs` would
+            // bind `a` to the loop index. Instead iterate a single element and
+            // deconstruct it inside the body: `for __deconN in xs { let (a, b) =
+            // __deconN; <body> }` (ADR-0115 §B).
             List<string> names = new List<string>();
             CollectForEachVariableNames(node.Variable, names);
 
-            if (names.Count == 2)
+            if (names.Count >= 2)
             {
+                string pair = $"__decon{this.deconCounter++}";
+                BlockStatement body = this.TranslateStatementAsBlock(node.Statement);
+                var statements = new List<GStatement>(body.Statements.Count + 1)
+                {
+                    new TupleDeconstructionStatement(
+                        BindingKind.Let,
+                        names,
+                        new IdentifierExpression(pair)),
+                };
+                statements.AddRange(body.Statements);
+
                 return new ForInStatement(
-                    names[0],
-                    names[1],
+                    pair,
                     this.TranslateReceiverWithNullForgiveness(node.Expression),
-                    this.TranslateStatementAsBlock(node.Statement));
+                    new BlockStatement(statements));
             }
 
             this.context.ReportUnsupported(
                 node,
-                "foreach tuple deconstruction with arity != 2 has no canonical G# form yet (ADR-0115 §B).");
+                "foreach tuple deconstruction with arity < 2 has no canonical G# form yet (ADR-0115 §B).");
             return new RawStatement("// unsupported: foreach variable deconstruction");
         }
 

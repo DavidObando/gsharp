@@ -299,11 +299,13 @@ namespace Demo
     }
 
     /// <summary>
-    /// A <c>foreach</c> over a tuple deconstruction maps to the G# two-name
-    /// iteration <c>for a, b in xs</c> (ADR-0115 §B).
+    /// A <c>foreach</c> over a tuple deconstruction iterates a single element and
+    /// deconstructs it inside the body (<c>for __deconN in xs { let (a, b) =
+    /// __deconN; … }</c>). The G# two-name <c>for k, v in xs</c> form is
+    /// index/element iteration, NOT tuple deconstruction (ADR-0115 §B).
     /// </summary>
     [Fact]
-    public void ForEachVariable_TupleDeconstruction_MappedToTwoNameForIn()
+    public void ForEachVariable_TupleDeconstruction_DeconstructsElementInBody()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -323,7 +325,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("for a, b in xs", printed);
+        Assert.Matches(@"for __decon\d+ in xs", printed);
+        Assert.Matches(@"let \(a, b\) = __decon\d+", printed);
+        Assert.DoesNotContain("for a, b in xs", printed);
     }
 
     /// <summary>
