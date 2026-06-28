@@ -748,7 +748,8 @@ public static class GSharpPrinter
                 var loopVars = string.IsNullOrEmpty(forIn.ValueName)
                     ? forIn.VariableName
                     : $"{forIn.VariableName}, {forIn.ValueName}";
-                return $"{pad}for {loopVars} in {RenderExpression(forIn.Iterable, indent)} {RenderBlock(forIn.Body, indent)}";
+                var forKeyword = forIn.IsAwait ? "await for" : "for";
+                return $"{pad}{forKeyword} {loopVars} in {RenderExpression(forIn.Iterable, indent)} {RenderBlock(forIn.Body, indent)}";
 
             case DeferStatement defer:
                 return $"{pad}defer {RenderBlock(defer.Body, indent)}";

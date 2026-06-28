@@ -3183,12 +3183,20 @@ public sealed class CSharpToGSharpTranslator
                     // narrow only locals, so `for x in field` over a `T?` field is
                     // rejected (GS0116 "not indexable") without an explicit
                     // `field!!`.
+                    //
+                    // A C# `await foreach` carries a non-empty `await` keyword; it
+                    // lowers to G#'s async-iteration form `await for x in seq`
+                    // (spec AwaitForRangeStmt). Without it, iterating an
+                    // `IAsyncEnumerable<T>` with a plain `for` is rejected (GS0116).
                     return new[]
                     {
                         (GStatement)new ForInStatement(
                             SanitizeIdentifier(forEach.Identifier.Text),
                             this.TranslateReceiverWithNullForgiveness(forEach.Expression),
-                            this.TranslateStatementAsBlock(forEach.Statement)),
+                            this.TranslateStatementAsBlock(forEach.Statement))
+                        {
+                            IsAwait = !forEach.AwaitKeyword.IsKind(SyntaxKind.None),
+                        },
                     };
 
                 case ForEachVariableStatementSyntax forEachVariable:
@@ -7151,7 +7159,10 @@ public sealed class CSharpToGSharpTranslator
                 return new ForInStatement(
                     pair,
                     this.TranslateReceiverWithNullForgiveness(node.Expression),
-                    new BlockStatement(statements));
+                    new BlockStatement(statements))
+                {
+                    IsAwait = !node.AwaitKeyword.IsKind(SyntaxKind.None),
+                };
             }
 
             this.context.ReportUnsupported(

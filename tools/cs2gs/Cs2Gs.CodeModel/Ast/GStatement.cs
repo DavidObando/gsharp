@@ -313,6 +313,13 @@ public sealed class ForInStatement : GStatement
 
     /// <summary>Gets the loop body.</summary>
     public BlockStatement Body { get; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this is an asynchronous iteration
+    /// (<c>await for x in seq</c>, the translation of C# <c>await foreach</c>).
+    /// Async iteration is only valid for the single-variable form.
+    /// </summary>
+    public bool IsAwait { get; set; }
 }
 
 /// <summary>
