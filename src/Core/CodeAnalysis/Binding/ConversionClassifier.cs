@@ -387,7 +387,7 @@ internal sealed class ConversionClassifier
             && widenTargetFnType.ReturnType != TypeSymbol.Error
             && widenTargetFnType.Arity == widenCandidateFnType.Arity
             && !ReferenceEquals(widenCandidateFnType.ReturnType, widenTargetFnType.ReturnType)
-            && IsNumericReturnWidening(widenCandidateFnType.ReturnType, widenTargetFnType.ReturnType))
+            && IsNumericReturnWideningCore(widenCandidateFnType.ReturnType, widenTargetFnType.ReturnType))
         {
             var widened = createErasedFunctionLiteralAdapter(widenCandidateLiteral, widenTargetFnType);
             if (!ReferenceEquals(widened, widenCandidateLiteral))
@@ -1338,6 +1338,15 @@ internal sealed class ConversionClassifier
         return new BoundAwaitExpression(null, clrCall, TypeSymbol.Void);
     }
 
+    // Issue #1334: shared accessor so the generic-LINQ delegate-argument rebind
+    // path (ExpressionBinder.Calls) can apply the same NUMERIC-only return
+    // widening gate used by BindConversion, rather than an over-broad implicit
+    // conversion check that erased same-compilation user-type projections.
+    internal static bool IsNumericReturnWidening(TypeSymbol source, TypeSymbol target)
+    {
+        return IsNumericReturnWideningCore(source, target);
+    }
+
     // ----- Private helpers (kept here because they are only used by methods in this class) -----
 
     /// <summary>
@@ -1460,7 +1469,7 @@ internal sealed class ConversionClassifier
     // per the standard widening lattice. Both types must be numeric CLR
     // primitives and the conversion classified implicit (i.e. directional
     // widening — narrowing and signed/unsigned same-width pairs are excluded).
-    private static bool IsNumericReturnWidening(TypeSymbol source, TypeSymbol target)
+    private static bool IsNumericReturnWideningCore(TypeSymbol source, TypeSymbol target)
     {
         var sourceClr = source?.ClrType?.FullName;
         var targetClr = target?.ClrType?.FullName;
