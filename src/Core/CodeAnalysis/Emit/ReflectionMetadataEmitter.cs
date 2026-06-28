@@ -111,7 +111,7 @@ internal sealed class ReflectionMetadataEmitter
     // Each lambda's synthetic FunctionSymbol is registered alongside user
     // functions in functionsByPackage so it gets a MethodDef row, and its
     // body is emitted via the same EmitFunction path.
-    private readonly Dictionary<FunctionSymbol, BoundBlockStatement> lambdaBodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+    private readonly Dictionary<FunctionSymbol, BoundBlockStatement> lambdaBodies = [];
 
     // PR-E-9: closure-environment metadata and synthesized display classes
     // moved onto ClosureEmitter. Where this file used to declare:
@@ -828,7 +828,7 @@ internal sealed class ReflectionMetadataEmitter
 
             if (!nestedChildrenByParent.TryGetValue(parent, out var list))
             {
-                list = new List<TypeSymbol>();
+                list = [];
                 nestedChildrenByParent[parent] = list;
             }
 
@@ -1791,7 +1791,7 @@ internal sealed class ReflectionMetadataEmitter
         var functionsByPackage = new Dictionary<PackageSymbol, List<FunctionSymbol>>();
         foreach (var pkg in packages)
         {
-            functionsByPackage[pkg] = new List<FunctionSymbol>();
+            functionsByPackage[pkg] = [];
         }
 
         foreach (var kvp in this.emitCtx.Program.Functions)
@@ -1827,7 +1827,7 @@ internal sealed class ReflectionMetadataEmitter
             var owningPackage = kvp.Key.Package ?? this.emitCtx.Program.EntryPointPackage ?? packages[0];
             if (!functionsByPackage.TryGetValue(owningPackage, out var bucket))
             {
-                bucket = new List<FunctionSymbol>();
+                bucket = [];
                 functionsByPackage[owningPackage] = bucket;
                 packages = packages.Add(owningPackage);
             }
@@ -1862,7 +1862,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             if (!functionsByPackage.TryGetValue(lambdaHostPackage, out var hostBucket))
             {
-                hostBucket = new List<FunctionSymbol>();
+                hostBucket = [];
                 functionsByPackage[lambdaHostPackage] = hostBucket;
                 packages = packages.Add(lambdaHostPackage);
             }
@@ -5875,7 +5875,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 Version = typeof(object).Assembly.GetName().Version ?? new Version(0, 0, 0, 0),
             };
-            sysRuntimeName.SetPublicKeyToken(new byte[] { 0xb0, 0x3f, 0x5f, 0x7f, 0x11, 0xd5, 0x0a, 0x3a });
+            sysRuntimeName.SetPublicKeyToken([0xb0, 0x3f, 0x5f, 0x7f, 0x11, 0xd5, 0x0a, 0x3a]);
         }
 
         var publicKeyToken = sysRuntimeName.GetPublicKeyToken();

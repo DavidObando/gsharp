@@ -161,7 +161,7 @@ public static class CodeLensComputer
             {
                 Title = title,
                 Name = "gsharp.showReferences",
-                Arguments = new object[] { uri, range.Start },
+                Arguments = [uri, range.Start],
             },
         };
     }

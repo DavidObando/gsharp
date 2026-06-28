@@ -197,7 +197,7 @@ public static class IteratorRewriter
 
     private sealed class LocalCollector : BoundTreeWalker
     {
-        public List<VariableSymbol> Locals { get; } = new List<VariableSymbol>();
+        public List<VariableSymbol> Locals { get; } = [];
 
         protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
         {

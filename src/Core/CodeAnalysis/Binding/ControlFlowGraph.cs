@@ -164,17 +164,17 @@ public sealed class ControlFlowGraph
         /// <summary>
         /// Gets the list of statements in this block.
         /// </summary>
-        public List<BoundStatement> Statements { get; } = new List<BoundStatement>();
+        public List<BoundStatement> Statements { get; } = [];
 
         /// <summary>
         /// Gets the list of incoming branches to this block.
         /// </summary>
-        public List<BasicBlockBranch> Incoming { get; } = new List<BasicBlockBranch>();
+        public List<BasicBlockBranch> Incoming { get; } = [];
 
         /// <summary>
         /// Gets the list of outgoing branches from this block.
         /// </summary>
-        public List<BasicBlockBranch> Outgoing { get; } = new List<BasicBlockBranch>();
+        public List<BasicBlockBranch> Outgoing { get; } = [];
 
         /// <inheritdoc/>
         public override string ToString()
@@ -254,8 +254,8 @@ public sealed class ControlFlowGraph
     /// </summary>
     public sealed class BasicBlockBuilder
     {
-        private readonly List<BoundStatement> statements = new List<BoundStatement>();
-        private readonly List<BasicBlock> blocks = new List<BasicBlock>();
+        private readonly List<BoundStatement> statements = [];
+        private readonly List<BasicBlock> blocks = [];
 
         /// <summary>
         /// Builds a basic block from the provided bound block statement and adds
@@ -332,9 +332,9 @@ public sealed class ControlFlowGraph
     /// </summary>
     public sealed class GraphBuilder
     {
-        private readonly Dictionary<BoundStatement, BasicBlock> blockFromStatement = new Dictionary<BoundStatement, BasicBlock>();
-        private readonly Dictionary<BoundLabel, BasicBlock> blockFromLabel = new Dictionary<BoundLabel, BasicBlock>();
-        private readonly List<BasicBlockBranch> branches = new List<BasicBlockBranch>();
+        private readonly Dictionary<BoundStatement, BasicBlock> blockFromStatement = [];
+        private readonly Dictionary<BoundLabel, BasicBlock> blockFromLabel = [];
+        private readonly List<BasicBlockBranch> branches = [];
         private readonly BasicBlock start = new BasicBlock(isStart: true);
         private readonly BasicBlock end = new BasicBlock(isStart: false);
 

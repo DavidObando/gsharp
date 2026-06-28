@@ -87,6 +87,6 @@ public class LspServerMemberFeatureTests
         => server.DidChangeAsync(new DidChangeTextDocumentParams
         {
             TextDocument = new VersionedTextDocumentIdentifier { Uri = uri, Version = version },
-            ContentChanges = new List<TextDocumentContentChangeEvent> { new TextDocumentContentChangeEvent { Text = text } },
+            ContentChanges = [new TextDocumentContentChangeEvent { Text = text }],
         });
 }

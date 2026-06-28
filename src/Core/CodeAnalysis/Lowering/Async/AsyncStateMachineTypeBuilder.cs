@@ -256,7 +256,7 @@ public static class AsyncStateMachineTypeBuilder
 
     private sealed class AwaiterTypeCollector : BoundTreeWalker
     {
-        public List<(Type ClrType, TypeSymbol TypeSymbol)> AwaiterTypes { get; } = new List<(Type ClrType, TypeSymbol TypeSymbol)>();
+        public List<(Type ClrType, TypeSymbol TypeSymbol)> AwaiterTypes { get; } = [];
 
         public void Walk(BoundStatement body)
         {

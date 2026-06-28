@@ -176,7 +176,7 @@ internal sealed class StateMachineEmitter
     /// <c>EmitFunction</c> swaps in this body for the user-authored iterator
     /// function so the kickoff returns a freshly-constructed SM struct.
     /// </summary>
-    public Dictionary<FunctionSymbol, BoundBlockStatement> IteratorKickoffBodies { get; } = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+    public Dictionary<FunctionSymbol, BoundBlockStatement> IteratorKickoffBodies { get; } = [];
 
     /// <summary>
     /// Gets per-iterator-SM metadata. Populated by
@@ -185,7 +185,7 @@ internal sealed class StateMachineEmitter
     /// <c>IEnumerator&lt;T&gt;</c> / <c>IDisposable</c> interface
     /// implementations.
     /// </summary>
-    public Dictionary<StructSymbol, IteratorStateMachineInfo> IteratorStateMachineInfos { get; } = new Dictionary<StructSymbol, IteratorStateMachineInfo>();
+    public Dictionary<StructSymbol, IteratorStateMachineInfo> IteratorStateMachineInfos { get; } = [];
 
     /// <summary>
     /// Gets per-async-iterator-SM plan. Populated by
@@ -195,7 +195,7 @@ internal sealed class StateMachineEmitter
     /// <c>IValueTaskSource&lt;bool&gt;</c> / <c>IAsyncStateMachine</c> interface
     /// implementations.
     /// </summary>
-    public Dictionary<StructSymbol, AsyncIteratorPlan> AsyncIteratorInfos { get; } = new Dictionary<StructSymbol, AsyncIteratorPlan>();
+    public Dictionary<StructSymbol, AsyncIteratorPlan> AsyncIteratorInfos { get; } = [];
 
     /// <summary>
     /// Gets per-async-iterator-SM emit-time context (builder field + builder
@@ -203,7 +203,7 @@ internal sealed class StateMachineEmitter
     /// <c>BodyEmitter</c> via the root emitter when threading the async
     /// iterator MoveNext path through the await pipeline.
     /// </summary>
-    public Dictionary<StructSymbol, AsyncIteratorEmitContext> AsyncIteratorEmitContexts { get; } = new Dictionary<StructSymbol, AsyncIteratorEmitContext>();
+    public Dictionary<StructSymbol, AsyncIteratorEmitContext> AsyncIteratorEmitContexts { get; } = [];
 
     /// <summary>
     /// Gets the map from a capture-bearing async lambda's SM struct to the
@@ -211,7 +211,7 @@ internal sealed class StateMachineEmitter
     /// nesting convention). SM structs NOT in this map nest inside the
     /// per-package <c>&lt;Program&gt;</c> class.
     /// </summary>
-    public Dictionary<StructSymbol, StructSymbol> AsyncSmEnclosingClosures { get; } = new Dictionary<StructSymbol, StructSymbol>();
+    public Dictionary<StructSymbol, StructSymbol> AsyncSmEnclosingClosures { get; } = [];
 
     /// <summary>
     /// Gets or sets the async state-machine plans produced by

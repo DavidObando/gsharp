@@ -26,14 +26,14 @@ public sealed class Evaluator
     private readonly object goLock = new object();
     private readonly Stack<ScopeFrame> scopeFrames = new Stack<ScopeFrame>();
     private readonly Stack<System.Collections.IList> iteratorSinks = new Stack<System.Collections.IList>();
-    private readonly Dictionary<Symbols.FunctionSymbol, bool> iteratorFunctionCache = new Dictionary<Symbols.FunctionSymbol, bool>();
-    private readonly Dictionary<(Symbols.StructSymbol, Symbols.FieldSymbol), object> staticFields = new Dictionary<(Symbols.StructSymbol, Symbols.FieldSymbol), object>();
+    private readonly Dictionary<Symbols.FunctionSymbol, bool> iteratorFunctionCache = [];
+    private readonly Dictionary<(Symbols.StructSymbol, Symbols.FieldSymbol), object> staticFields = [];
 
     // ADR-0089 / issue #1030: interface static-field storage. Keyed by the
     // owning interface symbol so each closed construction of a generic interface
     // (`IBox[int32]` vs `IBox[string]`) owns independent storage, matching CLR
     // static-field semantics. The non-generic case keys by the single interface.
-    private readonly Dictionary<(Symbols.InterfaceSymbol, Symbols.FieldSymbol), object> interfaceStaticFields = new Dictionary<(Symbols.InterfaceSymbol, Symbols.FieldSymbol), object>();
+    private readonly Dictionary<(Symbols.InterfaceSymbol, Symbols.FieldSymbol), object> interfaceStaticFields = [];
     private Random random;
 
     private object lastValue;
@@ -424,7 +424,7 @@ public sealed class Evaluator
         var getEnumerator = asyncEnumerableInterface.GetMethod(
             "GetAsyncEnumerator",
             new[] { typeof(System.Threading.CancellationToken) });
-        var enumerator = getEnumerator.Invoke(stream, new object[] { cancellationToken });
+        var enumerator = getEnumerator.Invoke(stream, [cancellationToken]);
         if (enumerator == null)
         {
             throw new EvaluatorException("'await for' GetAsyncEnumerator returned null.", node);
@@ -824,7 +824,7 @@ public sealed class Evaluator
                     continue;
                 }
 
-                var literalResult = appendLiteral.Invoke(handler, new object[] { part.Literal });
+                var literalResult = appendLiteral.Invoke(handler, [part.Literal]);
                 if (literalResult is bool lb)
                 {
                     shouldAppend = lb;
@@ -2699,7 +2699,7 @@ public sealed class Evaluator
                     locals[parameter] = EvaluateExpression(addrOf.Operand);
                     if (parameter.RefKind == RefKind.Ref || parameter.RefKind == RefKind.Out)
                     {
-                        userRefSlots ??= new List<(ParameterSymbol, BoundExpression)>();
+                        userRefSlots ??= [];
                         userRefSlots.Add((parameter, addrOf.Operand));
                     }
                 }
@@ -3205,7 +3205,7 @@ public sealed class Evaluator
                 && m.IsGenericMethodDefinition
                 && m.GetParameters().Length == 1
                 && m.GetParameters()[0].ParameterType.IsSameAs(typeof(BoundedChannelOptions)));
-        return bounded.MakeGenericMethod(elementClr).Invoke(null, new object[] { options });
+        return bounded.MakeGenericMethod(elementClr).Invoke(null, [options]);
     }
 
     private void EvaluateChannelSendStatement(BoundChannelSendStatement node)
@@ -3243,7 +3243,7 @@ public sealed class Evaluator
         var reader = channel.GetType().GetProperty("Reader").GetValue(channel);
         var elementType = reader.GetType().GenericTypeArguments[0];
         var readAsync = reader.GetType().GetMethod("ReadAsync", new[] { typeof(System.Threading.CancellationToken) });
-        var valueTask = readAsync.Invoke(reader, new object[] { System.Threading.CancellationToken.None });
+        var valueTask = readAsync.Invoke(reader, [System.Threading.CancellationToken.None]);
         var asTask = valueTask.GetType().GetMethod("AsTask").Invoke(valueTask, null);
         try
         {
@@ -3266,7 +3266,7 @@ public sealed class Evaluator
         }
 
         var writer = channel.GetType().GetProperty("Writer").GetValue(channel);
-        writer.GetType().GetMethod("Complete", new[] { typeof(Exception) }).Invoke(writer, new object[] { null });
+        writer.GetType().GetMethod("Complete", new[] { typeof(Exception) }).Invoke(writer, [null]);
         return null;
     }
 
@@ -3405,13 +3405,13 @@ public sealed class Evaluator
         {
             var writer = channel.GetType().GetProperty("Writer").GetValue(channel);
             var waitToWrite = writer.GetType().GetMethod("WaitToWriteAsync", new[] { typeof(System.Threading.CancellationToken) });
-            var vt = waitToWrite.Invoke(writer, new object[] { System.Threading.CancellationToken.None });
+            var vt = waitToWrite.Invoke(writer, [System.Threading.CancellationToken.None]);
             return (Task)vt.GetType().GetMethod("AsTask").Invoke(vt, null);
         }
 
         var reader = channel.GetType().GetProperty("Reader").GetValue(channel);
         var waitToRead = reader.GetType().GetMethod("WaitToReadAsync", new[] { typeof(System.Threading.CancellationToken) });
-        var vt2 = waitToRead.Invoke(reader, new object[] { System.Threading.CancellationToken.None });
+        var vt2 = waitToRead.Invoke(reader, [System.Threading.CancellationToken.None]);
         return (Task)vt2.GetType().GetMethod("AsTask").Invoke(vt2, null);
     }
 
@@ -4052,7 +4052,7 @@ public sealed class Evaluator
                 args[i] = EvaluateExpression(addrOf.Operand);
                 if (rk == RefKind.Ref || rk == RefKind.Out)
                 {
-                    refSlots ??= new List<(int, BoundExpression)>();
+                    refSlots ??= [];
                     refSlots.Add((i, addrOf.Operand));
                 }
             }
@@ -4443,7 +4443,7 @@ public sealed class Evaluator
 
     private sealed class ScopeFrame
     {
-        public List<Task> Tasks { get; } = new List<Task>();
+        public List<Task> Tasks { get; } = [];
 
         public System.Threading.CancellationTokenSource Cts { get; } = new System.Threading.CancellationTokenSource();
     }

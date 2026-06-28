@@ -192,7 +192,7 @@ var q = Enumerable.Where[Issue666ItemCls](xs, func(i Issue666ItemCls) bool { ret
         // plus all BCL assemblies through a MetadataLoadContext, reproducing
         // the cross-context configuration that triggers issue #666.
         var fixturePath = typeof(Fixtures.Issue666ItemCls).Assembly.Location;
-        var paths = new List<string> { fixturePath };
+        List<string> paths = [fixturePath];
 
         // Include BCL assemblies so System.Linq.Enumerable is discoverable.
         var tpa = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;

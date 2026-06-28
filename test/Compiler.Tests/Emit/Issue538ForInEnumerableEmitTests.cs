@@ -267,7 +267,7 @@ public class Issue538ForInEnumerableEmitTests
                         => new[] { 1, 2, 3, 4, 5 };
 
                     public static ICollection<string> GetCollection()
-                        => new List<string> { "x", "y" };
+                        => ["x", "y"];
 
                     public static IReadOnlyList<string> GetEmptyReadOnlyList()
                         => Array.Empty<string>();

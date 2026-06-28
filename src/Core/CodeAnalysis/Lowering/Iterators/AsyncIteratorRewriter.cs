@@ -257,7 +257,7 @@ public static class AsyncIteratorRewriter
 
     private sealed class LocalCollector : BoundTreeWalker
     {
-        public List<VariableSymbol> Locals { get; } = new List<VariableSymbol>();
+        public List<VariableSymbol> Locals { get; } = [];
 
         protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
         {
@@ -282,7 +282,7 @@ public static class AsyncIteratorRewriter
 
     private sealed class AwaiterTypeCollector : BoundTreeWalker
     {
-        public List<Type> AwaiterTypes { get; } = new List<Type>();
+        public List<Type> AwaiterTypes { get; } = [];
 
         protected override void VisitAwaitExpression(BoundAwaitExpression node)
         {
