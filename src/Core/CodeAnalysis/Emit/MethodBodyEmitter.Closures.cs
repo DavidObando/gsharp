@@ -545,8 +545,11 @@ internal sealed partial class MethodBodyEmitter
             // For an `open` (virtual) instance method, honor virtual
             // dispatch via `ldvirtftn` so an override on a derived
             // receiver is invoked. Non-virtual / sealed methods use
-            // `ldftn` directly.
-            if (methodGroup.Function.IsOpen || methodGroup.Function.IsOverride)
+            // `ldftn` directly. Issue #1397: an interface-typed receiver
+            // must also dispatch via `ldvirtftn` so the delegate invokes
+            // the concrete implementation through interface dispatch.
+            if (methodGroup.Function.IsOpen || methodGroup.Function.IsOverride
+                || methodGroup.Receiver.Type is InterfaceSymbol)
             {
                 this.il.OpCode(ILOpCode.Dup);
                 this.il.OpCode(ILOpCode.Ldvirtftn);

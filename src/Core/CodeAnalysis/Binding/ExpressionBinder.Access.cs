@@ -2778,6 +2778,20 @@ internal sealed partial class ExpressionBinder
                         return new BoundPropertyAccessExpression(null, receiver, null, ifaceProp);
                     }
 
+                    // Issue #1397: an instance method declared on the static
+                    // interface type (or any user base interface) named in
+                    // method-group position is captured against the bound
+                    // receiver, mirroring the class-receiver path above. The
+                    // emitter dispatches via `ldvirtftn` so the delegate invokes
+                    // the concrete implementation through interface dispatch.
+                    // TypeMemberModel.GetMethods walks SelfAndAllBaseInterfaces
+                    // so an inherited base-interface method binds too.
+                    var ifaceInstanceMethods = TypeMemberModel.GetMethods(ifaceSym, ne.IdentifierToken.Text, MemberQuery.Instance(MemberKinds.Method));
+                    if (TryBuildUserMethodGroup(receiver, ifaceInstanceMethods, out var ifaceUserGroup))
+                    {
+                        return ifaceUserGroup;
+                    }
+
                     // Issue #1181: a user interface that extends an imported/BCL
                     // interface (e.g. `interface IBox : ICollection`) inherits
                     // that interface's properties/fields/methods. Mirror the
