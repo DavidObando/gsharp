@@ -1973,6 +1973,15 @@ public sealed class CSharpToGSharpTranslator
                 ? this.typeMapper.Map(symbol.Type, this.context, node.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
 
+            // Issue #1354 / #1072: a non-nullable reference property that is
+            // null-checked or null-assigned anywhere in the declaring type is
+            // really nullable; render it `T?` so the `== nil`/`is null` guard
+            // type-checks (gsc rejects `== nil` on a non-null operand, GS0129).
+            if (symbol != null)
+            {
+                type = this.PromoteIfUsedAsNullable(type, symbol);
+            }
+
             List<PropertyAccessor> accessors = this.MapAccessors(node);
 
             // Issue #1278 / ADR-0131: a C# expression-bodied read-only property
@@ -3165,7 +3174,9 @@ public sealed class CSharpToGSharpTranslator
                     return new[]
                     {
                         (GStatement)new ReturnStatement(
-                            ret.Expression == null ? null : this.TranslateExpression(ret.Expression)),
+                            ret.Expression == null
+                                ? null
+                                : this.TranslateValueWithNullForgiveness(ret.Expression)),
                     };
 
                 case IfStatementSyntax ifStatement:
@@ -3616,8 +3627,8 @@ public sealed class CSharpToGSharpTranslator
             ConditionalExpressionSyntax conditional)
         {
             GExpression condition = this.TranslateExpression(conditional.Condition);
-            GExpression whenTrue = this.TranslateExpression(conditional.WhenTrue);
-            GExpression whenFalse = this.TranslateExpression(conditional.WhenFalse);
+            GExpression whenTrue = this.TranslateValueWithNullForgiveness(conditional.WhenTrue);
+            GExpression whenFalse = this.TranslateValueWithNullForgiveness(conditional.WhenFalse);
 
             ITypeSymbol resultType = this.context.GetTypeInfo(conditional).Type;
             ITypeSymbol trueType = this.context.GetTypeInfo(conditional.WhenTrue).Type;
@@ -4927,6 +4938,7 @@ public sealed class CSharpToGSharpTranslator
             ITypeSymbol declared = symbol switch
             {
                 IFieldSymbol f => f.Type,
+                IPropertySymbol pr => pr.Type,
                 ILocalSymbol l => l.Type,
                 IParameterSymbol p => p.Type,
                 _ => null,
@@ -4954,6 +4966,10 @@ public sealed class CSharpToGSharpTranslator
 
                 case IFieldSymbol field:
                     return field.ContainingType?
+                        .DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+
+                case IPropertySymbol property:
+                    return property.ContainingType?
                         .DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
 
                 case ILocalSymbol local:
@@ -6038,6 +6054,27 @@ public sealed class CSharpToGSharpTranslator
             GExpression translated = this.TranslateExpression(recv);
 
             if (this.ReceiverNeedsNullForgiveness(recv))
+            {
+                return new NonNullAssertionExpression(translated);
+            }
+
+            return translated;
+        }
+
+        // Issue #1354: a value-position read (a `return` expression or a
+        // conditional-expression arm) of a declared-`T?`/promoted-to-`T?` symbol
+        // that Roslyn's flow analysis has narrowed to non-null needs a `!!`
+        // assertion to satisfy a non-null target. G# does not smart-cast
+        // property/field chains, so unlike the receiver pass this also covers
+        // bare reads consumed as values (`return Continuation` /
+        // `cond ? a : Continuation`). The shared <see cref="ReceiverNeedsNullForgiveness"/>
+        // predicate already excludes null-comparison operands (flow there is not
+        // NotNull), `?.` receivers, `this`/`base`, and literals.
+        private GExpression TranslateValueWithNullForgiveness(ExpressionSyntax value)
+        {
+            GExpression translated = this.TranslateExpression(value);
+
+            if (this.ReceiverNeedsNullForgiveness(value))
             {
                 return new NonNullAssertionExpression(translated);
             }
