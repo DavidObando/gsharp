@@ -607,7 +607,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundCallExpression(null, node.Function, builder.MoveToImmutable());
+        return new BoundCallExpression(null, node.Function, builder.MoveToImmutable(), node.ReturnType, node.IsConditionalElided);
     }
 
     /// <summary>
