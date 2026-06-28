@@ -5201,6 +5201,15 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
+        // A constant pattern whose expression is actually a bare/qualified TYPE
+        // reference (Roslyn parses `is T`/`not T` after a pattern combinator as a
+        // ConstantPattern over an identifier, since it cannot tell at parse time
+        // that the identifier names a type). Such a pattern is a type test, not an
+        // equality, so it must lower to `x is T` rather than `x == T`.
+        private bool IsTypeReferencePattern(ExpressionSyntax expression) =>
+            expression is TypeSyntax
+            && this.context.GetSymbolInfo(expression).Symbol is ITypeSymbol;
+
         private GExpression TranslateIsPattern(IsPatternExpressionSyntax isPattern)
         {
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
@@ -5217,6 +5226,17 @@ public sealed class CSharpToGSharpTranslator
                     when constant.Expression.IsKind(SyntaxKind.NullLiteralExpression):
                     // `x is null` → `x == nil`.
                     return new BinaryExpression(receiver, "==", LiteralExpression.Null());
+
+                case ConstantPatternSyntax constant
+                    when this.IsTypeReferencePattern(constant.Expression):
+                    // Roslyn parses `x is T` where `T` is a bare type name after a
+                    // combinator (e.g. `is Frame child and not EmptyFrame`) as a
+                    // ConstantPattern over an identifier — but the identifier binds
+                    // to a TYPE, so it is a type test, not an equality. `x is T`.
+                    return new BinaryExpression(
+                        receiver,
+                        "is",
+                        new TypeExpression(this.MapTypeSyntax((TypeSyntax)constant.Expression)));
 
                 case ConstantPatternSyntax constant:
                     // `x is 0` / `x is "moov"` / `x is true`. G# `is` only tests a
@@ -5302,6 +5322,17 @@ public sealed class CSharpToGSharpTranslator
                     when constant.Expression.IsKind(SyntaxKind.NullLiteralExpression):
                     // `x is not null` → `x != nil`.
                     return new BinaryExpression(receiver, "!=", LiteralExpression.Null());
+
+                case ConstantPatternSyntax constant
+                    when this.IsTypeReferencePattern(constant.Expression):
+                    // `x is not T` where Roslyn parsed `T` as a ConstantPattern
+                    // identifier that binds to a TYPE → `!(x is T)`.
+                    return new UnaryExpression(
+                        "!",
+                        new ParenthesizedExpression(new BinaryExpression(
+                            receiver,
+                            "is",
+                            new TypeExpression(this.MapTypeSyntax((TypeSyntax)constant.Expression)))));
 
                 case ConstantPatternSyntax constant:
                     // `x is not 6` → `x != 6` (with numeric retyping to the receiver).

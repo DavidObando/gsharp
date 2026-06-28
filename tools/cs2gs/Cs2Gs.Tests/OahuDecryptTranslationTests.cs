@@ -331,6 +331,32 @@ namespace Demo
     }
 
     /// <summary>
+    /// A type reference that Roslyn parses as a constant pattern after a pattern
+    /// combinator (<c>is Frame f and not EmptyFrame</c>) lowers to a type test
+    /// <c>!(x is EmptyFrame)</c>, not an equality <c>x != EmptyFrame</c> (which
+    /// would treat the type name as a value → GS0125).
+    /// </summary>
+    [Fact]
+    public void IsPattern_TypeReferenceAfterCombinator_LowersToTypeTest()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Frame { }
+    public sealed class EmptyFrame : Frame { }
+    public static class C
+    {
+        public static bool IsRealFrame(object o) => o is Frame f and not EmptyFrame;
+    }
+}");
+
+        Assert.Contains("is Frame", printed);
+        Assert.Contains("is EmptyFrame", printed);
+        Assert.DoesNotContain("!= EmptyFrame", printed);
+        Assert.DoesNotContain("== EmptyFrame", printed);
+    }
+
+    /// <summary>
     /// A control character inside a string literal (here NUL from C# <c>\0</c>)
     /// is re-escaped as a <c>\uXXXX</c> escape so the emitted G# string stays
     /// terminated and round-trips (ADR-0115 §B).
