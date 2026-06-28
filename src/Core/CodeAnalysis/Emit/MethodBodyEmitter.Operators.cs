@@ -681,14 +681,14 @@ internal sealed partial class MethodBodyEmitter
         out BoundExpression operand)
     {
         if (node.Right.Type == TypeSymbol.Null
-            && IsOpenTypeParameterNullable(node.Left.Type))
+            && (IsOpenTypeParameterNullable(node.Left.Type) || IsBareNonStructTypeParameter(node.Left.Type)))
         {
             operand = node.Left;
             return true;
         }
 
         if (node.Left.Type == TypeSymbol.Null
-            && IsOpenTypeParameterNullable(node.Right.Type))
+            && (IsOpenTypeParameterNullable(node.Right.Type) || IsBareNonStructTypeParameter(node.Right.Type)))
         {
             operand = node.Right;
             return true;
@@ -696,6 +696,20 @@ internal sealed partial class MethodBodyEmitter
 
         operand = null;
         return false;
+    }
+
+    /// <summary>
+    /// Issue #1333: returns true when <paramref name="t"/> is a bare (non-nullable)
+    /// open type parameter that is NOT <c>struct</c>-constrained. Such a `T == nil`
+    /// operand is a reference at runtime (class/unconstrained), but emitting
+    /// `ldloc T; ldnull; ceq` is rejected by ilverify because `ceq` cannot match
+    /// an opaque VAR/MVAR slot against a managed-null reference. The caller boxes
+    /// the operand first (`box !!T; ldnull; ceq`), which the JIT elides for a
+    /// reference T.
+    /// </summary>
+    private static bool IsBareNonStructTypeParameter(TypeSymbol t)
+    {
+        return t is TypeParameterSymbol tp && !tp.HasValueTypeConstraint;
     }
 
     /// <summary>
