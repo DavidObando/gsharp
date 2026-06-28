@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -830,8 +831,8 @@ internal sealed class ConversionClassifier
 
         if (applicable.Count > 0)
         {
-            var resolution = OverloadResolution.Resolve(applicable, argTypes);
-            if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
+            var resolution = ClrOverloadResolution.Resolve(applicable, argTypes);
+            if (resolution.Outcome == ResolutionOutcome.Resolved)
             {
                 return new BoundClrMethodGroupExpression(group.Syntax, group.Receiver, resolution.Best, targetType);
             }

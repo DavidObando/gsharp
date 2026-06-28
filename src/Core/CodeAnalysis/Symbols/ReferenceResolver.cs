@@ -14,6 +14,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Runtime.CompilerServices;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 

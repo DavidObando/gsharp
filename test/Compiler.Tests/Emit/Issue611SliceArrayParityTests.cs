@@ -27,7 +27,7 @@ public class Issue611SliceArrayParityTests
         // Validates that slice → CLR generic method inference works end-to-end.
         // System.Linq.Enumerable.Count<T>(IEnumerable<T>) must infer T from a
         // []string argument. This exercises the CLR-level inference path
-        // (OverloadResolution.UnifyForInference → FindClosedGeneric) which walks
+        // (ClrOverloadResolution.UnifyForInference → FindClosedGeneric) which walks
         // the array's interfaces to find IEnumerable<string>.
         var gsource = """
             package Probe.Tests

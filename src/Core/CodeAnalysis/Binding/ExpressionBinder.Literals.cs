@@ -14,12 +14,12 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
-
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class ExpressionBinder
@@ -241,7 +241,7 @@ internal sealed partial class ExpressionBinder
 
     /// <summary>
     /// ADR-0055 Tier 4 (#369): builds the per-argument flags consumed by
-    /// <see cref="OverloadResolution.Resolve{T}(System.Collections.Generic.IEnumerable{T}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Func{System.Type, System.Type}, System.Collections.Generic.IReadOnlyList{bool}, System.Collections.Generic.IReadOnlyList{string}, System.Func{System.Reflection.MethodInfo, System.Collections.Immutable.ImmutableArray{GSharp.Core.CodeAnalysis.Symbols.TypeSymbol}})"/>,
+    /// <see cref="ClrOverloadResolution.Resolve{T}(System.Collections.Generic.IEnumerable{T}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Func{System.Type, System.Type}, System.Collections.Generic.IReadOnlyList{bool}, System.Collections.Generic.IReadOnlyList{string}, System.Func{System.Reflection.MethodInfo, System.Collections.Immutable.ImmutableArray{GSharp.Core.CodeAnalysis.Symbols.TypeSymbol}})"/>,
     /// marking each positional argument whose syntax is an interpolated-string
     /// literal. These arguments may convert to an
     /// <c>IFormattable</c>/<c>FormattableString</c> parameter in addition to
@@ -295,7 +295,7 @@ internal sealed partial class ExpressionBinder
 
             var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i]);
             if (argSyntax is InterpolatedStringExpressionSyntax interpolated
-                && OverloadResolution.IsFormattableStringTarget(parameters[paramIndex].ParameterType))
+                && ClrOverloadResolution.IsFormattableStringTarget(parameters[paramIndex].ParameterType))
             {
                 builder ??= arguments.ToBuilder();
                 builder[i] = BindInterpolatedStringAsFormattable(interpolated, targetType: null);

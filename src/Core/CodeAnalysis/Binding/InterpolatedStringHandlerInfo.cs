@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -314,7 +315,7 @@ public sealed class InterpolatedStringHandlerInfo
 
                 var argType = forwardedArgs[i].Type?.ClrType;
                 if (argType != null
-                    && OverloadResolution.ClassifyImplicit(paramType, argType) == OverloadResolution.ImplicitConversionKind.None)
+                    && ClrOverloadResolution.ClassifyImplicit(paramType, argType) == ImplicitConversionKind.None)
                 {
                     ok = false;
                     break;

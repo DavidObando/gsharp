@@ -8,6 +8,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Documentation;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
@@ -104,7 +105,7 @@ public sealed class Binder
     // supporting machinery (named-argument reordering, default-value
     // fill, params lowering, generic type-argument inference, candidate
     // selection, and diagnostic emission). Wraps the pure reflection-level
-    // resolver in OverloadResolution.cs (which is unchanged). Composed
+    // resolver in the OverloadResolution sub-namespace. Composed
     // via Func / custom-delegate callbacks; never back-references Binder.
     private readonly OverloadResolver overloads;
 
@@ -176,7 +177,7 @@ public sealed class Binder
         // Stream E: let overload-resolution see user-defined op_Implicit when
         // built-in conversions don't apply. Implicit-only here — explicit
         // conversions never participate in overload tie-breaking.
-        OverloadResolution.UserDefinedImplicitConversionLookup ??= (source, target) =>
+        ClrOverloadResolution.UserDefinedImplicitConversionLookup ??= (source, target) =>
             ClrOperatorResolution.TryResolveConversion(source, target, allowExplicit: false, out _, out _);
     }
 
@@ -3302,7 +3303,7 @@ public sealed class Binder
             // #611 intentional asymmetry: a fixed-array `[N]T` does NOT unify
             // against a slice parameter `[]T` (or vice versa). In Go, explicit
             // slicing is required to produce a slice from a fixed-length array.
-            // The CLR-level inference path (OverloadResolution.UnifyForInference)
+            // The CLR-level inference path (ClrOverloadResolution.UnifyForInference)
             // handles this differently because both map to CLR T[], but at the
             // GSharp semantic level they are distinct types.
         }

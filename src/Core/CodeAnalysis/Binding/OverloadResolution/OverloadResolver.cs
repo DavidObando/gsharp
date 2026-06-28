@@ -12,12 +12,13 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Documentation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 
-namespace GSharp.Core.CodeAnalysis.Binding;
+namespace GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
 /// <summary>
 /// PR-B-4: the binder-side facade for call-site overload resolution. Owns
@@ -26,7 +27,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// entry points, plus the supporting machinery — named-argument
 /// reordering, default-value fill, <c>params T[]</c> lowering, generic
 /// type-argument inference, candidate selection (delegating to the pure
-/// reflection-level resolver in <see cref="OverloadResolution"/>), and
+/// reflection-level resolver in <see cref="ClrOverloadResolution"/>), and
 /// the diagnostic emission used at all four call-site shapes.
 /// </summary>
 /// <remarks>
@@ -44,8 +45,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// established in PR-B-3.
 /// </para>
 /// <para>
-/// The pure value-shaped <see cref="OverloadResolution"/> static class
-/// in <c>OverloadResolution.cs</c> is unchanged and continues to expose
+/// The pure value-shaped <see cref="ClrOverloadResolution"/> static class
+/// exposes
 /// the reflection-level <c>Resolve&lt;T&gt;</c> /
 /// <c>TryInferTypeArguments</c> entry points. This class merely wraps
 /// that pure resolver with the diagnostic emission, syntax-aware

@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -119,7 +120,7 @@ internal sealed class MemberLookup
     /// Enumerates every public instance method on <paramref name="clrType"/>
     /// and its transitive implemented interfaces with the given <paramref name="name"/>.
     /// The overload-resolution-facing variant, used by call sites that need to
-    /// pass a candidate set into <see cref="OverloadResolution.Resolve"/>.
+    /// pass a candidate set into <see cref="ClrOverloadResolution.Resolve"/>.
     /// Hides base-method-with-same-signature shadowing the same way C# does
     /// (via the existing <c>IsHiddenByExisting</c> helper in <see cref="ClrTypeUtilities"/>).
     /// </summary>

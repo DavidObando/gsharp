@@ -1,4 +1,4 @@
-﻿// <copyright file="ImportedClassSymbol.cs" company="GSharp">
+// <copyright file="ImportedClassSymbol.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -8,6 +8,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -215,11 +216,11 @@ public sealed class ImportedClassSymbol : Symbol
         // Issue #658: set up supplementary interface check for user-class args.
         if (hasUserClassArg)
         {
-            OverloadResolution.SupplementaryInterfaceCheck = (source, target) =>
+            ClrOverloadResolution.SupplementaryInterfaceCheck = (source, target) =>
                 IsUserClassAssignableToInterface(arguments, argTypes, source, target);
         }
 
-        OverloadResolution.Result<MethodInfo> result;
+        Result<MethodInfo> result;
         try
         {
             // Issue #1325: recover the symbolic type-argument vector per candidate
@@ -229,26 +230,26 @@ public sealed class ImportedClassSymbol : Symbol
             var symbolicArgVector = MemberLookup.BuildSymbolicArgTypeVector(
                 receiverType: null,
                 ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
-            result = OverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs, projectTypeArgument, ComputeInterpolatedStringArgFlags(callExpression, arguments.Length), argumentNames, closed => MemberLookup.BuildSymbolicMethodTypeArgs(closed, typeArgSymbols, symbolicArgVector));
+            result = ClrOverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs, projectTypeArgument, ComputeInterpolatedStringArgFlags(callExpression, arguments.Length), argumentNames, closed => MemberLookup.BuildSymbolicMethodTypeArgs(closed, typeArgSymbols, symbolicArgVector));
         }
         finally
         {
             if (hasUserClassArg)
             {
-                OverloadResolution.SupplementaryInterfaceCheck = null;
+                ClrOverloadResolution.SupplementaryInterfaceCheck = null;
             }
         }
 
         switch (result.Outcome)
         {
-            case OverloadResolution.ResolutionOutcome.Resolved:
+            case ResolutionOutcome.Resolved:
                 // Issue #320: when an imported generic method returns exactly one
                 // of its method type parameters and was closed over a user-defined
                 // type argument (placeholder CLR type), recover the real return
                 // type from the explicit type-argument symbol.
                 TypeSymbol returnOverride = null;
                 if (!typeArgSymbols.IsDefaultOrEmpty
-                    && OverloadResolution.TryGetGenericMethodParameterReturnPosition(result.Best, out var position)
+                    && ClrOverloadResolution.TryGetGenericMethodParameterReturnPosition(result.Best, out var position)
                     && position >= 0
                     && position < typeArgSymbols.Length)
                 {
@@ -273,7 +274,7 @@ public sealed class ImportedClassSymbol : Symbol
                 parameterMapping = result.ParameterMapping;
                 isExpanded = result.IsExpanded;
                 return true;
-            case OverloadResolution.ResolutionOutcome.Ambiguous:
+            case ResolutionOutcome.Ambiguous:
                 isAmbiguous = true;
                 ambiguousMethods = result.Ambiguous;
                 return false;

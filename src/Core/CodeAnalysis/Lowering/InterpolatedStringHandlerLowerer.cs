@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -667,16 +668,16 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
                 argTypes[ai] = typeof(string);
             }
 
-            var resolution = OverloadResolution.Resolve<MethodInfo>(shapeCandidates, argTypes);
+            var resolution = ClrOverloadResolution.Resolve<MethodInfo>(shapeCandidates, argTypes);
             MethodInfo picked = null;
-            if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
+            if (resolution.Outcome == ResolutionOutcome.Resolved)
             {
                 picked = resolution.Best;
             }
-            else if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Ambiguous)
+            else if (resolution.Outcome == ResolutionOutcome.Ambiguous)
             {
                 // C# §7.5.3.2 tie-break: a non-generic member is better than
-                // a generic one. The shared OverloadResolution.Resolve does
+                // a generic one. The shared ClrOverloadResolution.Resolve does
                 // not yet implement this, so apply it locally so e.g.
                 // `AppendFormatted(string)` beats `AppendFormatted<T>(T)` when
                 // both are applicable for a `string` hole.

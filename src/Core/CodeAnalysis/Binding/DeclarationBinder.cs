@@ -13,10 +13,10 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
-
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
@@ -6570,15 +6570,15 @@ internal sealed class DeclarationBinder
         var isExpanded = false;
         if (argsAllTyped)
         {
-            var resolution = OverloadResolution.Resolve(ctors, argTypes);
+            var resolution = ClrOverloadResolution.Resolve(ctors, argTypes);
             switch (resolution.Outcome)
             {
-                case OverloadResolution.ResolutionOutcome.Resolved:
+                case ResolutionOutcome.Resolved:
                     bestCtor = resolution.Best as ConstructorInfo;
                     isExpanded = resolution.IsExpanded;
                     break;
-                case OverloadResolution.ResolutionOutcome.Ambiguous:
-                    Diagnostics.ReportAmbiguousOverload(location, clrBase.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
+                case ResolutionOutcome.Ambiguous:
+                    Diagnostics.ReportAmbiguousOverload(location, clrBase.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
                     return null;
                 default:
                     break;

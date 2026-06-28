@@ -15,12 +15,12 @@ using System.Linq;
 using System.Numerics;
 using System.Reflection;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
-
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class ExpressionBinder
@@ -1742,7 +1742,7 @@ internal sealed partial class ExpressionBinder
     }
 
     // Issue #1311: builds the per-call constant-narrowing applicability hook for
-    // imported/BCL overload resolution (OverloadResolution.Resolve). The hook
+    // imported/BCL overload resolution (ClrOverloadResolution.Resolve). The hook
     // receives the source-argument index (into argTypes) and the candidate's CLR
     // parameter type; it returns true when the corresponding bound argument is a
     // constant integer expression whose value fits that (possibly narrower /
