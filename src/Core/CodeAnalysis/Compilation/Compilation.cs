@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Diagnostics;
 using GSharp.Core.CodeAnalysis.Documentation;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Lowering.Iterators;
@@ -58,6 +59,7 @@ public class Compilation
         IsLibrary = previous?.IsLibrary ?? false;
         PreprocessorSymbols = previous?.PreprocessorSymbols ?? ImmutableHashSet<string>.Empty;
         WarnOnMissingDocumentation = previous?.WarnOnMissingDocumentation ?? false;
+        Logger = previous?.Logger ?? NullLogger.Instance;
         debugInformation = CloneDebugInformation(previous?.DebugInformation);
     }
 
@@ -133,10 +135,17 @@ public class Compilation
 
     /// <summary>
     /// Gets or sets a value indicating whether public source symbols missing
-    /// documentation comments should produce GS0228 warnings during emit.
+    /// documentation comments should produce GS0228 diagnostics during emit.
     /// Defaults to <see langword="false"/>.
     /// </summary>
     public bool WarnOnMissingDocumentation { get; set; }
+
+    /// <summary>
+    /// Gets or sets the optional <see cref="ILogger"/> instance used for
+    /// host-level diagnostic logging. Defaults to <see cref="NullLogger"/>
+    /// so there is zero overhead when the host does not configure one.
+    /// </summary>
+    public ILogger Logger { get; set; } = NullLogger.Instance;
 
     /// <summary>
     /// Gets or sets the optional per-project bound-body cache (ADR-0105

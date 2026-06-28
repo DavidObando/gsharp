@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Diagnostics;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.IO;
@@ -25,15 +26,30 @@ public class GSharpRepl : Repl
 
     private List<int> linesWithOpenMultilineComments = new List<int>();
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="GSharpRepl"/> class.
+    /// </summary>
+    /// <param name="logger">Optional host logger.</param>
+    public GSharpRepl(ILogger logger = null)
+    {
+        Logger = logger ?? NullLogger.Instance;
+    }
+
+    /// <summary>
+    /// Gets the host logger for this REPL.
+    /// </summary>
+    public ILogger Logger { get; }
+
     /// <inheritdoc/>
     public override void EvaluateSubmission(string text)
     {
         linesWithOpenMultilineComments.Clear();
+        Logger.LogDebug("Evaluating REPL submission");
 
         var syntaxTree = SyntaxTree.Parse(text);
 
         var compilation = previous == null
-                            ? new Compilation(syntaxTree)
+                            ? new Compilation(syntaxTree) { Logger = Logger }
                             : previous.ContinueWith(syntaxTree);
 
         if (showTree)
@@ -54,6 +70,7 @@ public class GSharpRepl : Repl
         // the compilation as successful unless an error severity is present.
         if (result.Diagnostics.Any())
         {
+            Logger.LogInfo($"Submission produced {result.Diagnostics.Length} diagnostic(s)");
             Console.Out.WriteDiagnostics(result.Diagnostics);
         }
 
@@ -68,6 +85,10 @@ public class GSharpRepl : Repl
             }
 
             previous = compilation;
+        }
+        else
+        {
+            Logger.LogWarning("Submission completed with errors");
         }
     }
 

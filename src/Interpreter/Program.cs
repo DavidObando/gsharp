@@ -5,6 +5,7 @@
 using System;
 using System.Globalization;
 using System.IO;
+using GSharp.Core.CodeAnalysis.Diagnostics;
 
 namespace GSharp.Interpreter;
 
@@ -20,35 +21,81 @@ public class Program
     /// <returns>Exit code.</returns>
     public static int Main(string[] args)
     {
-        var repl = new GSharpRepl();
-        if (args?.Length > 0)
+        var logPath = GetLogPath(args);
+        ILogger logger = logPath is not null ? new FileLogger(logPath) : NullLogger.Instance;
+        try
         {
-            var arg0 = args[0];
-            if (arg0.Length > 0 &&
-                arg0.EndsWith(".gs", ignoreCase: true, culture: CultureInfo.InvariantCulture) &&
-                File.Exists(arg0))
+            var filteredArgs = FilterLogArg(args);
+            var repl = new GSharpRepl(logger);
+            if (filteredArgs.Length > 0)
             {
-                var success = EvaluateFile(repl, arg0);
-                if (!success)
+                var arg0 = filteredArgs[0];
+                if (arg0.Length > 0 &&
+                    arg0.EndsWith(".gs", ignoreCase: true, culture: CultureInfo.InvariantCulture) &&
+                    File.Exists(arg0))
                 {
+                    logger.LogInfo($"Evaluating file: {arg0}");
+                    var success = EvaluateFile(repl, arg0, logger);
+                    if (!success)
+                    {
+                        return 1;
+                    }
+                }
+                else
+                {
+                    logger.LogWarning($"Unable to find specified file {arg0}");
+                    Console.WriteLine($"Unable to find specified file {arg0}");
                     return 1;
                 }
             }
             else
             {
-                Console.WriteLine($"Unable to find specified file {arg0}");
-                return 1;
+                logger.LogInfo("Starting REPL session");
+                repl.Run();
             }
-        }
-        else
-        {
-            repl.Run();
-        }
 
-        return 0;
+            return 0;
+        }
+        finally
+        {
+            (logger as IDisposable)?.Dispose();
+        }
     }
 
-    private static bool EvaluateFile(GSharpRepl repl, string filePath)
+    private static string GetLogPath(string[] args)
+    {
+        var logArg = Array.Find(args, a =>
+            string.Equals(a, "--log", StringComparison.OrdinalIgnoreCase) ||
+            a.StartsWith("--log=", StringComparison.OrdinalIgnoreCase) ||
+            a.StartsWith("--log:", StringComparison.OrdinalIgnoreCase));
+
+        if (logArg == null)
+        {
+            return null;
+        }
+
+        var separatorIndex = logArg.IndexOfAny(new[] { '=', ':' });
+        if (separatorIndex >= 0)
+        {
+            var path = logArg.Substring(separatorIndex + 1).Trim();
+            if (!string.IsNullOrEmpty(path))
+            {
+                return path;
+            }
+        }
+
+        return DiagnosticLogPaths.GetDefaultFilePath("gsharp-interpreter-debug.log");
+    }
+
+    private static string[] FilterLogArg(string[] args)
+    {
+        return Array.FindAll(args, a =>
+            !string.Equals(a, "--log", StringComparison.OrdinalIgnoreCase) &&
+            !a.StartsWith("--log=", StringComparison.OrdinalIgnoreCase) &&
+            !a.StartsWith("--log:", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool EvaluateFile(GSharpRepl repl, string filePath, ILogger logger)
     {
         string text;
         using (var reader = new StreamReader(filePath))
@@ -69,6 +116,7 @@ public class Program
         }
         else
         {
+            logger.LogWarning($"Invalid input: empty file {filePath}");
             Console.WriteLine("Invalid input: empty file.");
         }
 

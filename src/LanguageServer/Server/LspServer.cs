@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using GSharp.Core.CodeAnalysis.Diagnostics;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.LanguageServer.Protocol;
@@ -33,6 +34,7 @@ public sealed class LspServer
 {
     private readonly DocumentContentService documentContentService;
     private readonly WorkspaceState workspaceState;
+    private readonly ILogger logger;
     private readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
     private readonly TaskCompletionSource<int> exitSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object refreshLock = new object();
@@ -43,10 +45,11 @@ public sealed class LspServer
     private bool clientSupportsDiagnosticRefresh;
     private Timer refreshTimer;
 
-    public LspServer(DocumentContentService documentContentService, WorkspaceState workspaceState)
+    public LspServer(DocumentContentService documentContentService, WorkspaceState workspaceState, ILogger logger = null)
     {
         this.documentContentService = documentContentService;
         this.workspaceState = workspaceState;
+        this.logger = logger ?? NullLogger.Instance;
     }
 
     /// <summary>Gets a task that completes when the client sends the <c>exit</c> notification.</summary>
@@ -567,7 +570,7 @@ public sealed class LspServer
                 // a per-request "Object reference not set to an instance of an object"
                 // popup for every diagnostic / inlayHint / codeLens / semanticTokens pull
                 // until the user restarted the editor. Swallow the exception, log it to
-                // stderr for diagnosis, and return a safe default (null for reference
+                // structured logging for diagnosis, and return a safe default (null for reference
                 // types — LSP clients treat that as "no result" rather than an error).
                 LogHandlerException(caller, ex);
                 return default;
@@ -864,16 +867,15 @@ public sealed class LspServer
     private static SemanticTokens EmptySemanticTokens()
         => new SemanticTokens { Data = System.Collections.Immutable.ImmutableArray<int>.Empty };
 
-    private static void LogHandlerException(string handler, Exception ex)
+    private void LogHandlerException(string handler, Exception ex)
     {
         try
         {
-            Console.Error.WriteLine($"[gsharp-lsp] {handler ?? "handler"} failed: {ex.GetType().FullName}: {ex.Message}");
-            Console.Error.WriteLine(ex.StackTrace);
+            this.logger.LogError($"{handler ?? "handler"} failed: {ex.GetType().FullName}: {ex.Message}", ex);
         }
         catch
         {
-            // Logging is best-effort; never let a stderr write tear down the server.
+            // Logging is best-effort; never let a logger failure tear down the server.
         }
     }
 
