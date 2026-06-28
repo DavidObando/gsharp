@@ -1234,7 +1234,8 @@ public sealed class CSharpToGSharpTranslator
             {
                 (string Name, ITypeSymbol Type, bool IsProperty) target = paramToTarget[param];
                 GTypeReference type = this.typeMapper.Map(target.Type, this.context, param.Locations.FirstOrDefault());
-                primaryParameters.Add(new Parameter(target.Name, type));
+                GExpression liftedDefault = this.BuildOptionalParameterDefault(param, type);
+                primaryParameters.Add(new Parameter(target.Name, type, defaultValue: liftedDefault));
                 if (target.IsProperty)
                 {
                     propertiesAsParams.Add(target.Name);
@@ -2534,21 +2535,52 @@ public sealed class CSharpToGSharpTranslator
                 type = this.PromoteIfUsedAsNullable(type, symbol);
             }
 
-            GExpression defaultValue = null;
-            if (symbol.HasExplicitDefaultValue)
-            {
-                defaultValue = MapConstantDefault(symbol);
-                if (defaultValue == null && symbol.ExplicitDefaultValue != null)
-                {
-                    this.context.Report(new TranslationDiagnostic(
-                        nameof(SyntaxKind.EqualsValueClause),
-                        $"parameter '{symbol.Name}' has a default value that is not a simple literal; the default is omitted for now (deferred to step 7).",
-                        symbol.Locations.FirstOrDefault(),
-                        TranslationSeverity.Info));
-                }
-            }
+            GExpression defaultValue = this.BuildOptionalParameterDefault(symbol, type);
 
             return new Parameter(SanitizeIdentifier(symbol.Name), type, variadic, refKind, defaultValue);
+        }
+
+        /// <summary>
+        /// Computes the G# default-value expression for an optional C# parameter,
+        /// or <c>null</c> when the parameter is required or its default cannot be
+        /// represented as a simple literal. An optional parameter whose default is
+        /// the zero value (<c>= default</c>, <c>= default(T)</c>, or <c>= null</c>)
+        /// must never be dropped — doing so makes the parameter required and triggers
+        /// GS0144 at call sites. A non-nullable value type emits <c>default(T)</c>
+        /// (gsc rejects a bare <c>default</c> with GS0265); a reference or nullable
+        /// value type emits <c>nil</c>.
+        /// </summary>
+        private GExpression BuildOptionalParameterDefault(IParameterSymbol symbol, GTypeReference type)
+        {
+            if (!symbol.HasExplicitDefaultValue)
+            {
+                return null;
+            }
+
+            GExpression defaultValue = MapConstantDefault(symbol);
+            if (defaultValue != null)
+            {
+                return defaultValue;
+            }
+
+            if (symbol.ExplicitDefaultValue == null)
+            {
+                bool nullableValueType =
+                    symbol.Type.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T;
+                bool nonNullableValueType = symbol.Type.IsValueType
+                    && !nullableValueType
+                    && symbol.Type.NullableAnnotation != NullableAnnotation.Annotated;
+                return nonNullableValueType
+                    ? new DefaultValueExpression(type)
+                    : new IdentifierExpression("nil");
+            }
+
+            this.context.Report(new TranslationDiagnostic(
+                nameof(SyntaxKind.EqualsValueClause),
+                $"parameter '{symbol.Name}' has a default value that is not a simple literal; the default is omitted for now (deferred to step 7).",
+                symbol.Locations.FirstOrDefault(),
+                TranslationSeverity.Info));
+            return null;
         }
 
         private GTypeReference MapReturnType(IMethodSymbol symbol, MethodDeclarationSyntax node)
