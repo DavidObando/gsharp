@@ -506,7 +506,7 @@ internal sealed class ReflectionMetadataEmitter
         // ADR-0059 / issue #255: cache the base type and `IntPtr` parameter
         // type for user-declared named delegate emission.
         this.emitCtx.CoreMulticastDelegateType = this.ResolveCoreType("System.MulticastDelegate", typeof(System.MulticastDelegate));
-        this.emitCtx.CoreIntPtrType = this.ResolveCoreType("System.IntPtr", typeof(System.IntPtr));
+        this.emitCtx.CoreIntPtrType = this.ResolveCoreType("System.IntPtr", typeof(nint));
 
         // PR-E-3: WellKnownReferences depends on EmitContext.Core* and on the
         // dedup-cached GetTypeReference / GetMethodReference resolvers that
@@ -5401,7 +5401,7 @@ internal sealed class ReflectionMetadataEmitter
                 : "StringToCoTaskMemUTF8";
             var convertMethod = marshalType.GetMethod(convertName, new[] { typeof(string) })
                 ?? throw new InvalidOperationException($"Cannot resolve Marshal.{convertName}(string).");
-            var freeMethod = marshalType.GetMethod("FreeCoTaskMem", new[] { typeof(IntPtr) })
+            var freeMethod = marshalType.GetMethod("FreeCoTaskMem", new[] { typeof(nint) })
                 ?? throw new InvalidOperationException("Cannot resolve Marshal.FreeCoTaskMem(IntPtr).");
             convertRef = this.GetMethodReference(convertMethod);
             freeRef = this.GetMethodReference(freeMethod);

@@ -392,7 +392,7 @@ internal sealed partial class MethodBodyEmitter
 
         if (isAsync)
         {
-            var funcTaskCtor = typeof(Func<System.Threading.Tasks.Task>).GetConstructor(new[] { typeof(object), typeof(IntPtr) });
+            var funcTaskCtor = typeof(Func<System.Threading.Tasks.Task>).GetConstructor(new[] { typeof(object), typeof(nint) });
             this.il.OpCode(ILOpCode.Ldftn);
             this.il.Token(invokeHandle);
             this.il.OpCode(ILOpCode.Newobj);
@@ -400,7 +400,7 @@ internal sealed partial class MethodBodyEmitter
         }
         else
         {
-            var actionCtor = typeof(Action).GetConstructor(new[] { typeof(object), typeof(IntPtr) });
+            var actionCtor = typeof(Action).GetConstructor(new[] { typeof(object), typeof(nint) });
             this.il.OpCode(ILOpCode.Ldftn);
             this.il.Token(invokeHandle);
             this.il.OpCode(ILOpCode.Newobj);

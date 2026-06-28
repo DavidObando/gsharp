@@ -58,7 +58,7 @@ public class NamedDelegateEmitTests
         var parms = ctor.GetParameters();
         Assert.Equal(2, parms.Length);
         Assert.Equal(typeof(object), parms[0].ParameterType);
-        Assert.Equal(typeof(IntPtr), parms[1].ParameterType);
+        Assert.Equal(typeof(nint), parms[1].ParameterType);
     }
 
     [Fact]
