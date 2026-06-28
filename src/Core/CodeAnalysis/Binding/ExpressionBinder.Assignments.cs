@@ -27,13 +27,21 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindAssignmentExpression(AssignmentExpressionSyntax syntax)
     {
         var name = syntax.IdentifierToken.Text;
-        var boundExpression = BindExpression(syntax.Expression);
 
+        // Issue #1316: resolve the assignment target before binding the RHS so the
+        // target's declared type can be threaded into the RHS binder as the
+        // expected type. Without this an if-/conditional-/switch-expression RHS
+        // with a `nil` arm (e.g. `A = if c { nil } else { T(...) }` where
+        // `A : T?`) binds context-free, picks `T` from the non-nil arm, and then
+        // rejects the `nil` arm with GS0155 — even though the identical RHS bound
+        // through `let a T? = ...` (which does receive the target type) compiles.
         var variable = BindVariableReference(name, syntax.IdentifierToken.Location);
         if (variable == null)
         {
-            return boundExpression;
+            return BindExpression(syntax.Expression);
         }
+
+        var boundExpression = BindAssignmentRhs(syntax.Expression, GetAssignmentTargetType(variable));
 
         if (variable is ImplicitFieldVariableSymbol implicitField)
         {
@@ -139,6 +147,54 @@ internal sealed partial class ExpressionBinder
         var convertedExpression = conversions.BindConversion(syntax.Expression.Location, boundExpression, variable.Type);
 
         return new BoundAssignmentExpression(null, variable, convertedExpression, boundExpression.Type);
+    }
+
+    /// <summary>
+    /// Issue #1316: resolves the declared type of a simple-assignment target so
+    /// it can be threaded into the RHS binder as the expected type. Mirrors the
+    /// per-form types used by the conversions below: an implicit field/property
+    /// write uses the member's type; any other writable variable uses its own
+    /// declared type.
+    /// </summary>
+    /// <param name="variable">The resolved assignment-target symbol.</param>
+    /// <returns>The target's declared type, or <see langword="null"/> when unknown.</returns>
+    private static TypeSymbol GetAssignmentTargetType(VariableSymbol variable)
+    {
+        return variable switch
+        {
+            ImplicitFieldVariableSymbol implicitField => implicitField.Field.Type,
+            ImplicitStaticFieldVariableSymbol implicitStaticField => implicitStaticField.Field.Type,
+            ImplicitStaticPropertyVariableSymbol implicitStaticProp => implicitStaticProp.Property.Type,
+            ImplicitPropertyVariableSymbol implicitProp => implicitProp.Property.Type,
+            _ => variable?.Type,
+        };
+    }
+
+    /// <summary>
+    /// Issue #1316: binds the RHS of a simple assignment, threading the resolved
+    /// LHS <paramref name="targetType"/> into the binder for target-typed RHS
+    /// forms (if-/conditional-/switch-expression). This engages the same
+    /// branch-unification and nil-&gt;<c>T?</c> adaptation already used for a
+    /// <c>let x T? = ...</c> initializer (see StatementBinder), so a conditional
+    /// RHS with a <c>nil</c> arm unifies to the target instead of failing
+    /// GS0155. Other RHS forms keep their context-free binding; the per-form
+    /// conversion below still validates the result and reports genuine
+    /// mismatches.
+    /// </summary>
+    /// <param name="syntax">The RHS expression syntax.</param>
+    /// <param name="targetType">The resolved LHS declared type, or <see langword="null"/>.</param>
+    /// <returns>The bound RHS expression.</returns>
+    private BoundExpression BindAssignmentRhs(ExpressionSyntax syntax, TypeSymbol targetType)
+    {
+        if (targetType != null
+            && (syntax is IfExpressionSyntax
+                || syntax is ConditionalExpressionSyntax
+                || syntax is SwitchExpressionSyntax))
+        {
+            return BindExpression(syntax, targetType);
+        }
+
+        return BindExpression(syntax);
     }
 
     /// <summary>
@@ -508,11 +564,19 @@ internal sealed partial class ExpressionBinder
         }
 
         var variable = BindVariableReference(receiverName, syntax.Receiver.Location);
-        var value = BindExpression(syntax.Value);
         if (variable == null)
         {
-            return value;
+            return BindExpression(syntax.Value);
         }
+
+        // Issue #1316: bind the RHS lazily so a target-typed form
+        // (if-/conditional-/switch-expression) can receive the resolved
+        // destination member's declared type as the expected type — the same
+        // nil-&gt;`T?` / branch-unification adaptation a `let x T? = ...`
+        // initializer already gets. The first conversion site below binds it
+        // (exactly once); non-target-typed forms still bind context-free.
+        BoundExpression value = null;
+        BoundExpression BindValue(TypeSymbol targetType) => value ??= BindAssignmentRhs(syntax.Value, targetType);
 
         // Issue #689 (follow-up to #655): when the receiver name resolves to an
         // implicit field on `this` (e.g. `Tracker.Value = v` where Tracker is a
@@ -561,7 +625,7 @@ internal sealed partial class ExpressionBinder
             _ = instWritable;
             _ = instTargetType;
             var instReceiver = implicitFieldReceiverExpr ?? new BoundVariableExpression(null, variable);
-            var instConverted = conversions.BindConversion(syntax.Value.Location, value, instTargetSymbol);
+            var instConverted = conversions.BindConversion(syntax.Value.Location, BindValue(instTargetSymbol), instTargetSymbol);
             return new BoundClrPropertyAssignmentExpression(null, instReceiver, instanceMember, instConverted, instTargetSymbol);
         }
 
@@ -579,7 +643,7 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
-                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, value, ifaceProp.Type);
+                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, BindValue(ifaceProp.Type), ifaceProp.Type);
                 var ifaceReceiver = implicitFieldReceiverExpr ?? new BoundVariableExpression(null, variable);
                 EnforceInitOnlyAssignment(ifaceProp, ifaceReceiver, syntax.EqualsToken.Location);
                 return new BoundPropertyAssignmentExpression(null, ifaceReceiver, null, ifaceProp, ifaceConverted);
@@ -622,7 +686,7 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, receiverName);
                 }
 
-                var propConverted = conversions.BindConversion(syntax.Value.Location, value, prop.Type);
+                var propConverted = conversions.BindConversion(syntax.Value.Location, BindValue(prop.Type), prop.Type);
                 var propReceiver = implicitFieldReceiverExpr ?? new BoundVariableExpression(null, variable);
                 EnforceInitOnlyAssignment(prop, propReceiver, syntax.EqualsToken.Location);
                 return new BoundPropertyAssignmentExpression(null, propReceiver, structSymbol, prop, propConverted);
@@ -653,7 +717,7 @@ internal sealed partial class ExpressionBinder
                     _ = inhWritable;
                     _ = inhTargetType;
                     var inhReceiver = implicitFieldReceiverExpr ?? new BoundVariableExpression(null, variable);
-                    var inhConverted = conversions.BindConversion(syntax.Value.Location, value, inhTargetSymbol);
+                    var inhConverted = conversions.BindConversion(syntax.Value.Location, BindValue(inhTargetSymbol), inhTargetSymbol);
                     return new BoundClrPropertyAssignmentExpression(null, inhReceiver, clrMember, inhConverted, inhTargetSymbol);
                 }
             }
@@ -697,7 +761,7 @@ internal sealed partial class ExpressionBinder
             field,
             $"{structSymbol.Name}.{field.Name}");
 
-        var converted = conversions.BindConversion(syntax.Value.Location, value, field.Type);
+        var converted = conversions.BindConversion(syntax.Value.Location, BindValue(field.Type), field.Type);
         if (implicitFieldReceiverExpr != null)
         {
             return BoundFieldAssignmentExpression.WithExpressionReceiver(null, implicitFieldReceiverExpr, structSymbol, field, converted);
