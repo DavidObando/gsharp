@@ -8701,9 +8701,74 @@ public class Parser
         // emits a diagnostic otherwise.
         var nameOfIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
-        var argument = ParseExpression();
+        var argument = ParseNameOfArgument();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         return new NameOfExpressionSyntax(syntaxTree, nameOfIdentifier, openParen, argument, closeParen);
+    }
+
+    // Issue #1329: parse the argument of `nameof(...)`, recognising a
+    // constructed-generic *type* reference (`IAppleData[TData]`, `List[int32]`,
+    // `Dictionary[string, int32]`) as a GenericNameExpression. Such an argument
+    // is closed by the nameof `)` rather than by one of the ADR-0020 generic
+    // follow-set markers (`(`, `{`, `.`), so the ordinary postfix parser would
+    // otherwise treat the bracketed type-argument list as an indexer (and a
+    // multi-argument list would not parse at all). When the leading
+    // `Identifier[…]` scans as a type-argument list closed immediately by `)`,
+    // emit a GenericNameExpression so the binder folds it to the unqualified
+    // type name (matching C# `nameof(List<int>)` -> "List").
+    private ExpressionSyntax ParseNameOfArgument()
+    {
+        if (Current.Kind == SyntaxKind.IdentifierToken
+            && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken
+            && NameOfGenericArgumentScansToCloseParen(1))
+        {
+            var identifier = MatchToken(SyntaxKind.IdentifierToken);
+            var typeArguments = ParseTypeArgumentList();
+            return new GenericNameExpressionSyntax(syntaxTree, identifier, typeArguments);
+        }
+
+        return ParseExpression();
+    }
+
+    // Issue #1329: bounded-lookahead test for a generic-type nameof argument.
+    // Like <see cref="LooksLikeGenericCallSite"/>, but the accepted follow-set
+    // marker after the matching `]` is the nameof closing `)` (any arity).
+    private bool NameOfGenericArgumentScansToCloseParen(int bracketOffset)
+    {
+        if (Peek(bracketOffset).Kind != SyntaxKind.OpenSquareBracketToken)
+        {
+            return false;
+        }
+
+        var pos = bracketOffset + 1;
+        if (Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken)
+        {
+            return false;
+        }
+
+        while (true)
+        {
+            if (!TryScanTypeClause(ref pos))
+            {
+                return false;
+            }
+
+            if (Peek(pos).Kind == SyntaxKind.CommaToken)
+            {
+                pos++;
+                continue;
+            }
+
+            if (Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken)
+            {
+                pos++;
+                break;
+            }
+
+            return false;
+        }
+
+        return Peek(pos).Kind == SyntaxKind.CloseParenthesisToken;
     }
 
     // Phase 4.9: Kotlin-style trailing-lambda call syntax. When a call's
