@@ -2404,7 +2404,14 @@ public sealed class CSharpToGSharpTranslator
                 flags.Add("class");
             }
 
-            if (tp.HasValueTypeConstraint)
+            if (tp.HasUnmanagedTypeConstraint)
+            {
+                // Issue #1336: C# `where T : unmanaged` maps to the G# `unmanaged`
+                // flag constraint. It subsumes `struct` (gsc reports a conflict if
+                // both are spelled), so the value-type flag is intentionally omitted.
+                flags.Add("unmanaged");
+            }
+            else if (tp.HasValueTypeConstraint)
             {
                 flags.Add("struct");
             }
