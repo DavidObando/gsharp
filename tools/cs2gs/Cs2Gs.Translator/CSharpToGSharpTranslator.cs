@@ -405,6 +405,10 @@ public sealed class CSharpToGSharpTranslator
         // tuple-deconstruction assignments (`(a, b) = (x, y)`); ADR-0115 §B.
         private int deconCounter;
 
+        // Monotonic counter for synthesizing the hoist local when a loop condition
+        // carries a binder-less side-effecting `is`-pattern clause (issue #914).
+        private int loopHoistCounter;
+
         // When translating the body of a lifted owned-value-aggregate receiver
         // method (issue #938), the implicit `this.` of a bare instance-member
         // reference must be made explicit through the receiver name (`self.`),
@@ -3146,6 +3150,15 @@ public sealed class CSharpToGSharpTranslator
                     return new[] { (GStatement)new ContinueStatement() };
 
                 case DoStatementSyntax doStatement:
+                    if (this.TryTranslateLoopWithConditionHoist(
+                            doStatement.Condition,
+                            doStatement.Statement,
+                            isDoWhile: true,
+                            out IReadOnlyList<GStatement> doHoisted))
+                    {
+                        return doHoisted;
+                    }
+
                     return new[]
                     {
                         (GStatement)new DoWhileStatement(
@@ -3193,6 +3206,15 @@ public sealed class CSharpToGSharpTranslator
                     return this.TranslateIfStatements(ifStatement).ToArray();
 
                 case WhileStatementSyntax whileStatement:
+                    if (this.TryTranslateLoopWithConditionHoist(
+                            whileStatement.Condition,
+                            whileStatement.Statement,
+                            isDoWhile: false,
+                            out IReadOnlyList<GStatement> whileHoisted))
+                    {
+                        return whileHoisted;
+                    }
+
                     return new[]
                     {
                         (GStatement)new WhileStatement(
@@ -4304,6 +4326,291 @@ public sealed class CSharpToGSharpTranslator
                 _ => false,
             };
         }
+
+        /// <summary>
+        /// Lowers a <c>while</c>/<c>do-while</c> whose condition carries an
+        /// <c>is</c>-pattern clause that would otherwise duplicate a side-effecting
+        /// scrutinee or leak a binder the G# loop body cannot see (issue #914).
+        /// <para>
+        /// C# allows a loop condition such as
+        /// <c>M(out var n) is Frame child and not EmptyFrame</c>, binding
+        /// <c>child</c>/<c>n</c> for the loop body. G# has no <c>and</c>/<c>not</c>
+        /// pattern combinators (only <c>&amp;&amp;</c>/<c>!</c>), so the combinator
+        /// lowering re-emits the scrutinee per sub-test — re-running the call and
+        /// re-declaring <c>out var n</c> (→ GS0102). Pattern/out-var bindings in a
+        /// <c>while</c> condition are also invisible in the body (GS0125), and G#
+        /// narrows locals in <c>if</c> bodies but not <c>while</c> bodies.
+        /// </para>
+        /// <para>
+        /// The condition is split on its top-level <c>&amp;&amp;</c> clauses. The
+        /// leading side-effect-free clauses stay the real loop condition; from the
+        /// first clause that binds or duplicates a side-effecting scrutinee onward,
+        /// each clause is hoisted to the top of the loop body — the scrutinee
+        /// evaluated once into a local, the remaining must-hold tests converted to
+        /// <c>if !test { break }</c> guards:
+        /// <code>
+        /// while a &amp;&amp; b &amp;&amp; M(out var n) is Frame child and not EmptyFrame { … }
+        /// // becomes
+        /// while a &amp;&amp; b {
+        ///     let child = M(out var n)
+        ///     if child is EmptyFrame { break }
+        ///     …
+        /// }
+        /// </code>
+        /// Returns <see langword="false"/> (keep the plain <c>while cond { }</c>
+        /// form) when no clause needs hoisting, so simple loops are unaffected.
+        /// </para>
+        /// </summary>
+        private bool TryTranslateLoopWithConditionHoist(
+            ExpressionSyntax condition,
+            StatementSyntax bodyStatement,
+            bool isDoWhile,
+            out IReadOnlyList<GStatement> result)
+        {
+            result = null;
+
+            var clauses = new List<ExpressionSyntax>();
+            FlattenAndClauses(condition, clauses);
+
+            int firstHoist = -1;
+            for (int i = 0; i < clauses.Count; i++)
+            {
+                if (this.ClauseRequiresConditionHoist(clauses[i]))
+                {
+                    firstHoist = i;
+                    break;
+                }
+            }
+
+            if (firstHoist < 0)
+            {
+                return false;
+            }
+
+            // The leading side-effect-free clauses remain the real loop condition.
+            GExpression loopCondition = null;
+            for (int i = 0; i < firstHoist; i++)
+            {
+                GExpression clause = this.TranslateExpression(clauses[i]);
+                loopCondition = loopCondition == null
+                    ? clause
+                    : new BinaryExpression(loopCondition, "&&", clause);
+            }
+
+            loopCondition ??= LiteralExpression.Bool(true);
+
+            // The remaining clauses hoist to the top of the loop body as a single
+            // scrutinee evaluation plus `if !test { break }` guards.
+            var hoisted = new List<GStatement>();
+            for (int i = firstHoist; i < clauses.Count; i++)
+            {
+                this.HoistLoopConditionClause(clauses[i], hoisted);
+            }
+
+            BlockStatement originalBody = this.TranslateStatementAsBlock(bodyStatement);
+            var bodyStatements = new List<GStatement>(hoisted);
+            bodyStatements.AddRange(originalBody.Statements);
+            var body = new BlockStatement(bodyStatements);
+
+            result = isDoWhile
+                ? new GStatement[] { new DoWhileStatement(body, GuardBlockCondition(loopCondition)) }
+                : new GStatement[] { new WhileStatement(GuardBlockCondition(loopCondition), body) };
+            return true;
+        }
+
+        // Flattens the left-to-right top-level `&&` operands of a condition into
+        // `clauses`. Parentheses are transparent for the split.
+        private static void FlattenAndClauses(ExpressionSyntax expression, List<ExpressionSyntax> clauses)
+        {
+            ExpressionSyntax expr = expression;
+            while (expr is ParenthesizedExpressionSyntax paren)
+            {
+                expr = paren.Expression;
+            }
+
+            if (expr is BinaryExpressionSyntax binary && binary.IsKind(SyntaxKind.LogicalAndExpression))
+            {
+                FlattenAndClauses(binary.Left, clauses);
+                FlattenAndClauses(binary.Right, clauses);
+            }
+            else
+            {
+                clauses.Add(expr);
+            }
+        }
+
+        // A loop-condition clause needs hoisting when it is an `is`-pattern whose
+        // lowering would duplicate a side-effecting scrutinee (an `and`/`or`
+        // combinator re-emits the receiver), declare an `out var` more than once
+        // (GS0102), or bind a pattern variable the G# loop body cannot see (GS0125).
+        private bool ClauseRequiresConditionHoist(ExpressionSyntax clause)
+        {
+            return clause is IsPatternExpressionSyntax isPattern &&
+                (PatternIntroducesBinding(isPattern.Pattern) ||
+                 PatternDuplicatesScrutinee(isPattern.Pattern) ||
+                 ExpressionDeclaresOutVar(isPattern.Expression));
+        }
+
+        private static bool PatternIntroducesBinding(PatternSyntax pattern) =>
+            pattern.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>().Any();
+
+        private static bool PatternDuplicatesScrutinee(PatternSyntax pattern) =>
+            pattern.DescendantNodesAndSelf().OfType<BinaryPatternSyntax>().Any();
+
+        private static bool ExpressionDeclaresOutVar(ExpressionSyntax expression) =>
+            expression.DescendantNodesAndSelf().OfType<DeclarationExpressionSyntax>().Any();
+
+        // Emits the hoisted statements for a single loop-condition clause: a pure
+        // clause becomes a negated `break` guard; an `is`-pattern clause evaluates
+        // its scrutinee once into a local and turns the pattern's must-hold tests
+        // into `break` guards (issue #914).
+        private void HoistLoopConditionClause(ExpressionSyntax clause, List<GStatement> into)
+        {
+            if (clause is not IsPatternExpressionSyntax isPattern)
+            {
+                into.Add(BreakIf(Negate(this.TranslateExpression(clause))));
+                return;
+            }
+
+            GExpression receiver = this.TranslateExpression(isPattern.Expression);
+            ITypeSymbol scrutineeType = this.context.GetTypeInfo(isPattern.Expression).Type;
+
+            // The hoist local reuses a top-level binder's name when present (so body
+            // references to that binder print as the hoist local); otherwise a fresh
+            // synthetic name is used.
+            ILocalSymbol mainBinder = this.FindMainPatternBinder(isPattern.Pattern);
+            string hoistName = mainBinder != null
+                ? SanitizeIdentifier(mainBinder.Name)
+                : $"__scrutinee{this.loopHoistCounter++}";
+
+            BindingKind binding = mainBinder != null && this.IsLocalReassigned(mainBinder)
+                ? BindingKind.Var
+                : BindingKind.Let;
+
+            into.Add(new LocalDeclarationStatement(binding, hoistName, type: null, initializer: receiver));
+
+            var idExpr = new IdentifierExpression(hoistName);
+
+            // Any secondary binder prints as the hoist local inside the body.
+            foreach (ILocalSymbol binder in this.EnumeratePatternBinders(isPattern.Pattern))
+            {
+                if (!SymbolEqualityComparer.Default.Equals(binder, mainBinder))
+                {
+                    this.patternBindings[binder] = idExpr;
+                }
+            }
+
+            this.EmitMustHoldGuards(idExpr, scrutineeType, isPattern.Pattern, mainBinder, into);
+        }
+
+        // Converts a must-hold pattern over the already-hoisted `idExpr` into a list
+        // of `if !test { break }` guards. An `and` combinator splits into one guard
+        // per side; a `not P` breaks when `P` matches; the main binder whose static
+        // type already satisfies its type test is a bind-only (no guard).
+        private void EmitMustHoldGuards(
+            GExpression idExpr,
+            ITypeSymbol scrutineeType,
+            PatternSyntax pattern,
+            ILocalSymbol mainBinder,
+            List<GStatement> into)
+        {
+            switch (pattern)
+            {
+                case ParenthesizedPatternSyntax parenthesized:
+                    this.EmitMustHoldGuards(idExpr, scrutineeType, parenthesized.Pattern, mainBinder, into);
+                    return;
+
+                case BinaryPatternSyntax andPattern when andPattern.OperatorToken.IsKind(SyntaxKind.AndKeyword):
+                    this.EmitMustHoldGuards(idExpr, scrutineeType, andPattern.Left, mainBinder, into);
+                    this.EmitMustHoldGuards(idExpr, scrutineeType, andPattern.Right, mainBinder, into);
+                    return;
+
+                case UnaryPatternSyntax notPattern when notPattern.IsKind(SyntaxKind.NotPattern):
+                    // `not P` must hold → break when `P` matches.
+                    into.Add(BreakIf(this.TranslatePatternTest(idExpr, notPattern.Pattern, scrutineeType)));
+                    return;
+
+                case DeclarationPatternSyntax declaration
+                    when this.IsBindOnlyMainBinder(declaration, scrutineeType, mainBinder):
+                    // The main binder whose static type already satisfies the test is
+                    // a non-null bind (e.g. a method returning a non-null `Frame`); no
+                    // guard is needed and the binder prints as the hoist local.
+                    return;
+
+                case DeclarationPatternSyntax declaration:
+                    // A secondary type-binder: emit the type test as a break guard;
+                    // references to the binder print as the hoist local (registered by
+                    // HoistLoopConditionClause).
+                    into.Add(BreakIf(Negate(new BinaryExpression(
+                        idExpr, "is", new TypeExpression(this.MapTypeSyntax(declaration.Type))))));
+                    return;
+
+                default:
+                    into.Add(BreakIf(Negate(this.TranslatePatternTest(idExpr, pattern, scrutineeType))));
+                    return;
+            }
+        }
+
+        // True when `declaration` binds the hoist local and the scrutinee's static
+        // type already (non-nullably) satisfies the declared type — so the type test
+        // is statically true and the pattern is a pure binding.
+        private bool IsBindOnlyMainBinder(
+            DeclarationPatternSyntax declaration, ITypeSymbol scrutineeType, ILocalSymbol mainBinder)
+        {
+            if (mainBinder == null ||
+                declaration.Designation is not SingleVariableDesignationSyntax single ||
+                this.context.GetDeclaredSymbol(single) is not ILocalSymbol symbol ||
+                !SymbolEqualityComparer.Default.Equals(symbol, mainBinder))
+            {
+                return false;
+            }
+
+            ITypeSymbol target = this.context.GetTypeInfo(declaration.Type).Type;
+            return IsAssignableNonNull(scrutineeType, target);
+        }
+
+        // True when `scrutineeType` is a non-nullable reference convertible to
+        // `target` by identity or base/interface — i.e. `scrutinee is target` is
+        // statically guaranteed.
+        private static bool IsAssignableNonNull(ITypeSymbol scrutineeType, ITypeSymbol target)
+        {
+            if (scrutineeType == null || target == null ||
+                scrutineeType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return false;
+            }
+
+            for (ITypeSymbol t = scrutineeType; t != null; t = t.BaseType)
+            {
+                if (SymbolEqualityComparer.Default.Equals(t, target))
+                {
+                    return true;
+                }
+            }
+
+            return scrutineeType.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, target));
+        }
+
+        private ILocalSymbol FindMainPatternBinder(PatternSyntax pattern) =>
+            this.EnumeratePatternBinders(pattern).FirstOrDefault();
+
+        private IEnumerable<ILocalSymbol> EnumeratePatternBinders(PatternSyntax pattern)
+        {
+            foreach (SyntaxNode node in pattern.DescendantNodesAndSelf())
+            {
+                if (node is SingleVariableDesignationSyntax single &&
+                    this.context.GetDeclaredSymbol(single) is ILocalSymbol symbol)
+                {
+                    yield return symbol;
+                }
+            }
+        }
+
+        private static GStatement BreakIf(GExpression condition) =>
+            new IfStatement(condition, new BlockStatement(new GStatement[] { new BreakStatement() }));
+
+        private static GExpression Negate(GExpression expression) =>
+            new UnaryExpression("!", new ParenthesizedExpression(expression));
 
         /// <summary>
         /// Translates an <c>if</c> statement into one or more G# statements. A C#
