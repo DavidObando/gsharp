@@ -125,6 +125,45 @@ public class Issue1100GenericMemberOnUserTypeArgEmitTests
         Assert.Equal("7\n2\n", CompileAndRun(source));
     }
 
+    [Fact]
+    public void Issue1401_QueueAndListOfUserStructAndClass_EmitAndRun()
+    {
+        var source = """
+            package P
+            import System
+            import System.Collections.Generic
+
+            data struct StructEntry(Id int32)
+
+            class ClassEntry {
+                var Id int32
+                init(id int32) {
+                    Id = id
+                }
+            }
+
+            class C {
+                let structs Queue[StructEntry] = Queue[StructEntry]()
+                let classes List[ClassEntry] = List[ClassEntry]()
+
+                func run() int32 {
+                    structs.Enqueue(StructEntry{Id: 5})
+                    structs.Enqueue(StructEntry{Id: 6})
+                    classes.Add(ClassEntry(7))
+                    classes.Add(ClassEntry(8))
+
+                    let a = structs.Dequeue()
+                    let b = structs.Dequeue()
+                    return a.Id + b.Id + classes[0].Id + classes[1].Id + structs.Count + classes.Count
+                }
+            }
+
+            Console.WriteLine(C().run())
+            """;
+
+        Assert.Equal("28\n", CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1100_emit_").FullName;
