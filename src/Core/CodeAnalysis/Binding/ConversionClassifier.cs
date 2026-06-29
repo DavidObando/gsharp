@@ -816,7 +816,7 @@ internal sealed class ConversionClassifier
             return new BoundErrorExpression(null);
         }
 
-        var invoke = delegateClr.GetMethod("Invoke");
+        var invoke = delegateClr.GetMethodSafe("Invoke");
         if (invoke == null)
         {
             Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);

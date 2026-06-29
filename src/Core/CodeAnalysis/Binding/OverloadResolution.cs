@@ -1077,7 +1077,7 @@ internal static class OverloadResolution
                     return false;
                 }
 
-                invoke = delegateType.GetMethod("Invoke");
+                invoke = delegateType.GetMethodSafe("Invoke");
                 if (invoke is null)
                 {
                     return false;
@@ -1224,8 +1224,8 @@ internal static class OverloadResolution
         MethodInfo sourceInvoke;
         try
         {
-            targetInvoke = target.GetMethod("Invoke");
-            sourceInvoke = source.GetMethod("Invoke");
+            targetInvoke = target.GetMethodSafe("Invoke");
+            sourceInvoke = source.GetMethodSafe("Invoke");
         }
         catch (Exception)
         {
@@ -1488,7 +1488,7 @@ internal static class OverloadResolution
 
         try
         {
-            var invoke = delegateType.GetMethod("Invoke");
+            var invoke = delegateType.GetMethodSafe("Invoke");
             if (invoke != null)
             {
                 var ps = invoke.GetParameters();
@@ -1554,7 +1554,7 @@ internal static class OverloadResolution
         try
         {
             var definition = delegateType.GetGenericTypeDefinition();
-            var defInvoke = definition.GetMethod("Invoke");
+            var defInvoke = definition.GetMethodSafe("Invoke");
             if (defInvoke == null)
             {
                 return false;

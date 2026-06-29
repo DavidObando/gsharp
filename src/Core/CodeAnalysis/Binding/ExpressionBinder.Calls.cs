@@ -1688,7 +1688,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var invoke = openParameterType.GetMethod("Invoke");
+        var invoke = openParameterType.GetMethodSafe("Invoke");
         if (invoke == null)
         {
             return false;
@@ -2168,7 +2168,7 @@ internal sealed partial class ExpressionBinder
                 try
                 {
                     var delegateType = openParameters[paramIndex].ParameterType;
-                    invoke = delegateType?.GetMethod("Invoke");
+                    invoke = delegateType?.GetMethodSafe("Invoke");
                     invokeParameters = invoke?.GetParameters();
                 }
                 catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
@@ -3472,7 +3472,7 @@ internal sealed partial class ExpressionBinder
         // No applicable Invoke overload — most likely an argument-count or
         // type mismatch. Report against the member name (not "Invoke") so the
         // diagnostic points to what the user wrote.
-        var invoke = memberClrType.GetMethod("Invoke");
+        var invoke = memberClrType.GetMethodSafe("Invoke");
         var expectedArity = invoke?.GetParameters().Length ?? 0;
         if (arguments.Length != expectedArity)
         {

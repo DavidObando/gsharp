@@ -164,6 +164,35 @@ public class Issue1100GenericMemberOnUserTypeArgEmitTests
         Assert.Equal("28\n", CompileAndRun(source));
     }
 
+    [Fact]
+    public void DelegateVariableClosedOverUserClass_Invoke_EmitsAndRuns()
+    {
+        var source = """
+            package P
+            import System
+
+            class Entry {
+                var Value int32
+                init(value int32) {
+                    Value = value
+                }
+            }
+
+            class C {
+                func run() int32 {
+                    var seen = 0
+                    let f (Entry) -> void = (e Entry) -> seen = e.Value
+                    f(Entry(42))
+                    return seen
+                }
+            }
+
+            Console.WriteLine(C().run())
+            """;
+
+        Assert.Equal("42\n", CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1100_emit_").FullName;

@@ -1171,7 +1171,7 @@ public sealed class Conversion
 
         try
         {
-            var invoke = delegateType.GetMethod("Invoke");
+            var invoke = delegateType.GetMethodSafe("Invoke");
             if (invoke == null)
             {
                 return false;
@@ -1210,7 +1210,7 @@ public sealed class Conversion
             return false;
         }
 
-        var openInvoke = definition.GetMethod("Invoke");
+        var openInvoke = definition.GetMethodSafe("Invoke");
         if (openInvoke == null)
         {
             return false;
