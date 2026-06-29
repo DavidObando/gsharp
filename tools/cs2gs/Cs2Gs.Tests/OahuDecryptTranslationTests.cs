@@ -648,6 +648,35 @@ namespace Demo
         Assert.DoesNotContain(" as int32", printed);
     }
 
+    /// <summary>
+    /// A tuple literal element is a value position: a declared-nullable
+    /// (<c>T?</c>) operand flow-proven non-null by a preceding guard must be
+    /// emitted with the G# non-null assertion (<c>x!!</c>), because G# does not
+    /// smart-cast across the tuple boundary and would otherwise reject the
+    /// nullable element against the non-null tuple slot (issue #914).
+    /// </summary>
+    [Fact]
+    public void TupleLiteralElement_GuardedNullable_RendersNonNullAssertion()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Inner { }
+
+    public class C
+    {
+        public (Inner, int) M(Inner? a)
+        {
+            if (a is null) throw new System.InvalidOperationException();
+            return (a, 1);
+        }
+    }
+}");
+
+        Assert.Contains("return (a!!,", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

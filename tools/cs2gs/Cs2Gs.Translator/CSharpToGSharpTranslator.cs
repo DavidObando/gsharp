@@ -5102,7 +5102,7 @@ public sealed class CSharpToGSharpTranslator
 
                 case TupleExpressionSyntax tuple:
                     return new TupleLiteralExpression(
-                        tuple.Arguments.Select(a => this.TranslateExpression(a.Expression)).ToList());
+                        tuple.Arguments.Select(a => this.TranslateValueWithNullForgiveness(a.Expression)).ToList());
 
                 case ElementAccessExpressionSyntax elementAccess:
                     if (elementAccess.ArgumentList.Arguments.Count == 1 &&
