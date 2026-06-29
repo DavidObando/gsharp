@@ -119,8 +119,7 @@ func Use() {{
     public void NullableArrayOfNestedElement_BindsOuterArrayNullable()
     {
         // `[]?*int32` — the outer slice reference is nullable; the element is a
-        // nested (pointer) type clause. (A nested *slice* element `[]?[]T` is
-        // not spellable because `?[` lexes as the null-conditional index token.)
+        // nested (pointer) type clause.
         var type = LocalVarType("[]?*int32");
 
         Assert.True(type.IsSlice);
@@ -132,5 +131,26 @@ func Use() {{
         Assert.True(inner.IsPointer);
         Assert.False(inner.IsArrayNullable);
         Assert.False(inner.IsNullable);
+    }
+
+    [Fact]
+    public void NullableArrayOfArrayElement_BindsOuterArrayNullable()
+    {
+        // Issue #1351: `[]?[]int32` — the outer slice is nullable and its element
+        // is itself a slice. The `?[` is lexed as a single null-conditional index
+        // token; the parser splits it back into `?` (array-nullable) + `[` (nested
+        // element array) so the faithful nullable-jagged-array form parses.
+        var type = LocalVarType("[]?[]int32");
+
+        Assert.True(type.IsSlice);
+        Assert.True(type.IsArrayNullable);
+        Assert.False(type.IsNullable);
+        Assert.True(type.HasNestedArrayElement);
+
+        var inner = type.ArrayElementType;
+        Assert.True(inner.IsSlice);
+        Assert.False(inner.IsArrayNullable);
+        Assert.False(inner.IsNullable);
+        Assert.Equal("int32", inner.Identifier.Text);
     }
 }
