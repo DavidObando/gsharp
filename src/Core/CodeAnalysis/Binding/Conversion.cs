@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -276,6 +277,28 @@ public sealed class Conversion
             && toGeneric.OpenDefinition != null
             && (fromGeneric.HasSubstitutableTypeArgument || toGeneric.HasSubstitutableTypeArgument)
             && AreConstructedGenericsIdentical(fromGeneric, toGeneric))
+        {
+            return Conversion.Identity;
+        }
+
+        // Issue #1420: identity between a CLR-backed closed constructed generic
+        // (e.g. `Span<System.Int32>` recovered from a BCL signature such as
+        // `CollectionsMarshal.AsSpan`, whose symbolic `TypeArguments` are empty
+        // because the closed shape is fully described by its `ClrType`) and a
+        // SYMBOLICALLY constructed generic produced by substituting an
+        // extension's open receiver (e.g. `Span[T]` with `{T: int32}` →
+        // `Span[int32]`). Substitution cannot rebuild the real closed CLR type
+        // via `MakeGenericType` because the primitive alias `int32` carries the
+        // RUNTIME `System.Int32` while the open `Span<>` came from a
+        // MetadataLoadContext (mixing the two throws), so the substituted form
+        // stays symbolic with an erased `ClrType`. Comparing the two structurally
+        // — normalizing the CLR-backed side's generic arguments through
+        // `TypeSymbol.FromClrType` so a BCL `System.Int32` and the alias `int32`
+        // collapse to the SAME `TypeSymbol` — lets the generic-extension receiver
+        // bind instead of failing GS0155.
+        if (from is ImportedTypeSymbol fromImported
+            && to is ImportedTypeSymbol toImported
+            && AreConstructedGenericShapesIdentical(fromImported, toImported))
         {
             return Conversion.Identity;
         }
@@ -886,6 +909,90 @@ public sealed class Conversion
 
         return source?.ClrType != null && target?.ClrType != null
             && ClrTypeUtilities.IsAssignableByName(target.ClrType, source.ClrType);
+    }
+
+    /// <summary>
+    /// Issue #1420: determines whether two <see cref="ImportedTypeSymbol"/>
+    /// instances denote the same closed constructed generic when ONE side
+    /// carries symbolic <see cref="ImportedTypeSymbol.TypeArguments"/> (produced
+    /// by substituting an extension's open generic receiver) while the OTHER is a
+    /// plain CLR-backed closed generic whose arguments are described only by its
+    /// <see cref="TypeSymbol.ClrType"/>. The CLR-backed side's generic arguments
+    /// are normalized through <see cref="TypeSymbol.FromClrType"/> so a BCL
+    /// primitive (e.g. <c>System.Int32</c>) and the corresponding G# alias (e.g.
+    /// <c>int32</c>) resolve to the SAME <see cref="TypeSymbol"/>. Requires at
+    /// least one side to be symbolic so genuinely CLR-backed comparisons keep
+    /// flowing through the existing (variance-aware) rules.
+    /// </summary>
+    private static bool AreConstructedGenericShapesIdentical(ImportedTypeSymbol from, ImportedTypeSymbol to)
+    {
+        var fromSymbolic = !from.TypeArguments.IsDefaultOrEmpty;
+        var toSymbolic = !to.TypeArguments.IsDefaultOrEmpty;
+
+        // Scope to the asymmetric case: the symmetric symbolic/symbolic and the
+        // symmetric CLR/CLR paths are already handled above and elsewhere.
+        if (fromSymbolic == toSymbolic)
+        {
+            return false;
+        }
+
+        if (!TryGetConstructedGenericShape(from, out var fromOpen, out var fromArgs)
+            || !TryGetConstructedGenericShape(to, out var toOpen, out var toArgs))
+        {
+            return false;
+        }
+
+        if (!ClrTypeUtilities.IsSameAs(fromOpen, toOpen) || fromArgs.Length != toArgs.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < fromArgs.Length; i++)
+        {
+            if (!AreTypeArgumentsEquivalent(fromArgs[i], toArgs[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1420: extracts the open generic CLR definition and the symbolic
+    /// type arguments of a constructed generic <see cref="ImportedTypeSymbol"/>,
+    /// whether the arguments are carried symbolically (#313 construction) or only
+    /// by the closed <see cref="TypeSymbol.ClrType"/>. CLR-backed arguments are
+    /// projected through <see cref="TypeSymbol.FromClrType"/> so primitive
+    /// aliases and their BCL counterparts unify.
+    /// </summary>
+    private static bool TryGetConstructedGenericShape(ImportedTypeSymbol symbol, out Type openDefinition, out ImmutableArray<TypeSymbol> typeArguments)
+    {
+        if (symbol.OpenDefinition != null && !symbol.TypeArguments.IsDefaultOrEmpty)
+        {
+            openDefinition = symbol.OpenDefinition;
+            typeArguments = symbol.TypeArguments;
+            return true;
+        }
+
+        var clr = symbol.ClrType;
+        if (clr != null && clr.IsGenericType && !clr.IsGenericTypeDefinition)
+        {
+            var clrArgs = clr.GetGenericArguments();
+            var builder = ImmutableArray.CreateBuilder<TypeSymbol>(clrArgs.Length);
+            foreach (var arg in clrArgs)
+            {
+                builder.Add(TypeSymbol.FromClrType(arg));
+            }
+
+            openDefinition = clr.GetGenericTypeDefinition();
+            typeArguments = builder.MoveToImmutable();
+            return true;
+        }
+
+        openDefinition = null;
+        typeArguments = ImmutableArray<TypeSymbol>.Empty;
+        return false;
     }
 
     /// <summary>
