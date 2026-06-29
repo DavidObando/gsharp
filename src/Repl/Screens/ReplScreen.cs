@@ -171,7 +171,7 @@ public sealed class ReplScreen : ITabScreen
             });
         }
 
-        body.Add(InputBox(brand, tertiary));
+        body.Add(InputBox(brand, tertiary, width));
         var diag = engine.Cells.SelectMany(c => c.Diagnostics).Count(d => d.IsError);
         var status = diag == 0 ? $"[{Tokens.Tokens.StatusSuccess.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· ready[/]"
             : $"[{Tokens.Tokens.StatusError.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· {diag} error(s)[/]";
@@ -179,7 +179,7 @@ public sealed class ReplScreen : ITabScreen
         return new Rows(body);
     }
 
-    private IRenderable InputBox(string brand, string tertiary)
+    private IRenderable InputBox(string brand, string tertiary, int width)
     {
         var cursor = $"{Tokens.Tokens.TextPrimary.Value.ToMarkup()} invert";
         var lines = editor.RenderLines(cursor);
@@ -190,7 +190,8 @@ public sealed class ReplScreen : ITabScreen
             Border = BoxBorder.Rounded,
             BorderStyle = new Style(Tokens.Tokens.Brand),
             Padding = new Padding(1, 0, 1, 0),
-            Expand = true,
+            Expand = false,
+            Width = width - 1,
         };
     }
 
