@@ -167,6 +167,39 @@ public class Issue1437CatchInLambdaEmitTests
         Assert.Equal("str:hi1437e\nint\n", output);
     }
 
+    [Fact]
+    public void EndToEnd_NullConditionalInvokeCaptureLocalInLambda_Runs()
+    {
+        // The `?(…)` operator introduces a synthetic `$ncap_N` capture local
+        // referenced inside `WhenNotNull`. When the whole null-conditional sits
+        // in a lambda body, that capture local must be treated as a body-local
+        // declaration (not misclassified as a capture of an enclosing scope),
+        // otherwise emit crashes with GS9998 "Variable '$ncap_N' has no local
+        // slot". Here the nullable delegate is a captured parameter.
+        var source = """
+            package Probe1437f
+            import System
+
+            func Build1437f(cb ((int32) -> void)?) () -> void {
+                return () -> {
+                    cb?(5)
+                }
+            }
+
+            func Main() {
+                var total = 0
+                let run = Build1437f((n int32) -> { total = total + n })
+                run()
+                let noop = Build1437f(nil)
+                noop()
+                Console.WriteLine(total)
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("5\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_1437_exe_").FullName;

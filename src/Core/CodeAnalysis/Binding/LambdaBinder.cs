@@ -1450,6 +1450,31 @@ internal sealed class LambdaBinder
             return base.RewritePattern(node);
         }
 
+        protected override BoundExpression RewriteNullConditionalAccessExpression(BoundNullConditionalAccessExpression node)
+        {
+            // Issue #1437 (generalization): the `?.` / `?(…)` operators introduce a
+            // synthetic `Capture` local (`$ncap_N`) that the receiver value is
+            // spilled into, and `WhenNotNull` references that `Capture` as its
+            // receiver. Value-typed results also introduce a `$nres_N` ResultSlot.
+            // Both are body-local declarations — not BoundVariableDeclarations — so,
+            // exactly like a catch/arm/loop variable, without recording them here
+            // RecordReference would see the `Capture` read inside `WhenNotNull` as a
+            // capture of an enclosing-scope variable, box it, and desynchronize it
+            // from the slot the emit planner allocates (crashing with GS9998
+            // "Variable '$ncap_N' has no local slot").
+            if (node.Capture != null)
+            {
+                this.declared.Add(node.Capture);
+            }
+
+            if (node.ResultSlot != null)
+            {
+                this.declared.Add(node.ResultSlot);
+            }
+
+            return base.RewriteNullConditionalAccessExpression(node);
+        }
+
         protected override BoundExpression RewriteAssignmentExpression(BoundAssignmentExpression node)
         {
             // Issue #523: an assignment LHS is a USE of the variable that
