@@ -240,6 +240,15 @@ function pointers, struct marshalling — is documented in the
 | MSBuild SDK + templates | [`docs/sdk-usage.md`](docs/sdk-usage.md) |
 | Compiler architecture | [`docs/emit-pipeline.md`](docs/emit-pipeline.md) |
 
+## .NET tools
+
+The REPL and the C#→G# migrator ship as global .NET tools (requires a .NET 10 runtime):
+
+```sh
+dotnet tool install --global Gsharp.Repl    # `gsi` — interactive REPL / file runner
+dotnet tool install --global Gsharp.Cs2Gs   # `cs2gs` — C# to G# migration tool
+```
+
 ## Repository layout
 
 ```

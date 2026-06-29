@@ -45,6 +45,16 @@ This builds the compiler (`gsc`) and all `cs2gs` projects. Produced assemblies:
 IL verification (stage 3) uses the repo's local `ilverify` tool — restore it
 once with `dotnet tool restore` at the repo root.
 
+## Install as a .NET tool
+
+`cs2gs` ships as the `Gsharp.Cs2Gs` package (exposes the `cs2gs` command). A
+.NET 10 runtime is required.
+
+```sh
+dotnet tool install --global Gsharp.Cs2Gs
+cs2gs migrate --help
+```
+
 ## Run
 
 ### `migrate` — translate + verify the corpus
