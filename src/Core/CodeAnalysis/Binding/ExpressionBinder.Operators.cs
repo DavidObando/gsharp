@@ -916,12 +916,45 @@ internal sealed partial class ExpressionBinder
         var pairwise = ComputeConditionalCommonType(left, right);
         if (pairwise != null)
         {
-            return pairwise;
+            return UnionArmNullability(pairwise, left, right);
         }
 
         // (c) Best-common-type (least-upper-bound) fallback: unify sibling
         // subtypes to their shared base/interface.
-        return ComputeBestCommonType(new[] { left, right });
+        return UnionArmNullability(ComputeBestCommonType(new[] { left, right }), left, right);
+    }
+
+    /// <summary>
+    /// Issue #1428: the least-upper-bound of two conditional/if-expression arms
+    /// must UNION the nullable annotation of both arms, independent of arm order.
+    /// The pairwise/best-common routines can return a non-nullable type when one
+    /// arm is non-nullable and the other is reference-convertible to it (e.g.
+    /// arm0 <c>T</c>, arm1 <c>T?</c> for a reference/interface <c>T</c>, where
+    /// both arms are mutually implicitly convertible), dropping the nullable
+    /// annotation that the second arm contributed. This lifts the chosen result
+    /// to its nullable form whenever EITHER arm is nullable, mirroring C# where
+    /// <c>cond ? e : null</c> (and the reversed form) both yield <c>T?</c>.
+    /// </summary>
+    /// <param name="result">The chosen common type (may be <see langword="null"/>).</param>
+    /// <param name="left">The true-arm type.</param>
+    /// <param name="right">The false-arm type.</param>
+    /// <returns>The result lifted to nullable when either arm is nullable; otherwise <paramref name="result"/>.</returns>
+    private static TypeSymbol UnionArmNullability(TypeSymbol result, TypeSymbol left, TypeSymbol right)
+    {
+        if (result == null
+            || result == TypeSymbol.Error
+            || result == TypeSymbol.Never
+            || result is NullableTypeSymbol)
+        {
+            return result;
+        }
+
+        if (left is NullableTypeSymbol || right is NullableTypeSymbol)
+        {
+            return NullableTypeSymbol.Get(result);
+        }
+
+        return result;
     }
 
     /// <summary>
