@@ -3375,6 +3375,14 @@ internal static class OverloadResolution
             return true;
         }
 
+        if (parameterType.IsByRef)
+        {
+            return UnifyForInference(
+                parameterType.GetElementType(),
+                argumentType.IsByRef ? argumentType.GetElementType() : argumentType,
+                bounds);
+        }
+
         if (parameterType.IsArray)
         {
             if (argumentType.IsArray)
@@ -3387,9 +3395,24 @@ internal static class OverloadResolution
             return true;
         }
 
-        if (parameterType.IsByRef)
+        if (IsStructurallyInferrableDelegate(parameterType, argumentType))
         {
-            return UnifyForInference(parameterType.GetElementType(), argumentType, bounds);
+            if (!TryGetDelegateSignature(parameterType, out var parameterDelegateParameters, out var parameterDelegateReturn)
+                || !TryGetDelegateSignature(argumentType, out var argumentDelegateParameters, out var argumentDelegateReturn)
+                || parameterDelegateParameters.Length != argumentDelegateParameters.Length)
+            {
+                return true;
+            }
+
+            for (var i = 0; i < parameterDelegateParameters.Length; i++)
+            {
+                if (!UnifyForInference(parameterDelegateParameters[i], argumentDelegateParameters[i], bounds))
+                {
+                    return false;
+                }
+            }
+
+            return UnifyForInference(parameterDelegateReturn, argumentDelegateReturn, bounds);
         }
 
         if (parameterType.IsGenericType && !parameterType.IsGenericTypeDefinition)
@@ -3416,6 +3439,33 @@ internal static class OverloadResolution
             // If no matching closed generic is found we don't fail inference
             // here — the applicability pass will reject the candidate.
             return true;
+        }
+
+        return true;
+    }
+
+    private static bool IsStructurallyInferrableDelegate(Type parameterType, Type argumentType)
+    {
+        if (parameterType == null || argumentType == null)
+        {
+            return false;
+        }
+
+        if (!parameterType.ContainsGenericParameters
+            || !ClrTypeUtilities.IsDelegateType(parameterType)
+            || !ClrTypeUtilities.IsDelegateType(argumentType))
+        {
+            return false;
+        }
+
+        if (parameterType.IsGenericType
+            && argumentType.IsGenericType
+            && MatchesOpenDefinition(
+                argumentType.GetGenericTypeDefinition(),
+                parameterType.GetGenericTypeDefinition(),
+                parameterType.GetGenericTypeDefinition().FullName))
+        {
+            return false;
         }
 
         return true;
