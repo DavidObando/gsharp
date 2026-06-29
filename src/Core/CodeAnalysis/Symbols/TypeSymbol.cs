@@ -161,6 +161,11 @@ public class TypeSymbol : Symbol
             return NullableTypeSymbol.Get(FromClrType(inner));
         }
 
+        if (clrType.IsPointer)
+        {
+            return PointerTypeSymbol.Get(FromClrType(clrType.GetElementType()));
+        }
+
         // Compare by FullName so types loaded from a MetadataLoadContext (carrying the
         // target framework's identity) still map onto the built-in primitive symbols.
         var fullName = clrType.FullName;
