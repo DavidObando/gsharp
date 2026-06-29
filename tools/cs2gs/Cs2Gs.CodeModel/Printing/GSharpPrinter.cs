@@ -116,7 +116,15 @@ public static class GSharpPrinter
         }
 
         var rendered = RenderTypeCore(type);
-        return type != null && type.IsNullable ? rendered + "?" : rendered;
+        if (type == null || !type.IsNullable)
+        {
+            return rendered;
+        }
+
+        // A nullable function type must be parenthesized: `((T) -> R)?` (ADR-0137 /
+        // issue #1399). A bare `(T) -> R?` binds `?` to the return type, not the
+        // function type. Every other type spells nullable with a trailing `?`.
+        return type is ArrowTypeReference ? $"({rendered})?" : rendered + "?";
     }
 
     private static string RenderTypeCore(GTypeReference type)
