@@ -133,6 +133,19 @@ internal sealed partial class MethodBodyEmitter
                     this.EmitExpression(arg);
                 }
 
+                // Issue #1433: a `shared` (static) method called on a
+                // constructed generic INTERFACE (`IBox[int32].Make()`) must be
+                // referenced through a MemberRef parented at the construction's
+                // TypeSpec. The substituted method is not in the handle cache,
+                // so resolve it before the generic-struct/cache lookups below.
+                if (call.StaticGenericInterfaceOwnerType != null
+                    && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(call.StaticGenericInterfaceOwnerType))
+                {
+                    this.il.OpCode(ILOpCode.Call);
+                    this.il.Token(this.outer.ResolveUserInterfaceStaticMethodToken(call.StaticGenericInterfaceOwnerType, call.Function));
+                    break;
+                }
+
                 if (!this.outer.cache.FunctionHandles.TryGetValue(call.Function, out var fnHandle)
                     && !this.outer.cache.MethodHandles.TryGetValue(call.Function, out fnHandle))
                 {
@@ -545,14 +558,16 @@ internal sealed partial class MethodBodyEmitter
                 this.EmitAsExpression(asExpr);
                 break;
             case BoundErrorExpression:
-                // GS0268: a BoundErrorExpression leaked from lowering into emit.
-                // This typically means the lowerer could not resolve a required
-                // method (e.g. GetEnumerator) for a for-in loop. Throw a
-                // descriptive exception so BuildEmitFailureDiagnostic surfaces
-                // a clear GS9998 message instead of an opaque MSB4181.
+                // A BoundErrorExpression reached emit. This means an earlier
+                // phase (binding/lowering) produced an unresolved node that was
+                // not reported as a diagnostic. Surface a truthful, location-
+                // anchored GS9998 rather than a hard-coded (and frequently
+                // wrong) for-in message. This is a defensive emit-phase guard
+                // with no DiagnosticBag in scope; the anchor is the node's own
+                // syntax when available so the error points at real source.
                 {
-                    const string msg = "Internal compiler error (GS0268): a for-in loop over an enumerable type could not be lowered. "
-                        + "The collection type may not expose a resolvable GetEnumerator()/MoveNext()/Current pattern.";
+                    const string msg = "Internal compiler error: an unresolved (error) expression reached code emission. "
+                        + "This usually indicates an unsupported or mis-bound construct that earlier phases failed to report.";
                     EmitDiagnosticException.Throw(expression.Syntax, msg);
                 }
 
