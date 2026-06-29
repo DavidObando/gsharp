@@ -371,6 +371,16 @@ public sealed class CSharpToGSharpTranslator
         private readonly Dictionary<ISymbol, GExpression> patternBindings =
             new Dictionary<ISymbol, GExpression>(SymbolEqualityComparer.Default);
 
+        // Pattern variables (`x is T t`) that <see cref="TryBuildPositiveGuardHoist"/>
+        // materialised as a *nullable* G# local (`var t T? = scrutinee as T`). gsc
+        // flow-narrows such a local for reads inside the `if t != nil { … }` guard,
+        // but NOT for an assignment-LHS receiver (`t.Member = v`), so those writes
+        // need an explicit `t!!`. Tracked because the C# semantic model reports the
+        // pattern variable as the non-null `T`, which the read-side null-forgiveness
+        // predicate would otherwise treat as not needing an assertion.
+        private readonly HashSet<ISymbol> hoistedNullableGuardLocals =
+            new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+
         // C# post-increment/decrement (`i++`, `i--`) sub-expressions that the
         // surrounding statement seam has hoisted into trailing `i++` statements
         // (G# models inc/dec as statements, not expressions; spec §Statements).
@@ -3657,6 +3667,31 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
+            // A `null` arm (`cond ? value : null`) carries no type of its own, so
+            // G# infers the conditional's type purely from the non-null arm — the
+            // bare `nil` then fails to unify (GS0155 "cannot convert nil to T", and
+            // the surrounding call cascades GS0159). C#'s common type already
+            // records the nullable union (e.g. `IEnumerator<T>?`); re-emit the null
+            // arm as `default(T?)` carrying that mapped nullable type so gsc unifies
+            // the branches into the nullable type instead of guessing the non-null
+            // one. Restricted to reference-type results (a `Nullable<V>` value
+            // result is handled by C#'s own lifting / numeric paths above).
+            if (resultType is { IsReferenceType: true })
+            {
+                GTypeReference nullableResult = MakeNullable(
+                    this.typeMapper.Map(resultType, this.context, conditional.GetLocation()));
+
+                if (IsNullLiteral(conditional.WhenTrue))
+                {
+                    whenTrue = new DefaultValueExpression(nullableResult);
+                }
+
+                if (IsNullLiteral(conditional.WhenFalse))
+                {
+                    whenFalse = new DefaultValueExpression(nullableResult);
+                }
+            }
+
             return new IfExpression(condition, whenTrue, whenFalse);
         }
 
@@ -3889,7 +3924,7 @@ public sealed class CSharpToGSharpTranslator
                         this.TranslateExpression(assignment.Right));
                     assignRhs = this.CoerceCompoundAssignmentRhs(assignment, assignRhs);
                     return new AssignmentStatement(
-                        this.TranslateExpression(assignment.Left),
+                        this.TranslateAssignmentTarget(assignment.Left),
                         assignRhs,
                         op);
 
@@ -3912,6 +3947,50 @@ public sealed class CSharpToGSharpTranslator
                 default:
                     return new ExpressionStatement(this.TranslateExpression(expression));
             }
+        }
+
+        // Translates the target (left-hand side) of an assignment. Two member-access
+        // LHS shapes that gsc cannot bind through the usual receiver path are fixed
+        // up here:
+        //
+        //   • `Prop.Member = v` where `Prop` is an *implicit-this* instance
+        //     property/field of the enclosing type. gsc resolves a bare-identifier
+        //     assignment receiver as a variable/parameter; an implicit-this property
+        //     receiver has no local slot, so the member write fails (GS0158 /
+        //     GS9998). Qualifying it as `this.Prop.Member = v` routes the write
+        //     through the expression-receiver path, which binds correctly.
+        //
+        //   • `recv.Member = v` where `recv` is a declared-nullable receiver that
+        //     Roslyn flow-proved non-null. gsc does not flow-narrow an *assignment*
+        //     receiver (only reads), so the bare nullable receiver fails to bind the
+        //     setter (GS0158). A `recv!!.Member = v` re-establishes the non-null fact
+        //     (mirrors the read-side <see cref="TranslateReceiverWithNullForgiveness"/>).
+        private GExpression TranslateAssignmentTarget(ExpressionSyntax left)
+        {
+            if (left is MemberAccessExpressionSyntax member)
+            {
+                if (member.Expression is IdentifierNameSyntax receiverId &&
+                    this.context.GetSymbolInfo(receiverId).Symbol is { IsStatic: false } receiverSymbol &&
+                    receiverSymbol.Kind is SymbolKind.Property or SymbolKind.Field)
+                {
+                    GExpression thisQualified = new MemberAccessExpression(
+                        new ThisExpression(), SanitizeIdentifier(receiverId.Identifier.Text));
+                    return new MemberAccessExpression(
+                        thisQualified, SanitizeIdentifier(member.Name.Identifier.Text));
+                }
+
+                if (this.ReceiverNeedsNullForgiveness(member.Expression) ||
+                    (member.Expression is IdentifierNameSyntax hoistedId &&
+                     this.context.GetSymbolInfo(hoistedId).Symbol is { } hoistedSymbol &&
+                     this.hoistedNullableGuardLocals.Contains(hoistedSymbol)))
+                {
+                    return new MemberAccessExpression(
+                        new NonNullAssertionExpression(this.TranslateExpression(member.Expression)),
+                        SanitizeIdentifier(member.Name.Identifier.Text));
+                }
+            }
+
+            return this.TranslateExpression(left);
         }
 
         /// <summary>
@@ -4320,6 +4399,11 @@ public sealed class CSharpToGSharpTranslator
 
             string localName = SanitizeIdentifier(single.Identifier.Text);
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
+
+            // Record that this pattern variable is now a nullable G# local so an
+            // assignment-LHS use inside the guard is null-forgiven (gsc narrows
+            // reads but not write receivers).
+            this.hoistedNullableGuardLocals.Add(patternSymbol);
 
             // `var t T? = receiver as T` when the leaked variable is reassigned
             // anywhere in the body (C# allows it); otherwise an immutable `let`.
@@ -5154,6 +5238,11 @@ public sealed class CSharpToGSharpTranslator
                     return this.TranslatePredefinedTypeExpression(predefinedType);
 
                 case ConditionalAccessExpressionSyntax conditionalAccess:
+                    if (this.TryTranslateNullConditionalEnumExtension(conditionalAccess, out GExpression enumExtResult))
+                    {
+                        return enumExtResult;
+                    }
+
                     return new ConditionalAccessExpression(
                         this.TranslateExpression(conditionalAccess.Expression),
                         this.TranslateExpression(conditionalAccess.WhenNotNull));
@@ -5285,11 +5374,11 @@ public sealed class CSharpToGSharpTranslator
         {
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             ITypeSymbol receiverType = this.context.GetTypeInfo(isPattern.Expression).Type;
-            return this.TranslatePatternTest(receiver, isPattern.Pattern, receiverType);
+            return this.TranslatePatternTest(receiver, isPattern.Pattern, receiverType, isPattern.Expression);
         }
 
         private GExpression TranslatePatternTest(
-            GExpression receiver, PatternSyntax pattern, ITypeSymbol receiverType = null)
+            GExpression receiver, PatternSyntax pattern, ITypeSymbol receiverType = null, ExpressionSyntax receiverSyntax = null)
         {
             switch (pattern)
             {
@@ -5336,11 +5425,12 @@ public sealed class CSharpToGSharpTranslator
                 case DeclarationPatternSyntax declaration:
                     // `x is T t` → the boolean test `x is T`; the binder `t` is a
                     // Kotlin-style smart cast of `x` inside the guarded block, so
-                    // references to `t` are rewritten to `x` (ADR-0069).
+                    // references to `t` are rewritten to the narrowed `x` (ADR-0069).
                     if (declaration.Designation is SingleVariableDesignationSyntax single &&
                         this.context.GetDeclaredSymbol(single) is { } boundSymbol)
                     {
-                        this.patternBindings[boundSymbol] = receiver;
+                        this.patternBindings[boundSymbol] =
+                            this.BuildPatternNarrowingReplacement(receiver, receiverSyntax, declaration.Type);
                     }
 
                     return new BinaryExpression(
@@ -5356,7 +5446,7 @@ public sealed class CSharpToGSharpTranslator
                         new TypeExpression(this.MapTypeSyntax(typePattern.Type)));
 
                 case RecursivePatternSyntax recursive:
-                    return this.TranslateRecursivePatternTest(receiver, recursive);
+                    return this.TranslateRecursivePatternTest(receiver, recursive, receiverSyntax);
 
                 case UnaryPatternSyntax unary when unary.IsKind(SyntaxKind.NotPattern):
                     return this.TranslateNotPatternTest(receiver, unary.Pattern, receiverType);
@@ -5368,13 +5458,13 @@ public sealed class CSharpToGSharpTranslator
                     // `x is A and B` → `(x is A) && (x is B)`.
                     bool isOr = binaryPattern.OperatorToken.IsKind(SyntaxKind.OrKeyword);
                     return new BinaryExpression(
-                        this.TranslatePatternTest(receiver, binaryPattern.Left, receiverType),
+                        this.TranslatePatternTest(receiver, binaryPattern.Left, receiverType, receiverSyntax),
                         isOr ? "||" : "&&",
-                        this.TranslatePatternTest(receiver, binaryPattern.Right, receiverType));
+                        this.TranslatePatternTest(receiver, binaryPattern.Right, receiverType, receiverSyntax));
 
                 case ParenthesizedPatternSyntax parenthesized:
                     return new ParenthesizedExpression(
-                        this.TranslatePatternTest(receiver, parenthesized.Pattern, receiverType));
+                        this.TranslatePatternTest(receiver, parenthesized.Pattern, receiverType, receiverSyntax));
 
                 default:
                     this.context.ReportUnsupported(
@@ -5478,11 +5568,19 @@ public sealed class CSharpToGSharpTranslator
             return constant;
         }
 
-        private GExpression TranslateRecursivePatternTest(GExpression receiver, RecursivePatternSyntax recursive)
+        private GExpression TranslateRecursivePatternTest(
+            GExpression receiver, RecursivePatternSyntax recursive, ExpressionSyntax receiverSyntax = null)
         {
-            // Bind the designator (`is { } x`, `is Circle c`) to the receiver so
-            // later references read the matched value (ADR-0069 smart cast).
-            BindPatternDesignation(recursive.Designation, receiver);
+            // Bind the designator (`is { } x`, `is Circle c`) to the narrowed
+            // receiver so later references read the matched value (ADR-0069 smart
+            // cast). `is { } x` narrows away only nullability; `is Circle c`
+            // additionally downcasts.
+            if (recursive.Designation is SingleVariableDesignationSyntax recVar &&
+                this.context.GetDeclaredSymbol(recVar) is { } recBound)
+            {
+                this.patternBindings[recBound] =
+                    this.BuildPatternNarrowingReplacement(receiver, receiverSyntax, recursive.Type);
+            }
 
             GExpression test = recursive.Type != null
                 ? new BinaryExpression(receiver, "is", new TypeExpression(this.MapTypeSyntax(recursive.Type)))
@@ -5515,6 +5613,48 @@ public sealed class CSharpToGSharpTranslator
             {
                 this.patternBindings[boundSymbol] = receiver;
             }
+        }
+
+        // Builds the smart-cast replacement expression a pattern designator
+        // (`x is T t`, `x is { } t`) is rewritten to inside the guarded region.
+        // gsc flow-narrows only a bare local/parameter scrutinee (ADR-0069); when
+        // the scrutinee is a member-access chain, indexer or method-call result it
+        // is NOT narrowed, so re-emitting the bare receiver at each use of `t`
+        // leaves it at its (often nullable / wider) declared type and a member
+        // access then fails to bind (GS0158). For those non-smart-castable
+        // receivers we materialise the narrowing explicitly:
+        //   • reference target `T`  → `(receiver as T)!!` (downcast + non-null);
+        //   • value target `T`      → `receiver!!`        (G# has no `as` for value
+        //                                                  types; the match already
+        //                                                  proved it non-null);
+        //   • `is { } t` (no type)  → `receiver!!`        (non-null view only).
+        // A smart-castable bare local keeps the existing bare-receiver binding so
+        // currently passing translations are unchanged.
+        private GExpression BuildPatternNarrowingReplacement(
+            GExpression receiver, ExpressionSyntax receiverSyntax, TypeSyntax narrowedTypeSyntax)
+        {
+            if (receiverSyntax != null && this.IsSmartCastableScrutinee(receiverSyntax))
+            {
+                return receiver;
+            }
+
+            if (narrowedTypeSyntax == null)
+            {
+                return new NonNullAssertionExpression(receiver);
+            }
+
+            ITypeSymbol narrowedType = this.context.GetTypeInfo(narrowedTypeSyntax).Type;
+            if (narrowedType != null && narrowedType.IsValueType)
+            {
+                return new NonNullAssertionExpression(receiver);
+            }
+
+            return new NonNullAssertionExpression(
+                new ParenthesizedExpression(
+                    new BinaryExpression(
+                        receiver,
+                        "as",
+                        new TypeExpression(this.MapTypeSyntax(narrowedTypeSyntax)))));
         }
 
         private GExpression TranslateArrayCreation(ArrayCreationExpressionSyntax creation)
@@ -6008,7 +6148,18 @@ public sealed class CSharpToGSharpTranslator
             // Member access on a bare-identifier element access (`values[i].M`)
             // previously hit a G# parser ambiguity (#942); that gap is now fixed,
             // so the construct translates through the normal member-access path.
-            GExpression target = this.TranslateReceiverWithNullForgiveness(member.Expression);
+            //
+            // When the member binds to an extension method whose `this` parameter
+            // is itself nullable (`this T? x`), the method is *meant* to be invoked
+            // on a possibly-null receiver and handles null internally (e.g.
+            // `Ac4DsiV1.SampleRate()` over `static int? SampleRate(this Ac4DsiV1?)`).
+            // Forgiving the receiver to non-null (`Ac4DsiV1!!`) changes its static
+            // type to the non-null `Ac4DsiV1`, which gsc's extension-method lookup
+            // does not match against the `Ac4DsiV1?` `this` slot (GS0159). Keep the
+            // declared-nullable receiver so the extension resolves.
+            GExpression target = this.MemberBindsToNullableThisExtension(member)
+                ? this.TranslateExpression(member.Expression)
+                : this.TranslateReceiverWithNullForgiveness(member.Expression);
             string memberName = member.Name.Identifier.Text;
 
             // A C# tuple element access (`item.Name`, `item.Price`) lowers to the
@@ -6060,6 +6211,29 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return translated;
+        }
+
+        // True when <paramref name="member"/> binds to an extension method whose
+        // (reduced) `this` parameter is nullable-annotated (`this T? x`). Such a
+        // method is designed to accept a null receiver, so the translated call must
+        // keep the declared-nullable receiver rather than forgive it to non-null.
+        private bool MemberBindsToNullableThisExtension(MemberAccessExpressionSyntax member)
+        {
+            if (this.context.GetSymbolInfo(member).Symbol is not IMethodSymbol method)
+            {
+                return false;
+            }
+
+            IMethodSymbol unreduced = method.ReducedFrom ?? method;
+            if (!unreduced.IsExtensionMethod || unreduced.Parameters.Length == 0)
+            {
+                return false;
+            }
+
+            IParameterSymbol thisParameter = unreduced.Parameters[0];
+            return thisParameter.Type.IsReferenceType
+                ? thisParameter.NullableAnnotation == NullableAnnotation.Annotated
+                : thisParameter.Type.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T;
         }
 
         // Issue #1354: a value-position read (a `return` expression or a
@@ -6296,6 +6470,59 @@ public sealed class CSharpToGSharpTranslator
             return conditional.Expression is IdentifierNameSyntax
                 or MemberAccessExpressionSyntax
                 or ThisExpressionSyntax;
+        }
+
+        /// <summary>
+        /// Rewrites a null-conditional call to an enum extension method
+        /// (<c>recv?.M(args)</c> where <c>M</c> is <c>this EnumType</c>) into the
+        /// ternary <c>if recv != nil { Owner.M(recv!!, args) } else { nil }</c>.
+        /// An enum extension is emitted as a plain static helper (a G# receiver
+        /// clause is rejected on enums, GS0103), so the <c>?.</c> member-binding
+        /// form cannot bind to it; gsc reports GS0159. The receiver is a pure
+        /// expression in practice, so the duplicated evaluation is safe.
+        /// </summary>
+        private bool TryTranslateNullConditionalEnumExtension(
+            ConditionalAccessExpressionSyntax conditionalAccess,
+            out GExpression result)
+        {
+            result = null;
+
+            if (conditionalAccess.WhenNotNull is not InvocationExpressionSyntax invocation ||
+                invocation.Expression is not MemberBindingExpressionSyntax binding)
+            {
+                return false;
+            }
+
+            if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method ||
+                !TryGetEnumExtension(method, out string owner, out string name))
+            {
+                return false;
+            }
+
+            GExpression receiver = this.TranslateExpression(conditionalAccess.Expression);
+
+            var callArgs = new List<GExpression>
+            {
+                new NonNullAssertionExpression(receiver),
+            };
+            callArgs.AddRange(invocation.ArgumentList.Arguments.Select(a => this.TranslateArgument(a)));
+            IReadOnlyList<GTypeReference> callTypeArgs = binding.Name is GenericNameSyntax generic
+                ? this.MapTypeArguments(generic)
+                : null;
+
+            GExpression call = new InvocationExpression(
+                new MemberAccessExpression(new IdentifierExpression(owner), name),
+                callArgs,
+                callTypeArgs);
+
+            GExpression guard = new BinaryExpression(
+                this.TranslateExpression(conditionalAccess.Expression),
+                "!=",
+                new IdentifierExpression("nil"));
+
+            result = new ParenthesizedExpression(
+                new IfExpression(guard, call, new IdentifierExpression("nil")));
+            return true;
         }
 
         /// <summary>
