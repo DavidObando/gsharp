@@ -357,6 +357,12 @@ internal static class OverloadResolution
             return ImplicitConversionKind.Identity;
         }
 
+        if (target.IsPointer && source.IsPointer
+            && string.Equals(target.GetElementType()?.FullName, "System.Void", StringComparison.Ordinal))
+        {
+            return ImplicitConversionKind.Reference;
+        }
+
         if (IsNumericWidening(source, target))
         {
             return ImplicitConversionKind.NumericWidening;
@@ -1151,6 +1157,17 @@ internal static class OverloadResolution
             if (type.IsByRef)
             {
                 return TryCloseInferredType(type.GetElementType(), bounds, out closed);
+            }
+
+            if (type.IsPointer)
+            {
+                if (!TryCloseInferredType(type.GetElementType(), bounds, out var elem))
+                {
+                    return false;
+                }
+
+                closed = elem.MakePointerType();
+                return true;
             }
 
             if (type.IsArray)
@@ -3083,6 +3100,11 @@ internal static class OverloadResolution
             return SubstituteClrType(type.GetElementType(), from, to).MakeByRefType();
         }
 
+        if (type.IsPointer)
+        {
+            return SubstituteClrType(type.GetElementType(), from, to).MakePointerType();
+        }
+
         if (type.IsArray)
         {
             var element = SubstituteClrType(type.GetElementType(), from, to);
@@ -3381,6 +3403,16 @@ internal static class OverloadResolution
                 parameterType.GetElementType(),
                 argumentType.IsByRef ? argumentType.GetElementType() : argumentType,
                 bounds);
+        }
+
+        if (parameterType.IsPointer)
+        {
+            if (argumentType.IsPointer)
+            {
+                return UnifyForInference(parameterType.GetElementType(), argumentType.GetElementType(), bounds);
+            }
+
+            return true;
         }
 
         if (parameterType.IsArray)
