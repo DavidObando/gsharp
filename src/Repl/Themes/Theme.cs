@@ -117,7 +117,7 @@ public static class Themes
         Number = new(Color.SpringGreen2),
         StringLit = new(Color.Orange1),
         Comment = new(Color.Green),
-        Identifier = new(Color.Grey85),
+        Identifier = new(Color.Gold1),
     };
 
     public static Theme Dark { get; } = new()
@@ -137,7 +137,7 @@ public static class Themes
         Number = new(Color.Cyan1),
         StringLit = new(Color.Orange1),
         Comment = new(Color.Green),
-        Identifier = new(Color.Grey85),
+        Identifier = new(Color.Gold1),
     };
 
     public static Theme Light { get; } = new()
@@ -157,7 +157,7 @@ public static class Themes
         Number = new(Color.DarkGreen),
         StringLit = new(Color.Orange1),
         Comment = new(Color.DarkGreen),
-        Identifier = new(Color.Grey85),
+        Identifier = new(Color.Gold1),
     };
 
     public static Theme Amber { get; } = new()
@@ -177,6 +177,6 @@ public static class Themes
         Number = new(Color.Gold1),
         StringLit = new(Color.Gold1),
         Comment = new(Color.Green),
-        Identifier = new(Color.Grey85),
+        Identifier = new(Color.Gold1),
     };
 }

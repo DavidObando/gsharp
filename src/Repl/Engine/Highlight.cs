@@ -36,6 +36,41 @@ public static class Highlight
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Highlights a full line in one lex pass, drawing a reverse-video block cursor
+    /// at <paramref name="cursorCol"/> without splitting the token under the caret.
+    /// </summary>
+    public static string MarkupWithCursor(string line, int cursorCol, string cursorMarkup)
+    {
+        var sb = new StringBuilder();
+        var rendered = 0;
+        foreach (var token in SyntaxTree.ParseTokens(line))
+        {
+            var text = token.Text;
+            if (string.IsNullOrEmpty(text))
+            {
+                continue;
+            }
+
+            var color = ColorFor(token.Kind).Value.ToMarkup();
+            for (var i = 0; i < text.Length; i++)
+            {
+                var ch = Spectre.Console.Markup.Escape(text[i].ToString());
+                var open = token.Position + i == cursorCol ? cursorMarkup : color;
+                sb.Append('[').Append(open).Append(']').Append(ch).Append("[/]");
+            }
+
+            rendered = token.Position + text.Length;
+        }
+
+        if (cursorCol >= rendered)
+        {
+            sb.Append('[').Append(cursorMarkup).Append("] [/]");
+        }
+
+        return sb.ToString();
+    }
+
     private static SemanticColor ColorFor(SyntaxKind kind)
     {
         if (kind.ToString().EndsWith("Keyword", System.StringComparison.Ordinal))

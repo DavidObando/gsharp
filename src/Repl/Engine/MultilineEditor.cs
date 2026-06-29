@@ -115,11 +115,7 @@ public sealed class MultilineEditor
                 continue;
             }
 
-            var l = lines[i];
-            var before = Highlight.Markup(l[..Math.Min(col, l.Length)]);
-            var under = col < l.Length ? l[col].ToString() : " ";
-            var after = col < l.Length ? Highlight.Markup(l[(col + 1)..]) : string.Empty;
-            result.Add($"{before}[{cursorMarkup}]{Spectre.Console.Markup.Escape(under)}[/]{after}");
+            result.Add(Highlight.MarkupWithCursor(lines[i], col, cursorMarkup));
         }
 
         return result;
