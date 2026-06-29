@@ -5,7 +5,33 @@
     <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
     <RootNamespace>Cs2Gs.Cli</RootNamespace>
     <AssemblyName>cs2gs</AssemblyName>
+    <!-- The cs2gs Directory.Build.props marks the whole tree IsTestProject=true
+         (skips docs/StyleCop), which also defaults IsPackable=false. Re-enable
+         packing below without re-enabling StyleCop. -->
   </PropertyGroup>
+
+  <!-- Ship the C#->G# translator as a .NET tool: `dotnet tool install Gsharp.Cs2Gs`
+       exposes the `cs2gs` command. -->
+  <PropertyGroup>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>cs2gs</ToolCommandName>
+    <PackageId>Gsharp.Cs2Gs</PackageId>
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Title>GSharp cs2gs C# to G# translator</Title>
+    <Description>Command-line tool (`cs2gs`) that translates C# source to GSharp. Requires a .NET 10 runtime.</Description>
+    <PackageTags>gsharp;cs2gs;migration;csharp;translator;cli</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/DavidObando/gsharp</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <NoPackageAnalysis>true</NoPackageAnalysis>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\PACKAGE_README.md" Pack="true" PackagePath="README.md" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\gsharp-icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Cs2Gs.Pipeline\Cs2Gs.Pipeline.csproj" />

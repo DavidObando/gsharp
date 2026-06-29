@@ -10,6 +10,29 @@
     <NoWarn>$(NoWarn);CS1591;SA0001;SA1600;SA1601;SA1602;SA1611;SA1615;SA1623;SA1629;SA1633;SA1652;SA1201;SA1202;SA1204;SA1309;SA1502;SA1513;SA1515;SA1516;SA1101;SA1208;SA1413;SA1649</NoWarn>
   </PropertyGroup>
 
+  <!-- Ship the interactive REPL as a .NET tool: `dotnet tool install Gsharp.Repl`
+       exposes the `gsi` command (issue #1404). -->
+  <PropertyGroup>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>gsi</ToolCommandName>
+    <PackageId>Gsharp.Repl</PackageId>
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Title>GSharp interactive REPL</Title>
+    <Description>Interactive REPL (`gsi`) for the GSharp language. Requires a .NET 10 runtime.</Description>
+    <PackageTags>gsharp;repl;gsi;interactive;cli</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/DavidObando/gsharp</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <NoPackageAnalysis>true</NoPackageAnalysis>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\..\assets\PACKAGE_README.md" Pack="true" PackagePath="README.md" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\assets\gsharp-icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
   </ItemGroup>
