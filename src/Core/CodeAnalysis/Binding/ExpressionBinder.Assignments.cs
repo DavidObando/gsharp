@@ -1440,6 +1440,41 @@ internal sealed partial class ExpressionBinder
             return new BoundBlockExpression(syntax, ImmutableArray.Create<BoundStatement>(declaration), assignment);
         }
 
+        // Issue #1446: the property counterpart of the implicit-field case
+        // above. A bare instance auto-property name resolves to an
+        // ImplicitPropertyVariableSymbol, which likewise has no local slot.
+        // Initialise a temp local from the property getter (for an array
+        // property this is the array reference, so the subsequent stelem
+        // mutates the underlying array), then do the indexed write to that
+        // real local. Mirrors the read-side property rebinding from #1339.
+        if (variable is ImplicitPropertyVariableSymbol implicitProp)
+        {
+            if (!implicitProp.Property.HasGetter)
+            {
+                Diagnostics.ReportCannotAssign(syntax.TargetIdentifier.Location, implicitProp.Property.Name);
+                return new BoundErrorExpression(null);
+            }
+
+            var propertyAccess = new BoundPropertyAccessExpression(
+                null,
+                new BoundVariableExpression(null, implicitProp.Receiver),
+                implicitProp.StructType,
+                implicitProp.Property);
+
+            var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+            var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, propertyAccess.Type);
+            scope.TryDeclareVariable(tempVar);
+            var declaration = new BoundVariableDeclaration(syntax, tempVar, propertyAccess);
+
+            var assignment = BindIndexedAssignmentToVariable(tempVar, syntax.Index, syntax.Value, syntax.TargetIdentifier.Location);
+            if (assignment is BoundErrorExpression)
+            {
+                return assignment;
+            }
+
+            return new BoundBlockExpression(syntax, ImmutableArray.Create<BoundStatement>(declaration), assignment);
+        }
+
         return BindIndexedAssignmentToVariable(variable, syntax.Index, syntax.Value, syntax.TargetIdentifier.Location);
     }
 
