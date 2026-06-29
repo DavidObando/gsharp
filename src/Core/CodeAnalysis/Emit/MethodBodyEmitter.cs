@@ -460,6 +460,47 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
+        // Issue #1421: a user-declared interface value is a CLR reference type,
+        // so widening it to `object` — or up to any of its (transitive) base
+        // interfaces, user-declared (`BaseInterfaces`) or imported CLR
+        // (`BaseClrInterfaces`) — is a no-op reference conversion at the IL
+        // level (the slot already holds the reference). The InterfaceSymbol
+        // carries no ClrType during emit (its TypeDef only exists in the
+        // assembly being emitted), so the CLR-backed `object`-widening and #521
+        // rules cannot fire. Without this, passing an interface-typed value to a
+        // `ThrowIfNull(object?)`-style parameter — or assigning it to `object` —
+        // threw NotSupportedException from EmitConversion.
+        if (a is InterfaceSymbol srcInterface)
+        {
+            if (b?.ClrType.IsSameAs(typeof(object)) == true || b == TypeSymbol.Object)
+            {
+                return true;
+            }
+
+            if (b is InterfaceSymbol targetBaseInterface)
+            {
+                foreach (var baseInterface in srcInterface.SelfAndAllBaseInterfaces())
+                {
+                    if (baseInterface == targetBaseInterface)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            if (b?.ClrType is { IsInterface: true } targetClrInterface)
+            {
+                foreach (var baseClrInterface in srcInterface.BaseClrInterfaces)
+                {
+                    var clr = baseClrInterface?.ClrType;
+                    if (clr != null && (clr.IsSameAs(targetClrInterface) || targetClrInterface.IsAssignableFrom(clr)))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
         if (a is StructSymbol aClass && b is StructSymbol bClass && aClass.IsClass && bClass.IsClass)
         {
             // Issue #1248: a constructed generic class's base-type reference is

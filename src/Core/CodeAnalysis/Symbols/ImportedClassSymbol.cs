@@ -214,6 +214,19 @@ public sealed class ImportedClassSymbol : Symbol
                     t = ss.ImportedBaseType?.ClrType ?? typeof(object);
                     hasUserClassArg = true;
                 }
+                else if (arguments[i].Type is InterfaceSymbol || arguments[i].Type is DelegateTypeSymbol)
+                {
+                    // Issue #1421 / ADR-0087 §3 R5: a user-defined G# interface or
+                    // named delegate argument carries no ClrType during binding
+                    // (its TypeDef only exists in the assembly being emitted), so
+                    // GetEffectiveClrType returned null above. It rides through the
+                    // same `object` boundary as a user struct — an interface value
+                    // is reference-convertible to `object` — so overload resolution
+                    // can pick an `object`(?) parameter (e.g.
+                    // `ArgumentNullException.ThrowIfNull(object?)`). Mirrors
+                    // ExpressionBinder.GetEffectiveArgumentClrTypeForOverloadResolution.
+                    t = typeof(object);
+                }
                 else if (arguments[i].Type is EnumSymbol)
                 {
                     // Issue #661: user-defined G# enum — backed by int32 at CLR level.
