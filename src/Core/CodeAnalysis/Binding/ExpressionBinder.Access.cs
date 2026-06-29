@@ -4053,9 +4053,21 @@ internal sealed partial class ExpressionBinder
             // a bare-parameter property cannot be a constructed generic over a
             // user element (the #1305 ChannelWriter[Entry] concern), so it does
             // not regress those call sites.
+            //
+            // Issue #1344: a `Channel[Entry].Reader` (`ChannelReader[Entry]`)
+            // and `.Writer` (`ChannelWriter[Entry]`) are also constructed
+            // generics over a same-compilation user element. They are not
+            // enumerable collections, but the reader exposes
+            // `ReadAllAsync()` -> `IAsyncEnumerable[Entry]`; if the property
+            // erases to `ChannelReader[object]`, the async stream erases to
+            // `IAsyncEnumerable[object]` and the `await for` loop variable
+            // collapses to `object`. Surface the symbolic `[Entry]` so the
+            // element type survives; member/method lookup still resolves
+            // against the erased CLR shape (proven by #1088).
             return TypeSymbol.ContainsTypeParameter(mapped)
                 || TypeSymbol.IsSameCompilationUserTypeTopLevel(mapped)
                 || IsUserElementEnumerableCollection(mapped)
+                || IsUserElementChannelReaderWriter(mapped)
                 || openPropType.IsGenericParameter
                 ? mapped
                 : null;
@@ -4088,6 +4100,25 @@ internal sealed partial class ExpressionBinder
         => mapped is ImportedTypeSymbol { ClrType: { } clr }
             && TypeSymbol.ContainsSameCompilationUserType(mapped)
             && MemberLookup.TryGetClrEnumerableElementType(clr, out _);
+
+    /// <summary>
+    /// Issue #1344: returns <see langword="true"/> when <paramref name="mapped"/>
+    /// is a constructed <c>System.Threading.Channels.ChannelReader&lt;T&gt;</c>
+    /// or <c>ChannelWriter&lt;T&gt;</c> over a same-compilation user element.
+    /// Such a reader/writer is not an enumerable collection, but the reader
+    /// exposes <c>ReadAllAsync()</c> -> <c>IAsyncEnumerable[T]</c>; surfacing the
+    /// symbolic argument keeps the user element type instead of erasing to
+    /// <c>object</c>, so an <c>await for</c> over <c>reader.ReadAllAsync()</c>
+    /// binds member access on the loop element. Member/method lookup still
+    /// resolves against the erased closed shape (proven by #1088).
+    /// </summary>
+    /// <param name="mapped">The symbolic projection produced by <see cref="MemberLookup.MapOpenClrTypeToSymbolic(Type, ImportedTypeSymbol)"/>.</param>
+    /// <returns><see langword="true"/> when the mapped type is a user-element channel reader/writer.</returns>
+    private static bool IsUserElementChannelReaderWriter(TypeSymbol mapped)
+        => mapped is ImportedTypeSymbol { OpenDefinition: { } def }
+            && (def.FullName == "System.Threading.Channels.ChannelReader`1"
+                || def.FullName == "System.Threading.Channels.ChannelWriter`1")
+            && TypeSymbol.ContainsSameCompilationUserType(mapped);
 
     private static bool IsReadOnlyRefReturn(PropertyInfo indexer, MethodInfo getter)
     {
