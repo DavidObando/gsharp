@@ -447,6 +447,26 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #1441: `string(charArray)` — the G# rendering of C#
+        // `new string(char[])`. The binder accepts a `[]char -> string`
+        // conversion, but there is no primitive IL cast for it; materialise it
+        // through the `System.String(char[])` constructor. Resolving the ctor
+        // from `to.ClrType` (rather than `typeof(string)`) keeps it in the
+        // active reference context (live host vs MetadataLoadContext).
+        if (to?.ClrType != null && to.ClrType.IsSameAs(typeof(string))
+            && from?.ClrType is { IsArray: true } fromArray
+            && fromArray.GetElementType() is System.Type fromElement
+            && fromElement.IsSameAs(typeof(char)))
+        {
+            var stringCtor = to.ClrType.GetConstructor(new[] { fromArray });
+            if (stringCtor != null)
+            {
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(this.outer.GetCtorReference(stringCtor));
+                return;
+            }
+        }
+
         throw new NotSupportedException(
             $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
     }
