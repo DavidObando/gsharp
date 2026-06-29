@@ -1603,16 +1603,16 @@ internal sealed partial class ExpressionBinder
         var fieldOwner = interfaceSym.Definition ?? interfaceSym;
         switch (rightPart)
         {
-            case NameExpressionSyntax ne:
-                var memberName = ne.IdentifierToken.Text;
-                var field = fieldOwner.GetStaticField(memberName);
-                if (field != null)
-                {
-                    return new BoundFieldAccessExpression(null, field, interfaceSym);
-                }
+            // Issue #1433: `IName.method(args)` — a static (`shared`) method
+            // declared on the interface. Route through the same canonical
+            // member-resolution + overload machinery used for struct/class
+            // statics; the only difference (a constructed generic interface
+            // owner) is carried on the bound call for the emitter.
+            case CallExpressionSyntax ce:
+                return BindUserTypeStaticCall(interfaceSym, ce);
 
-                Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
-                return new BoundErrorExpression(null);
+            case NameExpressionSyntax ne:
+                return BindInterfaceStaticMemberAccess(interfaceSym, fieldOwner, ne);
 
             case AccessorExpressionSyntax nested:
                 var head = BindInterfaceStaticAccessorStep(interfaceSym, nested.LeftPart);
@@ -1626,6 +1626,64 @@ internal sealed partial class ExpressionBinder
             default:
                 return new BoundErrorExpression(null);
         }
+    }
+
+    /// <summary>
+    /// Issue #1433: resolves <c>IName.member</c> in non-call position against an
+    /// interface's static members. A static field reads to a static
+    /// <see cref="BoundFieldAccessExpression"/> (issue #1030); a static
+    /// (<c>shared</c>) method named here is a method group with a null receiver
+    /// (overload selection deferred to the conversion classifier), mirroring the
+    /// struct/class path in <see cref="BindUserTypeStaticMemberAccess"/>.
+    /// </summary>
+    /// <param name="interfaceSym">The interface receiver (constructed or open).</param>
+    /// <param name="fieldOwner">The interface definition owning static fields.</param>
+    /// <param name="ne">The member being accessed.</param>
+    /// <returns>The bound access, or a bound error expression.</returns>
+    private BoundExpression BindInterfaceStaticMemberAccess(InterfaceSymbol interfaceSym, InterfaceSymbol fieldOwner, NameExpressionSyntax ne)
+    {
+        var memberName = ne.IdentifierToken.Text;
+
+        var field = fieldOwner.GetStaticField(memberName);
+        if (field != null)
+        {
+            return new BoundFieldAccessExpression(null, field, interfaceSym);
+        }
+
+        // Issue #1433: a default-bodied static (`shared`) property on the
+        // interface (ADR-0089 / issue #1019) read in non-call position. Static
+        // interface properties are modeled as static-virtual accessor methods,
+        // not on a `StaticProperties` bucket, so a direct read is lowered to a
+        // call of the getter MethodDef — reusing the static-method-call emit
+        // path. Only a concrete (non-abstract, default-bodied) getter can be
+        // invoked directly on the interface type.
+        foreach (var prop in fieldOwner.Properties)
+        {
+            if (prop.IsStatic && !prop.IsIndexer && prop.Name == memberName)
+            {
+                if (prop.GetterSymbol != null && prop.HasGetter)
+                {
+                    return new BoundCallExpression(null, prop.GetterSymbol, ImmutableArray<BoundExpression>.Empty, prop.Type)
+                    {
+                        StaticGenericInterfaceOwnerType = interfaceSym.Definition != null ? interfaceSym : null,
+                    };
+                }
+
+                Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
+                return new BoundErrorExpression(null);
+            }
+        }
+
+        // ADR-0112: a static method named here in non-call position is a method
+        // group with a null receiver, driven by the target delegate signature.
+        var staticMethods = TypeMemberModel.GetMethods(interfaceSym, memberName, MemberQuery.Static(MemberKinds.Method));
+        if (TryBuildUserMethodGroup(receiver: null, staticMethods, out var staticGroup))
+        {
+            return staticGroup;
+        }
+
+        Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
+        return new BoundErrorExpression(null);
     }
 
     /// <summary>
@@ -2078,7 +2136,34 @@ internal sealed partial class ExpressionBinder
     }
 
     internal BoundExpression BindUserTypeStaticCall(StructSymbol structSym, CallExpressionSyntax ce)
+        => BindUserTypeStaticCall((TypeSymbol)structSym, ce);
+
+    /// <summary>
+    /// Issue #1433: resolves <c>TypeName.method(args)</c> for a static
+    /// (<c>shared</c>) method declared on a user struct/class OR interface. The
+    /// member-resolution and overload/substitution logic is identical for both
+    /// owner kinds (it routes through the canonical <see cref="TypeMemberModel"/>
+    /// layer, ADR-0112); only the generic-owner carried to the emitter differs:
+    /// a constructed generic struct goes through
+    /// <see cref="BoundCallExpression.StaticGenericOwnerType"/> (issue #1209) and
+    /// a constructed generic interface through
+    /// <see cref="BoundCallExpression.StaticGenericInterfaceOwnerType"/> (issue
+    /// #1030 parenting extended to methods) so the call is parented at the
+    /// correct construction <c>TypeSpec</c>. A non-generic owner of either kind
+    /// emits a bare <c>MethodDef</c> token.
+    /// </summary>
+    internal BoundExpression BindUserTypeStaticCall(TypeSymbol ownerType, CallExpressionSyntax ce)
     {
+        var structSym = ownerType as StructSymbol;
+        var ifaceSym = ownerType as InterfaceSymbol;
+        var ownerDefinition = structSym?.Definition ?? (TypeSymbol)ifaceSym?.Definition;
+        var ownerDefTypeParameters = structSym?.Definition?.TypeParameters
+            ?? ifaceSym?.Definition?.TypeParameters
+            ?? ImmutableArray<TypeParameterSymbol>.Empty;
+        var ownerTypeArguments = structSym?.TypeArguments
+            ?? ifaceSym?.TypeArguments
+            ?? ImmutableArray<TypeSymbol>.Empty;
+
         var methodName = ce.Identifier.Text;
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
@@ -2117,7 +2202,7 @@ internal sealed partial class ExpressionBinder
         // for instance methods). A single-candidate group is returned unchanged
         // so the legacy per-position arity/optional/variadic diagnostics below
         // still apply (e.g. genuine arity mismatch on a non-overloaded method).
-        var staticMethodGroup = TypeMemberModel.GetMethods(structSym, methodName, MemberQuery.Static(MemberKinds.Method));
+        var staticMethodGroup = TypeMemberModel.GetMethods(ownerType, methodName, MemberQuery.Static(MemberKinds.Method));
         if (!staticMethodGroup.IsDefaultOrEmpty)
         {
             var method = overloads.SelectInstanceOverloadOrReport(staticMethodGroup, arguments, ce, methodName, argumentNames: default);
@@ -2209,17 +2294,17 @@ internal sealed partial class ExpressionBinder
             // counterpart of the imported-generic fix in issue #1216 and exercises
             // the binding receiver added in issue #1323.
             Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;
-            if (structSym.Definition != null
-                && !ReferenceEquals(structSym.Definition, structSym)
-                && !structSym.TypeArguments.IsDefaultOrEmpty
-                && !structSym.Definition.TypeParameters.IsDefaultOrEmpty)
+            if (ownerDefinition != null
+                && !ReferenceEquals(ownerDefinition, ownerType)
+                && !ownerTypeArguments.IsDefaultOrEmpty
+                && !ownerDefTypeParameters.IsDefaultOrEmpty)
             {
                 substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
-                var defParams = structSym.Definition.TypeParameters;
-                var count = Math.Min(defParams.Length, structSym.TypeArguments.Length);
+                var defParams = ownerDefTypeParameters;
+                var count = Math.Min(defParams.Length, ownerTypeArguments.Length);
                 for (var i = 0; i < count; i++)
                 {
-                    substitution[defParams[i]] = structSym.TypeArguments[i];
+                    substitution[defParams[i]] = ownerTypeArguments[i];
                 }
             }
 
@@ -2431,7 +2516,12 @@ internal sealed partial class ExpressionBinder
             // the call at the construction's TypeSpec (a bare MethodDef token is
             // invalid for a method of a generic type). Null for non-generic
             // receivers leaves the ordinary MethodDef path unchanged.
-            var staticGenericOwner = structSym.Definition != null ? structSym : null;
+            // Issue #1433: the same parenting requirement applies to a
+            // constructed generic INTERFACE owner; it is carried separately
+            // because the emitter resolves interface- and struct-declared
+            // statics through different TypeSpec helpers.
+            var staticGenericOwner = structSym?.Definition != null ? structSym : null;
+            var staticGenericInterfaceOwner = ifaceSym?.Definition != null ? ifaceSym : null;
 
             if (substitution != null)
             {
@@ -2439,22 +2529,22 @@ internal sealed partial class ExpressionBinder
                 if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
                 {
                     substitutedReturn = lambdas.WrapAsTask(substitutedReturn);
-                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn) { StaticGenericOwnerType = staticGenericOwner };
+                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn) { StaticGenericOwnerType = staticGenericOwner, StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner };
                 }
 
                 if (!ReferenceEquals(substitutedReturn, method.Type))
                 {
-                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn) { StaticGenericOwnerType = staticGenericOwner };
+                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn) { StaticGenericOwnerType = staticGenericOwner, StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner };
                 }
             }
 
             if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
             {
                 var asyncReturn = lambdas.WrapAsTask(method.Type);
-                return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), asyncReturn) { StaticGenericOwnerType = staticGenericOwner };
+                return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), asyncReturn) { StaticGenericOwnerType = staticGenericOwner, StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner };
             }
 
-            return new BoundCallExpression(null, method, convertedArgs.ToImmutable()) { StaticGenericOwnerType = staticGenericOwner };
+            return new BoundCallExpression(null, method, convertedArgs.ToImmutable()) { StaticGenericOwnerType = staticGenericOwner, StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner };
         }
 
         Diagnostics.ReportUnableToFindMember(ce.Location, methodName);

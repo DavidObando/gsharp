@@ -73,6 +73,17 @@ public sealed class BoundCallExpression : BoundExpression
     public StructSymbol StaticGenericOwnerType { get; internal set; }
 
     /// <summary>
+    /// Gets, for issue #1433, the constructed generic interface when a static
+    /// (<c>shared</c>) method is dispatched on a constructed generic interface
+    /// (<c>IBox[int32].Create()</c>), so the emitter parents the call at the
+    /// construction's <c>TypeSpec</c> (mirroring the interface static-field path
+    /// of issue #1030). <see langword="null"/> for ordinary calls, non-generic
+    /// interface receivers, and struct/class receivers (which use
+    /// <see cref="StaticGenericOwnerType"/> or a bare <c>MethodDef</c>).
+    /// </summary>
+    public InterfaceSymbol StaticGenericInterfaceOwnerType { get; internal set; }
+
+    /// <summary>
     /// Gets the function symbol.
     /// </summary>
     public FunctionSymbol Function { get; }

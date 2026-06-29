@@ -6983,6 +6983,71 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #1433: resolves the token for a call to a user <c>shared</c>
+    /// (static) method whose declaring type is a user-declared INTERFACE
+    /// (<c>IThing.Create()</c> / <c>IBox[int32].Make()</c>). For a non-generic
+    /// interface returns the bare <c>MethodDef</c>; for a constructed generic
+    /// interface returns a <c>MemberRef</c> parented at the construction's
+    /// <c>TypeSpec</c> (mirroring the interface static-field path, issue #1030).
+    /// The substituted method on a constructed interface is mapped back to the
+    /// open definition's slot so its emitted <c>MethodDef</c> handle and open
+    /// (<c>VAR</c>-placeholdered) signature are used.
+    /// </summary>
+    /// <param name="containingInterface">The constructed (or open) interface reference.</param>
+    /// <param name="method">The static method being called.</param>
+    /// <returns>The MethodDef or TypeSpec-parented MemberRef token.</returns>
+    internal EntityHandle ResolveUserInterfaceStaticMethodToken(InterfaceSymbol containingInterface, FunctionSymbol method)
+    {
+        var openMethod = ResolveOpenInterfaceStaticMethod(containingInterface, method);
+        if (!this.cache.MethodHandles.TryGetValue(openMethod, out var openDef)
+            && !this.cache.FunctionHandles.TryGetValue(openMethod, out openDef))
+        {
+            throw new InvalidOperationException(
+                $"Static interface method '{method.Name}' has no emitted handle.");
+        }
+
+        if (!IsUserGenericInterfaceReference(containingInterface))
+        {
+            return openDef;
+        }
+
+        return this.GetUserInterfaceMethodRef(containingInterface, openDef, openMethod.Name, this.EncodeOpenMethodSignature(openMethod));
+    }
+
+    /// <summary>
+    /// Issue #1433: returns a <c>MemberRef</c> handle for a static method on a
+    /// user-declared generic interface, parented at the <c>TypeSpec</c> for
+    /// <paramref name="containingInterface"/>. Mirrors
+    /// <see cref="GetUserStructMethodRef"/>; the signature is supplied by the
+    /// caller (already encoded against the open definition with <c>VAR</c> slots).
+    /// </summary>
+    /// <param name="containingInterface">The constructed (or open) interface reference.</param>
+    /// <param name="openMethodDef">The open method's emitted MethodDef handle.</param>
+    /// <param name="methodName">The method name.</param>
+    /// <param name="signature">The open method signature blob.</param>
+    /// <returns>The MemberRef token parented at the interface TypeSpec.</returns>
+    internal EntityHandle GetUserInterfaceMethodRef(
+        InterfaceSymbol containingInterface,
+        EntityHandle openMethodDef,
+        string methodName,
+        BlobBuilder signature)
+    {
+        var key = (containingInterface, openMethodDef);
+        if (this.userInterfaceMethodRefCache.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        var parent = this.GetUserInterfaceTypeSpec(containingInterface);
+        var memberRef = (EntityHandle)this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(methodName),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(signature));
+        this.userInterfaceMethodRefCache[key] = memberRef;
+        return memberRef;
+    }
+
+    /// <summary>
     /// Issue #989: resolves the right token for a call to a user property's
     /// get/set accessor. For a non-generic containing type returns the bare
     /// accessor <c>MethodDef</c>; for a constructed generic containing type
