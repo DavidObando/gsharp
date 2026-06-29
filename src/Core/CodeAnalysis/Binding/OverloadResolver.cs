@@ -3031,6 +3031,11 @@ internal sealed class OverloadResolver
             return new BoundIndirectCallExpression(null, BuildImplicitFieldLoad(implicitField), fnType, args);
         }
 
+        if (TryBuildImplicitMemberLoad(variable, syntax.Identifier.Location, out var memberLoad))
+        {
+            return new BoundIndirectCallExpression(null, memberLoad, fnType, args);
+        }
+
         return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, variable), fnType, args);
     }
 
@@ -3047,6 +3052,197 @@ internal sealed class OverloadResolver
             new BoundVariableExpression(null, implicitField.Receiver),
             implicitField.StructType,
             implicitField.Field);
+
+    private bool TryBindNullableDelegateInvocation(
+        VariableSymbol variable,
+        CallExpressionSyntax syntax,
+        ImmutableArray<BoundExpression> boundArguments,
+        ImmutableArray<string> argumentNames,
+        out BoundExpression result)
+    {
+        result = null;
+        if (syntax.NullableQuestionToken == null
+            || variable.Type is not NullableTypeSymbol nullable
+            || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(nullable.UnderlyingType, out var functionType))
+        {
+            return false;
+        }
+
+        if (!argumentNames.IsDefault)
+        {
+            Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, variable.Name, FirstNamedArgumentName(argumentNames));
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        if (!TryBindFunctionTypeArguments(variable.Name, functionType, syntax, boundArguments, out var convertedArgs))
+        {
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        var delegateLoad = TryBuildImplicitMemberLoad(variable, syntax.Identifier.Location, out var implicitLoad)
+            ? implicitLoad
+            : new BoundVariableExpression(null, variable);
+        if (delegateLoad is BoundErrorExpression)
+        {
+            result = delegateLoad;
+            return true;
+        }
+
+        var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
+            .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: nullable.UnderlyingType);
+        var captureRef = new BoundVariableExpression(null, capture);
+        var whenNotNull = new BoundIndirectCallExpression(null, captureRef, functionType, convertedArgs);
+
+        if (ReferenceEquals(functionType.ReturnType, TypeSymbol.Void))
+        {
+            result = new BoundNullConditionalAccessExpression(
+                syntax,
+                delegateLoad,
+                capture,
+                whenNotNull,
+                TypeSymbol.Void,
+                resultSlot: null);
+            return true;
+        }
+
+        var resultType = functionType.ReturnType is NullableTypeSymbol
+            ? functionType.ReturnType
+            : (TypeSymbol)NullableTypeSymbol.Get(functionType.ReturnType);
+        LocalVariableSymbol resultSlot = null;
+        if (resultType is NullableTypeSymbol nullableResult
+            && nullableResult.UnderlyingType?.ClrType is { IsValueType: true })
+        {
+            var resultSlotName = "$nres_" + binderCtx.NullConditionalCaptureCounter
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+            resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);
+        }
+
+        result = new BoundNullConditionalAccessExpression(
+            syntax,
+            delegateLoad,
+            capture,
+            whenNotNull,
+            resultType,
+            resultSlot);
+        return true;
+    }
+
+    private bool TryBindFunctionTypeArguments(
+        string calleeName,
+        FunctionTypeSymbol functionType,
+        CallExpressionSyntax syntax,
+        ImmutableArray<BoundExpression> boundArguments,
+        out ImmutableArray<BoundExpression> convertedArgs)
+    {
+        convertedArgs = default;
+        var isVariadic = functionType.HasVariadic;
+        var fixedCount = isVariadic ? functionType.Arity - 1 : functionType.Arity;
+
+        if (isVariadic)
+        {
+            if (syntax.Arguments.Count < fixedCount)
+            {
+                Diagnostics.ReportTooFewArgumentsForVariadic(syntax.Identifier.Location, calleeName, fixedCount, syntax.Arguments.Count);
+                return false;
+            }
+        }
+        else if (syntax.Arguments.Count != functionType.Arity)
+        {
+            Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, calleeName, functionType.Arity, syntax.Arguments.Count);
+            return false;
+        }
+
+        var permutedArgs = boundArguments;
+        if (isVariadic)
+        {
+            var sliceType = (SliceTypeSymbol)functionType.ParameterTypes[functionType.Arity - 1];
+            var trailing = syntax.Arguments.Count - fixedCount;
+            var passThrough = trailing == 1 && boundArguments[fixedCount].Type == sliceType;
+            if (!passThrough)
+            {
+                var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailing);
+                for (var i = fixedCount; i < syntax.Arguments.Count; i++)
+                {
+                    packed.Add(boundArguments[i]);
+                }
+
+                var rebuilt = ImmutableArray.CreateBuilder<BoundExpression>(fixedCount + 1);
+                for (var i = 0; i < fixedCount; i++)
+                {
+                    rebuilt.Add(boundArguments[i]);
+                }
+
+                rebuilt.Add(new BoundArrayCreationExpression(syntax, sliceType, packed.MoveToImmutable()));
+                permutedArgs = rebuilt.ToImmutable();
+            }
+        }
+
+        var convertedBuilder = ImmutableArray.CreateBuilder<BoundExpression>(permutedArgs.Length);
+        for (var i = 0; i < permutedArgs.Length; i++)
+        {
+            var argLoc = i < syntax.Arguments.Count ? syntax.Arguments[i].Location : syntax.Identifier.Location;
+            var argument = permutedArgs[i];
+            var argSyntax = i < syntax.Arguments.Count ? UnwrapNamedArgumentValue(syntax.Arguments[i]) : null;
+            if (argSyntax != null
+                && bindLambdaWithTarget != null
+                && IsUntypedArrowLambda(argSyntax)
+                && functionType.ParameterTypes[i] is FunctionTypeSymbol lambdaTarget)
+            {
+                argument = bindLambdaWithTarget((LambdaExpressionSyntax)argSyntax, lambdaTarget);
+            }
+
+            convertedBuilder.Add(conversions.BindConversion(argLoc, argument, functionType.ParameterTypes[i]));
+        }
+
+        convertedArgs = convertedBuilder.MoveToImmutable();
+        return true;
+    }
+
+    private bool TryBuildImplicitMemberLoad(VariableSymbol variable, TextLocation location, out BoundExpression load)
+    {
+        load = null;
+        switch (variable)
+        {
+            case ImplicitStaticFieldVariableSymbol staticField:
+                load = staticField.InterfaceType != null
+                    ? new BoundFieldAccessExpression(null, staticField.Field, staticField.InterfaceType)
+                    : new BoundFieldAccessExpression(null, receiver: null, staticField.StructType, staticField.Field);
+                return true;
+            case ImplicitPropertyVariableSymbol prop:
+                if (!prop.Property.HasGetter)
+                {
+                    Diagnostics.ReportCannotAssign(location, prop.Property.Name);
+                    load = new BoundErrorExpression(null);
+                    return true;
+                }
+
+                load = new BoundPropertyAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, prop.Receiver),
+                    prop.StructType,
+                    prop.Property);
+                return true;
+            case ImplicitStaticPropertyVariableSymbol staticProp:
+                if (!staticProp.Property.HasGetter)
+                {
+                    Diagnostics.ReportCannotAssign(location, staticProp.Property.Name);
+                    load = new BoundErrorExpression(null);
+                    return true;
+                }
+
+                load = new BoundPropertyAccessExpression(
+                    null,
+                    receiver: null,
+                    staticProp.StructType,
+                    staticProp.Property);
+                return true;
+            default:
+                return false;
+        }
+    }
 
     public BoundExpression BindCallExpression(CallExpressionSyntax syntax)
     {
@@ -3439,6 +3635,12 @@ internal sealed class OverloadResolver
                 new BoundVariableExpression(null, fpVar),
                 fpConvertedArgs.MoveToImmutable(),
                 fpSym);
+        }
+
+        if (symbol is VariableSymbol nullableDelegateVar
+            && TryBindNullableDelegateInvocation(nullableDelegateVar, syntax, boundArguments.ToImmutable(), argumentNames, out var nullableDelegateCall))
+        {
+            return nullableDelegateCall;
         }
 
         // Phase 4.7: invoking a function-typed variable goes through the
