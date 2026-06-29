@@ -15,13 +15,14 @@ namespace GSharp.Repl.Themes;
 /// </summary>
 public sealed class Theme
 {
-    public static Theme Current { get; private set; } = Themes.Default;
+    public static Theme Current { get; private set; } = Themes.GSharp;
 
     public static IReadOnlyList<Theme> Available { get; } = new[]
     {
-        Themes.Default,
-        Themes.Mono,
-        Themes.HighContrast,
+        Themes.GSharp,
+        Themes.Dark,
+        Themes.Light,
+        Themes.Amber,
     };
 
     public required string Name { get; init; }
@@ -70,7 +71,22 @@ public sealed class Theme
         throw new ArgumentException($"Unknown theme '{name}'. Known: {string.Join(", ", AvailableNames())}.", nameof(name));
     }
 
-    public static void Reset() => Current = Themes.Default;
+    public static void Cycle()
+    {
+        var i = 0;
+        for (var n = 0; n < Available.Count; n++)
+        {
+            if (ReferenceEquals(Available[n], Current))
+            {
+                i = n;
+                break;
+            }
+        }
+
+        Current = Available[(i + 1) % Available.Count];
+    }
+
+    public static void Reset() => Current = Themes.GSharp;
 
     public static IEnumerable<string> AvailableNames()
     {
@@ -84,63 +100,83 @@ public sealed class Theme
 /// <summary>Built-in theme palettes.</summary>
 public static class Themes
 {
-    public static Theme Default { get; } = new()
+    public static Theme GSharp { get; } = new()
     {
-        Name = "Default",
+        Name = "gsharp",
         TextPrimary = new(Color.White),
         TextSecondary = new(Color.Grey85),
         TextTertiary = new(Color.Grey50),
-        StatusInfo = new(Color.SkyBlue1),
+        StatusInfo = new(Color.SpringGreen2),
         StatusSuccess = new(Color.Green),
         StatusWarning = new(Color.Yellow),
         StatusError = new(Color.Red),
-        Brand = new(Color.Aqua),
-        Selected = new(Color.DodgerBlue1),
+        Brand = new(Color.MediumPurple2),
+        Selected = new(Color.MediumPurple2),
         BorderNeutral = new(Color.Grey50),
-        Keyword = new(Color.DodgerBlue1),
-        Number = new(Color.Aqua),
+        Keyword = new(Color.MediumPurple2),
+        Number = new(Color.SpringGreen2),
         StringLit = new(Color.Orange1),
         Comment = new(Color.Green),
         Identifier = new(Color.Grey85),
     };
 
-    public static Theme Mono { get; } = new()
+    public static Theme Dark { get; } = new()
     {
-        Name = "Mono",
-        TextPrimary = new(Color.Default),
-        TextSecondary = new(Color.Default),
-        TextTertiary = new(Color.Default),
-        StatusInfo = new(Color.Default),
-        StatusSuccess = new(Color.Default),
-        StatusWarning = new(Color.Default),
-        StatusError = new(Color.Default),
-        Brand = new(Color.Default),
-        Selected = new(Color.Default),
-        BorderNeutral = new(Color.Default),
-        Keyword = new(Color.Default),
-        Number = new(Color.Default),
-        StringLit = new(Color.Default),
-        Comment = new(Color.Default),
-        Identifier = new(Color.Default),
-    };
-
-    public static Theme HighContrast { get; } = new()
-    {
-        Name = "HighContrast",
+        Name = "dark",
         TextPrimary = new(Color.White),
-        TextSecondary = new(Color.White),
-        TextTertiary = new(Color.Silver),
-        StatusInfo = new(Color.Aqua),
-        StatusSuccess = new(Color.Lime),
+        TextSecondary = new(Color.Grey85),
+        TextTertiary = new(Color.Grey42),
+        StatusInfo = new(Color.Cyan1),
+        StatusSuccess = new(Color.Green),
         StatusWarning = new(Color.Yellow),
         StatusError = new(Color.Red),
-        Brand = new(Color.Aqua),
-        Selected = new(Color.Yellow),
-        BorderNeutral = new(Color.White),
-        Keyword = new(Color.Aqua),
-        Number = new(Color.Lime),
-        StringLit = new(Color.Yellow),
-        Comment = new(Color.Silver),
-        Identifier = new(Color.White),
+        Brand = new(Color.DeepSkyBlue1),
+        Selected = new(Color.DeepSkyBlue1),
+        BorderNeutral = new(Color.Grey42),
+        Keyword = new(Color.DeepSkyBlue1),
+        Number = new(Color.Cyan1),
+        StringLit = new(Color.Orange1),
+        Comment = new(Color.Green),
+        Identifier = new(Color.Grey85),
+    };
+
+    public static Theme Light { get; } = new()
+    {
+        Name = "light",
+        TextPrimary = new(Color.White),
+        TextSecondary = new(Color.Grey85),
+        TextTertiary = new(Color.Grey35),
+        StatusInfo = new(Color.DarkGreen),
+        StatusSuccess = new(Color.DarkGreen),
+        StatusWarning = new(Color.Gold1),
+        StatusError = new(Color.Red),
+        Brand = new(Color.Blue),
+        Selected = new(Color.Blue),
+        BorderNeutral = new(Color.Grey35),
+        Keyword = new(Color.Blue),
+        Number = new(Color.DarkGreen),
+        StringLit = new(Color.Orange1),
+        Comment = new(Color.DarkGreen),
+        Identifier = new(Color.Grey85),
+    };
+
+    public static Theme Amber { get; } = new()
+    {
+        Name = "amber",
+        TextPrimary = new(Color.White),
+        TextSecondary = new(Color.Grey85),
+        TextTertiary = new(Color.Grey50),
+        StatusInfo = new(Color.Gold1),
+        StatusSuccess = new(Color.Green),
+        StatusWarning = new(Color.Gold1),
+        StatusError = new(Color.Red),
+        Brand = new(Color.Orange1),
+        Selected = new(Color.Orange1),
+        BorderNeutral = new(Color.Grey50),
+        Keyword = new(Color.Orange1),
+        Number = new(Color.Gold1),
+        StringLit = new(Color.Gold1),
+        Comment = new(Color.Green),
+        Identifier = new(Color.Grey85),
     };
 }

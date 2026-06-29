@@ -220,7 +220,8 @@ public sealed class ReplScreen : ITabScreen
 
     private void Move(int delta)
     {
-        completionIndex = Math.Clamp(completionIndex + delta, 0, completions.Count - 1);
+        var n = completions.Count;
+        completionIndex = (((completionIndex + delta) % n) + n) % n;
         if (completionIndex < completionTop)
         {
             completionTop = completionIndex;
@@ -271,7 +272,15 @@ public sealed class ReplScreen : ITabScreen
             case "theme":
                 try
                 {
-                    Theme.Use(string.IsNullOrEmpty(arg) ? "Default" : arg);
+                    if (string.IsNullOrEmpty(arg))
+                    {
+                        Theme.Cycle();
+                    }
+                    else
+                    {
+                        Theme.Use(arg);
+                    }
+
                     navigator?.ShowToast($"Theme: {Theme.Current.Name}");
                 }
                 catch (ArgumentException ex)
@@ -292,6 +301,10 @@ public sealed class ReplScreen : ITabScreen
                 }
 
                 break;
+            case "exit":
+            case "quit":
+                navigator?.RequestExit();
+                break;
             default:
                 navigator?.ShowToast($"Unknown command: {verb}");
                 break;
@@ -305,7 +318,8 @@ internal static class Palette
     {
         ("reset", "clear session state"),
         ("clear", "clear the editor"),
-        ("theme", "switch theme: Default|Mono|HighContrast"),
+        ("theme", "switch theme: gsharp|dark|light|amber"),
         ("load", "run a .gs file into session"),
+        ("exit", "quit the REPL"),
     };
 }

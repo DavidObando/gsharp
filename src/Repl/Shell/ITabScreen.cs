@@ -36,6 +36,8 @@ public interface IAppShellNavigator
     void DismissModal();
 
     void ShowToast(string message);
+
+    void RequestExit();
 }
 
 /// <summary>A modal overlay; receives keys until complete.</summary>

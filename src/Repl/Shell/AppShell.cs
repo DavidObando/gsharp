@@ -31,6 +31,7 @@ public sealed class AppShell : IAppShellNavigator
     private int activeTab;
     private IModal? activeModal;
     private string? toast;
+    private bool exitRequested;
 
     public AppShell(IAnsiConsole console, IReadOnlyList<ITabScreen> tabs, string version)
     {
@@ -60,6 +61,8 @@ public sealed class AppShell : IAppShellNavigator
 
     public void ShowToast(string message) => toast = message ?? string.Empty;
 
+    public void RequestExit() => exitRequested = true;
+
     public int Run(IKeyReader keyReader)
     {
         ArgumentNullException.ThrowIfNull(keyReader);
@@ -83,7 +86,7 @@ public sealed class AppShell : IAppShellNavigator
                 toast = $"Internal error: {ex.Message}";
             }
 
-            if (action == ShellAction.Exit)
+            if (action == ShellAction.Exit || exitRequested)
             {
                 return 0;
             }
