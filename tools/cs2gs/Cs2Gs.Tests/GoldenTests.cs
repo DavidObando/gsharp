@@ -525,8 +525,34 @@ public class GoldenTests
         AssertGolden(expected, unit);
     }
 
-    /// <summary>§For loops: the C-style three-clause <c>for init; cond; incr { }</c>
-    /// loop with a <c>var</c> init and an increment incrementor.</summary>
+    /// <summary>ADR-0137 / #1399: a nullable function type renders parenthesized
+    /// as <c>((T) -> R)?</c>, not <c>(T) -> R?</c> (which would bind the <c>?</c>
+    /// to the return type). A nullable return still renders <c>(T) -> R?</c>.</summary>
+    [Fact]
+    public void BNullable_FunctionTypeParenthesized()
+    {
+        var unit = new CompilationUnit("Demo", members: Nodes(
+            new FieldDeclaration(
+                BindingKind.Var,
+                "onClick",
+                new ArrowTypeReference(
+                    List<GTypeReference>(Type("int32")),
+                    List<GTypeReference>()) { IsNullable = true }),
+            new FieldDeclaration(
+                BindingKind.Var,
+                "nullableReturn",
+                new ArrowTypeReference(
+                    List<GTypeReference>(Type("int32")),
+                    List<GTypeReference>(new NamedTypeReference("int32") { IsNullable = true })))));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "var onClick ((int32) -> void)?",
+            "var nullableReturn (int32) -> int32?");
+
+        AssertGolden(expected, unit);
+    }
     [Fact]
     public void BFor_CStyleThreeClause()
     {
