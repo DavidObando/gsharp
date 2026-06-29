@@ -4306,13 +4306,14 @@ public sealed class CSharpToGSharpTranslator
                 this.IsSymbolReferencedOutside(patternSymbol, ifStatement.Statement);
 
             // The broadened "non-smart-castable scrutinee" hoist requires a
-            // well-formed nullable local annotation. Only a NamedTypeReference target
-            // nullable-annotates cleanly (`T?`); a nullable jagged/array target
-            // (`[]?[]T`) does not yet round-trip-parse in gsc, so for array/pointer/
-            // tuple targets that do not escape, keep the existing smart cast.
+            // well-formed nullable local annotation. NamedTypeReference (`T?`) and
+            // ArrayTypeReference (`[]?T`, incl. nullable jagged arrays `[]?[]T`,
+            // issue #1351) both nullable-annotate and round-trip-parse in gsc; a
+            // pointer/tuple target's nullable form does not yet, so for those keep
+            // the existing smart cast when the binder does not escape.
             if (!escapesThenBlock &&
                 (this.IsSmartCastableScrutinee(isPattern.Expression) ||
-                 targetType is not NamedTypeReference))
+                 targetType is not (NamedTypeReference or ArrayTypeReference)))
             {
                 return false;
             }

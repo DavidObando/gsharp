@@ -16,7 +16,6 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 public class Parser
 {
     private readonly SyntaxTree syntaxTree;
-    private readonly ImmutableArray<SyntaxToken> tokens;
 
     // ADR-0078 / issue #725: when a single source-level declaration desugars
     // into multiple synthesized top-level members (notably discriminated-union
@@ -24,6 +23,8 @@ public class Parser
     // expander stages the additional siblings here. `ParseMembers` drains the
     // queue after each `ParseMember` call so they appear in declaration order.
     private readonly Queue<MemberSyntax> pendingSyntheticMembers = new Queue<MemberSyntax>();
+
+    private ImmutableArray<SyntaxToken> tokens;
 
     private int position;
 
@@ -3825,6 +3826,17 @@ public class Parser
             }
 
             var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+
+            // Issue #1351: a nullable array whose element type is itself an
+            // array spells the element with a leading `[`. The lexer greedily
+            // fuses the nullability `?` and that `[` into a single
+            // `?[` (`QuestionOpenBracketToken`). Split it back into `?` + `[`
+            // so the nullable marker is consumed below and the recursive
+            // element parse sees the nested array's open bracket.
+            if (Current.Kind == SyntaxKind.QuestionOpenBracketToken)
+            {
+                SplitQuestionOpenBracketToken();
+            }
 
             // Issue #1212: a `?` placed immediately after the `]` (before the
             // element type) marks the *whole array reference* nullable —
@@ -9890,6 +9902,23 @@ public class Parser
         var current = Current;
         position++;
         return current;
+    }
+
+    /// <summary>
+    /// Issue #1351: replaces the current fused <c>?[</c>
+    /// (<see cref="SyntaxKind.QuestionOpenBracketToken"/>) with two distinct
+    /// tokens — a <c>?</c> (<see cref="SyntaxKind.QuestionToken"/>) followed by
+    /// a <c>[</c> (<see cref="SyntaxKind.OpenSquareBracketToken"/>) — at the
+    /// current parse position. The lexer fuses these for null-conditional
+    /// indexing (<c>a?[i]</c>); in a nullable-array type clause whose element is
+    /// itself an array (<c>[]?[]T</c>) they must be parsed separately.
+    /// </summary>
+    private void SplitQuestionOpenBracketToken()
+    {
+        var fused = tokens[position];
+        var question = new SyntaxToken(syntaxTree, SyntaxKind.QuestionToken, fused.Position, "?", null);
+        var open = new SyntaxToken(syntaxTree, SyntaxKind.OpenSquareBracketToken, fused.Position + 1, "[", null);
+        tokens = tokens.SetItem(position, question).Insert(position + 1, open);
     }
 
     /// <summary>

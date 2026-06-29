@@ -125,7 +125,7 @@ namespace Demo
     }
 
     [Fact]
-    public void PositivePattern_JaggedArrayTarget_PropertyScrutinee_FallsBackToSmartCast()
+    public void PositivePattern_JaggedArrayTarget_PropertyScrutinee_HoistsNullableJaggedArray()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -141,11 +141,12 @@ namespace Demo
     }
 }");
 
-        // A nullable jagged-array local annotation (`[]?[]uint8`) does not yet
-        // round-trip-parse in gsc, so an array target that does not escape keeps the
-        // smart-cast `is` test instead of hoisting a malformed nullable local.
-        Assert.Contains("chunk.ExtraData is [][]uint8", printed);
-        Assert.DoesNotContain("[]?[]", printed);
+        // Issue #1351: a nullable jagged-array local annotation (`[]?[]uint8`) now
+        // round-trip-parses in gsc, so an array target with a non-smart-castable
+        // (property-chain) scrutinee hoists the faithful nullable local + `!= nil`
+        // guard instead of falling back to the smart-cast `is` test.
+        Assert.Contains("let ivs []?[]uint8 = chunk.ExtraData as [][]uint8", printed);
+        Assert.Contains("if ivs != nil", printed);
     }
 
     [Fact]
