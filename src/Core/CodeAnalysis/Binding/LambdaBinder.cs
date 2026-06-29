@@ -1353,6 +1353,128 @@ internal sealed class LambdaBinder
             return base.RewriteVariableDeclaration(node);
         }
 
+        // Issue #1437: a `let`/`var` is not the only construct that introduces a
+        // local inside a lambda body. Catch clauses, `select` arms, range/ellipsis
+        // loop variables, `fixed` pin/pointer locals and type-pattern bindings all
+        // declare variables that are *local* to the body being walked. They must be
+        // recorded in `declared` exactly like a BoundVariableDeclaration; otherwise
+        // RecordReference misclassifies a later read of one of them as a capture of
+        // an enclosing-scope variable. That false capture then flows into
+        // BoundFunctionLiteralExpression.CapturedVariables and the CaptureBoxingRewriter
+        // hoists the *catch/arm/loop* variable into a heap box — desynchronizing the
+        // variable's declaration site (still the original symbol, which the emit
+        // local-slot planner allocates a slot for) from its in-body reads (rewritten
+        // to `box.Value` against a fresh, slot-less box local), crashing emit with
+        // GS9998 "has no local slot or parameter index in the current method."
+        // Recording these declarations keeps any genuine capture by a *nested* lambda
+        // correct: there the variable is declared in this body's scope, so the nested
+        // literal's capture is satisfied here and is not propagated outward.
+        protected override BoundStatement RewriteTryStatement(BoundTryStatement node)
+        {
+            foreach (var clause in node.CatchClauses)
+            {
+                if (clause.Variable != null)
+                {
+                    this.declared.Add(clause.Variable);
+                }
+            }
+
+            return base.RewriteTryStatement(node);
+        }
+
+        protected override BoundStatement RewriteSelectStatement(BoundSelectStatement node)
+        {
+            foreach (var arm in node.Cases)
+            {
+                if (arm.Variable != null)
+                {
+                    this.declared.Add(arm.Variable);
+                }
+            }
+
+            return base.RewriteSelectStatement(node);
+        }
+
+        protected override BoundStatement RewriteForRangeStatement(BoundForRangeStatement node)
+        {
+            if (node.KeyVariable != null)
+            {
+                this.declared.Add(node.KeyVariable);
+            }
+
+            if (node.ValueVariable != null)
+            {
+                this.declared.Add(node.ValueVariable);
+            }
+
+            return base.RewriteForRangeStatement(node);
+        }
+
+        protected override BoundStatement RewriteForEllipsisStatement(BoundForEllipsisStatement node)
+        {
+            if (node.Variable != null)
+            {
+                this.declared.Add(node.Variable);
+            }
+
+            return base.RewriteForEllipsisStatement(node);
+        }
+
+        protected override BoundStatement RewriteFixedStatement(BoundFixedStatement node)
+        {
+            if (node.PinnedVariable != null)
+            {
+                this.declared.Add(node.PinnedVariable);
+            }
+
+            if (node.PointerVariable != null)
+            {
+                this.declared.Add(node.PointerVariable);
+            }
+
+            if (node.SourceVariable != null)
+            {
+                this.declared.Add(node.SourceVariable);
+            }
+
+            return base.RewriteFixedStatement(node);
+        }
+
+        protected override BoundPattern RewritePattern(BoundPattern node)
+        {
+            if (node is BoundTypePattern typePattern && typePattern.Variable != null)
+            {
+                this.declared.Add(typePattern.Variable);
+            }
+
+            return base.RewritePattern(node);
+        }
+
+        protected override BoundExpression RewriteNullConditionalAccessExpression(BoundNullConditionalAccessExpression node)
+        {
+            // Issue #1437 (generalization): the `?.` / `?(…)` operators introduce a
+            // synthetic `Capture` local (`$ncap_N`) that the receiver value is
+            // spilled into, and `WhenNotNull` references that `Capture` as its
+            // receiver. Value-typed results also introduce a `$nres_N` ResultSlot.
+            // Both are body-local declarations — not BoundVariableDeclarations — so,
+            // exactly like a catch/arm/loop variable, without recording them here
+            // RecordReference would see the `Capture` read inside `WhenNotNull` as a
+            // capture of an enclosing-scope variable, box it, and desynchronize it
+            // from the slot the emit planner allocates (crashing with GS9998
+            // "Variable '$ncap_N' has no local slot").
+            if (node.Capture != null)
+            {
+                this.declared.Add(node.Capture);
+            }
+
+            if (node.ResultSlot != null)
+            {
+                this.declared.Add(node.ResultSlot);
+            }
+
+            return base.RewriteNullConditionalAccessExpression(node);
+        }
+
         protected override BoundExpression RewriteAssignmentExpression(BoundAssignmentExpression node)
         {
             // Issue #523: an assignment LHS is a USE of the variable that
