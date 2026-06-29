@@ -721,14 +721,18 @@ internal sealed partial class MethodBodyEmitter
         // From decimal: every numeric target has an `op_Explicit`.
         if (from.IsSameAs(typeof(decimal)))
         {
-            var op = typeof(decimal).GetMethod("op_Explicit", new[] { typeof(decimal) });
-            // GetMethod by name+params resolves the conversion that
-            // returns the requested type when overloads disambiguate by
-            // return type; iterate to find the right one.
+            // `System.Decimal` declares many `op_Explicit(decimal)`
+            // overloads that differ ONLY by return type (decimal -> byte,
+            // sbyte, short, ushort, int, uint, long, ulong, float, double,
+            // char). `Type.GetMethod(name, Type[])` matches by parameter
+            // signature alone and would throw `AmbiguousMatchException`, so
+            // we must disambiguate by BOTH parameter and return type by
+            // iterating the operator overloads ourselves.
+            MethodInfo op = null;
             foreach (var m in typeof(decimal).GetMethods())
             {
                 if (m.Name == "op_Explicit"
-                    && m.ReturnType == to
+                    && m.ReturnType.IsSameAs(to)
                     && m.GetParameters().Length == 1
                     && m.GetParameters()[0].ParameterType.IsSameAs(typeof(decimal)))
                 {
@@ -737,7 +741,7 @@ internal sealed partial class MethodBodyEmitter
                 }
             }
 
-            if (op == null || op.ReturnType != to)
+            if (op == null)
             {
                 return false;
             }
