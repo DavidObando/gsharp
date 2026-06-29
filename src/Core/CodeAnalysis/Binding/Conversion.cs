@@ -718,6 +718,50 @@ public sealed class Conversion
             }
         }
 
+        // Issue #1421: a user-declared interface value is a CLR reference type
+        // whose implicit root base is System.Object, so it converts implicitly
+        // to `object`/`object?` as a plain reference upcast (no IL op, no box —
+        // an interface reference already IS an object reference). It also
+        // upcasts to any of its (transitive) base interfaces, whether
+        // user-declared (`BaseInterfaces`) or imported CLR (`BaseClrInterfaces`,
+        // including interfaces those transitively inherit). An InterfaceSymbol
+        // carries no ClrType during binding (its TypeDef only exists in the
+        // assembly being emitted), so the general object-widening rule and the
+        // #521 reference-upcast arm — both of which require `from.ClrType != null`
+        // — cannot fire. Without this, passing an interface-typed value to a
+        // `ThrowIfNull(object?, …)`-style overload failed to bind (GS0159). The
+        // `object?` target is routed here by the #1121 nullable-wrapping rule.
+        if (from is InterfaceSymbol fromInterface)
+        {
+            if (to == TypeSymbol.Object || to?.ClrType?.IsSameAs(typeof(object)) == true)
+            {
+                return Conversion.Implicit;
+            }
+
+            if (to is InterfaceSymbol toBaseInterface)
+            {
+                foreach (var baseInterface in fromInterface.SelfAndAllBaseInterfaces())
+                {
+                    if (baseInterface == toBaseInterface)
+                    {
+                        return Conversion.Implicit;
+                    }
+                }
+            }
+
+            if (to?.ClrType is { IsInterface: true } toClrInterface)
+            {
+                foreach (var baseClrInterface in fromInterface.BaseClrInterfaces)
+                {
+                    var clr = baseClrInterface?.ClrType;
+                    if (clr != null && (clr.IsSameAs(toClrInterface) || toClrInterface.IsAssignableFrom(clr)))
+                    {
+                        return Conversion.Implicit;
+                    }
+                }
+            }
+        }
+
         // Issue #528: a G# slice `[]T` is backed by a CLR `T[]` at runtime
         // (`SliceTypeSymbol.ClrType` is built via `MakeArrayType()` on the
         // element's `ClrType`). The reverse direction (`T[] → []T`) is
