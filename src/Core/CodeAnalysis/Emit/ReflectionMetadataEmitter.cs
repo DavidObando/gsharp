@@ -22,6 +22,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
@@ -7332,10 +7333,22 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var candidate in open.GetMethods(
             BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
         {
-            if (candidate.MetadataToken == method.MetadataToken && candidate.Module == method.Module)
+            if (SameMetadataDefinition(candidate, method))
             {
                 return candidate;
             }
+        }
+
+        var parameters = method.GetParameters();
+        var fallback = open.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            .FirstOrDefault(candidate =>
+                candidate.Name == method.Name
+                && candidate.IsStatic == method.IsStatic
+                && candidate.IsGenericMethod == method.IsGenericMethod
+                && candidate.GetParameters().Length == parameters.Length);
+        if (fallback != null)
+        {
+            return fallback;
         }
 
         return method;
@@ -7353,17 +7366,117 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var candidate in open.GetConstructors(
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
         {
-            if (candidate.MetadataToken == ctor.MetadataToken && candidate.Module == ctor.Module)
+            if (SameMetadataDefinition(candidate, ctor))
             {
                 return candidate;
             }
         }
 
+        var parameters = ctor.GetParameters();
+        var fallback = open.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            .FirstOrDefault(candidate => candidate.GetParameters().Length == parameters.Length);
+        if (fallback != null)
+        {
+            return fallback;
+        }
+
         return ctor;
+    }
+
+    private static bool SameMetadataDefinition(MemberInfo candidate, MemberInfo member)
+    {
+        try
+        {
+            return candidate.MetadataToken == member.MetadataToken && candidate.Module == member.Module;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool ContainsTypeBuilderGenericArgument(Type type)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+
+        if (type is TypeBuilder)
+        {
+            return true;
+        }
+
+        if (type.HasElementType)
+        {
+            return ContainsTypeBuilderGenericArgument(type.GetElementType());
+        }
+
+        if (!type.IsGenericType)
+        {
+            return false;
+        }
+
+        try
+        {
+            return type.GetGenericArguments().Any(ContainsTypeBuilderGenericArgument);
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static MethodInfo ResolveTypeBuilderConstructedGenericMethod(MethodInfo method)
+    {
+        var declaring = method?.DeclaringType;
+        if (!ContainsTypeBuilderGenericArgument(declaring))
+        {
+            return method;
+        }
+
+        var openMethod = GetOpenMethod(method);
+        return openMethod != null && openMethod.DeclaringType?.IsGenericTypeDefinition == true
+            ? TypeBuilder.GetMethod(declaring, openMethod)
+            : method;
+    }
+
+    private static ConstructorInfo ResolveTypeBuilderConstructedGenericCtor(ConstructorInfo ctor)
+    {
+        var declaring = ctor?.DeclaringType;
+        if (!ContainsTypeBuilderGenericArgument(declaring))
+        {
+            return ctor;
+        }
+
+        var openCtor = GetOpenCtor(ctor);
+        return openCtor != null && openCtor.DeclaringType?.IsGenericTypeDefinition == true
+            ? TypeBuilder.GetConstructor(declaring, openCtor)
+            : ctor;
+    }
+
+    private static FieldInfo ResolveTypeBuilderConstructedGenericField(FieldInfo field)
+    {
+        var declaring = field?.DeclaringType;
+        if (!ContainsTypeBuilderGenericArgument(declaring) || declaring == null || !declaring.IsConstructedGenericType)
+        {
+            return field;
+        }
+
+        var openType = declaring.GetGenericTypeDefinition();
+        var openField = openType.GetField(
+            field.Name,
+            BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        return openField != null ? TypeBuilder.GetField(declaring, openField) : field;
     }
 
     internal MemberReferenceHandle GetMethodReference(MethodInfo method)
     {
+        method = ResolveTypeBuilderConstructedGenericMethod(method);
         if (this.cache.MethodRefs.TryGetValue(method, out var existing))
         {
             return existing;
@@ -7794,7 +7907,7 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var candidate in openDefinition.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
         {
-            if (candidate.MetadataToken == method.MetadataToken && candidate.Module == method.Module)
+            if (SameMetadataDefinition(candidate, method))
             {
                 return candidate;
             }
@@ -7823,7 +7936,7 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var candidate in openDefinition.GetProperties(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
         {
-            if (candidate.MetadataToken == property.MetadataToken && candidate.Module == property.Module)
+            if (SameMetadataDefinition(candidate, property))
             {
                 return candidate;
             }
@@ -8020,6 +8133,7 @@ internal sealed class ReflectionMetadataEmitter
     /// <returns>A MemberRef handle for the constructor on the correctly-typed parent.</returns>
     internal MemberReferenceHandle GetCtorReference(ConstructorInfo ctor, TypeSymbol containingTypeSymbol)
     {
+        ctor = ResolveTypeBuilderConstructedGenericCtor(ctor);
         // Issue #671: when the containing type carries symbolic user-type
         // arguments, the cache key needs to discriminate per symbol set
         // (multiple distinct user-type closures share a single type-erased
@@ -8153,7 +8267,7 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var candidate in openDefinition.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
         {
-            if (candidate.MetadataToken == ctor.MetadataToken && candidate.Module == ctor.Module)
+            if (SameMetadataDefinition(candidate, ctor))
             {
                 return candidate;
             }
@@ -8267,6 +8381,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     internal MemberReferenceHandle GetFieldReference(FieldInfo field)
     {
+        field = ResolveTypeBuilderConstructedGenericField(field);
         if (this.cache.FieldRefs.TryGetValue(field, out var existing))
         {
             return existing;
