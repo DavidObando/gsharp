@@ -3832,6 +3832,22 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // Issue #1423: a user class that implements a generic collection
+        // interface (e.g. `class EntryList : IReadOnlyCollection[Entry]`, which
+        // extends `IEnumerable[Entry]`) erases to `System.Object` via
+        // TryProjectErasedClrType (it has no imported base class), so an
+        // extension method whose `this` self-parameter is `IEnumerable<TSource>`
+        // (LINQ Where/Select/OrderBy/…) cannot match the receiver and TSource
+        // cannot be inferred. Project the receiver to the most-derived
+        // implemented CLR interface instead so overload resolution sees the
+        // collection element type; the bound receiver expression is unchanged.
+        if (receiver.Type is StructSymbol { IsClass: true } userReceiverClass
+            && (receiverClrType == null || receiverClrType.IsSameAs(typeof(object)))
+            && TryProjectUserClassReceiverInterface(userReceiverClass, out var receiverIface))
+        {
+            receiverClrType = receiverIface;
+        }
+
         // Build the argument-type vector as the extension method sees it: the
         // receiver becomes the first ("this") parameter, followed by the user
         // arguments. Every argument must carry a concrete CLR type so overload
@@ -4012,6 +4028,94 @@ internal sealed partial class ExpressionBinder
         overloads.ValidateRefArguments(bound, refKinds, methodName, ce.Location);
         result = new BoundImportedCallExpression(null, function, bound, refKinds, extensionTypeArgSymbolsForCall);
         return true;
+    }
+
+    /// <summary>
+    /// Issue #1423: projects a user-declared class to the implemented CLR
+    /// interface best suited to drive extension-method receiver matching and
+    /// generic inference. Prefers an implemented interface that is, or extends,
+    /// <c>IEnumerable&lt;T&gt;</c> (so LINQ-style extensions whose <c>this</c>
+    /// self-parameter is <c>IEnumerable&lt;TSource&gt;</c> bind and infer
+    /// <c>TSource</c>), choosing the most-derived such interface so any
+    /// methods declared on the richer interface remain reachable. Falls back to
+    /// the first implemented CLR interface so non-collection extensions can
+    /// still match an interface receiver.
+    /// </summary>
+    /// <param name="userClass">The user-declared class receiver.</param>
+    /// <param name="clrInterface">The projected CLR interface type, on success.</param>
+    /// <returns><see langword="true"/> when an implemented CLR interface was found.</returns>
+    private static bool TryProjectUserClassReceiverInterface(StructSymbol userClass, out Type clrInterface)
+    {
+        clrInterface = null;
+        if (userClass.ImplementedClrInterfaces.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        Type firstInterface = null;
+        Type bestEnumerable = null;
+        foreach (var implemented in userClass.ImplementedClrInterfaces)
+        {
+            var clr = implemented?.ClrType;
+            if (clr == null || !clr.IsInterface)
+            {
+                continue;
+            }
+
+            firstInterface ??= clr;
+
+            // A generic collection interface (IReadOnlyCollection<T>,
+            // ICollection<T>, IList<T>, IEnumerable<T>, …) exposes
+            // IEnumerable<T> through its base interfaces, letting overload
+            // resolution recover the element type. Prefer the most-derived
+            // such interface (the one whose interface set is largest).
+            if (ImplementsGenericEnumerable(clr)
+                && (bestEnumerable == null
+                    || SafeInterfaceCount(clr) > SafeInterfaceCount(bestEnumerable)))
+            {
+                bestEnumerable = clr;
+            }
+        }
+
+        clrInterface = bestEnumerable ?? firstInterface;
+        return clrInterface != null;
+    }
+
+    private static bool ImplementsGenericEnumerable(Type clr)
+    {
+        if (clr.IsGenericType && clr.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IEnumerable`1")
+        {
+            return true;
+        }
+
+        try
+        {
+            foreach (var iface in clr.GetInterfaces())
+            {
+                if (iface.IsGenericType && iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IEnumerable`1")
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Cross-context (MLC) types may throw on GetInterfaces(); ignore.
+        }
+
+        return false;
+    }
+
+    private static int SafeInterfaceCount(Type clr)
+    {
+        try
+        {
+            return clr.GetInterfaces().Length;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
     }
 
     private ImmutableArray<BoundExpression> RebindFunctionLiteralDelegateArguments(
