@@ -2298,7 +2298,7 @@ internal sealed class MemberLookup
                 var pos = openClr.GenericParameterPosition;
                 if ((uint)pos < (uint)result.Length && result[pos] == null)
                 {
-                    result[pos] = StripNullability(actual);
+                    result[pos] = NormalizeRecoveredNullability(actual);
                 }
             }
 
@@ -2415,9 +2415,21 @@ internal sealed class MemberLookup
         }
     }
 
-    private static TypeSymbol StripNullability(TypeSymbol t)
+    /// <summary>
+    /// Issue #1428: normalizes a symbolic type argument recovered while unifying
+    /// a method type parameter (e.g. the <c>TResult</c> of <c>Select</c>) against
+    /// the actual argument shape. A <em>reference</em>-typed nullable (e.g.
+    /// <c>IEnumerator[T]?</c>) keeps its nullable annotation so the projected
+    /// result element (<c>IEnumerable[IEnumerator[T]?]</c> → <c>IEnumerator[T]?[]</c>)
+    /// remains nullable — its CLR backing is identical to the underlying type, so
+    /// emit and overload resolution are unaffected by carrying the annotation.
+    /// A <em>value</em>-typed nullable (<c>int?</c> = <c>Nullable&lt;int&gt;</c>) is
+    /// still stripped to its underlying type, preserving the pre-existing CLR
+    /// encoding expectations for value-type projections.
+    /// </summary>
+    private static TypeSymbol NormalizeRecoveredNullability(TypeSymbol t)
     {
-        if (t is NullableTypeSymbol nn && nn.UnderlyingType != null)
+        if (t is NullableTypeSymbol nn && nn.UnderlyingType?.ClrType is { IsValueType: true })
         {
             return nn.UnderlyingType;
         }
