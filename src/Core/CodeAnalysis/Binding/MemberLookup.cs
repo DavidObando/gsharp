@@ -700,29 +700,29 @@ internal sealed class MemberLookup
             // parameter and reported GS0159. Erase using an `object` resolved
             // in the same context as `openDef`.
             var openParams = openDef.GetGenericArguments();
-            var erasedArgs = new Type[openParams.Length];
             var contextObject = ResolveErasedObjectInContext(openDef);
-            for (int i = 0; i < openParams.Length; i++)
-            {
-                erasedArgs[i] = contextObject;
-            }
 
-            Type erasedClosed;
-            try
-            {
-                erasedClosed = openDef.MakeGenericType(erasedArgs);
-            }
-            catch
-            {
-                // Fallback: if the type-erased construction violates a
-                // declared constraint (e.g. a `where T : struct` parameter
-                // that rejects `object`), fall back to the original open
-                // shape — downstream emit still encodes correctly via the
-                // OpenDefinition + TypeArguments.
-                erasedClosed = openClr;
-            }
+            // Issue #1422: preserve the *nested* generic structure of each
+            // symbolic argument when erasing. A chained projection such as
+            // `xs.Select(e -> e.GetEnumerator())` yields an element type that is
+            // itself a constructed generic interface (`IEnumerator[T]`). Flatly
+            // erasing every top-level argument to `object` would collapse the
+            // result's ClrType to `IEnumerable<object>`, so the next chained
+            // extension (`.Select((e IEnumerator[T]) -> …)`) would infer
+            // `TSource = object` and reject the typed selector with GS0159.
+            // Recurse through each symbolic argument's own open definition so
+            // the erased closed shape becomes `IEnumerable<IEnumerator<object>>`
+            // — matching the (identically erased) selector parameter type — and
+            // generic inference recovers the right `TSource`. Leaf type
+            // parameters and concrete arguments still erase to `object`, which
+            // mirrors how the selector's parameter type is erased, keeping the
+            // two shapes structurally aligned.
+            var symbolicArgs = symbolic.ToImmutable();
+            Type erasedClosed =
+                TryBuildErasedClosedGeneric(openDef, openParams, symbolicArgs, contextObject)
+                ?? openClr;
 
-            return ImportedTypeSymbol.GetConstructed(erasedClosed, openDef, symbolic.MoveToImmutable());
+            return ImportedTypeSymbol.GetConstructed(erasedClosed, openDef, symbolicArgs);
         }
 
         return TypeSymbol.FromClrType(openClr);
@@ -2012,6 +2012,104 @@ internal sealed class MemberLookup
         }
 
         return hostObject;
+    }
+
+    /// <summary>
+    /// Issue #1422: builds the type-erased closed shape for a constructed
+    /// generic whose symbolic arguments may themselves be constructed generics
+    /// (e.g. <c>IEnumerable&lt;IEnumerator&lt;T&gt;&gt;</c>). Each top-level
+    /// argument's <em>nested</em> generic structure is preserved by recursing
+    /// through its open definition, while leaf type parameters and concrete
+    /// leaves collapse to the context's <c>object</c> placeholder — matching the
+    /// erasure applied to selector/lambda parameter types, so generic inference
+    /// recovers the right element type for a chained extension call. Falls back
+    /// to a flat all-<c>object</c> erasure, then to <see langword="null"/>, when
+    /// the richer construction is rejected (e.g. cross-context or constraint
+    /// violations).
+    /// </summary>
+    /// <param name="openDef">The open generic type definition being closed.</param>
+    /// <param name="openParams">The open definition's generic parameters.</param>
+    /// <param name="symbolicArgs">The symbolic type arguments, aligned with <paramref name="openParams"/>.</param>
+    /// <param name="contextObject">The <c>object</c> placeholder resolved in <paramref name="openDef"/>'s context.</param>
+    /// <returns>The erased closed CLR type, or <see langword="null"/> when no valid closure could be formed.</returns>
+    private static Type TryBuildErasedClosedGeneric(Type openDef, Type[] openParams, ImmutableArray<TypeSymbol> symbolicArgs, Type contextObject)
+    {
+        var richArgs = new Type[openParams.Length];
+        var anyRich = false;
+        for (var i = 0; i < openParams.Length; i++)
+        {
+            var projected = i < symbolicArgs.Length
+                ? ProjectSymbolicArgToErasedClr(symbolicArgs[i], contextObject)
+                : null;
+            if (projected != null && !projected.IsSameAs(contextObject))
+            {
+                anyRich = true;
+            }
+
+            richArgs[i] = projected ?? contextObject;
+        }
+
+        if (anyRich)
+        {
+            try
+            {
+                return openDef.MakeGenericType(richArgs);
+            }
+            catch
+            {
+                // Fall through to the flat erasure below.
+            }
+        }
+
+        var flatArgs = new Type[openParams.Length];
+        for (var i = 0; i < openParams.Length; i++)
+        {
+            flatArgs[i] = contextObject;
+        }
+
+        try
+        {
+            return openDef.MakeGenericType(flatArgs);
+        }
+        catch
+        {
+            // Constraint or cross-context failure — caller falls back to the
+            // open shape; downstream emit still encodes correctly via the
+            // OpenDefinition + TypeArguments.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1422: projects a single symbolic type argument onto an erased CLR
+    /// type in <paramref name="contextObject"/>'s load context. Nested
+    /// constructed generics (carrying an <see cref="ImportedTypeSymbol.OpenDefinition"/>)
+    /// are rebuilt recursively so their generic shape survives; leaf type
+    /// parameters and other leaves collapse to <paramref name="contextObject"/>.
+    /// Returns <see langword="null"/> when no useful erasure could be formed.
+    /// </summary>
+    /// <param name="symbolicArg">The symbolic type argument.</param>
+    /// <param name="contextObject">The <c>object</c> placeholder for the target context.</param>
+    /// <returns>The erased CLR type, or <see langword="null"/>.</returns>
+    private static Type ProjectSymbolicArgToErasedClr(TypeSymbol symbolicArg, Type contextObject)
+    {
+        switch (symbolicArg)
+        {
+            case null:
+            case TypeParameterSymbol:
+                return contextObject;
+            case ImportedTypeSymbol imp when imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty:
+                return TryBuildErasedClosedGeneric(
+                    imp.OpenDefinition,
+                    imp.OpenDefinition.GetGenericArguments(),
+                    imp.TypeArguments,
+                    contextObject);
+            default:
+                // Concrete leaf (e.g. a fully-closed imported type): erase to the
+                // context placeholder so the shape stays in a single load context
+                // and mirrors how the same leaf is erased on the selector side.
+                return contextObject;
+        }
     }
 
     private static bool ReturnTypeMatchesSubstituted(TypeSymbol candidateReturn, Type openReturn, ImmutableArray<TypeSymbol> symbolicArgs)
