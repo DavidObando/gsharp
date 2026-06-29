@@ -440,6 +440,27 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
+        // Issue #1431: two reference types that resolve to the SAME closed CLR
+        // type token are identical at the IL level even when their symbols use
+        // different representations of the same type argument (e.g. a lambda
+        // body bound against a native `(T) -> IEnumerable[R]` parameter yields
+        // `IEnumerable<System.Int64>` projected through the
+        // MetadataLoadContext, while the substituted target return is the
+        // GS-side `IEnumerable[int64]` whose `ClrType` still carries the erased
+        // `IEnumerable<object>` shape but whose `TypeArguments` correctly hold
+        // `int64`). Both denote the identical metadata instantiation, so
+        // assigning one into the other is a no-op reference conversion. Without
+        // this, native-function-type lambda returns that mention a closed
+        // generic threw NotSupportedException from EmitConversion (the
+        // CLR-delegate `Func[...]` form already matched via reference
+        // equality). The comparison reconstructs each side's effective closed
+        // shape from its symbol `TypeArguments` (preferred) or `ClrType`
+        // generic arguments so an erased `ClrType` does not defeat the match.
+        if (SameClosedReferenceShape(a, b))
+        {
+            return true;
+        }
+
         // ADR-0045: any reference type widens to `object` at the IL
         // level as a no-op; the slot already holds the reference.
         if (b?.ClrType.IsSameAs(typeof(object)) == true && a?.ClrType != null && !a.ClrType.IsValueType)
@@ -671,6 +692,82 @@ internal sealed partial class MethodBodyEmitter
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issue #1431: returns <see langword="true"/> when <paramref name="a"/>
+    /// and <paramref name="b"/> denote the same closed constructed generic
+    /// reference type, comparing by the open definition's full name and each
+    /// effective type argument (taken from the symbol's <c>TypeArguments</c>
+    /// when present, otherwise from the <c>ClrType</c>'s generic arguments).
+    /// This recognises the no-op identity conversion between two symbols for
+    /// the same instantiation that differ only in representation — notably a
+    /// substituted target whose <c>ClrType</c> was left in the type-erased
+    /// open form while its <c>TypeArguments</c> carry the real arguments.
+    /// </summary>
+    private static bool SameClosedReferenceShape(TypeSymbol a, TypeSymbol b)
+    {
+        if (!TryGetClosedReferenceShape(a, out var aDef, out var aArgs)
+            || !TryGetClosedReferenceShape(b, out var bDef, out var bArgs))
+        {
+            return false;
+        }
+
+        if (!aDef.IsSameAs(bDef) || aArgs.Length != bArgs.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < aArgs.Length; i++)
+        {
+            if (aArgs[i] == null || bArgs[i] == null || !aArgs[i].IsSameAs(bArgs[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryGetClosedReferenceShape(TypeSymbol type, out Type definition, out Type[] args)
+    {
+        definition = null;
+        args = null;
+
+        var clr = type?.ClrType;
+        if (clr == null || !clr.IsGenericType || clr.IsValueType)
+        {
+            return false;
+        }
+
+        definition = clr.GetGenericTypeDefinition();
+
+        // Prefer the symbol's own type arguments — they survive the type
+        // erasure that can leave `ClrType` in the open `IEnumerable<object>`
+        // shape — and fall back to the CLR generic arguments when the symbol
+        // elided them.
+        if (type is ImportedTypeSymbol imported
+            && !imported.TypeArguments.IsDefaultOrEmpty
+            && imported.TypeArguments.Length == clr.GetGenericArguments().Length)
+        {
+            var symbolicArgs = new Type[imported.TypeArguments.Length];
+            for (var i = 0; i < symbolicArgs.Length; i++)
+            {
+                var argClr = imported.TypeArguments[i]?.ClrType;
+                if (argClr == null)
+                {
+                    return false;
+                }
+
+                symbolicArgs[i] = argClr;
+            }
+
+            args = symbolicArgs;
+            return true;
+        }
+
+        args = clr.GetGenericArguments();
+        return true;
     }
 
     private static bool IsSystemDelegateHostType(Type type)

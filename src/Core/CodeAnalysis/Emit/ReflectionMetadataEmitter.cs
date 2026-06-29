@@ -6174,6 +6174,20 @@ internal sealed class ReflectionMetadataEmitter
             return fromReturn;
         }
 
+        // Issue #1431 (secondary): reaching here means no parameter, return,
+        // or function-type shape mentioned `tp` after the structural unifier
+        // (now including the `FunctionTypeSymbol` parameter/return branch) was
+        // exhausted. For a well-formed program the binder has already either
+        // inferred or rejected the call's type arguments during binding
+        // (GS0151 covers the user-facing "cannot infer … supply it explicitly"
+        // case), so any failure that propagates this far is a genuine internal
+        // invariant violation, not user error. This emit-phase code has no
+        // DiagnosticBag in scope and surfacing a clean diagnostic here would
+        // require threading binder diagnostics through the metadata emitter —
+        // a large architectural change for an otherwise unreachable path. The
+        // throw therefore remains a defensive ICE guard (surfaced as GS9998)
+        // rather than a regression risk; the primary fix above ensures it no
+        // longer fires for the inferable native-function-type cases.
         throw new InvalidOperationException(
             $"Cannot infer type argument for '{tp.Name}'; "
             + "the type parameter does not appear in any parameter or return shape.");
@@ -6425,6 +6439,34 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        // Issue #1431: unify native G# function types `(T1, ...) -> R` so a
+        // type parameter that appears ONLY in a function-type parameter or
+        // return slot can be recovered when building the MethodSpec. The CLR
+        // delegate form (`Func[...]` / `Action[...]`) already flows through
+        // the generic-arguments fallback below because it is an
+        // `ImportedTypeSymbol`; a `FunctionTypeSymbol` has no GS-side type
+        // arguments (its slots live only on `ParameterTypes`/`ReturnType`)
+        // so it must be unified structurally here. Both sides may arrive as a
+        // native `FunctionTypeSymbol` OR as a `Func`/`Action`-shaped CLR
+        // delegate after binder substitution, so the shape is normalised to a
+        // flat slot list (parameter types followed by the return type unless
+        // void) and unified slot-by-slot. This bridges the cross-shape case
+        // where a native formal faces a `Func[...]`-shaped actual (or vice
+        // versa).
+        if ((formal is FunctionTypeSymbol || actual is FunctionTypeSymbol)
+            && TryGetFunctionShapeSlots(formal, out var formalFnSlots)
+            && TryGetFunctionShapeSlots(actual, out var actualFnSlots)
+            && formalFnSlots.Length == actualFnSlots.Length)
+        {
+            for (int i = 0; i < formalFnSlots.Length; i++)
+            {
+                if (TryUnify(formalFnSlots[i], actualFnSlots[i], tp, out inferred))
+                {
+                    return true;
+                }
+            }
+        }
+
         var formalArgs = GetGenericTypeArguments(formal);
         var actualArgs = GetGenericTypeArguments(actual);
         if (!formalArgs.IsDefaultOrEmpty && !actualArgs.IsDefaultOrEmpty
@@ -6441,6 +6483,62 @@ internal sealed class ReflectionMetadataEmitter
 
         inferred = null;
         return false;
+    }
+
+    private static bool TryGetFunctionShapeSlots(TypeSymbol type, out ImmutableArray<TypeSymbol> slots)
+    {
+        // Issue #1431: normalise a function shape into a flat slot list of
+        // [parameter types..., return type?] so a native `FunctionTypeSymbol`
+        // and a `Func`/`Action`-shaped CLR delegate unify uniformly. A void
+        // return contributes no trailing slot, mirroring how
+        // `FunctionTypeSymbol.BuildClrType` selects `Action<...>` (no return
+        // slot) over `Func<..., R>` (return slot appended).
+        if (type is FunctionTypeSymbol fn)
+        {
+            var b = ImmutableArray.CreateBuilder<TypeSymbol>(fn.ParameterTypes.Length + 1);
+            b.AddRange(fn.ParameterTypes);
+            if (!FunctionTypeSymbol.IsVoidReturn(fn.ReturnType))
+            {
+                b.Add(fn.ReturnType);
+            }
+
+            slots = b.ToImmutable();
+            return true;
+        }
+
+        // A delegate that arrived in CLR form (`Func[...]` / `Action[...]`).
+        // Its CLR generic arguments are already laid out as
+        // [parameter types..., return type] for `Func` and
+        // [parameter types...] for `Action`, matching the native slot order.
+        var clr = type?.ClrType;
+        if (clr != null && clr.IsGenericType && IsFuncOrActionDefinition(clr.GetGenericTypeDefinition()))
+        {
+            slots = GetGenericTypeArguments(type);
+            return !slots.IsDefaultOrEmpty;
+        }
+
+        slots = default;
+        return false;
+    }
+
+    private static bool IsFuncOrActionDefinition(Type openDef)
+    {
+        if (openDef == null)
+        {
+            return false;
+        }
+
+        // Name-based check (rather than `typeof` identity) so it holds across
+        // a `MetadataLoadContext` projection of `System.Func`/`System.Action`.
+        var name = openDef.Name;
+        var ns = openDef.Namespace;
+        if (ns != "System")
+        {
+            return false;
+        }
+
+        return name.StartsWith("Func`", StringComparison.Ordinal)
+            || name.StartsWith("Action`", StringComparison.Ordinal);
     }
 
     private static ImmutableArray<TypeSymbol> GetGenericTypeArguments(TypeSymbol type)
