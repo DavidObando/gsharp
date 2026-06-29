@@ -3211,6 +3211,13 @@ internal sealed class OverloadResolver
                     ? new BoundFieldAccessExpression(null, staticField.Field, staticField.InterfaceType)
                     : new BoundFieldAccessExpression(null, receiver: null, staticField.StructType, staticField.Field);
                 return true;
+            case ImplicitFieldVariableSymbol instanceField:
+                load = new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, instanceField.Receiver),
+                    instanceField.StructType,
+                    instanceField.Field);
+                return true;
             case ImplicitPropertyVariableSymbol prop:
                 if (!prop.Property.HasGetter)
                 {
