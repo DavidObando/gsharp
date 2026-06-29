@@ -2,8 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System;
-using System.IO;
+using GSharp.Repl.Engine;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -11,41 +10,28 @@ namespace GSharp.Interpreter.Tests;
 public class GSharpReplTests
 {
     [Fact]
-    public void EvaluateSubmission_SimpleExpression_WritesValue()
+    public void Evaluate_SimpleExpression_ReturnsValue()
     {
-        var output = RunSubmission("1 + 2");
-        Assert.Contains("3", output);
+        var cell = new SessionEngine().Evaluate("1 + 2");
+        Assert.False(cell.HasError);
+        Assert.Equal("3", cell.Value?.ToString());
     }
 
     [Fact]
-    public void EvaluateSubmission_StringLiteral_WritesValue()
+    public void Evaluate_StringLiteral_ReturnsValue()
     {
-        var output = RunSubmission("\"hello\"");
-        Assert.Contains("hello", output);
+        var cell = new SessionEngine().Evaluate("\"hello\"");
+        Assert.Contains("hello", cell.Value?.ToString());
     }
 
     [Fact]
-    public void EvaluateSubmission_InvalidInput_WritesDiagnostics()
+    public void Evaluate_InvalidInput_ProducesDiagnostics()
     {
-        var output = RunSubmission("1 +");
-        Assert.False(string.IsNullOrWhiteSpace(output));
+        var cell = new SessionEngine().Evaluate("1 +");
+        Assert.True(cell.HasError);
+        Assert.NotEmpty(cell.Diagnostics);
     }
 
-    private static string RunSubmission(string text)
-    {
-        using var outWriter = new StringWriter();
-        var prevOut = Console.Out;
-        Console.SetOut(outWriter);
-        try
-        {
-            var repl = new GSharpRepl();
-            repl.EvaluateSubmission(text);
-        }
-        finally
-        {
-            Console.SetOut(prevOut);
-        }
-
-        return outWriter.ToString();
-    }
+    [Fact]
+    public void IsComplete_OpenExpression_False() => Assert.False(SessionEngine.IsComplete("func f() {"));
 }
