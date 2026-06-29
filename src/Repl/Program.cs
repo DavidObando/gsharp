@@ -1,4 +1,4 @@
-﻿// <copyright file="Program.cs" company="GSharp">
+// <copyright file="Program.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -6,16 +6,18 @@ using System;
 using System.Globalization;
 using System.IO;
 using GSharp.Core.CodeAnalysis.Diagnostics;
+using GSharp.Interpreter;
 
-namespace GSharp.Interpreter;
+namespace GSharp.Repl;
 
 /// <summary>
-/// Entry point to the GSharp interpreter.
+/// Entry point for the <c>gsi</c> GSharp interpreter REPL.
 /// </summary>
-public class Program
+public static class Program
 {
     /// <summary>
-    /// Entry point to the GSharp interpreter.
+    /// Entry point: launches the modern TUI when invoked bare, or evaluates a
+    /// <c>.gs</c> file when one is passed as the first argument.
     /// </summary>
     /// <param name="args">Command line arguments.</param>
     /// <returns>Exit code.</returns>
@@ -35,25 +37,16 @@ public class Program
                     File.Exists(arg0))
                 {
                     logger.LogInfo($"Evaluating file: {arg0}");
-                    var success = EvaluateFile(repl, arg0, logger);
-                    if (!success)
-                    {
-                        return 1;
-                    }
+                    return EvaluateFile(repl, arg0, logger) ? 0 : 1;
                 }
-                else
-                {
-                    logger.LogWarning($"Unable to find specified file {arg0}");
-                    Console.WriteLine($"Unable to find specified file {arg0}");
-                    return 1;
-                }
-            }
-            else
-            {
-                logger.LogInfo("Starting REPL session");
-                repl.Run();
+
+                logger.LogWarning($"Unable to find specified file {arg0}");
+                Console.WriteLine($"Unable to find specified file {arg0}");
+                return 1;
             }
 
+            logger.LogInfo("Starting REPL session");
+            new TuiApp(repl).Run();
             return 0;
         }
         finally
@@ -84,7 +77,7 @@ public class Program
             }
         }
 
-        return DiagnosticLogPaths.GetDefaultFilePath("gsharp-interpreter-debug.log");
+        return DiagnosticLogPaths.GetDefaultFilePath("gsharp-repl-debug.log");
     }
 
     private static string[] FilterLogArg(string[] args)
@@ -114,12 +107,9 @@ public class Program
             repl.EvaluateSubmission(text);
             return true;
         }
-        else
-        {
-            logger.LogWarning($"Invalid input: empty file {filePath}");
-            Console.WriteLine("Invalid input: empty file.");
-        }
 
+        logger.LogWarning($"Invalid input: empty file {filePath}");
+        Console.WriteLine("Invalid input: empty file.");
         return false;
     }
 }

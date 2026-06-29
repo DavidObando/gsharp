@@ -74,7 +74,7 @@ The full audit, target metadata, staging plan (R1–R7, all implemented), and re
 | Lexer/parser/syntax | `src/Core/CodeAnalysis/Syntax/` |
 | Binding and symbols | `src/Core/CodeAnalysis/Binding/`, `src/Core/CodeAnalysis/Symbols/` |
 | Lowering | `src/Core/CodeAnalysis/Lowering/` |
-| Interpreter | `src/Core/CodeAnalysis/Evaluator.cs`, `src/Interpreter/` |
+| Interpreter | `src/Core/CodeAnalysis/Evaluator.cs`, `src/Repl/` (gsi REPL host) |
 | PE emit | `src/Core/CodeAnalysis/Emit/ReflectionMetadataEmitter.cs` |
 | Portable PDB emit | `src/Core/CodeAnalysis/Emit/PortablePdbEmitter.cs` |
 | SDK integration | `src/Sdk/Gsharp.NET.Sdk/` |

@@ -9,13 +9,13 @@
     <!-- Core -->
     <GsharpCore Include="$(GsharpRepoRoot)\src\Core\Core.csproj" />
     <GsharpCompiler Include="$(GsharpRepoRoot)\src\Compiler\Compiler.csproj" />
-    <GsharpInterpreter Include="$(GsharpRepoRoot)\src\Interpreter\Interpreter.csproj" />
+    <GsharpRepl Include="$(GsharpRepoRoot)\src\Repl\Repl.csproj" />
     <GsharpLanguageServer Include="$(GsharpRepoRoot)\src\LanguageServer\LanguageServer.csproj" />
 
     <!-- All -->
     <GsharpAll Include="@(GsharpCore)" />
     <GsharpAll Include="@(GsharpCompiler)" />
-    <GsharpAll Include="@(GsharpInterpreter)" />
+    <GsharpAll Include="@(GsharpRepl)" />
     <GsharpAll Include="@(GsharpLanguageServer)" />
   </ItemGroup>
 

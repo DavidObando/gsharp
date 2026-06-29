@@ -246,7 +246,7 @@ function pointers, struct marshalling — is documented in the
 src/
   Core/               # Shared front-end: syntax, binder, lowering, symbols, emit
   Compiler/           # gsc.dll command-line driver
-  Interpreter/        # In-process evaluator (REPL + language tests)
+  Repl/               # gsi.dll modern Spectre.Console TUI (REPL + language tests)
   LanguageServer/     # LSP server backing the editor experience
   Sdk/
     Gsharp.NET.Sdk/   # MSBuild SDK that wires .gsproj into dotnet build

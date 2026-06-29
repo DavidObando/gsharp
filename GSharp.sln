@@ -24,7 +24,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Core", "src\Core\Core.cspro
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Core.Tests", "test\Core.Tests\Core.Tests.csproj", "{0B2E708C-8B72-4EA7-A7AD-C47AC8EBCDCB}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Interpreter", "src\Interpreter\Interpreter.csproj", "{3B003A65-1C59-4C42-9A9D-70FB365C962F}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Repl", "src\Repl\Repl.csproj", "{3B003A65-1C59-4C42-9A9D-70FB365C962F}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LanguageServer", "src\LanguageServer\LanguageServer.csproj", "{704E201F-254B-42B7-8EB1-A2AEAB240EFC}"
 EndProject
