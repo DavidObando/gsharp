@@ -771,7 +771,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var invoke = delegateType.GetMethod("Invoke");
+        var invoke = delegateType.GetMethodSafe("Invoke");
         if (invoke == null)
         {
             return false;

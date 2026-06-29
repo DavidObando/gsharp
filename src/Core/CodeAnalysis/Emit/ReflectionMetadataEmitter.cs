@@ -7434,7 +7434,7 @@ internal sealed class ReflectionMetadataEmitter
     private static MethodInfo ResolveTypeBuilderConstructedGenericMethod(MethodInfo method)
     {
         var declaring = method?.DeclaringType;
-        if (!ContainsTypeBuilderGenericArgument(declaring))
+        if (declaring == null || !declaring.IsConstructedGenericType || !ContainsTypeBuilderGenericArgument(declaring))
         {
             return method;
         }
@@ -7448,7 +7448,7 @@ internal sealed class ReflectionMetadataEmitter
     private static ConstructorInfo ResolveTypeBuilderConstructedGenericCtor(ConstructorInfo ctor)
     {
         var declaring = ctor?.DeclaringType;
-        if (!ContainsTypeBuilderGenericArgument(declaring))
+        if (declaring == null || !declaring.IsConstructedGenericType || !ContainsTypeBuilderGenericArgument(declaring))
         {
             return ctor;
         }
@@ -7472,6 +7472,25 @@ internal sealed class ReflectionMetadataEmitter
             field.Name,
             BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
         return openField != null ? TypeBuilder.GetField(declaring, openField) : field;
+    }
+
+    internal static MethodInfo GetTypeBuilderSafePropertyAccessor(PropertyInfo property, bool wantSetter, bool nonPublic = false)
+    {
+        var declaring = property?.DeclaringType;
+        if (!ContainsTypeBuilderGenericArgument(declaring) || declaring == null || !declaring.IsConstructedGenericType)
+        {
+            return wantSetter
+                ? property?.GetSetMethod(nonPublic)
+                : property?.GetGetMethod(nonPublic);
+        }
+
+        var openProperty = ResolvePropertyOnOpenDefinition(declaring.GetGenericTypeDefinition(), property);
+        var openAccessor = wantSetter
+            ? openProperty?.GetSetMethod(nonPublic)
+            : openProperty?.GetGetMethod(nonPublic);
+        return openAccessor != null
+            ? TypeBuilder.GetMethod(declaring, openAccessor)
+            : null;
     }
 
     internal MemberReferenceHandle GetMethodReference(MethodInfo method)

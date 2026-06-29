@@ -844,7 +844,7 @@ internal sealed partial class MethodBodyEmitter
         switch (access.Member)
         {
             case PropertyInfo property:
-                var getter = property.GetGetMethod(nonPublic: false)
+                var getter = ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(property, wantSetter: false)
                     ?? throw new InvalidOperationException(
                         $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no public getter.");
                 // Issue #671: when the receiver is a symbolic constructed
@@ -931,7 +931,7 @@ internal sealed partial class MethodBodyEmitter
         switch (assn.Member)
         {
             case PropertyInfo property:
-                var setter = property.GetSetMethod(nonPublic: false)
+                var setter = ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(property, wantSetter: true)
                     ?? throw new InvalidOperationException(
                         $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no public setter.");
                 this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
@@ -1016,7 +1016,7 @@ internal sealed partial class MethodBodyEmitter
             this.EmitExpression(arg);
         }
 
-        var getter = idx.Indexer.GetGetMethod(nonPublic: false)
+        var getter = ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(idx.Indexer, wantSetter: false)
             ?? throw new InvalidOperationException(
                 $"Indexer on '{idx.Indexer.DeclaringType?.FullName}' has no public getter.");
         var receiverIsValueType = ReflectionMetadataEmitter.IsValueTypeSymbol(idx.Target.Type);
@@ -1047,7 +1047,7 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitClrIndexAssignment(BoundClrIndexAssignmentExpression ixa)
     {
-        var setter = ixa.Indexer.GetSetMethod(nonPublic: false);
+        var setter = ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(ixa.Indexer, wantSetter: true);
 
         // ADR-0056 §2: span element write. `Span[T]` has no setter; its
         // indexer getter returns `ref T`. Obtain the managed pointer via
@@ -1057,7 +1057,7 @@ internal sealed partial class MethodBodyEmitter
         // get_Item that would re-evaluate the index arguments.
         if (setter == null)
         {
-            var refGetter = ixa.Indexer.GetGetMethod(nonPublic: false)
+            var refGetter = ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(ixa.Indexer, wantSetter: false)
                 ?? throw new InvalidOperationException(
                     $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public setter or getter.");
             BoundExpression receiver = ixa.TargetExpression ?? new BoundVariableExpression(null, ixa.Target);

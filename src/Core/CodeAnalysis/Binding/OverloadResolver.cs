@@ -3601,7 +3601,7 @@ internal sealed class OverloadResolver
                 return invokeCall;
             }
 
-            var invoke = delegateClrType.GetMethod("Invoke");
+            var invoke = delegateClrType.GetMethodSafe("Invoke");
             var expectedArity = invoke?.GetParameters().Length ?? 0;
             if (syntax.Arguments.Count != expectedArity)
             {

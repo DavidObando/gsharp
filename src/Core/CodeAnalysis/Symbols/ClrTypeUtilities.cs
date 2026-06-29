@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Reflection.Emit;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -19,6 +20,37 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </summary>
 public static class ClrTypeUtilities
 {
+    /// <summary>
+    /// Resolves a named method without asking a constructed
+    /// <see cref="TypeBuilder"/> generic instantiation to resolve members
+    /// directly.
+    /// </summary>
+    /// <param name="type">The type that declares or inherits the method.</param>
+    /// <param name="name">The method name to resolve.</param>
+    /// <returns>The resolved method, or <see langword="null"/> when no matching method exists.</returns>
+    public static MethodInfo GetMethodSafe(this Type type, string name)
+    {
+        if (type is null || name is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return type.GetMethod(name);
+        }
+        catch (NotSupportedException)
+        {
+            if (!IsConstructedGenericWithTypeBuilderArgument(type))
+            {
+                return null;
+            }
+
+            var openMethod = type.GetGenericTypeDefinition().GetMethod(name);
+            return openMethod != null ? TypeBuilder.GetMethod(type, openMethod) : null;
+        }
+    }
+
     /// <summary>
     /// Returns whether two <see cref="Type"/>s refer to the same logical CLR
     /// type, regardless of which reflection context produced them. Two types
@@ -659,6 +691,53 @@ public static class ClrTypeUtilities
         {
             return Array.Empty<Type>();
         }
+    }
+
+    private static bool IsConstructedGenericWithTypeBuilderArgument(Type type)
+    {
+        return type != null
+            && type.IsConstructedGenericType
+            && ContainsTypeBuilderGenericArgument(type);
+    }
+
+    private static bool ContainsTypeBuilderGenericArgument(Type type)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+
+        if (type is TypeBuilder)
+        {
+            return true;
+        }
+
+        if (type.HasElementType)
+        {
+            return ContainsTypeBuilderGenericArgument(type.GetElementType());
+        }
+
+        if (!type.IsGenericType)
+        {
+            return false;
+        }
+
+        try
+        {
+            foreach (var arg in type.GetGenericArguments())
+            {
+                if (ContainsTypeBuilderGenericArgument(arg))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+
+        return false;
     }
 
     private static bool InterfaceMatchesByName(Type candidate, Type target)
