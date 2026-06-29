@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="@(GsharpInterpreter)" />
+    <ProjectReference Include="@(GsharpRepl)" />
     <ProjectReference Include="..\..\src\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj" />
   </ItemGroup>
 
