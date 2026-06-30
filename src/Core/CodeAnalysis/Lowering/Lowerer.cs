@@ -457,10 +457,14 @@ public sealed class Lowerer : BoundTreeRewriter
     protected override BoundExpression RewritePropertyAccessExpression(BoundPropertyAccessExpression node)
     {
         // ADR-0051: auto-properties lower to backing field access, but ONLY when
-        // we are inside the declaring type. From outside the type, the backing
-        // field is private so we must go through the accessor method (callvirt).
+        // we are inside the type that DIRECTLY declares the property. The backing
+        // field is private (DeclarationBinder), so it is only legal to touch from
+        // its exact declaring type. Issue #1486: an INHERITED auto-property read
+        // from a derived method must instead dispatch through the accessor
+        // (callvirt get_X) — node.StructType is the receiver's static type, not
+        // the property's declaring type, so it cannot gate this on its own.
         if (node.Property.IsAutoProperty && node.Property.BackingField != null
-            && this.declaringType != null && node.StructType == this.declaringType)
+            && this.declaringType != null && DeclaresPropertyDirectly(this.declaringType, node.Property))
         {
             return new BoundFieldAccessExpression(null, node.Receiver, node.StructType, node.Property.BackingField, node.NarrowedType);
         }
@@ -474,9 +478,13 @@ public sealed class Lowerer : BoundTreeRewriter
     protected override BoundExpression RewritePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
     {
         // ADR-0051: auto-properties lower to backing field assignment, but ONLY
-        // when we are inside the declaring type (same rationale as read access).
+        // when we are inside the type that DIRECTLY declares the property (same
+        // private-backing-field rationale as read access). Issue #1486: writing
+        // an INHERITED auto-property from a derived method must dispatch through
+        // the accessor (callvirt set_X) instead of touching the base's private
+        // backing field.
         if (node.Property.IsAutoProperty && node.Property.BackingField != null
-            && this.declaringType != null && node.StructType == this.declaringType)
+            && this.declaringType != null && DeclaresPropertyDirectly(this.declaringType, node.Property))
         {
             var value = RewriteExpression(node.Value);
 
@@ -495,6 +503,39 @@ public sealed class Lowerer : BoundTreeRewriter
         // Computed properties (or non-variable receivers, or external access)
         // remain as BoundPropertyAssignmentExpression.
         return base.RewritePropertyAssignmentExpression(node);
+    }
+
+    /// <summary>
+    /// Issue #1486: determines whether <paramref name="type"/> DIRECTLY declares
+    /// <paramref name="prop"/> (an own, non-inherited property), so the private
+    /// backing field is legally accessible. <see cref="StructSymbol.Properties"/>
+    /// lists only own properties. On a constructed generic instance the property
+    /// is a substituted clone, but <see cref="PropertySymbol.BackingField"/> is
+    /// carried by reference from the definition, so it gives a stable identity to
+    /// match against the type's own properties for any base/derived depth and for
+    /// both generic and non-generic types.
+    /// </summary>
+    private static bool DeclaresPropertyDirectly(StructSymbol type, PropertySymbol prop)
+    {
+        if (type == null || prop == null)
+        {
+            return false;
+        }
+
+        foreach (var own in type.Properties)
+        {
+            if (ReferenceEquals(own, prop))
+            {
+                return true;
+            }
+
+            if (prop.BackingField != null && ReferenceEquals(own.BackingField, prop.BackingField))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private BoundStatement LowerAwaitForRange(VariableSymbol valueVariable, BoundExpression stream, BoundStatement body, BoundLabel breakLabel, BoundLabel continueLabel)
