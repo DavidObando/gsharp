@@ -287,6 +287,46 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
+            // Issue #1516: NullCoalesce over a bare reference-typed type
+            // parameter LHS — e.g. `x as T ?? fallback` where `T : SomeClass`,
+            // interface-constrained, or unconstrained. `BoundAsExpression.Type`
+            // for a reference target is the bare `T`, so the LHS is a
+            // `TypeParameterSymbol` directly (NOT wrapped in
+            // `NullableTypeSymbol`), and the Issue #831 branch above misses
+            // it. The opaque `!!T` stack value cannot be probed with the
+            // bottom `dup; brtrue` shape (ECMA-335 III.1.8), so mirror the
+            // #831 box-probe spill: store the LHS to a `T`-typed slot, probe
+            // its non-nullness via `box !!T; brfalse fallback`, and either
+            // reload the slot (non-null) or evaluate RHS (fallback).
+            if (SlotPlanner.IsReferenceTypeParameterCoalesceProbe(b, out var bareTp))
+            {
+                if (!this.nullableCoalesceSpillSlots.TryGetValue(b, out var bareSlot))
+                {
+                    throw new InvalidOperationException(
+                        "No scratch slot pre-allocated for bare reference-typed type-parameter '??' LHS — "
+                        + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
+                }
+
+                var bareToken = this.outer.GetElementTypeToken(bareTp);
+                var fallback = this.il.DefineLabel();
+                var end = this.il.DefineLabel();
+
+                this.EmitExpression(b.Left);
+                this.il.StoreLocal(bareSlot);
+                this.il.LoadLocal(bareSlot);
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(bareToken);
+                this.il.Branch(ILOpCode.Brfalse, fallback);
+
+                this.il.LoadLocal(bareSlot);
+                this.il.Branch(ILOpCode.Br, end);
+
+                this.il.MarkLabel(fallback);
+                this.EmitExpression(b.Right);
+                this.il.MarkLabel(end);
+                return;
+            }
+
             // Defensive: any other value-typed LHS (raw struct or enum)
             // remains unsupported by `??`. Today the encoder rejects
             // nullable user-defined structs/enums, so this branch is
