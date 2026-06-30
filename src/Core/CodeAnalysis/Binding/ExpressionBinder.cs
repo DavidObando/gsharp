@@ -1236,7 +1236,7 @@ internal sealed partial class ExpressionBinder
         var erasedParameters = ImmutableArray.CreateBuilder<TypeSymbol>(functionType.ParameterTypes.Length);
         foreach (var parameterType in functionType.ParameterTypes)
         {
-            var parameterClr = GetEffectiveArgumentClrTypeForOverloadResolution(parameterType);
+            var parameterClr = EraseDelegateInnerClrTypeForOverloadResolution(parameterType);
             if (parameterClr == null)
             {
                 return false;
@@ -1252,7 +1252,7 @@ internal sealed partial class ExpressionBinder
         }
         else
         {
-            var returnClr = GetEffectiveArgumentClrTypeForOverloadResolution(functionType.ReturnType);
+            var returnClr = EraseDelegateInnerClrTypeForOverloadResolution(functionType.ReturnType);
             if (returnClr == null)
             {
                 return false;
@@ -1263,6 +1263,32 @@ internal sealed partial class ExpressionBinder
 
         erased = FunctionTypeSymbol.Get(erasedParameters.ToImmutable(), erasedReturn).ClrType;
         return erased != null;
+    }
+
+    /// <summary>
+    /// Issue #1502: erases an inner parameter/return type of a delegate shape
+    /// for overload resolution. Same-compilation user value types (a G# enum or
+    /// <c>UserEnum?</c>) have no <see cref="TypeSymbol.ClrType"/> and are always
+    /// erased to <c>object</c> when they appear as a constructed-generic type
+    /// argument (e.g. <c>Lazy[Color]</c> closes to <c>Lazy&lt;object&gt;</c>).
+    /// The default scalar ride-through maps such an enum to <c>int</c> (issue
+    /// #661), but <c>Func&lt;int&gt;</c> is not assignable to the erased
+    /// <c>Func&lt;object&gt;</c> ctor parameter (no value-type covariance), so
+    /// overload resolution would mis-select a competing <c>T value</c> ctor.
+    /// Erase these to the reference ride-through (<c>object</c>) so the delegate
+    /// shape stays covariant-compatible; the real type is recovered downstream
+    /// via the symbolic delegate-target binding and symbolic ctor emit.
+    /// </summary>
+    private Type EraseDelegateInnerClrTypeForOverloadResolution(TypeSymbol typeSymbol)
+    {
+        if (typeSymbol.ClrType == null
+            && (typeSymbol is EnumSymbol
+                || typeSymbol is NullableTypeSymbol { UnderlyingType: EnumSymbol }))
+        {
+            return typeof(object);
+        }
+
+        return GetEffectiveArgumentClrTypeForOverloadResolution(typeSymbol);
     }
 
     private bool TryBindClrMethodGroup(BoundExpression receiver, Type declaringType, bool wantStatic, string name, out BoundExpression methodGroup)

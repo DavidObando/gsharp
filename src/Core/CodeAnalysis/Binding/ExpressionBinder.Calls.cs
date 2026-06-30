@@ -707,6 +707,26 @@ internal sealed partial class ExpressionBinder
         for (var i = 0; i < syntax.Arguments.Count; i++)
         {
             var argName = argumentNames.IsDefault ? null : argumentNames[i];
+
+            // Issue #1502: when the constructed type carries a same-compilation
+            // user-defined type argument (e.g. `Lazy[Foo]`), the closed CLR ctor
+            // parameter shape is type-erased (`Func<object>`), so target-typing a
+            // lambda against it would infer `() -> object` and emit a synthesized
+            // method returning `object` boxed — yielding an unverifiable
+            // `Func<object>` where the reified `Lazy<Foo>::.ctor` expects
+            // `Func<Foo>`. Recover the symbolic delegate shape (`() -> Foo`) from
+            // the OPEN ctor's parameter type substituted with the real symbolic
+            // type arguments so the lambda method returns `Foo` and the delegate
+            // materialises as `Func<Foo>`.
+            var inner = OverloadResolver.UnwrapNamedArgumentValue(syntax.Arguments[i]);
+            if (inner is LambdaExpressionSyntax ctorLambdaSyntax
+                && TryResolveSymbolicDelegateTargetForCtor(
+                    openGenericDefinition, symbolicTypeArgs, sourceArgIndex: i, argName: argName, out var symbolicTarget))
+            {
+                boundArguments.Add(lambdas.BindLambdaExpression(ctorLambdaSyntax, symbolicTarget));
+                continue;
+            }
+
             boundArguments.Add(BindCallArgumentWithDelegateTargetTyping(
                 syntax.Arguments[i], ctorParameterLists, sourceArgIndex: i, argName: argName, paramOffset: 0));
         }
@@ -966,6 +986,92 @@ internal sealed partial class ExpressionBinder
             {
                 // Candidates disagree on the delegate shape — leave the lambda
                 // to be bound without a target (overload resolution decides).
+                target = null;
+                return false;
+            }
+        }
+
+        return target != null;
+    }
+
+    /// <summary>
+    /// Issue #1502: resolves the symbolic delegate target shape for a lambda
+    /// argument at <paramref name="sourceArgIndex"/> (or named
+    /// <paramref name="argName"/>) of a constructed-generic CLR constructor whose
+    /// type arguments include a same-compilation user-defined type. The closed
+    /// CLR ctor parameter is type-erased (e.g. <c>Func&lt;object&gt;</c>); this
+    /// recovers the real shape (e.g. <c>() -&gt; Foo</c>) by substituting the
+    /// receiver's symbolic type arguments through the OPEN constructor's
+    /// parameter type. Returns <see langword="false"/> (deferring to the ordinary
+    /// erased path) when there is no symbolic substitution in effect, when the
+    /// candidate ctors disagree on the delegate shape, or when no open ctor
+    /// exposes a delegate parameter at that position.
+    /// </summary>
+    private static bool TryResolveSymbolicDelegateTargetForCtor(
+        Type openGenericDefinition,
+        ImmutableArray<TypeSymbol> symbolicTypeArgs,
+        int sourceArgIndex,
+        string argName,
+        out FunctionTypeSymbol target)
+    {
+        target = null;
+        if (openGenericDefinition == null || symbolicTypeArgs.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        ConstructorInfo[] openCtors;
+        try
+        {
+            openCtors = openGenericDefinition.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+
+        foreach (var ctor in openCtors)
+        {
+            var parameters = ctor.GetParameters();
+            int paramIndex;
+            if (!string.IsNullOrEmpty(argName))
+            {
+                paramIndex = -1;
+                for (var p = 0; p < parameters.Length; p++)
+                {
+                    if (string.Equals(parameters[p].Name, argName, StringComparison.Ordinal))
+                    {
+                        paramIndex = p;
+                        break;
+                    }
+                }
+
+                if (paramIndex < 0)
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                paramIndex = sourceArgIndex;
+                if (paramIndex < 0 || paramIndex >= parameters.Length)
+                {
+                    continue;
+                }
+            }
+
+            if (!TryBuildSymbolicDelegateTarget(parameters[paramIndex].ParameterType, openGenericDefinition, symbolicTypeArgs, out var candidate)
+                || candidate == null)
+            {
+                continue;
+            }
+
+            if (target == null)
+            {
+                target = candidate;
+            }
+            else if (!ReferenceEquals(target, candidate) && !target.Equals(candidate))
+            {
                 target = null;
                 return false;
             }
