@@ -1205,9 +1205,42 @@ internal sealed class LambdaBinder
         var paramSet = new HashSet<VariableSymbol>(parameters);
         var seen = new HashSet<VariableSymbol>();
         var captured = ImmutableArray.CreateBuilder<VariableSymbol>();
-        var collector = new CapturedVariableCollector(paramSet, seen, captured);
+
+        // Issue #1451: pre-seed the collector's `declared` set with every inline
+        // `out var x` local declared *in this body*. Loop lowering (while/for/do)
+        // emits the loop body before the controlling condition, so the out-var's
+        // reads can be walked before its declaration; a single in-order pass would
+        // then misclassify the out-var as an enclosing-scope capture. Gathering the
+        // declarations up front removes that order dependency. The pre-pass is a
+        // BoundTreeWalker, so it is opaque at nested function literals — out-vars
+        // declared by a nested lambda stay in that lambda's scope.
+        var outVarCollector = new InlineOutVarDeclarationCollector();
+        outVarCollector.RewriteStatement(body);
+
+        var collector = new CapturedVariableCollector(paramSet, seen, captured, outVarCollector.Declared);
         collector.RewriteStatement(body);
         return captured.ToImmutable();
+    }
+
+    // Issue #1451: collects the locals declared by inline `out var`/`out let`
+    // arguments (`BoundAddressOfExpression(BoundVariableExpression(local))` where
+    // the local's declaring syntax is an inline RefArgumentExpressionSyntax) within
+    // a single body. Implemented as a BoundTreeRewriter (not a walker) only so it
+    // shares the FunctionLiteral-opaque traversal; it never mutates the tree.
+    private sealed class InlineOutVarDeclarationCollector : BoundTreeRewriter
+    {
+        public HashSet<VariableSymbol> Declared { get; } = [];
+
+        protected override BoundExpression RewriteAddressOfExpression(BoundAddressOfExpression node)
+        {
+            if (node.Operand is BoundVariableExpression outVarExpr
+                && outVarExpr.Variable.DeclaringSyntax is RefArgumentExpressionSyntax { IsInlineDeclaration: true })
+            {
+                this.Declared.Add(outVarExpr.Variable);
+            }
+
+            return base.RewriteAddressOfExpression(node);
+        }
     }
 
     // ADR-0076 / issue #716: walks a bound block-expression body collecting
@@ -1339,11 +1372,12 @@ internal sealed class LambdaBinder
         public CapturedVariableCollector(
             HashSet<VariableSymbol> parameters,
             HashSet<VariableSymbol> seen,
-            ImmutableArray<VariableSymbol>.Builder captured)
+            ImmutableArray<VariableSymbol>.Builder captured,
+            IEnumerable<VariableSymbol> preDeclared = null)
         {
             this.parameters = parameters;
             this.seen = seen;
-            this.declared = [];
+            this.declared = preDeclared != null ? [.. preDeclared] : [];
             this.captured = captured;
         }
 
@@ -1448,6 +1482,30 @@ internal sealed class LambdaBinder
             }
 
             return base.RewritePattern(node);
+        }
+
+        protected override BoundExpression RewriteAddressOfExpression(BoundAddressOfExpression node)
+        {
+            // Issue #1451 (generalization of #1437): an inline `out var x` argument
+            // declares a body-local via BoundAddressOfExpression(BoundVariableExpression(local))
+            // — NOT a BoundVariableDeclaration. Recording it here keeps the in-order
+            // case correct, but loop lowering (while/for/do) emits the body *before*
+            // the condition that declares the out-var, so the uses are walked first;
+            // a same-pass record is too late (RecordReference already classified the
+            // use as a capture). The authoritative seeding therefore happens up front
+            // via InlineOutVarDeclarationCollector (see CollectCapturedVariables) — this
+            // override is kept for the in-order path and as defense in depth. Without
+            // the declared-record, CaptureBoxingRewriter hoists `x` into a heap box,
+            // desynchronizing its declaration site (the original local, for which the
+            // emit local-slot planner allocates a slot) from its boxed reads, crashing
+            // emit with GS9998 "Variable 'x' has no local slot".
+            if (node.Operand is BoundVariableExpression outVarExpr
+                && outVarExpr.Variable.DeclaringSyntax is RefArgumentExpressionSyntax { IsInlineDeclaration: true })
+            {
+                this.declared.Add(outVarExpr.Variable);
+            }
+
+            return base.RewriteAddressOfExpression(node);
         }
 
         protected override BoundExpression RewriteNullConditionalAccessExpression(BoundNullConditionalAccessExpression node)
