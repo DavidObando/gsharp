@@ -7875,7 +7875,7 @@ internal sealed class ReflectionMetadataEmitter
             && openDefinition != null)
         {
             var methodDeclOpen = methodDecl.IsGenericTypeDefinition ? methodDecl : methodDecl.GetGenericTypeDefinition();
-            if (methodDeclOpen != openDefinition)
+            if (!SameOpenTypeDefinition(methodDeclOpen, openDefinition))
             {
                 if (TryFindImplementedInterfaceInstantiation(openDefinition, methodDeclOpen, out var ifaceInstantiation))
                 {
@@ -7954,13 +7954,13 @@ internal sealed class ReflectionMetadataEmitter
     {
         foreach (var iface in openDefinition.GetInterfaces())
         {
-            if (iface.IsGenericType && iface.GetGenericTypeDefinition() == targetOpenInterface)
+            if (iface.IsGenericType && SameOpenTypeDefinition(iface.GetGenericTypeDefinition(), targetOpenInterface))
             {
                 instantiation = iface;
                 return true;
             }
 
-            if (!iface.IsGenericType && iface == targetOpenInterface)
+            if (!iface.IsGenericType && SameOpenTypeDefinition(iface, targetOpenInterface))
             {
                 instantiation = iface;
                 return true;
@@ -7969,6 +7969,37 @@ internal sealed class ReflectionMetadataEmitter
 
         instantiation = null;
         return false;
+    }
+
+    /// <summary>
+    /// Issue #1462: compares two generic type definitions (or non-generic
+    /// types) for metadata identity rather than CLR reference identity. The
+    /// receiver's <c>OpenDefinition</c> and the interfaces it implements are
+    /// loaded through the <see cref="System.Reflection.MetadataLoadContext"/>
+    /// of the referenced framework, whereas the well-known method's
+    /// <see cref="MemberInfo.DeclaringType"/> may have been obtained via the
+    /// compiler's own runtime <c>typeof(...)</c> (e.g.
+    /// <c>typeof(IEnumerable&lt;object&gt;)</c> in the foreach lowerer). Those
+    /// two <see cref="Type"/> objects describe the same logical type but are
+    /// never reference-equal, so a <c>==</c> comparison silently fails and the
+    /// interface-substitution redirect is skipped — emitting the receiver's own
+    /// hiding member (e.g. <c>List&lt;T&gt;</c>'s struct-returning
+    /// <c>GetEnumerator</c>) typed as the interface enumerator, which is
+    /// unverifiable. Comparing by <see cref="Type.FullName"/> closes that gap.
+    /// </summary>
+    private static bool SameOpenTypeDefinition(Type a, Type b)
+    {
+        if (a == null || b == null)
+        {
+            return false;
+        }
+
+        if (a == b)
+        {
+            return true;
+        }
+
+        return a.FullName != null && a.FullName == b.FullName;
     }
 
     /// <summary>
