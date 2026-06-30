@@ -3442,7 +3442,7 @@ internal sealed class ReflectionMetadataEmitter
                 EmitDiagnosticException.Wrap(anchor, ex);
             }
 
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
             capturedSequencePoints = emitter.SequencePoints;
             capturedLocals = MethodBodyPlanner.CollectLocalInfo(locals);
             capturedConstants = MethodBodyPlanner.CollectLocalConstantInfo(constValues);
@@ -3686,7 +3686,7 @@ internal sealed class ReflectionMetadataEmitter
 
         il.OpCode(ILOpCode.Ret);
 
-        return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+        return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
     }
 
     /// <summary>
@@ -3805,7 +3805,7 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         il.OpCode(ILOpCode.Ret);
-        return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+        return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
     }
 
     /// <summary>
@@ -3951,7 +3951,7 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         il.OpCode(ILOpCode.Ret);
-        return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+        return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
     }
 
     /// <summary>
@@ -4167,7 +4167,7 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         il.OpCode(ILOpCode.Ret);
-        return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+        return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
     }
 
     /// <summary>
@@ -4395,7 +4395,7 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         il.OpCode(ILOpCode.Ret);
-        return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+        return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
     }
 
     // ADR-0068 / issue #698: emits the body of the synthesized `Finalize`
@@ -4544,7 +4544,7 @@ internal sealed class ReflectionMetadataEmitter
         il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
 
         il.OpCode(ILOpCode.Ret);
-        return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+        return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
     }
 
     private MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
@@ -4760,7 +4760,7 @@ internal sealed class ReflectionMetadataEmitter
                     il.OpCode(ILOpCode.Ret);
                 }
 
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
                 capturedSequencePoints = emitter.SequencePoints;
                 capturedLocals = MethodBodyPlanner.CollectLocalInfo(locals);
                 capturedConstants = MethodBodyPlanner.CollectLocalConstantInfo(constValues);
@@ -5750,7 +5750,7 @@ internal sealed class ReflectionMetadataEmitter
             localsSig = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
         }
 
-        var offset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSig);
+        var offset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSig);
         return (offset, localsSig);
     }
 
