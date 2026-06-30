@@ -52,7 +52,7 @@ internal sealed partial class ExpressionBinder
         return accessor;
     }
 
-    private static BoundMethodGroupExpression BuildInstanceMethodGroup(BoundExpression receiver, ImmutableArray<FunctionSymbol> methods)
+    private BoundMethodGroupExpression BuildInstanceMethodGroup(BoundExpression receiver, ImmutableArray<FunctionSymbol> methods)
     {
         if (methods.Length == 1)
         {
@@ -63,11 +63,27 @@ internal sealed partial class ExpressionBinder
                 paramTypes.Add(p.Type);
             }
 
-            var fnType = FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), only.Type ?? TypeSymbol.Void);
+            var fnType = FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), this.MethodGroupObservableReturnType(only));
             return new BoundMethodGroupExpression(null, receiver, only, fnType);
         }
 
         return new BoundMethodGroupExpression(null, receiver, methods);
+    }
+
+    // Issue #1467: a method group's natural delegate return type must match the
+    // method's *observable* (emitted) return type. An async method symbol carries
+    // a Void result for "async no-result" but the emitted state machine returns
+    // Task, so the method-group natural delegate is Func&lt;Task&gt; (not Action).
+    // Async iterators keep their IAsyncEnumerable return unchanged.
+    private TypeSymbol MethodGroupObservableReturnType(FunctionSymbol function)
+    {
+        var declared = function.Type ?? TypeSymbol.Void;
+        if (function.IsAsync && !isAsyncIteratorReturnType(declared))
+        {
+            return lambdas.WrapAsTask(declared);
+        }
+
+        return declared;
     }
 
     /// <summary>
@@ -79,7 +95,7 @@ internal sealed partial class ExpressionBinder
     /// variadic) are filtered out; the group is only produced when at least one
     /// usable candidate remains.
     /// </summary>
-    private static bool TryBuildUserMethodGroup(BoundExpression receiver, ImmutableArray<FunctionSymbol> methods, out BoundExpression methodGroup)
+    private bool TryBuildUserMethodGroup(BoundExpression receiver, ImmutableArray<FunctionSymbol> methods, out BoundExpression methodGroup)
     {
         methodGroup = null;
 

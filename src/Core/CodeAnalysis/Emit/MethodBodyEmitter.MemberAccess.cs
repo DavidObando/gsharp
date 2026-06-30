@@ -401,15 +401,16 @@ internal sealed partial class MethodBodyEmitter
         // signature now encoding VAR(idx), the value read off `stfld`
         // is already the correct concrete type, so the unbox.any /
         // castclass bridge that R0/R1 erasure required is dropped.
-        var containing = fa.StructType;
-        bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(containing);
-
-        // Issue #1254: an inherited field declared on a generic base type but
-        // accessed through a (non-generic) derived receiver must be read via a
-        // MemberRef parented at the constructed base TypeSpec.
-        var inheritedFieldBase = isGeneric
-            ? null
-            : ResolveInheritedGenericBaseForField(fa.Receiver?.Type as StructSymbol, fa.Field);
+        // Issue #1254 + #1467: resolve the struct symbol to parent the field
+        // reference at. A constructed generic receiver uses its own TypeSpec;
+        // an inherited field declared on a generic base reached through a
+        // derived receiver — whether the bound declaring type is recorded as
+        // the OPEN generic base or as a non-generic leaf — uses the CONSTRUCTED
+        // base instantiation so the reference is not a dangling `<!0>`.
+        var fieldContainer = ResolveFieldReferenceContainer(
+            fa.StructType as StructSymbol,
+            fa.Receiver?.Type as StructSymbol,
+            fa.Field);
 
         EntityHandle fieldHandle;
         if (fa.InterfaceType != null)
@@ -419,13 +420,9 @@ internal sealed partial class MethodBodyEmitter
             // construction); a non-generic interface uses the bare FieldDef.
             fieldHandle = this.outer.ResolveInterfaceFieldToken(fa.InterfaceType, fa.Field);
         }
-        else if (isGeneric)
+        else if (fieldContainer != null)
         {
-            fieldHandle = this.outer.ResolveFieldToken(containing, fa.Field);
-        }
-        else if (inheritedFieldBase != null)
-        {
-            fieldHandle = this.outer.GetUserStructFieldRef(inheritedFieldBase, fa.Field);
+            fieldHandle = this.outer.ResolveFieldToken(fieldContainer, fa.Field);
         }
         else if (this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var defHandle))
         {
@@ -507,16 +504,14 @@ internal sealed partial class MethodBodyEmitter
             fas.Receiver == null || !ValueExpressionMutatesReceiver(fas.Value, fas.Receiver),
             $"EmitFieldAssignment precondition violated: BoundFieldAssignmentExpression value must not reassign the receiver variable for field '{fas.Field.Name}' — see issue #420 / P3-4.");
 
-        // ADR-0087 §3 R3: route via TypeSpec MemberRef when generic.
-        var containing = fas.StructType;
-        bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(containing);
-
-        // Issue #1254: inherited field on a generic base via a non-generic
-        // derived receiver — write through a MemberRef parented at the
-        // constructed base TypeSpec.
-        var inheritedFieldBase = isGeneric
-            ? null
-            : ResolveInheritedGenericBaseForField(fas.Receiver?.Type as StructSymbol, fas.Field);
+        // ADR-0087 §3 R3 + issue #1254/#1467: route via a TypeSpec-parented
+        // MemberRef when the field is on a generic type — constructed receiver,
+        // or an inherited field on a generic base reached through a derived
+        // receiver (use the constructed base, never the open `<!0>`).
+        var fieldContainer = ResolveFieldReferenceContainer(
+            fas.StructType as StructSymbol,
+            fas.Receiver?.Type as StructSymbol,
+            fas.Field);
 
         EntityHandle fieldHandle;
         if (fas.InterfaceType != null)
@@ -525,13 +520,9 @@ internal sealed partial class MethodBodyEmitter
             // interface via TypeSpec MemberRef, non-generic via bare FieldDef.
             fieldHandle = this.outer.ResolveInterfaceFieldToken(fas.InterfaceType, fas.Field);
         }
-        else if (isGeneric)
+        else if (fieldContainer != null)
         {
-            fieldHandle = this.outer.ResolveFieldToken(containing, fas.Field);
-        }
-        else if (inheritedFieldBase != null)
-        {
-            fieldHandle = this.outer.GetUserStructFieldRef(inheritedFieldBase, fas.Field);
+            fieldHandle = this.outer.ResolveFieldToken(fieldContainer, fas.Field);
         }
         else if (this.outer.cache.StructFieldDefs.TryGetValue(fas.Field, out var defHandle))
         {
@@ -687,9 +678,10 @@ internal sealed partial class MethodBodyEmitter
         // parameter is read with the substitution applied. The non-generic case
         // keeps using the plain accessor MethodDef.
         EntityHandle getterHandle;
-        var getterContainer = ReflectionMetadataEmitter.IsUserGenericTypeReference(access.StructType)
-            ? access.StructType
-            : ResolveInheritedGenericBaseForProperty(access.Receiver?.Type as StructSymbol, access.Property);
+        var getterContainer = ResolvePropertyReferenceContainer(
+            access.StructType as StructSymbol,
+            access.Receiver?.Type as StructSymbol,
+            access.Property);
         if (getterContainer != null)
         {
             getterHandle = this.outer.ResolveUserPropertyAccessorToken(getterContainer, access.Property, wantSetter: false);
@@ -755,9 +747,10 @@ internal sealed partial class MethodBodyEmitter
         // Issue #989: route generic constructed receivers through the
         // TypeSpec-parented MemberRef (mirrors EmitPropertyAccess).
         EntityHandle setterHandle;
-        var setterContainer = ReflectionMetadataEmitter.IsUserGenericTypeReference(assn.StructType)
-            ? assn.StructType
-            : ResolveInheritedGenericBaseForProperty(assn.Receiver?.Type as StructSymbol, assn.Property);
+        var setterContainer = ResolvePropertyReferenceContainer(
+            assn.StructType as StructSymbol,
+            assn.Receiver?.Type as StructSymbol,
+            assn.Property);
         if (setterContainer != null)
         {
             setterHandle = this.outer.ResolveUserPropertyAccessorToken(setterContainer, assn.Property, wantSetter: true);
@@ -1336,10 +1329,13 @@ internal sealed partial class MethodBodyEmitter
         // generic-aware resolution used by the value-read path so `ldflda`
         // (struct builder SetResult/SetException etc.) matches verification.
         EntityHandle fieldHandle;
-        var containing = fa.StructType;
-        if (containing != null && ReflectionMetadataEmitter.IsUserGenericTypeReference(containing))
+        var fieldContainer = ResolveFieldReferenceContainer(
+            fa.StructType as StructSymbol,
+            fa.Receiver?.Type as StructSymbol,
+            fa.Field);
+        if (fieldContainer != null)
         {
-            fieldHandle = this.outer.ResolveFieldToken(containing, fa.Field);
+            fieldHandle = this.outer.ResolveFieldToken(fieldContainer, fa.Field);
         }
         else if (this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var defHandle))
         {
@@ -1537,5 +1533,72 @@ internal sealed partial class MethodBodyEmitter
         }
 
         return false;
+    }
+
+    // Issue #1467: resolves the struct symbol to parent a field reference at.
+    // The bound member-access node carries the field's DECLARING type
+    // (<paramref name="declaringType"/>). When that declaring type is an OPEN
+    // generic base (it carries no concrete type arguments, e.g.
+    // `FrameFilterBase`1` reached from a non-generic leaf override), encoding
+    // the reference against it produces a dangling `<!0>` instantiation that
+    // the verifier rejects. Resolve the CONSTRUCTED base instantiation
+    // reachable from the receiver's hierarchy instead — this yields the
+    // concrete base (`FrameFilterBase`1<int32>`) for a non-generic leaf and the
+    // self-instantiation (`FrameFilterBase`1<!0>`) when accessed from within the
+    // generic type itself. Returns null when the bare FieldDef should be used
+    // (a non-generic declaring type with no generic base in scope).
+    private static StructSymbol ResolveFieldReferenceContainer(StructSymbol declaringType, StructSymbol receiver, FieldSymbol field)
+    {
+        if (declaringType == null)
+        {
+            return null;
+        }
+
+        // Prefer the constructed base instantiation reachable from the receiver.
+        // FindConstructedGenericBase walks the receiver's hierarchy (including
+        // itself) resolving type arguments through the running substitution, so
+        // it yields the self-instantiation (`Base`1<!0>`) when the field is
+        // accessed from within the generic type and the concrete instantiation
+        // (`Base`1<int32>`) when reached through a non-generic leaf — even when
+        // the bound declaring type was recorded as the open self carrying its
+        // own type parameters as arguments.
+        var constructed = ResolveInheritedGenericBaseForField(receiver, field);
+        if (constructed != null)
+        {
+            return constructed;
+        }
+
+        // No receiver-reachable constructed base (e.g. a null/static receiver):
+        // fall back to the declaring type when it is itself generic.
+        if (!declaringType.TypeArguments.IsDefaultOrEmpty)
+        {
+            return declaringType;
+        }
+
+        var def = declaringType.Definition ?? declaringType;
+        return def.TypeParameters.IsDefaultOrEmpty ? null : declaringType;
+    }
+
+    // Issue #1467: the property analogue of ResolveFieldReferenceContainer.
+    private static StructSymbol ResolvePropertyReferenceContainer(StructSymbol declaringType, StructSymbol receiver, PropertySymbol property)
+    {
+        if (declaringType == null)
+        {
+            return null;
+        }
+
+        var constructed = ResolveInheritedGenericBaseForProperty(receiver, property);
+        if (constructed != null)
+        {
+            return constructed;
+        }
+
+        if (!declaringType.TypeArguments.IsDefaultOrEmpty)
+        {
+            return declaringType;
+        }
+
+        var def = declaringType.Definition ?? declaringType;
+        return def.TypeParameters.IsDefaultOrEmpty ? null : declaringType;
     }
 }
