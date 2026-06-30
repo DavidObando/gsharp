@@ -1,0 +1,87 @@
+{
+  "runId": "2026-06-30T00-14-43Z_dda962",
+  "timestamp": "2026-06-30T00:14:43Z",
+  "gscVersion": "0.2.365+10dca37a05",
+  "succeeded": false,
+  "totalApps": 1,
+  "greenApps": 0,
+  "stageOrder": [
+    "translate",
+    "compile",
+    "ilverify",
+    "test-parity"
+  ],
+  "apps": [
+    {
+      "appId": "corpus/Oahu.Decrypt",
+      "succeeded": false,
+      "failureCategory": "compile-error",
+      "stages": [
+        {
+          "stage": "translate",
+          "status": "passed",
+          "artifactCount": 0
+        },
+        {
+          "stage": "compile",
+          "status": "failed",
+          "artifactCount": 1
+        },
+        {
+          "stage": "ilverify",
+          "status": "skipped",
+          "artifactCount": 0
+        },
+        {
+          "stage": "test-parity",
+          "status": "skipped",
+          "artifactCount": 0
+        }
+      ],
+      "artifacts": [
+        "corpus_Oahu.Decrypt/compile-7b77e7aaf7d9.json"
+      ],
+      "fingerprints": [
+        "sha256:7b77e7aaf7d9bb58831daf5803511b22506b23838d3f7e52eeec6f18a7780da4"
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "fingerprint": "sha256:7b77e7aaf7d9bb58831daf5803511b22506b23838d3f7e52eeec6f18a7780da4",
+      "category": "compile-error",
+      "stage": "compile",
+      "diagnostic": {
+        "id": "GS9998",
+        "message": "NotSupportedException: TypeBuilder generic instantiation does not support resolving members. Use TypeBuilder.GetConstructor instead.",
+        "severity": "error"
+      },
+      "offendingCSharpConstruct": {
+        "kind": "LetConstruct",
+        "snippet": "let operation = Mp4Operation((t CancellationTokenSource) -> SaveAsync(keepMoovInFront, tracker, t.Token), this, (t Task) -> {"
+      },
+      "suggestedIssue": {
+        "title": "[cs2gs] GS9998 compiling translated corpus/Oahu.Decrypt (LetConstruct)",
+        "body": "The G# emitted for **corpus/Oahu.Decrypt** fails to compile with `gsc` 0.2.365+10dca37a05.\n\n- Diagnostic: `GS9998` — NotSupportedException: TypeBuilder generic instantiation does not support resolving members. Use TypeBuilder.GetConstructor instead.\n- Emitted G#: `corpus_Oahu.Decrypt/Mp4File.gs` (45,121)\n- Offending line: `let operation = Mp4Operation((t CancellationTokenSource) -> SaveAsync(keepMoovInFront, tracker, t.Token), this, (t Task) -> {`\n\n**Reproduction:** `cs2gs migrate` translates the corpus app, writes the `.gs` shown above, then runs `gsc /target:… /out:… corpus_Oahu.Decrypt/Mp4File.gs` which surfaces this error.\n**Fingerprint:** `sha256:7b77e7aaf7d9bb58831daf5803511b22506b23838d3f7e52eeec6f18a7780da4`",
+        "labels": [
+          "Oats",
+          "bug"
+        ]
+      },
+      "occurrences": [
+        {
+          "appId": "corpus/Oahu.Decrypt",
+          "sourceLocation": {
+            "gsFile": "corpus_Oahu.Decrypt/Mp4File.gs",
+            "gsLine": 45,
+            "gsColumn": 121,
+            "csFile": null,
+            "csLine": null,
+            "csColumn": null
+          }
+        }
+      ],
+      "retryHistory": []
+    }
+  ]
+}

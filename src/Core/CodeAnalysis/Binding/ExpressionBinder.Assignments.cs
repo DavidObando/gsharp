@@ -597,6 +597,23 @@ internal sealed partial class ExpressionBinder
                 implicitField.StructType,
                 implicitField.Field);
         }
+        else if (variable is ImplicitPropertyVariableSymbol implicitPropReceiver
+            && implicitPropReceiver.Property.HasGetter)
+        {
+            // Issue #1446 (follow-up to #689/#1339): the property counterpart
+            // of the implicit-field case above. A bare instance-property name
+            // used as the *receiver* of a member write (`Prop.Member = v`,
+            // `Prop.Member++`) resolves to an ImplicitPropertyVariableSymbol,
+            // which likewise has no local slot. Synthesize `this.Prop` (a
+            // getter call) so the receiver carries a real BoundExpression —
+            // for a reference-typed property this yields the live object whose
+            // member the write then mutates, symmetric with the read path.
+            implicitFieldReceiverExpr = new BoundPropertyAccessExpression(
+                null,
+                new BoundVariableExpression(null, implicitPropReceiver.Receiver),
+                implicitPropReceiver.StructType,
+                implicitPropReceiver.Property);
+        }
 
         // Stream B: instance-CLR receiver → property/field write via reflection.
         if (variable.Type is not StructSymbol && variable.Type is not NullableTypeSymbol && variable.Type?.ClrType != null)

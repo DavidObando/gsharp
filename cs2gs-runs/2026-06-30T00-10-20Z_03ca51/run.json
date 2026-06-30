@@ -1,0 +1,42 @@
+{
+  "runId": "2026-06-30T00-10-20Z_03ca51",
+  "timestamp": "2026-06-30T00:10:20Z",
+  "gscVersion": "0.2.365+10dca37a05",
+  "gscPath": "/Users/davidobando/GitHub/DavidObando/gsharp/.worktrees/fix-1446/out/bin/Release/Compiler/gsc.dll",
+  "succeeded": false,
+  "apps": [
+    {
+      "appId": "corpus/Oahu.Decrypt",
+      "succeeded": false,
+      "failureCategory": "compile-error",
+      "stages": [
+        {
+          "stage": "translate",
+          "status": "passed",
+          "artifactCount": 0
+        },
+        {
+          "stage": "compile",
+          "status": "failed",
+          "artifactCount": 1
+        },
+        {
+          "stage": "ilverify",
+          "status": "skipped",
+          "artifactCount": 0
+        },
+        {
+          "stage": "test-parity",
+          "status": "skipped",
+          "artifactCount": 0
+        }
+      ],
+      "artifacts": [
+        "corpus_Oahu.Decrypt/compile-50a2b466cb59.json"
+      ],
+      "fingerprints": [
+        "sha256:50a2b466cb5950a1e9b7eadf7796a89b218728d04062d0360396f5c30253e372"
+      ]
+    }
+  ]
+}
