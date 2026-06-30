@@ -72,29 +72,75 @@ internal static class SynthesizedClosureReifier
     }
 
     /// <summary>
-    /// Clones <paramref name="src"/> as a class-level type parameter at
-    /// <paramref name="ordinal"/> (carrying its constraints), suitable for
-    /// declaration on a synthesized closure / box class.
+    /// Issue #1499: clones <paramref name="origTPs"/> 1:1 as class-level type
+    /// parameters whose constraint reference types are remapped from the
+    /// originals onto the freshly cloned set. Uses a TWO-PASS approach:
+    /// (1) create every clone (name / ordinal / kind / reference-, value- and
+    /// default-constructor-constraint flags / variance) and build the
+    /// <c>original → clone</c> substitution map; (2) for each clone substitute
+    /// that map into the original's <see cref="TypeParameterSymbol.InterfaceConstraint"/>,
+    /// <see cref="TypeParameterSymbol.ClrInterfaceConstraint"/> and
+    /// <see cref="TypeParameterSymbol.ClassConstraint"/> so a constraint that
+    /// references an original parameter (self-referential <c>T IComparable[T]</c>,
+    /// cross-referential <c>T IEnumerable[U]</c> / <c>T Base[U]</c>, or nested
+    /// <c>T Base[Dict[T, U]]</c>) instead references the corresponding clone(s).
+    /// Because all clones exist before any constraint is rebuilt, interdependent
+    /// constraints across the set resolve correctly. Reuses the symbol layer's
+    /// <see cref="StructSymbol.SubstituteTypeParameters"/> so the remap walks
+    /// generic arguments recursively rather than hand-rolling a partial clone.
     /// </summary>
-    /// <param name="src">The original enclosing type parameter.</param>
-    /// <param name="ordinal">The ordinal for the fresh class type parameter.</param>
-    /// <returns>The cloned class type parameter.</returns>
-    public static TypeParameterSymbol CloneAsClassTypeParameter(TypeParameterSymbol src, int ordinal)
+    /// <param name="origTPs">The ordered enclosing type parameters to clone.</param>
+    /// <returns>The cloned type parameters with remapped constraints.</returns>
+    public static ImmutableArray<TypeParameterSymbol> CloneWithRemappedConstraints(ImmutableArray<TypeParameterSymbol> origTPs)
     {
-        return new TypeParameterSymbol(
-            src.Name,
-            ordinal,
-            src.Constraint,
-            src.Variance,
-            src.InterfaceConstraint)
+        if (origTPs.IsDefaultOrEmpty)
         {
-            HasReferenceTypeConstraint = src.HasReferenceTypeConstraint,
-            HasValueTypeConstraint = src.HasValueTypeConstraint,
-            HasDefaultConstructorConstraint = src.HasDefaultConstructorConstraint,
-            ClrInterfaceConstraint = src.ClrInterfaceConstraint,
-            ClassConstraint = src.ClassConstraint,
-            IsMethodTypeParameter = false,
-        };
+            return ImmutableArray<TypeParameterSymbol>.Empty;
+        }
+
+        var clones = new TypeParameterSymbol[origTPs.Length];
+        var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(origTPs.Length);
+        for (var i = 0; i < origTPs.Length; i++)
+        {
+            var src = origTPs[i];
+
+            // Pass 1: create the clone with its simple flags. Constraint
+            // reference types are deferred to pass 2 so cross-referential
+            // constraints can see every clone before being rebuilt.
+            clones[i] = new TypeParameterSymbol(
+                src.Name,
+                i,
+                src.Constraint,
+                src.Variance)
+            {
+                HasReferenceTypeConstraint = src.HasReferenceTypeConstraint,
+                HasValueTypeConstraint = src.HasValueTypeConstraint,
+                HasDefaultConstructorConstraint = src.HasDefaultConstructorConstraint,
+                HasUnmanagedConstraint = src.HasUnmanagedConstraint,
+                IsMethodTypeParameter = false,
+            };
+            subst[src] = clones[i];
+        }
+
+        for (var i = 0; i < origTPs.Length; i++)
+        {
+            var src = origTPs[i];
+            var clone = clones[i];
+
+            if (src.InterfaceConstraint != null)
+            {
+                clone.InterfaceConstraint =
+                    StructSymbol.SubstituteTypeParameters(src.InterfaceConstraint, subst) as InterfaceSymbol
+                    ?? src.InterfaceConstraint;
+            }
+
+            clone.ClrInterfaceConstraint =
+                StructSymbol.SubstituteTypeParameters(src.ClrInterfaceConstraint, subst);
+            clone.ClassConstraint =
+                StructSymbol.SubstituteTypeParameters(src.ClassConstraint, subst);
+        }
+
+        return ImmutableArray.Create(clones);
     }
 
     /// <summary>
@@ -112,13 +158,9 @@ internal static class SynthesizedClosureReifier
     /// <returns>The constructed instance over the original parameters.</returns>
     public static StructSymbol Reify(StructSymbol definition, ImmutableArray<TypeParameterSymbol> origTPs)
     {
-        var clones = ImmutableArray.CreateBuilder<TypeParameterSymbol>(origTPs.Length);
-        for (var i = 0; i < origTPs.Length; i++)
-        {
-            clones.Add(CloneAsClassTypeParameter(origTPs[i], i));
-        }
+        var clones = CloneWithRemappedConstraints(origTPs);
 
-        definition.SetTypeParameters(clones.MoveToImmutable());
+        definition.SetTypeParameters(clones);
         definition.SetReifiedFromTypeParameters(origTPs);
 
         var args = ImmutableArray.CreateBuilder<TypeSymbol>(origTPs.Length);
