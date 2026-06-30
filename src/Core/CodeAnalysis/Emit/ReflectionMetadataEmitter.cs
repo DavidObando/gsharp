@@ -8247,8 +8247,9 @@ internal sealed class ReflectionMetadataEmitter
     /// <param name="typeArgSymbols">The per-MVar symbolic type arguments carried by the bound call (issue #903 surfaces same-compilation user types here).</param>
     /// <param name="substitutedReturn">The reprojected symbolic return type, on success.</param>
     /// <returns><see langword="true"/> when the call's symbolic type arguments
-    /// reproject the open return type to a same-compilation user type, so the
-    /// erasure-widening must be skipped.</returns>
+    /// reproject the open return type to a same-compilation user type or an
+    /// in-scope generic type parameter (issue #1445), so the erasure-widening
+    /// must be skipped.</returns>
     internal bool TryGetSymbolicSubstitutedImportedCallReturn(
         MethodInfo method,
         ImmutableArray<TypeSymbol> typeArgSymbols,
@@ -8274,16 +8275,31 @@ internal sealed class ReflectionMetadataEmitter
         // arguments only (no receiver/type-level substitution): a bare
         // `TSource` return resolves to the symbolic element type, while a
         // constructed `IEnumerable<TResult>` return resolves to a symbolic
-        // instantiation. Either way, only a projection that actually surfaces
-        // a same-compilation user type means the MethodSpec deviates from the
-        // erased `object` placeholder and the widening must be suppressed.
+        // instantiation. Either way, a projection that surfaces a
+        // same-compilation user type OR an in-scope generic type parameter
+        // means the MethodSpec deviates from the erased `object` placeholder
+        // and the widening must be suppressed.
         var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openReturn, null, default, openMethod, typeArgSymbols);
         if (mapped == null || mapped == TypeSymbol.Error)
         {
             return false;
         }
 
-        if (!TypeSymbol.ContainsSameCompilationUserType(mapped))
+        // Issue #1445: a LINQ-style call whose open return is a bare method
+        // type parameter (`First<TSource>() -> TSource`) closed over an
+        // in-scope generic type parameter `T` (e.g. inside
+        // `func Pick[T IThing](items IEnumerable[T]) T?`) encodes a symbolic
+        // MethodSpec `First<!!T>` (ArgIsSymbolicUserDefined accepts the type
+        // parameter, #833), so the call leaves a `!!T` value directly on the
+        // stack — NOT the erased `object` the placeholder-closed
+        // `MethodInfo.ReturnType` reports. Feeding that placeholder into the
+        // erasure-widening emitted a spurious `unbox.any !!T` against a stack
+        // slot that already holds `!!T` (ilverify `StackObjRef`; unverifiable
+        // IL that crashes under stricter hosts). Suppress the widening for a
+        // type-parameter projection too, mirroring the same-compilation
+        // user-type case and the instance-method variant above.
+        if (!TypeSymbol.ContainsSameCompilationUserType(mapped)
+            && !TypeSymbol.ContainsTypeParameter(mapped))
         {
             return false;
         }
