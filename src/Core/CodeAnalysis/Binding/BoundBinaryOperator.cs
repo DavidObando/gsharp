@@ -316,6 +316,22 @@ public sealed record BoundBinaryOperator
     }
 
     /// <summary>
+    /// Issue #1480: builds a target-typed null-coalescing operator whose result
+    /// is the supplied <paramref name="resultType"/> (the contextual target type)
+    /// for the case where the operand underlyings share no natural common type
+    /// but both implicitly convert to the target (e.g. sibling classes
+    /// <c>A</c>/<c>B</c> coalesced at a common interface <c>IShape</c>). Used by
+    /// the binder's target-typed coalesce path; the operand conversions to the
+    /// result type are inserted by the caller.
+    /// </summary>
+    /// <param name="leftType">The left operand type.</param>
+    /// <param name="rightType">The right operand type.</param>
+    /// <param name="resultType">The contextual target (result) type.</param>
+    /// <returns>A null-coalescing operator with <see cref="Type"/> = <paramref name="resultType"/>.</returns>
+    internal static BoundBinaryOperator MakeNullCoalesce(TypeSymbol leftType, TypeSymbol rightType, TypeSymbol resultType)
+        => new BoundBinaryOperator(SyntaxKind.QuestionQuestionToken, BoundBinaryOperatorKind.NullCoalesce, leftType, rightType, resultType);
+
+    /// <summary>
     /// PR N-4: returns true for operator kinds that have a lifted
     /// counterpart per C# §7.3.7 — arithmetic, bitwise, equality, and
     /// ordering. Logical short-circuit (&amp;&amp;, ||), null-coalesce, and

@@ -219,6 +219,18 @@ internal sealed partial class ExpressionBinder
             return conversions.BindConversion(syntax.Location, boundConditional, targetType);
         }
 
+        // Issue #1480: a null-coalescing operator (`a ?? b`) likewise honors the
+        // contextual target type. When the operand underlyings share no natural
+        // common type but both implicitly convert to the target (e.g. sibling
+        // classes coalesced at a shared interface), bind with the target so the
+        // result is target-typed rather than reported as GS0129.
+        if (syntax is BinaryExpressionSyntax binaryExpr
+            && binaryExpr.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken)
+        {
+            var boundCoalesce = BindBinaryExpression(binaryExpr, targetType);
+            return conversions.BindConversion(syntax.Location, boundCoalesce, targetType);
+        }
+
         return conversions.BindConversion(syntax, targetType);
     }
 
@@ -844,7 +856,9 @@ internal sealed partial class ExpressionBinder
 
         return syntax is IfExpressionSyntax
             or ConditionalExpressionSyntax
-            or SwitchExpressionSyntax;
+            or SwitchExpressionSyntax
+            || (syntax is BinaryExpressionSyntax binary
+                && binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken);
     }
 
     /// <summary>

@@ -1478,10 +1478,49 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(node.Condition);
         this.il.Branch(ILOpCode.Brfalse, falseLabel);
         this.EmitExpression(node.WhenTrue);
+        this.EmitInterfaceMergeCastIfNeeded(node.WhenTrue, node.Type);
         this.il.Branch(ILOpCode.Br, doneLabel);
         this.il.MarkLabel(falseLabel);
         this.EmitExpression(node.WhenFalse);
+        this.EmitInterfaceMergeCastIfNeeded(node.WhenFalse, node.Type);
         this.il.MarkLabel(doneLabel);
+    }
+
+    /// <summary>
+    /// Issue #1480: when a conditional/if-expression or null-coalescing (<c>??</c>)
+    /// result type is an interface (or a nullable interface), a class branch that
+    /// implements that interface is a reference-level no-op at emit time — the
+    /// value left on the stack is the concrete class, not the interface. At the
+    /// branches' merge point the CLR verifier computes the least-common type of
+    /// the two branch classes, which is their shared <em>base class</em> (the
+    /// verifier merge never yields an interface), so the merged value fails to
+    /// satisfy the interface-typed consumer
+    /// (<c>StackUnexpected [found ref 'Base'][expected ref 'IShape']</c>) →
+    /// unverifiable IL / <see cref="System.InvalidProgramException"/>. Emit an
+    /// explicit <c>castclass</c> to the interface on each value branch so both
+    /// branches leave exactly the interface reference and the merge is the
+    /// interface itself. The cast is verifiable because the binder already proved
+    /// every branch implicitly converts to the interface. A <c>never</c> (throw)
+    /// or <c>nil</c> branch leaves no class value to realign and is skipped.
+    /// </summary>
+    /// <param name="branch">The bound branch expression.</param>
+    /// <param name="resultType">The conditional/coalesce result type.</param>
+    private void EmitInterfaceMergeCastIfNeeded(BoundExpression branch, TypeSymbol resultType)
+    {
+        var castTarget = resultType is NullableTypeSymbol nrt ? nrt.UnderlyingType : resultType;
+        if (!IsInterfaceTargetType(castTarget))
+        {
+            return;
+        }
+
+        var branchType = branch?.Type;
+        if (branchType == TypeSymbol.Never || branchType == TypeSymbol.Null)
+        {
+            return;
+        }
+
+        this.il.OpCode(ILOpCode.Castclass);
+        this.il.Token(this.outer.GetElementTypeToken(castTarget));
     }
 
     /// <summary>ADR-0039: Emits a dereference (load indirect) from a managed pointer.</summary>

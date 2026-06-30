@@ -808,6 +808,19 @@ internal sealed class StatementBinder
         }
     }
 
+    /// <summary>
+    /// Issue #1480: returns <see langword="true"/> when the expression is a
+    /// null-coalescing (<c>??</c>) binary expression. Such expressions honor the
+    /// contextual target type in target-typed positions (typed local, return,
+    /// assignment, argument) so sibling operands can unify to a common interface
+    /// or base class supplied by the consumer.
+    /// </summary>
+    /// <param name="syntax">The candidate expression syntax.</param>
+    /// <returns><see langword="true"/> for a <c>??</c> binary expression.</returns>
+    private static bool IsNullCoalescingExpression(ExpressionSyntax syntax)
+        => syntax is BinaryExpressionSyntax binary
+            && binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken;
+
     private BoundStatement BindVariableDeclaration(VariableDeclarationSyntax syntax)
     {
         // Issue #491 (ADR-0060 follow-up): a `let ref` / `var ref` declaration introduces a
@@ -893,7 +906,8 @@ internal sealed class StatementBinder
             else if (type != null
                 && (syntax.Initializer is IfExpressionSyntax
                     || syntax.Initializer is ConditionalExpressionSyntax
-                    || syntax.Initializer is SwitchExpressionSyntax))
+                    || syntax.Initializer is SwitchExpressionSyntax
+                    || IsNullCoalescingExpression(syntax.Initializer)))
             {
                 // Issue #1158: when a typed local is initialised with an
                 // if-/conditional-/switch-expression, thread the declared type
@@ -3889,7 +3903,8 @@ internal sealed class StatementBinder
             // (C#-style target-typing) before the conversion below.
             if ((syntax.Expression is SwitchExpressionSyntax
                     || syntax.Expression is IfExpressionSyntax
-                    || syntax.Expression is ConditionalExpressionSyntax)
+                    || syntax.Expression is ConditionalExpressionSyntax
+                    || IsNullCoalescingExpression(syntax.Expression))
                 && function != null
                 && !function.IsReturnTypeInferred
                 && function.Type != TypeSymbol.Void

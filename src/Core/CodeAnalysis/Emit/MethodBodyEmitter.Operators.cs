@@ -301,12 +301,15 @@ internal sealed partial class MethodBodyEmitter
                     + "(or box-before-brtrue) emit path is required when nullable value types are supported.");
             }
 
+            var resultType = b.Type;
             this.EmitExpression(b.Left);
+            this.EmitInterfaceMergeCastIfNeeded(b.Left, resultType);
             this.il.OpCode(ILOpCode.Dup);
             var done = this.il.DefineLabel();
             this.il.Branch(ILOpCode.Brtrue, done);
             this.il.OpCode(ILOpCode.Pop);
             this.EmitExpression(b.Right);
+            this.EmitInterfaceMergeCastIfNeeded(b.Right, resultType);
             this.il.MarkLabel(done);
             return;
         }
