@@ -208,6 +208,16 @@ internal sealed class StateMachineEmitter
     public Dictionary<StructSymbol, AsyncIteratorPlan> AsyncIteratorInfos { get; } = [];
 
     /// <summary>
+    /// Gets the per-async-iterator-SM generic reification info (issue #1489).
+    /// Populated by <see cref="SynthesizeAsyncIteratorStateMachines"/> only for
+    /// async iterators whose kickoff method has type parameters in scope. The
+    /// root reads it to register the outer-method-TP → class-TP-ordinal remap
+    /// so field/method/interface signatures encode the SM class's own
+    /// <c>Var(idx)</c> slots instead of the kickoff's <c>MVar(idx)</c>.
+    /// </summary>
+    public Dictionary<StructSymbol, IteratorStateMachineGenericInfo> AsyncIteratorStateMachineGenericInfos { get; } = [];
+
+    /// <summary>
     /// Gets per-async-iterator-SM emit-time context (builder field + builder
     /// info). Read by <see cref="EmitAwaitOnCompletedCall"/> and by
     /// <c>BodyEmitter</c> via the root emitter when threading the async
@@ -294,6 +304,54 @@ internal sealed class StateMachineEmitter
         /// type's parameters, so a method type parameter maps to the slot
         /// offset by the enclosing class type-parameter count. Used by
         /// <see cref="ReflectionMetadataEmitter.activeIteratorStateMachineRemap"/>.
+        /// </summary>
+        public Dictionary<TypeParameterSymbol, int> BuildRemap()
+        {
+            if (this.OuterMethodTypeParameters.IsDefaultOrEmpty)
+            {
+                return null;
+            }
+
+            var offset = this.ClassTypeParameters.Length - this.OuterMethodTypeParameters.Length;
+            var map = new Dictionary<TypeParameterSymbol, int>(this.OuterMethodTypeParameters.Length);
+            for (var i = 0; i < this.OuterMethodTypeParameters.Length; i++)
+            {
+                map[this.OuterMethodTypeParameters[i]] = offset + i;
+            }
+
+            return map;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1489: minimal carrier for an async-iterator SM's generic
+    /// reification — the outer (kickoff) method's type parameters and the
+    /// state-machine class's own ordinal-aligned type parameters. Used to
+    /// build the outer-method-TP → class-TP-ordinal remap (mirroring
+    /// <see cref="IteratorStateMachineInfo.BuildRemap"/>) without a sync
+    /// iterator plan.
+    /// </summary>
+    public sealed class IteratorStateMachineGenericInfo
+    {
+        public IteratorStateMachineGenericInfo(
+            ImmutableArray<TypeParameterSymbol> outerMethodTypeParameters,
+            ImmutableArray<TypeParameterSymbol> classTypeParameters)
+        {
+            this.OuterMethodTypeParameters = outerMethodTypeParameters;
+            this.ClassTypeParameters = classTypeParameters;
+        }
+
+        public ImmutableArray<TypeParameterSymbol> OuterMethodTypeParameters { get; }
+
+        public ImmutableArray<TypeParameterSymbol> ClassTypeParameters { get; }
+
+        /// <summary>
+        /// Returns the emit-time remap from each outer-method type parameter to
+        /// its class-type-parameter ordinal on the synthesized state machine,
+        /// or <see langword="null"/> when the method has no type parameters.
+        /// The leading class type parameters mirror the enclosing generic
+        /// type's parameters, so a method type parameter maps to the slot
+        /// offset by the enclosing class type-parameter count.
         /// </summary>
         public Dictionary<TypeParameterSymbol, int> BuildRemap()
         {
@@ -642,6 +700,60 @@ internal sealed class StateMachineEmitter
             var packageName = plan.Function.Package?.Name ?? hostPackage?.Name ?? string.Empty;
             var elementType = plan.ElementType;
 
+            // Issue #1489 (async sibling of #810/#1465): when the async
+            // iterator method has type parameters in scope — the enclosing
+            // GENERIC type's parameters and/or the method's own type
+            // parameters — the synthesized state-machine class must itself be
+            // generic over an ordinal-aligned copy of them (mirroring the sync
+            // iterator path and Roslyn's `<gen>d__0<T>`). The enclosing type's
+            // parameters come first (ordinals 0..k-1), then the method's own
+            // (ordinals k..). A method-TP reference inside a field/method
+            // signature is translated to the matching class-TP slot via the
+            // activeIteratorStateMachineRemap encode-time hook (registered in
+            // RME from AsyncIteratorStateMachineGenericInfos).
+            var enclosingClassTPs = plan.Function.ReceiverType is StructSymbol aiRecv
+                ? (aiRecv.Definition ?? aiRecv).TypeParameters
+                : ImmutableArray<TypeParameterSymbol>.Empty;
+            if (enclosingClassTPs.IsDefault)
+            {
+                enclosingClassTPs = ImmutableArray<TypeParameterSymbol>.Empty;
+            }
+
+            var outerMethodTPs = plan.Function.TypeParameters.IsDefaultOrEmpty
+                ? ImmutableArray<TypeParameterSymbol>.Empty
+                : plan.Function.TypeParameters;
+
+            var scopeTPs = enclosingClassTPs.AddRange(outerMethodTPs);
+            ImmutableArray<TypeParameterSymbol> classTPs;
+            if (scopeTPs.IsDefaultOrEmpty)
+            {
+                classTPs = ImmutableArray<TypeParameterSymbol>.Empty;
+            }
+            else
+            {
+                var tpb = ImmutableArray.CreateBuilder<TypeParameterSymbol>(scopeTPs.Length);
+                for (var ti = 0; ti < scopeTPs.Length; ti++)
+                {
+                    var scopeTP = scopeTPs[ti];
+                    tpb.Add(new TypeParameterSymbol(
+                        scopeTP.Name,
+                        ti,
+                        scopeTP.Constraint,
+                        scopeTP.Variance,
+                        scopeTP.InterfaceConstraint)
+                    {
+                        HasReferenceTypeConstraint = scopeTP.HasReferenceTypeConstraint,
+                        HasValueTypeConstraint = scopeTP.HasValueTypeConstraint,
+                        HasDefaultConstructorConstraint = scopeTP.HasDefaultConstructorConstraint,
+                        ClrInterfaceConstraint = scopeTP.ClrInterfaceConstraint,
+                        ClassConstraint = scopeTP.ClassConstraint,
+                        IsMethodTypeParameter = false,
+                    });
+                }
+
+                classTPs = tpb.MoveToImmutable();
+            }
+
             // Fields
             var stateField = new FieldSymbol("<>1__state", TypeSymbol.Int32, Accessibility.Public);
             var currentField = new FieldSymbol("<>2__current", elementType, Accessibility.Public);
@@ -711,6 +823,20 @@ internal sealed class StateMachineEmitter
                 isData: false,
                 isInline: false,
                 isClass: true);
+
+            // Issue #1489: stamp the async-iterator SM class with its
+            // class-level type parameters so `EmitNestedStructTypeDef` mangles
+            // the name (`<gen>d__1` → `<gen>d__1`1`) and emits `GenericParam`
+            // rows. Done after construction so the StructSymbol's internal
+            // generic flags are flipped without re-running the cached
+            // `Construct` path. The matching outer-method-TP → class-TP remap
+            // is registered by RME from `AsyncIteratorStateMachineGenericInfos`.
+            if (!classTPs.IsDefaultOrEmpty)
+            {
+                smClass.SetTypeParameters(classTPs);
+                this.AsyncIteratorStateMachineGenericInfos[smClass] =
+                    new IteratorStateMachineGenericInfo(outerMethodTPs, classTPs);
+            }
 
             // Methods: MoveNext, get_Current, MoveNextAsync, DisposeAsync, GetAsyncEnumerator
             var moveNext = new FunctionSymbol("MoveNext", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
@@ -835,16 +961,32 @@ internal sealed class StateMachineEmitter
                 ImmutableArray.Create<BoundStatement>(
                 new BoundReturnStatement(null, null))));
 
-            // Kickoff body: new SM { state = -3, params..., <>4__this = this }
+            // Kickoff body: new SM { state = -3, params..., <>4__this = this }.
+            // Issue #1489: when the SM is generic, the kickoff literal target
+            // must be the CONSTRUCTED instance `<gen>d__1<MVar(0),…>` (over the
+            // type parameters still in scope at the kickoff method) so the
+            // emitted `newobj`/`stfld` tokens land on a TypeSpec carrying the
+            // right type arguments. Non-generic iterators keep the open class.
+            var kickoffSmType = classTPs.IsDefaultOrEmpty
+                ? smClass
+                : StructSymbol.Construct(smClass, scopeTPs.CastArray<TypeSymbol>());
             this.IteratorKickoffBodies[plan.Function] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(null, this.CreateAsyncIteratorKickoffLiteral(smClass, stateField, builderField, parameterFields, plan.Function.Parameters, thisProxyField, plan.Function)))));
+                new BoundReturnStatement(null, this.CreateAsyncIteratorKickoffLiteral(kickoffSmType, stateField, builderField, parameterFields, plan.Function.Parameters, thisProxyField, plan.Function)))));
 
             this.AsyncIteratorInfos[smClass] = plan;
             this.closures.SynthesizedClosureClasses.Add(smClass);
 
-            // Resolve builder info for async iterator emit context.
-            var returnClrType = plan.Function.Type?.ClrType;
+            // Resolve builder info for async iterator emit context. Issue #1489:
+            // a generic async iterator's return type is an AsyncSequenceTypeSymbol
+            // over an open type parameter, whose ClrType is null — but the
+            // builder for EVERY async iterator is the element-agnostic,
+            // non-generic AsyncIteratorMethodBuilder. Resolve against a closed
+            // IAsyncEnumerable<object> placeholder so the builder members
+            // (Create / MoveNext / AwaitOnCompleted / AwaitUnsafeOnCompleted)
+            // are always bound regardless of element shape.
+            var returnClrType = plan.Function.Type?.ClrType
+                ?? typeof(System.Collections.Generic.IAsyncEnumerable<object>);
             var aiBuilderInfo = AsyncMethodBuilderInfo.Resolve(returnClrType, this.emitCtx.References);
             this.AsyncIteratorEmitContexts[smClass] = new AsyncIteratorEmitContext(smClass, builderField, aiBuilderInfo);
         }

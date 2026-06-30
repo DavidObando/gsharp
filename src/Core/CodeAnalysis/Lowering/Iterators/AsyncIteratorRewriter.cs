@@ -94,27 +94,7 @@ public static class AsyncIteratorRewriter
     }
 
     private static bool IsAsyncIteratorFunction(FunctionSymbol function)
-    {
-        // Issue #798: a generic `async sequence[T]` (AsyncSequenceTypeSymbol)
-        // with open T projects to a null ClrType. Recognize the symbolic
-        // form alongside the IAsyncEnumerable[T] / IAsyncEnumerator[T]
-        // shapes so the async iterator rewriter still rewrites it.
-        if (function.Type is AsyncSequenceTypeSymbol)
-        {
-            return true;
-        }
-
-        var clr = function.Type?.ClrType;
-        if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
-        {
-            return false;
-        }
-
-        var def = clr.GetGenericTypeDefinition();
-        var fullName = def?.FullName;
-        return fullName == "System.Collections.Generic.IAsyncEnumerable`1"
-            || fullName == "System.Collections.Generic.IAsyncEnumerator`1";
-    }
+        => AsyncIteratorDetection.IsAsyncIteratorFunction(function);
 
     private static bool ContainsYield(BoundStatement statement)
     {
@@ -124,52 +104,7 @@ public static class AsyncIteratorRewriter
     }
 
     private static TypeSymbol GetAsyncIteratorElementType(TypeSymbol type)
-    {
-        // Issue #798: `async sequence[T]` (AsyncSequenceTypeSymbol) carries
-        // its element symbolically; honor it directly so an open T does not
-        // collapse via the ClrType branch.
-        if (type is AsyncSequenceTypeSymbol aseq)
-        {
-            return aseq.ElementType;
-        }
-
-        // Issue #1002 (parallel to #990): `IAsyncEnumerable[Shape]` where
-        // `Shape` is a same-compilation user class is modelled as an
-        // ImportedTypeSymbol carrying `Shape` symbolically in
-        // `TypeArguments`. Its `ClrType` is the erased
-        // `IAsyncEnumerable<object>` (user types have no ClrType yet, so
-        // `MakeGenericType` falls back to `object`). If we go through the
-        // ClrType branch below we'd extract `typeof(object)` as the
-        // element type and the synthesized state machine would advertise
-        // `IAsyncEnumerable<object>` — invalid under generic invariance
-        // (ilverify StackUnexpected). Honour the symbolic argument so the
-        // SM emits the strongly-typed `IAsyncEnumerable<Shape>` /
-        // `IAsyncEnumerator<Shape>`.
-        if (type is ImportedTypeSymbol imported
-            && imported.OpenDefinition != null
-            && !imported.TypeArguments.IsDefaultOrEmpty
-            && imported.TypeArguments.Length == 1
-            && (imported.OpenDefinition.FullName == "System.Collections.Generic.IAsyncEnumerable`1"
-                || imported.OpenDefinition.FullName == "System.Collections.Generic.IAsyncEnumerator`1"))
-        {
-            return imported.TypeArguments[0];
-        }
-
-        var clr = type?.ClrType;
-        if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
-        {
-            return null;
-        }
-
-        var def = clr.GetGenericTypeDefinition();
-        if (def.FullName == "System.Collections.Generic.IAsyncEnumerable`1" ||
-            def.FullName == "System.Collections.Generic.IAsyncEnumerator`1")
-        {
-            return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
-        }
-
-        return null;
-    }
+        => AsyncIteratorDetection.GetElementType(type);
 
     private static ImmutableArray<VariableSymbol> CollectHoistedLocals(BoundStatement body)
     {
@@ -360,16 +295,6 @@ public sealed class AsyncIteratorPlan
     /// </summary>
     public bool IsEnumerable
     {
-        get
-        {
-            var clr = Function.Type?.ClrType;
-            if (clr == null || !clr.IsGenericType)
-            {
-                return false;
-            }
-
-            var def = clr.GetGenericTypeDefinition();
-            return def.FullName == "System.Collections.Generic.IAsyncEnumerable`1";
-        }
+        get => AsyncIteratorDetection.IsAsyncEnumerable(Function.Type);
     }
 }

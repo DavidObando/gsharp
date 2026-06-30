@@ -153,18 +153,7 @@ public static class AsyncStateMachineRewriter
     }
 
     private static bool IsAsyncIteratorFunction(FunctionSymbol function)
-    {
-        var clr = function.Type?.ClrType;
-        if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
-        {
-            return false;
-        }
-
-        var def = clr.GetGenericTypeDefinition();
-        var fullName = def?.FullName;
-        return fullName == "System.Collections.Generic.IAsyncEnumerable`1"
-            || fullName == "System.Collections.Generic.IAsyncEnumerator`1";
-    }
+        => AsyncIteratorDetection.IsAsyncIteratorFunction(function);
 
     private sealed class AwaitStateCollector : BoundTreeWalker
     {

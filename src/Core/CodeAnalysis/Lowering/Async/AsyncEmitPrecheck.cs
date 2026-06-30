@@ -80,21 +80,12 @@ public static class AsyncEmitPrecheck
 
     /// <summary>
     /// Determines whether the given async function is an async iterator
-    /// (returns IAsyncEnumerable or IAsyncEnumerator).
+    /// (returns IAsyncEnumerable or IAsyncEnumerator), including the symbolic
+    /// open-generic forms (issue #1489) via the shared
+    /// <see cref="AsyncIteratorDetection"/> helper.
     /// </summary>
     private static bool IsAsyncIterator(FunctionSymbol function)
-    {
-        var returnClrType = function.Type?.ClrType;
-        if (returnClrType == null || !returnClrType.IsGenericType)
-        {
-            return false;
-        }
-
-        var openDef = returnClrType.GetGenericTypeDefinition();
-        var fullName = openDef?.FullName;
-        return fullName == "System.Collections.Generic.IAsyncEnumerable`1"
-            || fullName == "System.Collections.Generic.IAsyncEnumerator`1";
-    }
+        => AsyncIteratorDetection.IsAsyncIteratorFunction(function);
 
     private static TextLocation LocateAsyncFunction(FunctionSymbol function)
     {
