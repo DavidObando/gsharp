@@ -206,6 +206,63 @@ public class Issue1502DelegateUserTypeArgEmitTests
         Assert.Equal("x\n", output);
     }
 
+    [Fact]
+    public void EndToEnd_LinqWhereCount_OverUserEnumArray_Runs()
+    {
+        // Issue #1502 follow-up regression: the enum delegate-arg erasure must
+        // be scoped to the constructed-generic ctor covariance case only. A
+        // LINQ `Where` over `[]Shade` infers `TSource` from BOTH the source
+        // (`IEnumerable<int>` via the #661 enum scalar ride-through) AND the
+        // lambda parameter; if the lambda param were erased to `object` the
+        // `Func<object,bool>` could not unify with `IEnumerable<int>` and
+        // `Where` would not resolve (GS0159). The enum must stay `int` here.
+        const string source = """
+            package i1502linqwhereenum
+            import System
+            import System.Linq
+
+            enum Shade { Dim, Mid, Bright }
+
+            func CountDim(xs []Shade) int32 -> xs.Where((s Shade) -> s == Shade.Dim).Count()
+
+            func Main() {
+                var xs = []Shade{Shade.Dim, Shade.Mid, Shade.Bright, Shade.Dim}
+                System.Console.WriteLine(CountDim(xs))
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("2\n", output);
+    }
+
+    [Fact]
+    public void EndToEnd_LinqSelectOverUserEnumArray_ThenLazyCtor_Runs()
+    {
+        // Both shapes coexist in one compilation: a generic-method inference
+        // path (`Select` over `[]Hue`, enum→int) and a constructed-generic ctor
+        // covariance path (`Lazy[Hue]`, enum→object). The fix keeps them
+        // independent.
+        const string source = """
+            package i1502linqselectlazyenum
+            import System
+            import System.Linq
+
+            enum Hue { Zero, One, Two }
+
+            func Make() Lazy[Hue] -> Lazy[Hue](() -> Hue.Two)
+
+            func Main() {
+                var xs = []Hue{Hue.Zero, Hue.One, Hue.Two}
+                var n = xs.Where((h Hue) -> h != Hue.Zero).Count()
+                System.Console.WriteLine(n)
+                System.Console.WriteLine(Make().Value)
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("2\n2\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_1502_exe_").FullName;

@@ -71,6 +71,18 @@ internal sealed partial class ExpressionBinder
     private readonly Func<FunctionSymbol> getCurrentFunction;
     private readonly Func<StatementSyntax, BoundStatement> bindStatement;
 
+    // Issue #1502 follow-up: when true, a same-compilation enum (or `Enum?`)
+    // appearing inside a delegate shape is erased to `object` (the covariant
+    // reference ride-through) instead of its default scalar ride-through
+    // (`int`/`int?`, issue #661). This is only enabled while computing the
+    // effective CLR delegate shape of a lambda that target-types a delegate
+    // parameter of a *constructed-generic constructor* (e.g. `Lazy[Color]`
+    // closes to `Lazy<object>` whose ctor wants `Func<object>`). For generic
+    // *method* inference (LINQ `Where`/`Select` over `[]Color`) the enum must
+    // stay `int` so the lambda's `Func<int,bool>` unifies with the source's
+    // `IEnumerable<int>`; that path leaves this flag false.
+    private bool eraseDelegateInnerEnumToObject;
+
     public ExpressionBinder(
         BinderContext binderCtx,
         MemberLookup memberLookup,
@@ -1268,20 +1280,22 @@ internal sealed partial class ExpressionBinder
     /// <summary>
     /// Issue #1502: erases an inner parameter/return type of a delegate shape
     /// for overload resolution. Same-compilation user value types (a G# enum or
-    /// <c>UserEnum?</c>) have no <see cref="TypeSymbol.ClrType"/> and are always
-    /// erased to <c>object</c> when they appear as a constructed-generic type
-    /// argument (e.g. <c>Lazy[Color]</c> closes to <c>Lazy&lt;object&gt;</c>).
-    /// The default scalar ride-through maps such an enum to <c>int</c> (issue
-    /// #661), but <c>Func&lt;int&gt;</c> is not assignable to the erased
-    /// <c>Func&lt;object&gt;</c> ctor parameter (no value-type covariance), so
-    /// overload resolution would mis-select a competing <c>T value</c> ctor.
-    /// Erase these to the reference ride-through (<c>object</c>) so the delegate
-    /// shape stays covariant-compatible; the real type is recovered downstream
-    /// via the symbolic delegate-target binding and symbolic ctor emit.
+    /// <c>UserEnum?</c>) have no <see cref="TypeSymbol.ClrType"/>. By default
+    /// they ride through as their scalar CLR backing (<c>int</c>/<c>int?</c>,
+    /// issue #661) so that LINQ/extension generic-method inference unifies the
+    /// lambda parameter with an <c>IEnumerable&lt;int&gt;</c> source. When the
+    /// delegate is instead a constructor argument of a constructed-generic type
+    /// (e.g. <c>Lazy[Color]</c> closes to <c>Lazy&lt;object&gt;</c> whose ctor
+    /// wants <c>Func&lt;object&gt;</c>), value types are not covariant so
+    /// <c>Func&lt;int&gt;</c> would mis-resolve; in that context the caller sets
+    /// <see cref="eraseDelegateInnerEnumToObject"/> so the enum erases to
+    /// <c>object</c> instead. The real type is recovered downstream via the
+    /// symbolic delegate-target binding and symbolic ctor emit.
     /// </summary>
     private Type EraseDelegateInnerClrTypeForOverloadResolution(TypeSymbol typeSymbol)
     {
-        if (typeSymbol.ClrType == null
+        if (eraseDelegateInnerEnumToObject
+            && typeSymbol.ClrType == null
             && (typeSymbol is EnumSymbol
                 || typeSymbol is NullableTypeSymbol { UnderlyingType: EnumSymbol }))
         {

@@ -704,6 +704,7 @@ internal sealed partial class ExpressionBinder
         var ctorParameterLists = ctors.Select(c => c.GetParameters()).ToList();
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+        var symbolicCtorDelegateArgs = new HashSet<int>();
         for (var i = 0; i < syntax.Arguments.Count; i++)
         {
             var argName = argumentNames.IsDefault ? null : argumentNames[i];
@@ -724,6 +725,7 @@ internal sealed partial class ExpressionBinder
                     openGenericDefinition, symbolicTypeArgs, sourceArgIndex: i, argName: argName, out var symbolicTarget))
             {
                 boundArguments.Add(lambdas.BindLambdaExpression(ctorLambdaSyntax, symbolicTarget));
+                symbolicCtorDelegateArgs.Add(i);
                 continue;
             }
 
@@ -747,7 +749,24 @@ internal sealed partial class ExpressionBinder
             // Issue #658: use the overload-resolution variant that provides a
             // surrogate CLR type for user-defined G# classes (whose ClrType is
             // null at bind time) so overload resolution can proceed.
-            var t = GetEffectiveArgumentClrTypeForOverloadResolution(boundArguments[i].Type);
+            // Issue #1502 follow-up: only for a lambda that target-typed a
+            // constructed-generic ctor's delegate parameter, erase an inner
+            // same-compilation enum to `object` (covariant ride-through) so the
+            // lambda's `Func<…>` matches the erased `Lazy<object>` ctor's
+            // `Func<object>` parameter. Other delegate args (and generic-method
+            // inference elsewhere) keep the default enum→int ride-through.
+            System.Type t;
+            var priorErase = eraseDelegateInnerEnumToObject;
+            eraseDelegateInnerEnumToObject = symbolicCtorDelegateArgs.Contains(i);
+            try
+            {
+                t = GetEffectiveArgumentClrTypeForOverloadResolution(boundArguments[i].Type);
+            }
+            finally
+            {
+                eraseDelegateInnerEnumToObject = priorErase;
+            }
+
             if (t == null && boundArguments[i].Type != TypeSymbol.Null)
             {
                 argsAllTyped = false;
