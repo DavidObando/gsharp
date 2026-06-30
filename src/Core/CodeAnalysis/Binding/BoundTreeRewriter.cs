@@ -833,6 +833,12 @@ public abstract class BoundTreeRewriter
                 }
 
                 return elementsBuilder == null ? node : new BoundListPattern(null, node.Type, elementsBuilder.MoveToImmutable(), list.ElementType);
+            case BoundNodeKind.SlicePattern:
+                var slice = (BoundSlicePattern)node;
+                var newSliceInner = slice.Pattern == null ? null : RewritePattern(slice.Pattern);
+                return newSliceInner == slice.Pattern
+                    ? node
+                    : new BoundSlicePattern(null, node.Type, slice.ElementType, slice.Variable, newSliceInner);
             case BoundNodeKind.BinaryPattern:
                 var binary = (BoundBinaryPattern)node;
                 var newLeft = RewritePattern(binary.Left);

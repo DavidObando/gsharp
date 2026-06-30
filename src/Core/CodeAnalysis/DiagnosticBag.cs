@@ -4276,6 +4276,22 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #1505: GS0416 — a list pattern contains more than one slice
+    /// ("rest") subpattern (<c>..</c>). A list pattern admits at most one slice
+    /// element; the elements before it form the fixed prefix and the elements
+    /// after it form the fixed suffix. Mirrors C#'s CS8980.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>..</c> token.</param>
+    public void ReportMultipleSlicePatternsInListPattern(TextLocation location)
+    {
+        Report(
+            location,
+            "GS0416",
+            "A list pattern may contain at most one slice subpattern ('..') (issue #1505).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Issue #987: GS0386 — an attempt to construct (instantiate) an abstract
     /// class. A class is abstract when it declares (or inherits without
     /// overriding) an abstract method — a no-body <c>open func F() R;</c>. Like

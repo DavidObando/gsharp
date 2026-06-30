@@ -6051,7 +6051,18 @@ public class Parser
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
         while (Current.Kind != SyntaxKind.CloseSquareBracketToken && Current.Kind != SyntaxKind.EndOfFileToken)
         {
-            nodesAndSeparators.Add(ParsePattern());
+            // Issue #1505: a leading `..` is a slice ("rest") subpattern, not a
+            // range expression. Without this production it would be consumed by
+            // ParsePattern() as a System.Range constant pattern.
+            if (Current.Kind == SyntaxKind.DotDotToken)
+            {
+                nodesAndSeparators.Add(ParseSlicePattern());
+            }
+            else
+            {
+                nodesAndSeparators.Add(ParsePattern());
+            }
+
             if (Current.Kind == SyntaxKind.CommaToken)
             {
                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
@@ -6065,6 +6076,42 @@ public class Parser
         var elements = new SeparatedSyntaxList<PatternSyntax>(nodesAndSeparators.ToImmutable());
         var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
         return new ListPatternSyntax(syntaxTree, openBracket, elements, closeBracket);
+    }
+
+    // Issue #1505: a slice subpattern is `..` optionally followed by a capture
+    // identifier (`..rest`) or a sub-pattern (`..[> 0]`). A bare identifier that
+    // is not `_`, not part of a type pattern (`id is T`), and immediately
+    // followed by `,` or `]` is treated as a capture binding the middle slice to
+    // a `[]T` variable. Everything else after `..` is parsed as a sub-pattern
+    // matched against the middle slice.
+    private PatternSyntax ParseSlicePattern()
+    {
+        var dotDot = MatchToken(SyntaxKind.DotDotToken);
+        SyntaxToken captureIdentifier = null;
+        PatternSyntax pattern = null;
+
+        var isBareIdentifier = Current.Kind == SyntaxKind.IdentifierToken
+            && Peek(1).Kind != SyntaxKind.IsKeyword
+            && (Peek(1).Kind == SyntaxKind.CommaToken || Peek(1).Kind == SyntaxKind.CloseSquareBracketToken);
+
+        if (isBareIdentifier && Current.Text != "_")
+        {
+            captureIdentifier = NextToken();
+        }
+        else if (isBareIdentifier)
+        {
+            // `.._` — an explicit discard of the slice; consume the `_` and
+            // leave it as a plain discard slice (no capture, no sub-pattern).
+            NextToken();
+        }
+        else if (Current.Kind != SyntaxKind.CommaToken
+            && Current.Kind != SyntaxKind.CloseSquareBracketToken
+            && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            pattern = ParsePattern();
+        }
+
+        return new SlicePatternSyntax(syntaxTree, dotDot, captureIdentifier, pattern);
     }
 
     private StatementSyntax ParseFallthroughStatement()

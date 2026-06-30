@@ -592,6 +592,22 @@ internal sealed class SlotPlanner
                     }
 
                     break;
+                case BoundSlicePattern slice:
+                    // Issue #1505: the captured / synthesized slice local holds the
+                    // materialized middle slice; allocate its slot and recurse into
+                    // any sub-pattern matched against that slice.
+                    if (slice.Variable != null && !locals.ContainsKey(slice.Variable))
+                    {
+                        locals[slice.Variable] = localTypes.Count;
+                        localTypes.Add(slice.Variable.Type);
+                    }
+
+                    if (slice.Pattern != null)
+                    {
+                        AllocatePatternBindings(slice.Pattern, locals, localTypes, typePatternScratchSlots);
+                    }
+
+                    break;
                 case BoundBinaryPattern bp:
                     AllocatePatternBindings(bp.Left, locals, localTypes, typePatternScratchSlots);
                     AllocatePatternBindings(bp.Right, locals, localTypes, typePatternScratchSlots);

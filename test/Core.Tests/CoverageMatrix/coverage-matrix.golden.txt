@@ -217,6 +217,7 @@ ShiftRightToken
 SizeOfExpression
 SlashEqualsToken
 SlashToken
+SlicePattern
 StackAllocExpression
 StarEqualsToken
 StarToken
@@ -344,6 +345,7 @@ ReturnStatement
 ScopeStatement
 SelectStatement
 SizeOfExpression
+SlicePattern
 SpillSequenceExpression
 StackAllocExpression
 StateMachineAwaitOnCompleted

@@ -71,6 +71,68 @@ let x = switch u { case _: 1 }
         Assert.Empty(diagnostics);
     }
 
+    [Fact]
+    public void SlicePattern_DiscardForms_BindWithoutError()
+    {
+        var diagnostics = Bind(@"
+let xs = []int32{1, 2, 3}
+let x = switch xs { case [1, .., 3]: 1 case [..]: 2 default: 0 }
+");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void SlicePattern_PrefixAndSuffixWithNestedPatterns_BindWithoutError()
+    {
+        var diagnostics = Bind(@"
+let xs = []int32{1, 2, 3}
+let x = switch xs { case [> 0, .., _]: 1 default: 0 }
+");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void CapturedSlice_BindsVariableWithSliceElementType()
+    {
+        // 'rest' must have type []int32; assigning it to a []int32 local must bind clean.
+        var diagnostics = Bind(@"
+let xs = []int32{1, 2, 3}
+switch xs {
+    case [_, ..rest, _] {
+        let s []int32 = rest
+    }
+    default { }
+}
+");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void CapturedSlice_UsedAsElementType_Diagnoses()
+    {
+        // 'rest' is []int32, not int32, so assigning to an int32 local must fail.
+        var diagnostics = Bind(@"
+let xs = []int32{1, 2, 3}
+switch xs {
+    case [_, ..rest, _] {
+        let s int32 = rest
+    }
+    default { }
+}
+");
+        Assert.NotEmpty(diagnostics);
+    }
+
+    [Fact]
+    public void SlicePattern_MultipleSlices_Diagnoses()
+    {
+        var diagnostics = Bind(@"
+let xs = []int32{1, 2, 3}
+let x = switch xs { case [1, .., .., 3]: 1 default: 0 }
+");
+        Assert.Contains(diagnostics, d => d.Message.Contains("at most one slice", System.StringComparison.Ordinal));
+    }
+
     private static ImmutableArray<Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

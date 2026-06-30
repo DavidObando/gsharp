@@ -53,6 +53,7 @@ public class BoundNodeKindExhaustivenessTests
         "PropertyPatternField",
         "RelationalPattern",
         "ListPattern",
+        "SlicePattern",
         "BinaryPattern",
         "NotPattern",
 
@@ -179,6 +180,7 @@ public class BoundNodeKindExhaustivenessTests
         "PropertyPatternField",
         "RelationalPattern",
         "ListPattern",
+        "SlicePattern",
         "BinaryPattern",
         "NotPattern",
 
@@ -232,6 +234,7 @@ public class BoundNodeKindExhaustivenessTests
         "PropertyPatternField",
         "RelationalPattern",
         "ListPattern",
+        "SlicePattern",
         "BinaryPattern",
         "NotPattern",
 
@@ -334,6 +337,7 @@ public class BoundNodeKindExhaustivenessTests
         "PropertyPatternField",
         "RelationalPattern",
         "ListPattern",
+        "SlicePattern",
         "BinaryPattern",
         "NotPattern",
 

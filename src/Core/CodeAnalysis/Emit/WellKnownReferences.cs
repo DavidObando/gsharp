@@ -857,6 +857,24 @@ internal sealed class WellKnownReferences
         return this.getMethodReference(method);
     }
 
+    public MemberReferenceHandle GetArrayCopyRangeReference()
+    {
+        // System.Array::Copy(Array, Int32, Array, Int32, Int32) — used to
+        // materialize the captured middle slice of a list slice pattern (#1505).
+        var method = this.emitCtx.CoreArrayType.GetMethod(
+            "Copy",
+            new[]
+            {
+                this.emitCtx.CoreArrayType,
+                this.emitCtx.CoreInt32Type,
+                this.emitCtx.CoreArrayType,
+                this.emitCtx.CoreInt32Type,
+                this.emitCtx.CoreInt32Type,
+            })
+            ?? throw new InvalidOperationException("Array.Copy(Array, int, Array, int, int) is not resolvable from the supplied references.");
+        return this.getMethodReference(method);
+    }
+
     public MemberReferenceHandle GetStringConcatReference()
     {
         if (!this.stringConcatRef.IsNil)

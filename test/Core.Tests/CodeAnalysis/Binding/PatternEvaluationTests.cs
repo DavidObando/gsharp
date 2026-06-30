@@ -87,6 +87,86 @@ x
 ", "pos");
     }
 
+    [Fact]
+    public void SwitchExpression_SlicePattern_Bookend_Evaluates()
+    {
+        AssertEvaluates(@"
+let a = []int32{1, 9, 9, 9, 3}
+let x = switch a { case [1, .., 3]: ""bookend"" default: ""other"" }
+x
+", "bookend");
+    }
+
+    [Fact]
+    public void SwitchExpression_SlicePattern_TooShort_DoesNotMatch()
+    {
+        AssertEvaluates(@"
+let a = []int32{5}
+let x = switch a { case [1, .., 3]: ""bookend"" default: ""other"" }
+x
+", "other");
+    }
+
+    [Fact]
+    public void SwitchExpression_SlicePattern_MatchAnyLength_Evaluates()
+    {
+        AssertEvaluates(@"
+let a = []int32{}
+let x = switch a { case [..]: ""any"" default: ""other"" }
+x
+", "any");
+    }
+
+    [Fact]
+    public void SwitchExpression_SlicePattern_SuffixBindsElement_Evaluates()
+    {
+        AssertEvaluates(@"
+let a = []int32{100, 200}
+let x = switch a { case [.., l is int32]: l default: -1 }
+x
+", 200);
+    }
+
+    [Fact]
+    public void SwitchExpression_SlicePattern_PrefixBindsElement_Evaluates()
+    {
+        AssertEvaluates(@"
+let a = []int32{42, 1, 2}
+let x = switch a { case [f is int32, ..]: f default: -1 }
+x
+", 42);
+    }
+
+    [Fact]
+    public void SwitchExpression_CapturedSlice_BindsMiddleContents()
+    {
+        AssertEvaluates(@"
+let a = []int32{10, 20, 30, 40}
+let x = switch a { case [_, ..rest, _]: rest[0] default: -1 }
+x
+", 20);
+    }
+
+    [Fact]
+    public void SwitchExpression_CapturedSlice_BindsMiddleLength()
+    {
+        AssertEvaluates(@"
+let a = []int32{10, 20, 30, 40}
+let x = switch a { case [_, ..rest, _]: rest.Length default: -1 }
+x
+", 2);
+    }
+
+    [Fact]
+    public void SwitchExpression_CapturedSlice_EmptyMiddle_BindsEmptySlice()
+    {
+        AssertEvaluates(@"
+let a = []int32{7, 8}
+let x = switch a { case [_, ..rest, _]: rest.Length default: -1 }
+x
+", 0);
+    }
+
     private static void AssertEvaluates(string source, object expected)
     {
         var result = Evaluate(source);

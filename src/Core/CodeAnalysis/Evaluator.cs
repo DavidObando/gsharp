@@ -3002,14 +3002,74 @@ public sealed class Evaluator
                 }
 
                 var list = (BoundListPattern)pattern;
-                if (array.Length != list.Elements.Length)
+                var sliceIndex = -1;
+                for (var i = 0; i < list.Elements.Length; i++)
+                {
+                    if (list.Elements[i] is BoundSlicePattern)
+                    {
+                        sliceIndex = i;
+                        break;
+                    }
+                }
+
+                if (sliceIndex < 0)
+                {
+                    if (array.Length != list.Elements.Length)
+                    {
+                        return false;
+                    }
+
+                    for (var i = 0; i < list.Elements.Length; i++)
+                    {
+                        if (!TryMatchPattern(list.Elements[i], array.GetValue(i), outBindings))
+                        {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                }
+
+                // Issue #1505: slice ("rest") subpattern. Match the fixed prefix
+                // from the start and the fixed suffix from the end; bind / match
+                // the variable-length middle slice.
+                var prefix = sliceIndex;
+                var suffix = list.Elements.Length - sliceIndex - 1;
+                if (array.Length < prefix + suffix)
                 {
                     return false;
                 }
 
-                for (var i = 0; i < list.Elements.Length; i++)
+                for (var i = 0; i < prefix; i++)
                 {
                     if (!TryMatchPattern(list.Elements[i], array.GetValue(i), outBindings))
+                    {
+                        return false;
+                    }
+                }
+
+                for (var k = 0; k < suffix; k++)
+                {
+                    if (!TryMatchPattern(list.Elements[sliceIndex + 1 + k], array.GetValue(array.Length - suffix + k), outBindings))
+                    {
+                        return false;
+                    }
+                }
+
+                var slice = (BoundSlicePattern)list.Elements[sliceIndex];
+                if (slice.Variable != null || slice.Pattern != null)
+                {
+                    var count = array.Length - prefix - suffix;
+                    var elementClrType = list.ElementType.ClrType ?? typeof(object);
+                    var middle = System.Array.CreateInstance(elementClrType, count);
+                    System.Array.Copy(array, prefix, middle, 0, count);
+
+                    if (slice.Variable != null)
+                    {
+                        outBindings[slice.Variable] = middle;
+                    }
+
+                    if (slice.Pattern != null && !TryMatchPattern(slice.Pattern, middle, outBindings))
                     {
                         return false;
                     }

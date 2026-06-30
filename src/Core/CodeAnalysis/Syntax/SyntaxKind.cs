@@ -214,6 +214,7 @@ public enum SyntaxKind
     PropertyPatternField,
     RelationalPattern,
     ListPattern,
+    SlicePattern,
     BinaryPattern,
     NotPattern,
     ParenthesizedPattern,

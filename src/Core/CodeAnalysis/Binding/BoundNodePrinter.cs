@@ -800,6 +800,19 @@ public static class BoundNodePrinter
 
                 writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
                 break;
+            case BoundNodeKind.SlicePattern:
+                var slice = (BoundSlicePattern)pattern;
+                writer.WritePunctuation(SyntaxKind.DotDotToken);
+                if (slice.Variable != null && slice.Pattern == null)
+                {
+                    writer.WriteIdentifier(slice.Variable.Name);
+                }
+                else if (slice.Pattern != null)
+                {
+                    WritePattern(slice.Pattern, writer);
+                }
+
+                break;
             case BoundNodeKind.BinaryPattern:
                 var binary = (BoundBinaryPattern)pattern;
                 WritePattern(binary.Left, writer);
