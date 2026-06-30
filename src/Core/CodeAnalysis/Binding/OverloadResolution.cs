@@ -27,20 +27,6 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </remarks>
 internal static class OverloadResolution
 {
-    private static readonly Dictionary<string, string[]> NumericWideningTargets = new(StringComparer.Ordinal)
-    {
-        ["System.SByte"] = new[] { "System.Int16", "System.Int32", "System.Int64", "System.Single", "System.Double", "System.Decimal" },
-        ["System.Byte"] = new[] { "System.Int16", "System.UInt16", "System.Int32", "System.UInt32", "System.Int64", "System.UInt64", "System.Single", "System.Double", "System.Decimal" },
-        ["System.Int16"] = new[] { "System.Int32", "System.Int64", "System.Single", "System.Double", "System.Decimal" },
-        ["System.UInt16"] = new[] { "System.Int32", "System.UInt32", "System.Int64", "System.UInt64", "System.Single", "System.Double", "System.Decimal" },
-        ["System.Int32"] = new[] { "System.Int64", "System.Single", "System.Double", "System.Decimal" },
-        ["System.UInt32"] = new[] { "System.Int64", "System.UInt64", "System.Single", "System.Double", "System.Decimal" },
-        ["System.Int64"] = new[] { "System.Single", "System.Double", "System.Decimal" },
-        ["System.UInt64"] = new[] { "System.Single", "System.Double", "System.Decimal" },
-        ["System.Char"] = new[] { "System.UInt16", "System.Int32", "System.UInt32", "System.Int64", "System.UInt64", "System.Single", "System.Double", "System.Decimal" },
-        ["System.Single"] = new[] { "System.Double" },
-    };
-
     // C# §7.5.3.4 "Better conversion target" — signed integral T1 beats unsigned
     // integral T2 in this map. Used only as a secondary signed/unsigned tie-break
     // when the implicit-conversion direction between T1 and T2 does not resolve
@@ -3302,19 +3288,12 @@ internal static class OverloadResolution
 
     private static bool IsNumericWidening(Type source, Type target)
     {
-        if (source.FullName is { } sn && target.FullName is { } tn
-            && NumericWideningTargets.TryGetValue(sn, out var targets))
-        {
-            foreach (var t in targets)
-            {
-                if (string.Equals(t, tn, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        // Issue #1482: query the single authoritative lattice instead of a
+        // second local copy. The previous local table lacked all native-int
+        // (nint/nuint) rows, so overload "better conversion" ranking disagreed
+        // with Conversion.Classify about native-int widening; routing through
+        // the shared lattice fixes that divergence by construction.
+        return NumericWideningLattice.IsWidening(source, target);
     }
 
     private static bool IsNullableWrap(Type source, Type target)

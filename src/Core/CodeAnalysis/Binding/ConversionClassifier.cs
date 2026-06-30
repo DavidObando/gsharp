@@ -53,14 +53,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </remarks>
 internal sealed class ConversionClassifier
 {
-    private static readonly System.Collections.Generic.HashSet<string> NumericPrimitiveFullNames = new(StringComparer.Ordinal)
-    {
-        "System.SByte", "System.Byte", "System.Int16", "System.UInt16",
-        "System.Int32", "System.UInt32", "System.Int64", "System.UInt64",
-        "System.IntPtr", "System.UIntPtr", "System.Char",
-        "System.Single", "System.Double", "System.Decimal",
-    };
-
+    // Issue #1482: the numeric-primitive set and widening lattice live in the
+    // single authoritative `NumericWideningLattice` helper; this facade queries
+    // it (via `NumericWideningLattice.IsNumericPrimitive`) instead of carrying a
+    // private copy that could drift.
     private readonly BinderContext binderCtx;
     private readonly MemberLookup memberLookup;
     private readonly Func<ExpressionSyntax, BoundExpression> bindExpression;
@@ -1590,8 +1586,8 @@ internal sealed class ConversionClassifier
         var sourceClr = source?.ClrType?.FullName;
         var targetClr = target?.ClrType?.FullName;
         if (sourceClr == null || targetClr == null
-            || !NumericPrimitiveFullNames.Contains(sourceClr)
-            || !NumericPrimitiveFullNames.Contains(targetClr))
+            || !NumericWideningLattice.IsNumericPrimitive(sourceClr)
+            || !NumericWideningLattice.IsNumericPrimitive(targetClr))
         {
             return false;
         }
