@@ -991,6 +991,13 @@ internal sealed class MemberDefEmitter
             {
                 return this.getTypeHandleForMember(clrType);
             }
+
+            // Issue #1473: a function-type delegate whose closed type arguments include a
+            // user-declared type has no runtime CLR Type, so ClrType is null. Build the concrete
+            // closed delegate (Action`n / Func`n) TypeSpec via the same encodeTypeSymbol machinery
+            // used by the backing-field signature and Interlocked.CompareExchange<T> spec, so the
+            // EventDef type and the accessor-body castclass token agree with the CAS loop.
+            return this.GetEventTypeSpecHandle(type);
         }
 
         if (type.ClrType != null)
@@ -1010,6 +1017,19 @@ internal sealed class MemberDefEmitter
 
         // Fallback: encode as System.Delegate.
         return this.getTypeReference(typeof(System.Delegate));
+    }
+
+    /// <summary>
+    /// Issue #1473: encodes the event handler type symbol into a TypeSpec EntityHandle, used when
+    /// the type has no runtime CLR <see cref="Type"/> (e.g. a function-type delegate closed over a
+    /// user-declared type argument). Mirrors the TypeSpec machinery in
+    /// <see cref="GetInterlockedCompareExchangeSpec"/> and the backing-field signature.
+    /// </summary>
+    private EntityHandle GetEventTypeSpecHandle(TypeSymbol type)
+    {
+        var sigBlob = new BlobBuilder();
+        this.encodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), type);
+        return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
 
     /// <summary>
