@@ -5452,6 +5452,14 @@ internal sealed class ReflectionMetadataEmitter
     ///   <item>Frees the marshalled buffers in a <c>finally</c> block via
     ///         <see cref="Marshal.FreeCoTaskMem(IntPtr)"/>, which is a no-op
     ///         on <see cref="IntPtr.Zero"/>.</item>
+    ///   <item>When the function returns <c>string</c>, the inner P/Invoke
+    ///         returns the raw native pointer (encoded as <c>IntPtr</c>) and
+    ///         the outer stub materializes the managed string via
+    ///         <see cref="Marshal.PtrToStringUTF8(IntPtr)"/> /
+    ///         <see cref="Marshal.PtrToStringUni(IntPtr)"/>. The returned
+    ///         native buffer is non-owning (the native side owns it, e.g.
+    ///         <c>getenv</c>) and is never freed — see the ADR-0092
+    ///         return-marshalling table.</item>
     /// </list>
     /// The result is verifiable IL that has no runtime marshalling stub —
     /// every transition is explicit and AOT-publishable.
@@ -5550,7 +5558,22 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(innerSigBlob).MethodSignature(isInstanceMethod: false)
             .Parameters(
                 function.Parameters.Length,
-                r => EncodeReturnSymbol(r, function.Type, function.ReturnRefKind),
+                r =>
+                {
+                    if (function.Type == TypeSymbol.String)
+                    {
+                        // ADR-0092 §2 — a `string` return is marshalled by the
+                        // outer stub. The PreserveSig/blittable inner returns the
+                        // raw native pointer as IntPtr (symmetric to the IntPtr
+                        // string-parameter form); the outer materializes the
+                        // managed string via Marshal.PtrToString*.
+                        r.Type(isByRef: false).IntPtr();
+                    }
+                    else
+                    {
+                        EncodeReturnSymbol(r, function.Type, function.ReturnRefKind);
+                    }
+                },
                 ps =>
                 {
                     foreach (var p in function.Parameters)
@@ -5652,12 +5675,14 @@ internal sealed class ReflectionMetadataEmitter
         // configured StringMarshalling mode. Both helpers are no-ops on
         // null / IntPtr.Zero respectively, so the stub does not need null
         // guards.
+        var marshalType = typeof(Marshal);
+        var isUtf16 = function.PInvokeMetadata.StringMarshalling == StringMarshalling.Utf16;
+
         MemberReferenceHandle convertRef = default;
         MemberReferenceHandle freeRef = default;
         if (stringParamIndices.Count > 0)
         {
-            var marshalType = typeof(Marshal);
-            var convertName = function.PInvokeMetadata.StringMarshalling == StringMarshalling.Utf16
+            var convertName = isUtf16
                 ? "StringToCoTaskMemUni"
                 : "StringToCoTaskMemUTF8";
             var convertMethod = marshalType.GetMethod(convertName, new[] { typeof(string) })
@@ -5666,6 +5691,22 @@ internal sealed class ReflectionMetadataEmitter
                 ?? throw new InvalidOperationException("Cannot resolve Marshal.FreeCoTaskMem(IntPtr).");
             convertRef = this.GetMethodReference(convertMethod);
             freeRef = this.GetMethodReference(freeMethod);
+        }
+
+        // ADR-0092 §2 — for a `string` return the inner P/Invoke yields the
+        // raw native pointer (encoded as IntPtr); the outer stub materializes
+        // a managed string via Marshal.PtrToStringUTF8 / PtrToStringUni. The
+        // returned native buffer is NON-OWNING (the native side owns it, e.g.
+        // `getenv`), so the stub never frees it — see the ADR-0092
+        // return-marshalling table.
+        var returnIsString = function.Type == TypeSymbol.String;
+        MemberReferenceHandle ptrToStringRef = default;
+        if (returnIsString)
+        {
+            var ptrToStringName = isUtf16 ? "PtrToStringUni" : "PtrToStringUTF8";
+            var ptrToStringMethod = marshalType.GetMethod(ptrToStringName, new[] { typeof(nint) })
+                ?? throw new InvalidOperationException($"Cannot resolve Marshal.{ptrToStringName}(IntPtr).");
+            ptrToStringRef = this.GetMethodReference(ptrToStringMethod);
         }
 
         // 1) Marshal each string argument to a CoTaskMem IntPtr before the try.
@@ -5702,6 +5743,16 @@ internal sealed class ReflectionMetadataEmitter
 
         if (hasResult)
         {
+            if (returnIsString)
+            {
+                // Inner returned a raw native pointer (IntPtr) on the stack;
+                // convert it to a managed string in place. PtrToString* is a
+                // no-op (returns null) on IntPtr.Zero, so no null guard is
+                // needed. The native buffer is non-owning and is NOT freed.
+                il.OpCode(ILOpCode.Call);
+                il.Token(ptrToStringRef);
+            }
+
             il.StoreLocal(resultLocalIndex);
         }
 

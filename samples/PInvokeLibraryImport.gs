@@ -6,7 +6,7 @@
 // parameter (per `StringMarshalling`), calls a hidden blittable inner
 // P/Invoke, and frees the buffer in a `finally` block. The IL is fully
 // verifiable and AOT-friendly. See ADR-0092 for the full rationale,
-// supported marshalling table, and diagnostic surface (GS0342–GS0345).
+// supported marshalling table, and diagnostic surface (GS0342–GS0344).
 
 package GSharp.Example.PInvokeLibraryImport
 

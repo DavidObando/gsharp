@@ -18,10 +18,11 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <see cref="PInvokeMetadata"/> whose
 /// <see cref="PInvokeMetadata.IsLibraryImport"/> flag is <c>true</c>, and
 /// rejected when paired with the legacy <c>@DllImport</c> shape, when the
-/// resolved <c>StringMarshalling</c> is invalid, when a string parameter
-/// or return is used without an explicit <c>StringMarshalling</c>, or when
-/// the return type is <c>string</c> (which the v1 stub generator cannot
-/// safely free).
+/// resolved <c>StringMarshalling</c> is invalid, or when a string parameter
+/// or return is used without an explicit <c>StringMarshalling</c>. Per
+/// issue #1504 a <c>string</c> return type is now supported (the v1 stub
+/// materializes the managed string from the inner P/Invoke's raw pointer);
+/// it still requires an explicit <c>StringMarshalling</c> (GS0344).
 /// </summary>
 public class Issue758LibraryImportBinderTests
 {
@@ -124,17 +125,74 @@ func Foo() int32 {
     }
 
     [Fact]
-    public void LibraryImport_With_String_Return_Reports_GS0345()
+    public void LibraryImport_With_String_Return_And_StringMarshalling_Binds_With_No_Diagnostic()
+    {
+        // Issue #1504: a `string` return is now supported as long as an
+        // explicit StringMarshalling is given. The v1 stub materializes the
+        // managed string from the inner P/Invoke's raw native pointer.
+        const string source = @"
+package P
+import System.Runtime.InteropServices
+
+@LibraryImport(""libc"", EntryPoint: ""getenv"", StringMarshalling: StringMarshalling.Utf8)
+func ReturnsString(name string) string;
+";
+        var globalScope = BindSource(source);
+        Assert.DoesNotContain(GetDiagnostics(globalScope), d => d.Id is "GS0322" or "GS0342" or "GS0343" or "GS0344" or "GS0345");
+        var fn = globalScope.Functions.Single(f => f.Name == "ReturnsString");
+        Assert.True(fn.IsPInvoke);
+        Assert.True(fn.PInvokeMetadata.IsLibraryImport);
+        Assert.Equal("getenv", fn.PInvokeMetadata.EntryPoint);
+        Assert.Equal(System.Runtime.InteropServices.StringMarshalling.Utf8, fn.PInvokeMetadata.StringMarshalling);
+    }
+
+    [Fact]
+    public void LibraryImport_With_String_Return_Utf16_Binds_With_No_Diagnostic()
     {
         const string source = @"
 package P
 import System.Runtime.InteropServices
 
-@LibraryImport(""libc"", StringMarshalling: StringMarshalling.Utf8)
+@LibraryImport(""libc"", EntryPoint: ""getenv"", StringMarshalling: StringMarshalling.Utf16)
+func ReturnsWideString() string;
+";
+        var globalScope = BindSource(source);
+        Assert.DoesNotContain(GetDiagnostics(globalScope), d => d.Id is "GS0344" or "GS0345");
+        var fn = globalScope.Functions.Single(f => f.Name == "ReturnsWideString");
+        Assert.Equal(System.Runtime.InteropServices.StringMarshalling.Utf16, fn.PInvokeMetadata.StringMarshalling);
+    }
+
+    [Fact]
+    public void LibraryImport_With_String_Return_Without_StringMarshalling_Still_Reports_GS0344()
+    {
+        // Issue #1504: GS0345 is gone, but a string return without an
+        // explicit StringMarshalling still fails GS0344 (the encoding is
+        // ambiguous). `returnIsString` feeds the string-surface check.
+        const string source = @"
+package P
+import System.Runtime.InteropServices
+
+@LibraryImport(""libc"", EntryPoint: ""getenv"")
 func ReturnsString() string;
 ";
         var globalScope = BindSource(source);
-        Assert.Contains(GetDiagnostics(globalScope), d => d.Id == "GS0345");
+        Assert.Contains(GetDiagnostics(globalScope), d => d.Id == "GS0344");
+    }
+
+    [Fact]
+    public void LibraryImport_With_String_Return_Is_Never_Rejected_With_GS0345()
+    {
+        // Issue #1504: GS0345 was removed entirely; no string-return shape
+        // should ever surface it again.
+        const string source = @"
+package P
+import System.Runtime.InteropServices
+
+@LibraryImport(""libc"", EntryPoint: ""getenv"", StringMarshalling: StringMarshalling.Utf8)
+func ReturnsString(name string) string;
+";
+        var globalScope = BindSource(source);
+        Assert.DoesNotContain(GetDiagnostics(globalScope), d => d.Id == "GS0345");
     }
 
     [Fact]

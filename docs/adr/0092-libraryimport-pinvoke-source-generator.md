@@ -60,9 +60,26 @@ Parameter and return types follow the same blittable list as ADR-0086 §2 (`bool
 | G# type | When permitted in `@LibraryImport` | Generated stub behaviour |
 |---------|------------------------------------|--------------------------|
 | `string` parameter | `StringMarshalling: Utf8` or `Utf16` must be explicit (GS0344). | Outer wrapper calls `Marshal.StringToCoTaskMemUTF8`/`StringToCoTaskMemUni`, stores the `IntPtr`, passes the pointer to the inner `[DllImport]`, frees the pointer in `finally` via `Marshal.FreeCoTaskMem`. |
-| `string` return value | Rejected in v1 (GS0345). | Lifetime ownership across the managed/unmanaged boundary for returned strings requires either an explicit deallocator or a `MarshallerType`; both are deferred to a future ADR. |
+| `string` return value | `StringMarshalling: Utf8` or `Utf16` must be explicit (GS0344). | The inner `[DllImport]` returns the raw native pointer (`IntPtr`). The outer wrapper materializes the managed string via `Marshal.PtrToStringUTF8`/`PtrToStringUni` and returns it. See the **return-marshalling table** below for the ownership/free policy. |
 
 Any other parameter type that ADR-0086 §2 already accepts is also accepted under `@LibraryImport` and passes straight through to the inner unchanged.
+
+#### String return marshalling (issue #1504)
+
+Issue #1504 lifts the v1 restriction on `string` return values. The inner blittable P/Invoke now returns the raw native pointer as `IntPtr` (symmetric to the `IntPtr` form used for `string` parameters), and the outer managed stub materializes the managed `string` per the resolved `StringMarshalling`. The remaining design question — who frees the returned native buffer — is resolved as **non-owning** in v1:
+
+| `StringMarshalling` | Materialization helper | Ownership / free policy |
+|---------------------|------------------------|-------------------------|
+| `Utf8`  | `Marshal.PtrToStringUTF8(IntPtr)` | **Non-owning.** The returned native buffer is owned by the callee (e.g. `getenv` returns a pointer into the process `environ`). The stub **does not** free it. |
+| `Utf16` | `Marshal.PtrToStringUni(IntPtr)`  | **Non-owning.** Same policy as `Utf8`. |
+
+Rationale for the non-owning policy:
+
+- **Memory safety.** The most common string-returning C APIs (`getenv`, `strerror`, `dlerror`, …) return a pointer the runtime / C library owns and that the caller **must not** free. Freeing such a pointer — especially through `Marshal.FreeCoTaskMem`, which assumes a CoTaskMem allocator — is undefined behavior and a likely crash. The .NET `[LibraryImport]` source generator's default string-return marshaller *does* free with `FreeCoTaskMem`, which is only correct for callees that allocate with a matching allocator; G# v1 deliberately avoids that cross-allocator hazard.
+- **Portability & deterministic tests.** A non-owning return is provably safe on Linux/macOS/Windows, so the `getenv` round-trip sample and the e2e tests are stable across platforms.
+- **`IntPtr.Zero` is null-safe.** `PtrToStringUTF8`/`PtrToStringUni` return `null` for a null pointer, so a missing/`NULL` native result surfaces as a G# `nil` string with no extra guard.
+
+A callee that transfers ownership to the caller (caller-frees semantics) is **not** expressible via a `string` return in v1: declare the function to return `nint` and free the buffer explicitly with the matching deallocator at the call site. Lifting this — e.g. an opt-in "the runtime owns and frees the return" mode or a user-supplied `MarshallerType` — is deferred to a future ADR.
 
 ### 3. Generated stub shape
 
@@ -92,7 +109,19 @@ For each well-formed `@LibraryImport` function `F`, the emitter produces **two**
 
    For functions without any `string` parameter the outer body is a direct tail of `ldarg` / `call <inner>` / `ret`. For `void` returns the result local is omitted.
 
-2. **Hidden inner P/Invoke** — name pattern `<{F}>g__PInvoke|0_0` (mirroring the C# generator's convention so decompilers display it identically). `MethodAttributes.Static | MethodAttributes.PinvokeImpl | MethodAttributes.PrivateScope`, `MethodImplAttributes.PreserveSig`, `bodyOffset = -1`, `ImplMap` row via `MetadataBuilder.AddMethodImport`. The signature substitutes `IntPtr` for every `string` parameter; everything else passes through unchanged.
+   For a `string` **return** (issue #1504) the inner P/Invoke's return type is `IntPtr`; the outer stub feeds the returned pointer straight into `Marshal.PtrToStringUTF8`/`PtrToStringUni` and stores the managed string in the result local. The native buffer is non-owning, so no free is emitted for the return (only marshalled string *parameters* are freed in `finally`):
+
+   ```il
+   .locals init ([0] string ret)
+   // no string parameters -> no try/finally
+       call native int <{F}>g__PInvoke|0_0()
+       call string [System.Runtime.InteropServices.Marshal]::PtrToStringUTF8(native int)
+       stloc.0
+       ldloc.0
+       ret
+   ```
+
+2. **Hidden inner P/Invoke** — name pattern `<{F}>g__PInvoke|0_0` (mirroring the C# generator's convention so decompilers display it identically). `MethodAttributes.Static | MethodAttributes.PinvokeImpl | MethodAttributes.PrivateScope`, `MethodImplAttributes.PreserveSig`, `bodyOffset = -1`, `ImplMap` row via `MetadataBuilder.AddMethodImport`. The signature substitutes `IntPtr` for every `string` parameter **and for a `string` return**; everything else passes through unchanged.
 
 The `@LibraryImport` attribute itself is **not** written out as a `CustomAttribute` on the outer wrapper (it is the user's *source* directive, fully consumed by the binder + emitter). The hidden inner does not carry a `@DllImport` CustomAttribute either — it is fully described by its `ImplMap` row.
 
@@ -117,7 +146,8 @@ For the interpreter (which has no IL emit), `@LibraryImport` functions are treat
 | GS0342  | Error    | `Function '<Name>' is annotated with both @DllImport and @LibraryImport; choose one.`                                                                | The function identifier.                                 |
 | GS0343  | Error    | `StringMarshalling value '<value>' is not a valid StringMarshalling member; use 'Utf8' or 'Utf16'.`                                                  | The `StringMarshalling:` argument.                       |
 | GS0344  | Error    | `@LibraryImport function '<Name>' has a 'string' surface and must specify 'StringMarshalling: StringMarshalling.Utf8' or 'StringMarshalling.Utf16'.` | The function identifier.                                 |
-| GS0345  | Error    | `@LibraryImport function '<Name>' has a 'string' return type; v1 supports 'string' only as a parameter type (see ADR-0092 §2).`                      | The return-type clause.                                  |
+
+> **Update (issue #1504):** GS0345 — which rejected a `string` *return* type — has been **removed**. A `string` return is now supported (see §2, "String return marshalling"); it still feeds the GS0344 string-surface check, so a string return without an explicit `StringMarshalling` is reported by GS0344. The retired GS0345 code is not reused.
 
 The ADR-0086 diagnostic set (GS0322 – GS0329) continues to apply to `@LibraryImport`: GS0322 (missing library name), GS0323 (unsupported marshalling type), GS0324 (body present), GS0325 (no body without a P/Invoke annotation), GS0326 (P/Invoke on an unsupported declaration kind), GS0329 (empty `EntryPoint`). `CharSet` (GS0327) and `CallingConvention` (GS0328) cannot fire under `@LibraryImport` because those knobs do not exist on the attribute.
 
@@ -131,12 +161,12 @@ The inner P/Invoke is emitted before the outer body to keep the row order in syn
 
 ### 7. Sample, spec, tests
 
-- **Sample.** `samples/PInvokeLibraryImport.gs` calls `libc.strlen("Hello, world!")` via `@LibraryImport(..., StringMarshalling: StringMarshalling.Utf8)` and writes the length (`13`). The sample is added to `samples/CoverageMatrix` so it is exercised by the matrix regression test.
+- **Sample.** `samples/PInvokeLibraryImport.gs` calls `libc.strlen("Hello, world!")` via `@LibraryImport(..., StringMarshalling: StringMarshalling.Utf8)` and writes the length (`13`). The sample is added to `samples/CoverageMatrix` so it is exercised by the matrix regression test. `samples/PInvokeLibraryImportStringReturn.gs` (issue #1504) sets an env var via `libc.setenv` (two `string` parameters) and reads it back via `libc.getenv` (a `string` return), writing the round-tripped value.
 - **Spec.** The "Native interop (P/Invoke)" section gains an `@LibraryImport` subsection that lists the supported knobs, the explicit-`StringMarshalling` requirement, and the two-layer emitted shape.
 - **Tests.**
   - Parser: `Issue758LibraryImportParserTests` covers `;`-bodied `@LibraryImport` declarations with each attribute knob.
-  - Binder: `Issue758LibraryImportBinderTests` covers GS0342 – GS0345 plus successful acceptance.
-  - Emit (CompileAndRun + ilverify): `Issue758LibraryImportEmitTests` covers `strlen` (Utf8 round-trip), `getpid` (no string), empty-string null-safe behaviour, and metadata-shape verification of the outer + hidden inner pair.
+  - Binder: `Issue758LibraryImportBinderTests` covers GS0342 – GS0344 plus successful acceptance, including a `string` return that binds with an explicit `StringMarshalling` and still reports GS0344 without one (issue #1504).
+  - Emit (CompileAndRun + ilverify): `Issue758LibraryImportEmitTests` covers `strlen` (Utf8 round-trip), `getpid` (no string), empty-string null-safe behaviour, and metadata-shape verification of the outer + hidden inner pair. `Issue1504LibraryImportStringReturnEmitTests` covers `string` returns: a `setenv`+`getenv` Utf8 round-trip, the null-pointer→`nil` path, and metadata/IL-shape checks (outer returns `string`, inner returns `IntPtr`, the `PtrToString*` materialization is emitted, and the return pointer is never freed) for Utf8/Utf16 and return-only/return-plus-param shapes.
   - Interpreter: `Issue758LibraryImportInterpreterTests` confirms the bound program does not crash under the interpreter and that GS0344 fires for an under-specified declaration before evaluation.
 - **Follow-ups (filed under parent #706, peers of #758):**
   - `out` / `ref` primitive parameter marshalling for `@LibraryImport` (issue #759).

@@ -1369,7 +1369,7 @@ Cause/fix:
   implicit *or* explicit).
 
 
-## `@LibraryImport` P/Invoke diagnostics (GS0342–GS0345)
+## `@LibraryImport` P/Invoke diagnostics (GS0342–GS0344)
 
 See ADR-0092 (issue #758). G# accepts the modern
 source-generator-shaped `@LibraryImport(...)` attribute on `;`-bodied
@@ -1384,8 +1384,7 @@ cover the surface that is unique to `@LibraryImport`.
 |----|----------|-------------|
 | GS0342 | Error | Function `<name>` is annotated with both `@DllImport` and `@LibraryImport`; choose one. |
 | GS0343 | Error | `StringMarshalling` value `<value>` is not a valid `StringMarshalling` member; use `Utf8` or `Utf16`. |
-| GS0344 | Error | `@LibraryImport` function `<name>` has a `string` surface and must specify `StringMarshalling: StringMarshalling.Utf8` or `StringMarshalling.Utf16`. |
-| GS0345 | Error | `@LibraryImport` function `<name>` has a `string` return type; v1 supports `string` only as a parameter type (see ADR-0092 §2). |
+| GS0344 | Error | `@LibraryImport` function `<name>` has a `string` surface (parameter or return) and must specify `StringMarshalling: StringMarshalling.Utf8` or `StringMarshalling.Utf16`. |
 
 Cause/fix:
 
@@ -1396,12 +1395,17 @@ Cause/fix:
   are accepted in v1. `Custom` (and `StringMarshallingCustomType`) is
   reserved for a future custom-marshaller ADR.
 - **GS0344** — supply an explicit `StringMarshalling` argument whenever
-  any `string` parameter is present. Unlike `@DllImport`, the modern
-  attribute does not assume a default encoding.
-- **GS0345** — declare an out-of-band buffer or use `nint` and call
-  `Marshal.PtrToStringUTF8` from G# instead. Returning a managed
-  `string` from `@LibraryImport` requires a deallocator contract that
-  v1 does not surface.
+  any `string` parameter **or a `string` return** is present. Unlike
+  `@DllImport`, the modern attribute does not assume a default encoding.
+
+`string` **return** types are supported (issue #1504): the inner P/Invoke
+returns the raw native pointer and the outer stub materializes the managed
+string via `Marshal.PtrToStringUTF8`/`PtrToStringUni` per `StringMarshalling`.
+The returned native buffer is treated as non-owning (e.g. `getenv`, whose
+result points into the process `environ`) and is never freed; a callee with
+caller-frees semantics should return `nint` and free explicitly. The retired
+**GS0345** code (which used to reject a `string` return) is no longer emitted
+and is not reused.
 
 Cross-references:
 
@@ -1423,7 +1427,7 @@ time from the `ClassLayout` and `FieldLayout` metadata-table rows, so
 the emitter writes those rows directly and skips the normal
 `CustomAttribute` round-trip. The diagnostics below cover the surface
 unique to struct / class marshalling; existing P/Invoke type-check codes
-(GS0322–GS0329 for `@DllImport`, GS0342–GS0345 for `@LibraryImport`)
+(GS0322–GS0329 for `@DllImport`, GS0342–GS0344 for `@LibraryImport`)
 continue to apply for the surrounding signature.
 
 | ID | Severity | Description |
