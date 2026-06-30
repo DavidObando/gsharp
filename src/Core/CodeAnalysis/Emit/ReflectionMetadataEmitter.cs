@@ -10319,6 +10319,37 @@ internal sealed class ReflectionMetadataEmitter
         return false;
     }
 
+    // Issue #1502: a GSharp function type must be materialised as a CLR
+    // delegate (Func/Action) through the SYMBOLIC TypeSpec path
+    // (EncodeFunctionTypeSymbol / GetFunctionDelegateCtorRef) — rather than
+    // the reflection path (ResolveDelegateClrType) — whenever any of its
+    // parameter/return types is a type parameter OR a source-defined
+    // user type (Struct/Class/Interface/Enum/Delegate), possibly nested
+    // (e.g. `List[UserClass]`, `Func<UserStruct>`, `UserClass[]`). The
+    // reflection path resolves such an argument through
+    // MapToReferenceClrType, which returns null for a type emitted in the
+    // current compilation (no MetadataLoadContext Type) and therefore
+    // erases the argument to System.Object — producing an unverifiable
+    // `Func<object>` where `Func<UserType>` is required.
+    internal bool FunctionTypeNeedsSymbolicDelegate(FunctionTypeSymbol fnType)
+    {
+        if (fnType == null)
+        {
+            return false;
+        }
+
+        foreach (var param in fnType.ParameterTypes)
+        {
+            if (TypeSymbol.ContainsTypeParameter(param) || ArgIsSymbolicUserDefined(param))
+            {
+                return true;
+            }
+        }
+
+        return TypeSymbol.ContainsTypeParameter(fnType.ReturnType)
+            || ArgIsSymbolicUserDefined(fnType.ReturnType);
+    }
+
     // Issue #504: a NullableTypeSymbol whose underlying CLR type is a value
     // type maps to the CLR struct `System.Nullable<T>` — a distinct CLR
     // value type with its own layout and ctor. NullableTypeSymbol over a
@@ -10875,6 +10906,63 @@ internal sealed class ReflectionMetadataEmitter
 
         args[arity] = this.MapToReferenceClrType(taskClrType);
         return openDef.MakeGenericType(args);
+    }
+
+    // Issue #1502: the async delegate equivalent of FunctionTypeNeedsSymbolicDelegate.
+    // For an async lambda materialised as a CLR delegate (`Func<...,Task<T>>`),
+    // ResolveAsyncDelegateClrType wraps the return in Task<T> via
+    // MapToReferenceClrType — which erases a source-defined user type or a
+    // type-parameter result (e.g. `Task<TOutput>` for `Mp4Operation`1::
+    // SetContinuation`) to `Task<object>`. When the Task-wrapped delegate shape
+    // needs symbolic encoding, return the MemberRef for its reified
+    // `.ctor(object, IntPtr)` parented at the `Func<...,Task<T>>` TypeSpec;
+    // otherwise return null so the caller keeps the reflection path.
+    internal EntityHandle? TryGetSymbolicAsyncDelegateCtorRef(FunctionTypeSymbol fnType, FunctionSymbol function)
+    {
+        AsyncStateMachinePlan plan = null;
+        foreach (var p in this.stateMachines.AsyncStateMachinePlans)
+        {
+            if (p.KickoffMethod == function)
+            {
+                plan = p;
+                break;
+            }
+        }
+
+        if (plan == null)
+        {
+            return null;
+        }
+
+        var builderInfo = plan.StateMachine.BuilderInfo;
+
+        // async void → Action shape (no Task<T> wrapping). Symbolic only when a
+        // parameter is itself user-defined / type-parameter-bearing.
+        if (builderInfo.Kind == AsyncMethodBuilderKind.Void)
+        {
+            var voidFn = FunctionTypeSymbol.Get(fnType.ParameterTypes, TypeSymbol.Void);
+            return this.FunctionTypeNeedsSymbolicDelegate(voidFn)
+                ? this.GetFunctionDelegateCtorRef(voidFn)
+                : (EntityHandle?)null;
+        }
+
+        if (builderInfo.TaskProperty?.PropertyType is not Type taskClrType
+            || plan.StateMachine.ResultTypeSymbol is not TypeSymbol resultSym)
+        {
+            return null;
+        }
+
+        TypeSymbol taskReturn = taskClrType.IsConstructedGenericType
+            ? ImportedTypeSymbol.GetConstructed(
+                taskClrType,
+                taskClrType.GetGenericTypeDefinition(),
+                ImmutableArray.Create(resultSym))
+            : ImportedTypeSymbol.Get(taskClrType);
+
+        var asyncFn = FunctionTypeSymbol.Get(fnType.ParameterTypes, taskReturn);
+        return this.FunctionTypeNeedsSymbolicDelegate(asyncFn)
+            ? this.GetFunctionDelegateCtorRef(asyncFn)
+            : (EntityHandle?)null;
     }
 
     // Map a host-runtime Type onto the MetadataLoadContext type from the

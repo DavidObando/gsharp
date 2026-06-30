@@ -49,6 +49,19 @@ internal sealed partial class MethodBodyEmitter
     //    to the target delegate type via `dup / ldvirtftn Invoke / newobj`.
     private void EmitFunctionToDelegateConversion(BoundExpression source, FunctionTypeSymbol sourceFn, Type targetDelegateHostType)
     {
+        // Issue #1502: when the SOURCE function type carries a source-defined
+        // user type (Struct/Class/Interface/Enum/Delegate) or a type parameter
+        // in any parameter/return position, the reflection-resolved target
+        // delegate type erases that argument to System.Object (`Func<object>`
+        // instead of `Func<UserType>`) because MapToReferenceClrType has no
+        // MetadataLoadContext Type for a type emitted in the current
+        // compilation. Route the literal / method-group materialisation through
+        // the symbolic TypeSpec path (passing overrideDelegateType == null lets
+        // EmitFunctionLiteral / EmitMethodGroup select GetFunctionDelegateCtorRef)
+        // so the on-stack delegate value and the newobj ctor parent are the
+        // reified `Func<UserType>` / `Action<UserType>` matching the target.
+        bool sourceNeedsSymbolic = this.outer.FunctionTypeNeedsSymbolicDelegate(sourceFn);
+
         // Issue #323: when the target is the abstract System.Delegate /
         // System.MulticastDelegate base type, there is no concrete delegate
         // to instantiate. Materialize the function value as its natural
@@ -60,7 +73,31 @@ internal sealed partial class MethodBodyEmitter
 
         if (source is BoundFunctionLiteralExpression literal)
         {
-            this.EmitFunctionLiteral(literal, overrideDelegateType: targetDelegateType);
+            // Issue #1502: an async lambda whose Task-wrapped delegate shape
+            // needs symbolic encoding (`Func<...,Task<TOutput>>`) is emitted
+            // through the reified TypeSpec ctor ref.
+            if (literal.Function.IsAsync)
+            {
+                FunctionSymbol planKey = literal.Function;
+                if (this.outer.closures.ClosureInfos.TryGetValue(literal, out var closureForAsync))
+                {
+                    planKey = closureForAsync.InvokeMethod;
+                }
+
+                var asyncSymbolicCtor = planKey.StateMachineType != null
+                    ? this.outer.TryGetSymbolicAsyncDelegateCtorRef(literal.FunctionType, planKey)
+                    : null;
+                if (asyncSymbolicCtor.HasValue)
+                {
+                    this.EmitFunctionLiteral(literal, overrideDelegateType: null, symbolicDelegateCtorRef: asyncSymbolicCtor.Value);
+                    return;
+                }
+
+                this.EmitFunctionLiteral(literal, overrideDelegateType: targetDelegateType);
+                return;
+            }
+
+            this.EmitFunctionLiteral(literal, overrideDelegateType: sourceNeedsSymbolic ? null : targetDelegateType);
             return;
         }
 
@@ -70,22 +107,35 @@ internal sealed partial class MethodBodyEmitter
         // target delegate type.
         if (source is BoundMethodGroupExpression methodGroup)
         {
-            this.EmitMethodGroup(methodGroup, overrideDelegateType: targetDelegateType);
+            this.EmitMethodGroup(methodGroup, overrideDelegateType: sourceNeedsSymbolic ? null : targetDelegateType);
             return;
         }
 
         // Delegate-to-delegate adaptation: wrap the existing delegate's
-        // Invoke method in a new delegate of the target type.
-        var sourceDelegateType = this.outer.ResolveDelegateClrType(sourceFn);
-        var sourceInvoke = sourceDelegateType.GetMethod("Invoke")
-            ?? throw new InvalidOperationException(
-                $"Delegate type '{sourceDelegateType.FullName}' has no Invoke method.");
+        // Invoke method in a new delegate of the target type. Issue #1502:
+        // when the source shape needs symbolic encoding, take the reified
+        // Invoke / .ctor MemberRefs parented at the `Func<UserType>` TypeSpec
+        // rather than reflecting over the type-erased `Func<object>`.
         this.EmitExpression(source);
         this.il.OpCode(ILOpCode.Dup);
         this.il.OpCode(ILOpCode.Ldvirtftn);
-        this.il.Token(this.outer.GetMethodReference(sourceInvoke));
+        if (sourceNeedsSymbolic)
+        {
+            this.il.Token(this.outer.GetFunctionDelegateInvokeRef(sourceFn));
+        }
+        else
+        {
+            var sourceDelegateType = this.outer.ResolveDelegateClrType(sourceFn);
+            var sourceInvoke = sourceDelegateType.GetMethod("Invoke")
+                ?? throw new InvalidOperationException(
+                    $"Delegate type '{sourceDelegateType.FullName}' has no Invoke method.");
+            this.il.Token(this.outer.GetMethodReference(sourceInvoke));
+        }
+
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetDelegateCtorReference(targetDelegateType));
+        this.il.Token(sourceNeedsSymbolic
+            ? this.outer.GetFunctionDelegateCtorRef(sourceFn)
+            : this.outer.GetDelegateCtorReference(targetDelegateType));
     }
 
     /// <summary>
@@ -366,6 +416,17 @@ internal sealed partial class MethodBodyEmitter
 
             if (planKey.StateMachineType != null)
             {
+                // Issue #1502: when the Task-wrapped delegate shape carries a
+                // source-defined user type or a type-parameter result/parameter
+                // (`Func<...,Task<TOutput>>`), route through the symbolic
+                // TypeSpec ctor ref instead of the type-erased reflection type.
+                var asyncSymbolicCtor = this.outer.TryGetSymbolicAsyncDelegateCtorRef(literal.FunctionType, planKey);
+                if (asyncSymbolicCtor.HasValue)
+                {
+                    this.EmitFunctionLiteral(literal, overrideDelegateType: null, symbolicDelegateCtorRef: asyncSymbolicCtor.Value);
+                    return;
+                }
+
                 asyncDelegateOverride = this.outer.ResolveAsyncDelegateClrType(literal.FunctionType, planKey);
             }
         }
@@ -466,7 +527,7 @@ internal sealed partial class MethodBodyEmitter
             {
                 this.il.Token(symbolicDelegateCtorRef.Value);
             }
-            else if (overrideDelegateType == null && literal.FunctionType.ClrType == null)
+            else if (overrideDelegateType == null && (literal.FunctionType.ClrType == null || this.outer.FunctionTypeNeedsSymbolicDelegate(literal.FunctionType)))
             {
                 this.il.Token(this.outer.GetFunctionDelegateCtorRef(literal.FunctionType));
             }
@@ -502,7 +563,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.Token(symbolicDelegateCtorRef.Value);
         }
-        else if (overrideDelegateType == null && literal.FunctionType.ClrType == null)
+        else if (overrideDelegateType == null && (literal.FunctionType.ClrType == null || this.outer.FunctionTypeNeedsSymbolicDelegate(literal.FunctionType)))
         {
             this.il.Token(this.outer.GetFunctionDelegateCtorRef(literal.FunctionType));
         }
@@ -536,7 +597,9 @@ internal sealed partial class MethodBodyEmitter
         }
 
         Type delegateType = null;
-        if (overrideDelegateType != null || methodGroup.FunctionType.ClrType != null)
+        if (overrideDelegateType != null
+            || (methodGroup.FunctionType.ClrType != null
+                && !this.outer.FunctionTypeNeedsSymbolicDelegate(methodGroup.FunctionType)))
         {
             delegateType = overrideDelegateType ?? this.outer.ResolveDelegateClrType(methodGroup.FunctionType);
         }
