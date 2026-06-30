@@ -1067,7 +1067,7 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
-    private static bool TryBindSingleMethodGroup(FunctionSymbol function, out BoundExpression methodGroup)
+    private bool TryBindSingleMethodGroup(FunctionSymbol function, out BoundExpression methodGroup)
     {
         methodGroup = null;
 
@@ -1082,7 +1082,7 @@ internal sealed partial class ExpressionBinder
             parameterTypes.Add(parameter.Type);
         }
 
-        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), function.Type ?? TypeSymbol.Void);
+        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), this.MethodGroupObservableReturnType(function));
         methodGroup = new BoundMethodGroupExpression(null, function, fnType);
         return true;
     }

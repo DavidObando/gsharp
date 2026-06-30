@@ -430,6 +430,77 @@ internal sealed class ReflectionMetadataEmitter
         };
     }
 
+    // Issue #1467: gathers the flattened generic parameters of every enclosing
+    // type of <paramref name="nested"/>, in CLR order (outermost first). A type
+    // nested inside `Outer[U].Inner[T]` sees `[U, T]`.
+    private static ImmutableArray<TypeParameterSymbol> CollectEnclosingTypeParameters(StructSymbol nested)
+    {
+        List<ImmutableArray<TypeParameterSymbol>> levels = null;
+        for (var c = nested.ContainingType as StructSymbol; c != null; c = c.ContainingType as StructSymbol)
+        {
+            var def = c.Definition ?? c;
+            if (!def.TypeParameters.IsDefaultOrEmpty)
+            {
+                levels ??= new List<ImmutableArray<TypeParameterSymbol>>();
+
+                // Prepend so the outermost enclosing type's parameters come first.
+                levels.Insert(0, def.TypeParameters);
+            }
+        }
+
+        if (levels == null)
+        {
+            return ImmutableArray<TypeParameterSymbol>.Empty;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<TypeParameterSymbol>();
+        foreach (var level in levels)
+        {
+            builder.AddRange(level);
+        }
+
+        return builder.ToImmutable();
+    }
+
+    // Issue #1467: reifies every user-declared type nested inside a generic
+    // type over an ordinal-aligned clone of the enclosing type-parameter list
+    // (ECMA-335 §II.10.3.1). The enclosing parameters keep their original
+    // ordinals (outermost first), so a member that references an enclosing
+    // type parameter — whose `TypeParameterSymbol.Ordinal` already matches —
+    // encodes the correct `VAR` slot without any remap. Nested types that
+    // declare their OWN generic parameters are left untouched (their own
+    // parameters would need re-ordinalization, which is out of scope here and
+    // does not occur in the issue corpus).
+    private void RegisterNestedTypeEnclosingGenerics()
+    {
+        foreach (var s in this.emitCtx.Program.Structs)
+        {
+            if (s.ContainingType is not StructSymbol)
+            {
+                continue;
+            }
+
+            if (!s.TypeParameters.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            var enclosing = CollectEnclosingTypeParameters(s);
+            if (enclosing.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            var clones = ImmutableArray.CreateBuilder<TypeParameterSymbol>(enclosing.Length);
+            for (var i = 0; i < enclosing.Length; i++)
+            {
+                clones.Add(CloneAsClassTypeParameter(enclosing[i], i));
+            }
+
+            s.SetTypeParameters(clones.MoveToImmutable());
+        }
+    }
+
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
         this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
@@ -786,6 +857,17 @@ internal sealed class ReflectionMetadataEmitter
                 this.iteratorStateMachineRemapsByClass[kvp.Key] = remap;
             }
         }
+
+        // Issue #1467: a user-declared type nested inside a generic type must
+        // declare the enclosing type's generic parameters (ECMA-335 §II.10.3.1:
+        // a nested type's generic parameters include the encloser's). Reify
+        // those nested types over an ordinal-aligned copy of the enclosing
+        // type-parameter list — mirroring the state-machine treatment — so
+        // member/field/ctor signatures that reference an enclosing type
+        // parameter encode a valid `VAR` slot (`!0[]`) rather than a dangling
+        // type variable, and references to the nested type construct a real
+        // `Nested`1<!0>` TypeSpec.
+        this.RegisterNestedTypeEnclosingGenerics();
 
         // Phase 3.B.4: user-defined interface TypeDefs (planned below).
         // Synthesized closure classes are appended after user aggregates so

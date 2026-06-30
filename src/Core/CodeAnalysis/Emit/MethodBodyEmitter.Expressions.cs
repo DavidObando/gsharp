@@ -1555,10 +1555,32 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(node.Expression);
 
         // Box value-type operands so that `isinst` can operate on them.
-        if (ReflectionMetadataEmitter.IsValueTypeSymbol(node.Expression.Type))
+        // Issue #1467: an UNCONSTRAINED type-parameter operand (or `T?` over
+        // one) is neither a known value type nor a known reference type — its
+        // runtime value sits unboxed on the stack as a bare `!i`/`!!i` slot, so
+        // `isinst` (which requires an ObjRef) rejects it (`StackObjRef`). Box
+        // the underlying type parameter in that case too.
+        var operandType = node.Expression.Type;
+        var boxNeeded = ReflectionMetadataEmitter.IsValueTypeSymbol(operandType);
+        var boxType = operandType;
+        if (!boxNeeded)
+        {
+            if (operandType is TypeParameterSymbol)
+            {
+                boxNeeded = true;
+            }
+            else if (operandType is NullableTypeSymbol nullableOperand
+                && nullableOperand.UnderlyingType is TypeParameterSymbol underlyingTp)
+            {
+                boxNeeded = true;
+                boxType = underlyingTp;
+            }
+        }
+
+        if (boxNeeded)
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(node.Expression.Type));
+            this.il.Token(this.outer.GetElementTypeToken(boxType));
         }
 
         // Determine the isinst target. For nullable targets, test against the underlying type.
@@ -1587,11 +1609,30 @@ internal sealed partial class MethodBodyEmitter
     {
         this.EmitExpression(node.Expression);
 
-        // Box value-type operands.
-        if (ReflectionMetadataEmitter.IsValueTypeSymbol(node.Expression.Type))
+        // Box value-type operands. Issue #1467: an unconstrained type-parameter
+        // operand (or `T?` over one) also sits unboxed on the stack and must be
+        // boxed before `isinst`.
+        var operandType = node.Expression.Type;
+        var boxNeeded = ReflectionMetadataEmitter.IsValueTypeSymbol(operandType);
+        var boxType = operandType;
+        if (!boxNeeded)
+        {
+            if (operandType is TypeParameterSymbol)
+            {
+                boxNeeded = true;
+            }
+            else if (operandType is NullableTypeSymbol nullableOperand
+                && nullableOperand.UnderlyingType is TypeParameterSymbol underlyingTp)
+            {
+                boxNeeded = true;
+                boxType = underlyingTp;
+            }
+        }
+
+        if (boxNeeded)
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(node.Expression.Type));
+            this.il.Token(this.outer.GetElementTypeToken(boxType));
         }
 
         // Determine the isinst target type. For any `as T?` (nullable target),
@@ -1613,6 +1654,15 @@ internal sealed partial class MethodBodyEmitter
             // Unbox to Nullable<T> — converts the boxed T (or null) to a Nullable<T> value.
             this.il.OpCode(ILOpCode.Unbox_any);
             this.il.Token(this.outer.GetElementTypeToken(node.TargetType));
+        }
+        else if (isinstTarget is TypeParameterSymbol)
+        {
+            // Issue #1467: `expr as T` where T is a type parameter must convert
+            // the boxed `isinst` result back to the `!i`/`!!i` value form via
+            // `unbox.any`, otherwise the stack carries a reference where the
+            // type-parameter value slot is expected.
+            this.il.OpCode(ILOpCode.Unbox_any);
+            this.il.Token(this.outer.GetElementTypeToken(isinstTarget));
         }
     }
 }

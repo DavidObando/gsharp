@@ -379,11 +379,13 @@ public class Compilation
         // see the boxed captures rather than the snapshot-by-value pattern.
         program = Lowering.CaptureBoxingRewriter.Lower(program);
 
-        var (lowered, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
+        var (lowered, loweredProgram, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))
         {
             return new EmitResult(success: false, lowerDiagnostics);
         }
+
+        program = loweredProgram;
 
         var allWarnings = syntaxDiagnostics
             .Concat(program.Diagnostics)
@@ -488,11 +490,13 @@ public class Compilation
         // see the boxed captures rather than the snapshot-by-value pattern.
         program = Lowering.CaptureBoxingRewriter.Lower(program);
 
-        var (lowered, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
+        var (lowered, loweredProgram, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))
         {
             return new EmitResult(success: false, lowerDiagnostics);
         }
+
+        program = loweredProgram;
 
         var allWarnings = syntaxDiagnostics
             .Concat(program.Diagnostics)
@@ -599,10 +603,16 @@ public class Compilation
     /// to distinguish successfully-lowered async methods from those that
     /// failed builder resolution.</para>
     /// </remarks>
-    private static (LoweredProgram Lowered, ImmutableArray<Diagnostic> Diagnostics) LowerForEmit(
+    private static (LoweredProgram Lowered, BoundProgram Program, ImmutableArray<Diagnostic> Diagnostics) LowerForEmit(
         BoundProgram program, ReferenceResolver references)
     {
         // Run the rewriter passes.
+        // Issue #1467: route base.M() calls inside async/iterator bodies through
+        // synthesized non-virtual forwarders BEFORE the state-machine rewriters,
+        // so the hoisted `<>4__this` receiver never reaches a non-virtual base
+        // call (ilverify ThisMismatch).
+        program = Lowering.BaseCallForwarderRewriter.Rewrite(program);
+
         var asyncRewriteResult = Lowering.Async.AsyncStateMachineRewriter.Rewrite(program, references);
         var iteratorRewriteResult = IteratorRewriter.Rewrite(program);
         var asyncIteratorRewriteResult = AsyncIteratorRewriter.Rewrite(program);
@@ -613,7 +623,7 @@ public class Compilation
         var diagnostics = Lowering.Async.AsyncEmitPrecheck.Check(program);
 
         var lowered = new LoweredProgram(asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult);
-        return (lowered, diagnostics);
+        return (lowered, program, diagnostics);
     }
 
     private static DebugInformationOptions CloneDebugInformation(DebugInformationOptions source)
