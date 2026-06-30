@@ -3445,23 +3445,6 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// ADR-0092 / issue #758: GS0345 — an <c>@LibraryImport</c> function
-    /// returns a <c>string</c>, which the v1 stub generator cannot
-    /// safely free. Use a non-string return (e.g. <c>nint</c>) and call
-    /// the appropriate <c>Marshal.PtrToString</c> helper at the call
-    /// site instead.
-    /// </summary>
-    /// <param name="location">The location of the offending return-type clause.</param>
-    /// <param name="functionName">The function name.</param>
-    public void ReportLibraryImportStringReturnNotSupported(TextLocation location, string functionName)
-    {
-        Report(
-            location,
-            "GS0345",
-            $"'@LibraryImport' function '{functionName}' returns 'string'; the v1 stub generator does not yet support string return marshalling — return 'nint' and use 'Marshal.PtrToStringUTF8' at the call site (ADR-0092).");
-    }
-
-    /// <summary>
     /// ADR-0093 / issue #759: GS0346 — a <c>@StructLayout(...)</c>
     /// annotation supplies a <see cref="System.Runtime.InteropServices.LayoutKind"/>
     /// value other than <c>Sequential</c> or <c>Explicit</c>. <c>Auto</c>

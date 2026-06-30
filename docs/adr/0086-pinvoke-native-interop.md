@@ -117,7 +117,7 @@ Any **unknown named argument** falls through to the standard "no matching proper
 
 ### 4. `@LibraryImport` — implemented in ADR-0092 (issue #758)
 
-The modern C# 11+ source-generator attribute (`[LibraryImport]`) produces an equivalent — and in places safer — managed/unmanaged transition than `[DllImport]`. v1 of G# P/Invoke shipped with `@DllImport` only; **ADR-0092** (issue #758) supersedes this deferral and adds `@LibraryImport` support: the binder accepts the source-generator-shaped attribute, the emitter generates an explicit managed marshalling stub (outer method) that calls a hidden blittable inner P/Invoke, and the IL is verifiable. The runtime never auto-marshals strings for an `@LibraryImport` declaration. See **ADR-0092** for the marshalling rules, generated-stub IL shape, and diagnostics GS0342–GS0345.
+The modern C# 11+ source-generator attribute (`[LibraryImport]`) produces an equivalent — and in places safer — managed/unmanaged transition than `[DllImport]`. v1 of G# P/Invoke shipped with `@DllImport` only; **ADR-0092** (issue #758) supersedes this deferral and adds `@LibraryImport` support: the binder accepts the source-generator-shaped attribute, the emitter generates an explicit managed marshalling stub (outer method) that calls a hidden blittable inner P/Invoke, and the IL is verifiable. The runtime never auto-marshals strings for an `@LibraryImport` declaration. See **ADR-0092** for the marshalling rules, generated-stub IL shape, and diagnostics GS0342–GS0344.
 
 The original rationale for deferring `@LibraryImport` is preserved here for historical context:
 

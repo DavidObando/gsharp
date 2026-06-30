@@ -588,7 +588,7 @@ ADR-0086 / issue #727 introduces `@DllImport`-annotated function declarations wh
 
 See ADR-0086 for the complete attribute-knob table, supported marshalling types, and a worked example.
 
-## `@LibraryImport` P/Invoke diagnostics (GS0342–GS0345)
+## `@LibraryImport` P/Invoke diagnostics (GS0342–GS0344)
 
 ADR-0092 / issue #758 adds the modern source-generator-shaped `@LibraryImport`
 attribute. The compiler emits an explicit managed marshalling stub that calls
@@ -601,8 +601,13 @@ surface unique to `@LibraryImport`.
 |----|----------|-------------|
 | GS0342 | Error | Function `{name}` is annotated with both `@DllImport` and `@LibraryImport`; choose one. |
 | GS0343 | Error | `StringMarshalling` value `{value}` is not a valid `StringMarshalling` member; use `Utf8` or `Utf16`. |
-| GS0344 | Error | `@LibraryImport` function `{name}` has a `string` surface and must specify `StringMarshalling: StringMarshalling.Utf8` or `StringMarshalling.Utf16`. |
-| GS0345 | Error | `@LibraryImport` function `{name}` has a `string` return type; v1 supports `string` only as a parameter type (see ADR-0092 §2). |
+| GS0344 | Error | `@LibraryImport` function `{name}` has a `string` surface (parameter or return) and must specify `StringMarshalling: StringMarshalling.Utf8` or `StringMarshalling.Utf16`. |
+
+`string` return types are supported (issue #1504): the inner P/Invoke returns
+the raw native pointer and the outer stub materializes the managed string via
+`Marshal.PtrToStringUTF8`/`PtrToStringUni`. The returned native buffer is
+treated as non-owning (it is not freed). The retired GS0345 code (which used to
+reject a `string` return) is no longer emitted and is not reused.
 
 See ADR-0092 for the full design rationale.
 

@@ -365,7 +365,7 @@ Console.WriteLine(NativeStrLen("Hello, world!"))     // prints 13
 
 Knobs that exist on `@DllImport` but **not** on `@LibraryImport` (matching the BCL surface): `CharSet` (superseded by per-call `StringMarshalling`), `CallingConvention` (overridden via the separate `[UnmanagedCallConv]` attribute in C#; not exposed in v1), `PreserveSig`, `BestFitMapping`, `ThrowOnUnmappableChar`.
 
-The diagnostics unique to `@LibraryImport` are GS0342 (mixing with `@DllImport`), GS0343 (invalid `StringMarshalling`), GS0344 (string surface without `StringMarshalling`), and GS0345 (`string` return type). The existing GS0322–GS0329 codes continue to apply where relevant. See the [Diagnostics reference](./diagnostics) and ADR-0092 for the full table.
+The diagnostics unique to `@LibraryImport` are GS0342 (mixing with `@DllImport`), GS0343 (invalid `StringMarshalling`), and GS0344 (string surface — parameter or return — without `StringMarshalling`). A `string` return type is supported (issue #1504): the outer stub materializes the managed string via `Marshal.PtrToStringUTF8`/`PtrToStringUni` and treats the returned native buffer as non-owning. The existing GS0322–GS0329 codes continue to apply where relevant. See the [Diagnostics reference](./diagnostics) and ADR-0092 for the full table.
 
 ### Struct and class marshalling (`@StructLayout` / `@FieldOffset`)
 
@@ -491,4 +491,4 @@ The diagnostics introduced by this feature are GS0357 (unsupported `UnmanagedTyp
 
 ## Unsupported interop surface
 
-The following are not yet implemented as source features: user-supplied custom marshallers (`StringMarshalling.Custom` and per-field `[MarshalAs]`), fixed-size buffers inside marshalled structs, `string` return types under `@LibraryImport` (GS0345), default parameter values in G# declarations, and C#-style `null` literals. Use `nil` for nullable values, import .NET APIs for library functionality, and wrap unsupported marshalling shapes behind a thin C# shim for now.
+The following are not yet implemented as source features: user-supplied custom marshallers (`StringMarshalling.Custom` and per-field `[MarshalAs]`), fixed-size buffers inside marshalled structs, default parameter values in G# declarations, and C#-style `null` literals. Use `nil` for nullable values, import .NET APIs for library functionality, and wrap unsupported marshalling shapes behind a thin C# shim for now. (`string` return types under `@LibraryImport` are now supported — issue #1504 — with a non-owning return policy.)

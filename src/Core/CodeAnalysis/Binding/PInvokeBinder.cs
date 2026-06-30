@@ -29,7 +29,7 @@ internal static class PInvokeBinder
     /// When <paramref name="function"/> carries an <c>@DllImport</c> or
     /// <c>@LibraryImport</c> annotation, validates the shape and produces
     /// a <see cref="PInvokeMetadata"/> attached to the symbol. Reports
-    /// GS0322–GS0329 (DllImport) and GS0342–GS0345 (LibraryImport) on any
+    /// GS0322–GS0329 (DllImport) and GS0342–GS0344 (LibraryImport) on any
     /// malformed input.
     /// </summary>
     /// <param name="function">The function symbol being declared.</param>
@@ -252,14 +252,14 @@ internal static class PInvokeBinder
             }
         }
 
-        // ADR-0092 §4 — the v1 LibraryImport stub generator cannot safely
-        // free CLR-owned string returns. Reject them with a tailored
-        // diagnostic so users reach for `nint` + `Marshal.PtrToStringUTF8`.
-        if (isLibraryImport && returnIsString)
-        {
-            var returnLocation = syntax.Type?.Location ?? identifierLocation;
-            diagnostics.ReportLibraryImportStringReturnNotSupported(returnLocation, function.Name);
-        }
+        // ADR-0092 §2/§4 — a `string` return is supported: the emitted outer
+        // stub materializes the managed string from the inner P/Invoke's raw
+        // native pointer via `Marshal.PtrToStringUTF8`/`PtrToStringUni`. The
+        // returned native buffer is treated as non-owning (the native side
+        // owns it, e.g. `getenv`), so no free is emitted for the return. An
+        // explicit `StringMarshalling` is still required: `returnIsString`
+        // feeds `hasStringSurface` below, so GS0344 fires for a string-return
+        // signature without `Utf8`/`Utf16`.
 
         // Extract metadata from the attribute arguments.
         var metadata = isLibraryImport

@@ -31,6 +31,7 @@ public class SampleConformanceTests
     {
         "PInvoke.gs",
         "PInvokeLibraryImport.gs",
+        "PInvokeLibraryImportStringReturn.gs",
         "PInvokeRefOutIn.gs",
         "PInvokeMarshalAs.gs",
     };
