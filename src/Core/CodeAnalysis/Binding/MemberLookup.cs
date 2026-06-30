@@ -362,20 +362,51 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
-    /// Probes <paramref name="clrType"/> for an
-    /// <c>IDictionary&lt;TKey, TValue&gt;</c> implementation and returns the
-    /// key/value type arguments when present.
+    /// Probes <paramref name="clrType"/> for a member-mapping shape and returns
+    /// the key/value type arguments when present. Recognizes the broader
+    /// read-only mapping family: any interface whose generic type definition is
+    /// <c>IDictionary&lt;TKey, TValue&gt;</c> or
+    /// <c>IReadOnlyDictionary&lt;TKey, TValue&gt;</c> — mirroring how the
+    /// enumerable probe accepts the whole <c>IEnumerable&lt;T&gt;</c> family
+    /// rather than one concrete type (issue #1483). This lets
+    /// <c>for k, v in d</c> key/value destructure receivers that surface only
+    /// through the read-only contract (e.g. immutable dictionaries or user
+    /// types implementing only <c>IReadOnlyDictionary&lt;,&gt;</c>).
+    /// <para>
+    /// When a type implements BOTH interfaces (e.g. <c>Dictionary&lt;K, V&gt;</c>),
+    /// the writable <c>IDictionary&lt;,&gt;</c> is preferred. This is enforced
+    /// with a two-pass probe — the first pass scans for <c>IDictionary&lt;,&gt;</c>
+    /// and only when none is found does the second pass scan for
+    /// <c>IReadOnlyDictionary&lt;,&gt;</c> — so enumeration order can never pick
+    /// the read-only interface over an available writable one (they may even
+    /// carry different type arguments in pathological types).
+    /// </para>
     /// </summary>
     /// <param name="clrType">The CLR type to probe.</param>
     /// <param name="keyType">The dictionary's key type, on success.</param>
     /// <param name="valueType">The dictionary's value type, on success.</param>
     /// <returns><see langword="true"/> when the type implements
-    /// <c>IDictionary&lt;,&gt;</c>.</returns>
+    /// <c>IDictionary&lt;,&gt;</c> or <c>IReadOnlyDictionary&lt;,&gt;</c>.</returns>
     public static bool TryGetClrDictionaryTypes(Type clrType, out Type keyType, out Type valueType)
     {
+        // First pass: prefer the writable IDictionary<,> (write scenarios) when
+        // a type implements both contracts.
         foreach (var iface in EnumerateSelfAndInterfaces(clrType))
         {
             if (iface.IsGenericType && iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IDictionary`2")
+            {
+                var args = iface.GetGenericArguments();
+                keyType = args[0];
+                valueType = args[1];
+                return true;
+            }
+        }
+
+        // Second pass: only when no writable IDictionary<,> was found, accept the
+        // read-only IReadOnlyDictionary<,> mapping family.
+        foreach (var iface in EnumerateSelfAndInterfaces(clrType))
+        {
+            if (iface.IsGenericType && iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IReadOnlyDictionary`2")
             {
                 var args = iface.GetGenericArguments();
                 keyType = args[0];
