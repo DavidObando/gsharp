@@ -1240,6 +1240,30 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>
+    /// Issue #1499: applies a type-parameter <paramref name="substitution"/> to
+    /// <paramref name="type"/>, recursively rewriting the generic arguments of
+    /// any constructed generic (struct / interface / imported CLR) type and the
+    /// element / underlying / function-signature types it contains. Shares the
+    /// same traversal used when constructing a generic instantiation, so it is
+    /// the canonical way for the symbol layer to remap a constraint reference
+    /// type (e.g. <c>IComparable[T]</c> → <c>IComparable[clone]</c>) onto a
+    /// cloned type-parameter set. Returns the original instance unchanged when
+    /// the substitution touches nothing.
+    /// </summary>
+    /// <param name="type">The type whose type-parameter references to remap.</param>
+    /// <param name="substitution">The original → replacement type-parameter map.</param>
+    /// <returns>The substituted type, or <paramref name="type"/> when unchanged.</returns>
+    internal static TypeSymbol SubstituteTypeParameters(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        if (type == null || substitution == null || substitution.Count == 0)
+        {
+            return type;
+        }
+
+        return SubstituteTypeForConstruction(type, substitution);
+    }
+
+    /// <summary>
     /// ADR-0105 Phase 2 — re-points this (reused) struct symbol at the
     /// declaration node of a freshly-parsed syntax tree whose declaration is
     /// byte-identical to the previous one (a body-only edit). Only the backing

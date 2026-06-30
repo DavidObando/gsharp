@@ -391,43 +391,29 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var total = classTPs.Length + methodTPs.Length;
-        var smTPs = ImmutableArray.CreateBuilder<TypeParameterSymbol>(total);
+        var origCombined = ImmutableArray.CreateBuilder<TypeParameterSymbol>(total);
+        origCombined.AddRange(classTPs);
+        origCombined.AddRange(methodTPs);
+
+        // Issue #1499: remap self-/cross-referential constraints from the
+        // enclosing parameters onto the state machine's cloned set.
+        var smTPs = SynthesizedClosureReifier.CloneWithRemappedConstraints(origCombined.MoveToImmutable());
         var remap = new Dictionary<TypeParameterSymbol, int>(total);
         var ordinal = 0;
         foreach (var src in classTPs)
         {
-            smTPs.Add(CloneAsClassTypeParameter(src, ordinal));
             remap[src] = ordinal;
             ordinal++;
         }
 
         foreach (var src in methodTPs)
         {
-            smTPs.Add(CloneAsClassTypeParameter(src, ordinal));
             remap[src] = ordinal;
             ordinal++;
         }
 
-        smStruct.SetTypeParameters(smTPs.MoveToImmutable());
+        smStruct.SetTypeParameters(smTPs);
         this.iteratorStateMachineRemapsByClass[smStruct] = remap;
-    }
-
-    private static TypeParameterSymbol CloneAsClassTypeParameter(TypeParameterSymbol src, int ordinal)
-    {
-        return new TypeParameterSymbol(
-            src.Name,
-            ordinal,
-            src.Constraint,
-            src.Variance,
-            src.InterfaceConstraint)
-        {
-            HasReferenceTypeConstraint = src.HasReferenceTypeConstraint,
-            HasValueTypeConstraint = src.HasValueTypeConstraint,
-            HasDefaultConstructorConstraint = src.HasDefaultConstructorConstraint,
-            ClrInterfaceConstraint = src.ClrInterfaceConstraint,
-            ClassConstraint = src.ClassConstraint,
-            IsMethodTypeParameter = false,
-        };
     }
 
     // Issue #1467: gathers the flattened generic parameters of every enclosing
@@ -491,13 +477,9 @@ internal sealed class ReflectionMetadataEmitter
                 continue;
             }
 
-            var clones = ImmutableArray.CreateBuilder<TypeParameterSymbol>(enclosing.Length);
-            for (var i = 0; i < enclosing.Length; i++)
-            {
-                clones.Add(CloneAsClassTypeParameter(enclosing[i], i));
-            }
-
-            s.SetTypeParameters(clones.MoveToImmutable());
+            // Issue #1499: remap self-/cross-referential constraints onto the
+            // nested type's cloned enclosing-parameter set.
+            s.SetTypeParameters(SynthesizedClosureReifier.CloneWithRemappedConstraints(enclosing));
         }
     }
 

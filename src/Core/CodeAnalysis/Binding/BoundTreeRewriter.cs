@@ -1243,7 +1243,17 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundImportedInstanceCallExpression(null, newReceiver, node.Method, node.Type, args, node.ArgumentRefKinds, node.TypeArgumentSymbols);
+        return new BoundImportedInstanceCallExpression(
+            null,
+            newReceiver,
+            node.Method,
+            node.Type,
+            args,
+            node.ArgumentRefKinds,
+            node.TypeArgumentSymbols,
+            node.ConstrainedReceiverTypeParameter,
+            node.ConstrainedInterfaceType,
+            node.IsNonVirtualBaseCall);
     }
 
     /// <summary>Rewrites an array creation expression.</summary>
