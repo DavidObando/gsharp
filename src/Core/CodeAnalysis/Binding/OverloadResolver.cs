@@ -466,6 +466,61 @@ internal sealed class OverloadResolver
     }
 
     /// <summary>
+    /// Issue #1493: coerces a single trailing argument bound for a G# variadic
+    /// (<c>...T</c>) element slot to the variadic element type, applying the same
+    /// implicit conversions a fixed parameter of that type would accept —
+    /// reference upcast, interface conversion, tuple-element conversions, nullable
+    /// lifting, implicit constant narrowing, and user-defined implicit conversions.
+    /// Returns the (possibly conversion-wrapped) argument so the emitter packs the
+    /// element with the variadic element type rather than the argument's static
+    /// type; reports GS0154 and sets <paramref name="hasErrors"/> when no implicit
+    /// conversion exists. This keeps overload applicability and final coercion in
+    /// agreement with the non-variadic / array-literal element paths.
+    /// </summary>
+    private BoundExpression CoerceVariadicElement(
+        BoundExpression argument,
+        TypeSymbol elementType,
+        TextLocation location,
+        string parameterName,
+        ref bool hasErrors)
+    {
+        var argType = argument.Type;
+
+        // Unknown/error argument, or an open (unsubstituted) element type whose
+        // members are erased: leave the argument untouched. Open element types
+        // follow the type-erased model where the emitter boxes as needed.
+        if (argType == null || argType == TypeSymbol.Error || elementType is TypeParameterSymbol)
+        {
+            return argument;
+        }
+
+        if (argType == elementType)
+        {
+            return argument;
+        }
+
+        var conversion = Conversion.Classify(argType, elementType);
+        if (conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity))
+        {
+            return conversions.BindConversion(location, argument, elementType);
+        }
+
+        if (ExpressionBinder.IsImplicitConstantNarrowingArgument(argument, elementType))
+        {
+            return conversions.BindConversion(location, argument, elementType);
+        }
+
+        if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, elementType, out var udc))
+        {
+            return udc;
+        }
+
+        Diagnostics.ReportWrongArgumentType(location, parameterName, elementType, argType);
+        hasErrors = true;
+        return argument;
+    }
+
+    /// <summary>
     /// Issue #1281: C# §10.2.11 implicit constant expression conversion at a call
     /// site. When <paramref name="argument"/> is a constant integer expression
     /// whose value fits the (possibly narrower or cross-sign) integer parameter
@@ -912,6 +967,53 @@ internal sealed class OverloadResolver
             }
 
             return false;
+        }
+
+        // Issue #1493: validate the variadic tail too, so a non-generic
+        // variadic candidate is only applicable when each trailing argument
+        // implicitly converts to the variadic element type — keeping
+        // applicability/ranking in agreement with the final element coercion.
+        if (isVariadic
+            && candidate.Parameters[candidate.Parameters.Length - 1].Type is SliceTypeSymbol variadicSlice)
+        {
+            var elementType = variadicSlice.ElementType;
+            var tailStart = fixedParamCount;
+
+            // A single trailing argument already typed as the slice itself is a
+            // pass-through (`f(existingSlice)`); accept it as-is.
+            var isSlicePassThrough = argumentCount - tailStart == 1
+                && tailStart < boundArguments.Count
+                && boundArguments[tailStart]?.Type == candidate.Parameters[candidate.Parameters.Length - 1].Type;
+
+            if (!isSlicePassThrough && !(elementType is TypeParameterSymbol))
+            {
+                for (var i = tailStart; i < argumentCount && i < boundArguments.Count; i++)
+                {
+                    var argType = boundArguments[i]?.Type;
+                    if (argType == null)
+                    {
+                        continue;
+                    }
+
+                    var conversion = Conversion.Classify(argType, elementType);
+                    if (conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity))
+                    {
+                        continue;
+                    }
+
+                    if (ExpressionBinder.IsImplicitConstantNarrowingArgument(boundArguments[i], elementType))
+                    {
+                        continue;
+                    }
+
+                    if (conversions.TryApplyUserDefinedImplicitArgumentConversion(boundArguments[i], elementType, out _))
+                    {
+                        continue;
+                    }
+
+                    return false;
+                }
+            }
         }
 
         return true;
@@ -1907,16 +2009,17 @@ internal sealed class OverloadResolver
 
             if (!passThrough)
             {
+                // Issue #1493: coerce each trailing element to the variadic
+                // element type, applying any valid implicit conversion before
+                // the elements are packed.
                 for (var i = fixedPrimaryCount; i < requestedArgCount; i++)
                 {
-                    var argument = boundArguments[i];
-                    if (argument.Type != elementType
-                        && argument.Type != TypeSymbol.Error
-                        && !Conversion.Classify(argument.Type, elementType).IsImplicit)
-                    {
-                        Diagnostics.ReportWrongArgumentType(parameterSyntaxV[i].Location, variadicParam.Name, elementType, argument.Type);
-                        hasErrorsV = true;
-                    }
+                    boundArguments[i] = CoerceVariadicElement(
+                        boundArguments[i],
+                        elementType,
+                        parameterSyntaxV[i].Location,
+                        variadicParam.Name,
+                        ref hasErrorsV);
                 }
             }
 
@@ -2369,16 +2472,18 @@ internal sealed class OverloadResolver
             if (!passThrough)
             {
                 var hasVariadicErrors = false;
+
+                // Issue #1493: coerce each trailing element to the variadic
+                // element type, applying any valid implicit conversion before
+                // packing.
                 for (var i = fixedCtorParamCount; i < requestedArgCount; i++)
                 {
-                    var argument = boundArguments[i];
-                    if (argument.Type != elementType
-                        && argument.Type != TypeSymbol.Error
-                        && !Conversion.Classify(argument.Type, elementType).IsImplicit)
-                    {
-                        Diagnostics.ReportWrongArgumentType(parameterSyntax[i].Location, variadicParam.Name, elementType, argument.Type);
-                        hasVariadicErrors = true;
-                    }
+                    boundArguments[i] = CoerceVariadicElement(
+                        boundArguments[i],
+                        elementType,
+                        parameterSyntax[i].Location,
+                        variadicParam.Name,
+                        ref hasVariadicErrors);
                 }
 
                 if (hasVariadicErrors)
@@ -3206,10 +3311,24 @@ internal sealed class OverloadResolver
             var passThrough = trailing == 1 && boundArguments[fixedCount].Type == sliceType;
             if (!passThrough)
             {
+                // Issue #1493: coerce each trailing element to the variadic
+                // element type before packing so implicit conversions apply.
+                var elementType = sliceType.ElementType;
+                var hasElementErrors = false;
                 var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailing);
                 for (var i = fixedCount; i < syntax.Arguments.Count; i++)
                 {
-                    packed.Add(boundArguments[i]);
+                    packed.Add(CoerceVariadicElement(
+                        boundArguments[i],
+                        elementType,
+                        syntax.Arguments[i].Location,
+                        calleeName,
+                        ref hasElementErrors));
+                }
+
+                if (hasElementErrors)
+                {
+                    return false;
                 }
 
                 var rebuilt = ImmutableArray.CreateBuilder<BoundExpression>(fixedCount + 1);
@@ -4443,22 +4562,27 @@ internal sealed class OverloadResolver
             }
             else
             {
+                // Issue #1493: coerce each trailing element to the variadic
+                // element type so an implicit conversion (reference upcast,
+                // tuple-element, interface, ...) is applied before packing —
+                // the emitter then builds the element with the element type.
+                var convertedElements = new BoundExpression[syntax.Arguments.Count - fixedParamCount];
                 for (var i = fixedParamCount; i < syntax.Arguments.Count; i++)
                 {
-                    var argument = boundArguments[i];
-                    if (argument.Type != elementType && argument.Type != TypeSymbol.Error)
-                    {
-                        Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, variadicParam.Name, elementType, argument.Type);
-                        hasErrors = true;
-                    }
+                    convertedElements[i - fixedParamCount] = CoerceVariadicElement(
+                        boundArguments[i],
+                        elementType,
+                        syntax.Arguments[i].Location,
+                        variadicParam.Name,
+                        ref hasErrors);
                 }
 
                 if (!hasErrors)
                 {
-                    var packed = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count - fixedParamCount);
-                    for (var i = fixedParamCount; i < syntax.Arguments.Count; i++)
+                    var packed = ImmutableArray.CreateBuilder<BoundExpression>(convertedElements.Length);
+                    foreach (var element in convertedElements)
                     {
-                        packed.Add(boundArguments[i]);
+                        packed.Add(element);
                     }
 
                     var finalArgs = ImmutableArray.CreateBuilder<BoundExpression>(fixedParamCount + 1);
@@ -4953,23 +5077,20 @@ internal sealed class OverloadResolver
             if (!passThrough)
             {
                 var hasVariadicErrors = false;
+                var converted = new BoundExpression[trailingCount];
                 for (var i = fixedCallableParamCount; i < permutedArguments.Length; i++)
                 {
-                    var argument = permutedArguments[i];
-                    if (elementType is TypeParameterSymbol)
-                    {
-                        // Open element type: leave argument untouched, the
-                        // emitter boxes as needed (type-erased model).
-                        continue;
-                    }
-
-                    if (argument.Type != elementType
-                        && argument.Type != TypeSymbol.Error
-                        && !Conversion.Classify(argument.Type, elementType).IsImplicit)
-                    {
-                        Diagnostics.ReportWrongArgumentType(permutedSyntax[i].Location, variadicParam.Name, elementType, argument.Type);
-                        hasVariadicErrors = true;
-                    }
+                    // Issue #1493: coerce each trailing element to the variadic
+                    // element type so an implicit conversion is applied before
+                    // packing (the emitter then builds the element with the
+                    // element type rather than the argument's static type).
+                    var elementLocation = permutedSyntax[i]?.Location ?? ce.Location;
+                    converted[i - fixedCallableParamCount] = CoerceVariadicElement(
+                        permutedArguments[i],
+                        elementType,
+                        elementLocation,
+                        variadicParam.Name,
+                        ref hasVariadicErrors);
                 }
 
                 if (hasVariadicErrors)
@@ -4978,9 +5099,9 @@ internal sealed class OverloadResolver
                 }
 
                 var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailingCount);
-                for (var i = fixedCallableParamCount; i < permutedArguments.Length; i++)
+                foreach (var element in converted)
                 {
-                    packed.Add(permutedArguments[i]);
+                    packed.Add(element);
                 }
 
                 var newArgs = ImmutableArray.CreateBuilder<BoundExpression>(fixedCallableParamCount + 1);
