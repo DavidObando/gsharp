@@ -1833,6 +1833,99 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
+    /// <summary>
+    /// Issue #1512: builds a symbolic <see cref="FunctionTypeSymbol"/> for a
+    /// lambda argument bound to a generic CLR/imported method whose delegate
+    /// parameter mentions a method type parameter (e.g.
+    /// <c>Task.ContinueWith&lt;TResult&gt;(Func&lt;Task,TResult&gt;)</c>). The
+    /// CLOSED method's parameter is type-erased (<c>Func&lt;Task,object&gt;</c>),
+    /// which would force the lambda's bound function type — and therefore its
+    /// synthesized return — to <c>object</c>, so the delegate emits as
+    /// <c>Func&lt;Task,object&gt;</c> instead of <c>Func&lt;Task,T&gt;</c>. This
+    /// recovers the real shape by substituting the inferred symbolic method type
+    /// arguments (and any receiver-level type arguments) through the OPEN
+    /// method's delegate parameter via <see cref="MemberLookup.MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol}, MethodInfo, ImmutableArray{TypeSymbol})"/>.
+    /// Returns <see langword="false"/> (deferring to the erased target) when the
+    /// parameter is not a delegate, the method is not generic, or no recovered
+    /// position contains a type parameter / same-compilation user type.
+    /// </summary>
+    private static bool TryBuildSymbolicDelegateTargetForMethodParam(
+        MethodInfo closedMethod,
+        int paramIndex,
+        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs,
+        TypeSymbol receiverType,
+        out FunctionTypeSymbol target)
+    {
+        target = null;
+        if (closedMethod == null
+            || !closedMethod.IsGenericMethod
+            || symbolicMethodTypeArgs.IsDefaultOrEmpty
+            || !symbolicMethodTypeArgs.Any(s => s != null
+                && (TypeSymbol.ContainsTypeParameter(s) || TypeSymbol.ContainsSameCompilationUserType(s))))
+        {
+            return false;
+        }
+
+        MethodInfo openMethod;
+        ParameterInfo[] openParams;
+        try
+        {
+            openMethod = closedMethod.IsGenericMethodDefinition ? closedMethod : closedMethod.GetGenericMethodDefinition();
+            openParams = openMethod.GetParameters();
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+
+        if (paramIndex < 0 || paramIndex >= openParams.Length)
+        {
+            return false;
+        }
+
+        var openParamType = openParams[paramIndex].ParameterType;
+        var invoke = openParamType?.GetMethodSafe("Invoke");
+        if (invoke == null)
+        {
+            return false;
+        }
+
+        Type receiverOpenDef = null;
+        ImmutableArray<TypeSymbol> receiverTypeArgs = default;
+        if (receiverType is ImportedTypeSymbol imp && imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty)
+        {
+            receiverOpenDef = imp.OpenDefinition;
+            receiverTypeArgs = imp.TypeArguments;
+        }
+
+        var invokeParameters = invoke.GetParameters();
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(invokeParameters.Length);
+        foreach (var parameter in invokeParameters)
+        {
+            parameterTypes.Add(MemberLookup.MapOpenClrTypeToSymbolic(
+                parameter.ParameterType, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs));
+        }
+
+        var returnType = invoke.ReturnType.IsSameAs(typeof(void))
+            ? TypeSymbol.Void
+            : MemberLookup.MapOpenClrTypeToSymbolic(invoke.ReturnType, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs);
+
+        var candidate = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), returnType);
+
+        // Only override the erased target when the recovered shape actually
+        // carries a type parameter or same-compilation user type; otherwise the
+        // ordinary closed-CLR delegate target is already correct.
+        var carries = (returnType != null && (TypeSymbol.ContainsTypeParameter(returnType) || TypeSymbol.ContainsSameCompilationUserType(returnType)))
+            || parameterTypes.Any(p => p != null && (TypeSymbol.ContainsTypeParameter(p) || TypeSymbol.ContainsSameCompilationUserType(p)));
+        if (!carries)
+        {
+            return false;
+        }
+
+        target = candidate;
+        return true;
+    }
+
     private void ResolveDeferredArrowLambdaArguments(
         BoundExpression receiver,
         ImportedClassSymbol classSymbol,
@@ -2728,21 +2821,24 @@ internal sealed partial class ExpressionBinder
                 var staticRebound = RebindFormattableInterpolationArguments(staticExpandedArgs, ce.Arguments, staticParameters, staticDownstreamMapping);
                 var staticHandlerArgs = ApplyInterpolatedStringHandlers(staticParameters, staticRebound, receiver: null, ce.Location, staticDownstreamMapping, out var staticHandlerPrelude, out _);
 
-                // Issue #889: void-ize value-returning func/arrow literals passed
-                // to void-returning delegate parameters (System.Action / Action<...>)
-                // before CLR parameter conversion, mirroring the instance path.
-                var staticDelegateArgs = RebindFunctionLiteralDelegateArguments(staticHandlerArgs, staticParameters, staticDownstreamMapping);
-
                 // Issue #1325 / #1471: recover the symbolic method type-argument
                 // vector before parameter conversion so a bare `default`
                 // argument closed over an open type parameter (e.g.
                 // `Task.FromResult[T?](default)`) materialises against the real
                 // type parameter instead of the erased `object` placeholder.
+                // Issue #1512: computed BEFORE the delegate rebind so a lambda
+                // argument whose return is a method type parameter recovers its
+                // symbolic delegate target rather than erasing to `object`.
                 var staticSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
                     receiverType: null,
                     ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
                 var staticSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(staticFn.Method, typeArgSymbols, staticSymbolicArgs);
                 var staticTypeArgSymbolsForCall = !staticSymbolicTypeArgs.IsDefault ? staticSymbolicTypeArgs : typeArgSymbols;
+
+                // Issue #889: void-ize value-returning func/arrow literals passed
+                // to void-returning delegate parameters (System.Action / Action<...>)
+                // before CLR parameter conversion, mirroring the instance path.
+                var staticDelegateArgs = RebindFunctionLiteralDelegateArguments(staticHandlerArgs, staticParameters, staticDownstreamMapping, staticFn.Method, staticTypeArgSymbolsForCall);
 
                 // Issue #506 follow-up: ensure value-type → object boxing fires
                 // for fixed-arity CLR static calls (e.g. `String.Format("{0}", 42)`
@@ -3143,7 +3239,21 @@ internal sealed partial class ExpressionBinder
                             // against the resolved by-ref parameter so the new
                             // local is declared with the inferred pointee type.
                             arguments = RebindInlineOutVarArguments(ce, arguments, resolution.Best, resolution.ParameterMapping, receiver?.Type);
-                            var instSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(effectiveReceiverType, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+
+                            // Issue #1512: for a genuine INSTANCE method the receiver
+                            // is `this`, not a formal parameter — `GetParameters()`
+                            // excludes it. The method-type-argument inference vector
+                            // must therefore align with the method's parameters and
+                            // must NOT carry the receiver as slot 0 (unlike the
+                            // extension-method path, where the receiver IS param 0).
+                            // Including it shifted every real argument by one slot, so
+                            // a method type parameter inferable only from a lambda
+                            // argument (e.g. `TResult` of
+                            // `Task.ContinueWith<TResult>(Func<Task,TResult>)`) was
+                            // never unified and the call collapsed to `<object>`. The
+                            // receiver still drives return-type Var substitution via
+                            // `ResolveCallReturnTypeFromSymbolicTypeArgs` below.
+                            var instSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(null, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
                             var instSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(resolution.Best, typeArgSymbols, instSymbolicArgs);
                             var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : typeArgSymbols;
                             var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
@@ -3158,7 +3268,7 @@ internal sealed partial class ExpressionBinder
                             var instDownstreamMapping = resolution.IsExpanded ? default : instMapping;
                             var instRebound = RebindFormattableInterpolationArguments(instExpandedArgs, ce.Arguments, instParameters, instDownstreamMapping);
                             var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instDownstreamMapping, out var instHandlerPrelude, out var instUpdatedReceiver);
-                            var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instDownstreamMapping);
+                            var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instDownstreamMapping, resolution.Best, instTypeArgSymbolsForCall, effectiveReceiverType);
                             var instConvertedArgs = conversions.BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping, method: resolution.Best, receiverType: receiver?.Type, symbolicMethodTypeArgs: instTypeArgSymbolsForCall);
                             var instArguments = OverloadResolver.BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
                             var instRefKinds = ComputeArgumentRefKinds(instParameters);
@@ -3811,7 +3921,12 @@ internal sealed partial class ExpressionBinder
                     return true;
                 }
 
-                var inheritedSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(receiver?.Type, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+                // Issue #1512: an instance method (incl. one inherited from an
+                // imported generic base) excludes the receiver from its formal
+                // parameter list, so the method-type-argument inference vector must
+                // not carry the receiver as slot 0 — otherwise lambda-only-inferable
+                // method type parameters never unify and erase to `<object>`.
+                var inheritedSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(null, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
                 var inheritedSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(resolution.Best, typeArgSymbols, inheritedSymbolicArgs);
                 var inheritedTypeArgSymbolsForCall = !inheritedSymbolicTypeArgs.IsDefault ? inheritedSymbolicTypeArgs : typeArgSymbols;
                 var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
@@ -3825,7 +3940,7 @@ internal sealed partial class ExpressionBinder
                     : arguments;
                 var inheritedDownstreamMapping = resolution.IsExpanded ? default : inheritedMapping;
                 var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, inheritedExpandedArgs, receiver, ce.Location, inheritedDownstreamMapping, out var inheritedHandlerPrelude, out var inheritedUpdatedReceiver);
-                var inheritedDelegateArgs = RebindFunctionLiteralDelegateArguments(inheritedHandlerArgs, inheritedParameters, inheritedDownstreamMapping);
+                var inheritedDelegateArgs = RebindFunctionLiteralDelegateArguments(inheritedHandlerArgs, inheritedParameters, inheritedDownstreamMapping, resolution.Best, inheritedTypeArgSymbolsForCall, receiver?.Type);
                 var inheritedConvertedArgs = conversions.BindClrParameterConversions(inheritedDelegateArgs, inheritedParameters, ce, inheritedDownstreamMapping, method: resolution.Best, receiverType: receiver?.Type, symbolicMethodTypeArgs: inheritedTypeArgSymbolsForCall);
                 var inheritedArguments = OverloadResolver.BuildOrderedCallArguments(inheritedConvertedArgs, inheritedDownstreamMapping, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
@@ -4245,7 +4360,10 @@ internal sealed partial class ExpressionBinder
     private ImmutableArray<BoundExpression> RebindFunctionLiteralDelegateArguments(
         ImmutableArray<BoundExpression> arguments,
         ParameterInfo[] parameters,
-        ImmutableArray<int> parameterMapping = default)
+        ImmutableArray<int> parameterMapping = default,
+        MethodInfo method = null,
+        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs = default,
+        TypeSymbol receiverType = null)
     {
         ImmutableArray<BoundExpression>.Builder builder = null;
         for (var i = 0; i < arguments.Length; i++)
@@ -4258,7 +4376,24 @@ internal sealed partial class ExpressionBinder
                 && MemberLookup.TryGetDelegateFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
                 && literal.FunctionType != targetFunctionType)
             {
-                rebound = lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
+                // Issue #1512: when the call is a generic method whose delegate
+                // parameter mentions a method type parameter, the closed CLR
+                // parameter type erases that slot to `object`, so the literal
+                // would be rebound to e.g. `(Task) -> object` and emit a
+                // `Func<Task,object>` delegate where `Func<Task,T>` is required.
+                // Prefer the symbolic delegate target recovered from the OPEN
+                // method parameter substituted with the inferred symbolic method
+                // type arguments — including when it already equals the literal's
+                // bound function type, so the erasing rebind below is skipped.
+                if (TryBuildSymbolicDelegateTargetForMethodParam(method, paramIndex, symbolicMethodTypeArgs, receiverType, out var symbolicTarget))
+                {
+                    targetFunctionType = symbolicTarget;
+                }
+
+                if (literal.FunctionType != targetFunctionType)
+                {
+                    rebound = lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
+                }
             }
 
             if (rebound != argument && builder == null)

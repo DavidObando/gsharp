@@ -273,12 +273,18 @@ internal sealed class ClosureEmitter
             // the CLR nested-type access to the encloser's family/private members
             // (and the encloser's inherited protected members). Without nesting the
             // synthesized Invoke method triggers MethodAccessException/
-            // FieldAccessException at runtime. Generic enclosing types are skipped:
-            // a nested type would have to re-declare the encloser's type parameters,
-            // which the closure synthesis does not model, and the public-member case
-            // those closures already handle does not need nesting.
+            // FieldAccessException at runtime.
+            //
+            // Issue #1512: this nesting must also apply when the enclosing type is
+            // generic. A closure capturing a generic encloser is reified over a
+            // clone of the encloser's type parameters (SynthesizedClosureReifier),
+            // so the closure's own ordinal-aligned parameter list already matches
+            // what a nested type inside the encloser must re-declare per
+            // ECMA-335 §II.10.3.1 (e.g. `<closure>`1` nested in `Op`1` shares the
+            // single `T`). Without nesting, the reified closure was emitted as a
+            // top-level type and its Invoke could not read the generic encloser's
+            // private captured field ("Field is not visible").
             if (literal.Function?.LexicalEnclosingType is StructSymbol enclosing
-                && enclosing.TypeParameters.IsDefaultOrEmpty
                 && info.ClassSym.ContainingType == null)
             {
                 info.ClassSym.SetContainingType(enclosing);
