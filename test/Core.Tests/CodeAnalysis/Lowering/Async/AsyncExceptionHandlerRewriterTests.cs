@@ -85,6 +85,69 @@ ImmutableArray.Create<BoundStatement>(
     }
 
     [Fact]
+    public void TryFinally_WithAwait_FunnelsEarlyReturnThroughLiftedFinally()
+    {
+        // Arrange: try { return 7 } finally { await ... } — Pattern C (#1484).
+        // The early return leaves a try whose finally awaits, so it must be
+        // captured into a pending-branch discriminator and resumed AFTER the
+        // lifted finally, not emitted as a raw pass-through return.
+        var tryBlock = new BoundBlockStatement(
+            null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(null, new BoundLiteralExpression(null, 7))));
+        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var finallyBlock = new BoundBlockStatement(
+            null,
+            ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(null, awaitExpr)));
+        var tryStmt = new BoundTryStatement(null, tryBlock, ImmutableArray<BoundCatchClause>.Empty, finallyBlock);
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(tryStmt));
+
+        // Act
+        var result = AsyncExceptionHandlerRewriter.Rewrite(body);
+
+        // Assert: the try is rewritten and a pending-branch discriminator plus a
+        // pending-return-value local are declared.
+        Assert.NotSame(body, result);
+        var innerBlock = Assert.IsType<BoundBlockStatement>(result.Statements[0]);
+        var decls = innerBlock.Statements.OfType<BoundVariableDeclaration>().ToList();
+        Assert.Contains(decls, d => d.Variable.Name.Contains("<>pending_branch_"));
+        Assert.Contains(decls, d => d.Variable.Name.Contains("<>pending_ret_"));
+
+        // The rewritten inner try must NOT contain a raw return anymore — the
+        // return was funneled into a pending-branch capture + goto.
+        var innerTry = innerBlock.Statements.OfType<BoundTryStatement>().First();
+        Assert.False(ContainsReturn(innerTry.TryBlock), "Early return must be funneled, not left in the try body.");
+
+        // A raw return IS re-emitted after the lifted finally (the dispatch),
+        // outside any protected region.
+        Assert.True(
+            innerBlock.Statements.Skip(1).Any(ContainsReturn),
+            "A resume `return` should be dispatched after the lifted finally.");
+
+        // The lifted await still appears outside the protected region.
+        Assert.True(
+            innerBlock.Statements.Any(s => AsyncBoundTreeQueries.HasAwait(s) && !(s is BoundTryStatement)),
+            "Await should be lifted outside the try region.");
+    }
+
+    private static bool ContainsReturn(BoundStatement statement)
+    {
+        switch (statement)
+        {
+            case BoundReturnStatement:
+                return true;
+            case BoundBlockStatement block:
+                return block.Statements.Any(ContainsReturn);
+            case BoundTryStatement tryStmt:
+                return ContainsReturn(tryStmt.TryBlock)
+                    || tryStmt.CatchClauses.Any(c => ContainsReturn(c.Body))
+                    || (tryStmt.FinallyBlock != null && ContainsReturn(tryStmt.FinallyBlock));
+            default:
+                return false;
+        }
+    }
+
+    [Fact]
     public void TryCatch_WithoutAwait_PassesThroughUnchanged()
     {
         // Arrange: try { x = 1 } catch (e Exception) { x = 2 } — no await

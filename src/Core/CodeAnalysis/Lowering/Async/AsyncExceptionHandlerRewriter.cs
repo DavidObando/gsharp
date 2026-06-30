@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -50,15 +51,42 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 /// }
 /// </code>
 ///
-/// <para><b>Deferred:</b> Pending-branch dispatch for <c>return</c>/<c>goto</c>/
-/// <c>break</c> out of a try-with-async-finally (spec §8, Pattern C). A clean
-/// pass-through is emitted for now; early returns from a try whose finally has
-/// await are not yet supported and will produce correct but potentially
-/// surprising behavior (the return value is computed but the finally runs
-/// before the method actually returns, which is the normal CLR semantic — the
-/// issue arises only if the return target must be funneled through the rewritten
-/// code, which for our state-machine path is handled by MoveNextBodyRewriter's
-/// exit label).</para>
+/// <para><b>Pattern C — non-fall-through exits out of a try whose finally
+/// awaits (issue #1484):</b> Every way control leaves a <c>try</c> whose
+/// <c>finally</c> awaits must run the finally <i>after</i> the awaited work
+/// completes and only then resume that exit. The exception exit is already
+/// generalized by Pattern B; Pattern C generalizes the remaining
+/// non-fall-through exits — <c>return</c> and the intra-method branches
+/// (<c>goto</c>/<c>break</c>/<c>continue</c>, all of which reach this pass as
+/// <see cref="BoundGotoStatement"/>/<see cref="BoundConditionalGotoStatement"/>
+/// after the general <see cref="Lowerer"/> desugars loops) — that target a
+/// label outside the protected region (or, for <c>return</c>, leave the
+/// method). Mirroring the pending-exception machinery, each such exit is
+/// replaced by an assignment to a small <c>pendingBranch</c> discriminator
+/// (plus a <c>pendingReturnValue</c> local for value returns, captured at the
+/// point of the original return so evaluation order is preserved) followed by a
+/// <c>goto</c> to the lifted-finally tail. After the finally body and the
+/// pending-exception rethrow, a dispatch on the discriminator resumes the
+/// captured exit:</para>
+/// <code>
+/// int pendingBranch = 0;          // 0 == fall-through
+/// T pendingReturnValue = default; // only when a value-return is captured
+/// try { body; /* `return v;` => { pendingReturnValue = v; pendingBranch = 1; goto finallyTail; } */ }
+/// catch (Exception ex) { pendingException = ex; }
+/// finallyTail:
+/// finallyBody;                    // await is now outside the finally region
+/// if (pendingException != null) { ...Capture(pendingException).Throw(); }
+/// if (pendingBranch == 1) { return pendingReturnValue; }  // resume captured return
+/// if (pendingBranch == 2) { goto someOuterLabel; }        // resume captured goto/break/continue
+/// // pendingBranch == 0 falls through and continues normally
+/// </code>
+/// <para>The rewrite is compositional: an exit that crosses multiple awaited
+/// finallys is captured one level at a time, because each level's dispatch
+/// re-emits a real <c>return</c>/<c>goto</c> that the next enclosing lifted
+/// try captures in turn. The discriminator and pending-return-value locals are
+/// ordinary user-style locals, so <see cref="AsyncCaptureWalker"/> hoists them
+/// into state-machine fields exactly like the pending-exception local, keeping
+/// them live across the awaited finally.</para>
 /// </remarks>
 public static class AsyncExceptionHandlerRewriter
 {
@@ -90,6 +118,19 @@ public static class AsyncExceptionHandlerRewriter
     private sealed class Rewriter : BoundTreeRewriter
     {
         private int localOrdinal;
+
+        /// <summary>
+        /// Creates a fresh synthesized local with a deterministic, collision-free
+        /// name. Used by the Pattern C exit funneler for its pending-branch
+        /// discriminator and pending-return-value locals.
+        /// </summary>
+        /// <param name="prefix">A short role hint embedded in the generated name.</param>
+        /// <param name="type">The local's type.</param>
+        /// <returns>The new local variable symbol.</returns>
+        internal LocalVariableSymbol NewLocal(string prefix, TypeSymbol type)
+        {
+            return new LocalVariableSymbol($"<>{prefix}_{localOrdinal++}", isReadOnly: false, type);
+        }
 
         protected override BoundStatement RewriteTryStatement(BoundTryStatement node)
         {
@@ -304,6 +345,37 @@ public static class AsyncExceptionHandlerRewriter
             TypeSymbol exceptionType,
             bool anyCatchHasAwait)
         {
+            // Pattern C (issue #1484): funnel every non-fall-through exit that
+            // leaves the try body through the lifted finally. Each `return` or
+            // intra-method branch (`goto`/`break`/`continue`, all surfaced as
+            // BoundGotoStatement/BoundConditionalGotoStatement after lowering)
+            // whose target lies outside the protected region is replaced by an
+            // assignment to a pending-branch discriminator (and, for value
+            // returns, a pending-return-value local captured at the point of the
+            // original return so evaluation order is preserved) plus a `goto` to
+            // the lifted-finally tail. The captured exits are re-emitted after
+            // the finally body and the pending-exception rethrow.
+            var funneler = new ExitFunneler(this, LabelCollector.Collect(tryBody));
+            tryBody = funneler.Funnel(tryBody);
+            if (funneler.HasCapturedExits)
+            {
+                statements.Add(new BoundVariableDeclaration(
+                    null,
+                    funneler.PendingBranchLocal,
+                    new BoundLiteralExpression(null, 0)));
+                if (funneler.PendingReturnValueLocal != null)
+                {
+                    // default(T): correct for any return type — `0`/zeroed bytes
+                    // for value types (a typed null literal would emit an invalid
+                    // `ldnull` for e.g. int32) and null for reference types. The
+                    // value is always overwritten before the dispatch reads it.
+                    statements.Add(new BoundVariableDeclaration(
+                        null,
+                        funneler.PendingReturnValueLocal,
+                        new BoundDefaultExpression(null, funneler.PendingReturnValueLocal.Type)));
+                }
+            }
+
             // Build inner try: original try body + original catches.
             // Typed catches with await KEEP their original type (issue #419)
             // and capture into a per-clause local plus pendingException so the
@@ -417,6 +489,15 @@ public static class AsyncExceptionHandlerRewriter
                 statements.Add(new BoundLabelStatement(null, endLabel));
             }
 
+            // Pattern C: place the lifted-finally tail label that funneled exits
+            // branch to. It sits AFTER the lifted catch handlers and BEFORE the
+            // finally body so a captured `return`/`goto`/`break`/`continue` runs
+            // the finally exactly like the normal-completion and exception paths.
+            if (funneler.HasCapturedExits)
+            {
+                statements.Add(new BoundLabelStatement(null, funneler.FinallyTailLabel));
+            }
+
             // Emit the finally body (now outside any handler region)
             if (finallyBlock is BoundBlockStatement finallyBlockStmt)
             {
@@ -451,6 +532,33 @@ public static class AsyncExceptionHandlerRewriter
             // trace and defeat production diagnostics (issue #418 P1-11).
             statements.Add(BuildEdiCaptureThrow(new BoundVariableExpression(null, pendingExLocal), exceptionType));
             statements.Add(new BoundLabelStatement(null, rethrowEndLabel));
+
+            // Pattern C: dispatch the captured branch AFTER the pending-exception
+            // rethrow. The exception and branch exits are mutually exclusive
+            // (a funneled `goto finallyTail` is a `leave`, not a throw, so it
+            // never sets pendingException), and ordering the rethrow first keeps
+            // the exception semantics identical to Pattern B. A discriminator of
+            // 0 means fall-through and continues normally past the dispatch.
+            if (funneler.HasCapturedExits)
+            {
+                foreach (var arm in funneler.DispatchArms)
+                {
+                    var skipLabel = MakeLabel("branch_skip");
+                    var armCondition = new BoundBinaryExpression(
+                        null,
+                        new BoundVariableExpression(null, funneler.PendingBranchLocal),
+                        BoundBinaryOperator.Bind(
+                            CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
+                            TypeSymbol.Int32,
+                            TypeSymbol.Int32),
+                        new BoundLiteralExpression(null, arm.Discriminator));
+
+                    // if (pendingBranch != value) goto skip; <exit>; skip:
+                    statements.Add(new BoundConditionalGotoStatement(null, skipLabel, armCondition, jumpIfTrue: false));
+                    statements.Add(arm.Exit);
+                    statements.Add(new BoundLabelStatement(null, skipLabel));
+                }
+            }
         }
 
         /// <summary>
@@ -510,6 +618,208 @@ public static class AsyncExceptionHandlerRewriter
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// One captured Pattern C exit: a discriminator value paired with the
+        /// statement to re-emit (a <c>return</c> of the pending-return-value, or
+        /// a <c>goto</c> to the original target) when the dispatch after the
+        /// lifted finally observes that value.
+        /// </summary>
+        private readonly struct DispatchArm
+        {
+            public DispatchArm(int discriminator, BoundStatement exit)
+            {
+                Discriminator = discriminator;
+                Exit = exit;
+            }
+
+            public int Discriminator { get; }
+
+            public BoundStatement Exit { get; }
+        }
+
+        /// <summary>
+        /// Collects every label DEFINED inside a statement subtree (the targets
+        /// of <see cref="BoundLabelStatement"/>). The Pattern C exit funneler
+        /// uses this set to decide whether a <c>goto</c>/conditional-goto leaves
+        /// the protected region: a branch whose target label is in this set
+        /// stays inside the try and must NOT run the lifted finally, whereas a
+        /// branch to any other label (or a <c>return</c>) exits the try and is
+        /// funneled.
+        /// </summary>
+        private sealed class LabelCollector : BoundTreeWalker
+        {
+            private readonly HashSet<BoundLabel> labels = new HashSet<BoundLabel>();
+
+            public static HashSet<BoundLabel> Collect(BoundStatement body)
+            {
+                var collector = new LabelCollector();
+                collector.VisitStatement(body);
+                return collector.labels;
+            }
+
+            public override void VisitStatement(BoundStatement node)
+            {
+                if (node is BoundLabelStatement labelStatement)
+                {
+                    labels.Add(labelStatement.Label);
+                }
+
+                base.VisitStatement(node);
+            }
+        }
+
+        /// <summary>
+        /// Rewrites the try body of a finally-with-await, replacing every
+        /// non-fall-through exit that leaves the try (a <c>return</c>, or a
+        /// <c>goto</c>/conditional-goto whose target label is outside the try)
+        /// with a pending-branch capture followed by <c>goto finallyTail</c>.
+        /// The captured exits are surfaced via <see cref="DispatchArms"/> so the
+        /// caller can re-emit them after the lifted finally body. Implements
+        /// Pattern C (issue #1484) symmetrically with the pending-exception
+        /// machinery.
+        /// </summary>
+        private sealed class ExitFunneler : BoundTreeRewriter
+        {
+            private const int ReturnDiscriminator = 1;
+
+            private readonly Rewriter owner;
+            private readonly HashSet<BoundLabel> innerLabels;
+            private readonly Dictionary<BoundLabel, int> gotoDiscriminators = new Dictionary<BoundLabel, int>();
+            private readonly List<DispatchArm> dispatchArms = new List<DispatchArm>();
+
+            private BoundLabel finallyTailLabel;
+            private LocalVariableSymbol pendingBranchLocal;
+            private LocalVariableSymbol pendingReturnValueLocal;
+            private bool returnCaptured;
+            private int nextGotoDiscriminator = ReturnDiscriminator + 1;
+
+            public ExitFunneler(Rewriter owner, HashSet<BoundLabel> innerLabels)
+            {
+                this.owner = owner;
+                this.innerLabels = innerLabels;
+            }
+
+            /// <summary>Gets a value indicating whether any exit was captured.</summary>
+            public bool HasCapturedExits => dispatchArms.Count > 0;
+
+            /// <summary>Gets the lifted-finally tail label (only valid once an exit is captured).</summary>
+            public BoundLabel FinallyTailLabel => finallyTailLabel;
+
+            /// <summary>Gets the pending-branch discriminator local (only valid once an exit is captured).</summary>
+            public LocalVariableSymbol PendingBranchLocal => pendingBranchLocal;
+
+            /// <summary>Gets the pending-return-value local, or null when no value-return was captured.</summary>
+            public LocalVariableSymbol PendingReturnValueLocal => pendingReturnValueLocal;
+
+            /// <summary>Gets the captured exits, in first-encounter order.</summary>
+            public IReadOnlyList<DispatchArm> DispatchArms => dispatchArms;
+
+            public BoundStatement Funnel(BoundStatement body) => RewriteStatement(body);
+
+            protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)
+            {
+                // A `return` always leaves the try (and the method), so it is
+                // always funneled. The return expression is evaluated here, in
+                // the try body, and stashed into the pending-return-value local
+                // BEFORE the finally runs; the actual transfer happens after.
+                EnsureFinallyTail();
+                var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
+
+                if (node.Expression != null)
+                {
+                    if (pendingReturnValueLocal == null)
+                    {
+                        pendingReturnValueLocal = owner.NewLocal("pending_ret", node.Expression.Type);
+                    }
+
+                    stmts.Add(new BoundExpressionStatement(
+                        null,
+                        new BoundAssignmentExpression(null, pendingReturnValueLocal, node.Expression)));
+                }
+
+                if (!returnCaptured)
+                {
+                    returnCaptured = true;
+                    var resume = node.Expression != null
+                        ? new BoundReturnStatement(null, new BoundVariableExpression(null, pendingReturnValueLocal), node.IsRef)
+                        : new BoundReturnStatement(null, null);
+                    dispatchArms.Add(new DispatchArm(ReturnDiscriminator, resume));
+                }
+
+                stmts.Add(AssignBranch(ReturnDiscriminator));
+                stmts.Add(new BoundGotoStatement(null, finallyTailLabel));
+                return new BoundBlockStatement(null, stmts.ToImmutable());
+            }
+
+            protected override BoundStatement RewriteGotoStatement(BoundGotoStatement node)
+            {
+                if (innerLabels.Contains(node.Label))
+                {
+                    // Target is inside the try — stays in the protected region.
+                    return node;
+                }
+
+                EnsureFinallyTail();
+                var discriminator = GetGotoDiscriminator(node.Label);
+                return new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(
+                    AssignBranch(discriminator),
+                    new BoundGotoStatement(null, finallyTailLabel)));
+            }
+
+            protected override BoundStatement RewriteConditionalGotoStatement(BoundConditionalGotoStatement node)
+            {
+                if (innerLabels.Contains(node.Label))
+                {
+                    return node;
+                }
+
+                EnsureFinallyTail();
+                var discriminator = GetGotoDiscriminator(node.Label);
+
+                // if (cond == JumpIfTrue) { pendingBranch = d; goto finallyTail; }
+                // Re-emit the condition once, jumping past the capture when the
+                // branch is NOT taken (the original JumpIfTrue is negated for the
+                // skip test).
+                var skipLabel = MakeLabel("exit_skip");
+                return new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(
+                    new BoundConditionalGotoStatement(null, skipLabel, node.Condition, jumpIfTrue: !node.JumpIfTrue),
+                    AssignBranch(discriminator),
+                    new BoundGotoStatement(null, finallyTailLabel),
+                    new BoundLabelStatement(null, skipLabel)));
+            }
+
+            private int GetGotoDiscriminator(BoundLabel target)
+            {
+                if (!gotoDiscriminators.TryGetValue(target, out var discriminator))
+                {
+                    discriminator = nextGotoDiscriminator++;
+                    gotoDiscriminators[target] = discriminator;
+                    dispatchArms.Add(new DispatchArm(discriminator, new BoundGotoStatement(null, target)));
+                }
+
+                return discriminator;
+            }
+
+            private BoundStatement AssignBranch(int discriminator)
+            {
+                return new BoundExpressionStatement(
+                    null,
+                    new BoundAssignmentExpression(
+                        null,
+                        pendingBranchLocal,
+                        new BoundLiteralExpression(null, discriminator)));
+            }
+
+            private void EnsureFinallyTail()
+            {
+                if (finallyTailLabel == null)
+                {
+                    finallyTailLabel = MakeLabel("finally_tail");
+                    pendingBranchLocal = owner.NewLocal("pending_branch", TypeSymbol.Int32);
+                }
+            }
         }
     }
 }
