@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cs2gs report — 2026-06-29T23-51-48Z_2644b2</title>
+<style>
+:root{--ok:#1a7f37;--bad:#cf222e;--skip:#6e7781;--bg:#ffffff;--fg:#1f2328;--line:#d0d7de;--panel:#f6f8fa;}
+*{box-sizing:border-box;}
+body{margin:0;padding:1.5rem;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:var(--fg);background:var(--bg);line-height:1.45;}
+h1{font-size:1.5rem;margin:0 0 .25rem;}
+h2{font-size:1.2rem;margin:2rem 0 .75rem;border-bottom:1px solid var(--line);padding-bottom:.25rem;}
+h3{font-size:1rem;margin:0 0 .5rem;}
+a{color:#0969da;}
+.run-header .verdict{display:inline-block;font-weight:700;padding:.15rem .6rem;border-radius:999px;color:#fff;}
+.verdict.ok{background:var(--ok);} .verdict.bad{background:var(--bad);}
+.provenance{display:grid;grid-template-columns:max-content 1fr;gap:.15rem 1rem;margin:.75rem 0 0;}
+.provenance dt{font-weight:600;color:var(--skip);} .provenance dd{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+table{border-collapse:collapse;width:100%;}
+.matrix th,.matrix td{border:1px solid var(--line);padding:.4rem .6rem;text-align:left;}
+.matrix thead th{background:var(--panel);}
+.cell{font-weight:600;white-space:nowrap;}
+.cell .dot{display:inline-block;width:.65rem;height:.65rem;border-radius:50%;margin-right:.4rem;vertical-align:middle;}
+.cell.pass{color:var(--ok);} .cell.pass .dot{background:var(--ok);}
+.cell.fail{color:var(--bad);} .cell.fail .dot{background:var(--bad);}
+.cell.skip{color:var(--skip);} .cell.skip .dot{background:var(--skip);}
+.gap{border:1px solid var(--line);border-radius:6px;padding:1rem;margin:0 0 1rem;background:var(--panel);}
+.gap-meta{list-style:none;margin:0 0 .5rem;padding:0;display:flex;flex-wrap:wrap;gap:.35rem 1rem;}
+.gap-meta .k{font-weight:600;color:var(--skip);} .gap-meta .v{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+.snippet,.issue-body{background:#0d1117;color:#e6edf3;padding:.6rem .8rem;border-radius:6px;overflow:auto;}
+.snippet code,.issue-body code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;}
+.labels{margin:.5rem 0;} .label{display:inline-block;background:#ddf4ff;color:#0969da;border:1px solid #54aeff66;border-radius:999px;padding:.05rem .55rem;font-size:.8rem;}
+.occurrences ul{margin:.25rem 0;padding-left:1.2rem;} .occurrences .app{font-weight:600;} .occurrences .loc{color:var(--skip);font-family:ui-monospace,monospace;}
+.retry th,.retry td{border:1px solid var(--line);padding:.25rem .5rem;text-align:left;font-size:.85rem;}
+.toggle{margin:.5rem 0;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:6px;padding:.3rem .7rem;font:inherit;}
+.app-detail{border:1px solid var(--line);border-radius:6px;padding:1rem;margin:0 0 1rem;}
+.state{font-size:.75rem;padding:.1rem .5rem;border-radius:999px;color:#fff;vertical-align:middle;}
+.state.ok{background:var(--ok);} .state.bad{background:var(--bad);}
+.stage-list th,.stage-list td{border:1px solid var(--line);padding:.3rem .6rem;text-align:left;}
+.meta-line .k,.artifact-h{font-weight:600;color:var(--skip);}
+.empty{color:var(--skip);}
+</style>
+</head>
+<body>
+<header class="run-header">
+<h1>cs2gs migration report</h1>
+<p class="verdict bad">Run FAILED — 0/1 apps green</p>
+<dl class="provenance">
+<dt>Run id</dt><dd>2026-06-29T23-51-48Z_2644b2</dd>
+<dt>Timestamp</dt><dd>2026-06-29T23:51:48Z</dd>
+<dt>gsc version</dt><dd>0.2.363+fd47bae91e</dd>
+</dl>
+</header>
+<section aria-labelledby="matrix-h">
+<h2 id="matrix-h">Status matrix</h2>
+<table class="matrix">
+<thead><tr><th scope="col">app</th><th scope="col">translate</th><th scope="col">compile</th><th scope="col">ilverify</th><th scope="col">test-parity</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="#app-corpus-oahu-decrypt">corpus/Oahu.Decrypt</a></th><td class="cell pass" aria-label="passed"><span class="dot" aria-hidden="true"></span>PASS</td><td class="cell fail" aria-label="failed"><span class="dot" aria-hidden="true"></span>FAIL (1)</td><td class="cell skip" aria-label="skipped"><span class="dot" aria-hidden="true"></span>SKIP</td><td class="cell skip" aria-label="skipped"><span class="dot" aria-hidden="true"></span>SKIP</td></tr>
+</tbody>
+</table>
+</section>
+<section aria-labelledby="gaps-h">
+<h2 id="gaps-h">Discovered gaps (1)</h2>
+<article class="gap">
+<h3>[cs2gs] GS9998 compiling translated corpus/Oahu.Decrypt (PackageConstruct)</h3>
+<ul class="gap-meta">
+<li><span class="k">fingerprint</span> <span class="v">sha256:5c4100795019fcbd65cc6501abb7369bf4203309b3f4cd05ddd6a827a094a093</span></li>
+<li><span class="k">category</span> <span class="v">compile-error</span></li>
+<li><span class="k">stage</span> <span class="v">compile</span></li>
+<li><span class="k">diagnostic</span> <span class="v">GS9998: EmitDiagnosticException: Internal compiler error: an unresolved (error) expression reached code emission. This usually indicates an unsupported or mis-bound construct that earlier phases failed to report.</span></li>
+<li><span class="k">construct</span> <span class="v">PackageConstruct</span></li>
+</ul>
+<pre class="snippet"><code>package Oahu.Decrypt</code></pre>
+<p class="labels">labels: <span class="label">Oats</span> <span class="label">bug</span></p>
+<details class="occurrences" open><summary>1 occurrence(s)</summary>
+<ul>
+<li><span class="app">corpus/Oahu.Decrypt</span> <span class="loc">corpus_Oahu.Decrypt/ChapterQueue.gs:1:1</span></li>
+</ul>
+</details>
+<button type="button" class="toggle" aria-expanded="false" aria-controls="gap-body-0" data-target="gap-body-0">Suggested issue body</button>
+<pre id="gap-body-0" class="issue-body" hidden><code>The G# emitted for **corpus/Oahu.Decrypt** fails to compile with `gsc` 0.2.363+fd47bae91e.
+
+- Diagnostic: `GS9998` — EmitDiagnosticException: Internal compiler error: an unresolved (error) expression reached code emission. This usually indicates an unsupported or mis-bound construct that earlier phases failed to report.
+- Emitted G#: `corpus_Oahu.Decrypt/ChapterQueue.gs` (1,1)
+- Offending line: `package Oahu.Decrypt`
+
+**Reproduction:** `cs2gs migrate` translates the corpus app, writes the `.gs` shown above, then runs `gsc /target:… /out:… corpus_Oahu.Decrypt/ChapterQueue.gs` which surfaces this error.
+**Fingerprint:** `sha256:5c4100795019fcbd65cc6501abb7369bf4203309b3f4cd05ddd6a827a094a093`</code></pre>
+</article>
+</section>
+<section aria-labelledby="apps-h">
+<h2 id="apps-h">App details</h2>
+<article id="app-corpus-oahu-decrypt" class="app-detail">
+<h3>corpus/Oahu.Decrypt <span class="state bad">failing</span></h3>
+<p class="meta-line"><span class="k">failure category</span> <span class="v">compile-error</span></p>
+<table class="stage-list"><thead><tr><th scope="col">stage</th><th scope="col">status</th><th scope="col">artifacts</th></tr></thead><tbody>
+<tr><td>translate</td><td>passed</td><td>0</td></tr>
+<tr><td>compile</td><td>failed</td><td>1</td></tr>
+<tr><td>ilverify</td><td>skipped</td><td>0</td></tr>
+<tr><td>test-parity</td><td>skipped</td><td>0</td></tr>
+</tbody></table>
+<p class="artifact-h">triage artifacts</p>
+<ul class="artifacts">
+<li><a href="corpus_Oahu.Decrypt/compile-5c4100795019.json">corpus_Oahu.Decrypt/compile-5c4100795019.json</a></li>
+</ul>
+</article>
+</section>
+<script>
+(function(){
+  var buttons = document.querySelectorAll('.toggle');
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].addEventListener('click', function(){
+      var id = this.getAttribute('data-target');
+      var target = document.getElementById(id);
+      if (!target) { return; }
+      var hidden = target.hasAttribute('hidden');
+      if (hidden) { target.removeAttribute('hidden'); } else { target.setAttribute('hidden',''); }
+      this.setAttribute('aria-expanded', hidden ? 'true' : 'false');
+    });
+  }
+})();
+</script>
+</body>
+</html>

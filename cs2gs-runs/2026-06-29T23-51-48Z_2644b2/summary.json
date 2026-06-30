@@ -1,0 +1,87 @@
+{
+  "runId": "2026-06-29T23-51-48Z_2644b2",
+  "timestamp": "2026-06-29T23:51:48Z",
+  "gscVersion": "0.2.363+fd47bae91e",
+  "succeeded": false,
+  "totalApps": 1,
+  "greenApps": 0,
+  "stageOrder": [
+    "translate",
+    "compile",
+    "ilverify",
+    "test-parity"
+  ],
+  "apps": [
+    {
+      "appId": "corpus/Oahu.Decrypt",
+      "succeeded": false,
+      "failureCategory": "compile-error",
+      "stages": [
+        {
+          "stage": "translate",
+          "status": "passed",
+          "artifactCount": 0
+        },
+        {
+          "stage": "compile",
+          "status": "failed",
+          "artifactCount": 1
+        },
+        {
+          "stage": "ilverify",
+          "status": "skipped",
+          "artifactCount": 0
+        },
+        {
+          "stage": "test-parity",
+          "status": "skipped",
+          "artifactCount": 0
+        }
+      ],
+      "artifacts": [
+        "corpus_Oahu.Decrypt/compile-5c4100795019.json"
+      ],
+      "fingerprints": [
+        "sha256:5c4100795019fcbd65cc6501abb7369bf4203309b3f4cd05ddd6a827a094a093"
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "fingerprint": "sha256:5c4100795019fcbd65cc6501abb7369bf4203309b3f4cd05ddd6a827a094a093",
+      "category": "compile-error",
+      "stage": "compile",
+      "diagnostic": {
+        "id": "GS9998",
+        "message": "EmitDiagnosticException: Internal compiler error: an unresolved (error) expression reached code emission. This usually indicates an unsupported or mis-bound construct that earlier phases failed to report.",
+        "severity": "error"
+      },
+      "offendingCSharpConstruct": {
+        "kind": "PackageConstruct",
+        "snippet": "package Oahu.Decrypt"
+      },
+      "suggestedIssue": {
+        "title": "[cs2gs] GS9998 compiling translated corpus/Oahu.Decrypt (PackageConstruct)",
+        "body": "The G# emitted for **corpus/Oahu.Decrypt** fails to compile with `gsc` 0.2.363+fd47bae91e.\n\n- Diagnostic: `GS9998` — EmitDiagnosticException: Internal compiler error: an unresolved (error) expression reached code emission. This usually indicates an unsupported or mis-bound construct that earlier phases failed to report.\n- Emitted G#: `corpus_Oahu.Decrypt/ChapterQueue.gs` (1,1)\n- Offending line: `package Oahu.Decrypt`\n\n**Reproduction:** `cs2gs migrate` translates the corpus app, writes the `.gs` shown above, then runs `gsc /target:… /out:… corpus_Oahu.Decrypt/ChapterQueue.gs` which surfaces this error.\n**Fingerprint:** `sha256:5c4100795019fcbd65cc6501abb7369bf4203309b3f4cd05ddd6a827a094a093`",
+        "labels": [
+          "Oats",
+          "bug"
+        ]
+      },
+      "occurrences": [
+        {
+          "appId": "corpus/Oahu.Decrypt",
+          "sourceLocation": {
+            "gsFile": "corpus_Oahu.Decrypt/ChapterQueue.gs",
+            "gsLine": 1,
+            "gsColumn": 1,
+            "csFile": null,
+            "csLine": null,
+            "csColumn": null
+          }
+        }
+      ],
+      "retryHistory": []
+    }
+  ]
+}

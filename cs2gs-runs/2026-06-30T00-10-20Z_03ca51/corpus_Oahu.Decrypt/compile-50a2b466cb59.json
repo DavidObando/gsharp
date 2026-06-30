@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "1.0",
+  "runId": "2026-06-30T00-10-20Z_03ca51",
+  "timestamp": "2026-06-30T00:10:20Z",
+  "gscVersion": "0.2.365+10dca37a05",
+  "corpusAppId": "corpus/Oahu.Decrypt",
+  "stage": "compile",
+  "category": "compile-error",
+  "diagnostic": {
+    "id": "GS9998",
+    "message": "InvalidOperationException: Variable 'Mvhd' has no local slot or parameter index in the current method.",
+    "severity": "error"
+  },
+  "sourceLocation": {
+    "gsFile": "corpus_Oahu.Decrypt/MoovBox.gs",
+    "gsLine": 72,
+    "gsColumn": 13,
+    "csFile": null,
+    "csLine": null,
+    "csColumn": null
+  },
+  "offendingCSharpConstruct": {
+    "kind": "GSharpConstruct",
+    "snippet": "Children.Insert(Children.IndexOf(AudioTrack) + 1, textTrack!!)"
+  },
+  "suggestedIssue": {
+    "title": "[cs2gs] GS9998 compiling translated corpus/Oahu.Decrypt (GSharpConstruct)",
+    "body": "The G# emitted for **corpus/Oahu.Decrypt** fails to compile with `gsc` 0.2.365+10dca37a05.\n\n- Diagnostic: `GS9998` — InvalidOperationException: Variable 'Mvhd' has no local slot or parameter index in the current method.\n- Emitted G#: `corpus_Oahu.Decrypt/MoovBox.gs` (72,13)\n- Offending line: `Children.Insert(Children.IndexOf(AudioTrack) + 1, textTrack!!)`\n\n**Reproduction:** `cs2gs migrate` translates the corpus app, writes the `.gs` shown above, then runs `gsc /target:… /out:… corpus_Oahu.Decrypt/MoovBox.gs` which surfaces this error.\n**Fingerprint:** `sha256:50a2b466cb5950a1e9b7eadf7796a89b218728d04062d0360396f5c30253e372`",
+    "labels": [
+      "Oats",
+      "bug"
+    ]
+  },
+  "fingerprint": "sha256:50a2b466cb5950a1e9b7eadf7796a89b218728d04062d0360396f5c30253e372",
+  "retryHistory": []
+}
