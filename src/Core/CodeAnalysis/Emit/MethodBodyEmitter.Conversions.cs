@@ -397,11 +397,23 @@ internal sealed partial class MethodBodyEmitter
         // `object`), emit `box T` so the JIT materialises the value-or-
         // reference boxed slot. The JIT elides the box when T resolves to a
         // reference type at runtime, so no perf regression.
-        if (from is TypeParameterSymbol fromTp
+        //
+        // Issue #1455: the same widening reaches emit through a NULLABLE
+        // wrapper over the type parameter (`T?`) — e.g. a lambda whose body
+        // returns `T?` flowing into a `Func<..., object>` parameter via
+        // delegate-return covariance, or `Task.FromResult(default)` over
+        // `T?`. `T?` shares `T`'s CLR representation for a ref-constrained or
+        // unconstrained `T` (`box !!T`), and is `Nullable<!!T>` for a
+        // value-type-constrained `T` (`box Nullable<!!T>` correctly yields a
+        // null reference for the missing-value case). `GetElementTypeToken`
+        // already selects the right token for the nullable wrapper in either
+        // constraint case, so we box the wrapper symbol directly.
+        if ((from is TypeParameterSymbol
+                || (from is NullableTypeSymbol fromNullableTp && fromNullableTp.UnderlyingType is TypeParameterSymbol))
             && (to?.ClrType.IsSameAs(typeof(object)) == true || IsInterfaceTargetType(to)))
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(fromTp));
+            this.il.Token(this.outer.GetElementTypeToken(from));
             return;
         }
 
@@ -412,6 +424,23 @@ internal sealed partial class MethodBodyEmitter
         // slot needs `unbox.any` to surface as its native value type.
         if ((from?.ClrType.IsSameAs(typeof(object)) == true || IsInterfaceSourceType(from))
             && to?.ClrType != null && to.ClrType.IsValueType)
+        {
+            this.il.OpCode(ILOpCode.Unbox_any);
+            this.il.Token(this.outer.GetElementTypeToken(to));
+            return;
+        }
+
+        // Issue #1455 (symmetric direction): `object`/interface → type
+        // parameter, including a nullable wrapper over one (`T?`). The boxed
+        // reference held in the `object`/interface slot is surfaced with
+        // `unbox.any T` (or `unbox.any Nullable<!!T>`). The JIT picks the
+        // value-vs-reference shape from the instantiated `T` at call time, so
+        // this verifies for any closing instantiation. `GetElementTypeToken`
+        // resolves the correct token for both the bare and nullable-wrapped
+        // type parameter.
+        if ((from?.ClrType.IsSameAs(typeof(object)) == true || IsInterfaceSourceType(from))
+            && (to is TypeParameterSymbol
+                || (to is NullableTypeSymbol toNullableTp && toNullableTp.UnderlyingType is TypeParameterSymbol)))
         {
             this.il.OpCode(ILOpCode.Unbox_any);
             this.il.Token(this.outer.GetElementTypeToken(to));
