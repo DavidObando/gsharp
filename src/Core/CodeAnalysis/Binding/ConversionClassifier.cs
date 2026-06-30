@@ -573,6 +573,11 @@ internal sealed class ConversionClassifier
     /// <param name="receiverType">Optional receiver type carrying the
     /// symbolic type arguments referenced by <paramref name="method"/>'s
     /// declaring generic.</param>
+    /// <param name="symbolicMethodTypeArgs">Optional symbolic method
+    /// type-argument vector (issue #1471). Recovers the real parameter type for
+    /// a bare <c>default</c> argument when a method type-argument erased to the
+    /// reference-context <c>object</c> placeholder (e.g.
+    /// <c>Task.FromResult[T?](default)</c>).</param>
     /// <returns>The (possibly rebound) argument array.</returns>
     public ImmutableArray<BoundExpression> BindClrParameterConversions(
         ImmutableArray<BoundExpression> arguments,
@@ -581,7 +586,8 @@ internal sealed class ConversionClassifier
         ImmutableArray<int> parameterMapping = default,
         int receiverArgCount = 0,
         MethodInfo method = null,
-        TypeSymbol receiverType = null)
+        TypeSymbol receiverType = null,
+        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs = default)
     {
         ImmutableArray<BoundExpression>.Builder builder = null;
         for (var i = 0; i < arguments.Length; i++)
@@ -603,7 +609,20 @@ internal sealed class ConversionClassifier
                 // Error-typed default that produces invalid IL.
                 if (!parameterType.IsByRef && argument is BoundDefaultExpression { Type: var defType } && defType == TypeSymbol.Error)
                 {
-                    var defSubstituted = TrySubstituteParameterTypeFromReceiver(method, paramIndex, receiverType);
+                    // Issue #1471: a generic-method call closed over an open
+                    // type parameter (e.g. `Task.FromResult[T?](default)` for an
+                    // unconstrained `T`) erases its method type-argument to the
+                    // reference-context `object` placeholder, so the closed CLR
+                    // parameter type is `object` and `default` would lower to a
+                    // `BoundDefaultExpression(object)` → `ldnull`. For an open
+                    // `T` (or `T?` over an open `T`) that is unverifiable and
+                    // throws `InvalidProgramException` at runtime. Recover the
+                    // symbolic parameter type from the method's type-argument
+                    // vector so the default lowers against the real type
+                    // parameter and emits the verifiable `ldloca; initobj; ldloc`
+                    // slot shape uniformly for ref and value instantiations.
+                    var defSubstituted = TrySubstituteParameterTypeFromReceiver(method, paramIndex, receiverType)
+                        ?? TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
                     var defTargetType = defSubstituted ?? TypeSymbol.FromClrType(parameterType);
                     if (defTargetType != null && defTargetType != TypeSymbol.Error)
                     {
@@ -803,6 +822,66 @@ internal sealed class ConversionClassifier
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Issue #1471: recovers the symbolic parameter type for a generic CLR
+    /// method invoked with a method-level type-argument vector that includes an
+    /// open type parameter (or a same-compilation user type). The closed CLR
+    /// method erases such arguments to the reference-context <see cref="object"/>
+    /// placeholder, so the closed parameter type is <c>object</c>; mapping the
+    /// open method parameter through <paramref name="methodTypeArgs"/> recovers
+    /// the real symbol (e.g. <c>T?</c> for <c>Task.FromResult[T?]</c>). Returns
+    /// <see langword="null"/> when no symbolic recovery applies, so concrete
+    /// instantiations keep flowing through the erased CLR shape unchanged.
+    /// </summary>
+    /// <param name="method">The resolved (closed) CLR method (may be null).</param>
+    /// <param name="paramIndex">Zero-based index into the method's parameter list.</param>
+    /// <param name="methodTypeArgs">The symbolic method type-argument vector.</param>
+    /// <returns>The recovered symbolic parameter type, or <see langword="null"/>.</returns>
+    public static TypeSymbol TrySubstituteParameterTypeFromMethodTypeArgs(
+        MethodInfo method,
+        int paramIndex,
+        ImmutableArray<TypeSymbol> methodTypeArgs)
+    {
+        if (method == null
+            || !method.IsGenericMethod
+            || methodTypeArgs.IsDefaultOrEmpty
+            || paramIndex < 0)
+        {
+            return null;
+        }
+
+        var openMethod = method.IsGenericMethodDefinition ? method : method.GetGenericMethodDefinition();
+        var openParams = openMethod.GetParameters();
+        if (paramIndex >= openParams.Length)
+        {
+            return null;
+        }
+
+        var openParamType = openParams[paramIndex].ParameterType;
+        if (openParamType.IsByRef)
+        {
+            openParamType = openParamType.GetElementType();
+        }
+
+        if (openParamType == null)
+        {
+            return null;
+        }
+
+        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
+            openParamType,
+            openDefinition: null,
+            typeArguments: default,
+            openMethodDefinition: openMethod,
+            methodTypeArguments: methodTypeArgs);
+
+        return mapped != null
+            && mapped != TypeSymbol.Error
+            && (TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped))
+            ? mapped
+            : null;
     }
 
     // ----- Method-group → delegate conversions -----

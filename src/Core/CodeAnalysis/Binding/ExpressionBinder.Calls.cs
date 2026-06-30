@@ -2608,26 +2608,25 @@ internal sealed partial class ExpressionBinder
                 // before CLR parameter conversion, mirroring the instance path.
                 var staticDelegateArgs = RebindFunctionLiteralDelegateArguments(staticHandlerArgs, staticParameters, staticDownstreamMapping);
 
-                // Issue #506 follow-up: ensure value-type → object boxing fires
-                // for fixed-arity CLR static calls (e.g. `String.Format("{0}", 42)`
-                // selecting the fixed `(string, object)` overload).
-                var staticConvertedArgs = conversions.BindClrParameterConversions(staticDelegateArgs, staticParameters, ce, staticDownstreamMapping);
-                var staticArguments = OverloadResolver.BuildOrderedCallArguments(staticConvertedArgs, staticDownstreamMapping, staticParameters);
-                var refKinds = ComputeArgumentRefKinds(staticParameters);
-                overloads.ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
-
-                // Issue #1325: when the type arguments were inferred (no explicit
-                // `[...]` list), recover the symbolic method type-argument vector
-                // from the argument symbols so a same-compilation user value type
-                // (erased to `object` in the closed CLR method) is emitted as its
-                // real TypeDef token in the MethodSpec — e.g.
-                // `MemoryMarshal.AsBytes<E>` rather than the constraint-violating
-                // `AsBytes<object>`. Mirrors the instance/inherited call paths.
+                // Issue #1325 / #1471: recover the symbolic method type-argument
+                // vector before parameter conversion so a bare `default`
+                // argument closed over an open type parameter (e.g.
+                // `Task.FromResult[T?](default)`) materialises against the real
+                // type parameter instead of the erased `object` placeholder.
                 var staticSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
                     receiverType: null,
                     ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
                 var staticSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(staticFn.Method, typeArgSymbols, staticSymbolicArgs);
                 var staticTypeArgSymbolsForCall = !staticSymbolicTypeArgs.IsDefault ? staticSymbolicTypeArgs : typeArgSymbols;
+
+                // Issue #506 follow-up: ensure value-type → object boxing fires
+                // for fixed-arity CLR static calls (e.g. `String.Format("{0}", 42)`
+                // selecting the fixed `(string, object)` overload).
+                var staticConvertedArgs = conversions.BindClrParameterConversions(staticDelegateArgs, staticParameters, ce, staticDownstreamMapping, method: staticFn.Method, symbolicMethodTypeArgs: staticTypeArgSymbolsForCall);
+                var staticArguments = OverloadResolver.BuildOrderedCallArguments(staticConvertedArgs, staticDownstreamMapping, staticParameters);
+                var refKinds = ComputeArgumentRefKinds(staticParameters);
+                overloads.ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
+
                 BoundExpression staticCall = new BoundImportedCallExpression(null, staticFn, staticArguments, refKinds, staticTypeArgSymbolsForCall);
                 return WrapWithHandlerPrelude(staticCall, staticHandlerPrelude, ce);
             }
@@ -3035,7 +3034,7 @@ internal sealed partial class ExpressionBinder
                             var instRebound = RebindFormattableInterpolationArguments(instExpandedArgs, ce.Arguments, instParameters, instDownstreamMapping);
                             var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instDownstreamMapping, out var instHandlerPrelude, out var instUpdatedReceiver);
                             var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instDownstreamMapping);
-                            var instConvertedArgs = conversions.BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping, method: resolution.Best, receiverType: receiver?.Type);
+                            var instConvertedArgs = conversions.BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping, method: resolution.Best, receiverType: receiver?.Type, symbolicMethodTypeArgs: instTypeArgSymbolsForCall);
                             var instArguments = OverloadResolver.BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
                             var instRefKinds = ComputeArgumentRefKinds(instParameters);
                             overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
@@ -3702,7 +3701,7 @@ internal sealed partial class ExpressionBinder
                 var inheritedDownstreamMapping = resolution.IsExpanded ? default : inheritedMapping;
                 var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, inheritedExpandedArgs, receiver, ce.Location, inheritedDownstreamMapping, out var inheritedHandlerPrelude, out var inheritedUpdatedReceiver);
                 var inheritedDelegateArgs = RebindFunctionLiteralDelegateArguments(inheritedHandlerArgs, inheritedParameters, inheritedDownstreamMapping);
-                var inheritedConvertedArgs = conversions.BindClrParameterConversions(inheritedDelegateArgs, inheritedParameters, ce, inheritedDownstreamMapping);
+                var inheritedConvertedArgs = conversions.BindClrParameterConversions(inheritedDelegateArgs, inheritedParameters, ce, inheritedDownstreamMapping, method: resolution.Best, receiverType: receiver?.Type, symbolicMethodTypeArgs: inheritedTypeArgSymbolsForCall);
                 var inheritedArguments = OverloadResolver.BuildOrderedCallArguments(inheritedConvertedArgs, inheritedDownstreamMapping, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
                 overloads.ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
