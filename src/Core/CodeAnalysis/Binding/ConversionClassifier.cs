@@ -644,6 +644,24 @@ internal sealed class ConversionClassifier
                             : call?.Location ?? default;
                         rebound = BindConversion(location, argument, targetType, allowExplicit: true);
                     }
+                    else if (argument.Type != targetType
+                        && TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out var udcArg))
+                    {
+                        // Issue #1459: the resolved parameter type is reachable
+                        // only through a user-defined / BCL `op_Implicit` (e.g.
+                        // `[]uint8 -> System.ReadOnlySpan[uint8]`,
+                        // `Span[uint8] -> ReadOnlySpan[uint8]`,
+                        // `Memory[T] -> ReadOnlyMemory[T]`). Built-in
+                        // conversions classify above and never reach this
+                        // fallback, so existing imported-call overloads keep
+                        // selecting unchanged; this only inserts the missing
+                        // `op_Implicit` call (as a BoundClrConversionCallExpression)
+                        // that the emitter already knows how to lower, mirroring
+                        // the user-function argument-coercion path. Without it
+                        // the emitter pushed the source type directly and
+                        // produced unverifiable IL at imported call sites.
+                        rebound = udcArg;
+                    }
                 }
             }
 
