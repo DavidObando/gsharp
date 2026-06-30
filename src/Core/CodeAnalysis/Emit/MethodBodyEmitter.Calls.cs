@@ -386,11 +386,10 @@ internal sealed partial class MethodBodyEmitter
         // needed — the signature is concrete, not type-erased).
         if (call.Target.Type is DelegateTypeSymbol namedDelegate)
         {
-            if (!this.outer.cache.DelegateInvokeHandles.TryGetValue(namedDelegate, out var namedInvokeHandle))
-            {
-                throw new InvalidOperationException(
-                    $"Delegate '{namedDelegate.Name}' has no emitted Invoke MethodDef.");
-            }
+            // Issue #1503: a generic named delegate (constructed or open)
+            // dispatches through a MemberRef parented at the delegate TypeSpec;
+            // a non-generic delegate uses the bare Invoke MethodDef handle.
+            var namedInvokeHandle = this.outer.ResolveDelegateInvokeToken(namedDelegate);
 
             this.EmitExpression(call.Target);
             foreach (var arg in call.Arguments)

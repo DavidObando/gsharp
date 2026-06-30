@@ -502,7 +502,7 @@ The aggregate keyword IS the declaration keyword (ADR-0078). Legal modifier comb
 
 ```ebnf
 
-A `DelegateAliasTail` declares a real CLR `MulticastDelegate`-derived named delegate type (ADR-0059), so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Diagnostics `GS0233`–`GS0234` cover malformed declarations.
+A `DelegateAliasTail` declares a real CLR `MulticastDelegate`-derived named delegate type (ADR-0059), so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Generic delegate declarations (`type Predicate[T any] = delegate func(value T) bool`) are supported per issue #1503, emitting a generic delegate `TypeDef`. Diagnostic `GS0233` covers malformed declarations.
 
 ### Members
 

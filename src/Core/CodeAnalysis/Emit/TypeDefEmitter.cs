@@ -875,11 +875,21 @@ internal sealed class TypeDefEmitter
         var delegateTypeDef = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
             @namespace: this.emitCtx.Metadata.GetOrAddString(delegateSym.PackageName ?? string.Empty),
-            name: this.emitCtx.Metadata.GetOrAddString(delegateSym.Name),
+            name: this.emitCtx.Metadata.GetOrAddString(MangleGenericName(delegateSym.Name, delegateSym.TypeParameters)),
             baseType: multicastTypeRef,
             fieldList: firstFieldHandle,
             methodList: MetadataTokens.MethodDefinitionHandle(firstMethodRow));
         this.cache.DelegateTypeDefs[delegateSym] = delegateTypeDef;
+
+        // Issue #1503 / ADR-0059 follow-up: a generic named delegate carries
+        // one GenericParam row per type parameter (mangled name above adds the
+        // backtick-arity suffix). The Invoke signature references the slots as
+        // VAR(idx) through the shared type encoder, exactly as generic
+        // struct/class/interface TypeDefs do (ADR-0087 §3 R1/R2). Constraints
+        // (`comparable`, `class`, interface bounds, …) flow through the same
+        // queued GenericParamConstraint rows. Non-generic delegates emit no
+        // GenericParam rows and keep their unmangled name.
+        EmitGenericParamRows(this.emitCtx, delegateTypeDef, delegateSym.TypeParameters);
 
         // ---- .ctor(object, native int) ----
         var ctorSigBlob = new BlobBuilder();

@@ -213,16 +213,53 @@ internal sealed class DeclarationBinder
             return;
         }
 
-        // ADR-0059 v1 limitation: generic delegate declarations are accepted
-        // syntactically but rejected by the binder (the emitter does not yet
-        // thread GenericParam rows through delegate TypeDefs). Surface a clear
-        // diagnostic so users know it's a deliberate not-yet-supported case.
-        if (syntax.TypeParameterList != null)
+        // Issue #1503 / ADR-0059 follow-up: a generic named delegate
+        // declaration (`type Predicate[T any] = delegate func(value T) bool`)
+        // binds its type-parameter list FIRST so the delegate's parameter and
+        // return type clauses can reference T, U, … — mirroring how generic
+        // struct/class/interface declarations bind their TypeParameterList. The
+        // emitter threads one GenericParam row per slot through the delegate
+        // TypeDef and references the type parameters (VAR(idx)) in the
+        // Invoke/ctor signatures.
+        var previousTypeParameters = binderCtx.CurrentTypeParameters;
+        ImmutableArray<TypeParameterSymbol> typeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
+        try
         {
-            Diagnostics.ReportGenericDelegateNotSupported(syntax.Identifier.Location, name);
-            return;
-        }
+            if (syntax.TypeParameterList != null)
+            {
+                binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+                typeParameters = BindTypeParameterList(syntax.TypeParameterList);
+            }
 
+            // Re-establish the type-parameter scope captured above so the
+            // delegate's parameter and return type clauses resolve T, U, ….
+            // (BindTypeParameterList restores CurrentTypeParameters to its prior
+            // value when it returns, so the scope must be rebuilt here.)
+            if (!typeParameters.IsDefaultOrEmpty)
+            {
+                binderCtx.CurrentTypeParameters = previousTypeParameters == null
+                    ? new Dictionary<string, TypeParameterSymbol>()
+                    : new Dictionary<string, TypeParameterSymbol>(previousTypeParameters);
+                foreach (var tp in typeParameters)
+                {
+                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
+                }
+            }
+
+            BindDelegateDeclarationCore(syntax, package, typeParameters);
+        }
+        finally
+        {
+            binderCtx.CurrentTypeParameters = previousTypeParameters;
+        }
+    }
+
+    private void BindDelegateDeclarationCore(
+        DelegateDeclarationSyntax syntax,
+        PackageSymbol package,
+        ImmutableArray<TypeParameterSymbol> typeParameters)
+    {
+        var name = syntax.Identifier.Text;
         var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
 
         var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
@@ -292,6 +329,11 @@ internal sealed class DeclarationBinder
             parameters.ToImmutable(),
             returnType,
             syntax);
+        if (!typeParameters.IsDefaultOrEmpty)
+        {
+            delegateSymbol.SetTypeParameters(typeParameters);
+        }
+
         delegateSymbol.SetAttributes(delegateAttributes);
         Binder.AttachDocumentation(delegateSymbol, syntax);
 
