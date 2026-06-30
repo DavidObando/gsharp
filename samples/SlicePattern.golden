@@ -1,0 +1,10 @@
+bookend
+bookend
+other
+last=200
+empty
+first=42
+none
+first=10 last=40 restLen=2
+first=7 last=8 restLen=0
+nomatch

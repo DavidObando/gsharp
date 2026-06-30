@@ -361,11 +361,61 @@ internal sealed class PatternBinder
         }
 
         var elements = ImmutableArray.CreateBuilder<BoundPattern>();
+        var sliceCount = 0;
         foreach (var elementSyntax in syntax.Elements)
         {
-            elements.Add(BindPattern(elementSyntax, elementType));
+            if (elementSyntax is SlicePatternSyntax slice)
+            {
+                // Issue #1505: at most one slice subpattern per list pattern.
+                sliceCount++;
+                if (sliceCount > 1)
+                {
+                    Diagnostics.ReportMultipleSlicePatternsInListPattern(slice.DotDotToken.Location);
+                }
+
+                elements.Add(BindSlicePattern(slice, discriminantType, elementType));
+            }
+            else
+            {
+                elements.Add(BindPattern(elementSyntax, elementType));
+            }
         }
 
         return new BoundListPattern(syntax, discriminantType, elements.ToImmutable(), elementType);
+    }
+
+    // Issue #1505: bind a slice ("rest") subpattern. A named capture (`..rest`)
+    // declares a `[]T` variable bound to the middle slice. A sub-pattern
+    // (`..[> 0]`) is materialized into a synthesized `[]T` local and matched
+    // against the slice value. A pure discard (`..`) materializes nothing.
+    private BoundPattern BindSlicePattern(SlicePatternSyntax syntax, TypeSymbol discriminantType, TypeSymbol elementType)
+    {
+        var sliceType = elementType == TypeSymbol.Error
+            ? (TypeSymbol)TypeSymbol.Error
+            : SliceTypeSymbol.Get(elementType);
+
+        BoundPattern subPattern = null;
+        if (syntax.Pattern != null)
+        {
+            subPattern = BindPattern(syntax.Pattern, sliceType);
+        }
+
+        LocalVariableSymbol variable = null;
+        if (syntax.CaptureIdentifier != null)
+        {
+            variable = new LocalVariableSymbol(syntax.CaptureIdentifier.Text, isReadOnly: true, sliceType, declaringSyntax: syntax.CaptureIdentifier);
+            if (!Scope.TryDeclareVariable(variable))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.CaptureIdentifier.Location, syntax.CaptureIdentifier.Text);
+            }
+        }
+        else if (subPattern != null)
+        {
+            // A sub-pattern needs the materialized slice value but introduces no
+            // user-visible binding; synthesize an internal local as its source.
+            variable = new LocalVariableSymbol("<slice>", isReadOnly: true, sliceType, declaringSyntax: syntax.DotDotToken);
+        }
+
+        return new BoundSlicePattern(syntax, discriminantType, elementType, variable, subPattern);
     }
 }

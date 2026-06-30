@@ -136,6 +136,7 @@ public enum BoundNodeKind
     PropertyPatternField,
     RelationalPattern,
     ListPattern,
+    SlicePattern,
     BinaryPattern,
     NotPattern,
     GoStatement,

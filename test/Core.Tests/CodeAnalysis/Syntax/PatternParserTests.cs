@@ -99,6 +99,57 @@ public class PatternParserTests
         Assert.Equal(SyntaxKind.BinaryExpression, theCase.Guard.Kind);
     }
 
+    [Theory]
+    [InlineData("[..]", 1, 0)]
+    [InlineData("[1, .., 3]", 3, 1)]
+    [InlineData("[.., last]", 2, 0)]
+    [InlineData("[first, ..]", 2, 1)]
+    public void SwitchExpression_SlicePattern_ParsesAsSliceElement(string pattern, int count, int sliceIndex)
+    {
+        var arm = ParseFirstSwitchExpressionArm($"let x = switch v {{ case {pattern}: 1 default: 0 }}");
+        var list = Assert.IsType<ListPatternSyntax>(arm.Value);
+        Assert.Equal(count, list.Elements.Count);
+        var slice = Assert.IsType<SlicePatternSyntax>(list.Elements[sliceIndex]);
+        Assert.Equal(SyntaxKind.SlicePattern, slice.Kind);
+        Assert.Null(slice.CaptureIdentifier);
+        Assert.Null(slice.Pattern);
+    }
+
+    [Fact]
+    public void SwitchExpression_CapturedSlicePattern_ParsesCaptureIdentifier()
+    {
+        var arm = ParseFirstSwitchExpressionArm("let x = switch v { case [first, ..rest, last]: 1 default: 0 }");
+        var list = Assert.IsType<ListPatternSyntax>(arm.Value);
+        Assert.Equal(3, list.Elements.Count);
+        var slice = Assert.IsType<SlicePatternSyntax>(list.Elements[1]);
+        Assert.NotNull(slice.CaptureIdentifier);
+        Assert.Equal("rest", slice.CaptureIdentifier.Text);
+        Assert.Null(slice.Pattern);
+    }
+
+    [Fact]
+    public void SwitchExpression_SlicePattern_IsNotParsedAsRangeExpression()
+    {
+        var arm = ParseFirstSwitchExpressionArm("let x = switch v { case [1, .., 3]: 1 default: 0 }");
+        var list = Assert.IsType<ListPatternSyntax>(arm.Value);
+
+        // The middle element must be a slice subpattern, never a range/constant expression pattern.
+        Assert.IsType<SlicePatternSyntax>(list.Elements[1]);
+        Assert.IsType<ConstantPatternSyntax>(list.Elements[0]);
+        Assert.IsType<ConstantPatternSyntax>(list.Elements[2]);
+    }
+
+    [Fact]
+    public void SwitchExpression_MultipleSlicePatterns_ParseWithoutSyntaxError()
+    {
+        // Multiple slices are a binder-level diagnostic (GS0416), not a syntax error.
+        var arm = ParseFirstSwitchExpressionArm("let x = switch v { case [1, .., .., 3]: 1 default: 0 }");
+        var list = Assert.IsType<ListPatternSyntax>(arm.Value);
+        Assert.Equal(4, list.Elements.Count);
+        Assert.IsType<SlicePatternSyntax>(list.Elements[1]);
+        Assert.IsType<SlicePatternSyntax>(list.Elements[2]);
+    }
+
     private static SwitchExpressionArmSyntax ParseFirstSwitchExpressionArm(string source)
     {
         var tree = SyntaxTree.Parse(source);

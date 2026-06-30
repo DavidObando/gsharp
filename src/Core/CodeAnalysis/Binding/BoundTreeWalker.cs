@@ -378,6 +378,9 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.ListPattern:
                 VisitListPattern((BoundListPattern)node);
                 break;
+            case BoundNodeKind.SlicePattern:
+                VisitSlicePattern((BoundSlicePattern)node);
+                break;
             case BoundNodeKind.BinaryPattern:
                 VisitBinaryPattern((BoundBinaryPattern)node);
                 break;
@@ -997,6 +1000,14 @@ public abstract class BoundTreeWalker
         foreach (var element in node.Elements)
         {
             VisitPattern(element);
+        }
+    }
+
+    protected virtual void VisitSlicePattern(BoundSlicePattern node)
+    {
+        if (node.Pattern != null)
+        {
+            VisitPattern(node.Pattern);
         }
     }
 

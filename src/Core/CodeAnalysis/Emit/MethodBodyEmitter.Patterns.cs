@@ -168,6 +168,11 @@ internal sealed partial class MethodBodyEmitter
             case BoundListPattern lp:
                 this.EmitListPattern(lp, loadValue, failLabel);
                 break;
+            case BoundSlicePattern:
+                // Slice subpatterns are emitted inline by EmitListPattern with
+                // prefix/suffix context; they never reach the generic dispatch.
+                throw new InvalidOperationException(
+                    "A slice subpattern ('..') is only valid inside a list pattern and is emitted by EmitListPattern.");
             case BoundBinaryPattern bp:
                 this.EmitBinaryPattern(bp, loadValue, valueType, failLabel);
                 break;
@@ -382,17 +387,60 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitListPattern(BoundListPattern lp, Action loadValue, LabelHandle failLabel)
     {
-        // Match an array (or slice) of exactly N elements. Slice patterns
-        // (`..`) are not yet supported by the binder, so length is
-        // strict-equal to the pattern's element count.
+        // Issue #1505: a list pattern may contain a single slice ("rest")
+        // subpattern. Without a slice, the length is strict-equal to the element
+        // count and elements are indexed 0..N-1 from the start. With a slice at
+        // index `prefix`, require length >= prefix + suffix, match the prefix
+        // elements from the start and the suffix elements from the end, and
+        // (for a captured / sub-patterned slice) materialize the middle slice.
+        var sliceIndex = -1;
+        for (var i = 0; i < lp.Elements.Length; i++)
+        {
+            if (lp.Elements[i] is BoundSlicePattern)
+            {
+                sliceIndex = i;
+                break;
+            }
+        }
+
+        if (sliceIndex < 0)
+        {
+            loadValue();
+            this.il.OpCode(ILOpCode.Ldlen);
+            this.il.OpCode(ILOpCode.Conv_i4);
+            this.il.LoadConstantI4(lp.Elements.Length);
+            this.il.OpCode(ILOpCode.Ceq);
+            this.il.Branch(ILOpCode.Brfalse, failLabel);
+
+            for (var i = 0; i < lp.Elements.Length; i++)
+            {
+                var index = i;
+                Action loadElement = () =>
+                {
+                    loadValue();
+                    this.il.LoadConstantI4(index);
+                    this.EmitLoadElement(lp.ElementType);
+                };
+
+                this.EmitPattern(lp.Elements[index], loadElement, lp.ElementType, failLabel);
+            }
+
+            return;
+        }
+
+        var prefix = sliceIndex;
+        var suffix = lp.Elements.Length - sliceIndex - 1;
+
+        // Require length >= prefix + suffix: fail when len < (prefix + suffix).
         loadValue();
         this.il.OpCode(ILOpCode.Ldlen);
         this.il.OpCode(ILOpCode.Conv_i4);
-        this.il.LoadConstantI4(lp.Elements.Length);
-        this.il.OpCode(ILOpCode.Ceq);
-        this.il.Branch(ILOpCode.Brfalse, failLabel);
+        this.il.LoadConstantI4(prefix + suffix);
+        this.il.OpCode(ILOpCode.Clt);
+        this.il.Branch(ILOpCode.Brtrue, failLabel);
 
-        for (var i = 0; i < lp.Elements.Length; i++)
+        // Prefix elements indexed from the start: 0 .. prefix-1.
+        for (var i = 0; i < prefix; i++)
         {
             var index = i;
             Action loadElement = () =>
@@ -403,6 +451,60 @@ internal sealed partial class MethodBodyEmitter
             };
 
             this.EmitPattern(lp.Elements[index], loadElement, lp.ElementType, failLabel);
+        }
+
+        // Suffix elements indexed from the end: element[sliceIndex+1+k] sits at
+        // array index len - (suffix - k).
+        for (var k = 0; k < suffix; k++)
+        {
+            var fromEnd = suffix - k;
+            var element = lp.Elements[sliceIndex + 1 + k];
+            Action loadElement = () =>
+            {
+                loadValue();
+                loadValue();
+                this.il.OpCode(ILOpCode.Ldlen);
+                this.il.OpCode(ILOpCode.Conv_i4);
+                this.il.LoadConstantI4(fromEnd);
+                this.il.OpCode(ILOpCode.Sub);
+                this.EmitLoadElement(lp.ElementType);
+            };
+
+            this.EmitPattern(element, loadElement, lp.ElementType, failLabel);
+        }
+
+        var slice = (BoundSlicePattern)lp.Elements[sliceIndex];
+        if (slice.Variable != null)
+        {
+            var elementToken = this.outer.GetElementTypeToken(lp.ElementType);
+
+            // dst = new T[len - (prefix + suffix)]
+            loadValue();
+            this.il.OpCode(ILOpCode.Ldlen);
+            this.il.OpCode(ILOpCode.Conv_i4);
+            this.il.LoadConstantI4(prefix + suffix);
+            this.il.OpCode(ILOpCode.Sub);
+            this.il.OpCode(ILOpCode.Newarr);
+            this.il.Token(elementToken);
+            this.EmitStoreVariable(slice.Variable);
+
+            // Array.Copy(src, prefix, dst, 0, len - (prefix + suffix))
+            loadValue();
+            this.il.LoadConstantI4(prefix);
+            this.EmitLoadVariable(slice.Variable);
+            this.il.LoadConstantI4(0);
+            loadValue();
+            this.il.OpCode(ILOpCode.Ldlen);
+            this.il.OpCode(ILOpCode.Conv_i4);
+            this.il.LoadConstantI4(prefix + suffix);
+            this.il.OpCode(ILOpCode.Sub);
+            this.il.Call(this.outer.wellKnown.GetArrayCopyRangeReference());
+
+            if (slice.Pattern != null)
+            {
+                var sliceType = SliceTypeSymbol.Get(lp.ElementType);
+                this.EmitPattern(slice.Pattern, () => this.EmitLoadVariable(slice.Variable), sliceType, failLabel);
+            }
         }
     }
 
