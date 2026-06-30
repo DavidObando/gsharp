@@ -959,6 +959,36 @@ internal sealed partial class MethodBodyEmitter
         // sequence per entry. Using set_Item rather than Add so duplicate keys
         // overwrite (matching Go semantics; ParseMapEntries does not dedup).
         var dictType = literal.MapType.ClrType;
+
+        // Issue #1481: when the map's key or value structurally references an
+        // in-scope type parameter (e.g. `map[string, T]`), the erased CLR
+        // `Dictionary<…>` type is unavailable (ClrType is null). Route the
+        // construction through the reified TypeSpec-parented MemberRefs so the
+        // value verifies against the iterator state machine's reified
+        // `Dictionary<…, !0>` field — mirrors the symbolic tuple-literal path.
+        if (dictType == null)
+        {
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetMapCtorReference(literal.MapType));
+
+            if (literal.Entries.Length == 0)
+            {
+                return;
+            }
+
+            var symbolicSetItemRef = this.outer.GetMapSetItemReference(literal.MapType);
+            foreach (var entry in literal.Entries)
+            {
+                this.il.OpCode(ILOpCode.Dup);
+                this.EmitExpression(entry.Key);
+                this.EmitExpression(entry.Value);
+                this.il.OpCode(ILOpCode.Callvirt);
+                this.il.Token(symbolicSetItemRef);
+            }
+
+            return;
+        }
+
         var ctor = dictType.GetConstructor(Type.EmptyTypes)
             ?? throw new InvalidOperationException(
                 $"Dictionary type '{dictType.FullName}' has no parameterless constructor.");

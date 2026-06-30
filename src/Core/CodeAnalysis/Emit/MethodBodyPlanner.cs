@@ -831,7 +831,7 @@ internal sealed class MethodBodyPlanner
         // loop in RME — outer-method TPs translate to Var(idx)). For closed
         // element types we keep the original CLR-erased path so existing
         // closed-iterator behaviour is unchanged.
-        var elementContainsTp = ContainsTypeParameter(elementType);
+        var elementContainsTp = TypeSymbol.ContainsTypeParameter(elementType);
 
         // Issue #990: a user-declared element type (a `class` or `data
         // struct` emitted in this same assembly) has no ClrType, so the
@@ -883,75 +883,6 @@ internal sealed class MethodBodyPlanner
         var gi = encoder.GenericInstantiation(openHandle, genericArgumentCount: 1, isValueType: false);
         this.encodeTypeSymbol(gi.AddArgument(), elementType);
         return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-    }
-
-    /// <summary>
-    /// Issue #810: recursively returns true if <paramref name="t"/>
-    /// directly or transitively references a <see cref="TypeParameterSymbol"/>.
-    /// Used to decide between TypeSpec and CLR-erased interface
-    /// implementations for the iterator SM class.
-    /// </summary>
-    private static bool ContainsTypeParameter(TypeSymbol t)
-    {
-        switch (t)
-        {
-            case null:
-                return false;
-            case TypeParameterSymbol:
-                return true;
-            case ArrayTypeSymbol a:
-                return ContainsTypeParameter(a.ElementType);
-            case SliceTypeSymbol s:
-                return ContainsTypeParameter(s.ElementType);
-            case SequenceTypeSymbol seq:
-                return ContainsTypeParameter(seq.ElementType);
-            case AsyncSequenceTypeSymbol aseq:
-                return ContainsTypeParameter(aseq.ElementType);
-            case NullableTypeSymbol nu:
-                return ContainsTypeParameter(nu.UnderlyingType);
-            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
-                foreach (var arg in it.TypeArguments)
-                {
-                    if (ContainsTypeParameter(arg))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
-            case StructSymbol st when !st.TypeArguments.IsDefaultOrEmpty:
-                foreach (var arg in st.TypeArguments)
-                {
-                    if (ContainsTypeParameter(arg))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
-            case TupleTypeSymbol tup:
-                // Issue #813: a value-tuple element type mentioning an
-                // outer-method TP must also drive the symbolic
-                // `IEnumerable<…>` / `IEnumerator<…>` interface
-                // implementations on the iterator SM class so the
-                // TypeSpec carries `ValueTuple<…, !0>` instead of the
-                // type-erased `IEnumerable<object>`. Without this the
-                // SM's interface row references the wrong shape and a
-                // for-in over `Indexed[int32](source)` throws
-                // `EntryPointNotFoundException` from the runtime's
-                // `IEnumerable<(int32,T)>.GetEnumerator()` lookup.
-                foreach (var elem in tup.ElementTypes)
-                {
-                    if (ContainsTypeParameter(elem))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
-            default:
-                return false;
-        }
     }
 
     public void AddAsyncIteratorInterfaceImplementations(StructSymbol smClass, AsyncIteratorPlan plan)

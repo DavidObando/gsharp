@@ -531,7 +531,7 @@ internal sealed class StateMachineEmitter
             // symbolic encoder so the GetEnumerator signature stays
             // strongly typed as `IEnumerator<Shape>`.
             var elementNeedsSymbolicEnumerator =
-                ContainsOuterMethodTypeParameter(plan.ElementType, scopeTPs)
+                TypeSymbol.ContainsOuterMethodTypeParameter(plan.ElementType, scopeTPs)
                 || plan.ElementType?.ClrType == null;
             var getEnumeratorType = elementNeedsSymbolicEnumerator
                 ? (TypeSymbol)ImportedTypeSymbol.GetConstructed(
@@ -595,75 +595,6 @@ internal sealed class StateMachineEmitter
                     thisProxyField, plan.Function.ThisParameter != null ? new BoundVariableExpression(null, plan.Function.ThisParameter) : null)))));
             this.IteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(plan, smClass, outerMethodTPs, classTPs);
             this.closures.SynthesizedClosureClasses.Add(smClass);
-        }
-    }
-
-    /// <summary>
-    /// Issue #810: returns <see langword="true"/> when <paramref name="type"/>
-    /// references any of the outer method's type parameters (directly or
-    /// nested inside an array/slice/sequence/imported-generic). Used to
-    /// decide whether the GetEnumerator return type needs a symbolic
-    /// (TypeSpec-encoded) `IEnumerator&lt;T&gt;` instead of the
-    /// CLR-erased `IEnumerator&lt;object&gt;` shape.
-    /// </summary>
-    private static bool ContainsOuterMethodTypeParameter(TypeSymbol type, ImmutableArray<TypeParameterSymbol> outerMethodTPs)
-    {
-        if (outerMethodTPs.IsDefaultOrEmpty || type == null)
-        {
-            return false;
-        }
-
-        switch (type)
-        {
-            case TypeParameterSymbol tp:
-                foreach (var outer in outerMethodTPs)
-                {
-                    if (ReferenceEquals(tp, outer))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
-            case ArrayTypeSymbol a:
-                return ContainsOuterMethodTypeParameter(a.ElementType, outerMethodTPs);
-            case SliceTypeSymbol s:
-                return ContainsOuterMethodTypeParameter(s.ElementType, outerMethodTPs);
-            case SequenceTypeSymbol seq:
-                return ContainsOuterMethodTypeParameter(seq.ElementType, outerMethodTPs);
-            case AsyncSequenceTypeSymbol aseq:
-                return ContainsOuterMethodTypeParameter(aseq.ElementType, outerMethodTPs);
-            case NullableTypeSymbol nu:
-                return ContainsOuterMethodTypeParameter(nu.UnderlyingType, outerMethodTPs);
-            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
-                foreach (var arg in it.TypeArguments)
-                {
-                    if (ContainsOuterMethodTypeParameter(arg, outerMethodTPs))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
-            case TupleTypeSymbol tup:
-                // Issue #813: a tuple element type that mentions an
-                // outer-method TP (e.g. `(int32, T)` from
-                // `sequence[(int32, T)]`) must drive the same
-                // symbolic-IEnumerator routing as the open-generic
-                // sequence cases above, so the SM's GetEnumerator return
-                // encodes as `IEnumerator<ValueTuple<int32,!0>>` rather
-                // than the type-erased `IEnumerator<object>`.
-                foreach (var elem in tup.ElementTypes)
-                {
-                    if (ContainsOuterMethodTypeParameter(elem, outerMethodTPs))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
-            default:
-                return false;
         }
     }
 

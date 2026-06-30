@@ -3556,6 +3556,24 @@ public sealed class Binder
             return ReferenceEquals(inner, aseq.ElementType) ? type : AsyncSequenceTypeSymbol.Get(inner);
         }
 
+        if (type is MapTypeSymbol map)
+        {
+            // Issue #1481: substitute through `map[K, V]` so a call like
+            // `entries[int32](items)` lowers its return type from the open
+            // `sequence[map[string, T]]` to the closed
+            // `sequence[map[string, int32]]`. Without this branch the map's
+            // key/value types stay parametric, so the for-in at the call site
+            // encodes its `IEnumerable<Dictionary<string, !!0>>` GetEnumerator
+            // reference against the unsubstituted method type parameter and
+            // fails verification against the closed kickoff return. Directly
+            // analogous to the tuple branch below (#813).
+            var newKey = SubstituteType(map.KeyType, substitution);
+            var newValue = SubstituteType(map.ValueType, substitution);
+            return ReferenceEquals(newKey, map.KeyType) && ReferenceEquals(newValue, map.ValueType)
+                ? type
+                : MapTypeSymbol.Get(newKey, newValue);
+        }
+
         if (type is TupleTypeSymbol tup)
         {
             // Issue #813: substitute through `(T1, T2, …)` so a call like
