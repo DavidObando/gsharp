@@ -1329,7 +1329,23 @@ internal sealed partial class MethodBodyEmitter
     /// <summary>ADR-0039: Emits the field address (ldflda) for a user struct field.</summary>
     private void EmitFieldAddress(BoundFieldAccessExpression fa)
     {
-        if (!this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var fieldHandle))
+        // Issue #1465: a field declared on a generic user struct (e.g. an async
+        // state-machine reified over its enclosing class's type parameters) must
+        // be addressed through a MemberRef parented at the constructed self
+        // TypeSpec (`SM`1<!T>`), not the raw open FieldDef. Mirror the
+        // generic-aware resolution used by the value-read path so `ldflda`
+        // (struct builder SetResult/SetException etc.) matches verification.
+        EntityHandle fieldHandle;
+        var containing = fa.StructType;
+        if (containing != null && ReflectionMetadataEmitter.IsUserGenericTypeReference(containing))
+        {
+            fieldHandle = this.outer.ResolveFieldToken(containing, fa.Field);
+        }
+        else if (this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var defHandle))
+        {
+            fieldHandle = defHandle;
+        }
+        else
         {
             throw new InvalidOperationException(
                 $"Cannot take address of field '{fa.Field.Name}': no emitted FieldDef.");

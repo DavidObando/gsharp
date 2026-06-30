@@ -132,6 +132,12 @@ internal sealed class StateMachineEmitter
     private readonly Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol;
     private readonly Action<SignatureTypeEncoder, Type> encodeClrType;
 
+    // Issue #1465: resolve a state-machine struct type token / field token
+    // through the generic-aware path (TypeSpec / MemberRef when the SM is
+    // reified over its enclosing type's parameters).
+    private readonly Func<StructSymbol, EntityHandle> getStructTypeToken;
+    private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken;
+
     // PR-E-8-style callback: drives the still-private BodyEmitter nested class
     // on RME to build the MoveNext body bytes (PDB metadata included). Returns
     // -1 bodyOffset under MetadataOnly.
@@ -151,6 +157,8 @@ internal sealed class StateMachineEmitter
         Func<ParameterHandle> nextParameterHandle,
         Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol,
         Action<SignatureTypeEncoder, Type> encodeClrType,
+        Func<StructSymbol, EntityHandle> getStructTypeToken,
+        Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken,
         Func<AsyncStateMachinePlan, MoveNextBodyResult> buildMoveNextBodyBytes)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
@@ -166,6 +174,8 @@ internal sealed class StateMachineEmitter
         this.nextParameterHandle = nextParameterHandle ?? throw new ArgumentNullException(nameof(nextParameterHandle));
         this.encodeTypeSymbol = encodeTypeSymbol ?? throw new ArgumentNullException(nameof(encodeTypeSymbol));
         this.encodeClrType = encodeClrType ?? throw new ArgumentNullException(nameof(encodeClrType));
+        this.getStructTypeToken = getStructTypeToken ?? throw new ArgumentNullException(nameof(getStructTypeToken));
+        this.resolveFieldToken = resolveFieldToken ?? throw new ArgumentNullException(nameof(resolveFieldToken));
         this.buildMoveNextBodyBytes = buildMoveNextBodyBytes ?? throw new ArgumentNullException(nameof(buildMoveNextBodyBytes));
     }
 
@@ -276,10 +286,13 @@ internal sealed class StateMachineEmitter
         public ImmutableArray<TypeParameterSymbol> ClassTypeParameters { get; }
 
         /// <summary>
-        /// Issue #810: returns the emit-time remap from each outer-method
-        /// type parameter to its corresponding class-type-parameter ordinal,
-        /// or <see langword="null"/> when this iterator has no type
-        /// parameters. Used by
+        /// Issue #810 + #1465: returns the emit-time remap from each
+        /// outer-method type parameter to its corresponding class-type-parameter
+        /// ordinal on the synthesized state machine, or <see langword="null"/>
+        /// when this iterator method has no method-level type parameters. The
+        /// state machine's leading type parameters mirror the enclosing generic
+        /// type's parameters, so a method type parameter maps to the slot
+        /// offset by the enclosing class type-parameter count. Used by
         /// <see cref="ReflectionMetadataEmitter.activeIteratorStateMachineRemap"/>.
         /// </summary>
         public Dictionary<TypeParameterSymbol, int> BuildRemap()
@@ -289,10 +302,11 @@ internal sealed class StateMachineEmitter
                 return null;
             }
 
+            var offset = this.ClassTypeParameters.Length - this.OuterMethodTypeParameters.Length;
             var map = new Dictionary<TypeParameterSymbol, int>(this.OuterMethodTypeParameters.Length);
             for (var i = 0; i < this.OuterMethodTypeParameters.Length; i++)
             {
-                map[this.OuterMethodTypeParameters[i]] = i;
+                map[this.OuterMethodTypeParameters[i]] = offset + i;
             }
 
             return map;
@@ -376,41 +390,57 @@ internal sealed class StateMachineEmitter
             // rows so CLR access checks succeed at runtime.
             var packageName = plan.Function.Package?.Name ?? hostPackage?.Name ?? string.Empty;
 
-            // Issue #810: when the iterator is generic, the synthesized
-            // state-machine class must itself be generic over a matching
-            // set of class-level type parameters (mirroring Roslyn's
-            // `<Empty>d__0<T>`). Build class TPs (`IsMethodTypeParameter=false`,
-            // so EncodeTypeSymbol writes them as `Var(idx)`) before the
-            // class is materialized — every field/parameter/local that
-            // mentions the outer method's TP is then substituted to the
-            // class TP via the activeIteratorStateMachineRemap encode-time
-            // hook. The class TPs themselves are not used directly in any
-            // bound expression — the substitution lives at the encoder.
+            // Issue #810 + #1465: when the iterator method has type parameters
+            // in scope — the enclosing GENERIC type's parameters and/or the
+            // method's own type parameters — the synthesized state-machine
+            // class must itself be generic over an ordinal-aligned copy of
+            // them (mirroring Roslyn's `<Empty>d__0<T>`). The enclosing type's
+            // parameters come first (ordinals 0..k-1), then the method's own
+            // (ordinals k..). Class TPs (`IsMethodTypeParameter=false`) encode
+            // as `Var(idx)`; a method-TP reference inside the body is
+            // translated to the matching class-TP slot via the
+            // activeIteratorStateMachineRemap encode-time hook. The class TPs
+            // themselves are not used directly in any bound expression — the
+            // substitution lives at the encoder.
+            var enclosingClassTPs = plan.Function.ReceiverType is StructSymbol iterRecv
+                ? (iterRecv.Definition ?? iterRecv).TypeParameters
+                : ImmutableArray<TypeParameterSymbol>.Empty;
+            if (enclosingClassTPs.IsDefault)
+            {
+                enclosingClassTPs = ImmutableArray<TypeParameterSymbol>.Empty;
+            }
+
             var outerMethodTPs = plan.Function.TypeParameters.IsDefaultOrEmpty
                 ? ImmutableArray<TypeParameterSymbol>.Empty
                 : plan.Function.TypeParameters;
+
+            // Combined in-scope type parameters: enclosing class first, then
+            // method. Drives the SM's own generic parameters and the
+            // self-instantiation type arguments used by the kickoff.
+            var scopeTPs = enclosingClassTPs.AddRange(outerMethodTPs);
             ImmutableArray<TypeParameterSymbol> classTPs;
-            if (outerMethodTPs.IsDefaultOrEmpty)
+            if (scopeTPs.IsDefaultOrEmpty)
             {
                 classTPs = ImmutableArray<TypeParameterSymbol>.Empty;
             }
             else
             {
-                var b = ImmutableArray.CreateBuilder<TypeParameterSymbol>(outerMethodTPs.Length);
-                foreach (var outerTP in outerMethodTPs)
+                var b = ImmutableArray.CreateBuilder<TypeParameterSymbol>(scopeTPs.Length);
+                for (var ti = 0; ti < scopeTPs.Length; ti++)
                 {
+                    var scopeTP = scopeTPs[ti];
                     var classTP = new TypeParameterSymbol(
-                        outerTP.Name,
-                        outerTP.Ordinal,
-                        outerTP.Constraint,
-                        outerTP.Variance,
-                        outerTP.InterfaceConstraint)
+                        scopeTP.Name,
+                        ti,
+                        scopeTP.Constraint,
+                        scopeTP.Variance,
+                        scopeTP.InterfaceConstraint)
                     {
-                        HasReferenceTypeConstraint = outerTP.HasReferenceTypeConstraint,
-                        HasValueTypeConstraint = outerTP.HasValueTypeConstraint,
-                        HasDefaultConstructorConstraint = outerTP.HasDefaultConstructorConstraint,
-                        ClrInterfaceConstraint = outerTP.ClrInterfaceConstraint,
-                        ClassConstraint = outerTP.ClassConstraint,
+                        HasReferenceTypeConstraint = scopeTP.HasReferenceTypeConstraint,
+                        HasValueTypeConstraint = scopeTP.HasValueTypeConstraint,
+                        HasDefaultConstructorConstraint = scopeTP.HasDefaultConstructorConstraint,
+                        ClrInterfaceConstraint = scopeTP.ClrInterfaceConstraint,
+                        ClassConstraint = scopeTP.ClassConstraint,
                         IsMethodTypeParameter = false,
                     };
                     b.Add(classTP);
@@ -501,7 +531,7 @@ internal sealed class StateMachineEmitter
             // symbolic encoder so the GetEnumerator signature stays
             // strongly typed as `IEnumerator<Shape>`.
             var elementNeedsSymbolicEnumerator =
-                ContainsOuterMethodTypeParameter(plan.ElementType, outerMethodTPs)
+                ContainsOuterMethodTypeParameter(plan.ElementType, scopeTPs)
                 || plan.ElementType?.ClrType == null;
             var getEnumeratorType = elementNeedsSymbolicEnumerator
                 ? (TypeSymbol)ImportedTypeSymbol.GetConstructed(
@@ -548,7 +578,7 @@ internal sealed class StateMachineEmitter
             // outer method's TPs.
             var kickoffSmType = classTPs.IsDefaultOrEmpty
                 ? smClass
-                : StructSymbol.Construct(smClass, outerMethodTPs.CastArray<TypeSymbol>());
+                : StructSymbol.Construct(smClass, scopeTPs.CastArray<TypeSymbol>());
 
             this.lambdaBodies[getEnumerator] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
@@ -1349,10 +1379,10 @@ internal sealed class StateMachineEmitter
     public int EmitAsyncKickoffBody(FunctionSymbol function, AsyncStateMachinePlan plan)
     {
         var smStruct = plan.StateMachine.MaterializeAsStructSymbol();
-        var smTypeDef = this.cache.StructTypeDefs[smStruct];
+        var smTypeDef = this.getStructTypeToken(smStruct);
         var builderInfo = plan.StateMachine.BuilderInfo;
-        var stateFieldHandle = this.cache.StructFieldDefs[plan.FieldMap.StateField];
-        var builderFieldHandle = this.cache.StructFieldDefs[plan.FieldMap.BuilderField];
+        var stateFieldHandle = this.resolveFieldToken(smStruct, plan.FieldMap.StateField);
+        var builderFieldHandle = this.resolveFieldToken(smStruct, plan.FieldMap.BuilderField);
 
         var il = new InstructionEncoder(new BlobBuilder());
 
@@ -1373,7 +1403,7 @@ internal sealed class StateMachineEmitter
         // Copy this (for instance methods)
         if (plan.FieldMap.ThisField != null && function.IsInstanceMethod)
         {
-            var thisFieldHandle = this.cache.StructFieldDefs[plan.FieldMap.ThisField];
+            var thisFieldHandle = this.resolveFieldToken(smStruct, plan.FieldMap.ThisField);
             il.LoadLocalAddress(0);
             il.LoadArgument(0);
             il.OpCode(ILOpCode.Stfld);
@@ -1385,7 +1415,7 @@ internal sealed class StateMachineEmitter
         var paramIndex = 0;
         foreach (var copy in plan.KickoffPlan.ParameterCopies)
         {
-            var fieldHandle = this.cache.StructFieldDefs[copy.Field];
+            var fieldHandle = this.resolveFieldToken(smStruct, copy.Field);
             il.LoadLocalAddress(0);
             il.LoadArgument(paramIndex + paramSlotShift);
             il.OpCode(ILOpCode.Stfld);
@@ -1430,10 +1460,12 @@ internal sealed class StateMachineEmitter
 
         il.OpCode(ILOpCode.Ret);
 
-        // Locals: one local of the state-machine struct type.
+        // Locals: one local of the state-machine struct type. Issue #1465:
+        // encode through EncodeTypeSymbol so a generic SM is written as the
+        // self-instantiated GENERICINST rather than a bare VALUETYPE token.
         var localsSigBlob = new BlobBuilder();
         var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(1);
-        localsEncoder.AddVariable().Type().Type(smTypeDef, isValueType: true);
+        this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), smStruct);
         var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
 
         return this.emitCtx.MethodBodyStream.AddMethodBody(
@@ -1457,11 +1489,12 @@ internal sealed class StateMachineEmitter
                 : startOpenMethod,
             builderFieldType);
 
-        // Build MethodSpec signature: instantiation with SM struct type.
-        var smTypeDef = this.cache.StructTypeDefs[smStruct];
+        // Build MethodSpec signature: instantiation with the SM struct type.
+        // Issue #1465: encode through EncodeTypeSymbol so a generic SM is
+        // written as the self-instantiated GENERICINST<SM><!0,…>.
         var sigBlob = new BlobBuilder();
         var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
-        argsEncoder.AddArgument().Type(smTypeDef, isValueType: true);
+        this.encodeTypeSymbol(argsEncoder.AddArgument(), smStruct);
 
         return this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
@@ -1520,7 +1553,7 @@ internal sealed class StateMachineEmitter
             throw new InvalidOperationException("Cannot emit AwaitOnCompleted: no active async plan.");
         }
 
-        var builderFieldHandle = this.cache.StructFieldDefs[builderField];
+        var builderFieldHandle = this.resolveFieldToken(smStruct, builderField);
 
         // ldarg.0 (this)
         // ldflda builder
@@ -1555,7 +1588,6 @@ internal sealed class StateMachineEmitter
                 : openMethod,
             builderField.Type);
 
-        var smTypeDef = this.cache.StructTypeDefs[smStruct];
         var sigBlob = new BlobBuilder();
         var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(2);
 
@@ -1569,8 +1601,10 @@ internal sealed class StateMachineEmitter
             this.encodeClrType(argsEncoder.AddArgument(), node.AwaiterClrType);
         }
 
-        // Second type arg: TStateMachine (the SM TypeDef)
-        argsEncoder.AddArgument().Type(smTypeDef, isValueType: smIsValueType);
+        // Second type arg: TStateMachine. Issue #1465: encode through
+        // EncodeTypeSymbol so a generic SM is written as the self-instantiated
+        // GENERICINST<SM><!0,…> rather than a bare TypeDef token.
+        this.encodeTypeSymbol(argsEncoder.AddArgument(), smStruct);
 
         var methodSpec = this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         il.OpCode(ILOpCode.Call);
