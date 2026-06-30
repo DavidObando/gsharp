@@ -54,7 +54,7 @@ internal sealed partial class MethodBodyEmitter
     {
         // ldarg.0 (this)
         // ldflda builder
-        var builderFieldHandle = this.outer.cache.StructFieldDefs[node.BuilderField];
+        var builderFieldHandle = this.outer.ResolveFieldToken(node.SmClass, node.BuilderField);
         this.il.OpCode(ILOpCode.Ldarg_0);
         this.il.OpCode(ILOpCode.Ldflda);
         this.il.Token(builderFieldHandle);
@@ -69,11 +69,9 @@ internal sealed partial class MethodBodyEmitter
             .First(m => m.Name == "MoveNext" && m.IsGenericMethodDefinition && m.GetParameters().Length == 1);
         var openRef = this.outer.GetMethodReference(openMoveNext.GetGenericMethodDefinition());
 
-        var smTypeDef = this.outer.cache.StructTypeDefs[node.SmClass];
-
         var sigBlob = new BlobBuilder();
         var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
-        argsEncoder.AddArgument().Type(smTypeDef, isValueType: false); // class, not struct
+        this.outer.EncodeTypeSymbolIntoSignature(argsEncoder.AddArgument(), node.SmClass); // class, not struct
 
         var methodSpec = this.outer.emitCtx.Metadata.AddMethodSpecification(openRef, this.outer.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         this.il.OpCode(ILOpCode.Call);

@@ -364,6 +364,72 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    /// <summary>
+    /// Issue #1465: reifies an async state-machine struct over an
+    /// ordinal-aligned copy of the type parameters in scope at its kickoff
+    /// method — the enclosing generic type's parameters first, then the
+    /// kickoff method's own type parameters (Roslyn ordering). References to
+    /// those parameters inside MoveNext / hoisted-field signatures then encode
+    /// as the SM type's own <c>ELEMENT_TYPE_VAR</c> slots, and references to
+    /// the SM type from the kickoff method self-instantiate as
+    /// <c>SM&lt;!0,…&gt;</c> using the enclosing type's parameters.
+    /// </summary>
+    /// <param name="smStruct">The materialized state-machine struct.</param>
+    /// <param name="kickoff">The async kickoff method.</param>
+    private void RegisterStateMachineEnclosingGenerics(StructSymbol smStruct, FunctionSymbol kickoff)
+    {
+        var classTPs = kickoff?.ReceiverType is StructSymbol receiver
+            ? (receiver.Definition ?? receiver).TypeParameters
+            : ImmutableArray<TypeParameterSymbol>.Empty;
+        var methodTPs = kickoff == null || kickoff.TypeParameters.IsDefaultOrEmpty
+            ? ImmutableArray<TypeParameterSymbol>.Empty
+            : kickoff.TypeParameters;
+
+        if (classTPs.IsDefaultOrEmpty && methodTPs.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var total = classTPs.Length + methodTPs.Length;
+        var smTPs = ImmutableArray.CreateBuilder<TypeParameterSymbol>(total);
+        var remap = new Dictionary<TypeParameterSymbol, int>(total);
+        var ordinal = 0;
+        foreach (var src in classTPs)
+        {
+            smTPs.Add(CloneAsClassTypeParameter(src, ordinal));
+            remap[src] = ordinal;
+            ordinal++;
+        }
+
+        foreach (var src in methodTPs)
+        {
+            smTPs.Add(CloneAsClassTypeParameter(src, ordinal));
+            remap[src] = ordinal;
+            ordinal++;
+        }
+
+        smStruct.SetTypeParameters(smTPs.MoveToImmutable());
+        this.iteratorStateMachineRemapsByClass[smStruct] = remap;
+    }
+
+    private static TypeParameterSymbol CloneAsClassTypeParameter(TypeParameterSymbol src, int ordinal)
+    {
+        return new TypeParameterSymbol(
+            src.Name,
+            ordinal,
+            src.Constraint,
+            src.Variance,
+            src.InterfaceConstraint)
+        {
+            HasReferenceTypeConstraint = src.HasReferenceTypeConstraint,
+            HasValueTypeConstraint = src.HasValueTypeConstraint,
+            HasDefaultConstructorConstraint = src.HasDefaultConstructorConstraint,
+            ClrInterfaceConstraint = src.ClrInterfaceConstraint,
+            ClassConstraint = src.ClassConstraint,
+            IsMethodTypeParameter = false,
+        };
+    }
+
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
         this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
@@ -657,6 +723,8 @@ internal sealed class ReflectionMetadataEmitter
             this.customAttrEncoder.NextParameterHandle,
             this.EncodeTypeSymbol,
             this.EncodeClrType,
+            this.GetStructTypeToken,
+            this.ResolveFieldToken,
             this.BuildMoveNextBodyBytes);
 
         if (asyncRewriteResult != null)
@@ -738,6 +806,17 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var plan in this.stateMachines.AsyncStateMachinePlans)
         {
             var smStruct = plan.StateMachine.MaterializeAsStructSymbol();
+
+            // Issue #1465: when the async kickoff method lives inside a
+            // generic type (or is itself a generic method), the synthesized
+            // state-machine type must be reified over an ordinal-aligned copy
+            // of the enclosing type's (and the method's) type parameters —
+            // mirroring Roslyn's `<M>d__0<T>`. Without this the hoisted
+            // `<>4__this` field, the `this`-proxy, and the self-call targets
+            // inside MoveNext reference the class's `!0` from a non-generic
+            // SM context, producing unverifiable IL.
+            this.RegisterStateMachineEnclosingGenerics(smStruct, plan.StateMachine.KickoffMethod);
+
             asyncSmStructs.Add(smStruct);
             asyncSmPlansByStruct[smStruct] = plan;
         }
@@ -2137,7 +2216,15 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var s in smStructsOrdered)
         {
             var smMethodListRow = structFirstMethodRows[s];
-            this.typeDefEmitter.EmitNestedStructTypeDef(s, structFirstFieldRow[s], smMethodListRow);
+
+            // Issue #1465: push the SM's enclosing-type/method TP → SM-TP
+            // remap so hoisted-field signatures (e.g. `<>4__this`) translate
+            // method-type-parameter references into the SM type's own Var
+            // slots. A no-op when the SM is non-generic.
+            using (this.PushSmRemap(s))
+            {
+                this.typeDefEmitter.EmitNestedStructTypeDef(s, structFirstFieldRow[s], smMethodListRow);
+            }
 
             var iAsyncSmType = typeof(System.Runtime.CompilerServices.IAsyncStateMachine);
             var iAsyncSmRef = this.GetTypeReference(iAsyncSmType);
@@ -2490,7 +2577,16 @@ internal sealed class ReflectionMetadataEmitter
                     EmitClassMethodBodies(ns);
                     break;
                 case StructSymbol ns:
-                    EmitStructMethodBodies(ns);
+                    // Issue #1465: async state-machine structs are reified
+                    // over their enclosing-type/method type parameters; push
+                    // the SM TP remap so MoveNext bodies and signatures
+                    // translate method-TP references to the SM's own Var
+                    // slots. A no-op for non-generic structs.
+                    using (this.PushSmRemap(ns))
+                    {
+                        EmitStructMethodBodies(ns);
+                    }
+
                     break;
 
                 // Enums own no method bodies.
@@ -6689,6 +6785,34 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #1465: returns the metadata token for a state-machine (or any
+    /// user) struct type used as an operand (<c>initobj</c>) or type
+    /// argument. A non-generic struct uses its bare <c>TypeDef</c>; a generic
+    /// struct uses the constructed (or self-) <c>TypeSpec</c> so references
+    /// from a generic context carry the correct <c>Var</c> instantiation.
+    /// </summary>
+    /// <param name="structSym">The struct symbol.</param>
+    /// <returns>The type token.</returns>
+    internal EntityHandle GetStructTypeToken(StructSymbol structSym)
+    {
+        return IsUserGenericTypeReference(structSym)
+            ? this.GetUserStructTypeSpec(structSym)
+            : this.cache.StructTypeDefs[structSym];
+    }
+
+    /// <summary>
+    /// Issue #1465: internal forwarder so the body emitter can encode a
+    /// <see cref="TypeSymbol"/> into a signature blob (e.g. a MethodSpec type
+    /// argument) using the same generic-aware path as the rest of the emitter.
+    /// </summary>
+    /// <param name="encoder">The signature type encoder to write into.</param>
+    /// <param name="type">The type symbol to encode.</param>
+    internal void EncodeTypeSymbolIntoSignature(SignatureTypeEncoder encoder, TypeSymbol type)
+    {
+        this.EncodeTypeSymbol(encoder, type);
+    }
+
+    /// <summary>
     /// ADR-0087 §3 R3: returns a <c>MemberRef</c> handle for a field
     /// on a user-declared generic type, parented at the
     /// <c>TypeSpec</c> for <paramref name="containingType"/>.
@@ -6840,6 +6964,34 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #1465: encodes a function's emitted return type into a signature
+    /// blob. For an <c>async</c> kickoff method the emitted return is the
+    /// wrapped builder task type (<c>Task</c> / <c>Task&lt;T&gt;</c>), not the
+    /// declared inner result type carried on <see cref="FunctionSymbol.Type"/>.
+    /// MemberRef signatures built for calls into such a method on a generic
+    /// receiver must match the emitted MethodDef, otherwise verification fails
+    /// with a spurious <c>MissingMethod</c>.
+    /// </summary>
+    /// <param name="encoder">The return-type encoder.</param>
+    /// <param name="fn">The function whose emitted return type to encode.</param>
+    private void EncodeFunctionReturnSymbol(ReturnTypeEncoder encoder, FunctionSymbol fn)
+    {
+        if (fn.IsAsync && fn.StateMachineType != null)
+        {
+            foreach (var plan in this.stateMachines.AsyncStateMachinePlans)
+            {
+                if (plan.KickoffMethod == fn)
+                {
+                    this.EncodeAsyncReturnType(encoder, plan);
+                    return;
+                }
+            }
+        }
+
+        EncodeReturnSymbol(encoder, fn.Type, fn.ReturnRefKind);
+    }
+
+    /// <summary>
     /// ADR-0087 §3 R3: encodes a method signature blob from a
     /// <see cref="FunctionSymbol"/>, using the OPEN definition's type
     /// information so <c>VAR(idx)</c> placeholders are produced for
@@ -6856,7 +7008,7 @@ internal sealed class ReflectionMetadataEmitter
                 genericParameterCount: openMethod.TypeParameters.IsDefaultOrEmpty ? 0 : openMethod.TypeParameters.Length)
             .Parameters(
                 paramCount,
-                r => EncodeReturnSymbol(r, openMethod.Type, openMethod.ReturnRefKind),
+                r => EncodeFunctionReturnSymbol(r, openMethod),
                 ps =>
                 {
                     foreach (var p in openMethod.Parameters)
