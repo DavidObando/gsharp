@@ -1161,6 +1161,28 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression ConvertConditionalBranch(TextLocation location, BoundExpression branch, TypeSymbol target)
     {
+        // Issue #1496: a bare `default` arm is bound to a placeholder
+        // `BoundDefaultExpression(syntax, TypeSymbol.Error)` (see
+        // BindDefaultExpression) that must acquire the concrete conditional
+        // result type before emit. The `?:` path pre-types this from the
+        // sibling arm, but the if-expression path (BindIfExpression) does not,
+        // so the placeholder would otherwise reach the early-out below and
+        // surface to the emitter as an `Error`-typed node — which emits a
+        // bogus `ldnull` instead of a zero-initialized value of the merge
+        // target (`initobj` for value types / type parameters / nullable open
+        // generics). Materialise it against the computed merge target here so
+        // BOTH `if` and `?:` (and any future caller) are covered. This runs
+        // before the `branch.Type == TypeSymbol.Error` early-out, which is kept
+        // for genuine error cascades where `target` is itself Error/Void.
+        if (branch is BoundDefaultExpression bareDefault
+            && bareDefault.Type == TypeSymbol.Error
+            && target != null
+            && target != TypeSymbol.Error
+            && target != TypeSymbol.Void)
+        {
+            return new BoundDefaultExpression(bareDefault.Syntax, target);
+        }
+
         if (target == TypeSymbol.Error || branch.Type == TypeSymbol.Error)
         {
             return branch;
