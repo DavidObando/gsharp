@@ -1195,11 +1195,24 @@ internal sealed class SlotPlanner
 
         protected override void VisitBinaryExpression(BoundBinaryExpression node)
         {
-            if (node.Op.Kind == BoundBinaryOperatorKind.NullCoalesce
-                && node.Left.Type is NullableTypeSymbol n)
+            if (node.Op.Kind == BoundBinaryOperatorKind.NullCoalesce)
             {
-                bool needsSlot = n.UnderlyingType?.ClrType is { IsValueType: true }
-                    || (n.UnderlyingType is TypeParameterSymbol tp && !tp.HasValueTypeConstraint);
+                bool needsSlot = false;
+
+                if (node.Left.Type is NullableTypeSymbol n)
+                {
+                    needsSlot = n.UnderlyingType?.ClrType is { IsValueType: true }
+                        || (n.UnderlyingType is TypeParameterSymbol tp && !tp.HasValueTypeConstraint);
+                }
+                else if (IsReferenceTypeParameterCoalesceProbe(node, out _))
+                {
+                    // Issue #1516: bare reference-typed type-parameter LHS
+                    // (e.g. `x as T ?? fallback` where `T : SomeClass`,
+                    // interface-constrained, or unconstrained). The LHS
+                    // type is the bare `T`, not `T?`, so the value-type
+                    // and `NullableTypeSymbol(TP)` cases above miss it.
+                    needsSlot = true;
+                }
 
                 if (needsSlot)
                 {
@@ -1209,6 +1222,31 @@ internal sealed class SlotPlanner
 
             base.VisitBinaryExpression(node);
         }
+    }
+
+    // Issue #1516: a `??` whose LHS is a bare reference-typed type
+    // parameter (NOT wrapped in a `NullableTypeSymbol`). This shape arises
+    // from `x as T ?? fallback` because `BoundAsExpression.Type` for a
+    // reference target is the bare `T`. The opaque `!!T` stack value cannot
+    // be probed with `dup; brtrue` (ECMA-335 III.1.8), so — exactly like
+    // the Issue #831 `NullableTypeSymbol(TP)` path — the emitter spills the
+    // LHS to a `T`-typed scratch slot and probes via `box !!T; brfalse`.
+    // The collector and emitter both call this helper so they agree
+    // precisely on which nodes need a pre-allocated slot.
+    internal static bool IsReferenceTypeParameterCoalesceProbe(
+        BoundBinaryExpression node,
+        out TypeParameterSymbol typeParameter)
+    {
+        if (node.Op.Kind == BoundBinaryOperatorKind.NullCoalesce
+            && node.Left.Type is TypeParameterSymbol tp
+            && !tp.HasValueTypeConstraint)
+        {
+            typeParameter = tp;
+            return true;
+        }
+
+        typeParameter = null;
+        return false;
     }
 
     // PR N-4 / §6.1 / C# §7.3.7: walks the bound tree collecting every
