@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -314,50 +315,55 @@ public class TypeSymbol : Symbol
     }
 
     /// <summary>
-    /// #313: returns <c>true</c> if <paramref name="type"/> is, or structurally
-    /// contains, an in-scope generic <see cref="TypeParameterSymbol"/> (e.g.
-    /// <c>T</c>, <c>T?</c>, <c>[]T</c>, or <c>List[T]</c>). Such a type is an
-    /// open/partially-constructed generic whose emit form is type-erased to
-    /// <c>System.Object</c> under the type-erased generic model (ADR-0004).
+    /// Issue #1481: the single canonical structural walk over the
+    /// <see cref="TypeSymbol"/> lattice, parameterized by a leaf predicate.
+    /// Returns <c>true</c> when any <see cref="TypeParameterSymbol"/> reachable
+    /// from <paramref name="type"/> (directly or nested inside any composite
+    /// type-kind that can structurally carry one) satisfies
+    /// <paramref name="match"/>.
+    /// <para>This replaces three previously hand-copied, divergent recursions —
+    /// the canonical <see cref="ContainsTypeParameter"/> and two emit-layer
+    /// copies (<c>MethodBodyPlanner.ContainsTypeParameter</c> and
+    /// <c>StateMachineEmitter.ContainsOuterMethodTypeParameter</c>) — which had
+    /// drifted apart in which kinds they descended into (the emit copies
+    /// omitted <see cref="MapTypeSymbol"/> / <see cref="FunctionTypeSymbol"/>,
+    /// erasing generic iterator element types to the <c>&lt;object&gt;</c>
+    /// shape). Every composite kind is now handled here in exactly one place;
+    /// the public wrappers differ only in their leaf predicate.</para>
     /// </summary>
-    /// <param name="type">The type to inspect.</param>
-    /// <returns><c>true</c> if the type references an in-scope type parameter.</returns>
-    public static bool ContainsTypeParameter(TypeSymbol type)
+    /// <param name="type">The type to inspect (may be <see langword="null"/>).</param>
+    /// <param name="match">Leaf predicate applied to each referenced type parameter.</param>
+    /// <returns><c>true</c> if some referenced type parameter satisfies <paramref name="match"/>.</returns>
+    public static bool AnyTypeParameter(TypeSymbol type, Func<TypeParameterSymbol, bool> match)
     {
         switch (type)
         {
             case null:
                 return false;
-            case TypeParameterSymbol:
-                return true;
+            case TypeParameterSymbol tp:
+                return match(tp);
             case NullableTypeSymbol n:
-                return ContainsTypeParameter(n.UnderlyingType);
+                return AnyTypeParameter(n.UnderlyingType, match);
             case SliceTypeSymbol s:
-                return ContainsTypeParameter(s.ElementType);
+                return AnyTypeParameter(s.ElementType, match);
             case ArrayTypeSymbol a:
-                return ContainsTypeParameter(a.ElementType);
+                return AnyTypeParameter(a.ElementType, match);
+            case SequenceTypeSymbol seq:
+                return AnyTypeParameter(seq.ElementType, match);
+            case AsyncSequenceTypeSymbol aseq:
+                return AnyTypeParameter(aseq.ElementType, match);
             case MapTypeSymbol m:
-                return ContainsTypeParameter(m.KeyType) || ContainsTypeParameter(m.ValueType);
+                return AnyTypeParameter(m.KeyType, match) || AnyTypeParameter(m.ValueType, match);
             case FunctionTypeSymbol fn:
                 foreach (var param in fn.ParameterTypes)
                 {
-                    if (ContainsTypeParameter(param))
+                    if (AnyTypeParameter(param, match))
                     {
                         return true;
                     }
                 }
 
-                return ContainsTypeParameter(fn.ReturnType);
-            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
-                foreach (var arg in it.TypeArguments)
-                {
-                    if (ContainsTypeParameter(arg))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
+                return AnyTypeParameter(fn.ReturnType, match);
             case TupleTypeSymbol tup:
                 // Issue #813: value-tuple element types must propagate
                 // "contains type parameter" so callers like
@@ -367,7 +373,49 @@ public class TypeSymbol : Symbol
                 // type-erased `IEnumerable<object>` shape.
                 foreach (var elem in tup.ElementTypes)
                 {
-                    if (ContainsTypeParameter(elem))
+                    if (AnyTypeParameter(elem, match))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            case ByRefTypeSymbol br:
+                return AnyTypeParameter(br.PointeeType, match);
+            case StructSymbol st when !st.TypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in st.TypeArguments)
+                {
+                    if (AnyTypeParameter(arg, match))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            case InterfaceSymbol iface when !iface.TypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in iface.TypeArguments)
+                {
+                    if (AnyTypeParameter(arg, match))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            case DelegateTypeSymbol del:
+                foreach (var param in del.Parameters)
+                {
+                    if (AnyTypeParameter(param.Type, match))
+                    {
+                        return true;
+                    }
+                }
+
+                return AnyTypeParameter(del.ReturnType, match);
+            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in it.TypeArguments)
+                {
+                    if (AnyTypeParameter(arg, match))
                     {
                         return true;
                     }
@@ -377,6 +425,41 @@ public class TypeSymbol : Symbol
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// #313: returns <c>true</c> if <paramref name="type"/> is, or structurally
+    /// contains, an in-scope generic <see cref="TypeParameterSymbol"/> (e.g.
+    /// <c>T</c>, <c>T?</c>, <c>[]T</c>, or <c>List[T]</c>). Such a type is an
+    /// open/partially-constructed generic whose emit form is type-erased to
+    /// <c>System.Object</c> under the type-erased generic model (ADR-0004).
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> if the type references an in-scope type parameter.</returns>
+    public static bool ContainsTypeParameter(TypeSymbol type) => AnyTypeParameter(type, static _ => true);
+
+    /// <summary>
+    /// Issue #810 / #1481: returns <see langword="true"/> when
+    /// <paramref name="type"/> structurally references any of the supplied
+    /// <paramref name="outerMethodTypeParameters"/>. Used by the iterator
+    /// state-machine emitter to decide whether the <c>GetEnumerator</c> return
+    /// and the SM's <c>IEnumerable&lt;…&gt;</c> / <c>IEnumerator&lt;…&gt;</c>
+    /// interface rows need a symbolic (TypeSpec-encoded) strongly-typed shape
+    /// rather than the CLR-erased <c>&lt;object&gt;</c> form. Shares the single
+    /// <see cref="AnyTypeParameter"/> walker with
+    /// <see cref="ContainsTypeParameter"/>; only the leaf predicate differs.
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <param name="outerMethodTypeParameters">The outer method's in-scope type parameters.</param>
+    /// <returns><c>true</c> if the type references one of the outer-method type parameters.</returns>
+    public static bool ContainsOuterMethodTypeParameter(TypeSymbol type, ImmutableArray<TypeParameterSymbol> outerMethodTypeParameters)
+    {
+        if (outerMethodTypeParameters.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        return AnyTypeParameter(type, outerMethodTypeParameters.Contains);
     }
 
     /// <summary>

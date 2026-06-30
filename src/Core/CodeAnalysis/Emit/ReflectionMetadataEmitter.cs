@@ -9314,6 +9314,80 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #1481: builds a <c>TypeSpec</c> encoding
+    /// <c>System.Collections.Generic.Dictionary`2&lt;K, V&gt;</c> with the key
+    /// and value routed through <see cref="EncodeTypeSymbol"/>, so an in-scope
+    /// type parameter survives as a <c>Var</c>/<c>MVar</c> slot. Used when a
+    /// <c>map[K, V]</c> literal's <see cref="TypeSymbol.ClrType"/> is null
+    /// (e.g. <c>map[string, T]</c>) — the erased CLR fast-path is unavailable
+    /// and the body construction must be parented at this reified TypeSpec so
+    /// the value stored into the iterator state machine's reified
+    /// <c>Dictionary&lt;…, !0&gt;</c> field verifies. Mirrors
+    /// <see cref="GetTupleTypeSpec"/>.
+    /// </summary>
+    private EntityHandle GetMapTypeSpec(MapTypeSymbol mapType)
+    {
+        var dictionaryOpen = typeof(System.Collections.Generic.Dictionary<,>);
+        var sigBlob = new BlobBuilder();
+        var genInst = new BlobEncoder(sigBlob).TypeSpecificationSignature()
+            .GenericInstantiation(
+                this.GetTypeReference(dictionaryOpen),
+                genericArgumentCount: 2,
+                isValueType: false);
+        this.EncodeTypeSymbol(genInst.AddArgument(), mapType.KeyType);
+        this.EncodeTypeSymbol(genInst.AddArgument(), mapType.ValueType);
+        return this.emitCtx.Metadata.AddTypeSpecification(
+            this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
+    /// Issue #1481: gets a MemberRef for the parameterless
+    /// <c>Dictionary`2::.ctor()</c> parented at the reified
+    /// <see cref="GetMapTypeSpec"/> TypeSpec, for a <c>map[K, V]</c> literal
+    /// whose <see cref="TypeSymbol.ClrType"/> is null. Mirrors
+    /// <see cref="GetTupleCtorReference"/>.
+    /// </summary>
+    internal MemberReferenceHandle GetMapCtorReference(MapTypeSymbol mapType)
+    {
+        var parent = this.GetMapTypeSpec(mapType);
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, returnType: r => r.Void(), parameters: _ => { });
+        return this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
+    /// Issue #1481: gets a MemberRef for
+    /// <c>Dictionary`2::set_Item(!0, !1)</c> parented at the reified
+    /// <see cref="GetMapTypeSpec"/> TypeSpec, used to populate a
+    /// <c>map[K, V]</c> literal whose <see cref="TypeSymbol.ClrType"/> is null.
+    /// The parameter signature references the dictionary's own generic
+    /// parameters (<c>!0</c>/<c>!1</c>), as required for a MemberRef on a
+    /// constructed generic type.
+    /// </summary>
+    internal MemberReferenceHandle GetMapSetItemReference(MapTypeSymbol mapType)
+    {
+        var parent = this.GetMapTypeSpec(mapType);
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                2,
+                returnType: r => r.Void(),
+                parameters: ps =>
+                {
+                    ps.AddParameter().Type().GenericTypeParameter(0);
+                    ps.AddParameter().Type().GenericTypeParameter(1);
+                });
+        return this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString("set_Item"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
     /// Issue #491 (ADR-0060 follow-up): encodes a single local-variable signature slot.
     /// A <see cref="ByRefTypeSymbol"/> entry signals a ref-aliasing local (<c>let ref</c> /
     /// <c>var ref</c>) whose slot must carry <c>ELEMENT_TYPE_BYREF</c> wrapping the pointee
@@ -9797,6 +9871,29 @@ internal sealed class ReflectionMetadataEmitter
             // `Func<object, object>`, and the call site bridged the
             // value-type boundary through `Delegate.DynamicInvoke`.
             this.EncodeFunctionTypeSymbol(encoder, openFn);
+        }
+        else if (type is MapTypeSymbol openMap)
+        {
+            // Issue #1481: a `map[K, V]` whose erased CLR form is unavailable
+            // because a key or value is (or structurally contains) an in-scope
+            // type parameter — e.g. `map[string, T]` — has a null ClrType, so
+            // the fast-path above cannot fire. Encode it as
+            // `GENERICINST System.Collections.Generic.Dictionary`2<K, V>` with
+            // each argument routed through EncodeTypeSymbol so the `Var`/`MVar`
+            // slot survives. Without this the encoder threw
+            // "Cannot encode signature for type 'map[string,T]'", so a generic
+            // iterator yielding `map[string, T]` could not be emitted at all,
+            // and the iterator's `IEnumerable<…>` / `IEnumerator<…>` rows could
+            // not carry the strongly-typed `Dictionary<…, !0>` shape. The
+            // matching body construction is reified through
+            // <see cref="GetMapCtorReference"/> / <see cref="GetMapSetItemReference"/>.
+            var dictionaryOpen = typeof(System.Collections.Generic.Dictionary<,>);
+            var giMap = encoder.GenericInstantiation(
+                this.GetTypeReference(dictionaryOpen),
+                genericArgumentCount: 2,
+                isValueType: false);
+            this.EncodeTypeSymbol(giMap.AddArgument(), openMap.KeyType);
+            this.EncodeTypeSymbol(giMap.AddArgument(), openMap.ValueType);
         }
         else
         {
