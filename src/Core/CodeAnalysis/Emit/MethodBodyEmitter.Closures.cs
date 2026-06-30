@@ -80,14 +80,12 @@ internal sealed partial class MethodBodyEmitter
         var sourceInvoke = sourceDelegateType.GetMethod("Invoke")
             ?? throw new InvalidOperationException(
                 $"Delegate type '{sourceDelegateType.FullName}' has no Invoke method.");
-        var targetCtor = targetDelegateType.GetConstructors()[0];
-
         this.EmitExpression(source);
         this.il.OpCode(ILOpCode.Dup);
         this.il.OpCode(ILOpCode.Ldvirtftn);
         this.il.Token(this.outer.GetMethodReference(sourceInvoke));
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(targetCtor));
+        this.il.Token(this.outer.GetDelegateCtorReference(targetDelegateType));
     }
 
     /// <summary>
@@ -453,8 +451,7 @@ internal sealed partial class MethodBodyEmitter
             else
             {
                 var delegateTypeC = overrideDelegateType ?? this.outer.ResolveDelegateClrType(literal.FunctionType);
-                var delegateCtorC = delegateTypeC.GetConstructors()[0];
-                this.il.Token(this.outer.GetCtorReference(delegateCtorC));
+                this.il.Token(this.outer.GetDelegateCtorReference(delegateTypeC));
             }
 
             return;
@@ -490,8 +487,7 @@ internal sealed partial class MethodBodyEmitter
         else
         {
             var delegateType = overrideDelegateType ?? this.outer.ResolveDelegateClrType(literal.FunctionType);
-            var delegateCtor = delegateType.GetConstructors()[0];
-            this.il.Token(this.outer.GetCtorReference(delegateCtor));
+            this.il.Token(this.outer.GetDelegateCtorReference(delegateType));
         }
     }
 
@@ -572,8 +568,7 @@ internal sealed partial class MethodBodyEmitter
         }
         else
         {
-            var delegateCtor = delegateType.GetConstructors()[0];
-            this.il.Token(this.outer.GetCtorReference(delegateCtor));
+            this.il.Token(this.outer.GetDelegateCtorReference(delegateType));
         }
     }
 
@@ -595,7 +590,6 @@ internal sealed partial class MethodBodyEmitter
                 $"CLR method group '{methodGroup.MethodName}' has no resolved target delegate type.");
 
         var delegateType = this.outer.ResolveTargetDelegateClrType(hostDelegate);
-        var delegateCtor = delegateType.GetConstructors()[0];
         var methodRef = this.outer.GetMethodReference(method);
 
         if (method.IsStatic)
@@ -637,7 +631,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(delegateCtor));
+        this.il.Token(this.outer.GetDelegateCtorReference(delegateType));
     }
 
     // Phase 4 emit parity: load a captured variable. In a MoveNext body,

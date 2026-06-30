@@ -8675,6 +8675,49 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #1449: Gets a MemberRef for a delegate's canonical
+    /// <c>(object, IntPtr)</c> constructor in a TypeBuilder-safe way.
+    /// <para>
+    /// Calling <see cref="Type.GetConstructors()"/> on a constructed generic
+    /// delegate type (e.g. <c>Func&lt;…&gt;</c> / <c>Action&lt;…&gt;</c>) that
+    /// is realized as a reflection-emit <c>TypeBuilderInstantiation</c> throws
+    /// <see cref="NotSupportedException"/> ("TypeBuilder generic instantiation
+    /// does not support resolving members. Use TypeBuilder.GetConstructor
+    /// instead."). This happens both when a type argument is a
+    /// <see cref="TypeBuilder"/> closed in the same compilation (#671) and when
+    /// the instantiation is constructed against the in-progress assembly even
+    /// though every type argument is a runtime type (#1449). In either case the
+    /// MemberRef is built from the open generic definition's canonical ctor
+    /// signature parented at the constructed-generic TypeSpec instead.
+    /// </para>
+    /// </summary>
+    /// <param name="delegateType">The (possibly constructed-generic) delegate CLR type.</param>
+    /// <returns>A MemberRef handle for the delegate's <c>(object, IntPtr)</c> constructor.</returns>
+    internal MemberReferenceHandle GetDelegateCtorReference(Type delegateType)
+    {
+        if (delegateType.IsConstructedGenericType)
+        {
+            ConstructorInfo ctor;
+            try
+            {
+                ctor = delegateType.GetConstructors()[0];
+            }
+            catch (NotSupportedException)
+            {
+                // Reflection-emit limitation: GetConstructors() throws on a
+                // generic delegate realized as a TypeBuilderInstantiation. Build
+                // the MemberRef from the open definition's canonical
+                // (object, IntPtr) delegate ctor parented at the TypeSpec.
+                return this.GetCtorReferenceOnConstructedGeneric(delegateType, paramCount: 2);
+            }
+
+            return this.GetCtorReference(ctor);
+        }
+
+        return this.GetCtorReference(delegateType.GetConstructors()[0]);
+    }
+
+    /// <summary>
     /// Issue #649: Gets the TypeSpec handle for a <c>ValueTuple&lt;...&gt;</c> whose element
     /// types include G#-defined types (StructSymbol) that lack a CLR backing type.
     /// Encodes each element type via <see cref="EncodeTypeSymbol"/> so user-defined types
