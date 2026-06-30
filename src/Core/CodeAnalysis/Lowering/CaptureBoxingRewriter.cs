@@ -345,6 +345,64 @@ internal static class CaptureBoxingRewriter
         public FieldSymbol BoxField { get; }
     }
 
+    /// <summary>
+    /// Issue #1453: finds captured locals that are introduced (rather than
+    /// declared) by an <c>out</c>/<c>ref</c> address-of within a single
+    /// statement — i.e. inline <c>out var x</c> captures that have no
+    /// <see cref="BoundVariableDeclaration"/>. The scan is shallow: it stops at
+    /// nested <see cref="BoundBlockStatement"/>s (those are handled when the
+    /// rewriter recurses into them, so a loop body gets a fresh box) and at
+    /// function literals (already opaque to <see cref="BoundTreeWalker"/>).
+    /// </summary>
+    private sealed class OutVarBoxIntroductionScanner : BoundTreeWalker
+    {
+        private readonly Dictionary<VariableSymbol, BoxedVariable> boxInfo;
+        private readonly HashSet<VariableSymbol> allocated;
+        private readonly List<BoxedVariable> found = new List<BoxedVariable>();
+        private readonly HashSet<VariableSymbol> foundSet = new HashSet<VariableSymbol>();
+
+        private OutVarBoxIntroductionScanner(
+            Dictionary<VariableSymbol, BoxedVariable> boxInfo,
+            HashSet<VariableSymbol> allocated)
+        {
+            this.boxInfo = boxInfo;
+            this.allocated = allocated;
+        }
+
+        public static List<BoxedVariable> Scan(
+            BoundStatement statement,
+            Dictionary<VariableSymbol, BoxedVariable> boxInfo,
+            HashSet<VariableSymbol> allocated)
+        {
+            var scanner = new OutVarBoxIntroductionScanner(boxInfo, allocated);
+            scanner.VisitStatement(statement);
+            return scanner.found;
+        }
+
+        /// <inheritdoc/>
+        protected override void VisitBlockStatement(BoundBlockStatement node)
+        {
+            // Stop: a nested block introduces its own scope. Its out-var boxes
+            // are allocated when the rewriter recurses into that block, keeping
+            // loop-body captures fresh per iteration.
+        }
+
+        /// <inheritdoc/>
+        protected override void VisitAddressOfExpression(BoundAddressOfExpression node)
+        {
+            if (node.Operand is BoundVariableExpression bve
+                && this.boxInfo.TryGetValue(bve.Variable, out var bi)
+                && bi.Original is not ParameterSymbol
+                && !this.allocated.Contains(bve.Variable)
+                && this.foundSet.Add(bve.Variable))
+            {
+                this.found.Add(bi);
+            }
+
+            base.VisitAddressOfExpression(node);
+        }
+    }
+
     private sealed class CaptureWalker : BoundTreeRewriter
     {
         private readonly HashSet<VariableSymbol> sink;
@@ -382,6 +440,14 @@ internal static class CaptureBoxingRewriter
         private readonly Dictionary<VariableSymbol, BoxedVariable> boxInfo;
         private readonly HashSet<VariableSymbol> dropFromCapture;
 
+        // Issue #1453: boxed local originals whose box has already been
+        // allocated (a `new Box()` statement emitted). Ordinary captured
+        // locals are allocated at their BoundVariableDeclaration; inline
+        // `out var x` captures have no declaration, so RewriteBlockStatement
+        // allocates their box at the introducing statement. This set
+        // distinguishes the two so out-var boxes are allocated exactly once.
+        private readonly HashSet<VariableSymbol> allocated = new HashSet<VariableSymbol>();
+
         public BoxingRewriter(
             Dictionary<VariableSymbol, BoxedVariable> boxInfo,
             HashSet<VariableSymbol> dropFromCapture)
@@ -398,6 +464,68 @@ internal static class CaptureBoxingRewriter
         /// </summary>
         public Dictionary<FunctionSymbol, BoundBlockStatement> RewrittenLambdaBodies { get; }
             = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+
+        /// <inheritdoc/>
+        protected override BoundStatement RewriteBlockStatement(BoundBlockStatement node)
+        {
+            // Issue #1453: an inline `out var x` that is captured by a nested
+            // lambda is hoisted into a Box like any other captured local, but
+            // unlike `var x = e` it has no BoundVariableDeclaration, so
+            // RewriteVariableDeclaration never allocates its box and emit later
+            // fails with "Variable 'x' has no local slot".
+            //
+            // Allocate the box for such declaration-less captured locals at the
+            // statement that first introduces them (their `out`/`ref` address-of
+            // site), scoped to the block that contains that statement. Doing it
+            // at block level means a loop body gets a fresh box per iteration,
+            // mirroring how `var x = e` inside a loop body is handled.
+            ImmutableArray<BoundStatement>.Builder builder = null;
+
+            for (var i = 0; i < node.Statements.Length; i++)
+            {
+                var oldStatement = node.Statements[i];
+
+                // Find declaration-less captured locals introduced (as an
+                // address-of operand) directly within this statement, before it
+                // is rewritten into box-field accesses. Mark them allocated up
+                // front so recursion into nested scopes does not re-allocate.
+                var introduced = OutVarBoxIntroductionScanner.Scan(oldStatement, this.boxInfo, this.allocated);
+                foreach (var bi in introduced)
+                {
+                    this.allocated.Add(bi.Original);
+                }
+
+                var newStatement = this.RewriteStatement(oldStatement);
+
+                var changed = introduced.Count > 0 || !ReferenceEquals(newStatement, oldStatement);
+                if (changed && builder == null)
+                {
+                    builder = ImmutableArray.CreateBuilder<BoundStatement>(node.Statements.Length + introduced.Count);
+                    for (var j = 0; j < i; j++)
+                    {
+                        builder.Add(node.Statements[j]);
+                    }
+                }
+
+                if (builder != null)
+                {
+                    foreach (var bi in introduced)
+                    {
+                        builder.Add(new BoundVariableDeclaration(
+                            null,
+                            bi.BoxLocal,
+                            new BoundConstructorCallExpression(
+                                null,
+                                bi.BoxClass,
+                                ImmutableArray<BoundExpression>.Empty)));
+                    }
+
+                    builder.Add(newStatement);
+                }
+            }
+
+            return builder == null ? node : new BoundBlockStatement(null, builder.ToImmutable());
+        }
 
         /// <inheritdoc/>
         protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
@@ -544,6 +672,7 @@ internal static class CaptureBoxingRewriter
                 // The original `n`'s slot is reclaimed by the new LocalVariableSymbol
                 // of type Box_n. Note `Lowerer.Flatten` will inline this nested
                 // block into the enclosing block during the post-binding lower pass.
+                this.allocated.Add(bi.Original);
                 var initializer = this.RewriteExpression(node.Initializer);
                 var stmts = ImmutableArray.Create<BoundStatement>(
                     new BoundVariableDeclaration(
