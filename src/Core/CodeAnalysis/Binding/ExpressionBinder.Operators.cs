@@ -1204,7 +1204,25 @@ internal sealed partial class ExpressionBinder
     }
 
     private BoundExpression BindBinaryExpression(BinaryExpressionSyntax syntax)
+        => BindBinaryExpression(syntax, coalesceTargetType: null);
+
+    private BoundExpression BindBinaryExpression(BinaryExpressionSyntax syntax, TypeSymbol coalesceTargetType)
     {
+        // Issue #1480: when a `??` argument has no contextual target type and the
+        // overload binder requested deferral (DeferTargetlessConditional), a
+        // no-common-type failure is parked as a placeholder retaining the syntax
+        // rather than reported, then re-bound once the parameter type is known.
+        // Consume the flag immediately so nested sub-expressions bind normally.
+        var deferTargetlessCoalesce = syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken
+            && coalesceTargetType == null
+            && binderCtx.DeferTargetlessConditional;
+        if (syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken)
+        {
+            binderCtx.DeferTargetlessConditional = false;
+        }
+
+        var coalesceDiagMark = Diagnostics.Count;
+
         var boundLeft = BindExpression(syntax.Left);
 
         // ADR-0069 / issue #700: `&&` short-circuits — the right operand is
@@ -1256,6 +1274,21 @@ internal sealed partial class ExpressionBinder
             ref boundRight,
             syntax.Left.Location,
             syntax.Right.Location);
+
+        // Issue #1480: target-typed null-coalescing. When `a ?? b` has no natural
+        // common operand type (so the standard bind produced no operator) but the
+        // consuming context supplies a target type both operands implicitly
+        // convert to (e.g. sibling classes `A`/`B` each implementing `IShape`,
+        // coalesced where an `IShape` is expected), synthesize a NullCoalesce
+        // operator whose result is the target type. The operand conversions to
+        // the target are inserted by the NullCoalesce tail below; the emitter's
+        // interface-merge cast (#1480) realigns each branch's stack type.
+        if (boundOperator == null
+            && syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken
+            && TryBindTargetTypedNullCoalesce(boundLeft, boundRight, coalesceTargetType, out var targetTypedCoalesce))
+        {
+            boundOperator = targetTypedCoalesce;
+        }
 
         if (boundOperator == null)
         {
@@ -1326,6 +1359,18 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
+            // Issue #1480: a `??` whose operands share no natural common type and
+            // has no contextual target is deferred (rather than reported as
+            // GS0129) when it is a bare call/constructor argument awaiting its
+            // parameter type — the argument-binding loop set
+            // DeferTargetlessConditional. The retained syntax is re-bound with
+            // the parameter type as its target by FinalizeBranchyArgument.
+            if (deferTargetlessCoalesce)
+            {
+                Diagnostics.TruncateTo(coalesceDiagMark);
+                return new BoundErrorExpression(syntax);
+            }
+
             Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, boundLeft.Type, boundRight.Type);
             return new BoundErrorExpression(null);
         }
@@ -1350,9 +1395,54 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #1480: attempts to bind a target-typed null-coalescing operator.
+    /// Succeeds when a non-null contextual <paramref name="target"/> is supplied
+    /// and BOTH operands implicitly convert to it — the left operand's non-null
+    /// underlying type and the right operand's type. This covers the C# §12.15
+    /// target-typed case where the two operands share no natural common type but
+    /// the result is consumed at a type both convert to (e.g. sibling classes
+    /// each implementing a common interface). A <c>never</c> (throw) right
+    /// operand is left to the normal <c>x ?? throw</c> path.
+    /// </summary>
+    /// <param name="boundLeft">The bound left operand.</param>
+    /// <param name="boundRight">The bound right operand.</param>
+    /// <param name="target">The contextual target type, or <see langword="null"/>.</param>
+    /// <param name="op">The synthesized NullCoalesce operator on success.</param>
+    /// <returns><see langword="true"/> when a target-typed operator was built.</returns>
+    private bool TryBindTargetTypedNullCoalesce(BoundExpression boundLeft, BoundExpression boundRight, TypeSymbol target, out BoundBinaryOperator op)
+    {
+        op = null;
+        if (target == null
+            || target == TypeSymbol.Error
+            || target == TypeSymbol.Void
+            || boundLeft.Type == TypeSymbol.Error
+            || boundRight.Type == TypeSymbol.Error
+            || boundRight.Type == TypeSymbol.Never)
+        {
+            return false;
+        }
+
+        var leftUnderlying = boundLeft.Type is NullableTypeSymbol leftNullable ? leftNullable.UnderlyingType : boundLeft.Type;
+        if (leftUnderlying == null || leftUnderlying == TypeSymbol.Null)
+        {
+            return false;
+        }
+
+        var leftConv = Conversion.Classify(leftUnderlying, target);
+        var rightConv = Conversion.Classify(boundRight.Type, target);
+        if (leftConv.Exists && leftConv.IsImplicit && rightConv.Exists && rightConv.IsImplicit)
+        {
+            op = BoundBinaryOperator.MakeNullCoalesce(boundLeft.Type, boundRight.Type, target);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Issue #1246: shared numeric-operand adaptation for binding a binary
     /// operator. Attempts an exact per-type bind first, then — when that fails —
-    /// applies, in order, the same adaptations <see cref="BindBinaryExpression"/>
+    /// applies, in order, the same adaptations <c>BindBinaryExpression</c>
     /// performs: constant-integer-literal adaptation (#1144), directional
     /// implicit integer widening (#1150), the value-type and heterogeneous
     /// nullable mixed-mode lifts, and lifted (nullable) numeric widening (#1236).
