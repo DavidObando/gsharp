@@ -205,6 +205,52 @@ internal sealed class ClosureEmitter
         {
             if (literal.CapturedVariables.Length == 0)
             {
+                // Issue #1469: a non-capturing lambda is normally hoisted to a
+                // static method on the top-level `<Program>` host type. When the
+                // lambda is lexically declared inside a member of a user type and
+                // reads a `protected`/`private` member (e.g. a positional member
+                // of a `protected` nested data class, or a private backing field),
+                // the `<Program>`-hosted method is outside that member's
+                // accessibility domain — producing an unverifiable `FieldAccess`/
+                // `MethodAccess` ("not visible") IL site and a runtime
+                // `FieldAccessException`/`MethodAccessException`. C# avoids this by
+                // hosting the lambda in a display class nested inside the declaring
+                // type, sharing its accessibility domain. Mirror that here by
+                // routing the non-capturing lambda through a (fieldless) display
+                // class nested in the enclosing user type, exactly as the
+                // capture-bearing #1335 path does. Only non-async lambdas whose
+                // enclosing type is a non-generic user type are nested; async
+                // lambdas are owned by the async state-machine synthesis (which
+                // keys off the absence of a ClosureInfo), and generic enclosers
+                // are skipped because a nested type would have to re-declare the
+                // encloser's type parameters, which this synthesis does not model.
+                // All other non-capturing lambdas keep the existing top-level
+                // `<Program>` static placement.
+                if (literal.Function == null
+                    || literal.Function.IsAsync
+                    || literal.Function.LexicalEnclosingType is not StructSymbol zeroCaptureEnclosing
+                    || !zeroCaptureEnclosing.TypeParameters.IsDefaultOrEmpty)
+                {
+                    continue;
+                }
+
+                var hostName = "<lambda_host_" + literal.Function.Name + "_" + System.Threading.Interlocked.Increment(ref this.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
+                var hostInfo = this.SynthesizeDisplayClass(
+                    hostName,
+                    ImmutableArray<VariableSymbol>.Empty,
+                    literal.Function.Parameters,
+                    literal.Function.Type,
+                    literal.Body,
+                    hostPackage,
+                    invokeName: "Invoke");
+
+                this.ClosureInfos[literal] = hostInfo;
+
+                if (hostInfo.ClassSym.ContainingType == null)
+                {
+                    hostInfo.ClassSym.SetContainingType(zeroCaptureEnclosing);
+                }
+
                 continue;
             }
 
