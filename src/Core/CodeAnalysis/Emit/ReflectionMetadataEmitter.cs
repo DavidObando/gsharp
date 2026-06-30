@@ -6874,6 +6874,9 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<InterfaceSymbol, EntityHandle> userInterfaceTypeSpecCache = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<(InterfaceSymbol Containing, EntityHandle OpenMember), EntityHandle> userInterfaceMethodRefCache = new();
     private readonly Dictionary<(InterfaceSymbol Containing, FieldSymbol DefField), EntityHandle> userInterfaceFieldRefCache = new();
+    private readonly Dictionary<DelegateTypeSymbol, EntityHandle> userDelegateTypeSpecCache = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<DelegateTypeSymbol, EntityHandle> userDelegateCtorRefCache = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<DelegateTypeSymbol, EntityHandle> userDelegateInvokeRefCache = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
     /// ADR-0087 §3 R3: returns <see langword="true"/> when
@@ -6951,6 +6954,195 @@ internal sealed class ReflectionMetadataEmitter
         var spec = (EntityHandle)this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         this.userStructTypeSpecCache[(structSym, this.activeIteratorStateMachineRemap)] = spec;
         return spec;
+    }
+
+    /// <summary>
+    /// Issue #1503: returns <see langword="true"/> when
+    /// <paramref name="delegateSym"/> is a generic named-delegate reference —
+    /// either a constructed instance (carrying <see cref="DelegateTypeSymbol.TypeArguments"/>)
+    /// or the open definition of a generic delegate — whose ctor/Invoke
+    /// references must be parented at a <c>TypeSpec</c> rather than the bare
+    /// TypeDef/MethodDef rows. Mirrors <see cref="IsUserGenericTypeReference"/>.
+    /// </summary>
+    /// <param name="delegateSym">The named-delegate symbol.</param>
+    /// <returns>Whether the delegate is a generic reference.</returns>
+    internal static bool IsUserGenericDelegateReference(DelegateTypeSymbol delegateSym)
+    {
+        if (delegateSym == null)
+        {
+            return false;
+        }
+
+        if (!delegateSym.TypeArguments.IsDefaultOrEmpty)
+        {
+            return true;
+        }
+
+        var def = delegateSym.Definition ?? delegateSym;
+        return !def.TypeParameters.IsDefaultOrEmpty;
+    }
+
+    /// <summary>
+    /// Issue #1503: resolves the type arguments used to encode a generic named
+    /// delegate reference. A constructed instance uses its
+    /// <see cref="DelegateTypeSymbol.TypeArguments"/>; the open definition uses
+    /// the self-instantiation (its own type parameters, each encoded as
+    /// <c>VAR(idx)</c>).
+    /// </summary>
+    /// <param name="delegateSym">The generic delegate reference.</param>
+    /// <returns>The type arguments to encode in the <c>GENERICINST</c> signature.</returns>
+    private static ImmutableArray<TypeSymbol> ResolveDelegateTypeArguments(DelegateTypeSymbol delegateSym)
+    {
+        if (!delegateSym.TypeArguments.IsDefaultOrEmpty)
+        {
+            return delegateSym.TypeArguments;
+        }
+
+        var def = delegateSym.Definition ?? delegateSym;
+        var defTps = def.TypeParameters;
+        var bld = ImmutableArray.CreateBuilder<TypeSymbol>(defTps.Length);
+        foreach (var tp in defTps)
+        {
+            bld.Add(tp);
+        }
+
+        return bld.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #1503: returns a <c>TypeSpec</c> EntityHandle for a generic
+    /// user-declared named delegate. A constructed instance encodes the
+    /// construction (<c>Predicate`1&lt;int32&gt;</c>); the open definition
+    /// encodes the self-instantiation (<c>Predicate`1&lt;!0,…&gt;</c>). Mirrors
+    /// <see cref="GetUserStructTypeSpec"/>.
+    /// </summary>
+    /// <param name="delegateSym">The generic delegate reference.</param>
+    /// <returns>The TypeSpec handle.</returns>
+    internal EntityHandle GetUserDelegateTypeSpec(DelegateTypeSymbol delegateSym)
+    {
+        if (this.userDelegateTypeSpecCache.TryGetValue(delegateSym, out var cached))
+        {
+            return cached;
+        }
+
+        var def = delegateSym.Definition ?? delegateSym;
+        if (!this.cache.DelegateTypeDefs.TryGetValue(def, out var defHandle))
+        {
+            throw new InvalidOperationException(
+                $"Generic delegate '{def.Name}' has no emitted TypeDef when constructing TypeSpec.");
+        }
+
+        var typeArgs = ResolveDelegateTypeArguments(delegateSym);
+        var sigBlob = new BlobBuilder();
+        var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
+        var gi = encoder.GenericInstantiation(defHandle, typeArgs.Length, isValueType: false);
+        foreach (var arg in typeArgs)
+        {
+            this.EncodeTypeSymbol(gi.AddArgument(), arg);
+        }
+
+        var spec = (EntityHandle)this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.userDelegateTypeSpecCache[delegateSym] = spec;
+        return spec;
+    }
+
+    /// <summary>
+    /// Issue #1503: resolves the token used to construct a named-delegate
+    /// value (<c>newobj</c> of its <c>.ctor(object, native int)</c>). A
+    /// non-generic delegate uses the bare <c>.ctor</c> MethodDef; a generic
+    /// delegate uses a <c>MemberRef</c> parented at the constructed (or self-)
+    /// <c>TypeSpec</c> so the IL verifies against the locally-typed slot.
+    /// </summary>
+    /// <param name="delegateSym">The (possibly constructed) delegate symbol.</param>
+    /// <returns>The ctor token.</returns>
+    internal EntityHandle ResolveDelegateCtorToken(DelegateTypeSymbol delegateSym)
+    {
+        var def = delegateSym.Definition ?? delegateSym;
+        if (!IsUserGenericDelegateReference(delegateSym))
+        {
+            if (!this.cache.DelegateCtorHandles.TryGetValue(def, out var ctorHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Named delegate '{def.Name}' has no emitted .ctor MethodDef.");
+            }
+
+            return ctorHandle;
+        }
+
+        if (this.userDelegateCtorRefCache.TryGetValue(delegateSym, out var cached))
+        {
+            return cached;
+        }
+
+        // The delegate ctor signature is the canonical `(object, native int)`
+        // for every delegate — it never references the type parameters — so the
+        // MemberRef signature is the same regardless of construction.
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(2, r => r.Void(), ps =>
+            {
+                ps.AddParameter().Type().Object();
+                ps.AddParameter().Type().IntPtr();
+            });
+
+        var parent = this.GetUserDelegateTypeSpec(delegateSym);
+        var memberRef = (EntityHandle)this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.userDelegateCtorRefCache[delegateSym] = memberRef;
+        return memberRef;
+    }
+
+    /// <summary>
+    /// Issue #1503: resolves the token used to invoke a named-delegate value
+    /// (<c>callvirt</c> of its <c>Invoke</c>). A non-generic delegate uses the
+    /// bare <c>Invoke</c> MethodDef; a generic delegate uses a <c>MemberRef</c>
+    /// parented at the constructed (or self-) <c>TypeSpec</c>, with the Invoke
+    /// signature encoded from the OPEN definition (so type-parameter slots
+    /// round-trip as <c>VAR(idx)</c>, matching the emitted MethodDef).
+    /// </summary>
+    /// <param name="delegateSym">The (possibly constructed) delegate symbol.</param>
+    /// <returns>The Invoke token.</returns>
+    internal EntityHandle ResolveDelegateInvokeToken(DelegateTypeSymbol delegateSym)
+    {
+        var def = delegateSym.Definition ?? delegateSym;
+        if (!IsUserGenericDelegateReference(delegateSym))
+        {
+            if (!this.cache.DelegateInvokeHandles.TryGetValue(def, out var invokeHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Named delegate '{def.Name}' has no emitted Invoke MethodDef.");
+            }
+
+            return invokeHandle;
+        }
+
+        if (this.userDelegateInvokeRefCache.TryGetValue(delegateSym, out var cached))
+        {
+            return cached;
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                def.Parameters.Length,
+                r => EncodeReturnSymbol(r, def.ReturnType ?? TypeSymbol.Void, RefKind.None),
+                ps =>
+                {
+                    foreach (var p in def.Parameters)
+                    {
+                        this.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                    }
+                });
+
+        var parent = this.GetUserDelegateTypeSpec(delegateSym);
+        var memberRef = (EntityHandle)this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString("Invoke"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.userDelegateInvokeRefCache[delegateSym] = memberRef;
+        return memberRef;
     }
 
     /// <summary>
@@ -9793,12 +9985,31 @@ internal sealed class ReflectionMetadataEmitter
             // ADR-0059 / issue #255: a user-declared named delegate type
             // encodes as a reference type referring to its own TypeDef
             // (a sealed class deriving from System.MulticastDelegate).
-            if (!this.cache.DelegateTypeDefs.TryGetValue(delegateSym, out var delegateDef))
+            // Issue #1503: a GENERIC named delegate encodes as
+            // GENERICINST<Predicate`1><args> — for a constructed instance the
+            // args come from TypeArguments; for the open definition the
+            // self-instantiation `Predicate`1<!0,…>` is emitted so member
+            // signatures round-trip under verification, exactly as the generic
+            // struct/interface branches do.
+            var delegateDefSym = delegateSym.Definition ?? delegateSym;
+            if (!this.cache.DelegateTypeDefs.TryGetValue(delegateDefSym, out var delegateDef))
             {
-                throw new InvalidOperationException($"Delegate '{delegateSym.Name}' has no emitted TypeDef.");
+                throw new InvalidOperationException($"Delegate '{delegateDefSym.Name}' has no emitted TypeDef.");
             }
 
-            encoder.Type(delegateDef, isValueType: false);
+            if (delegateDefSym.TypeParameters.IsDefaultOrEmpty)
+            {
+                encoder.Type(delegateDef, isValueType: false);
+            }
+            else
+            {
+                var delegateTypeArgs = ResolveDelegateTypeArguments(delegateSym);
+                var gi = encoder.GenericInstantiation(delegateDef, delegateTypeArgs.Length, isValueType: false);
+                foreach (var arg in delegateTypeArgs)
+                {
+                    this.EncodeTypeSymbol(gi.AddArgument(), arg);
+                }
+            }
         }
         else if (type is ChannelTypeSymbol chType)
         {

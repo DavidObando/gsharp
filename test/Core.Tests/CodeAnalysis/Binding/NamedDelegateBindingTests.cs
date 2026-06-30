@@ -37,15 +37,43 @@ Console.WriteLine(sum.Invoke(2, 40))
     }
 
     [Fact]
-    public void GenericDelegate_Reports_GS0234()
+    public void GenericDelegate_Binds_Without_Diagnostics()
     {
+        // Issue #1503: a generic named delegate declaration now binds without
+        // diagnostics (GS0234 retired). Single and multi type-parameter shapes,
+        // and a type parameter used in a composite return type, all bind.
         var source = @"
 package P
 
 type Box[T any] = delegate func(value T) T
+type Converter[TIn any, TOut any] = delegate func(x TIn) TOut
+type Mapper[T any] = delegate func(items []T) []T
 ";
         var diagnostics = Bind(source);
-        Assert.Contains(diagnostics, d => d.Id == "GS0234");
+        Assert.Empty(diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0234");
+    }
+
+    [Fact]
+    public void GenericDelegate_Construct_And_Use_Binds_Without_Diagnostics()
+    {
+        // Issue #1503: a generic delegate constructed over a concrete type
+        // argument binds as a parameter/local type and is assignable from a
+        // matching func literal.
+        var source = @"
+package P
+import System
+
+type Predicate1503[T any] = delegate func(value T) bool
+
+var isPositive Predicate1503[int32] = func(value int32) bool {
+    return value > 0
+}
+
+Console.WriteLine(isPositive.Invoke(7))
+";
+        var diagnostics = Bind(source);
+        Assert.Empty(diagnostics);
     }
 
     [Fact]

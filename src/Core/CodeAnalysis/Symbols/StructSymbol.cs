@@ -1728,6 +1728,42 @@ public sealed class StructSymbol : TypeSymbol
             return ReferenceEquals(inner, a.ElementType) ? type : ArrayTypeSymbol.Get(inner, a.Length);
         }
 
+        // Issue #1503: a `map[K, V]` element of a generic member (e.g. a
+        // generic delegate parameter typed `map[K, V]`) recursively
+        // substitutes both its key and value types so it surfaces as
+        // `map[int32, string]` on the constructed instantiation.
+        if (type is MapTypeSymbol map)
+        {
+            var substKey = SubstituteTypeForConstruction(map.KeyType, subst);
+            var substValue = SubstituteTypeForConstruction(map.ValueType, subst);
+            return ReferenceEquals(substKey, map.KeyType) && ReferenceEquals(substValue, map.ValueType)
+                ? type
+                : MapTypeSymbol.Get(substKey, substValue);
+        }
+
+        // Issue #1503: a constructed generic named delegate referenced as a
+        // member type (e.g. a field/parameter typed `Predicate[T]` on a
+        // generic type, or a nested generic delegate argument) substitutes its
+        // own type arguments so it surfaces as `Predicate[int32]`.
+        if (type is DelegateTypeSymbol del
+            && del.Definition != null
+            && !ReferenceEquals(del.Definition, del)
+            && !del.TypeArguments.IsDefaultOrEmpty)
+        {
+            var substitutedDelegateArgs = ImmutableArray.CreateBuilder<TypeSymbol>(del.TypeArguments.Length);
+            var delegateChanged = false;
+            for (var i = 0; i < del.TypeArguments.Length; i++)
+            {
+                var substituted = SubstituteTypeForConstruction(del.TypeArguments[i], subst);
+                substitutedDelegateArgs.Add(substituted);
+                delegateChanged |= !ReferenceEquals(substituted, del.TypeArguments[i]);
+            }
+
+            return delegateChanged
+                ? DelegateTypeSymbol.Construct(del.Definition, substitutedDelegateArgs.MoveToImmutable())
+                : type;
+        }
+
         // Issue #1192: a function/delegate type (e.g. a primary-constructor
         // parameter of type `(T) -> void`) must have its parameter types and
         // return type recursively substituted so the constructed generic's

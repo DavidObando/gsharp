@@ -97,11 +97,10 @@ internal sealed partial class MethodBodyEmitter
     /// </summary>
     private void EmitFunctionToNamedDelegateConversion(BoundExpression source, FunctionTypeSymbol sourceFn, DelegateTypeSymbol targetDelegate)
     {
-        if (!this.outer.cache.DelegateCtorHandles.TryGetValue(targetDelegate, out var ctorHandle))
-        {
-            throw new InvalidOperationException(
-                $"Named delegate '{targetDelegate.Name}' has no emitted .ctor MethodDef.");
-        }
+        // Issue #1503: a generic named delegate (constructed or open) resolves
+        // its `.ctor` through a MemberRef parented at the delegate TypeSpec; a
+        // non-generic delegate uses the bare `.ctor` MethodDef handle.
+        var ctorHandle = this.outer.ResolveDelegateCtorToken(targetDelegate);
 
         if (source is BoundFunctionLiteralExpression literal)
         {
@@ -145,7 +144,7 @@ internal sealed partial class MethodBodyEmitter
     /// <see cref="EmitFunctionLiteral(BoundFunctionLiteralExpression, Type)"/>
     /// but uses a metadata handle instead of a runtime <see cref="Type"/>.
     /// </summary>
-    private void EmitFunctionLiteralToNamedDelegate(BoundFunctionLiteralExpression literal, MethodDefinitionHandle delegateCtorHandle)
+    private void EmitFunctionLiteralToNamedDelegate(BoundFunctionLiteralExpression literal, EntityHandle delegateCtorHandle)
     {
         if (this.outer.closures.ClosureInfos.TryGetValue(literal, out var closure))
         {
@@ -219,7 +218,7 @@ internal sealed partial class MethodBodyEmitter
     /// first so the resulting delegate's <c>Target</c> binds to the
     /// captured instance.
     /// </summary>
-    private void EmitMethodGroupToNamedDelegate(BoundMethodGroupExpression methodGroup, MethodDefinitionHandle delegateCtorHandle)
+    private void EmitMethodGroupToNamedDelegate(BoundMethodGroupExpression methodGroup, EntityHandle delegateCtorHandle)
     {
         if (!this.outer.cache.FunctionHandles.TryGetValue(methodGroup.Function, out var staticHandle)
             && !this.outer.cache.MethodHandles.TryGetValue(methodGroup.Function, out staticHandle))

@@ -122,7 +122,7 @@ ADR-0052 §1 said the event's `type_clause` "must resolve to a function type (`f
 
 ## Follow-up work (out of scope)
 
-- Generic delegate declarations (`type Predicate[T any] = delegate func(value T) bool`); the parser accepts them but the binder rejects them with **GS0234** in v1 because the emitter does not yet thread `GenericParam` rows through delegate TypeDefs. Lifting this is mechanical follow-up work once the existing struct/class generic emit support is generalised.
+- Generic delegate declarations (`type Predicate[T any] = delegate func(value T) bool`) are now supported (issue #1503): the binder binds the type-parameter list, and the emitter mangles the delegate TypeDef name with the backtick-arity suffix, threads one `GenericParam` row per type parameter, and references the slots as `VAR(idx)` in the `Invoke`/`.ctor` signatures — reusing the existing generic struct/class/interface emit mechanism. Constructed instantiations (`Predicate[int32]`) are constructed from a lambda/method group and invoked through a `MemberRef` parented at the delegate `TypeSpec`. **GS0234** has been retired.
 - A `where T : delegate` constraint to make `Predicate[T]` instantiations of a generic delegate work as a generic-type-parameter constraint target.
 - Emitting `BeginInvoke` / `EndInvoke` if a project enables a legacy-delegate compatibility flag.
 - Variance annotations on generic delegate type parameters (`type Func[in T, out R] = delegate func(value T) R`).

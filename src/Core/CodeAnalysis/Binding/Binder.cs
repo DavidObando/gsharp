@@ -2545,6 +2545,26 @@ public sealed class Binder
 
                     element = StructSymbol.Construct(genericStruct, typeArgs);
                 }
+                else if (element is DelegateTypeSymbol genericDelegate)
+                {
+                    // Issue #1503: a generic named delegate construction
+                    // `Predicate[int32]` resolves to a constructed
+                    // DelegateTypeSymbol whose parameter/return types are
+                    // substituted with the supplied type arguments.
+                    if (!genericDelegate.IsGenericDefinition)
+                    {
+                        Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.Identifier.Text);
+                        return null;
+                    }
+
+                    if (genericDelegate.TypeParameters.Length != typeArgs.Length)
+                    {
+                        Diagnostics.ReportWrongTypeArgumentCount(syntax.Identifier.Location, syntax.Identifier.Text, genericDelegate.TypeParameters.Length, typeArgs.Length);
+                        return null;
+                    }
+
+                    element = DelegateTypeSymbol.Construct(genericDelegate, typeArgs);
+                }
                 else
                 {
                     Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.Identifier.Text);
@@ -2736,6 +2756,8 @@ public sealed class Binder
                 return StructSymbol.Construct(genericStruct, typeArgs);
             case InterfaceSymbol genericIface when genericIface.IsGenericDefinition && genericIface.TypeParameters.Length == typeArgs.Length:
                 return InterfaceSymbol.Construct(genericIface, typeArgs);
+            case DelegateTypeSymbol genericDelegate when genericDelegate.IsGenericDefinition && genericDelegate.TypeParameters.Length == typeArgs.Length:
+                return DelegateTypeSymbol.Construct(genericDelegate, typeArgs);
             default:
                 Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.DottedName);
                 return null;

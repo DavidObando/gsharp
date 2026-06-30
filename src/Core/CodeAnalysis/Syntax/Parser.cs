@@ -3343,7 +3343,7 @@ public class Parser
                 || follow.Kind == SyntaxKind.InterfaceKeyword
                 || follow.Kind == SyntaxKind.SealedKeyword
                 || follow.Kind == SyntaxKind.OpenKeyword
-                || follow.Kind == SyntaxKind.EqualsToken // ADR-0059: `type X[T any] = delegate func(...)` (rejected by binder as GS0234).
+                || follow.Kind == SyntaxKind.EqualsToken // ADR-0059 / issue #1503: `type X[T any] = delegate func(...)` (generic named delegate).
                 || follow.Kind == SyntaxKind.OpenBraceToken // ADR-0078: `class Name[T any] { ... }`.
                 || follow.Kind == SyntaxKind.ColonToken // ADR-0078: `class Name[T any] : Base { ... }`.
                 || (follow.Kind == SyntaxKind.IdentifierToken && (follow.Text == "data" || follow.Text == "record")))

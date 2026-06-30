@@ -2230,19 +2230,6 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// ADR-0059 / issue #255: reports a generic delegate declaration (e.g.
-    /// <c>type Predicate[T any] = delegate func(value T) bool</c>) — generic
-    /// delegate emit is not yet supported in v1 and is tracked as ADR-0059
-    /// follow-up work.
-    /// </summary>
-    /// <param name="location">The text location of the delegate identifier.</param>
-    /// <param name="typeName">The delegate type name.</param>
-    public void ReportGenericDelegateNotSupported(TextLocation location, string typeName)
-    {
-        Report(location, "GS0234", $"Generic delegate declaration '{typeName}' is not yet supported; declare a non-generic named delegate type (ADR-0059 follow-up).");
-    }
-
-    /// <summary>
     /// ADR-0060: reports that an argument's ref-kind modifier (or its absence) does not match
     /// the parameter's declared ref-kind at a call site. Replaces the lower-level GS9002 for
     /// keyword-form call sites with a more targeted message naming both observed and expected.

@@ -914,6 +914,7 @@ public sealed class BoundScope
         {
             StructSymbol s when s.IsGenericDefinition => s.TypeParameters.Length,
             InterfaceSymbol i when i.IsGenericDefinition => i.TypeParameters.Length,
+            DelegateTypeSymbol d when d.IsGenericDefinition => d.TypeParameters.Length,
             _ => 0,
         };
     }
