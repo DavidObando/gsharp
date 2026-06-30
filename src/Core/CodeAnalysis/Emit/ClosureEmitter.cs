@@ -364,6 +364,38 @@ internal sealed class ClosureEmitter
 
         closureClass.SetMethods(ImmutableArray.Create(invokeMethod));
 
+        // Issue #1477: when the lambda is declared inside a generic type (or
+        // generic method) and captures a value whose type references an
+        // enclosing type parameter (a `T`-typed value, `this` of `G[T]`, or a
+        // boxed `Box[T]`), the display class must itself be generic over those
+        // parameters — otherwise each capture field's `VAR` slot has no generic
+        // parameter in scope, producing an illegal field type (TypeLoadException
+        // at load) and unverifiable IL (`StackUnexpected`/`DelegateCtor`) at the
+        // capture site. Reify the display class generic over exactly the
+        // referenced enclosing parameters (mirroring the state-machine
+        // treatment); the emitter's outer-TP → own-TP remap then routes every
+        // field / Invoke signature through a valid `VAR(idx)` slot, and the
+        // returned constructed instance carries the original parameters as type
+        // arguments for the capture-site `newobj`/field stores/delegate ctor.
+        var enclosingRefSink = new List<TypeSymbol>();
+        foreach (var captured in capturedVariables)
+        {
+            enclosingRefSink.Add(captured.Type);
+        }
+
+        foreach (var parameter in parameters)
+        {
+            enclosingRefSink.Add(parameter.Type);
+        }
+
+        enclosingRefSink.Add(returnType);
+        var origTPs = SynthesizedClosureReifier.CollectOrdered(enclosingRefSink);
+        StructSymbol constructedClass = closureClass;
+        if (!origTPs.IsDefaultOrEmpty)
+        {
+            constructedClass = SynthesizedClosureReifier.Reify(closureClass, origTPs);
+        }
+
         var rewriter = new CaptureRewriter(closureClass, captureFields, invokeMethod.ThisParameter);
         var rewrittenBody = (BoundBlockStatement)rewriter.RewriteStatement(body);
         if (rewriter.UnsupportedCapture != null)
@@ -374,7 +406,7 @@ internal sealed class ClosureEmitter
 
         this.lambdaBodies[invokeMethod] = (BoundBlockStatement)Lowerer.Lower(rewrittenBody);
         this.SynthesizedClosureClasses.Add(closureClass);
-        var info = new ClosureInfo(closureClass, invokeMethod, captureFields);
+        var info = new ClosureInfo(closureClass, invokeMethod, captureFields, constructedClass);
         this.ClosureInvokeToInfo[invokeMethod] = info;
         return info;
     }
@@ -420,13 +452,29 @@ internal sealed class ClosureEmitter
     public sealed class ClosureInfo
     {
         public ClosureInfo(StructSymbol classSym, FunctionSymbol invokeMethod, Dictionary<VariableSymbol, FieldSymbol> captureFields)
+            : this(classSym, invokeMethod, captureFields, classSym)
+        {
+        }
+
+        public ClosureInfo(StructSymbol classSym, FunctionSymbol invokeMethod, Dictionary<VariableSymbol, FieldSymbol> captureFields, StructSymbol constructedClassSym)
         {
             this.ClassSym = classSym;
             this.InvokeMethod = invokeMethod;
             this.CaptureFields = captureFields;
+            this.ConstructedClassSym = constructedClassSym;
         }
 
         public StructSymbol ClassSym { get; }
+
+        /// <summary>
+        /// Gets the constructed display-class instance to reference at the
+        /// capture site (<c>newobj</c> / field stores / delegate ctor /
+        /// <c>ldftn Invoke</c>). Equals <see cref="ClassSym"/> for a non-generic
+        /// closure; for a generic-encloser closure it is the open definition
+        /// constructed over the enclosing type parameters
+        /// (<c>DisplayClass&lt;!0,…&gt;</c>) — issue #1477.
+        /// </summary>
+        public StructSymbol ConstructedClassSym { get; }
 
         public FunctionSymbol InvokeMethod { get; }
 

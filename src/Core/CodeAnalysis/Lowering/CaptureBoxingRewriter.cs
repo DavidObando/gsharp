@@ -196,7 +196,27 @@ internal static class CaptureBoxingRewriter
 
             counter++;
             var boxClass = CreateBoxClass(variable, counter, packageName);
-            var fieldSymbol = boxClass.Fields[0];
+
+            // Issue #1477: when the captured variable's type references an
+            // enclosing generic type / method type parameter (a `T`-typed
+            // local, or a value whose type is `G[T]`/`Box[T]`/`(…) -> T`), the
+            // box class must be generic over those parameters; otherwise its
+            // `Value` field's `VAR` slot has no generic parameter in scope,
+            // producing an illegal field type (TypeLoadException at load) and
+            // unverifiable IL at the capture site. Reify the box generic over
+            // the referenced parameters (mirroring the state-machine treatment)
+            // and reference the CONSTRUCTED instance everywhere downstream so
+            // the local slot, `newobj`, and field stores carry the right
+            // `Box<…enclosing args…>` TypeSpec; the open definition (added to
+            // newStructs) gets the TypeDef + generic-param rows.
+            var origTPs = SynthesizedClosureReifier.CollectOrdered(new[] { variable.Type });
+            StructSymbol boxReference = boxClass;
+            FieldSymbol fieldSymbol = boxClass.Fields[0];
+            if (!origTPs.IsDefaultOrEmpty)
+            {
+                boxReference = SynthesizedClosureReifier.Reify(boxClass, origTPs);
+                fieldSymbol = boxReference.Fields[0];
+            }
 
             // For captured locals: a new LocalVariableSymbol of the box type
             // replaces the original; the binder-emitted slot is reclaimed
@@ -207,9 +227,9 @@ internal static class CaptureBoxingRewriter
             var slotName = variable is ParameterSymbol p
                 ? "<>__boxed_" + p.Name
                 : variable.Name;
-            var boxLocal = new LocalVariableSymbol(slotName, isReadOnly: false, type: boxClass);
+            var boxLocal = new LocalVariableSymbol(slotName, isReadOnly: false, type: boxReference);
 
-            boxInfo[variable] = new BoxedVariable(variable, boxLocal, boxClass, fieldSymbol);
+            boxInfo[variable] = new BoxedVariable(variable, boxLocal, boxReference, fieldSymbol);
             newStructs.Add(boxClass);
         }
 
