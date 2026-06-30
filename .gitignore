@@ -339,3 +339,6 @@ package-lock.json
 .DS_Store
 
 *.lscache
+
+# cs2gs migration run output (generated, do not commit)
+cs2gs-runs/
