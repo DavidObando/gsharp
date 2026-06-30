@@ -662,7 +662,9 @@ internal sealed partial class MethodBodyEmitter
     }
 
     private static bool IsNullableUserEnum(TypeSymbol type)
-        => type is NullableTypeSymbol nullable && nullable.UnderlyingType is EnumSymbol;
+        => type is NullableTypeSymbol nullable
+            && (nullable.UnderlyingType is EnumSymbol
+                || (nullable.UnderlyingType is StructSymbol s && !s.IsClass));
 
     /// <summary>
     /// Issue #831: matches `T? == nil` / `T? != nil` (and the symmetric

@@ -518,7 +518,8 @@ internal sealed class ConversionClassifier
             && type is NullableTypeSymbol nilTargetNullable
             && (nilTargetNullable.UnderlyingType?.ClrType is { IsValueType: true }
                 || nilTargetNullable.UnderlyingType is TypeParameterSymbol
-                || nilTargetNullable.UnderlyingType is EnumSymbol))
+                || nilTargetNullable.UnderlyingType is EnumSymbol
+                || (nilTargetNullable.UnderlyingType is StructSymbol nilTargetStruct && !nilTargetStruct.IsClass)))
         {
             return new BoundDefaultExpression(null, type);
         }

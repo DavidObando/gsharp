@@ -158,6 +158,17 @@ internal sealed class MetadataTokenCache
         = new Dictionary<EnumSymbol, MemberReferenceHandle>();
 
     /// <summary>
+    /// Gets the cache mapping a user-defined value-type <see cref="StructSymbol"/>
+    /// to the <see cref="MemberReferenceHandle"/> for
+    /// <c>System.Nullable`1&lt;S&gt;::.ctor(!0)</c> (issue #1475). The parent
+    /// TypeSpec closes <c>Nullable&lt;&gt;</c> over the struct's emitted
+    /// TypeDef/TypeSpec, so one MemberRef per struct serves every
+    /// null-conditional / <c>S -&gt; S?</c> lift site.
+    /// </summary>
+    public Dictionary<StructSymbol, MemberReferenceHandle> NullableUserStructCtorMemberRefs { get; }
+        = new Dictionary<StructSymbol, MemberReferenceHandle>();
+
+    /// <summary>
     /// Gets the cache mapping a <see cref="FieldInfo"/> to its
     /// <see cref="MemberReferenceHandle"/>.
     /// </summary>

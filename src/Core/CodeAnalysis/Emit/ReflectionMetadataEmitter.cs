@@ -5817,11 +5817,17 @@ internal sealed class ReflectionMetadataEmitter
         // naming the generic instantiation `System.Nullable<E>`. This is the
         // token consumed by `box Nullable<E>` in the lifted enum-equality emit
         // (and by `initobj` when zero-initialising such a slot).
-        if (element is NullableTypeSymbol nullableEnumElement
-            && nullableEnumElement.UnderlyingType is EnumSymbol)
+        //
+        // Issue #1475: the same TypeSpec form applies to `S?` over a
+        // user-declared value-type struct (no runtime `ClrType`). Recognise
+        // both user value-type underlyings here so the null-conditional emit
+        // can `initobj`/`box` the `Nullable<UserT>` slot.
+        if (element is NullableTypeSymbol nullableUserVtElement
+            && (nullableUserVtElement.UnderlyingType is EnumSymbol
+                || (nullableUserVtElement.UnderlyingType is StructSymbol userVtStruct && !userVtStruct.IsClass)))
         {
             var sigBlob = new BlobBuilder();
-            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), nullableEnumElement);
+            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), nullableUserVtElement);
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
@@ -8851,6 +8857,60 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #1475: gets a MemberRef for <c>System.Nullable`1&lt;S&gt;::.ctor(!0)</c>
+    /// where <c>S</c> is a user-declared value-type struct emitted in this
+    /// assembly (or a user enum, by delegation). The struct has no runtime CLR
+    /// type, so the BCL-backed ctor path cannot construct it; instead the
+    /// parent TypeSpec closes <c>Nullable&lt;&gt;</c> over the struct's emitted
+    /// TypeDef/TypeSpec and the ctor signature refers to that argument as
+    /// <c>!0</c>. Mirrors <see cref="GetNullableCtorMemberRefForUserEnum"/>.
+    /// </summary>
+    /// <param name="nullableOfUserVt">A <c>Nullable&lt;S&gt;</c> over a user value type (enum or value struct).</param>
+    /// <returns>The constructor MemberRef.</returns>
+    internal MemberReferenceHandle GetNullableCtorMemberRefForUserValueType(NullableTypeSymbol nullableOfUserVt)
+    {
+        // A user enum already has a dedicated cache + helper; reuse it so a
+        // single MemberRef serves both the lift (issue #1298) and the
+        // null-conditional (issue #1475) sites.
+        if (nullableOfUserVt?.UnderlyingType is EnumSymbol)
+        {
+            return this.GetNullableCtorMemberRefForUserEnum(nullableOfUserVt);
+        }
+
+        if (nullableOfUserVt?.UnderlyingType is not StructSymbol structSym || structSym.IsClass)
+        {
+            throw new InvalidOperationException(
+                "GetNullableCtorMemberRefForUserValueType requires Nullable<user enum or value struct>.");
+        }
+
+        if (this.cache.NullableUserStructCtorMemberRefs.TryGetValue(structSym, out var cached))
+        {
+            return cached;
+        }
+
+        var parentBlob = new BlobBuilder();
+        this.EncodeTypeSymbol(new BlobEncoder(parentBlob).TypeSpecificationSignature(), nullableOfUserVt);
+        var parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob));
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                parameterCount: 1,
+                returnType: r => r.Void(),
+                parameters: ps =>
+                {
+                    ps.AddParameter().Type().GenericTypeParameter(0);
+                });
+
+        var handle = this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.cache.NullableUserStructCtorMemberRefs[structSym] = handle;
+        return handle;
+    }
+
+    /// <summary>
     /// Phase 4 emit parity: get a MemberRef for a CLR field on a possibly
     /// generic declaring type (e.g. <c>KeyValuePair&lt;K, V&gt;.Key</c>).
     /// </summary>
@@ -9268,8 +9328,26 @@ internal sealed class ReflectionMetadataEmitter
 
             if (inner is StructSymbol nestedStruct && !nestedStruct.IsClass)
             {
-                throw new NotSupportedException(
-                    $"Nullable user-defined struct '{inner.Name}?' is not yet supported by the emitter.");
+                // Issue #1475: `S?` over a user-declared value-type struct
+                // lowers to `System.Nullable<S>` — a generic instantiation
+                // whose single argument is the struct's emitted TypeDef (or a
+                // GENERICINST for a constructed user-generic struct). Mirrors
+                // the user-enum branch below and the struct-constrained
+                // type-parameter branch above.
+                var nestedStructDef = nestedStruct.Definition ?? nestedStruct;
+                if (!this.cache.StructTypeDefs.ContainsKey(nestedStructDef))
+                {
+                    throw new InvalidOperationException(
+                        $"Struct '{nestedStruct.Name}' has no emitted TypeDef.");
+                }
+
+                var nullableOpenForStruct = typeof(System.Nullable<>);
+                var giNullableStruct = encoder.GenericInstantiation(
+                    this.GetTypeReference(nullableOpenForStruct),
+                    genericArgumentCount: 1,
+                    isValueType: true);
+                this.EncodeTypeSymbol(giNullableStruct.AddArgument(), nestedStruct);
+                return;
             }
 
             if (inner is EnumSymbol nestedEnum)

@@ -1173,9 +1173,19 @@ internal sealed partial class ExpressionBinder
         // underlying* is a value type — even if `whenNotNull.Type` is
         // already nullable. The emitter inspects `WhenNotNull.Type` to
         // decide whether to wrap with `newobj` or pass through.
+        //
+        // Issue #1475: the slot must be allocated for ANY value-type
+        // underlying recognised by SYMBOL — user `EnumSymbol`, value-type
+        // `StructSymbol`, a value-constrained type parameter, tuple — not only
+        // when the underlying carries a runtime `ClrType.IsValueType`. User
+        // enums/structs have a null `ClrType`, so the old gate skipped them and
+        // emit fell to the reference (`ldnull`) branch, producing unverifiable
+        // IL (`StackUnexpected`/`PathStackUnexpected`). Routing through the
+        // canonical symbol-level value-type predicate keeps BCL behaviour
+        // identical while covering user value types.
         LocalVariableSymbol resultSlot = null;
         if (resultType is NullableTypeSymbol nullableResult
-            && nullableResult.UnderlyingType?.ClrType is { IsValueType: true })
+            && GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(nullableResult.UnderlyingType))
         {
             var resultSlotName = "$nres_" + binderCtx.NullConditionalCaptureCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
             resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);
@@ -3273,9 +3283,15 @@ internal sealed partial class ExpressionBinder
             ? whenNotNull.Type
             : (TypeSymbol)NullableTypeSymbol.Get(whenNotNull.Type);
 
+        // Issue #1475: allocate the result slot for ANY value-type underlying
+        // recognised by symbol (user enum/struct, value-constrained type
+        // parameter, tuple), not only when `ClrType.IsValueType`. Mirrors the
+        // member-access `?.` path so `?[]` over a user value type also
+        // materialises `default(Nullable<T>)` on the nil branch instead of
+        // `ldnull`.
         LocalVariableSymbol resultSlot = null;
         if (resultType is NullableTypeSymbol nullableResult
-            && nullableResult.UnderlyingType?.ClrType is { IsValueType: true })
+            && GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(nullableResult.UnderlyingType))
         {
             var resultSlotName = "$nres_" + binderCtx.NullConditionalCaptureCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
             resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);
