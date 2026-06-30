@@ -2044,6 +2044,18 @@ internal sealed class ReflectionMetadataEmitter
                     continue;
                 }
 
+                // Issue #1469: a non-capturing lambda lexically nested inside a
+                // user type was rerouted by SynthesizeClosures into a display
+                // class nested in that type (so it shares the type's
+                // accessibility domain). Such a literal now carries a ClosureInfo
+                // and its body is already registered against the synthesized
+                // Invoke method, so it must NOT also be hosted as a top-level
+                // <Program> static method.
+                if (this.closures.ClosureInfos.ContainsKey(literal))
+                {
+                    continue;
+                }
+
                 this.lambdaBodies[literal.Function] = (BoundBlockStatement)Lowerer.Lower(literal.Body);
                 hostBucket.Add(literal.Function);
             }
