@@ -896,6 +896,19 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        // Issue #1489: same registration for GENERIC async-iterator SM classes
+        // so their field / method / interface signatures translate the kickoff
+        // method's type-parameter references (MVar) into the SM class's own
+        // class-type-parameter slots (Var) during emit.
+        foreach (var kvp in this.stateMachines.AsyncIteratorStateMachineGenericInfos)
+        {
+            var remap = kvp.Value.BuildRemap();
+            if (remap != null)
+            {
+                this.iteratorStateMachineRemapsByClass[kvp.Key] = remap;
+            }
+        }
+
         // Issue #1467: a user-declared type nested inside a generic type must
         // declare the enclosing type's generic parameters (ECMA-335 §II.10.3.1:
         // a nested type's generic parameters include the encloser's). Reify
