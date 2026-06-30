@@ -34,50 +34,11 @@ public sealed class Conversion
     /// </summary>
     public static readonly Conversion Explicit = new Conversion(exists: true, isIdentity: false, isImplicit: false);
 
-    // ADR-0044 implicit numeric widening lattice, keyed by source CLR full
-    // name → set of target CLR full names. Mirrors C# §6.1.2 plus the
-    // ADR-0044 inclusion of `decimal` as a widening target for every
-    // integral source. Native-width integers (nint/nuint) follow C#'s
-    // rules: nint widens to int64/single/double/decimal; nuint widens to
-    // uint64/single/double/decimal.
-    private static readonly Dictionary<string, HashSet<string>> NumericWideningTargets = new(StringComparer.Ordinal)
-    {
-        ["System.SByte"] = new(StringComparer.Ordinal) { "System.Int16", "System.Int32", "System.Int64", "System.IntPtr", "System.Single", "System.Double", "System.Decimal" },
-        ["System.Byte"] = new(StringComparer.Ordinal) { "System.Int16", "System.UInt16", "System.Int32", "System.UInt32", "System.Int64", "System.UInt64", "System.IntPtr", "System.UIntPtr", "System.Single", "System.Double", "System.Decimal" },
-        ["System.Int16"] = new(StringComparer.Ordinal) { "System.Int32", "System.Int64", "System.IntPtr", "System.Single", "System.Double", "System.Decimal" },
-        ["System.UInt16"] = new(StringComparer.Ordinal) { "System.Int32", "System.UInt32", "System.Int64", "System.UInt64", "System.IntPtr", "System.UIntPtr", "System.Single", "System.Double", "System.Decimal" },
-        ["System.Int32"] = new(StringComparer.Ordinal) { "System.Int64", "System.IntPtr", "System.Single", "System.Double", "System.Decimal" },
-        ["System.UInt32"] = new(StringComparer.Ordinal) { "System.Int64", "System.UInt64", "System.UIntPtr", "System.Single", "System.Double", "System.Decimal" },
-        ["System.Int64"] = new(StringComparer.Ordinal) { "System.Single", "System.Double", "System.Decimal" },
-        ["System.UInt64"] = new(StringComparer.Ordinal) { "System.Single", "System.Double", "System.Decimal" },
-        ["System.IntPtr"] = new(StringComparer.Ordinal) { "System.Int64", "System.Single", "System.Double", "System.Decimal" },
-        ["System.UIntPtr"] = new(StringComparer.Ordinal) { "System.UInt64", "System.Single", "System.Double", "System.Decimal" },
-        ["System.Char"] = new(StringComparer.Ordinal) { "System.UInt16", "System.Int32", "System.UInt32", "System.Int64", "System.UInt64", "System.IntPtr", "System.UIntPtr", "System.Single", "System.Double", "System.Decimal" },
-        ["System.Single"] = new(StringComparer.Ordinal) { "System.Double" },
-    };
-
-    // All numeric primitive CLR full-name set — every pair (source != target)
-    // that isn't an implicit widening is permitted as an explicit narrowing
-    // (per ADR-0044). `char` is included so `(char)<int>` and `(int)<char>`
-    // both work the same way as in C#.
-    private static readonly HashSet<string> NumericClrFullNames = new(StringComparer.Ordinal)
-    {
-        "System.SByte",
-        "System.Byte",
-        "System.Int16",
-        "System.UInt16",
-        "System.Int32",
-        "System.UInt32",
-        "System.Int64",
-        "System.UInt64",
-        "System.IntPtr",
-        "System.UIntPtr",
-        "System.Single",
-        "System.Double",
-        "System.Decimal",
-        "System.Char",
-    };
-
+    // Issue #1482: the implicit numeric-widening lattice and the numeric
+    // primitive set now live in the single authoritative
+    // `NumericWideningLattice` helper. Conversion classification and overload
+    // "better conversion" ranking both query that one table so they cannot
+    // drift apart (they previously disagreed about native-int widening).
     private Conversion(bool exists, bool isIdentity, bool isImplicit)
     {
         Exists = exists;
@@ -535,10 +496,10 @@ public sealed class Conversion
         var fromClr = from?.ClrType?.FullName;
         var toClr = to?.ClrType?.FullName;
         if (fromClr != null && toClr != null
-            && NumericClrFullNames.Contains(fromClr)
-            && NumericClrFullNames.Contains(toClr))
+            && NumericWideningLattice.IsNumericPrimitive(fromClr)
+            && NumericWideningLattice.IsNumericPrimitive(toClr))
         {
-            if (NumericWideningTargets.TryGetValue(fromClr, out var targets) && targets.Contains(toClr))
+            if (NumericWideningLattice.IsWidening(fromClr, toClr))
             {
                 return Conversion.Implicit;
             }
@@ -1507,14 +1468,14 @@ public sealed class Conversion
         }
 
         // enum → numeric primitive.
-        if (fromIsEnum && to?.ClrType?.FullName is string toName && NumericClrFullNames.Contains(toName))
+        if (fromIsEnum && to?.ClrType?.FullName is string toName && NumericWideningLattice.IsNumericPrimitive(toName))
         {
             conversion = Conversion.Explicit;
             return true;
         }
 
         // numeric primitive → enum.
-        if (toIsEnum && from?.ClrType?.FullName is string fromName && NumericClrFullNames.Contains(fromName))
+        if (toIsEnum && from?.ClrType?.FullName is string fromName && NumericWideningLattice.IsNumericPrimitive(fromName))
         {
             conversion = Conversion.Explicit;
             return true;
@@ -1534,10 +1495,7 @@ public sealed class Conversion
     /// </summary>
     private static bool WidensNumerically(Type fromClr, Type toClr)
     {
-        return fromClr?.FullName is { } fromName
-            && toClr?.FullName is { } toName
-            && NumericWideningTargets.TryGetValue(fromName, out var targets)
-            && targets.Contains(toName);
+        return NumericWideningLattice.IsWidening(fromClr, toClr);
     }
 
     /// <summary>
