@@ -354,6 +354,19 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the type arguments when this is a constructed instance of a generic definition (Phase 4.3 / ADR-0020). Empty for generic definitions and for non-generic types.</summary>
     public ImmutableArray<TypeSymbol> TypeArguments { get; private set; } = ImmutableArray<TypeSymbol>.Empty;
 
+    /// <summary>
+    /// Gets, for a synthesized closure / capture-box class that was reified
+    /// generic over enclosing type/method type parameters (issue #1477), the
+    /// ordered list of the ORIGINAL enclosing
+    /// <see cref="TypeParameterSymbol"/>s its fresh class type parameters
+    /// (<see cref="TypeParameters"/>) clone 1:1. The emitter consumes this to
+    /// build the outer-TP → own-TP-ordinal remap (mirroring the iterator/async
+    /// state-machine treatment) so member signatures encode a valid
+    /// <c>VAR(idx)</c> slot. Empty for every other type. Each entry at index
+    /// <c>i</c> corresponds to <see cref="TypeParameters"/><c>[i]</c>.
+    /// </summary>
+    public ImmutableArray<TypeParameterSymbol> ReifiedFromTypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
+
     /// <summary>Gets a value indicating whether this is a generic definition (has type parameters and no type arguments).</summary>
     public bool IsGenericDefinition => !TypeParameters.IsDefaultOrEmpty && TypeArguments.IsDefaultOrEmpty;
 
@@ -729,6 +742,18 @@ public sealed class StructSymbol : TypeSymbol
     public void SetTypeParameters(ImmutableArray<TypeParameterSymbol> typeParameters)
     {
         TypeParameters = typeParameters;
+    }
+
+    /// <summary>
+    /// Issue #1477: records the ordered original enclosing type parameters that
+    /// this synthesized closure / capture-box class's fresh type parameters
+    /// clone 1:1 (see <see cref="ReifiedFromTypeParameters"/>). Called once at
+    /// synthesis time alongside <see cref="SetTypeParameters"/>.
+    /// </summary>
+    /// <param name="reifiedFrom">The original enclosing type parameters, aligned to <see cref="TypeParameters"/>.</param>
+    public void SetReifiedFromTypeParameters(ImmutableArray<TypeParameterSymbol> reifiedFrom)
+    {
+        ReifiedFromTypeParameters = reifiedFrom;
     }
 
     /// <summary>

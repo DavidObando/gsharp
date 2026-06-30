@@ -501,6 +501,44 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    // Issue #1477: builds the outer-TP → own-TP-ordinal remap for every
+    // synthesized closure / capture-box class that was reified generic over its
+    // enclosing type parameters (SynthesizedClosureReifier records the original
+    // referenced parameters on ReifiedFromTypeParameters in declaration order,
+    // 1:1 with the class's own freshly cloned parameters). Registering the
+    // remap on the shared state-machine remap channel makes EncodeTypeSymbol
+    // translate every enclosing-type-parameter reference in a capture field /
+    // Invoke signature into the synthesized class's own VAR(idx) slot.
+    private void RegisterSynthesizedClosureReifiedGenerics()
+    {
+        void Register(StructSymbol s)
+        {
+            var origTPs = s.ReifiedFromTypeParameters;
+            if (origTPs.IsDefaultOrEmpty)
+            {
+                return;
+            }
+
+            var remap = new Dictionary<TypeParameterSymbol, int>(origTPs.Length);
+            for (var i = 0; i < origTPs.Length; i++)
+            {
+                remap[origTPs[i]] = i;
+            }
+
+            this.iteratorStateMachineRemapsByClass[s] = remap;
+        }
+
+        foreach (var s in this.emitCtx.Program.Structs)
+        {
+            Register(s);
+        }
+
+        foreach (var s in this.closures.SynthesizedClosureClasses)
+        {
+            Register(s);
+        }
+    }
+
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
         this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
@@ -868,6 +906,14 @@ internal sealed class ReflectionMetadataEmitter
         // type variable, and references to the nested type construct a real
         // `Nested`1<!0>` TypeSpec.
         this.RegisterNestedTypeEnclosingGenerics();
+
+        // Issue #1477: register the outer-TP → own-TP-ordinal remap for each
+        // synthesized closure / capture-box class that was reified generic over
+        // its enclosing type parameters (recorded on
+        // ReifiedFromTypeParameters). This reuses the state-machine remap
+        // channel so EncodeTypeSymbol routes every capture-field / Invoke
+        // signature through a valid VAR(idx) slot of the synthesized class.
+        this.RegisterSynthesizedClosureReifiedGenerics();
 
         // Phase 3.B.4: user-defined interface TypeDefs (planned below).
         // Synthesized closure classes are appended after user aggregates so
@@ -1777,7 +1823,15 @@ internal sealed class ReflectionMetadataEmitter
         // interface-implementation metadata.
         void EmitClassTypeDefRow(StructSymbol c)
         {
-            this.typeDefEmitter.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
+            // Issue #1477: a synthesized closure / capture-box class reified
+            // generic over enclosing type parameters needs its remap active so
+            // its capture-field signatures encode the class's own VAR(idx)
+            // slots. No-op for every other class (unregistered → restore:false).
+            using (this.PushSmRemap(c))
+            {
+                this.typeDefEmitter.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
+            }
+
             EmitInterfaceImplRows(c);
         }
 
@@ -2567,7 +2621,14 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var c in topClasses)
         {
-            EmitClassMethodBodies(c);
+            // Issue #1477: keep the synthesized closure / capture-box class's
+            // remap active while emitting its ctor + Invoke bodies/signatures
+            // so enclosing type-parameter references resolve to the class's own
+            // VAR(idx) slots. No-op for every other class.
+            using (this.PushSmRemap(c))
+            {
+                EmitClassMethodBodies(c);
+            }
         }
 
         // 4b. Non-SM struct methods.
@@ -2668,7 +2729,17 @@ internal sealed class ReflectionMetadataEmitter
                     EmitInterfaceMethodBodies(ni);
                     break;
                 case StructSymbol ns when ns.IsClass:
-                    EmitClassMethodBodies(ns);
+                    // Issue #1477: a closure / capture-box class synthesized for
+                    // a lambda inside a GENERIC METHOD is nested in the (possibly
+                    // non-generic) declaring type and was reified generic over
+                    // the method's type parameters; push its remap so the Invoke
+                    // signature + body translate method-TP references to the
+                    // class's own Var slots. No-op for every other nested class.
+                    using (this.PushSmRemap(ns))
+                    {
+                        EmitClassMethodBodies(ns);
+                    }
+
                     break;
                 case StructSymbol ns:
                     // Issue #1465: async state-machine structs are reified
@@ -5946,8 +6017,11 @@ internal sealed class ReflectionMetadataEmitter
 
             // Issue #810: inside an iterator state-machine method body,
             // outer-method TPs are remapped to the SM class's own TPs.
+            // Issue #1477: a synthesized closure / capture-box class is also
+            // generic over enclosing TYPE parameters, so any TP present in the
+            // active remap (class or method) maps to the synthesized class's
+            // own VAR(idx) slot.
             if (this.activeIteratorStateMachineRemap != null
-                && tpSym.IsMethodTypeParameter
                 && this.activeIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd))
             {
                 encoder.GenericTypeParameter(smClassOrd);
@@ -6799,9 +6873,9 @@ internal sealed class ReflectionMetadataEmitter
             || openDef.IsSameAs(typeof(ValueTuple<,,,,,,,>));
     }
 
-    private readonly Dictionary<StructSymbol, EntityHandle> userStructTypeSpecCache = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<(StructSymbol Containing, FieldSymbol DefField), EntityHandle> userStructFieldRefCache = new();
-    private readonly Dictionary<(StructSymbol Containing, EntityHandle OpenMember), EntityHandle> userStructMethodRefCache = new();
+    private readonly Dictionary<(StructSymbol Sym, object Remap), EntityHandle> userStructTypeSpecCache = new();
+    private readonly Dictionary<(StructSymbol Containing, FieldSymbol DefField, object Remap), EntityHandle> userStructFieldRefCache = new();
+    private readonly Dictionary<(StructSymbol Containing, EntityHandle OpenMember, object Remap), EntityHandle> userStructMethodRefCache = new();
     private readonly Dictionary<InterfaceSymbol, EntityHandle> userInterfaceTypeSpecCache = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<(InterfaceSymbol Containing, EntityHandle OpenMember), EntityHandle> userInterfaceMethodRefCache = new();
     private readonly Dictionary<(InterfaceSymbol Containing, FieldSymbol DefField), EntityHandle> userInterfaceFieldRefCache = new();
@@ -6839,7 +6913,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     internal EntityHandle GetUserStructTypeSpec(StructSymbol structSym)
     {
-        if (this.userStructTypeSpecCache.TryGetValue(structSym, out var cached))
+        if (this.userStructTypeSpecCache.TryGetValue((structSym, this.activeIteratorStateMachineRemap), out var cached))
         {
             return cached;
         }
@@ -6880,7 +6954,7 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var spec = (EntityHandle)this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.userStructTypeSpecCache[structSym] = spec;
+        this.userStructTypeSpecCache[(structSym, this.activeIteratorStateMachineRemap)] = spec;
         return spec;
     }
 
@@ -6939,7 +7013,7 @@ internal sealed class ReflectionMetadataEmitter
             defField = fieldOnContaining;
         }
 
-        var key = (containingType, defField);
+        var key = (containingType, defField, (object)this.activeIteratorStateMachineRemap);
         if (this.userStructFieldRefCache.TryGetValue(key, out var cached))
         {
             return cached;
@@ -7048,7 +7122,7 @@ internal sealed class ReflectionMetadataEmitter
         string methodName,
         BlobBuilder signature)
     {
-        var key = (containingType, openMethodDef);
+        var key = (containingType, openMethodDef, (object)this.activeIteratorStateMachineRemap);
         if (this.userStructMethodRefCache.TryGetValue(key, out var cached))
         {
             return cached;
@@ -7206,6 +7280,43 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return this.GetUserStructMethodRef(containingType, openDef, method.Name, this.EncodeOpenMethodSignature(method));
+    }
+
+    /// <summary>
+    /// Issue #1477: resolves the <c>ldftn</c> function token for a synthesized
+    /// generic closure's <c>Invoke</c> method at the capture site. The parent
+    /// <c>TypeSpec</c> must encode the CONSTRUCTED closure
+    /// (<c>Closure`1&lt;…enclosing args…&gt;</c>) under the AMBIENT (capture-site)
+    /// remap, but the MemberRef signature must encode the open <c>Invoke</c>
+    /// parameters under the CLOSURE's OWN remap so enclosing-type-parameter
+    /// references resolve to the closure's <c>VAR(idx)</c> slots (which is how
+    /// the closure's MethodDef signature was emitted). For a non-generic closure
+    /// the bare <c>MethodDef</c> is returned.
+    /// </summary>
+    /// <param name="constructedClosure">The constructed closure reference.</param>
+    /// <param name="closureDef">The open closure definition (for the sig remap).</param>
+    /// <param name="invoke">The closure's <c>Invoke</c> method.</param>
+    /// <returns>The function token suitable for <c>ldftn</c>.</returns>
+    internal EntityHandle ResolveClosureInvokeFtnToken(StructSymbol constructedClosure, StructSymbol closureDef, FunctionSymbol invoke)
+    {
+        if (!this.cache.MethodHandles.TryGetValue(invoke, out var openDef))
+        {
+            throw new InvalidOperationException(
+                $"Closure invoke method '{invoke.Name}' has no emitted handle.");
+        }
+
+        if (!IsUserGenericTypeReference(constructedClosure))
+        {
+            return openDef;
+        }
+
+        BlobBuilder sig;
+        using (this.PushSmRemap(closureDef))
+        {
+            sig = this.EncodeOpenMethodSignature(invoke);
+        }
+
+        return this.GetUserStructMethodRef(constructedClosure, openDef, invoke.Name, sig);
     }
 
     /// <summary>
@@ -9406,6 +9517,15 @@ internal sealed class ReflectionMetadataEmitter
                 && this.activeIteratorStateMachineRemap.TryGetValue(tp, out var classOrdinal))
             {
                 encoder.GenericTypeParameter(classOrdinal);
+            }
+
+            // Issue #1477: a synthesized closure / capture-box class is generic
+            // over enclosing TYPE parameters too, so any TP in the active remap
+            // (class or method) encodes the synthesized class's own Var(idx).
+            else if (this.activeIteratorStateMachineRemap != null
+                && this.activeIteratorStateMachineRemap.TryGetValue(tp, out var classOrdinal2))
+            {
+                encoder.GenericTypeParameter(classOrdinal2);
             }
 
             // ADR-0087 §3 R2: a user-declared open type parameter encodes as

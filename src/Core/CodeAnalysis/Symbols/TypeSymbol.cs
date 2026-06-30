@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -375,6 +376,120 @@ public class TypeSymbol : Symbol
                 return false;
             default:
                 return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1477: collects, in stable first-seen order, every distinct
+    /// <see cref="TypeParameterSymbol"/> structurally referenced by
+    /// <paramref name="type"/> — recursing through nullable / slice / array /
+    /// map / function / tuple wrappers and the type arguments of constructed
+    /// user (<see cref="StructSymbol"/> / <see cref="InterfaceSymbol"/> /
+    /// <see cref="DelegateTypeSymbol"/>) and imported generic types. Used by
+    /// the closure / capture-box emitter to discover which enclosing type
+    /// parameters a synthesized display class must be made generic over.
+    /// </summary>
+    /// <param name="type">The type to inspect (may be <see langword="null"/>).</param>
+    /// <param name="sink">The ordered set to add referenced type parameters to.</param>
+    public static void CollectReferencedTypeParameters(TypeSymbol type, List<TypeParameterSymbol> sink)
+    {
+        switch (type)
+        {
+            case null:
+                return;
+            case TypeParameterSymbol tp:
+                if (!sink.Contains(tp))
+                {
+                    sink.Add(tp);
+                }
+
+                return;
+            case NullableTypeSymbol n:
+                CollectReferencedTypeParameters(n.UnderlyingType, sink);
+                return;
+            case SliceTypeSymbol s:
+                CollectReferencedTypeParameters(s.ElementType, sink);
+                return;
+            case ArrayTypeSymbol a:
+                CollectReferencedTypeParameters(a.ElementType, sink);
+                return;
+            case SequenceTypeSymbol sq:
+                CollectReferencedTypeParameters(sq.ElementType, sink);
+                return;
+            case AsyncSequenceTypeSymbol asq:
+                CollectReferencedTypeParameters(asq.ElementType, sink);
+                return;
+            case MapTypeSymbol m:
+                CollectReferencedTypeParameters(m.KeyType, sink);
+                CollectReferencedTypeParameters(m.ValueType, sink);
+                return;
+            case FunctionTypeSymbol fn:
+                foreach (var param in fn.ParameterTypes)
+                {
+                    CollectReferencedTypeParameters(param, sink);
+                }
+
+                CollectReferencedTypeParameters(fn.ReturnType, sink);
+                return;
+            case TupleTypeSymbol tup:
+                foreach (var elem in tup.ElementTypes)
+                {
+                    CollectReferencedTypeParameters(elem, sink);
+                }
+
+                return;
+            case ByRefTypeSymbol br:
+                CollectReferencedTypeParameters(br.PointeeType, sink);
+                return;
+            case StructSymbol ss when !ss.TypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in ss.TypeArguments)
+                {
+                    CollectReferencedTypeParameters(arg, sink);
+                }
+
+                return;
+            case StructSymbol ssOpen when !ssOpen.TypeParameters.IsDefaultOrEmpty:
+                // Issue #1477: a captured `this` of a generic type `G[T]` is the
+                // OPEN definition (TypeParameters set, no TypeArguments) — its
+                // own parameters ARE the enclosing parameters the capture field
+                // references (`G`1<!0>`), so collect them.
+                foreach (var tp in ssOpen.TypeParameters)
+                {
+                    CollectReferencedTypeParameters(tp, sink);
+                }
+
+                return;
+            case InterfaceSymbol iface when !iface.TypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in iface.TypeArguments)
+                {
+                    CollectReferencedTypeParameters(arg, sink);
+                }
+
+                return;
+            case InterfaceSymbol ifaceOpen when !ifaceOpen.TypeParameters.IsDefaultOrEmpty:
+                foreach (var tp in ifaceOpen.TypeParameters)
+                {
+                    CollectReferencedTypeParameters(tp, sink);
+                }
+
+                return;
+            case DelegateTypeSymbol del:
+                foreach (var param in del.Parameters)
+                {
+                    CollectReferencedTypeParameters(param.Type, sink);
+                }
+
+                CollectReferencedTypeParameters(del.ReturnType, sink);
+                return;
+            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in it.TypeArguments)
+                {
+                    CollectReferencedTypeParameters(arg, sink);
+                }
+
+                return;
+            default:
+                return;
         }
     }
 
