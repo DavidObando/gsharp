@@ -125,6 +125,26 @@ internal sealed partial class ExpressionBinder
         foreach (var arm in boundArmBuilders)
         {
             var result = arm.Result;
+
+            // Issue #1443: a bare `default` arm result (`case 0: default`) is
+            // an untyped placeholder `BoundDefaultExpression(Error)` until a
+            // target type is known — its concrete type is supplied by the
+            // switch's result type, exactly like `default` in a return/arrow
+            // body. Re-bind it against `resultType` (which already honors any
+            // outer target type and the other arms) so it materialises as
+            // `default(resultType)`. Without this it would fall into the
+            // conversion-failure branch below and be silently replaced by a
+            // BoundErrorExpression that crashes emission (GS9998).
+            if (result is BoundDefaultExpression bareDefault
+                && bareDefault.Type == TypeSymbol.Error
+                && resultType != TypeSymbol.Error
+                && resultType != TypeSymbol.Void)
+            {
+                result = BindExpression(arm.Syntax.Result, resultType);
+                arms.Add(new BoundSwitchExpressionArm(null, arm.Pattern, arm.Guard, result));
+                continue;
+            }
+
             var conversion = Conversion.Classify(result.Type, resultType);
             if (!conversion.Exists || conversion.IsExplicit)
             {
