@@ -1125,7 +1125,7 @@ internal sealed class TypeDefEmitter
                 il.OpCode(ILOpCode.Call);
                 il.Token(baseCtorToken);
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
         }
 
@@ -1230,7 +1230,7 @@ internal sealed class TypeDefEmitter
                 }
 
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
         }
 
@@ -1505,7 +1505,7 @@ internal sealed class TypeDefEmitter
             il.LoadArgument(0);
             il.Call(this.wellKnown.ObjectCtorRef);
             il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
         }
 
         var ctorSig = new BlobBuilder();

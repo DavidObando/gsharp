@@ -155,7 +155,7 @@ internal sealed class DataStructSynthesizer
             il.OpCode(ILOpCode.Stfld);
             il.Token(fieldHandle);
             il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
         }
 
         var sig = new BlobBuilder();
@@ -176,7 +176,7 @@ internal sealed class DataStructSynthesizer
 
     private int FinishInlineBody(InstructionEncoder il)
     {
-        return this.emitCtx.MetadataOnly ? -1 : this.emitCtx.MethodBodyStream.AddMethodBody(il);
+        return this.emitCtx.MetadataOnly ? -1 : this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
     }
 
     private void EmitInlineEqualsObject(StructSymbol structSym, FieldSymbol field, EntityHandle fieldHandle, EntityHandle typeDef)
@@ -573,7 +573,7 @@ internal sealed class DataStructSynthesizer
                 localsSignature = this.GetHashCodeLocalSignature();
             }
 
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
         }
 
         var sig = new BlobBuilder();

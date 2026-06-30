@@ -221,7 +221,7 @@ internal sealed class MemberDefEmitter
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(backingToken);
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
             else if (prop.GetterSymbol != null && this.emitCtx.Program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
             {
@@ -237,7 +237,7 @@ internal sealed class MemberDefEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
         }
 
@@ -292,7 +292,7 @@ internal sealed class MemberDefEmitter
                 il.OpCode(ILOpCode.Stfld);
                 il.Token(backingToken);
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
             else if (prop.SetterSymbol != null && this.emitCtx.Program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
             {
@@ -308,7 +308,7 @@ internal sealed class MemberDefEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
         }
 
@@ -469,7 +469,7 @@ internal sealed class MemberDefEmitter
                 il.OpCode(ILOpCode.Ldsfld);
                 il.Token(backingToken);
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
             else if (prop.GetterSymbol != null && this.emitCtx.Program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
             {
@@ -483,7 +483,7 @@ internal sealed class MemberDefEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
         }
 
@@ -522,7 +522,7 @@ internal sealed class MemberDefEmitter
                 il.OpCode(ILOpCode.Stsfld);
                 il.Token(backingToken);
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
             else if (prop.SetterSymbol != null && this.emitCtx.Program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
             {
@@ -536,7 +536,7 @@ internal sealed class MemberDefEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
         }
 
@@ -691,7 +691,7 @@ internal sealed class MemberDefEmitter
                 this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
                 var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
 
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
             }
             else if (ev.AddMethodSymbol != null && this.emitCtx.Program.Functions.TryGetValue(ev.AddMethodSymbol, out var addBody))
             {
@@ -705,7 +705,7 @@ internal sealed class MemberDefEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
         }
 
@@ -792,7 +792,7 @@ internal sealed class MemberDefEmitter
                 this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
                 var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
 
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
             }
             else if (ev.RemoveMethodSymbol != null && this.emitCtx.Program.Functions.TryGetValue(ev.RemoveMethodSymbol, out var removeBody))
             {
@@ -806,7 +806,7 @@ internal sealed class MemberDefEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
         }
 
@@ -1096,7 +1096,7 @@ internal sealed class MemberDefEmitter
                 this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
                 var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
 
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
             }
             else if (ev.AddMethodSymbol != null && this.emitCtx.Program.Functions.TryGetValue(ev.AddMethodSymbol, out var addBody))
             {
@@ -1112,7 +1112,7 @@ internal sealed class MemberDefEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
         }
 
@@ -1213,7 +1213,7 @@ internal sealed class MemberDefEmitter
                 this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
                 var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
 
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
             }
             else if (ev.RemoveMethodSymbol != null && this.emitCtx.Program.Functions.TryGetValue(ev.RemoveMethodSymbol, out var removeBody))
             {
@@ -1229,7 +1229,7 @@ internal sealed class MemberDefEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
         }
 
@@ -1288,7 +1288,7 @@ internal sealed class MemberDefEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
         }
 

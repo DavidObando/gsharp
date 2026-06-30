@@ -1350,7 +1350,7 @@ internal sealed class StateMachineEmitter
         {
             var il = new InstructionEncoder(new BlobBuilder());
             il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
         }
 
         var iAsyncSmType = typeof(System.Runtime.CompilerServices.IAsyncStateMachine);
@@ -1470,7 +1470,7 @@ internal sealed class StateMachineEmitter
 
         return this.emitCtx.MethodBodyStream.AddMethodBody(
             il,
-            maxStack: 3,
+            maxStack: MaxStackTracker.ComputeMaxStack(il),
             localVariablesSignature: localsSignature);
     }
 
