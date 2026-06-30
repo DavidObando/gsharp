@@ -19,6 +19,17 @@ public sealed class FunctionTypeSymbol : TypeSymbol
 
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TypeParameterSymbol, object> TypeParameterIds = new System.Runtime.CompilerServices.ConditionalWeakTable<TypeParameterSymbol, object>();
 
+    // Issue #1457: a same-compilation user type (a struct/class/enum/interface/
+    // delegate still being compiled) has no host CLR Type and is identified
+    // across compilations only by its (re-usable) display name. Keying the
+    // process-wide function-type cache by that name would alias a `func(Item) R`
+    // built in one compilation with a same-named `Item` from another concurrent
+    // compilation, so the emitter would look up a TypeDef the current emit never
+    // registered ("Struct 'Item' has no emitted TypeDef"). Key such slots by the
+    // symbol instance identity instead so they isolate per compilation while
+    // still sharing within one.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TypeSymbol, object> UserTypeIds = new System.Runtime.CompilerServices.ConditionalWeakTable<TypeSymbol, object>();
+
     private static long typeParameterIdSeed;
 
     private FunctionTypeSymbol(string name, ImmutableArray<TypeSymbol> parameterTypes, ImmutableArray<bool> isVariadic, TypeSymbol returnType)
@@ -192,6 +203,19 @@ public sealed class FunctionTypeSymbol : TypeSymbol
 
     private static void AppendIdentityKey(System.Text.StringBuilder builder, TypeSymbol type)
     {
+        // Issue #1457: any slot that references a same-compilation user type
+        // (directly or nested, e.g. `Item`, `List[Item]`, `(Item, int)`) must be
+        // keyed by symbol-instance identity rather than by name, so the cached
+        // entry never aliases a same-named user type from another compilation.
+        // Type parameters and function types keep their dedicated handling below.
+        if (type is not null and not TypeParameterSymbol and not FunctionTypeSymbol
+            && ContainsSameCompilationUserType(type))
+        {
+            var uid = (long)UserTypeIds.GetValue(type, _ => NextTypeParameterId());
+            builder.Append("!ut").Append(uid);
+            return;
+        }
+
         switch (type)
         {
             case TypeParameterSymbol tp:

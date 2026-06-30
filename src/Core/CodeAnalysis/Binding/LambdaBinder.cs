@@ -645,9 +645,10 @@ internal sealed class LambdaBinder
         for (var i = 0; i < literal.Function.Parameters.Length; i++)
         {
             var original = literal.Function.Parameters[i];
-            var adapterParameterType = i < targetFunctionType.ParameterTypes.Length
-                ? GetErasedDelegateSlotType(targetFunctionType.ParameterTypes[i])
+            var targetSlot = i < targetFunctionType.ParameterTypes.Length
+                ? targetFunctionType.ParameterTypes[i]
                 : TypeSymbol.Object;
+            var adapterParameterType = GetAdapterSlotType(original.Type, targetSlot);
             var adapterParameter = new ParameterSymbol(
                 original.Name,
                 adapterParameterType,
@@ -662,7 +663,7 @@ internal sealed class LambdaBinder
 
         var adapterReturnType = targetFunctionType.ReturnType == TypeSymbol.Void
             ? TypeSymbol.Void
-            : GetErasedDelegateSlotType(targetFunctionType.ReturnType);
+            : GetAdapterSlotType(literal.Function.Type, targetFunctionType.ReturnType);
 
         // ADR-0102 follow-up / issue #818: preserve the target's variadic
         // flag shape through the erased adapter so call-site dispatch keeps
@@ -1164,6 +1165,27 @@ internal sealed class LambdaBinder
     private static TypeSymbol GetErasedDelegateSlotType(TypeSymbol type)
     {
         return TypeSymbol.ContainsTypeParameter(type) ? TypeSymbol.Object : type;
+    }
+
+    // Issue #1457: chooses the adapter slot type for one delegate
+    // parameter/return position. The erased adapter exists to widen
+    // type-parameter slots to System.Object so the lambda MethodDef matches
+    // the runtime delegate's Invoke shape. But when the literal's own slot is
+    // a same-compilation user type (a `data struct`, user class, enum, …) the
+    // host-reflection target slot has already been erased to `object` (the
+    // user type has no host CLR Type yet). Erasing to that `object` would
+    // realise the delegate as `Func<object, …>` and force an unverifiable
+    // `object -> UserType` unbox in the body. Preserve the literal's concrete
+    // slot instead so the delegate reifies as `Func<UserType, …>` through the
+    // TypeSpec path (ADR-0087 §3 R6), matching the reified generic call site.
+    private static TypeSymbol GetAdapterSlotType(TypeSymbol literalSlot, TypeSymbol targetSlot)
+    {
+        if (literalSlot != null && TypeSymbol.ContainsSameCompilationUserType(literalSlot))
+        {
+            return literalSlot;
+        }
+
+        return GetErasedDelegateSlotType(targetSlot);
     }
 
     // ADR-0087 §3 R6: returns true when the literal's signature already
