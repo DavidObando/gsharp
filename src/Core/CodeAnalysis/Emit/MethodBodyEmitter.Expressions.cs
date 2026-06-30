@@ -1196,9 +1196,46 @@ internal sealed partial class MethodBodyEmitter
             // `default(Nullable<T>)`.
             var slot = this.locals[nc.ResultSlot];
             var nullableType = (NullableTypeSymbol)nc.Type;
-            var innerClr = nullableType.UnderlyingType.ClrType
-                ?? throw new InvalidOperationException(
-                    $"Null-conditional value-type result '{nullableType.UnderlyingType.Name}' has no CLR type.");
+            var underlying = nullableType.UnderlyingType;
+
+            // Issue #1475: a user-declared value-type underlying (enum or
+            // struct) has no runtime `ClrType`, so the BCL-backed
+            // `TryConstructNullable` path below cannot fire. Materialise the
+            // nil-branch `default(Nullable<UserT>)` and the not-null-branch
+            // `newobj Nullable<UserT>::.ctor(!0)` purely from emitted
+            // TypeDef/TypeSpec tokens — mirroring the issue #1298 enum lift in
+            // MethodBodyEmitter.Conversions. The same token path also serves a
+            // value-constrained open type parameter (issue #814).
+            if (underlying?.ClrType is not { IsValueType: true })
+            {
+                var nullableToken = this.outer.GetElementTypeToken(nullableType);
+
+                // nil branch: ldloca slot; initobj Nullable<UserT>; ldloc slot
+                this.il.LoadLocalAddress(slot);
+                this.il.OpCode(ILOpCode.Initobj);
+                this.il.Token(nullableToken);
+                this.il.LoadLocal(slot);
+                this.il.Branch(ILOpCode.Br, end);
+
+                // not-null branch: produce UserT then wrap, or — when
+                // WhenNotNull already produces Nullable<UserT> (ADR-0073 /
+                // issue #710 chained `?.`/`?[]`) — emit it directly.
+                this.il.MarkLabel(nonNull);
+                this.EmitExpression(nc.WhenNotNull);
+                if (nc.WhenNotNull.Type is not NullableTypeSymbol)
+                {
+                    var ctorToken = underlying is Symbols.TypeParameterSymbol
+                        ? this.outer.GetNullableCtorMemberRefForOpenTypeParameter(nullableType)
+                        : this.outer.GetNullableCtorMemberRefForUserValueType(nullableType);
+                    this.il.OpCode(ILOpCode.Newobj);
+                    this.il.Token(ctorToken);
+                }
+
+                this.il.MarkLabel(end);
+                return;
+            }
+
+            var innerClr = underlying.ClrType;
 
             // Issue #571: construct Nullable<T> through the ReferenceResolver so
             // the open generic definition lives in the same load context as the
