@@ -679,7 +679,16 @@ internal sealed class ConversionClassifier
                     if (substituted == null
                         && argument.Type is TypeParameterSymbol)
                     {
-                        substituted = TryRecoverReceiverTypeParameterSlot(method, paramIndex, receiverType);
+                        // The erased `object` slot may originate either from the
+                        // receiver's generic type arguments (`List[T].Add(!0)`)
+                        // or from the method's OWN type arguments — e.g. a static
+                        // generic call `Enumerable.Repeat[T](v, n)` whose element
+                        // parameter `TSource` closes over the enclosing open `T`.
+                        // Both present as `System.Object` at the raw CLR signature
+                        // level, so recover the real `T` slot from whichever
+                        // applies, keeping the argument `T -> T` identity (no box).
+                        substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs)
+                            ?? TryRecoverReceiverTypeParameterSlot(method, paramIndex, receiverType);
                     }
 
                     var targetType = substituted ?? TypeSymbol.FromClrType(parameterType);

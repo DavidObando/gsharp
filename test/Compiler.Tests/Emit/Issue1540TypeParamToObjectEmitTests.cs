@@ -25,8 +25,10 @@ namespace GSharp.Compiler.Tests.Emit;
 /// #1196 regression (a spurious <c>box T</c> before the call → invalid IL). The
 /// fix classifies <c>T -&gt; object</c> as an implicit conversion but recovers the
 /// real type-parameter slot for erased-<c>!0</c> arguments in
-/// <c>ConversionClassifier.BindClrParameterConversions</c>, so such arguments
-/// stay <c>T -&gt; T</c> identity (no box) while genuine <c>object</c> targets box.
+/// <c>ConversionClassifier.BindClrParameterConversions</c> — for both erased
+/// RECEIVER slots (<c>List[T].Add</c>) and erased METHOD-level slots
+/// (<c>Enumerable.Repeat[T]</c>) — so such arguments stay <c>T -&gt; T</c> identity
+/// (no box) while genuine <c>object</c> targets box.
 /// </para>
 /// Every test round-trips through compile → <c>IlVerifier.Verify</c> → run, so any
 /// spurious box or missing box surfaces as invalid IL. The final two tests are
@@ -269,6 +271,41 @@ public class Issue1540TypeParamToObjectEmitTests
 
         var output = CompileAndRun(source);
         Assert.Equal("1\n1\n", output);
+    }
+
+    [Fact]
+    public void Control_StaticGenericMethodArg_ErasedMethodSlot_NoSpuriousBox()
+    {
+        // #1196 regression control for an erased METHOD-level type-parameter slot
+        // (distinct from the receiver-slot controls above). `Enumerable.Repeat[T]`
+        // has element parameter `TSource`, which closes over the enclosing open
+        // `T`; at the raw CLR signature level that slot presents as `System.Object`.
+        // The #1540 `T -> object` implicit rule must NOT box the `v T` argument
+        // here — the classifier recovers the real `T` slot from the method's own
+        // type arguments, keeping the argument `T -> T` identity. A spurious box
+        // would produce `[found ref 'T'][expected value 'T']` invalid IL.
+        const string source = """
+            package i1540staticgenmethod
+            import System
+            import System.Linq
+            import System.Collections.Generic
+
+            func RepeatVal[T](v T, n int32) IEnumerable[T] {
+                return Enumerable.Repeat[T](v, n)
+            }
+
+            func Main() {
+                for x in RepeatVal[int32](42, 3) {
+                    System.Console.WriteLine(x)
+                }
+                for s in RepeatVal[string]("a", 2) {
+                    System.Console.WriteLine(s)
+                }
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("42\n42\n42\na\na\n", output);
     }
 
     private static string CompileAndRun(string source)
