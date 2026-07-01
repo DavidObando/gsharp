@@ -140,6 +140,27 @@ public static class NullableLifting
     }
 
     /// <summary>
+    /// Issue #1572: returns <see langword="true"/> when <paramref name="nullable"/>
+    /// wraps a <em>user-declared</em> value type emitted in the current
+    /// compilation — a value-kind <see cref="StructSymbol"/> (i.e.
+    /// <c>!IsClass</c>) or an <see cref="EnumSymbol"/>. Such underlyings have a
+    /// null CLR <see cref="Type"/> during emit, so the
+    /// <see cref="IsValueTypeNullable"/> ClrType probe misclassifies them as
+    /// reference nullables. Emit and slot-planning code that must close
+    /// <c>System.Nullable`1</c> over the emitted TypeDef/TypeSpec (rather than a
+    /// host <c>Type</c>) uses this symbol-aware predicate to detect them. Both
+    /// the slot collectors and the corresponding emit arms call it so the two
+    /// sides stay in exact agreement.
+    /// </summary>
+    /// <param name="nullable">The wrapper to test.</param>
+    /// <returns><see langword="true"/> for a user value-type <c>Nullable&lt;T&gt;</c>.</returns>
+    internal static bool IsUserValueTypeNullable(NullableTypeSymbol nullable)
+    {
+        return nullable?.UnderlyingType is EnumSymbol
+            || (nullable?.UnderlyingType is StructSymbol s && !s.IsClass);
+    }
+
+    /// <summary>
     /// Returns <see langword="true"/> when <paramref name="type"/> is a
     /// constructed <c>System.Nullable&lt;T&gt;</c> (i.e. closed-generic over the
     /// open <c>System.Nullable`1</c> definition). The open definition itself

@@ -9527,6 +9527,51 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #1572: gets a MemberRef for <c>System.Nullable`1&lt;T&gt;::get_Value()</c>
+    /// where <c>T</c> is a user-declared value type emitted in this assembly
+    /// (a value-kind <see cref="StructSymbol"/> or an <see cref="EnumSymbol"/>).
+    /// The type has no runtime CLR type, so the BCL-backed
+    /// <see cref="WellKnownReferences.GetNullableGetValueReference"/> path cannot
+    /// build it; instead the parent TypeSpec closes <c>Nullable&lt;&gt;</c> over
+    /// the type's emitted TypeDef/TypeSpec and the getter returns <c>!0</c>.
+    /// Used by the <c>(v!!)</c> unwrap and value-type narrowing-read emit.
+    /// </summary>
+    /// <param name="nullableOfUserVt">A <c>Nullable&lt;T&gt;</c> over a user value type (enum or value struct).</param>
+    /// <returns>The <c>get_Value()</c> MemberRef.</returns>
+    internal MemberReferenceHandle GetNullableGetValueMemberRefForUserValueType(NullableTypeSymbol nullableOfUserVt)
+    {
+        if (nullableOfUserVt == null || !NullableLifting.IsUserValueTypeNullable(nullableOfUserVt))
+        {
+            throw new InvalidOperationException(
+                "GetNullableGetValueMemberRefForUserValueType requires Nullable<user enum or value struct>.");
+        }
+
+        var underlying = nullableOfUserVt.UnderlyingType;
+        if (this.cache.NullableUserValueTypeGetValueMemberRefs.TryGetValue(underlying, out var cached))
+        {
+            return cached;
+        }
+
+        var parentBlob = new BlobBuilder();
+        this.EncodeTypeSymbol(new BlobEncoder(parentBlob).TypeSpecificationSignature(), nullableOfUserVt);
+        var parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob));
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                parameterCount: 0,
+                returnType: r => r.Type().GenericTypeParameter(0),
+                parameters: _ => { });
+
+        var handle = this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString("get_Value"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.cache.NullableUserValueTypeGetValueMemberRefs[underlying] = handle;
+        return handle;
+    }
+
+    /// <summary>
     /// Phase 4 emit parity: get a MemberRef for a CLR field on a possibly
     /// generic declaring type (e.g. <c>KeyValuePair&lt;K, V&gt;.Key</c>).
     /// </summary>
@@ -10556,8 +10601,13 @@ internal sealed class ReflectionMetadataEmitter
         // ClrType-based branch below misses it; recognise the symbolic form so
         // default-init (`ldloca; initobj; ldloc`) and boxing decisions treat it
         // as a value type.
-        if (type is NullableTypeSymbol nullableEnum
-            && nullableEnum.UnderlyingType is EnumSymbol)
+        //
+        // Issue #1572: the same applies to `S?` over a user-declared value-type
+        // struct (`!IsClass`). Both underlyings have a null ClrType during emit,
+        // so without this arm `EmitDefault` takes the `ldnull` reference path
+        // for a `Nullable<UserStruct>` nil-default — producing invalid IL.
+        if (type is NullableTypeSymbol nullableUserVt
+            && NullableLifting.IsUserValueTypeNullable(nullableUserVt))
         {
             return true;
         }

@@ -169,6 +169,18 @@ internal sealed class MetadataTokenCache
         = new Dictionary<StructSymbol, MemberReferenceHandle>();
 
     /// <summary>
+    /// Gets the cache mapping a user-defined value-type underlying
+    /// (<see cref="EnumSymbol"/> or value-kind <see cref="StructSymbol"/>) to the
+    /// <see cref="MemberReferenceHandle"/> for
+    /// <c>System.Nullable`1&lt;T&gt;::get_Value()</c> (issue #1572). The parent
+    /// TypeSpec closes <c>Nullable&lt;&gt;</c> over the type's emitted
+    /// TypeDef/TypeSpec, so one MemberRef per underlying serves every
+    /// <c>(v!!)</c> unwrap and narrowing-read site.
+    /// </summary>
+    public Dictionary<TypeSymbol, MemberReferenceHandle> NullableUserValueTypeGetValueMemberRefs { get; }
+        = new Dictionary<TypeSymbol, MemberReferenceHandle>();
+
+    /// <summary>
     /// Gets the cache mapping a <see cref="FieldInfo"/> to its
     /// <see cref="MemberReferenceHandle"/>.
     /// </summary>
