@@ -659,6 +659,29 @@ internal sealed class ConversionClassifier
                         substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
                     }
 
+                    // Issue #1540: recover an ERASED open type-parameter slot
+                    // whose receiver type argument is itself a bare type
+                    // parameter (e.g. `List[T].Add(!0)` compiled INSIDE the
+                    // generic method that declares `T`). `TrySubstituteParameter
+                    // TypeFromReceiver` above deliberately bails for a bare
+                    // type-parameter receiver arg (its #765 filter only rewrites
+                    // user symbolic types), so the closed CLR parameter stays
+                    // erased to `object`. Left alone, the new #1540 `T -> object`
+                    // implicit rule would classify the argument as a boxing
+                    // conversion and inject a spurious `box T` before the call,
+                    // reproducing the #1196 invalid-IL regression. Recovering the
+                    // real `T` slot here makes the argument `T -> T` identity
+                    // (no conversion node, no box), byte-identical to today.
+                    // A GENUINE `object` slot (real `System.Object` parameter, or
+                    // a `List[object]` whose `!0` maps to `object`) is NOT a type
+                    // parameter, so this recovery returns null and the argument
+                    // still boxes correctly.
+                    if (substituted == null
+                        && argument.Type is TypeParameterSymbol)
+                    {
+                        substituted = TryRecoverReceiverTypeParameterSlot(method, paramIndex, receiverType);
+                    }
+
                     var targetType = substituted ?? TypeSymbol.FromClrType(parameterType);
                     if (argument.Type != targetType
                         && Conversion.Classify(argument.Type, targetType).Exists
@@ -832,6 +855,75 @@ internal sealed class ConversionClassifier
             && openParamType.GenericParameterPosition < imported.TypeArguments.Length)
         {
             return imported.TypeArguments[openParamType.GenericParameterPosition];
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #1540: recovers the receiver's type argument for an erased open
+    /// type-parameter slot (e.g. the <c>!0</c> element type of
+    /// <c>List[T].Add(!0)</c>) when that argument is itself a type parameter —
+    /// the case <see cref="TrySubstituteParameterTypeFromReceiver"/> deliberately
+    /// skips (its #765 filter rewrites only user symbolic type arguments). This
+    /// lets the caller re-target a <c>T</c> argument onto the real <c>T</c> slot
+    /// so it is classified as an identity conversion (no spurious box), matching
+    /// the pre-#1540 behaviour and keeping the #1196 invariant. Returns
+    /// <see langword="null"/> for a genuine <c>object</c> slot (or any non
+    /// type-parameter type argument), so those arguments still box correctly.
+    /// </summary>
+    /// <param name="method">The resolved (closed) CLR method (may be null).</param>
+    /// <param name="paramIndex">Zero-based index into the method's parameter list.</param>
+    /// <param name="receiverType">The receiver's (symbolic) type.</param>
+    /// <returns>The recovered type-parameter slot, or <see langword="null"/>.</returns>
+    public static TypeSymbol TryRecoverReceiverTypeParameterSlot(
+        MethodInfo method,
+        int paramIndex,
+        TypeSymbol receiverType)
+    {
+        if (method == null
+            || receiverType is not ImportedTypeSymbol imported
+            || imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        var declaring = method.DeclaringType;
+        if (declaring == null || !declaring.IsConstructedGenericType)
+        {
+            return null;
+        }
+
+        var openDef = declaring.GetGenericTypeDefinition();
+        MethodInfo openMethod = null;
+        foreach (var candidate in openDef.GetMethods(
+            BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.MetadataToken == method.MetadataToken && candidate.Module == method.Module)
+            {
+                openMethod = candidate;
+                break;
+            }
+        }
+
+        if (openMethod == null)
+        {
+            return null;
+        }
+
+        var openParams = openMethod.GetParameters();
+        if (paramIndex < 0 || paramIndex >= openParams.Length)
+        {
+            return null;
+        }
+
+        var openParamType = openParams[paramIndex].ParameterType;
+        if (openParamType.IsGenericParameter
+            && openParamType.DeclaringMethod == null
+            && openParamType.GenericParameterPosition < imported.TypeArguments.Length
+            && imported.TypeArguments[openParamType.GenericParameterPosition] is TypeParameterSymbol recovered)
+        {
+            return recovered;
         }
 
         return null;
