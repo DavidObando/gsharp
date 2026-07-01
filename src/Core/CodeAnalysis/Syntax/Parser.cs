@@ -7071,6 +7071,8 @@ public class Parser
                 // Issue #522: an indexer is a fresh inner expression context.
                 var savedSuppress = suppressTrailingObjectInitializer;
                 suppressTrailingObjectInitializer = 0;
+                var savedStructLiteral = suppressStructLiteral;
+                suppressStructLiteral = 0;
                 ExpressionSyntax index;
                 try
                 {
@@ -7079,6 +7081,7 @@ public class Parser
                 finally
                 {
                     suppressTrailingObjectInitializer = savedSuppress;
+                    suppressStructLiteral = savedStructLiteral;
                 }
 
                 var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
@@ -8012,7 +8015,7 @@ public class Parser
         }
         else if (Current.Kind == SyntaxKind.IdentifierToken
             && Peek(1).Kind == SyntaxKind.OpenBraceToken
-            && suppressStructLiteral == 0
+            && (suppressStructLiteral == 0 || StructLiteralAllowedInSuppressedHeader(1))
             && IsStructLiteralFollowingBrace(2))
         {
             current = ParseStructLiteralExpression();
@@ -8563,6 +8566,8 @@ public class Parser
         // where trailing object/collection initializers are again allowed.
         var savedSuppress = suppressTrailingObjectInitializer;
         suppressTrailingObjectInitializer = 0;
+        var savedStructLiteral = suppressStructLiteral;
+        suppressStructLiteral = 0;
         try
         {
             // Indexed entry `[key] = value`.
@@ -8592,6 +8597,7 @@ public class Parser
         finally
         {
             suppressTrailingObjectInitializer = savedSuppress;
+            suppressStructLiteral = savedStructLiteral;
         }
     }
 
@@ -8781,6 +8787,8 @@ public class Parser
             ExpressionSyntax value;
             var savedSuppress = suppressTrailingObjectInitializer;
             suppressTrailingObjectInitializer = 0;
+            var savedStructLiteral = suppressStructLiteral;
+            suppressStructLiteral = 0;
             try
             {
                 value = ParseExpression();
@@ -8788,6 +8796,7 @@ public class Parser
             finally
             {
                 suppressTrailingObjectInitializer = savedSuppress;
+                suppressStructLiteral = savedStructLiteral;
             }
 
             nodesAndSeparators.Add(new PropertyInitializerSyntax(syntaxTree, propertyId, equals, value));
@@ -8807,17 +8816,24 @@ public class Parser
 
     // Parses an expression in a body-header context (the condition of an `if`,
     // the collection of a `for-range`, etc.) — trailing `Call() { ... }`
-    // object initializers are suppressed so the following `{` is recognised
-    // as the body of the surrounding statement.
+    // object initializers AND bare `Ident { }` struct literals are suppressed so
+    // the following `{` is recognised as the body of the surrounding statement.
+    // Suppressing the bare struct-literal form matters for an empty body: an
+    // `if disposing { }` condition would otherwise commit `disposing { }` as an
+    // empty struct literal (GS0157), because the struct-literal lookahead accepts
+    // `{}` (a non-empty body already backtracks). Mirrors the if-expression
+    // (#669), `if let`, and `fixed` headers, which suppress both forms.
     private ExpressionSyntax ParseExpressionInBodyHeader()
     {
         suppressTrailingObjectInitializer++;
+        suppressStructLiteral++;
         try
         {
             return ParseExpression();
         }
         finally
         {
+            suppressStructLiteral--;
             suppressTrailingObjectInitializer--;
         }
     }
@@ -9081,6 +9097,12 @@ public class Parser
         var savedSuppress = suppressTrailingObjectInitializer;
         suppressTrailingObjectInitializer = 0;
 
+        // A call argument is likewise a fresh context for the bare `Ident { }`
+        // struct-literal form, so `Foo(Pt{X: 1})` is recognised even inside a
+        // body-header condition (#1575).
+        var savedStructLiteral = suppressStructLiteral;
+        suppressStructLiteral = 0;
+
         // Issue #1038: an argument list is a fresh context, so a standalone
         // range argument (`f(1..3)`) is recognised even inside an index bound.
         var savedRange = suppressRangeOperator;
@@ -9092,6 +9114,7 @@ public class Parser
         finally
         {
             suppressTrailingObjectInitializer = savedSuppress;
+            suppressStructLiteral = savedStructLiteral;
             suppressRangeOperator = savedRange;
         }
     }
@@ -9633,6 +9656,26 @@ public class Parser
         return false;
     }
 
+    // In a body-header controlling expression (`if`/`while`/`for` clauses, a
+    // `for-in` collection, …) bare struct literals are suppressed so a trailing
+    // `{` opens the statement body (issue #1575). A NON-empty struct literal
+    // (`Pt{X: 1}`) is unambiguous — `{ Ident : … }` cannot open a body — so it is
+    // still admitted (`if Pt{X: 1} == p { }`). Only an EMPTY `Ident{}` collides
+    // with an empty body: it is a struct literal solely when a real body `{`
+    // follows it (`for v in Numbers{} { … }`); otherwise the identifier is the
+    // controlling expression and the `{}` is the empty body (`if disposing { }`),
+    // which previously mis-parsed as an empty struct literal (GS0157).
+    // <paramref name="braceOffset"/> is the offset of the opening `{`.
+    private bool StructLiteralAllowedInSuppressedHeader(int braceOffset)
+    {
+        if (Peek(braceOffset + 1).Kind != SyntaxKind.CloseBraceToken)
+        {
+            return true;
+        }
+
+        return Peek(braceOffset + 2).Kind == SyntaxKind.OpenBraceToken;
+    }
+
     private ExpressionSyntax ParseStructLiteralExpression()
     {
         var typeIdentifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -9708,6 +9751,12 @@ public class Parser
         var savedSuppress = suppressTrailingObjectInitializer;
         suppressTrailingObjectInitializer = 0;
 
+        // A parenthesised expression is likewise a fresh context for the bare
+        // `Ident { }` struct-literal form, so `(Pt{X: 1})` is recognised even
+        // inside a body-header condition (`if p == (Pt{X: 1}) { }`, #1575).
+        var savedStructLiteral = suppressStructLiteral;
+        suppressStructLiteral = 0;
+
         // Issue #1038: a parenthesised expression is a fresh context, so a
         // parenthesised range (`a[(1..3)]`) is recognised as a standalone
         // `System.Range` value even inside an index bound.
@@ -9720,6 +9769,7 @@ public class Parser
         finally
         {
             suppressTrailingObjectInitializer = savedSuppress;
+            suppressStructLiteral = savedStructLiteral;
             suppressRangeOperator = savedRange;
         }
 
