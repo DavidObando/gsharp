@@ -256,10 +256,16 @@ public sealed class FunctionTypeSymbol : TypeSymbol
         // is void). Higher arities (>16 args) have no shipped delegate
         // shape and return a null ClrType, keeping the type
         // interpreter-only on the emit side.
+        // Issue #1518: use the nullable-lifted effective CLR type so a
+        // nullable value-type slot (T?) becomes Nullable<T> rather than the
+        // bare underlying T. Otherwise the delegate shape (Func<…,T>) disagrees
+        // with the symbol-accurate delegate the emitter builds (Func<…,T?>),
+        // which makes overload-resolution inference bind the method type
+        // parameter to T instead of Nullable<T> and produces unverifiable IL.
         var paramClr = new System.Type[parameterTypes.Length];
         for (var i = 0; i < parameterTypes.Length; i++)
         {
-            var pt = parameterTypes[i]?.ClrType;
+            var pt = NullableLifting.GetEffectiveClrType(parameterTypes[i]);
             if (pt == null)
             {
                 return null;
@@ -286,7 +292,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
             }
         }
 
-        var retClr = returnType.ClrType;
+        var retClr = NullableLifting.GetEffectiveClrType(returnType);
         if (retClr == null)
         {
             return null;

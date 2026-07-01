@@ -10700,7 +10700,13 @@ internal sealed class ReflectionMetadataEmitter
     // is a missed conversion site and worth surfacing.
     private Type ResolveDelegateArgClrType(TypeSymbol type)
     {
-        return this.MapToReferenceClrType(type.ClrType) ?? this.emitCtx.CoreObjectType;
+        // Issue #1518: a nullable value-type slot (T?) must materialise as
+        // Nullable<T> on the delegate shape, not the bare underlying T. The
+        // symbol's ClrType is the bare underlying, so lift through
+        // NullableLifting.GetEffectiveClrType (identity for everything else)
+        // to keep the emitted Func/Action delegate in agreement with the
+        // instantiation overload-resolution inferred.
+        return this.MapToReferenceClrType(NullableLifting.GetEffectiveClrType(type)) ?? this.emitCtx.CoreObjectType;
     }
 
     // ADR-0087 §3 R6: cache for reified delegate (Func/Action) TypeSpecs
