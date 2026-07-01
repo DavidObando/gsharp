@@ -1539,31 +1539,23 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindMemberFieldAssignmentExpression(MemberFieldAssignmentExpressionSyntax syntax)
     {
-        // ADR-0089 / issue #1030: `IBox[int32].Field = value` — a write to a
-        // constructed generic interface's static field. The receiver
-        // `IBox[int32]` is a type, not a value, so it is resolved to the
-        // constructed interface symbol rather than bound as an index expression.
-        if (syntax.Receiver is IndexExpressionSyntax ifaceIndex
-            && !ifaceIndex.IsNullConditional
-            && TryResolveConstructedGenericInterfaceReceiver(ifaceIndex, out var ctorIface))
+        // Issue #1559 (extends ADR-0089 / issue #1030 and issue #1209/#1323): a
+        // write to a static field/property through a constructed generic *type*
+        // receiver — `Foo[int32].x = v` (class/struct), `IBox[int32].Field = v`
+        // (interface), or an imported CLR generic. The receiver `Foo[int32]` is
+        // a TYPE, not a value, so it is resolved to the constructed type symbol
+        // (mirroring the READ path in BindAccessorExpression) rather than bound
+        // as an index expression — which would otherwise report GS0125
+        // "Variable 'Foo' doesn't exist". The parser shapes the receiver as an
+        // IndexExpression (single type-arg) or a GenericNameExpression (nullable
+        // / nested / multiple type-args); a single dispatcher covers both.
+        if (TryResolveConstructedGenericTypeReceiver(
+                syntax.Receiver,
+                out var ctorStruct,
+                out var ctorIface,
+                out var ctorImported))
         {
-            var ifaceFieldName = syntax.FieldIdentifier.Text;
-            var ownerDef = ctorIface.Definition ?? ctorIface;
-            var ifaceStaticField = ownerDef.GetStaticField(ifaceFieldName);
-            if (ifaceStaticField != null)
-            {
-                var ifaceValue = BindExpression(syntax.Value);
-                if (ifaceStaticField.IsReadOnly || ifaceStaticField.IsConst)
-                {
-                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, ifaceFieldName);
-                }
-
-                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, ifaceValue, ifaceStaticField.Type);
-                return new BoundFieldAssignmentExpression(null, ifaceStaticField, ctorIface, ifaceConverted);
-            }
-
-            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, ifaceFieldName);
-            return new BoundErrorExpression(null);
+            return BindConstructedGenericStaticFieldWrite(syntax, ctorStruct, ctorIface, ctorImported);
         }
 
         var receiver = BindExpression(syntax.Receiver);
@@ -1691,6 +1683,92 @@ internal sealed partial class ExpressionBinder
             _ = instTargetType;
             var instConverted = conversions.BindConversion(syntax.Value.Location, value, instTargetSymbol);
             return new BoundClrPropertyAssignmentExpression(null, receiver, instanceMember, instConverted, instTargetSymbol);
+        }
+
+        Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
+        return new BoundErrorExpression(null);
+    }
+
+    /// <summary>
+    /// Issue #1559: binds a write to a static field or property reached through
+    /// a constructed generic *type* receiver — <c>Foo[int32].x = v</c> (user
+    /// class/struct), <c>IBox[int32].Field = v</c> (user interface), or an
+    /// imported CLR generic. Exactly one of the constructed-type arguments is
+    /// non-null (the receiver resolver picks the owner kind). The struct/class
+    /// and interface paths carry the constructed symbol so the emitter parents
+    /// the field/property reference at the correct <c>TypeSpec</c> (ADR-0087 /
+    /// issue #1030 / issue #1209), giving each closed construction its own
+    /// static storage. Mirrors the READ path in
+    /// <see cref="BindUserTypeStaticMemberAccess"/> and the non-generic static
+    /// write in <see cref="BindFieldAssignmentExpression"/>.
+    /// </summary>
+    private BoundExpression BindConstructedGenericStaticFieldWrite(
+        MemberFieldAssignmentExpressionSyntax syntax,
+        StructSymbol constructedStruct,
+        InterfaceSymbol constructedInterface,
+        ImportedClassSymbol constructedImported)
+    {
+        var fieldName = syntax.FieldIdentifier.Text;
+        var value = BindExpression(syntax.Value);
+
+        // User class/struct → static field or static property write.
+        if (constructedStruct != null)
+        {
+            if (TypeMemberModel.TryGetStaticField(constructedStruct, fieldName, out var staticField))
+            {
+                if (staticField.IsReadOnly)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                }
+
+                var staticConverted = conversions.BindConversion(syntax.Value.Location, value, staticField.Type);
+                return new BoundFieldAssignmentExpression(null, null, constructedStruct, staticField, staticConverted);
+            }
+
+            if (TypeMemberModel.TryGetStaticProperty(constructedStruct, fieldName, out var prop))
+            {
+                if (!prop.HasSetter)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                    return new BoundErrorExpression(null);
+                }
+
+                var propConverted = conversions.BindConversion(syntax.Value.Location, value, prop.Type);
+                return new BoundPropertyAssignmentExpression(null, receiver: null, constructedStruct, prop, propConverted);
+            }
+
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
+            return new BoundErrorExpression(null);
+        }
+
+        // User interface → static field write (per-construction storage).
+        if (constructedInterface != null)
+        {
+            var ownerDef = constructedInterface.Definition ?? constructedInterface;
+            var ifaceStaticField = ownerDef.GetStaticField(fieldName);
+            if (ifaceStaticField != null)
+            {
+                if (ifaceStaticField.IsReadOnly || ifaceStaticField.IsConst)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                }
+
+                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, value, ifaceStaticField.Type);
+                return new BoundFieldAssignmentExpression(null, ifaceStaticField, constructedInterface, ifaceConverted);
+            }
+
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
+            return new BoundErrorExpression(null);
+        }
+
+        // Imported CLR generic → static field/property write via reflection on
+        // the closed construction (mirrors the non-generic imported-class write
+        // in BindFieldAssignmentExpression).
+        if (constructedImported.TryLookupMember(fieldName, ne: null, out var staticMember)
+            && TryGetWritableClrMember(staticMember, out _, out var staticTargetSymbol, out _))
+        {
+            var staticConverted = conversions.BindConversion(syntax.Value.Location, value, staticTargetSymbol);
+            return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, staticTargetSymbol);
         }
 
         Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);

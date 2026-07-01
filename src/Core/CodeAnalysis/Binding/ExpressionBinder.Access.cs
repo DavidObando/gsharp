@@ -2429,6 +2429,45 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #1559: syntax-shape-agnostic dispatcher over the two
+    /// constructed-generic-type receiver resolvers. A qualified generic-type
+    /// receiver <c>G[T1..Tn]</c> reaches the binder as either an
+    /// <see cref="IndexExpressionSyntax"/> (single type argument that also reads
+    /// as an index — <c>Foo[T]</c>, <c>Box[int32]</c>) or a
+    /// <see cref="GenericNameExpressionSyntax"/> (arguments the parser could only
+    /// shape as types — <c>Box[int32?]</c>, <c>Pair[int32, string]</c>,
+    /// <c>Box[List[int32]]</c>). Both read (member access) and write (assignment
+    /// target) receiver resolution route through here so the WRITE path mirrors
+    /// the READ path (<see cref="BindAccessorExpression"/>) exactly rather than
+    /// duplicating shape-specific logic.
+    /// </summary>
+    /// <param name="receiver">The candidate constructed-generic-type receiver syntax.</param>
+    /// <param name="constructedStruct">The constructed generic class/struct on success.</param>
+    /// <param name="constructedInterface">The constructed generic interface on success.</param>
+    /// <param name="constructedImported">The constructed imported CLR generic type on success.</param>
+    /// <returns>Whether a constructed generic type receiver was resolved.</returns>
+    private bool TryResolveConstructedGenericTypeReceiver(
+        ExpressionSyntax receiver,
+        out StructSymbol constructedStruct,
+        out InterfaceSymbol constructedInterface,
+        out ImportedClassSymbol constructedImported)
+    {
+        constructedStruct = null;
+        constructedInterface = null;
+        constructedImported = null;
+
+        switch (receiver)
+        {
+            case IndexExpressionSyntax index when !index.IsNullConditional:
+                return TryResolveConstructedGenericTypeReceiver(index, out constructedStruct, out constructedInterface, out constructedImported);
+            case GenericNameExpressionSyntax generic:
+                return TryResolveConstructedGenericTypeReceiver(generic, out constructedStruct, out constructedInterface, out constructedImported);
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
     /// Closes an open imported CLR generic definition over the CLR types of the
     /// bound type arguments (e.g. <c>ArrayPool`1</c> + <c>byte</c> -&gt;
     /// <c>ArrayPool&lt;byte&gt;</c>) and surfaces it as an
