@@ -566,20 +566,33 @@ internal sealed class MethodBodyPlanner
         // temp must be typed as `Nullable<T>` (not the unwrapped T). Reuse
         // receiverSpillSlots — the dictionary already aggregates several
         // distinct-by-node-identity scratch-slot kinds (receiver spills and
-        // assignment-value spills) and BoundUnaryExpression keys cannot
-        // collide with either. The slot is typed as the operand's
+        // assignment-value spills).
+        //
+        // Issue #1591: the slot is keyed by the unwrap's OPERAND node, NOT by
+        // the BoundUnaryExpression node itself. When the smart-cast-narrowed
+        // `!!` result is used as the receiver of a value-type instance call
+        // (`x.ToString()` after an `if x == nil` guard), the receiver-spill
+        // collector above independently keys an underlying-`T`-typed
+        // ldloca-address slot on the SAME BoundUnaryExpression node. Keying
+        // the unwrap on the unary node too made the two slots collapse into
+        // one (the receiver-address `T` slot won, being collected first), so
+        // the `get_Value` spill stored the `Nullable<T>` struct into a `T`
+        // slot and read a default-initialized value — silently printing the
+        // underlying type's default (0 / first enum member). Keying on the
+        // operand node keeps the `Nullable<T>` spill slot distinct from the
+        // receiver-address slot. The slot is typed as the operand's
         // NullableTypeSymbol, which `EncodeTypeSymbol` lowers to
         // `System.Nullable<T>` in the local-sig blob.
         foreach (var unwrap in this.CollectNullableValueTypeUnwraps(body))
         {
-            if (receiverSpillSlots.ContainsKey(unwrap))
+            if (receiverSpillSlots.ContainsKey(unwrap.Operand))
             {
                 continue;
             }
 
             var slot = localTypes.Count;
             localTypes.Add(unwrap.Operand.Type);
-            receiverSpillSlots[unwrap] = slot;
+            receiverSpillSlots[unwrap.Operand] = slot;
         }
 
         // Issue #519 / #752 / ADR-0084 L3: `??` whose LHS is a value-type
