@@ -1219,7 +1219,14 @@ internal sealed class SlotPlanner
                 if (node.Operand.Type is NullableTypeSymbol n)
                 {
                     needsSlot = n.UnderlyingType?.ClrType is { IsValueType: true }
-                        || (n.UnderlyingType is TypeParameterSymbol tp && !tp.HasValueTypeConstraint);
+                        || (n.UnderlyingType is TypeParameterSymbol tp && !tp.HasValueTypeConstraint)
+
+                        // Issue #1572: a user-declared value-type underlying
+                        // (value-kind struct or enum) has a null ClrType during
+                        // emit, so the ClrType probe above misses it. The `(v!!)`
+                        // emit arm spills to a `Nullable<T>` slot and calls
+                        // get_Value off its address, so it needs the same slot.
+                        || NullableLifting.IsUserValueTypeNullable(n);
                 }
                 else if (node.Operand.Type is TypeParameterSymbol bare && !bare.HasValueTypeConstraint)
                 {

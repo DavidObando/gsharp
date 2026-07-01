@@ -44,6 +44,32 @@ internal sealed partial class MethodBodyEmitter
         // dependency on stack tracking inside the operand.
         if (u.Op.Kind == BoundUnaryOperatorKind.NullAssertion)
         {
+            // Issue #1572: a value-type `Nullable<T>` operand where T is a
+            // user-declared value type (value-kind struct or enum) emitted in
+            // this compilation. Its underlying has no runtime CLR type, so the
+            // BCL-backed `get_Value` reference below cannot be built; spill the
+            // struct to the pre-allocated `Nullable<T>` slot, take its address,
+            // and call `Nullable<T>::get_Value()` off a TypeSpec MemberRef that
+            // closes `Nullable<>` over the emitted TypeDef/TypeSpec. Mirrors the
+            // primitive value-type arm below (issue #504).
+            if (u.Operand.Type is NullableTypeSymbol userVtNullable
+                && NullableLifting.IsUserValueTypeNullable(userVtNullable))
+            {
+                if (!this.receiverSpillSlots.TryGetValue(u, out var userVtSlot))
+                {
+                    throw new InvalidOperationException(
+                        "No scratch slot pre-allocated for user value-type Nullable<T> '!!' operand — "
+                        + "check NullableValueTypeUnwrapCollector and the prepass in CollectLocalsAndLabels.");
+                }
+
+                this.EmitExpression(u.Operand);
+                this.il.StoreLocal(userVtSlot);
+                this.il.LoadLocalAddress(userVtSlot);
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(this.outer.GetNullableGetValueMemberRefForUserValueType(userVtNullable));
+                return;
+            }
+
             // Issue #504: a value-type `Nullable<T>` operand cannot use
             // `dup; brtrue` (the `Nullable<T>` struct on the stack has no
             // valid `brtrue` interpretation — it produces invalid IL).

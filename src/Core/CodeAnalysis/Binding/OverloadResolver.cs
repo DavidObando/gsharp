@@ -4872,12 +4872,20 @@ internal sealed class OverloadResolver
             }
             else if (argument.Type != expectedType
                 && expectedType is NullableTypeSymbol ntConv
-                && ntConv.UnderlyingType?.ClrType is { IsValueType: true })
+                && (ntConv.UnderlyingType?.ClrType is { IsValueType: true }
+                    || NullableLifting.IsUserValueTypeNullable(ntConv)))
             {
                 // Issue #533: conversions to a value-type Nullable<T> parameter
                 // need explicit lowering:
                 // - nil → Nullable<T> becomes BoundDefaultExpression (initobj)
                 // - T → Nullable<T> becomes BoundConversionExpression (newobj ctor)
+                //
+                // Issue #1572: a user-declared value-type underlying (struct? /
+                // enum?) has a null ClrType, so the primitive probe above misses
+                // it and the argument would otherwise pass through unlifted (a
+                // bare `UserT` where `Nullable<UserT>` is expected). Include the
+                // symbol-aware predicate so the `UserT → UserT?` argument lift is
+                // lowered to a `newobj Nullable<UserT>::.ctor` here too.
                 var argLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
                 boundArguments[i] = conversions.BindConversion(argLoc, argument, expectedType);
             }

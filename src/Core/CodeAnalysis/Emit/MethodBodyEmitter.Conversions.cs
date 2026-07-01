@@ -181,18 +181,19 @@ internal sealed partial class MethodBodyEmitter
                 + "ldloca/initobj/ldloc. Reaching EmitConversion indicates a missing lowering path.");
         }
 
-        // Issue #1298: value-type `E → E?` lift where E is a user-declared
-        // enum. The enum has no runtime CLR type, so the BCL-backed ctor path
-        // below (which closes `Nullable<>` over a real `Type`) cannot fire;
-        // instead emit `newobj Nullable<E>::.ctor(!0)` against a TypeSpec
-        // parent that closes `Nullable<>` over the enum's emitted TypeDef.
-        // Mirrors the open-type-parameter branch in the value-type lift below.
-        if (to is NullableTypeSymbol toUserEnumNullableLift
-            && toUserEnumNullableLift.UnderlyingType is EnumSymbol
-            && from == toUserEnumNullableLift.UnderlyingType)
+        // Issue #1298 / #1572: value-type `T → T?` lift where T is a
+        // user-declared value type (enum or value-kind struct). The type has no
+        // runtime CLR type, so the BCL-backed ctor path below (which closes
+        // `Nullable<>` over a real `Type`) cannot fire; instead emit
+        // `newobj Nullable<T>::.ctor(!0)` against a TypeSpec parent that closes
+        // `Nullable<>` over the type's emitted TypeDef/TypeSpec. Mirrors the
+        // open-type-parameter branch in the value-type lift below.
+        if (to is NullableTypeSymbol toUserVtNullableLift
+            && NullableLifting.IsUserValueTypeNullable(toUserVtNullableLift)
+            && from == toUserVtNullableLift.UnderlyingType)
         {
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetNullableCtorMemberRefForUserEnum(toUserEnumNullableLift));
+            this.il.Token(this.outer.GetNullableCtorMemberRefForUserValueType(toUserVtNullableLift));
             return;
         }
 

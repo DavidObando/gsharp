@@ -597,8 +597,15 @@ internal sealed partial class ExpressionBinder
         // needs the storage `Nullable<T>` unwrapped on load. Reference-type
         // nullables narrow to a reference underlying and share the CLR shape, so
         // they fall through to the bare narrowed read.
+        //
+        // Issue #1572: a user-declared value-type underlying (value-kind struct
+        // or enum) diverges from its `Nullable<T>` storage exactly like a
+        // primitive value-type nullable, but has a null ClrType so
+        // `IsValueTypeNullable` misses it — include the symbol-aware predicate so
+        // the narrowed read is wrapped in the `!!` unwrap.
         if (declaredType is NullableTypeSymbol nullable
-            && NullableLifting.IsValueTypeNullable(nullable)
+            && (NullableLifting.IsValueTypeNullable(nullable)
+                || NullableLifting.IsUserValueTypeNullable(nullable))
             && narrowedType is not NullableTypeSymbol)
         {
             var op = BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, declaredType);

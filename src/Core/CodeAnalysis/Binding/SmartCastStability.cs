@@ -220,7 +220,12 @@ internal static class SmartCastStability
         // so narrowing is an IL no-op and is safe. The short-circuit
         // (`&&`/`||`) caller passes `referenceNullableOnly: true` to stay on the
         // safe side; the statement classifier keeps its pre-existing behaviour.
-        if (referenceNullableOnly && NullableLifting.IsValueTypeNullable(nullable))
+        // Issue #1572: a user-declared value-type nullable (struct? / enum?)
+        // has the same storage-vs-narrowed-type divergence, but a null ClrType,
+        // so include the symbol-aware predicate here too.
+        if (referenceNullableOnly
+            && (NullableLifting.IsValueTypeNullable(nullable)
+                || NullableLifting.IsUserValueTypeNullable(nullable)))
         {
             target = null;
             return false;
