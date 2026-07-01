@@ -606,13 +606,20 @@ internal sealed class OverloadResolver
         // selection so generic candidates are filtered for applicability against
         // either the explicit type arguments or, in their absence, type inference.
         var explicitTypeArgCount = ce.TypeArgumentList?.Arguments.Count ?? 0;
-        var selected = SelectBestInstanceOverload(overloads, arguments.Length, argumentNames, arguments, out var ambiguous, explicitTypeArgCount);
+        var selected = SelectBestInstanceOverload(overloads, arguments.Length, argumentNames, arguments, out var ambiguous, out var nullSafetyFailure, explicitTypeArgCount);
         if (selected != null)
         {
             return selected;
         }
 
-        if (ambiguous)
+        if (nullSafetyFailure != null)
+        {
+            var argLoc = nullSafetyFailure.Index < ce.Arguments.Count
+                ? ce.Arguments[nullSafetyFailure.Index].Location
+                : ce.Identifier.Location;
+            Diagnostics.ReportWrongArgumentType(argLoc, nullSafetyFailure.ParamName, nullSafetyFailure.ParamType, nullSafetyFailure.ArgType);
+        }
+        else if (ambiguous)
         {
             Diagnostics.ReportAmbiguousOverloadResolution(ce.Identifier.Location, methodName);
         }
@@ -677,9 +684,10 @@ internal sealed class OverloadResolver
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
         out bool ambiguous,
+        out NullSafetyArgumentMismatch nullSafetyFailure,
         int explicitTypeArgCount = 0)
     {
-        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, boundArguments, out ambiguous, explicitTypeArgCount);
+        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, boundArguments, out ambiguous, out nullSafetyFailure, explicitTypeArgCount);
     }
 
     /// <summary>
@@ -694,9 +702,11 @@ internal sealed class OverloadResolver
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression> boundArguments,
         out bool ambiguous,
+        out NullSafetyArgumentMismatch nullSafetyFailure,
         int explicitTypeArgCount = 0)
     {
         ambiguous = false;
+        nullSafetyFailure = null;
         if (candidates.Length == 0)
         {
             return null;
@@ -709,7 +719,7 @@ internal sealed class OverloadResolver
 
         var builder = ImmutableArray.CreateBuilder<BoundExpression>(boundArguments.Length);
         builder.AddRange(boundArguments);
-        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, builder, out ambiguous, explicitTypeArgCount);
+        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, builder, out ambiguous, out nullSafetyFailure, explicitTypeArgCount);
     }
 
     private FunctionSymbol SelectBestUserOverloadCore(
@@ -718,9 +728,11 @@ internal sealed class OverloadResolver
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
         out bool ambiguous,
+        out NullSafetyArgumentMismatch nullSafetyFailure,
         int explicitTypeArgCount = 0)
     {
         ambiguous = false;
+        nullSafetyFailure = null;
 
         // Phase 1: applicability.
         var applicable = new List<FunctionSymbol>();
@@ -803,6 +815,23 @@ internal sealed class OverloadResolver
             if (convertible.Count > 0)
             {
                 applicable = convertible;
+            }
+            else
+            {
+                // Issue #1552: every arity-applicable candidate was filtered
+                // out. When the reason is the Kotlin-model null-safety gate — a
+                // nullable REFERENCE argument `S?` reaching a non-nullable,
+                // non-`object` reference parameter — surface the SAME GS0154
+                // the single-candidate path emits, rather than falling through
+                // to a spurious GS0266 ambiguity or a generic
+                // no-applicable-overload. This preserves null safety: the user
+                // is prompted to write `!!` (or narrow) exactly as the
+                // single-overload call already requires.
+                nullSafetyFailure = TryFindNullSafetyArgumentMismatch(applicable, argumentCount, boundArguments);
+                if (nullSafetyFailure != null)
+                {
+                    return null;
+                }
             }
         }
 
@@ -970,6 +999,22 @@ internal sealed class OverloadResolver
                 continue;
             }
 
+            // Issue #1552: Kotlin-model null-safety gate. A nullable REFERENCE
+            // argument `S?` does NOT satisfy a non-nullable REFERENCE parameter
+            // unless the parameter is null-tolerant (`object`/`object?` or any
+            // nullable target). This overrides the #521 reference-upcast leak in
+            // Conversion.Classify (a NullableTypeSymbol exposes its underlying
+            // ClrType, so an IMPORTED `S? -> S` is otherwise mis-classified as
+            // implicit) WITHOUT changing global conversion semantics — we only
+            // treat such a candidate as non-applicable here. Value-type nullables
+            // (`int32?`, user `struct?`, `enum?`) and nullable type-parameter
+            // underlyings are never reference-like, so the gate leaves them
+            // untouched.
+            if (IsNullableReferenceGateRejected(argType, paramType))
+            {
+                return false;
+            }
+
             var conversion = Conversion.Classify(argType, paramType);
             if (conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity))
             {
@@ -1040,6 +1085,175 @@ internal sealed class OverloadResolver
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #1552: the Kotlin-model null-safety gate used by overload
+    /// applicability. Returns <see langword="true"/> when a nullable REFERENCE
+    /// argument <paramref name="argType"/> (<c>S?</c>) must NOT be accepted by
+    /// the (non-nullable, non-<c>object</c>) reference parameter
+    /// <paramref name="paramType"/>. Passing a nullable reference where a
+    /// non-nullable reference is required is an error in G# (the user must write
+    /// <c>!!</c> or rely on smart-cast narrowing); this mirrors that rule during
+    /// overload resolution so the ambiguity/leak paths cannot silently drop the
+    /// <c>?</c>. The gate deliberately fires ONLY for reference-like nullable
+    /// underlyings, so value-type nullables and nullable type-parameter
+    /// underlyings are unaffected.
+    /// </summary>
+    private static bool IsNullableReferenceGateRejected(TypeSymbol argType, TypeSymbol paramType)
+    {
+        if (argType is not NullableTypeSymbol argNullable)
+        {
+            return false;
+        }
+
+        // Only a REFERENCE-like nullable underlying is subject to the gate.
+        if (!IsReferenceLikeType(argNullable.UnderlyingType))
+        {
+            return false;
+        }
+
+        // A null-tolerant parameter (`object`/`object?` or any nullable target)
+        // accepts null, so the gate does not fire.
+        if (IsNullTolerantParameter(paramType))
+        {
+            return false;
+        }
+
+        // Only reference parameters are gated; a nullable-reference argument to
+        // a value-type parameter is already non-convertible via Conversion.
+        return IsReferenceLikeType(paramType);
+    }
+
+    /// <summary>
+    /// Issue #1552: a parameter is null-tolerant when it accepts a null
+    /// reference: the top type <c>object</c>/<c>object?</c> or any nullable
+    /// target (<c>T?</c>).
+    /// </summary>
+    private static bool IsNullTolerantParameter(TypeSymbol paramType)
+    {
+        if (paramType is NullableTypeSymbol)
+        {
+            return true;
+        }
+
+        if (paramType == TypeSymbol.Object)
+        {
+            return true;
+        }
+
+        return paramType?.ClrType?.IsSameAs(typeof(object)) == true;
+    }
+
+    /// <summary>
+    /// Issue #1552: the reference-like notion used by the null-safety gate,
+    /// mirroring <c>Conversion.IsReferenceLikeTarget</c>. A type is reference-
+    /// like when it is a user interface, a user <c>class</c> (StructSymbol with
+    /// IsClass), the built-in <c>string</c>, or an imported/CLR-backed type
+    /// whose backing is a class/interface. User classes/interfaces carry a null
+    /// ClrType during binding and are matched by their symbol kind.
+    /// </summary>
+    private static bool IsReferenceLikeType(TypeSymbol type)
+    {
+        if (type is InterfaceSymbol)
+        {
+            return true;
+        }
+
+        if (type is StructSymbol { IsClass: true })
+        {
+            return true;
+        }
+
+        if (type == TypeSymbol.String)
+        {
+            return true;
+        }
+
+        if (type?.ClrType is { } clrBacking)
+        {
+            return !clrBacking.IsValueType && !clrBacking.IsPointer && !clrBacking.IsByRef;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #1552: when every arity-applicable candidate was filtered out by
+    /// the convertibility pass, locate the first supplied argument whose
+    /// nullable-reference type is rejected by the null-safety gate against at
+    /// least one candidate's parameter at that position. Returns the mismatch so
+    /// the caller can emit the same GS0154 the single-candidate path produces
+    /// (pointing at the argument), or <see langword="null"/> when the empty set
+    /// is not attributable to the null-safety gate.
+    /// </summary>
+    private static NullSafetyArgumentMismatch TryFindNullSafetyArgumentMismatch(
+        List<FunctionSymbol> candidates,
+        int argumentCount,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        var count = Math.Min(argumentCount, boundArguments.Count);
+        for (var i = 0; i < count; i++)
+        {
+            var argType = boundArguments[i]?.Type;
+            if (argType is not NullableTypeSymbol argNullable || !IsReferenceLikeType(argNullable.UnderlyingType))
+            {
+                continue;
+            }
+
+            foreach (var candidate in candidates)
+            {
+                if (candidate.IsGeneric)
+                {
+                    continue;
+                }
+
+                var parameterOffset = candidate.ExplicitReceiverParameter == null ? 0 : 1;
+                var paramIndex = i + parameterOffset;
+                if (paramIndex < 0 || paramIndex >= candidate.Parameters.Length)
+                {
+                    continue;
+                }
+
+                var parameter = candidate.Parameters[paramIndex];
+                if (parameter.RefKind != RefKind.None || parameter.IsVariadic)
+                {
+                    continue;
+                }
+
+                if (IsNullableReferenceGateRejected(argType, parameter.Type))
+                {
+                    return new NullSafetyArgumentMismatch(i, argType, parameter.Type, parameter.Name);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #1552: describes a null-safety overload-resolution failure — a
+    /// nullable-reference argument at <see cref="Index"/> that no applicable
+    /// overload can accept without dropping the <c>?</c>. Carries the argument
+    /// and parameter types so the call site can emit GS0154 at the argument.
+    /// </summary>
+    internal sealed class NullSafetyArgumentMismatch
+    {
+        public NullSafetyArgumentMismatch(int index, TypeSymbol argType, TypeSymbol paramType, string paramName)
+        {
+            Index = index;
+            ArgType = argType;
+            ParamType = paramType;
+            ParamName = paramName;
+        }
+
+        public int Index { get; }
+
+        public TypeSymbol ArgType { get; }
+
+        public TypeSymbol ParamType { get; }
+
+        public string ParamName { get; }
     }
 
     /// <summary>
@@ -2431,11 +2645,19 @@ internal sealed class OverloadResolver
                 syntax.Arguments.Count,
                 argumentNames,
                 boundArgumentsBuilder.ToImmutable(),
-                out var ambiguous);
+                out var ambiguous,
+                out var nullSafetyFailure);
 
             if (selectedFn == null)
             {
-                if (ambiguous)
+                if (nullSafetyFailure != null)
+                {
+                    var argLoc = nullSafetyFailure.Index < syntax.Arguments.Count
+                        ? syntax.Arguments[nullSafetyFailure.Index].Location
+                        : syntax.Identifier.Location;
+                    Diagnostics.ReportWrongArgumentType(argLoc, nullSafetyFailure.ParamName, nullSafetyFailure.ParamType, nullSafetyFailure.ArgType);
+                }
+                else if (ambiguous)
                 {
                     Diagnostics.ReportAmbiguousOverloadResolution(syntax.Identifier.Location, classType.Name);
                 }
@@ -2927,11 +3149,19 @@ internal sealed class OverloadResolver
                 syntax.Arguments.Count,
                 argumentNames,
                 boundArgsBuilder.ToImmutable(),
-                out var ambiguous);
+                out var ambiguous,
+                out var nullSafetyFailure);
 
             if (selectedFn == null)
             {
-                if (ambiguous)
+                if (nullSafetyFailure != null)
+                {
+                    var argLoc = nullSafetyFailure.Index < syntax.Arguments.Count
+                        ? syntax.Arguments[nullSafetyFailure.Index].Location
+                        : syntax.Identifier.Location;
+                    Diagnostics.ReportWrongArgumentType(argLoc, nullSafetyFailure.ParamName, nullSafetyFailure.ParamType, nullSafetyFailure.ArgType);
+                }
+                else if (ambiguous)
                 {
                     Diagnostics.ReportAmbiguousOverloadResolution(syntax.Identifier.Location, "init");
                 }
@@ -4076,10 +4306,17 @@ internal sealed class OverloadResolver
         var overloadSet = Scope.TryLookupFunctions(syntax.Identifier.Text);
         if (overloadSet.Length > 1)
         {
-            var selected = SelectBestUserOverload(overloadSet, syntax.Arguments.Count, argumentNames, boundArguments, out var overloadAmbiguous, syntax.TypeArgumentList?.Arguments.Count ?? 0);
+            var selected = SelectBestUserOverload(overloadSet, syntax.Arguments.Count, argumentNames, boundArguments, out var overloadAmbiguous, out var nullSafetyFailure, syntax.TypeArgumentList?.Arguments.Count ?? 0);
             if (selected == null)
             {
-                if (overloadAmbiguous)
+                if (nullSafetyFailure != null)
+                {
+                    var argLoc = nullSafetyFailure.Index < syntax.Arguments.Count
+                        ? syntax.Arguments[nullSafetyFailure.Index].Location
+                        : syntax.Identifier.Location;
+                    Diagnostics.ReportWrongArgumentType(argLoc, nullSafetyFailure.ParamName, nullSafetyFailure.ParamType, nullSafetyFailure.ArgType);
+                }
+                else if (overloadAmbiguous)
                 {
                     Diagnostics.ReportAmbiguousOverloadResolution(syntax.Identifier.Location, syntax.Identifier.Text);
                 }
