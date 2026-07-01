@@ -186,6 +186,18 @@ internal sealed class ReflectionMetadataEmitter
     // wellKnown.
     private MethodBodyPlanner methodBodyPlanner;
 
+    // Issue #1525: the declaring type whose synthesized static constructor
+    // (<c>.cctor</c>) is currently being planned/emitted, or <c>null</c> when a
+    // normal method (or an instance <c>.ctor</c>) is being emitted. Taking the
+    // address of an <c>initonly</c> static field (<c>ldsflda</c>) is only
+    // verifiable inside that field's declaring type-initializer; the mirrored
+    // receiver-addressability predicates consult this to decide whether a
+    // static readonly value-type field receiver must be spilled to a temp
+    // (defensive copy) instead of addressed in place. Set for the duration of
+    // <see cref="EmitStaticConstructorBodyFromBlock"/> only.
+    // PR-E-11: internal so the promoted MethodBodyEmitter can read it.
+    internal Symbol currentStaticConstructorOwner;
+
     // PR-E-5: SlotPlanner's sibling — ConversionEmitter — owns conversion-
     // shaped IL emission. In this PR it hosts the two stateless top-level
     // helpers (EmitBoxIfNeeded, EmitDefaultValue) that take an
@@ -3522,7 +3534,16 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var body = new BoundBlockStatement(null, statements.ToImmutable());
-        return this.EmitStaticConstructorBodyFromBlock(body, typeSym.Declaration);
+        var previousOwner = this.currentStaticConstructorOwner;
+        this.currentStaticConstructorOwner = typeSym;
+        try
+        {
+            return this.EmitStaticConstructorBodyFromBlock(body, typeSym.Declaration);
+        }
+        finally
+        {
+            this.currentStaticConstructorOwner = previousOwner;
+        }
     }
 
     /// <summary>
@@ -3577,7 +3598,16 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var body = new BoundBlockStatement(null, statements.ToImmutable());
-        return this.EmitStaticConstructorBodyFromBlock(body, ifaceSym.Declaration);
+        var previousOwner = this.currentStaticConstructorOwner;
+        this.currentStaticConstructorOwner = ifaceSym;
+        try
+        {
+            return this.EmitStaticConstructorBodyFromBlock(body, ifaceSym.Declaration);
+        }
+        finally
+        {
+            this.currentStaticConstructorOwner = previousOwner;
+        }
     }
 
     /// <summary>
@@ -5878,6 +5908,37 @@ internal sealed class ReflectionMetadataEmitter
         return false;
     }
 
+    /// <summary>
+    /// Issue #1525: returns <c>true</c> when taking the address of
+    /// <paramref name="field"/> via <c>ldsflda</c> is verifiable in the current
+    /// emit context — i.e. the field is not an <c>initonly</c> static field, or
+    /// it is but we are currently emitting the synthesized static constructor
+    /// (<c>.cctor</c>) of the field's own declaring type (the only place ECMA-335
+    /// permits mutating/addressing an <c>initonly</c> static field). Otherwise a
+    /// static readonly value-type field used as an instance-method or
+    /// property-getter receiver must be spilled to a temp (defensive copy)
+    /// rather than addressed in place.
+    /// </summary>
+    /// <param name="field">The field whose address is being considered.</param>
+    /// <returns><c>true</c> when <c>ldsflda</c> of the field is legal here.</returns>
+    internal bool IsStaticFieldAddressLegalHere(FieldSymbol field)
+    {
+        if (!(field.IsReadOnly && field.IsStatic) || field.IsConst)
+        {
+            return true;
+        }
+
+        switch (this.currentStaticConstructorOwner)
+        {
+            case StructSymbol s:
+                return !s.StaticFields.IsDefaultOrEmpty && s.StaticFields.Contains(field);
+            case InterfaceSymbol i:
+                return !i.StaticFields.IsDefaultOrEmpty && i.StaticFields.Contains(field);
+            default:
+                return false;
+        }
+    }
+
     private bool IsAddressableFieldAccessForReceiverSpill(
         BoundFieldAccessExpression fa,
         FunctionSymbol function,
@@ -5885,7 +5946,12 @@ internal sealed class ReflectionMetadataEmitter
     {
         if (fa.Receiver == null)
         {
-            return true;
+            // Issue #1525: a static field receiver is normally addressable
+            // (ldsflda), but an initonly (readonly) static value-type field
+            // is only addressable inside its declaring type's .cctor; anywhere
+            // else force an rvalue spill (defensive copy) so the emitted IL is
+            // verifiable.
+            return this.IsStaticFieldAddressLegalHere(fa.Field);
         }
 
         if (fa.Receiver.Type is StructSymbol rs && rs.IsClass)
