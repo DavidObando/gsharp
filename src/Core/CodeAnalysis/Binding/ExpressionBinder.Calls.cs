@@ -2889,6 +2889,18 @@ internal sealed partial class ExpressionBinder
         {
             if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticMapping, out var staticAmbiguous, out var staticAmbiguousMethods, out var staticIsExpanded, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences, argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames))
             {
+                // Issue #1538: now that the imported static overload is chosen,
+                // re-bind any inline `out var`/`out let`/`out _` placeholders
+                // against the resolved by-ref parameter so the synthesized local
+                // is declared with the inferred (substituted) pointee type and
+                // leaks into the enclosing block scope. Without this the
+                // placeholder (an Error-typed address-of) would flow into the
+                // parameter-conversion path below and the inline-declared local
+                // would never exist for the rest of the body. Static calls have
+                // no receiver, so pass null; the mapping aligns source args to
+                // parameters for out-parameters in any position.
+                arguments = RebindInlineOutVarArguments(ce, arguments, staticFn.Method, staticMapping, receiver?.Type);
+
                 // Issue #1330: when the receiver is a generic type constructed
                 // over an in-scope generic type parameter (`Comparer[TResult]`),
                 // bind the static call symbolically — substituting the receiver's

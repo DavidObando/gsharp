@@ -200,6 +200,22 @@ public sealed class ImportedClassSymbol : Symbol
                 continue;
             }
 
+            // Issue #1538: an inline `out var`/`out let`/`out _` argument whose
+            // type is omitted was bound in the eager first pass to a placeholder
+            // address-of over an Error operand (no local declared yet, because
+            // the out-parameter type was not known). Feed the dedicated sentinel
+            // so overload resolution treats it as matching any by-ref parameter;
+            // the caller re-binds the placeholder to the chosen overload's
+            // out-parameter (pointee) type via RebindInlineOutVarArguments. This
+            // mirrors the imported-instance path (ExpressionBinder.Calls.cs) so a
+            // static/overloaded imported call (`int32.TryParse(s, out var n)`)
+            // resolves instead of collapsing to GS0159 and poisoning the body.
+            if (arguments[i] is BoundAddressOfExpression { Operand.Type: var outVarPointee } && outVarPointee == TypeSymbol.Error)
+            {
+                argTypes[i] = OverloadResolution.InlineOutVarArgumentType;
+                continue;
+            }
+
             // Issue #530: use effective CLR type so nullable value types
             // (e.g. int32?) are matched as Nullable<T> in overload resolution.
             // Issue #533: allow null (nil literal) through; overload resolution
