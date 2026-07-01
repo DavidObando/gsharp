@@ -191,6 +191,34 @@ namespace Demo
         Assert.Contains("GetChild[T IBox]() T?", printed);
     }
 
+    [Fact]
+    public void NullComparedInferredLocal_RendersNullableType()
+    {
+        // A `var x = e` local with no explicit type whose initializer is a
+        // non-nullable reference but which is compared to `null` is really
+        // nullable: inference over the non-null initializer would pick the
+        // non-nullable type and the `!= nil` guard would fail with GS0129, so an
+        // explicit `T?` annotation must be emitted (issue #1072 inferred-local form).
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Box { public string Name = string.Empty; }
+    public class C
+    {
+        private static Box Find() => new Box();
+        public string Run()
+        {
+            var found = Find();
+            if (found != null) { return found.Name; }
+            return string.Empty;
+        }
+    }
+}");
+
+        Assert.Contains("found Box? =", printed);
+        Assert.DoesNotContain("let found =", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
