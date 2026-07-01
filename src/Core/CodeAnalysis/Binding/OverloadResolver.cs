@@ -5335,6 +5335,31 @@ internal sealed class OverloadResolver
         Dictionary<TypeParameterSymbol, TypeSymbol> map = null;
         for (var c = start; c != null; c = c.BaseClass)
         {
+            // Issue #1537: a receiver that is a generic type nested inside a
+            // generic enclosing type (e.g. `Outer[int32].Middle[string]`)
+            // carries the enclosing construction's arguments on
+            // EnclosingTypeArguments (`[int32]`) separately from its own
+            // arguments (`[string]`). An instance method's signature may mention
+            // the ENCLOSING type's parameters (a method returning `U`), so map
+            // each enclosing parameter to its construction argument in addition
+            // to the own parameter -> own argument mappings below.
+            if (!c.EnclosingTypeArguments.IsDefaultOrEmpty)
+            {
+                var enclosingParams = StructSymbol.CollectEnclosingTypeParameters(c);
+                var enclosingCount = System.Math.Min(enclosingParams.Length, c.EnclosingTypeArguments.Length);
+                for (var i = 0; i < enclosingCount; i++)
+                {
+                    var arg = c.EnclosingTypeArguments[i];
+                    if (arg is TypeParameterSymbol tpEnc && map != null && map.TryGetValue(tpEnc, out var resolvedEnc))
+                    {
+                        arg = resolvedEnc;
+                    }
+
+                    map ??= new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                    map[enclosingParams[i]] = arg;
+                }
+            }
+
             if (c.Definition == null
                 || ReferenceEquals(c.Definition, c)
                 || c.TypeArguments.IsDefaultOrEmpty

@@ -2766,12 +2766,21 @@ public sealed class Binder
         // threading the binder applies to a nested type surfaced from within a
         // constructed enclosing member (e.g. the return of `Box[int32].MakeTag()`),
         // so the two representations are reference-equal and interconvertible.
-        if (deepest is StructSymbol deepestStruct && deepestStruct.TypeArguments.IsDefaultOrEmpty)
+        //
+        // Issue #1537: when the deepest segment ITSELF carries own type
+        // arguments (`Outer[int32].Middle[string]`), thread BOTH the enclosing
+        // construction's arguments and the nested type's own arguments so member
+        // lookup substitutes both levels and the emitter encodes
+        // `Outer`1+Middle`2<int32, string>`.
+        if (deepest is StructSymbol deepestStruct)
         {
             var enclosingArgs = CollectConstructedEnclosingArguments(constructedSegments, segmentTexts.Length - 1);
             if (!enclosingArgs.IsDefaultOrEmpty)
             {
-                deepest = StructSymbol.ConstructNested(deepestStruct.Definition ?? deepestStruct, enclosingArgs);
+                var ownArgs = deepestStruct.TypeArguments;
+                deepest = ownArgs.IsDefaultOrEmpty
+                    ? StructSymbol.ConstructNested(deepestStruct.Definition ?? deepestStruct, enclosingArgs)
+                    : StructSymbol.ConstructNestedGeneric(deepestStruct.Definition ?? deepestStruct, enclosingArgs, ownArgs);
             }
         }
 

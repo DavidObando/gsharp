@@ -569,6 +569,17 @@ internal sealed class DeclarationBinder
             if (syntax.TypeParameterList != null)
             {
                 binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+
+                // Issue #1537: a nested generic type's own type-parameter
+                // constraints may reference the enclosing type's parameters
+                // (e.g. `struct Middle[T U]` nested in `Outer[U]`), so seed the
+                // enclosing parameters (outermost-first) before binding the
+                // nested type's list.
+                foreach (var tp in CollectEnclosingTypeParameters(containingType))
+                {
+                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
+                }
+
                 typeParameters = BindTypeParameterList(
                     syntax.TypeParameterList,
                     bareSymbols =>
@@ -656,12 +667,30 @@ internal sealed class DeclarationBinder
         var previousTypeParameters = binderCtx.CurrentTypeParameters;
         try
         {
-            if (!structSymbol.TypeParameters.IsDefaultOrEmpty)
+            // Issue #1537: a nested type's members may reference the ENCLOSING
+            // type's type parameters (e.g. a field of type `U` inside
+            // `Middle[T]` nested in `Outer[U]`). Seed the member-binding scope
+            // with every enclosing type parameter (outermost-first, so an inner
+            // level shadows an outer one on a name clash) BEFORE the type's own
+            // parameters, mirroring CLR nested-generic scoping (ECMA-335
+            // §II.10.3.1). The emitter reifies such a nested type over the
+            // combined [enclosing, own] parameter list and remaps each reference
+            // to the correct VAR ordinal, so these references encode verifiably.
+            var enclosingTypeParameters = CollectEnclosingTypeParameters(structSymbol.ContainingType);
+            if (!structSymbol.TypeParameters.IsDefaultOrEmpty || enclosingTypeParameters.Count > 0)
             {
                 binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
-                foreach (var tp in structSymbol.TypeParameters)
+                foreach (var tp in enclosingTypeParameters)
                 {
                     binderCtx.CurrentTypeParameters[tp.Name] = tp;
+                }
+
+                if (!structSymbol.TypeParameters.IsDefaultOrEmpty)
+                {
+                    foreach (var tp in structSymbol.TypeParameters)
+                    {
+                        binderCtx.CurrentTypeParameters[tp.Name] = tp;
+                    }
                 }
             }
 
@@ -671,6 +700,41 @@ internal sealed class DeclarationBinder
         {
             binderCtx.CurrentTypeParameters = previousTypeParameters;
         }
+    }
+
+    /// <summary>
+    /// Issue #1537: collects the type parameters of <paramref name="enclosingType"/>
+    /// and all of ITS enclosing types, outermost-first, so a nested type's
+    /// members and its own type-parameter constraints can reference them.
+    /// Returns an empty list for a top-level type (<paramref name="enclosingType"/>
+    /// is <see langword="null"/>) or when every encloser is non-generic.
+    /// </summary>
+    /// <param name="enclosingType">The immediately enclosing type, or <see langword="null"/>.</param>
+    /// <returns>The enclosing type parameters, outermost-first.</returns>
+    private static List<TypeParameterSymbol> CollectEnclosingTypeParameters(TypeSymbol enclosingType)
+    {
+        List<ImmutableArray<TypeParameterSymbol>> levels = null;
+        for (var c = enclosingType as StructSymbol; c != null; c = c.ContainingType as StructSymbol)
+        {
+            if (!c.TypeParameters.IsDefaultOrEmpty)
+            {
+                levels ??= new List<ImmutableArray<TypeParameterSymbol>>();
+
+                // Prepend so the outermost enclosing type's parameters come first.
+                levels.Insert(0, c.TypeParameters);
+            }
+        }
+
+        var result = new List<TypeParameterSymbol>();
+        if (levels != null)
+        {
+            foreach (var level in levels)
+            {
+                result.AddRange(level);
+            }
+        }
+
+        return result;
     }
 
     /// <summary>

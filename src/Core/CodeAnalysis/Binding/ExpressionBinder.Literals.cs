@@ -481,7 +481,20 @@ internal sealed partial class ExpressionBinder
     /// resolving the type by the literal's simple name — which would otherwise
     /// bind to the top-level homonym holding the simple key.
     /// </summary>
-    private BoundExpression BindStructLiteralExpression(StructLiteralExpressionSyntax syntax, StructSymbol resolvedDefinition)
+    /// <param name="syntax">The struct-literal syntax.</param>
+    /// <param name="resolvedDefinition">The pre-resolved struct definition, or <c>null</c> to resolve by simple name.</param>
+    /// <param name="enclosingTypeArguments">
+    /// Issue #1521 / #1537: when the literal names a type nested inside a
+    /// CONSTRUCTED generic enclosing type (<c>Outer[int32].Middle[string]{…}</c>
+    /// or <c>Box[int32].Tag{…}</c>), the flattened enclosing construction's type
+    /// arguments (outermost-first). Threaded onto the constructed struct symbol
+    /// so member types substitute the enclosing arguments and the emitter
+    /// encodes the reified nested type (<c>Outer`1+Middle`2&lt;int32,string&gt;</c>).
+    /// </param>
+    private BoundExpression BindStructLiteralExpression(
+        StructLiteralExpressionSyntax syntax,
+        StructSymbol resolvedDefinition,
+        ImmutableArray<TypeSymbol> enclosingTypeArguments = default)
     {
         var typeName = syntax.TypeIdentifier.Text;
 
@@ -611,12 +624,27 @@ internal sealed partial class ExpressionBinder
                 typeArgs.Add(substitution[tp]);
             }
 
-            structSymbol = StructSymbol.Construct(structSymbol, typeArgs.MoveToImmutable());
+            // Issue #1537: a generic nested type of a constructed generic
+            // enclosing type (`Outer[int32].Middle[string]{…}`) threads BOTH the
+            // enclosing arguments and its own arguments so member types
+            // substitute both levels and the emitter encodes the reified nested
+            // type (`Outer`1+Middle`2<int32, string>`).
+            structSymbol = enclosingTypeArguments.IsDefaultOrEmpty
+                ? StructSymbol.Construct(structSymbol, typeArgs.MoveToImmutable())
+                : StructSymbol.ConstructNestedGeneric(structSymbol, enclosingTypeArguments, typeArgs.MoveToImmutable());
         }
         else if (syntax.TypeArgumentList != null)
         {
             Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, typeName, 0, syntax.TypeArgumentList.Arguments.Count);
             return new BoundErrorExpression(null);
+        }
+        else if (!enclosingTypeArguments.IsDefaultOrEmpty)
+        {
+            // Issue #1521: a NON-generic nested type of a constructed generic
+            // enclosing type (`Box[int32].Tag{…}`) threads only the enclosing
+            // arguments so member types typed as an enclosing parameter surface
+            // closed and the emitter encodes `Box`1+Tag`1<int32>`.
+            structSymbol = StructSymbol.ConstructNested(structSymbol, enclosingTypeArguments);
         }
 
         var seenFieldNames = new HashSet<string>();

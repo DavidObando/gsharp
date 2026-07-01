@@ -27,6 +27,14 @@ public sealed class StructSymbol : TypeSymbol
     // reference equality and TypeSpec caching in the emitter).
     private static readonly ConcurrentDictionary<(StructSymbol Def, string ArgsKey), StructSymbol> ConstructedNestedCache = new();
 
+    // Issue #1537: identity cache for constructed references to a GENERIC type
+    // nested inside a generic enclosing type (`Outer[int32].Middle[string]`),
+    // keyed by the nested definition, the flattened enclosing type-argument
+    // vector, and the nested type's own type-argument vector. Distinct from
+    // ConstructedNestedCache (which keys only the enclosing args for a nested
+    // type with no own parameters) so the two representations never collide.
+    private static readonly ConcurrentDictionary<(StructSymbol Def, string EnclosingKey, string OwnKey), StructSymbol> ConstructedNestedGenericCache = new();
+
     // Issue #1341: backing stores for the generically-erased member tables whose
     // reads are forwarded to Definition on a constructed instance. On a
     // definition (or non-generic type) these hold the canonical member set; on a
@@ -48,6 +56,16 @@ public sealed class StructSymbol : TypeSymbol
     // definition's body still observes the substituted members afterward,
     // making member lookup independent of source-file binding order.
     private Dictionary<TypeParameterSymbol, TypeSymbol> substitutionMap;
+
+    // Issue #1537: for a constructed reference to a GENERIC type nested inside a
+    // generic enclosing type (`Outer[int32].Middle[string]`), the nested
+    // definition's own type parameters captured at construction time (before the
+    // emitter re-ordinalizes the nested TypeDef's parameters over the flattened
+    // enclosing+own list, ECMA-335 §II.10.3.1). Used to key the own-argument
+    // half of the substitution map so a member typed as the nested type's own
+    // parameter (`Middle.Label : T`) surfaces closed regardless of when the map
+    // is first computed. Empty for every other symbol.
+    private ImmutableArray<TypeParameterSymbol> nestedOwnTypeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
     private ImmutableArray<FieldSymbol> substitutedFields;
     private ImmutableArray<FieldSymbol> substitutedFieldsSource;
     private bool substitutedFieldsComputed;
@@ -1177,6 +1195,61 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>
+    /// Issue #1537: constructs a reference to a <em>generic</em> type declared
+    /// as a nested type inside a <em>generic</em> enclosing type, closed over
+    /// BOTH the enclosing construction's type arguments and the nested type's
+    /// own type arguments (e.g. <c>Outer[int32].Middle[string]</c>). The nested
+    /// type declares its own type parameters, so the CLR models it as
+    /// <c>Outer`1+Middle`2</c> — redeclaring the encloser's parameters first,
+    /// then its own (ECMA-335 §II.10.3.1). The enclosing arguments are recorded
+    /// on <see cref="EnclosingTypeArguments"/> and the own arguments on
+    /// <see cref="TypeArguments"/>; a member whose type mentions either an
+    /// enclosing parameter (<c>U</c>) or the nested type's own parameter
+    /// (<c>T</c>) is substituted through the combined map (see
+    /// <see cref="GetSubstitutionMap"/>). The emitter threads the combined
+    /// vector <c>[enclosing…, own…]</c> so a constructed use site encodes
+    /// <c>Outer`1+Middle`2&lt;int32, string&gt;</c>.
+    /// </summary>
+    /// <param name="nestedDefinition">The open nested-type definition (its <see cref="Definition"/> is used).</param>
+    /// <param name="enclosingTypeArguments">The flattened enclosing construction arguments in CLR order (outermost first), aligned with <see cref="CollectEnclosingTypeParameters(TypeSymbol)"/>. May be empty when the enclosing type is open but the nested type carries own arguments.</param>
+    /// <param name="ownTypeArguments">The nested type's own type arguments.</param>
+    /// <returns>A constructed nested-generic reference, or <paramref name="nestedDefinition"/> unchanged when neither vector applies.</returns>
+    public static StructSymbol ConstructNestedGeneric(
+        StructSymbol nestedDefinition,
+        ImmutableArray<TypeSymbol> enclosingTypeArguments,
+        ImmutableArray<TypeSymbol> ownTypeArguments)
+    {
+        if (nestedDefinition == null)
+        {
+            return nestedDefinition;
+        }
+
+        // No own arguments: fall back to the enclosing-only construction so the
+        // two representations remain reference-equal and share one cache.
+        if (ownTypeArguments.IsDefaultOrEmpty)
+        {
+            return ConstructNested(nestedDefinition, enclosingTypeArguments);
+        }
+
+        // No enclosing arguments to thread: this is an ordinary construction of
+        // the nested type over its own parameters (e.g. `Middle[string]`
+        // referenced from within the enclosing generic's own members, where the
+        // enclosing parameters stay open). Route through Construct so the own
+        // arguments substitute exactly as for a top-level generic.
+        if (enclosingTypeArguments.IsDefaultOrEmpty)
+        {
+            return Construct(nestedDefinition.Definition ?? nestedDefinition, ownTypeArguments);
+        }
+
+        var def = nestedDefinition.Definition ?? nestedDefinition;
+        var enclosingKey = BuildArgsKey(enclosingTypeArguments);
+        var ownKey = BuildArgsKey(ownTypeArguments);
+        return ConstructedNestedGenericCache.GetOrAdd(
+            (def, enclosingKey, ownKey),
+            _ => CreateConstructedNestedGeneric(def, enclosingTypeArguments, ownTypeArguments));
+    }
+
+    /// <summary>
     /// Issue #1521: gathers the flattened generic parameters of every enclosing
     /// type of <paramref name="nested"/>, in CLR order (outermost first). A type
     /// nested inside <c>Outer[U].Inner[T]</c> sees <c>[U, T]</c>. Mirrors the
@@ -1601,6 +1674,60 @@ public sealed class StructSymbol : TypeSymbol
         return constructed;
     }
 
+    // Issue #1537: materializes a constructed reference to a GENERIC type nested
+    // inside a generic enclosing type (`Outer[int32].Middle[string]`). Combines
+    // the treatment of CreateConstructed (own type arguments) and
+    // CreateConstructedNested (enclosing type arguments): the nested type
+    // declares its own parameters AND its members may mention the enclosing
+    // type's parameters, so the substitution map (GetSubstitutionMap) is keyed
+    // by BOTH the nested type's own parameters (-> own arguments) and the
+    // flattened enclosing parameters (-> enclosing arguments). Instance-member
+    // reads forward to the definition and substitute lazily against that map, so
+    // a field/return typed as either an own parameter (`Middle.Label : T`) or an
+    // enclosing parameter (`Middle.Owner : U`) surfaces closed.
+    private static StructSymbol CreateConstructedNestedGeneric(
+        StructSymbol definition,
+        ImmutableArray<TypeSymbol> enclosingTypeArguments,
+        ImmutableArray<TypeSymbol> ownTypeArguments)
+    {
+        var constructed = new StructSymbol(
+            definition.Name,
+            definition.Fields,
+            definition.Accessibility,
+            definition.Declaration,
+            definition.PackageName,
+            definition.IsData,
+            definition.IsInline,
+            definition.IsClass,
+            definition.PrimaryConstructorParameters,
+            definition.IsOpen,
+            definition.BaseClass);
+
+        constructed.Definition = definition;
+        constructed.TypeArguments = ownTypeArguments;
+        constructed.EnclosingTypeArguments = enclosingTypeArguments;
+
+        // Capture the nested type's own type parameters BEFORE the emitter
+        // re-ordinalizes the nested TypeDef over the flattened enclosing+own
+        // list (RegisterNestedTypeEnclosingGenerics), so the substitution map's
+        // own-argument half keeps pairing each original own parameter with its
+        // argument no matter when it is first computed.
+        constructed.nestedOwnTypeParameters = definition.TypeParameters;
+        constructed.ContainingType = definition.ContainingType;
+        constructed.SetInterfaces(definition.Interfaces);
+        if (!definition.ImplementedClrInterfaces.IsDefaultOrEmpty)
+        {
+            constructed.SetImplementedClrInterfaces(definition.ImplementedClrInterfaces);
+        }
+
+        if (definition.ImportedBaseType != null)
+        {
+            constructed.SetImportedBaseType(definition.ImportedBaseType);
+        }
+
+        return constructed;
+    }
+
     // Issue #1341: builds (once) the type-parameter -> type-argument map used to
     // substitute the definition's instance-member types for this constructed
     // instance. Generic definitions are immutable in their type parameters and
@@ -1615,12 +1742,19 @@ public sealed class StructSymbol : TypeSymbol
         var def = Definition;
         var map = new Dictionary<TypeParameterSymbol, TypeSymbol>(
             def.TypeParameters.IsDefaultOrEmpty ? 0 : def.TypeParameters.Length);
-        if (!def.TypeParameters.IsDefaultOrEmpty && !TypeArguments.IsDefaultOrEmpty)
+
+        // Issue #1537: for a constructed nested-generic reference the emitter
+        // re-ordinalizes the definition's TypeParameters over the flattened
+        // enclosing+own list, so use the own parameters captured at construction
+        // time to pair with TypeArguments. For every other constructed instance
+        // the definition's TypeParameters are the own parameters.
+        var ownParams = !nestedOwnTypeParameters.IsDefaultOrEmpty ? nestedOwnTypeParameters : def.TypeParameters;
+        if (!ownParams.IsDefaultOrEmpty && !TypeArguments.IsDefaultOrEmpty)
         {
-            var count = System.Math.Min(def.TypeParameters.Length, TypeArguments.Length);
+            var count = System.Math.Min(ownParams.Length, TypeArguments.Length);
             for (var i = 0; i < count; i++)
             {
-                map[def.TypeParameters[i]] = TypeArguments[i];
+                map[ownParams[i]] = TypeArguments[i];
             }
         }
 

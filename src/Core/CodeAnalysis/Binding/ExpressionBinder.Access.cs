@@ -901,6 +901,34 @@ internal sealed partial class ExpressionBinder
                     break;
             }
         }
+        else if (leftPart is IndexExpressionSyntax nestedTypeIndex
+            && !nestedTypeIndex.IsNullConditional
+            && TryResolveUserNestedTypeExpression(nestedTypeIndex, out var nestedTypeIndexSymbol))
+        {
+            // Issue #1537: a per-segment generic nested-type chain whose deepest
+            // segment carries a SINGLE type argument parses as an index over the
+            // preceding accessor (`Outer[int32].Middle[string]` is
+            // `((Outer[int32]).Middle)[string]`), so it never reaches the
+            // NAME-target index branch above. Resolve it as the constructed
+            // nested type receiver (`Outer`1+Middle`2<int32, string>`) so the
+            // trailing member access / composite literal binds against a type
+            // whose members substitute every enclosing level.
+            switch (nestedTypeIndexSymbol)
+            {
+                case EnumSymbol nestedIndexEnum:
+                    enumSymbol = nestedIndexEnum;
+                    break;
+                case StructSymbol nestedIndexStruct:
+                    userStructSymbol = nestedIndexStruct;
+                    break;
+                case InterfaceSymbol nestedIndexInterface:
+                    userInterfaceSymbol = nestedIndexInterface;
+                    break;
+                default:
+                    receiver = BindExpression(leftPart);
+                    break;
+            }
+        }
         else
         {
             receiver = BindExpression(leftPart);
@@ -1022,36 +1050,236 @@ internal sealed partial class ExpressionBinder
     /// the chain is not a pure user nested-type reference.
     /// </summary>
     private bool TryResolveQualifiedUserNestedType(AccessorExpressionSyntax accessor, out TypeSymbol nestedType)
+        => TryResolveUserNestedTypeExpression(accessor, out nestedType);
+
+    /// <summary>
+    /// Issue #1069/#1506/#1521/#1537: resolves an expression that names a
+    /// (possibly nested, possibly per-segment generic) user type — e.g.
+    /// <c>Outer.Middle</c>, <c>Outer[int32].Middle</c>,
+    /// <c>Outer[int32].Middle[string]</c>, or the arbitrarily deep
+    /// <c>Outer[int32].Middle[string].Inner[bool]</c> — to its constructed type
+    /// symbol. The chain is flattened to per-segment (name, own type-arguments)
+    /// pairs, each segment is resolved as a nested type of the previous one, and
+    /// the deepest segment is constructed threading BOTH the flattened enclosing
+    /// construction's arguments (outermost-first, occupying the low ordinals)
+    /// and its own arguments, so member lookup substitutes every level and the
+    /// emitter encodes the reified nested type (<c>Outer`1+Middle`2&lt;int32,
+    /// string&gt;</c>). Generalizes to arbitrary depth and mixed generic /
+    /// non-generic levels; a fully non-generic chain returns the definition
+    /// unchanged (preserving #1069 behavior).
+    /// </summary>
+    /// <param name="expr">The type-naming expression (accessor or index chain).</param>
+    /// <param name="nestedType">The resolved (possibly constructed) type symbol.</param>
+    /// <returns>Whether the expression resolved to a user nested type.</returns>
+    private bool TryResolveUserNestedTypeExpression(ExpressionSyntax expr, out TypeSymbol nestedType)
     {
         nestedType = null;
-
-        if (accessor.RightPart is not NameExpressionSyntax rightName)
+        var segments = new List<(string Name, ImmutableArray<TypeSymbol> Args)>();
+        if (!TryFlattenUserTypeExpressionSegments(expr, segments) || segments.Count < 2)
         {
             return false;
         }
 
-        TypeSymbol container;
-        switch (accessor.LeftPart)
+        var headArity = segments[0].Args.IsDefaultOrEmpty ? -1 : segments[0].Args.Length;
+        if (!scope.TryLookupTypeAlias(segments[0].Name, headArity, out var headDef) || !IsUserAggregateType(headDef))
         {
-            case NameExpressionSyntax leftName
-                when scope.TryLookupTypeAlias(leftName.IdentifierToken.Text, out var leftType)
-                    && IsUserAggregateType(leftType):
-                container = leftType;
+            return false;
+        }
+
+        var definitions = new TypeSymbol[segments.Count];
+        definitions[0] = headDef;
+        for (var i = 1; i < segments.Count; i++)
+        {
+            var containerDef = (definitions[i - 1] as StructSymbol)?.Definition ?? definitions[i - 1];
+            var arity = segments[i].Args.IsDefaultOrEmpty ? -1 : segments[i].Args.Length;
+            if (!scope.TryLookupNestedTypeAlias(containerDef, segments[i].Name, arity, out var nested))
+            {
+                return false;
+            }
+
+            definitions[i] = nested;
+        }
+
+        // Thread the flattened enclosing construction's arguments (the own
+        // arguments of every generic enclosing segment, outermost-first) onto
+        // the deepest segment, together with its own arguments. A generic
+        // enclosing segment left without matching arguments cannot be threaded,
+        // so the whole chain stays open (mirrors the type-clause path's
+        // CollectConstructedEnclosingArguments).
+        var enclosingBuilder = ImmutableArray.CreateBuilder<TypeSymbol>();
+        for (var i = 0; i < segments.Count - 1; i++)
+        {
+            var ownParams = definitions[i] switch
+            {
+                StructSymbol s => (s.Definition ?? s).TypeParameters,
+                InterfaceSymbol iface => (iface.Definition ?? iface).TypeParameters,
+                _ => ImmutableArray<TypeParameterSymbol>.Empty,
+            };
+
+            if (ownParams.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            if (segments[i].Args.IsDefaultOrEmpty || segments[i].Args.Length != ownParams.Length)
+            {
+                enclosingBuilder = null;
                 break;
-            case AccessorExpressionSyntax leftAccessor
-                when TryResolveQualifiedUserNestedType(leftAccessor, out var leftNested):
-                container = leftNested;
-                break;
+            }
+
+            enclosingBuilder.AddRange(segments[i].Args);
+        }
+
+        var enclosingArgs = enclosingBuilder != null && enclosingBuilder.Count > 0
+            ? enclosingBuilder.ToImmutable()
+            : default;
+        var ownArgs = segments[segments.Count - 1].Args;
+
+        switch (definitions[segments.Count - 1])
+        {
+            case StructSymbol nestedStruct:
+                var def = nestedStruct.Definition ?? nestedStruct;
+                if (!enclosingArgs.IsDefaultOrEmpty && !ownArgs.IsDefaultOrEmpty)
+                {
+                    nestedType = StructSymbol.ConstructNestedGeneric(def, enclosingArgs, ownArgs);
+                }
+                else if (!enclosingArgs.IsDefaultOrEmpty)
+                {
+                    nestedType = StructSymbol.ConstructNested(def, enclosingArgs);
+                }
+                else if (!ownArgs.IsDefaultOrEmpty)
+                {
+                    nestedType = StructSymbol.Construct(def, ownArgs);
+                }
+                else
+                {
+                    nestedType = def;
+                }
+
+                return true;
+
+            case InterfaceSymbol nestedIface:
+                var ifaceDef = nestedIface.Definition ?? nestedIface;
+                nestedType = !ownArgs.IsDefaultOrEmpty
+                    ? InterfaceSymbol.Construct(ifaceDef, ownArgs)
+                    : ifaceDef;
+                return true;
+
+            default:
+                nestedType = definitions[segments.Count - 1];
+                return true;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1537: flattens a user-type-naming expression into its ordered
+    /// per-segment (simple name, bound own type-arguments) pairs. Because
+    /// per-segment generics parse as an index over the preceding accessor
+    /// (<c>Outer[int32].Middle[string]</c> is
+    /// <c>((Outer[int32]).Middle)[string]</c>) and multi-argument segments parse
+    /// as generic-name expressions, every shape (name, generic-name, index,
+    /// accessor) is handled so arbitrary depth and arity flatten uniformly.
+    /// </summary>
+    /// <param name="expr">The type-naming expression.</param>
+    /// <param name="segments">The accumulator for resolved segments (outermost-first).</param>
+    /// <returns>Whether the expression is a well-formed user-type name chain.</returns>
+    private bool TryFlattenUserTypeExpressionSegments(ExpressionSyntax expr, List<(string Name, ImmutableArray<TypeSymbol> Args)> segments)
+    {
+        switch (expr)
+        {
+            case NameExpressionSyntax name:
+                segments.Add((name.IdentifierToken.Text, default));
+                return true;
+
+            case GenericNameExpressionSyntax generic:
+                if (!TryBindGenericSegmentArguments(generic, out var genericArgs))
+                {
+                    return false;
+                }
+
+                segments.Add((generic.Identifier.Text, genericArgs));
+                return true;
+
+            case IndexExpressionSyntax index when !index.IsNullConditional:
+                if (index.Target is NameExpressionSyntax indexTargetName)
+                {
+                    if (!TryBindTypeArgumentExpressions(index.Index, out var rootArgs))
+                    {
+                        return false;
+                    }
+
+                    segments.Add((indexTargetName.IdentifierToken.Text, rootArgs));
+                    return true;
+                }
+
+                if (!TryFlattenUserTypeExpressionSegments(index.Target, segments) || segments.Count == 0)
+                {
+                    return false;
+                }
+
+                var last = segments[segments.Count - 1];
+                if (!last.Args.IsDefaultOrEmpty)
+                {
+                    return false;
+                }
+
+                if (!TryBindTypeArgumentExpressions(index.Index, out var lastArgs))
+                {
+                    return false;
+                }
+
+                segments[segments.Count - 1] = (last.Name, lastArgs);
+                return true;
+
+            case AccessorExpressionSyntax accessor when !accessor.IsNullConditional:
+                if (!TryFlattenUserTypeExpressionSegments(accessor.LeftPart, segments))
+                {
+                    return false;
+                }
+
+                switch (accessor.RightPart)
+                {
+                    case NameExpressionSyntax rightName:
+                        segments.Add((rightName.IdentifierToken.Text, default));
+                        return true;
+                    case GenericNameExpressionSyntax rightGeneric
+                        when TryBindGenericSegmentArguments(rightGeneric, out var rightArgs):
+                        segments.Add((rightGeneric.Identifier.Text, rightArgs));
+                        return true;
+                    default:
+                        return false;
+                }
+
             default:
                 return false;
         }
+    }
 
-        if (!scope.TryLookupNestedTypeAlias(container, rightName.IdentifierToken.Text, preferredArity: -1, out var candidate))
+    /// <summary>
+    /// Issue #1537: binds the type-argument clauses of a generic-name segment
+    /// (<c>Middle[string]</c>) to their type symbols for nested-type chain
+    /// resolution in expression position.
+    /// </summary>
+    /// <param name="generic">The generic-name segment.</param>
+    /// <param name="typeArgs">The bound type arguments on success.</param>
+    /// <returns>Whether all type-argument clauses bound successfully.</returns>
+    private bool TryBindGenericSegmentArguments(GenericNameExpressionSyntax generic, out ImmutableArray<TypeSymbol> typeArgs)
+    {
+        typeArgs = default;
+        var argClauses = generic.TypeArgumentList.Arguments;
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>(argClauses.Count);
+        foreach (var clause in argClauses)
         {
-            return false;
+            var bound = bindTypeClause(clause);
+            if (bound == null)
+            {
+                return false;
+            }
+
+            builder.Add(bound);
         }
 
-        nestedType = candidate;
+        typeArgs = builder.ToImmutable();
         return true;
     }
 
@@ -1564,6 +1792,21 @@ internal sealed partial class ExpressionBinder
         switch (rightPart)
         {
             case AccessorExpressionSyntax nested:
+                // Issue #1537: the left portion may name a nested TYPE of the
+                // constructed receiver (`Middle[string]` under `Outer[int32]`),
+                // with the rightPart a composite literal / member / call on that
+                // nested type — i.e. a per-segment generic chain of depth ≥ 3
+                // (`Outer[int32].Middle[string].Inner{…}`) parses right-leaning
+                // so the inner segments arrive here rather than at the top-level
+                // accessor. Resolve the nested-type chain under the receiver
+                // (threading the flattened enclosing arguments) and bind the
+                // tail against it. Falls through to the value/static-member path
+                // when the left portion is not a nested type.
+                if (TryResolveNestedTypeChainUnderReceiver(structSym, nested.LeftPart, out var innerReceiver))
+                {
+                    return BindUserTypeStaticAccessorStep(innerReceiver, nested.RightPart);
+                }
+
                 var head = BindUserTypeStaticAccessorStep(structSym, nested.LeftPart);
                 if (head is BoundErrorExpression)
                 {
@@ -1574,6 +1817,19 @@ internal sealed partial class ExpressionBinder
 
             case CallExpressionSyntax ce:
                 return BindUserTypeStaticCall(structSym, ce);
+
+            // Issue #1537: a composite literal for a type nested inside a
+            // CONSTRUCTED generic enclosing type
+            // (`Outer[int32].Middle[string]{…}`, `Box[int32].Tag{…}`). The outer
+            // segment (`Outer[int32]`) resolves to the constructed struct
+            // receiver `structSym`; resolve the nested type under its definition
+            // and bind the literal against it, threading the enclosing
+            // construction's flattened arguments so member types substitute the
+            // enclosing parameters and the emitter encodes the reified nested
+            // type. Mirrors the #1069 peel-off path in BindAccessorExpression
+            // that already handles a NON-generic enclosing segment.
+            case StructLiteralExpressionSyntax structLiteral:
+                return BindQualifiedNestedStructLiteral(structSym, structLiteral);
 
             case NameExpressionSyntax ne:
                 return BindUserTypeStaticMemberAccess(structSym, ne);
@@ -1604,6 +1860,153 @@ internal sealed partial class ExpressionBinder
             default:
                 return new BoundErrorExpression(null);
         }
+    }
+
+    /// <summary>
+    /// Issue #1537: binds a composite literal naming a type nested inside a
+    /// CONSTRUCTED generic enclosing type
+    /// (<c>Outer[int32].Middle[string]{…}</c>, <c>Box[int32].Tag{…}</c>). The
+    /// nested type is resolved under <paramref name="outerConstructed"/>'s
+    /// definition, and the enclosing construction's flattened type arguments
+    /// (its own enclosing arguments followed by its own arguments, outermost
+    /// first — aligned with <see cref="StructSymbol.CollectEnclosingTypeParameters(TypeSymbol)"/>)
+    /// are threaded onto the constructed nested symbol so member types
+    /// substitute the enclosing parameters and the emitter encodes the reified
+    /// nested type. Generalizes to arbitrary depth: at each level the outer
+    /// segment already carries the flattened arguments of everything above it.
+    /// </summary>
+    /// <param name="outerConstructed">The constructed generic enclosing segment (e.g. <c>Outer[int32]</c>).</param>
+    /// <param name="structLiteral">The nested composite literal (e.g. <c>Middle[string]{…}</c>).</param>
+    /// <returns>The bound nested struct literal, or a bound error expression.</returns>
+    private BoundExpression BindQualifiedNestedStructLiteral(StructSymbol outerConstructed, StructLiteralExpressionSyntax structLiteral)
+    {
+        var container = outerConstructed.Definition ?? outerConstructed;
+        var literalArity = structLiteral.TypeArgumentList != null ? structLiteral.TypeArgumentList.Arguments.Count : -1;
+        if (!scope.TryLookupNestedTypeAlias(container, structLiteral.TypeIdentifier.Text, literalArity, out var nestedType)
+            || nestedType is not StructSymbol nestedStructDef)
+        {
+            Diagnostics.ReportUnableToFindType(structLiteral.TypeIdentifier.Location, structLiteral.TypeIdentifier.Text);
+            return new BoundErrorExpression(null);
+        }
+
+        // The enclosing construction already flattens its own enclosing chain in
+        // EnclosingTypeArguments; append its own TypeArguments so the nested
+        // type sees the full outermost-first vector.
+        var enclosingArgs = FlattenConstructedEnclosingArguments(outerConstructed);
+        return BindStructLiteralExpression(structLiteral, nestedStructDef.Definition ?? nestedStructDef, enclosingArgs);
+    }
+
+    /// <summary>
+    /// Issue #1537: resolves a nested-type-naming expression evaluated UNDER a
+    /// constructed generic receiver — e.g. <c>Middle[string]</c> (or the deeper
+    /// <c>Middle[string].Deeper[y]</c>) under a receiver <c>Outer[int32]</c> —
+    /// to the constructed nested type symbol, threading the receiver's flattened
+    /// enclosing arguments plus each intervening segment's own arguments so the
+    /// deepest segment carries the full outermost-first argument vector
+    /// (<c>Outer`1+Middle`2&lt;int32, string&gt;</c>). Returns <see langword="false"/>
+    /// (without diagnostics) when the expression does not name a nested type of
+    /// the receiver, so the caller can fall back to the value/static-member path.
+    /// </summary>
+    /// <param name="receiver">The constructed generic receiver the chain is nested under.</param>
+    /// <param name="typeExpr">The nested-type-naming expression.</param>
+    /// <param name="constructed">The resolved constructed nested type on success.</param>
+    /// <returns>Whether the expression named a nested type of the receiver.</returns>
+    private bool TryResolveNestedTypeChainUnderReceiver(StructSymbol receiver, ExpressionSyntax typeExpr, out StructSymbol constructed)
+    {
+        constructed = null;
+        var segments = new List<(string Name, ImmutableArray<TypeSymbol> Args)>();
+        if (!TryFlattenUserTypeExpressionSegments(typeExpr, segments) || segments.Count == 0)
+        {
+            return false;
+        }
+
+        var enclosingArgs = FlattenConstructedEnclosingArguments(receiver);
+        TypeSymbol containerDef = receiver.Definition ?? receiver;
+        for (var i = 0; i < segments.Count; i++)
+        {
+            var arity = segments[i].Args.IsDefaultOrEmpty ? -1 : segments[i].Args.Length;
+            var lookupContainer = (containerDef as StructSymbol)?.Definition ?? containerDef;
+            if (!scope.TryLookupNestedTypeAlias(lookupContainer, segments[i].Name, arity, out var nested))
+            {
+                return false;
+            }
+
+            if (i < segments.Count - 1)
+            {
+                // Enclosing segment: accumulate its own arguments (if generic)
+                // onto the flattened vector threaded into the next level.
+                if (!segments[i].Args.IsDefaultOrEmpty)
+                {
+                    enclosingArgs = enclosingArgs.IsDefaultOrEmpty
+                        ? segments[i].Args
+                        : enclosingArgs.AddRange(segments[i].Args);
+                }
+
+                containerDef = nested;
+                continue;
+            }
+
+            if (nested is not StructSymbol nestedStruct)
+            {
+                return false;
+            }
+
+            var def = nestedStruct.Definition ?? nestedStruct;
+            var ownArgs = segments[i].Args;
+            if (!enclosingArgs.IsDefaultOrEmpty && !ownArgs.IsDefaultOrEmpty)
+            {
+                constructed = StructSymbol.ConstructNestedGeneric(def, enclosingArgs, ownArgs);
+            }
+            else if (!enclosingArgs.IsDefaultOrEmpty)
+            {
+                constructed = StructSymbol.ConstructNested(def, enclosingArgs);
+            }
+            else if (!ownArgs.IsDefaultOrEmpty)
+            {
+                constructed = StructSymbol.Construct(def, ownArgs);
+            }
+            else
+            {
+                constructed = def;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #1537: flattens the type arguments of a constructed generic
+    /// enclosing segment into the outermost-first vector its nested types are
+    /// reified over — the segment's own <see cref="StructSymbol.EnclosingTypeArguments"/>
+    /// (from levels above it) followed by its own <see cref="StructSymbol.TypeArguments"/>.
+    /// Returns <c>default</c> when the segment carries no type arguments (a
+    /// non-generic enclosing type contributes nothing to thread).
+    /// </summary>
+    /// <param name="outerConstructed">The constructed (or open) enclosing segment.</param>
+    /// <returns>The flattened enclosing-argument vector, or <c>default</c>.</returns>
+    private static ImmutableArray<TypeSymbol> FlattenConstructedEnclosingArguments(StructSymbol outerConstructed)
+    {
+        var enclosing = outerConstructed.EnclosingTypeArguments;
+        var own = outerConstructed.TypeArguments;
+        if (enclosing.IsDefaultOrEmpty && own.IsDefaultOrEmpty)
+        {
+            return default;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>();
+        if (!enclosing.IsDefaultOrEmpty)
+        {
+            builder.AddRange(enclosing);
+        }
+
+        if (!own.IsDefaultOrEmpty)
+        {
+            builder.AddRange(own);
+        }
+
+        return builder.ToImmutable();
     }
 
     /// <summary>
