@@ -1046,6 +1046,25 @@ internal sealed class MethodBodyPlanner
                         }
 
                         break;
+                    case BoundPatternSwitchStatement ps:
+                        // Issue #1515: the label/local pre-pass must descend into
+                        // pattern-switch arm bodies. Loop lowering (and other
+                        // label-generating constructs) inside an arm emits branch
+                        // labels (Label*, check*, continue/break) that
+                        // EmitPatternSwitchStatement later branches to; without this
+                        // recursion those labels are never DefineLabel'd and the
+                        // `labels[target]` lookup throws KeyNotFoundException.
+                        // Nested locals declared inside arm bodies are also
+                        // allocated here, but the `!locals.ContainsKey` guards keep
+                        // this consistent with CollectPatternSwitchSlots (which
+                        // separately allocates the switch discriminant temp, type-
+                        // pattern scratch slots and pattern-binding locals).
+                        foreach (var arm in ps.Arms)
+                        {
+                            this.CollectArmBody(arm.Body, function, locals, localTypes, labels, appendSlots, il, pass);
+                        }
+
+                        break;
                     case BoundTryStatement t:
                         this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         foreach (var clause in t.CatchClauses)
@@ -1108,6 +1127,16 @@ internal sealed class MethodBodyPlanner
                         }
 
                         break;
+                    case BoundPatternSwitchStatement ps:
+                        // Issue #1515: register goto/conditional-goto labels emitted
+                        // by constructs nested inside pattern-switch arm bodies (see
+                        // the pass==1 branch above for the full rationale).
+                        foreach (var arm in ps.Arms)
+                        {
+                            this.CollectArmBody(arm.Body, function, locals, localTypes, labels, appendSlots, il, pass);
+                        }
+
+                        break;
                     case BoundTryStatement t:
                         this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         foreach (var clause in t.CatchClauses)
@@ -1126,6 +1155,38 @@ internal sealed class MethodBodyPlanner
                         break;
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Issue #1515: recurse the label/local pre-pass into a pattern-switch arm
+    /// body. Arm bodies are normally <see cref="BoundBlockStatement"/>, but a
+    /// non-block statement is tolerated by wrapping it so that any nested
+    /// label-generating construct (loops, nested switches, try/finally, scope,
+    /// select, fixed, …) at any depth is still visited.
+    /// </summary>
+    private void CollectArmBody(
+        BoundStatement armBody,
+        FunctionSymbol function,
+        Dictionary<VariableSymbol, int> locals,
+        List<TypeSymbol> localTypes,
+        Dictionary<BoundLabel, LabelHandle> labels,
+        Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
+        InstructionEncoder il,
+        int pass)
+    {
+        if (armBody == null)
+        {
+            return;
+        }
+
+        if (armBody is BoundBlockStatement armBlock)
+        {
+            this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+        }
+        else
+        {
+            this.CollectStatements(ImmutableArray.Create(armBody), function, locals, localTypes, labels, appendSlots, il, pass);
         }
     }
 
