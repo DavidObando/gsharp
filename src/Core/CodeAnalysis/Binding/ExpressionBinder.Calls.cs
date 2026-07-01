@@ -3228,6 +3228,22 @@ internal sealed partial class ExpressionBinder
                 return importedBaseIfaceCall;
             }
 
+            // Issue #1550: a value of ANY type parameter is ultimately a
+            // System.Object, so the universal object instance members
+            // (ToString, GetHashCode, Equals(object), GetType) are callable on
+            // any type-parameter receiver even when no constraint supplies them.
+            // Runs AFTER the constraint-dispatch paths above (#1052 / #1056 /
+            // #943) so a constraint that redeclares one of these names still
+            // wins there. Emitted as a verifiable
+            // `constrained. !!T  callvirt System.Object::Method(...)` sequence,
+            // which dispatches to any override for value, struct/enum and
+            // reference type parameters alike without a manual box.
+            if (receiver != null && receiver.Type is TypeParameterSymbol tpObjRecv
+                && TryBindConstrainedObjectMemberCall(receiver, tpObjRecv, methodName, arguments, ce, argumentNames, out var constrainedObjectCall))
+            {
+                return constrainedObjectCall;
+            }
+
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             return new BoundErrorExpression(null);
         }
@@ -5659,6 +5675,105 @@ internal sealed partial class ExpressionBinder
             default,
             constrainedReceiverTypeParameter: tp,
             constrainedInterfaceType: constraintInterface);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1550: binds a call to a universal <see cref="object"/> instance
+    /// member (<c>ToString</c>, <c>GetHashCode</c>, <c>Equals(object)</c>,
+    /// <c>GetType</c>) dispatched through ANY type-parameter receiver, even one
+    /// without a matching user/CLR constraint. The method is resolved against
+    /// <c>typeof(object)</c>; the resulting
+    /// <see cref="BoundImportedInstanceCallExpression"/> carries the constrained
+    /// type parameter (and a <see langword="null"/> constrained interface type,
+    /// so the emitted <c>MemberRef</c> is parented at <c>System.Object</c>) so
+    /// the emitter produces a verifiable
+    /// <c>constrained. !!T  callvirt System.Object::Method(...)</c> sequence.
+    /// The <c>constrained.</c> prefix dispatches to any override for value,
+    /// struct/enum-constrained and reference type parameters alike without a
+    /// manual box.
+    /// </summary>
+    /// <param name="receiver">The bound receiver (its type is the constrained type parameter).</param>
+    /// <param name="tp">The receiver's type parameter.</param>
+    /// <param name="methodName">The invoked method name.</param>
+    /// <param name="arguments">The bound argument expressions.</param>
+    /// <param name="ce">The originating call-expression syntax.</param>
+    /// <param name="argumentNames">Optional named-argument labels in source order.</param>
+    /// <param name="result">The bound constrained call on success.</param>
+    /// <returns><see langword="true"/> when a matching object member was found and bound.</returns>
+    private bool TryBindConstrainedObjectMemberCall(
+        BoundExpression receiver,
+        TypeParameterSymbol tp,
+        string methodName,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        ImmutableArray<string> argumentNames,
+        out BoundExpression result)
+    {
+        result = null;
+
+        var candidates = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(typeof(object), BindingFlags.Instance | BindingFlags.Public)
+            .Where(m => m.Name == methodName)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        var argTypes = new Type[arguments.Length];
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
+            if (t == null && arguments[i].Type != TypeSymbol.Null)
+            {
+                return false;
+            }
+
+            argTypes[i] = t;
+        }
+
+        var resolution = OverloadResolution.Resolve(
+            candidates,
+            argTypes,
+            null,
+            scope.References.MapClrTypeToReferences,
+            null,
+            argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
+        if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
+        {
+            return false;
+        }
+
+        var method = resolution.Best;
+        var parameters = method.GetParameters();
+
+        // A concrete object member has a concrete return type (string / int32 /
+        // bool / System.Type). Resolve it nullable-obliviously: the receiver is
+        // an erased type parameter (ADR-0004 / #313), so the BCL's `string?`
+        // annotation on `object.ToString()` must not leak a spurious nullable
+        // return into the generic context (which would reject the common
+        // `func Show[T struct]() string -> v.ToString()` shape with GS0156).
+        var returnType = TypeSymbol.FromClrType(method.ReturnType);
+
+        // Unlike the CLR-interface path, the parameter of a matched object
+        // member (e.g. Equals(object)) is a real System.Object, so a `T`-typed
+        // argument must be boxed. Run the normal CLR conversion pass so the
+        // emitter widens (boxes) the `!!T` value to object.
+        var mapping = resolution.ParameterMapping;
+        var convertedArgs = conversions.BindClrParameterConversions(arguments, parameters, ce, mapping, method: method, receiverType: receiver.Type);
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(convertedArgs, mapping, parameters);
+        var refKinds = ComputeArgumentRefKinds(parameters);
+
+        result = new BoundImportedInstanceCallExpression(
+            ce,
+            receiver,
+            method,
+            returnType,
+            orderedArgs,
+            refKinds,
+            default,
+            constrainedReceiverTypeParameter: tp,
+            constrainedInterfaceType: null);
         return true;
     }
 }
