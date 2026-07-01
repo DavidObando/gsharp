@@ -3868,36 +3868,12 @@ public class Parser
 
             var elementIdentifier = MatchToken(SyntaxKind.IdentifierToken);
 
-            // Issue #526: an array/slice of a nested CLR type — `[]Outer.Inner`.
-            var (arrayDots, arrayQualifiers) = ParseQualifierSegments();
-
-            // Phase 4.3c: an array/slice of a constructed generic type —
-            // `[]List[int32]`. The optional type-argument list attaches to the
-            // (last) element identifier, mirroring the non-array path below.
-            SyntaxToken arrayTypeArgOpen = null;
-            SeparatedSyntaxList<TypeClauseSyntax> arrayTypeArgs = default;
-            SyntaxToken arrayTypeArgClose = null;
-            if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
-            {
-                arrayTypeArgOpen = MatchToken(SyntaxKind.OpenSquareBracketToken);
-                var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
-                while (Current.Kind != SyntaxKind.CloseSquareBracketToken &&
-                       Current.Kind != SyntaxKind.EndOfFileToken)
-                {
-                    nodesAndSeparators.Add(ParseTypeClause());
-                    if (Current.Kind == SyntaxKind.CommaToken)
-                    {
-                        nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
-                    }
-                    else
-                    {
-                        break;
-                    }
-                }
-
-                arrayTypeArgs = new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable());
-                arrayTypeArgClose = MatchToken(SyntaxKind.CloseSquareBracketToken);
-            }
+            // Issue #526 / #1506: an array/slice of a (possibly nested, possibly
+            // per-segment generic) named type — `[]Outer.Inner`, `[]List[int32]`,
+            // `[]List[int32].Enumerator`. The dotted-name tail records a
+            // type-argument list per segment so an outer segment can be generic
+            // and still dot into a nested type.
+            var arrayTail = ParseDottedTypeNameTail();
 
             var arrayQuestion = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
             return new TypeClauseSyntax(
@@ -3906,48 +3882,26 @@ public class Parser
                 length,
                 closeBracket,
                 elementIdentifier,
-                arrayDots,
-                arrayQualifiers,
-                arrayTypeArgOpen,
-                arrayTypeArgs,
-                arrayTypeArgClose,
+                arrayTail.Dots,
+                arrayTail.Identifiers,
+                arrayTail.TrailingTypeArgumentOpen,
+                arrayTail.TrailingTypeArguments,
+                arrayTail.TrailingTypeArgumentClose,
                 arrayQuestion,
-                arrayNullableQuestion);
+                arrayNullableQuestion,
+                arrayTail.OuterSegmentTypeArgumentOpens,
+                arrayTail.OuterSegmentTypeArgumentLists,
+                arrayTail.OuterSegmentTypeArgumentCloses);
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
 
-        // Issue #526: a dotted-qualifier chain `Outer.Inner` (or `A.B.C`) names a
-        // nested CLR type. Consume the `.IDENT` segments greedily — the trailing
-        // type-argument list `[T1, ...]` (Phase 4.3c) attaches to the LAST segment,
-        // matching how nested generic types are written in source.
-        var (qualifierDots, qualifierIdents) = ParseQualifierSegments();
-
-        // Phase 4.3c: optional type-argument list `Foo[T1, T2]` in type position.
-        SyntaxToken typeArgOpen = null;
-        SeparatedSyntaxList<TypeClauseSyntax> typeArgs = default;
-        SyntaxToken typeArgClose = null;
-        if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
-        {
-            typeArgOpen = MatchToken(SyntaxKind.OpenSquareBracketToken);
-            var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
-            while (Current.Kind != SyntaxKind.CloseSquareBracketToken &&
-                   Current.Kind != SyntaxKind.EndOfFileToken)
-            {
-                nodesAndSeparators.Add(ParseTypeClause());
-                if (Current.Kind == SyntaxKind.CommaToken)
-                {
-                    nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
-                }
-                else
-                {
-                    break;
-                }
-            }
-
-            typeArgs = new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable());
-            typeArgClose = MatchToken(SyntaxKind.CloseSquareBracketToken);
-        }
+        // Issue #526 / #1506: a dotted-qualifier chain `Outer.Inner` (or `A.B.C`)
+        // names a nested type. Each segment may carry its own type-argument list
+        // so an OUTER segment can be generic and then dot into a nested type
+        // (`List[int32].Enumerator`, `A[T].B[U].C`); the list on the LAST segment
+        // continues to be tracked by `TypeArguments` for backwards compatibility.
+        var tail = ParseDottedTypeNameTail();
 
         var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
         return new TypeClauseSyntax(
@@ -3956,37 +3910,116 @@ public class Parser
             lengthToken: null,
             closeBracketToken: null,
             identifier,
-            qualifierDots,
-            qualifierIdents,
-            typeArgOpen,
-            typeArgs,
-            typeArgClose,
-            question);
+            tail.Dots,
+            tail.Identifiers,
+            tail.TrailingTypeArgumentOpen,
+            tail.TrailingTypeArguments,
+            tail.TrailingTypeArgumentClose,
+            question,
+            arrayQuestionToken: null,
+            tail.OuterSegmentTypeArgumentOpens,
+            tail.OuterSegmentTypeArgumentLists,
+            tail.OuterSegmentTypeArgumentCloses);
     }
 
     /// <summary>
-    /// Issue #526: consumes a dotted-qualifier chain (zero or more <c>.IDENT</c> pairs)
-    /// in a type-clause position. Lookahead-only: stops when the next token is not a
-    /// <c>.</c> followed by an identifier so we never miscount a member-access on a
-    /// value-typed identifier as a qualifier.
+    /// Issue #526 / #1506: consumes the tail of a dotted type-clause name, starting
+    /// immediately after the first (already-consumed) identifier. Each segment may
+    /// carry its own optional <c>[ T1, ... ]</c> type-argument list, generalizing
+    /// <c>Outer[T].Inner</c>, <c>A[T].B[U].C</c>, and the legacy single-trailing-list
+    /// forms. The last segment's type-argument list is returned via the
+    /// <c>Trailing*</c> fields (matching the historical <see cref="TypeClauseSyntax.TypeArguments"/>
+    /// representation); every earlier (outer) segment's list is returned via the
+    /// <c>OuterSegment*</c> arrays, aligned to the segment sequence. Lookahead-only on
+    /// <c>. IDENT</c> so a member access on a value-typed identifier is never miscounted
+    /// as a qualifier.
     /// </summary>
-    /// <returns>The collected dot tokens and qualifier identifier tokens, both empty when no chain is present.</returns>
-    private (ImmutableArray<SyntaxToken> Dots, ImmutableArray<SyntaxToken> Identifiers) ParseQualifierSegments()
+    /// <returns>The decomposed dotted-name tail.</returns>
+    private DottedTypeNameTail ParseDottedTypeNameTail()
     {
-        ImmutableArray<SyntaxToken>.Builder dotBuilder = null;
-        ImmutableArray<SyntaxToken>.Builder identifierBuilder = null;
+        var dots = ImmutableArray.CreateBuilder<SyntaxToken>();
+        var identifiers = ImmutableArray.CreateBuilder<SyntaxToken>();
+        var segmentOpens = new System.Collections.Generic.List<SyntaxToken>();
+        var segmentLists = new System.Collections.Generic.List<SeparatedSyntaxList<TypeClauseSyntax>>();
+        var segmentCloses = new System.Collections.Generic.List<SyntaxToken>();
+
+        // Segment 0 (the already-consumed first identifier): optional `[ ... ]`.
+        ParseOptionalSegmentTypeArguments(out var firstOpen, out var firstList, out var firstClose);
+        segmentOpens.Add(firstOpen);
+        segmentLists.Add(firstList);
+        segmentCloses.Add(firstClose);
 
         while (Current.Kind == SyntaxKind.DotToken && Peek(1).Kind == SyntaxKind.IdentifierToken)
         {
-            dotBuilder ??= ImmutableArray.CreateBuilder<SyntaxToken>();
-            identifierBuilder ??= ImmutableArray.CreateBuilder<SyntaxToken>();
-            dotBuilder.Add(NextToken());
-            identifierBuilder.Add(NextToken());
+            dots.Add(NextToken());
+            identifiers.Add(NextToken());
+            ParseOptionalSegmentTypeArguments(out var segOpen, out var segList, out var segClose);
+            segmentOpens.Add(segOpen);
+            segmentLists.Add(segList);
+            segmentCloses.Add(segClose);
         }
 
-        var dots = dotBuilder == null ? ImmutableArray<SyntaxToken>.Empty : dotBuilder.ToImmutable();
-        var identifiers = identifierBuilder == null ? ImmutableArray<SyntaxToken>.Empty : identifierBuilder.ToImmutable();
-        return (dots, identifiers);
+        var lastIndex = segmentOpens.Count - 1;
+        var outerOpens = ImmutableArray.CreateBuilder<SyntaxToken>(lastIndex);
+        var outerLists = ImmutableArray.CreateBuilder<SeparatedSyntaxList<TypeClauseSyntax>>(lastIndex);
+        var outerCloses = ImmutableArray.CreateBuilder<SyntaxToken>(lastIndex);
+        for (var i = 0; i < lastIndex; i++)
+        {
+            outerOpens.Add(segmentOpens[i]);
+            outerLists.Add(segmentLists[i]);
+            outerCloses.Add(segmentCloses[i]);
+        }
+
+        return new DottedTypeNameTail(
+            dots.ToImmutable(),
+            identifiers.ToImmutable(),
+            segmentOpens[lastIndex],
+            segmentLists[lastIndex],
+            segmentCloses[lastIndex],
+            outerOpens.ToImmutable(),
+            outerLists.ToImmutable(),
+            outerCloses.ToImmutable());
+    }
+
+    /// <summary>
+    /// Parses an optional type-argument list <c>[ T1, T2, ... ]</c> in type position
+    /// (issue #1506). Leaves the parser unchanged and emits all-<c>null</c> outputs when
+    /// the current token does not open a list.
+    /// </summary>
+    /// <param name="open">The opening <c>[</c>, or <c>null</c>.</param>
+    /// <param name="list">The argument list, or <c>null</c>.</param>
+    /// <param name="close">The closing <c>]</c>, or <c>null</c>.</param>
+    private void ParseOptionalSegmentTypeArguments(
+        out SyntaxToken open,
+        out SeparatedSyntaxList<TypeClauseSyntax> list,
+        out SyntaxToken close)
+    {
+        open = null;
+        list = null;
+        close = null;
+        if (Current.Kind != SyntaxKind.OpenSquareBracketToken)
+        {
+            return;
+        }
+
+        open = MatchToken(SyntaxKind.OpenSquareBracketToken);
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        while (Current.Kind != SyntaxKind.CloseSquareBracketToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseTypeClause());
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        list = new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable());
+        close = MatchToken(SyntaxKind.CloseSquareBracketToken);
     }
 
     private TypeClauseSyntax ParseTupleTypeClause()
@@ -9998,5 +10031,51 @@ public class Parser
 
         Diagnostics.ReportUnexpectedToken(new TextLocation(syntaxTree.Text, Current.Span), Current.Kind, kind);
         return new SyntaxToken(syntaxTree, kind, Current.Position, null, null);
+    }
+
+    /// <summary>
+    /// Issue #526 / #1506: the decomposed tail of a dotted type-clause name (everything
+    /// after the first identifier). The last segment's type-argument list is stored in the
+    /// <c>Trailing*</c> fields (the historical single-trailing representation); the per-segment
+    /// lists of every earlier (outer) segment are stored in the <c>OuterSegment*</c> arrays,
+    /// aligned to the segment sequence (index 0 = the first identifier).
+    /// </summary>
+    private readonly struct DottedTypeNameTail
+    {
+        public DottedTypeNameTail(
+            ImmutableArray<SyntaxToken> dots,
+            ImmutableArray<SyntaxToken> identifiers,
+            SyntaxToken trailingTypeArgumentOpen,
+            SeparatedSyntaxList<TypeClauseSyntax> trailingTypeArguments,
+            SyntaxToken trailingTypeArgumentClose,
+            ImmutableArray<SyntaxToken> outerSegmentTypeArgumentOpens,
+            ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>> outerSegmentTypeArgumentLists,
+            ImmutableArray<SyntaxToken> outerSegmentTypeArgumentCloses)
+        {
+            Dots = dots;
+            Identifiers = identifiers;
+            TrailingTypeArgumentOpen = trailingTypeArgumentOpen;
+            TrailingTypeArguments = trailingTypeArguments;
+            TrailingTypeArgumentClose = trailingTypeArgumentClose;
+            OuterSegmentTypeArgumentOpens = outerSegmentTypeArgumentOpens;
+            OuterSegmentTypeArgumentLists = outerSegmentTypeArgumentLists;
+            OuterSegmentTypeArgumentCloses = outerSegmentTypeArgumentCloses;
+        }
+
+        public ImmutableArray<SyntaxToken> Dots { get; }
+
+        public ImmutableArray<SyntaxToken> Identifiers { get; }
+
+        public SyntaxToken TrailingTypeArgumentOpen { get; }
+
+        public SeparatedSyntaxList<TypeClauseSyntax> TrailingTypeArguments { get; }
+
+        public SyntaxToken TrailingTypeArgumentClose { get; }
+
+        public ImmutableArray<SyntaxToken> OuterSegmentTypeArgumentOpens { get; }
+
+        public ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>> OuterSegmentTypeArgumentLists { get; }
+
+        public ImmutableArray<SyntaxToken> OuterSegmentTypeArgumentCloses { get; }
     }
 }
