@@ -1214,7 +1214,14 @@ internal sealed partial class MethodBodyEmitter
     {
         if (fa.Receiver == null)
         {
-            return true;
+            // Issue #1525: mirror ReflectionMetadataEmitter
+            // .IsAddressableFieldAccessForReceiverSpill — a static field is
+            // addressable via ldsflda except for an initonly (readonly) static
+            // value-type field outside its declaring type's .cctor, which must
+            // be spilled to a temp (defensive copy) to keep the IL verifiable.
+            // These two predicates MUST stay in sync: if they disagree the
+            // emitter looks up a spill slot the planner never reserved.
+            return this.outer.IsStaticFieldAddressLegalHere(fa.Field);
         }
 
         if (fa.Receiver.Type is StructSymbol rs && rs.IsClass)
