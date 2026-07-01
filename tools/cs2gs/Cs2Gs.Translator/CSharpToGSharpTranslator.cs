@@ -6423,10 +6423,18 @@ public sealed class CSharpToGSharpTranslator
                     return LiteralExpression.Null();
 
                 case SyntaxKind.DefaultLiteralExpression:
-                    // The target-typed `default` literal maps to the bare G#
-                    // `default`, whose type is supplied by the surrounding context
-                    // (ADR-0100).
-                    return new DefaultValueExpression();
+                    // The target-typed `default` literal maps to G# `default(T)`
+                    // for the converted (target) type when that type is known, so
+                    // the value is self-typed. A bare typeless `default` relies on
+                    // surrounding context for its type, but common positions supply
+                    // none: an inferred `var retval = default` (the C# type was
+                    // erased to the initializer's natural type, which for `default`
+                    // is the target type, so the local-declaration path omits the
+                    // clause and infers — yet bare `default` has nothing to infer
+                    // from) surfaces GS0362. Emitting `default(T)` keeps it valid
+                    // everywhere (ADR-0100). Falls back to bare `default` only when
+                    // the type is genuinely unavailable.
+                    return new DefaultValueExpression(this.ResolveExpressionType(literal));
 
                 default:
                     this.context.ReportUnsupported(
@@ -7124,6 +7132,20 @@ public sealed class CSharpToGSharpTranslator
                 : creation.ArgumentList.Arguments
                     .Select(a => this.TranslateArgument(a))
                     .ToList();
+
+            // A C# delegate creation `new SomeDelegate(target)` wraps a method
+            // group, lambda, or another delegate in a named delegate type. G# has
+            // no delegate wrapper type: a delegate value IS a function value
+            // (ADR-0115 function types). The wrapping constructor is therefore
+            // redundant — unwrap it to the sole target expression. Constructing the
+            // mapped delegate type directly would fail because a delegate maps to an
+            // `ArrowTypeReference` (a structural function type), not a callable named
+            // type, and would otherwise leak the AST node's CLR type name.
+            if (typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Delegate } &&
+                arguments.Count == 1)
+            {
+                return arguments[0];
+            }
 
             // A C# collection initializer maps to the canonical G# collection
             // initializer `Target{ ... }` (ADR-0117, issue #479). This covers
