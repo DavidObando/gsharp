@@ -3350,6 +3350,7 @@ internal sealed class ReflectionMetadataEmitter
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
             var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+            var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
             var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
             var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
@@ -3380,7 +3381,8 @@ internal sealed class ReflectionMetadataEmitter
                 goEnclosingScopes,
                 liftedBinarySlots,
                 nullableCoalesceSpillSlots,
-                il);
+                il,
+                stackAllocResultSlots);
 
             // MoveNext is instance on the SM struct: arg0 = this.
             var parameters = new Dictionary<ParameterSymbol, int>
@@ -3425,7 +3427,8 @@ internal sealed class ReflectionMetadataEmitter
                 constValues: constValues,
                 structThisParameter: moveNextBody.ThisParameter,
                 asyncFieldMap: plan.FieldMap,
-                asyncPlan: plan);
+                asyncPlan: plan,
+                stackAllocResultSlots: stackAllocResultSlots);
 
             try
             {
@@ -3602,6 +3605,7 @@ internal sealed class ReflectionMetadataEmitter
         var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
         var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
         var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+        var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
         var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
         var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
         var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
@@ -3629,7 +3633,8 @@ internal sealed class ReflectionMetadataEmitter
             goEnclosingScopes,
             liftedBinarySlots,
             nullableCoalesceSpillSlots,
-            il);
+            il,
+            stackAllocResultSlots);
 
         var parameters = new Dictionary<ParameterSymbol, int>();
 
@@ -3667,7 +3672,8 @@ internal sealed class ReflectionMetadataEmitter
             goEnclosingScopes,
             liftedBinarySlots: liftedBinarySlots,
             nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-            constValues: constValues);
+            constValues: constValues,
+            stackAllocResultSlots: stackAllocResultSlots);
 
         try
         {
@@ -3713,6 +3719,7 @@ internal sealed class ReflectionMetadataEmitter
         var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
         var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
         var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+        var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
         var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
         var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
         var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
@@ -3740,7 +3747,8 @@ internal sealed class ReflectionMetadataEmitter
             goEnclosingScopes,
             liftedBinarySlots,
             nullableCoalesceSpillSlots,
-            il);
+            il,
+            stackAllocResultSlots);
 
         var parameters = new Dictionary<ParameterSymbol, int>
         {
@@ -3781,7 +3789,8 @@ internal sealed class ReflectionMetadataEmitter
             goEnclosingScopes,
             liftedBinarySlots: liftedBinarySlots,
             nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-            constValues: constValues);
+            constValues: constValues,
+            stackAllocResultSlots: stackAllocResultSlots);
 
         // base()
         il.LoadArgument(0);
@@ -3835,6 +3844,7 @@ internal sealed class ReflectionMetadataEmitter
         var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
         var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
         var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+        var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
         var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
         var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
         var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
@@ -3862,7 +3872,8 @@ internal sealed class ReflectionMetadataEmitter
             goEnclosingScopes,
             liftedBinarySlots,
             nullableCoalesceSpillSlots,
-            il);
+            il,
+            stackAllocResultSlots);
 
         var paramSlots = new Dictionary<ParameterSymbol, int>
         {
@@ -3907,7 +3918,8 @@ internal sealed class ReflectionMetadataEmitter
             goEnclosingScopes,
             liftedBinarySlots: liftedBinarySlots,
             nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-            constValues: constValues);
+            constValues: constValues,
+            stackAllocResultSlots: stackAllocResultSlots);
 
         // base()
         il.LoadArgument(0);
@@ -4000,6 +4012,7 @@ internal sealed class ReflectionMetadataEmitter
         var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
         var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
         var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+        var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
         var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
         var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
         var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
@@ -4037,7 +4050,8 @@ internal sealed class ReflectionMetadataEmitter
                 goEnclosingScopes,
                 liftedBinarySlots,
                 nullableCoalesceSpillSlots,
-                il);
+                il,
+                stackAllocResultSlots);
         }
 
         // Issue #640: pre-scan instance field initializer expressions for locals.
@@ -4066,7 +4080,8 @@ internal sealed class ReflectionMetadataEmitter
                 goEnclosingScopes,
                 liftedBinarySlots,
                 nullableCoalesceSpillSlots,
-                il);
+                il,
+                stackAllocResultSlots);
         }
 
         var paramSlots = new Dictionary<ParameterSymbol, int>
@@ -4112,7 +4127,8 @@ internal sealed class ReflectionMetadataEmitter
             goEnclosingScopes,
             liftedBinarySlots: liftedBinarySlots,
             nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-            constValues: constValues);
+            constValues: constValues,
+            stackAllocResultSlots: stackAllocResultSlots);
 
         // base(args)
         il.LoadArgument(0);
@@ -4198,6 +4214,7 @@ internal sealed class ReflectionMetadataEmitter
         var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
         var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
         var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+        var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
         var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
         var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
         var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
@@ -4238,7 +4255,8 @@ internal sealed class ReflectionMetadataEmitter
                 goEnclosingScopes,
                 liftedBinarySlots,
                 nullableCoalesceSpillSlots,
-                il);
+                il,
+                stackAllocResultSlots);
         }
 
         // Issue #640: pre-scan instance field initializer expressions for locals.
@@ -4270,7 +4288,8 @@ internal sealed class ReflectionMetadataEmitter
                 goEnclosingScopes,
                 liftedBinarySlots,
                 nullableCoalesceSpillSlots,
-                il);
+                il,
+                stackAllocResultSlots);
         }
 
         MethodBodyPlanner.CollectConstValues(body, constValues);
@@ -4295,7 +4314,8 @@ internal sealed class ReflectionMetadataEmitter
             goEnclosingScopes,
             liftedBinarySlots,
             nullableCoalesceSpillSlots,
-            il);
+            il,
+            stackAllocResultSlots);
 
         // Slot 0 is the implicit `this`; user parameters shift up by one.
         var paramSlots = new Dictionary<ParameterSymbol, int>
@@ -4341,7 +4361,8 @@ internal sealed class ReflectionMetadataEmitter
             goEnclosingScopes,
             liftedBinarySlots: liftedBinarySlots,
             nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-            constValues: constValues);
+            constValues: constValues,
+            stackAllocResultSlots: stackAllocResultSlots);
 
         // ADR-0065 §2: a `convenience init(...)` does NOT chain to the base
         // constructor itself — the user-authored body begins with an
@@ -4423,6 +4444,7 @@ internal sealed class ReflectionMetadataEmitter
         var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
         var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
         var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+        var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
         var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
         var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
         var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
@@ -4451,7 +4473,8 @@ internal sealed class ReflectionMetadataEmitter
             goEnclosingScopes,
             liftedBinarySlots,
             nullableCoalesceSpillSlots,
-            il);
+            il,
+            stackAllocResultSlots);
 
         // Slot 0 is the implicit `this`; deinit has no user parameters.
         var paramSlots = new Dictionary<ParameterSymbol, int>
@@ -4493,7 +4516,8 @@ internal sealed class ReflectionMetadataEmitter
             goEnclosingScopes,
             liftedBinarySlots: liftedBinarySlots,
             nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-            constValues: constValues);
+            constValues: constValues,
+            stackAllocResultSlots: stackAllocResultSlots);
 
         // Wrap the user body in try { … } finally { base.Finalize(); }.
         // Matches the IL shape Roslyn emits for `~Type()`. The base
@@ -4622,6 +4646,7 @@ internal sealed class ReflectionMetadataEmitter
                 var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
                 var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
                 var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+                var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
                 var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
                 var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
                 var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
@@ -4652,7 +4677,8 @@ internal sealed class ReflectionMetadataEmitter
                     goEnclosingScopes,
                     liftedBinarySlots,
                     nullableCoalesceSpillSlots,
-                    il);
+                    il,
+                    stackAllocResultSlots);
 
                 // For instance methods, IL slot 0 is the implicit `this`, so user
                 // parameters shift up by one. Both the synthesized `ThisParameter`
@@ -4733,7 +4759,8 @@ internal sealed class ReflectionMetadataEmitter
                     constValues: constValues,
                     structThisParameter: structThis,
                     asyncIteratorEmitCtx: aiEmitCtx,
-                    enclosingClosure: enclosingClosureInfo);
+                    enclosingClosure: enclosingClosureInfo,
+                    stackAllocResultSlots: stackAllocResultSlots);
 
                 // 6.2 SilentEmitFailure invariant: wrap the per-function
                 // EmitBlock in a try/catch so any exception that escapes the

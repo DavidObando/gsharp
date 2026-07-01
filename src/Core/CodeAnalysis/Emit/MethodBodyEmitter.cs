@@ -63,6 +63,8 @@ internal sealed partial class MethodBodyEmitter
     private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
     private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
     private readonly Dictionary<BoundExpression, int> receiverSpillSlots;
+    private readonly Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots;
+    private readonly HashSet<BoundStackAllocExpression> materializedStackAllocs = new HashSet<BoundStackAllocExpression>();
     private readonly Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots;
     private readonly Dictionary<BoundExpression, int> indexAssignmentValueSlots;
     private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
@@ -132,7 +134,8 @@ internal sealed partial class MethodBodyEmitter
         Lowering.Async.AsyncStateMachinePlan asyncPlan = null,
         StateMachineEmitter.AsyncIteratorEmitContext asyncIteratorEmitCtx = null,
         Dictionary<VariableSymbol, object> constValues = null,
-        ClosureEmitter.ClosureInfo enclosingClosure = null)
+        ClosureEmitter.ClosureInfo enclosingClosure = null,
+        Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots = null)
     {
         this.outer = outer;
         this.il = il;
@@ -160,6 +163,7 @@ internal sealed partial class MethodBodyEmitter
         this.asyncIteratorEmitCtx = asyncIteratorEmitCtx;
         this.constValues = constValues;
         this.enclosingClosure = enclosingClosure;
+        this.stackAllocResultSlots = stackAllocResultSlots ?? new Dictionary<BoundStackAllocExpression, int>();
     }
 
     public IReadOnlyList<SequencePoint> SequencePoints => this.sequencePoints;
@@ -218,6 +222,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.RecordSequencePointFor(statement);
+        this.MaterializeSpilledStackAllocs(statement);
         switch (statement)
         {
             case BoundBlockStatement block:
@@ -360,6 +365,34 @@ internal sealed partial class MethodBodyEmitter
             endLine: location.EndLine + 1,
             endColumn: location.EndCharacter + 1));
         this.lastSequencePointIlOffset = ilOffset;
+    }
+
+    // Issue #1522: before a statement's own IL is emitted (evaluation stack is
+    // empty here), materialise every spilled `stackalloc` sub-expression that
+    // this statement contains, in source order, into its pre-allocated result
+    // local. The `localloc` therefore runs at an empty stack, satisfying
+    // ECMA-335 III.3.47; the original operand position later loads the result
+    // local. Nested statements are handled by their own EmitStatement pass, so
+    // this walker does not descend past the first statement boundary.
+    private void MaterializeSpilledStackAllocs(BoundStatement statement)
+    {
+        if (this.stackAllocResultSlots.Count == 0)
+        {
+            return;
+        }
+
+        var spilled = new List<BoundStackAllocExpression>();
+        new SpilledStackAllocCollector(this.stackAllocResultSlots, spilled).Visit(statement);
+        foreach (var sa in spilled)
+        {
+            if (!this.materializedStackAllocs.Add(sa))
+            {
+                continue;
+            }
+
+            this.EmitStackAllocCore(sa);
+            this.il.StoreLocal(this.stackAllocResultSlots[sa]);
+        }
     }
 
     private static bool IsObjectStackType(TypeSymbol type)
@@ -982,6 +1015,48 @@ internal sealed partial class MethodBodyEmitter
             }
 
             base.VisitAssignmentExpression(node);
+        }
+    }
+
+    // Issue #1522: collects the spilled `stackalloc` sub-expressions directly
+    // contained in a single statement, in source (evaluation) order, without
+    // descending into nested statements (each of those runs its own
+    // materialisation pass in EmitStatement).
+    private sealed class SpilledStackAllocCollector : BoundTreeWalker
+    {
+        private readonly IReadOnlyDictionary<BoundStackAllocExpression, int> spilled;
+        private readonly List<BoundStackAllocExpression> sink;
+        private bool entered;
+
+        public SpilledStackAllocCollector(
+            IReadOnlyDictionary<BoundStackAllocExpression, int> spilled,
+            List<BoundStackAllocExpression> sink)
+        {
+            this.spilled = spilled;
+            this.sink = sink;
+        }
+
+        public override void VisitStatement(BoundStatement node)
+        {
+            if (this.entered)
+            {
+                return;
+            }
+
+            this.entered = true;
+            base.VisitStatement(node);
+        }
+
+        public override void VisitExpression(BoundExpression node)
+        {
+            // Post-order: a stackalloc nested inside another spilled
+            // stackalloc's count/initializer must be materialised first so the
+            // outer materialisation reads it back with an empty stack.
+            base.VisitExpression(node);
+            if (node is BoundStackAllocExpression sa && this.spilled.ContainsKey(sa))
+            {
+                this.sink.Add(sa);
+            }
         }
     }
 

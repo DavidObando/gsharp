@@ -767,6 +767,32 @@ internal sealed partial class MethodBodyEmitter
     // ADR-0124 / ADR-0122).
     private void EmitStackAlloc(BoundStackAllocExpression node)
     {
+        // Issue #1522: a `stackalloc` that was spilled by the method-body
+        // planner (any non-statement-root position) has already had its
+        // `localloc` + result materialised into a pre-allocated local at an
+        // empty-stack point (see MaterializeSpilledStackAllocs). At the operand
+        // position we simply load that local, keeping the evaluation stack legal
+        // for the surrounding call/operator. The materialisation guard tolerates
+        // the (unexpected) case of a spilled node reached before its statement's
+        // pre-pass ran by materialising in place — still correct, only the IL
+        // legality that spilling guarantees would be lost on that path.
+        if (this.stackAllocResultSlots.TryGetValue(node, out var resultSlot))
+        {
+            if (this.materializedStackAllocs.Add(node))
+            {
+                this.EmitStackAllocCore(node);
+                this.il.StoreLocal(resultSlot);
+            }
+
+            this.il.LoadLocal(resultSlot);
+            return;
+        }
+
+        this.EmitStackAllocCore(node);
+    }
+
+    private void EmitStackAllocCore(BoundStackAllocExpression node)
+    {
         if (!this.receiverSpillSlots.TryGetValue(node, out var countSlot))
         {
             throw new InvalidOperationException(
