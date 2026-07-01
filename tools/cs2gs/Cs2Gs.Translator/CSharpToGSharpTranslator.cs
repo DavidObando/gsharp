@@ -1676,9 +1676,17 @@ public sealed class CSharpToGSharpTranslator
                 IParameterSymbol self = symbol.Parameters.FirstOrDefault();
                 if (self != null && self.Type.TypeKind != TypeKind.Enum)
                 {
+                    // Issue #1072/#1535: an extension receiver that is null-compared
+                    // or null-assigned in the body is really nullable (common in
+                    // nullable-oblivious sources, e.g. `this object o => o == null`),
+                    // so promote it to `T?` exactly as an ordinary parameter would be
+                    // — the receiver path bypasses MapParameters, so the promotion
+                    // must be applied here too.
+                    GTypeReference receiverType = this.typeMapper.Map(self.Type, this.context, node.GetLocation());
+                    receiverType = this.PromoteIfUsedAsNullable(receiverType, self);
                     receiver = new Receiver(
                         SanitizeIdentifier(self.Name),
-                        this.typeMapper.Map(self.Type, this.context, node.GetLocation()));
+                        receiverType);
                     skipFirstParameter = true;
                     isStatic = false;
                 }
