@@ -564,6 +564,23 @@ public sealed class Conversion
             return Conversion.Explicit;
         }
 
+        // Issue #1532: an explicit cast from `object` (or `object?`) to a type
+        // parameter `T` — written `T(o)` — is an explicit reference/unboxing
+        // conversion checked at runtime, valid for ANY `T` (unconstrained,
+        // `class`-, `struct`-, or interface/base-constrained). C# §10.3.5
+        // lowers `(T)o` to `unbox.any <T>`, which the JIT specialises per
+        // instantiation: a checked reference cast for reference `T`, an unbox
+        // for value `T` (a null source throwing at runtime is expected). This
+        // is EXPLICIT only — an implicit `object -> T` is still rejected
+        // (GS0155) — and does not disturb the reverse `T -> object` erasure
+        // rule (excluded above) because `from` here is a genuine `object`, not
+        // a type parameter. `object?` reaches this via its `object` ClrType.
+        // The emitter materialises this with `unbox.any T`.
+        if (from?.ClrType.IsSameAs(typeof(object)) == true && to is TypeParameterSymbol)
+        {
+            return Conversion.Explicit;
+        }
+
         // Issue #421 P2-5: an interface-typed reference holding a boxed
         // value type unboxes back to that value type via an explicit cast
         // (`MyStruct(iface)`). On the CLR this lowers to `unbox.any`. We
