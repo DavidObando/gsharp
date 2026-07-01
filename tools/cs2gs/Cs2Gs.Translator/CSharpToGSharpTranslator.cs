@@ -5429,7 +5429,7 @@ public sealed class CSharpToGSharpTranslator
                         return new TypeExpression(typeRef);
                     }
 
-                    return new IdentifierExpression(generic.Identifier.Text);
+                    return new IdentifierExpression(SanitizeIdentifier(generic.Identifier.Text));
 
                 case ThisExpressionSyntax:
                     return new ThisExpression();
@@ -6299,7 +6299,7 @@ public sealed class CSharpToGSharpTranslator
                 {
                     return new MemberAccessExpression(
                         new IdentifierExpression(this.currentReceiverName),
-                        identifier.Identifier.Text);
+                        SanitizeIdentifier(identifier.Identifier.Text));
                 }
             }
 
@@ -6320,7 +6320,7 @@ public sealed class CSharpToGSharpTranslator
             {
                 return new MemberAccessExpression(
                     new IdentifierExpression(owner.Name),
-                    identifier.Identifier.Text);
+                    SanitizeIdentifier(identifier.Identifier.Text));
             }
 
             return new IdentifierExpression(SanitizeIdentifier(identifier.Identifier.Text));
@@ -6676,7 +6676,7 @@ public sealed class CSharpToGSharpTranslator
             // lift them onto the G# bracket-type-argument form `Foo[T](...)`.
             if (invocation.Expression is GenericNameSyntax generic)
             {
-                target = new IdentifierExpression(generic.Identifier.Text);
+                target = new IdentifierExpression(SanitizeIdentifier(generic.Identifier.Text));
                 typeArguments = this.MapTypeArguments(generic);
             }
             else if (invocation.Expression is MemberAccessExpressionSyntax member
