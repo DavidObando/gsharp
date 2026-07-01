@@ -788,27 +788,30 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Handles a bare `identifier += expr` / `identifier -= expr` that the parser
-    /// emitted as an <see cref="EventSubscriptionExpressionSyntax"/> with a
-    /// <see cref="NameExpressionSyntax"/> LHS. Resolves as:
-    /// 1. An event subscription on the implicit <c>this</c> if the name matches an event.
-    /// 2. A compound assignment fallback (<c>x += 1</c>) otherwise.
-    /// </summary>
-    /// <summary>
     /// Issue #1246: binds the underlying binary operation of a compound
     /// assignment (<c>lhs op= rhs</c> ⇒ <c>lhs op rhs</c>) so that the right
     /// operand participates in the SAME implicit numeric widening and constant-
     /// integer-literal adaptation that the binary operator <c>lhs op rhs</c>
     /// applies (via <see cref="BindBinaryOperatorWithNumericAdaptation"/>).
-    /// Returns the bound binary expression, or <see langword="null"/> when no
-    /// operator binds even after adaptation (the caller reports GS0129). The
+    /// Issue #1554: when no built-in operator binds, falls back to the SAME
+    /// user-defined (<c>operator</c> methods) and CLR (<c>op_*</c>) resolution
+    /// that the equivalent binary expression uses, so that <c>x += y</c> binds
+    /// whenever <c>x = x + y</c> does (e.g. <c>TimeSpan += TimeSpan</c>,
+    /// <c>DateTime += TimeSpan</c>, or a user <c>operator +</c>). Returns the
+    /// bound expression, or <see langword="null"/> when no operator binds even
+    /// after adaptation and both fallbacks (the caller reports GS0129). The
     /// caller is responsible for converting the result back to the LHS type for
     /// the store, which preserves the C#-style guardrail that a compound
     /// assignment whose result does not implicitly convert back to the LHS type
     /// (e.g. <c>uint8 += int32</c>) is still rejected — exactly as
     /// <c>lhs = lhs op rhs</c> is.
     /// </summary>
-    private BoundBinaryExpression TryBindCompoundBinaryOperation(
+    /// <param name="baseOperatorKind">The base binary operator token kind.</param>
+    /// <param name="leftRead">The bound read of the compound-assignment target.</param>
+    /// <param name="boundRhs">The bound right-hand-side operand.</param>
+    /// <param name="rhsLocation">The source location used for operand diagnostics.</param>
+    /// <returns>The bound binary/user/CLR operator, or <see langword="null"/>.</returns>
+    private BoundExpression TryBindCompoundBinaryOperation(
         SyntaxKind baseOperatorKind,
         BoundExpression leftRead,
         BoundExpression boundRhs,
@@ -817,7 +820,14 @@ internal sealed partial class ExpressionBinder
         var left = leftRead;
         var right = boundRhs;
         var op = BindBinaryOperatorWithNumericAdaptation(baseOperatorKind, ref left, ref right, rhsLocation, rhsLocation);
-        return op == null ? null : new BoundBinaryExpression(null, left, op, right);
+        if (op != null)
+        {
+            return new BoundBinaryExpression(null, left, op, right);
+        }
+
+        // Issue #1554: fall back to user-defined / CLR operator resolution,
+        // exactly as the equivalent binary expression `lhs op rhs` does.
+        return TryBindBinaryWithUserAndClrFallback(baseOperatorKind, ref left, ref right, rhsLocation, rhsLocation, out _);
     }
 
     private BoundExpression BindBareEventOrCompoundAssignment(NameExpressionSyntax bareName, EventSubscriptionExpressionSyntax syntax)

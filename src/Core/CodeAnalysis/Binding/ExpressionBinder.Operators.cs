@@ -1314,68 +1314,21 @@ internal sealed partial class ExpressionBinder
 
         if (boundOperator == null)
         {
-            // Stream D: try user-defined `func (a T) operator <op>(b U) R` on
-            // either operand's user type. Same-package operators are bound as
-            // methods on the struct (Phase 6.4); the receiver is at
-            // Parameters[0] (so binary ops have Parameters.Length == 2).
-            var userOpName = OperatorNames.TryGetBinaryName(syntax.OperatorToken.Kind);
-            if (userOpName != null)
+            // Streams D + C: user-defined `operator` methods then CLR `op_*`
+            // methods, shared with the compound-assignment path (issue #1554).
+            var fallback = TryBindBinaryWithUserAndClrFallback(
+                syntax.OperatorToken.Kind,
+                ref boundLeft,
+                ref boundRight,
+                syntax.Left.Location,
+                syntax.Right.Location,
+                out var ambiguous);
+            if (fallback != null)
             {
-                FunctionSymbol userOp = null;
-                bool leftIsStructReceiver = false;
-                bool rightIsStructReceiver = false;
-                if (boundLeft.Type is StructSymbol leftStruct && TypeMemberModel.TryGetMethodIncludingInherited(leftStruct, userOpName, out var leftOp))
-                {
-                    userOp = leftOp;
-                    leftIsStructReceiver = true;
-                }
-                else if (boundRight.Type is StructSymbol rightStruct && TypeMemberModel.TryGetMethodIncludingInherited(rightStruct, userOpName, out var rightOp))
-                {
-                    userOp = rightOp;
-                    rightIsStructReceiver = true;
-                }
-                else if (boundLeft.Type != null && scope.TryLookupExtensionFunction(boundLeft.Type, userOpName, out var leftExt))
-                {
-                    userOp = leftExt;
-                }
-                else if (boundRight.Type != null && scope.TryLookupExtensionFunction(boundRight.Type, userOpName, out var rightExt))
-                {
-                    userOp = rightExt;
-                }
-
-                if (userOp != null && userOp.Parameters.Length == 2)
-                {
-                    var convertedLeft = conversions.BindConversion(syntax.Left.Location, boundLeft, userOp.Parameters[0].Type);
-                    var convertedRight = conversions.BindConversion(syntax.Right.Location, boundRight, userOp.Parameters[1].Type);
-                    if (leftIsStructReceiver)
-                    {
-                        return new BoundUserInstanceCallExpression(null, convertedLeft, userOp, ImmutableArray.Create(convertedRight));
-                    }
-
-                    if (rightIsStructReceiver)
-                    {
-                        return new BoundUserInstanceCallExpression(null, convertedRight, userOp, ImmutableArray.Create(convertedLeft));
-                    }
-
-                    return new BoundCallExpression(null, userOp, ImmutableArray.Create(convertedLeft, convertedRight));
-                }
+                return fallback;
             }
 
-            // Stream C: fall back to a public-static `op_*` method on either
-            // operand's CLR type (TimeSpan + TimeSpan, BigInteger * int, ...).
-            var ambiguous = false;
-            if ((boundLeft.Type?.ClrType != null || boundRight.Type?.ClrType != null)
-                && ClrOperatorResolution.TryResolveBinary(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type, out var clrMethod, out ambiguous))
-            {
-                return new BoundClrBinaryOperatorExpression(
-                    null,
-                    syntax.OperatorToken.Kind,
-                    boundLeft,
-                    boundRight,
-                    clrMethod,
-                    TypeSymbol.FromClrType(clrMethod.ReturnType));
-            }
-            else if (ambiguous)
+            if (ambiguous)
             {
                 Diagnostics.ReportAmbiguousOverload(syntax.OperatorToken.Location, syntax.OperatorToken.Text, candidateCount: 2);
                 return new BoundErrorExpression(null);
@@ -1414,6 +1367,96 @@ internal sealed partial class ExpressionBinder
         }
 
         return new BoundBinaryExpression(null, boundLeft, boundOperator, boundRight);
+    }
+
+    /// <summary>
+    /// Issue #1554: shared fallback that resolves a binary operator via the
+    /// user-defined operator path (Stream D) and then the CLR <c>op_*</c> path
+    /// (Stream C), in that order, for both the plain binary expression
+    /// (<c>lhs op rhs</c>) and the compound-assignment (<c>lhs op= rhs</c>)
+    /// paths. It is invoked only after the built-in numeric operator has failed
+    /// to bind, so that a compound assignment falls back to exactly the same
+    /// user/BCL operator resolution that the equivalent binary expression uses.
+    /// </summary>
+    /// <param name="opKind">The base binary operator token kind.</param>
+    /// <param name="left">The bound left operand (adapted by the built-in attempt).</param>
+    /// <param name="right">The bound right operand (adapted by the built-in attempt).</param>
+    /// <param name="leftLocation">The source location of the left operand.</param>
+    /// <param name="rightLocation">The source location of the right operand.</param>
+    /// <param name="ambiguous">Set to <see langword="true"/> when CLR operator resolution found multiple equally-applicable candidates.</param>
+    /// <returns>The bound user/CLR operator call, or <see langword="null"/> when neither resolves.</returns>
+    private BoundExpression TryBindBinaryWithUserAndClrFallback(
+        SyntaxKind opKind,
+        ref BoundExpression left,
+        ref BoundExpression right,
+        TextLocation leftLocation,
+        TextLocation rightLocation,
+        out bool ambiguous)
+    {
+        ambiguous = false;
+
+        // Stream D: try user-defined `func (a T) operator <op>(b U) R` on
+        // either operand's user type. Same-package operators are bound as
+        // methods on the struct (Phase 6.4); the receiver is at
+        // Parameters[0] (so binary ops have Parameters.Length == 2).
+        var userOpName = OperatorNames.TryGetBinaryName(opKind);
+        if (userOpName != null)
+        {
+            FunctionSymbol userOp = null;
+            bool leftIsStructReceiver = false;
+            bool rightIsStructReceiver = false;
+            if (left.Type is StructSymbol leftStruct && TypeMemberModel.TryGetMethodIncludingInherited(leftStruct, userOpName, out var leftOp))
+            {
+                userOp = leftOp;
+                leftIsStructReceiver = true;
+            }
+            else if (right.Type is StructSymbol rightStruct && TypeMemberModel.TryGetMethodIncludingInherited(rightStruct, userOpName, out var rightOp))
+            {
+                userOp = rightOp;
+                rightIsStructReceiver = true;
+            }
+            else if (left.Type != null && scope.TryLookupExtensionFunction(left.Type, userOpName, out var leftExt))
+            {
+                userOp = leftExt;
+            }
+            else if (right.Type != null && scope.TryLookupExtensionFunction(right.Type, userOpName, out var rightExt))
+            {
+                userOp = rightExt;
+            }
+
+            if (userOp != null && userOp.Parameters.Length == 2)
+            {
+                var convertedLeft = conversions.BindConversion(leftLocation, left, userOp.Parameters[0].Type);
+                var convertedRight = conversions.BindConversion(rightLocation, right, userOp.Parameters[1].Type);
+                if (leftIsStructReceiver)
+                {
+                    return new BoundUserInstanceCallExpression(null, convertedLeft, userOp, ImmutableArray.Create(convertedRight));
+                }
+
+                if (rightIsStructReceiver)
+                {
+                    return new BoundUserInstanceCallExpression(null, convertedRight, userOp, ImmutableArray.Create(convertedLeft));
+                }
+
+                return new BoundCallExpression(null, userOp, ImmutableArray.Create(convertedLeft, convertedRight));
+            }
+        }
+
+        // Stream C: fall back to a public-static `op_*` method on either
+        // operand's CLR type (TimeSpan + TimeSpan, BigInteger * int, ...).
+        if ((left.Type?.ClrType != null || right.Type?.ClrType != null)
+            && ClrOperatorResolution.TryResolveBinary(opKind, left.Type, right.Type, out var clrMethod, out ambiguous))
+        {
+            return new BoundClrBinaryOperatorExpression(
+                null,
+                opKind,
+                left,
+                right,
+                clrMethod,
+                TypeSymbol.FromClrType(clrMethod.ReturnType));
+        }
+
+        return null;
     }
 
     /// <summary>
