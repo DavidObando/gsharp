@@ -837,9 +837,14 @@ internal sealed partial class MethodBodyEmitter
         switch (access.Member)
         {
             case PropertyInfo property:
+                // Issue #1582: an inherited property from a metadata base may
+                // expose only a `protected` / `protected internal` getter. Try
+                // the public accessor first (unchanged IL for existing samples),
+                // then fall back to the non-public getter for inherited members.
                 var getter = ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(property, wantSetter: false)
+                    ?? ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(property, wantSetter: false, nonPublic: true)
                     ?? throw new InvalidOperationException(
-                        $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no public getter.");
+                        $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no accessible getter.");
                 // Issue #671: when the receiver is a symbolic constructed
                 // generic (e.g. List[MyGs] with a user-defined type arg),
                 // route the getter through the receiver-aware overload so
@@ -924,7 +929,11 @@ internal sealed partial class MethodBodyEmitter
         switch (assn.Member)
         {
             case PropertyInfo property:
+                // Issue #1582: fall back to a non-public setter for an inherited
+                // metadata-base property (public accessor tried first so existing
+                // sample IL is unchanged).
                 var setter = ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(property, wantSetter: true)
+                    ?? ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(property, wantSetter: true, nonPublic: true)
                     ?? throw new InvalidOperationException(
                         $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no public setter.");
                 this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
