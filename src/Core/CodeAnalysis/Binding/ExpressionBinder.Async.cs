@@ -110,14 +110,29 @@ internal sealed partial class ExpressionBinder
             Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
             return new BoundErrorExpression(null);
         }
-        else if (accessor.LeftPart is IndexExpressionSyntax ifaceIndex
-            && !ifaceIndex.IsNullConditional
-            && TryResolveConstructedGenericInterfaceReceiver(ifaceIndex, out var ctorInterface))
+        else if ((accessor.LeftPart is IndexExpressionSyntax || accessor.LeftPart is GenericNameExpressionSyntax)
+            && TryResolveConstructedGenericTypeReceiver(
+                accessor.LeftPart,
+                out var ctorStruct,
+                out var ctorInterface,
+                out var ctorImported))
         {
-            // ADR-0089 / issue #1030: `IBox[int32].StaticField += rhs` —
-            // compound assignment to a constructed generic interface static
-            // field (per-construction storage).
-            if (TryBindInterfaceStaticCompoundAssignment(ctorInterface, eventNameSyntax, syntax, isAdd, out var ctorCompound))
+            // Issue #1559 (extends ADR-0089 / issue #1030): compound assignment
+            // to a static field/property through a constructed generic *type*
+            // receiver — `Foo[int32].x += rhs` (class/struct) or
+            // `IBox[int32].StaticField += rhs` (interface). The receiver is a
+            // TYPE, resolved to the constructed symbol (mirroring the READ /
+            // simple-write paths) rather than bound as element access, and the
+            // carried construction drives per-construction emit/storage.
+            _ = ctorImported;
+            if (ctorStruct != null
+                && TryBindUserTypeStaticCompoundAssignment(ctorStruct, eventNameSyntax, syntax, isAdd, out var ctorStructCompound))
+            {
+                return ctorStructCompound;
+            }
+
+            if (ctorInterface != null
+                && TryBindInterfaceStaticCompoundAssignment(ctorInterface, eventNameSyntax, syntax, isAdd, out var ctorCompound))
             {
                 return ctorCompound;
             }
