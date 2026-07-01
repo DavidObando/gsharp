@@ -4072,6 +4072,33 @@ internal sealed class OverloadResolver
                 }
             }
 
+            // Issue #1585: implicit static-self dispatch inside a `shared`
+            // (static) method body of a user struct/class. The enclosing
+            // function has no `this` parameter but carries <c>StaticOwnerType</c>
+            // = the owning StructSymbol. An unqualified call (`Helper(args)` /
+            // `Helper[T](args)`) must resolve against the type's own static
+            // (`shared`) method group — mirroring both the qualified
+            // `Type.Helper(args)` path and the instance-body bare-call path
+            // (issue #1147), which already reach sibling statics. Routing
+            // through the shared static-call finalizer (`bindUserTypeStaticCall`)
+            // gives full private/overload/optional/variadic/generic fidelity and
+            // walks the same base-type chain as the qualified path. The method
+            // group is fetched through the canonical member-resolution layer
+            // (ADR-0112) so it holds under both reference resolvers.
+            if (getCurrentFunction()?.ThisParameter == null
+                && getCurrentFunction()?.StaticOwnerType is StructSymbol implicitStaticStruct
+                && bindUserTypeStaticCall != null)
+            {
+                var implicitStaticStructOverloads = TypeMemberModel.GetMethods(
+                    implicitStaticStruct,
+                    syntax.Identifier.Text,
+                    MemberQuery.Static(MemberKinds.Method));
+                if (!implicitStaticStructOverloads.IsDefaultOrEmpty)
+                {
+                    return bindUserTypeStaticCall(implicitStaticStruct, syntax);
+                }
+            }
+
             // Issue #1566: reaching here with a non-null symbol means the name
             // denotes only extension function(s) and the enclosing type had no
             // matching member — fall through to the free-function/extension
