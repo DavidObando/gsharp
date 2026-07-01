@@ -105,10 +105,11 @@ public class Issue1506PerSegmentNestedTypeBinderTests
     public void UserGenericOuter_NestedType_ResolvesAgainstConstructedOuter()
     {
         // A user-declared generic outer's nested type resolves through the
-        // enclosing-type chain, validating the outer's arguments. (End-to-end
-        // emit of nested types declared inside user generics is a separate,
-        // pre-existing limitation outside issue #1506's scope; this asserts the
-        // binder resolution the issue requires.)
+        // enclosing-type chain, validating the outer's arguments. Issue #1521:
+        // the nested type is now threaded with the enclosing construction's
+        // arguments (`Box[int32].Tag` carries EnclosingTypeArguments=[int32]) so
+        // a use-site reference/slot emits `Box`1+Tag`1<int32>` rather than the
+        // open self-instantiation `Box`1+Tag`1<!0>`.
         var scope = BindSource("""
             package p
             struct Box[T] {
@@ -129,8 +130,17 @@ public class Issue1506PerSegmentNestedTypeBinderTests
 
         var tag = (StructSymbol)scope.TypeAliases["Tag"];
         var box = (StructSymbol)scope.TypeAliases["Box`1"];
-        Assert.Same(tag, paramType);
-        Assert.Same(box, tag.ContainingType);
+
+        // Issue #1521: the resolved parameter type is a constructed-nested
+        // reference (distinct from the open Tag definition) closed over the
+        // enclosing outer's `int32` argument, but sharing the open definition
+        // and the open enclosing type as its ContainingType.
+        var paramStruct = Assert.IsType<StructSymbol>(paramType);
+        Assert.True(paramStruct.IsConstructedNestedType);
+        Assert.Same(tag, paramStruct.Definition);
+        Assert.Same(box, paramStruct.ContainingType);
+        var enclosingArg = Assert.Single(paramStruct.EnclosingTypeArguments);
+        Assert.Equal("int32", enclosingArg.Name);
     }
 
     [Fact]

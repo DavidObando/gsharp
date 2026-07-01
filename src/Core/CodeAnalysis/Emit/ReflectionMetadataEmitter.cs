@@ -7067,25 +7067,7 @@ internal sealed class ReflectionMetadataEmitter
                 $"User generic type '{def.Name}' has no emitted TypeDef when constructing TypeSpec.");
         }
 
-        ImmutableArray<TypeSymbol> typeArgs;
-        if (!structSym.TypeArguments.IsDefaultOrEmpty)
-        {
-            typeArgs = structSym.TypeArguments;
-        }
-        else
-        {
-            // Open definition → encode self-instantiation using the
-            // definition's own type parameters as arguments. Each will
-            // encode as `VAR(idx)` via EncodeTypeSymbol after R2.
-            var defTps = def.TypeParameters;
-            var bld = ImmutableArray.CreateBuilder<TypeSymbol>(defTps.Length);
-            foreach (var tp in defTps)
-            {
-                bld.Add(tp);
-            }
-
-            typeArgs = bld.MoveToImmutable();
-        }
+        var typeArgs = ResolveUserStructTypeSpecArguments(structSym, def);
 
         var sigBlob = new BlobBuilder();
         var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
@@ -7098,6 +7080,51 @@ internal sealed class ReflectionMetadataEmitter
         var spec = (EntityHandle)this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         this.userStructTypeSpecCache[(structSym, this.activeIteratorStateMachineRemap)] = spec;
         return spec;
+    }
+
+    /// <summary>
+    /// ADR-0087 §3 R3 / issue #1521: resolves the type-argument vector encoded
+    /// for a reference to a user-declared generic struct (or a type nested
+    /// inside one). A constructed instance uses its own
+    /// <see cref="StructSymbol.TypeArguments"/> (<c>Box`1&lt;int32&gt;</c>); a
+    /// constructed reference to a nested type uses the enclosing construction's
+    /// <see cref="StructSymbol.EnclosingTypeArguments"/>
+    /// (<c>Box`1+Tag`1&lt;int32&gt;</c>); the open definition (including a nested
+    /// type referenced from within its enclosing generic's own members) uses the
+    /// self-instantiation over the definition's own type parameters, each of
+    /// which encodes as <c>VAR(idx)</c> (<c>Box`1+Tag`1&lt;!0&gt;</c>).
+    /// </summary>
+    /// <param name="structSym">The struct reference being encoded.</param>
+    /// <param name="def">The struct's emitted definition.</param>
+    /// <returns>The type-argument vector aligned with <paramref name="def"/>'s type parameters.</returns>
+    private static ImmutableArray<TypeSymbol> ResolveUserStructTypeSpecArguments(StructSymbol structSym, StructSymbol def)
+    {
+        if (!structSym.TypeArguments.IsDefaultOrEmpty)
+        {
+            return structSym.TypeArguments;
+        }
+
+        // Issue #1521: a constructed reference to a type nested inside a generic
+        // enclosing type threads the enclosing construction's arguments as the
+        // reified nested type's argument vector (`Box`1+Tag`1<int32>`).
+        if (!structSym.EnclosingTypeArguments.IsDefaultOrEmpty)
+        {
+            return structSym.EnclosingTypeArguments;
+        }
+
+        // Open definition → encode self-instantiation using the definition's
+        // own type parameters as arguments. Each will encode as `VAR(idx)` via
+        // EncodeTypeSymbol. For a nested type referenced from within its
+        // enclosing generic's own members these are the reified enclosing
+        // parameters, so the reference correctly threads `!0…`.
+        var defTps = def.TypeParameters;
+        var bld = ImmutableArray.CreateBuilder<TypeSymbol>(defTps.Length);
+        foreach (var tp in defTps)
+        {
+            bld.Add(tp);
+        }
+
+        return bld.MoveToImmutable();
     }
 
     /// <summary>
@@ -10035,22 +10062,7 @@ internal sealed class ReflectionMetadataEmitter
 
             if (IsUserGenericTypeReference(structSym))
             {
-                ImmutableArray<TypeSymbol> typeArgs;
-                if (!structSym.TypeArguments.IsDefaultOrEmpty)
-                {
-                    typeArgs = structSym.TypeArguments;
-                }
-                else
-                {
-                    var defTps = defSym.TypeParameters;
-                    var bld = ImmutableArray.CreateBuilder<TypeSymbol>(defTps.Length);
-                    foreach (var defTp in defTps)
-                    {
-                        bld.Add(defTp);
-                    }
-
-                    typeArgs = bld.MoveToImmutable();
-                }
+                var typeArgs = ResolveUserStructTypeSpecArguments(structSym, defSym);
 
                 var gi = encoder.GenericInstantiation(typeDef, typeArgs.Length, isValueType: !defSym.IsClass);
                 foreach (var arg in typeArgs)
