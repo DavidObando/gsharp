@@ -398,22 +398,46 @@ public sealed record BoundBinaryOperator
             return true;
         }
 
-        // Issue #796: extend `== nil` / `!= nil` to reference-shaped types
-        // whose CLR representation is a managed reference. The binder
-        // already accepts `T? == nil` for any nullable wrapper; the
-        // language has no `T?` spelling for these structural shapes,
-        // so allow the comparison directly. Emit falls through to the
-        // generic `ldnull; ceq` path (verifier-clean for any reference).
+        // Issues #796 / #1535: extend `== nil` / `!= nil` to reference-shaped
+        // types whose CLR representation is a managed reference. The binder
+        // already accepts `T? == nil` for any nullable wrapper; the language
+        // has no `T?` spelling for most of these structural shapes, so allow
+        // the comparison directly (C# permits `x == null` for any reference or
+        // array type). Emit falls through to the generic `ldnull; ceq` path
+        // (verifier-clean for any reference).
         //
-        // Covered shapes (all reference-typed at the CLR level):
+        // Structural reference shapes handled explicitly because they may carry
+        // no concrete CLR type during binding (user-declared or synthesized):
         //   * `(T) -> R` / `func(T) U` — FunctionTypeSymbol, lowered to a
         //     System.MulticastDelegate-derived closure.
         //   * Named delegate types declared with `delegate` — DelegateTypeSymbol.
         //   * `sequence[T]` / `asyncSequence[T]` — IEnumerable<T> / IAsyncEnumerable<T>.
-        return nullableOrUnderlying is FunctionTypeSymbol
+        //   * User and imported interfaces — InterfaceSymbol.
+        if (nullableOrUnderlying is FunctionTypeSymbol
             || nullableOrUnderlying is DelegateTypeSymbol
             || nullableOrUnderlying is SequenceTypeSymbol
-            || nullableOrUnderlying is AsyncSequenceTypeSymbol;
+            || nullableOrUnderlying is AsyncSequenceTypeSymbol
+            || nullableOrUnderlying is InterfaceSymbol)
+        {
+            return true;
+        }
+
+        // Issue #1535: a user-declared struct is a reference type only when it
+        // is a `class` (`IsClass`). Non-class structs (plain / `data` / `inline`)
+        // are value types and must keep rejecting `== nil` (GS0129).
+        if (nullableOrUnderlying is StructSymbol structSym)
+        {
+            return structSym.IsClass;
+        }
+
+        // Issue #1535: any remaining type whose CLR representation is a managed
+        // reference — arrays (`[N]T`), slices (`[]T`, incl. `[]T?`), `object`,
+        // `string`, imported reference/interface types (e.g. `IEnumerable[T]`,
+        // `System.Threading.SynchronizationContext`), maps, channels. Value
+        // types (`int32`, `DateTime`, imported structs, user enums) carry a
+        // value CLR type and are correctly excluded, so `== nil` still reports
+        // GS0129 for them.
+        return nullableOrUnderlying.ClrType is { IsValueType: false };
     }
 
     private static BoundBinaryOperator[] BuildSupportedOperators()
