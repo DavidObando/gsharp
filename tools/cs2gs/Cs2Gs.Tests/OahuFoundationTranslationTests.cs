@@ -77,6 +77,41 @@ namespace Demo
     }
 
     /// <summary>
+    /// Issue #914: a C# nullable *value* type (`T?` = `System.Nullable&lt;T&gt;`)
+    /// exposes `.Value` / `.HasValue`, but G# models `T?` directly and has no
+    /// `Nullable&lt;T&gt;` member surface (it relies on Kotlin-style smart-casts).
+    /// So `x.Value` maps to the non-null assertion `x!!` (faithful to C#'s
+    /// throw-if-null semantics) and `x.HasValue` maps to the null test
+    /// `x != nil`. A user type with a member literally named `Value` is left
+    /// untouched (the rewrite is gated on the receiver being `Nullable&lt;T&gt;`).
+    /// </summary>
+    [Fact]
+    public void NullableValueTypeValueAndHasValue_MapToAssertionAndNilTest()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class NullVX
+    {
+        public int Unwrap(int? x) => x.Value;
+        public bool Present(int? x) => x.HasValue;
+    }
+
+    public class BoxVX
+    {
+        public int Value => 7;
+        public int Read(BoxVX b) => b.Value;
+    }
+}");
+
+        Assert.Contains("x!!", printed);
+        Assert.Contains("x != nil", printed);
+        // The user `BoxVX.Value` member access is NOT a Nullable<T> receiver and
+        // must remain a plain member access, never rewritten to `!!`.
+        Assert.Contains("b.Value", printed);
+    }
+
+    /// <summary>
     /// ADR-0115 §B: `x is null` / `x is not null` map to G# `== nil` / `!= nil`,
     /// and a type-test with a binder (`x is T t`) becomes a smart-cast `is T`
     /// test that drops the binder (the receiver is narrowed inside the block).

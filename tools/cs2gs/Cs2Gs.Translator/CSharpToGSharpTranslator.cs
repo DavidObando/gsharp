@@ -6513,6 +6513,31 @@ public sealed class CSharpToGSharpTranslator
             // type to the non-null `Ac4DsiV1`, which gsc's extension-method lookup
             // does not match against the `Ac4DsiV1?` `this` slot (GS0159). Keep the
             // declared-nullable receiver so the extension resolves.
+            // A C# nullable *value* type (`T?` lowering to `System.Nullable<T>`)
+            // exposes `.Value` and `.HasValue`, but G# models a value-type `T?`
+            // directly (no `Nullable<T>` member surface) and relies on Kotlin-style
+            // smart-casts, so those members do not exist on the G# side. Rewrite
+            // them to the idiomatic G# equivalents (#914):
+            //   * `x.Value`    -> `x!!`      (assert non-null, matching C#'s throw-
+            //                                 if-null semantics; harmless once the
+            //                                 local is already smart-cast-narrowed).
+            //   * `x.HasValue` -> `x != nil` (a plain null test on the raw receiver).
+            // Guard on the receiver's *declared* type being `System.Nullable<T>` so
+            // a user type with a member literally named `Value`/`HasValue` is
+            // unaffected. Nullable *reference* types (`string?`) have a non-
+            // `Nullable<T>` receiver type and are likewise left alone.
+            if (this.context.GetTypeInfo(member.Expression).Type is { } receiverType
+                && receiverType.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T)
+            {
+                switch (member.Name.Identifier.Text)
+                {
+                    case "Value":
+                        return new NonNullAssertionExpression(this.TranslateExpression(member.Expression));
+                    case "HasValue":
+                        return new BinaryExpression(this.TranslateExpression(member.Expression), "!=", LiteralExpression.Null());
+                }
+            }
+
             GExpression target = this.MemberBindsToNullableThisExtension(member)
                 ? this.TranslateExpression(member.Expression)
                 : this.TranslateReceiverWithNullForgiveness(member.Expression);
