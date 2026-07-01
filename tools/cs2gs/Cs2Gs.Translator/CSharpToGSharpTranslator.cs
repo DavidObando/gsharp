@@ -6327,11 +6327,28 @@ public sealed class CSharpToGSharpTranslator
                 !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition))
             {
                 return new MemberAccessExpression(
-                    new IdentifierExpression(owner.Name),
+                    this.StaticQualifierReceiver(owner, identifier.GetLocation()),
                     SanitizeIdentifier(identifier.Identifier.Text));
             }
 
             return new IdentifierExpression(SanitizeIdentifier(identifier.Identifier.Text));
+        }
+
+        // Builds the receiver expression used to qualify a bare sibling static
+        // member reference through its owning type. For a non-generic owner this is
+        // a plain identifier (`Owner`); for a GENERIC owner it must carry the type
+        // arguments (`Owner[T]`) so it does not collide with a sibling non-generic
+        // type of the same simple name (e.g. `static class TreeDecomposition` beside
+        // `class TreeDecomposition<T>`), which would otherwise bind the arity-0 type
+        // and report GS0158 for members that live only on the generic type.
+        private GExpression StaticQualifierReceiver(INamedTypeSymbol owner, Location location)
+        {
+            if (owner.IsGenericType)
+            {
+                return new TypeExpression(this.typeMapper.Map(owner, this.context, location));
+            }
+
+            return new IdentifierExpression(owner.Name);
         }
 
         private GExpression TranslateLiteral(LiteralExpressionSyntax literal)
@@ -6722,7 +6739,7 @@ public sealed class CSharpToGSharpTranslator
                 // (ADR-0134): gsc brings it into scope through `import Owner`,
                 // so it is left unqualified above.
                 target = new MemberAccessExpression(
-                    new IdentifierExpression(owner.Name),
+                    this.StaticQualifierReceiver(owner, bareName.GetLocation()),
                     staticMethod.Name);
             }
             else
