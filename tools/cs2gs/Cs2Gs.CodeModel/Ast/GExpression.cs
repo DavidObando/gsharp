@@ -262,6 +262,14 @@ public sealed class CollectionInitializerElement : GNode
 /// A collection initializer <c>Target{ elements }</c> — e.g.
 /// <c>List[int32]{1, 2, 3}</c> or <c>Dictionary[string, int32]{ "a": 1 }</c>
 /// (ADR-0117). <see cref="Target"/> is the construction call.
+/// <para>
+/// Issue #1567: <see cref="Target"/> is <see langword="null"/> for the
+/// target-less <em>member</em> collection-initializer form <c>{ elements }</c>
+/// used as a composite/object-initializer member value
+/// (<c>T{ GetOnlyProp: { a, b } }</c>) to populate a get-only collection
+/// property at construction (gsc lowers each element to an <c>Add(...)</c>
+/// call / indexer set on the constructed receiver's member).
+/// </para>
 /// </summary>
 public sealed class CollectionInitializerExpression : GExpression
 {

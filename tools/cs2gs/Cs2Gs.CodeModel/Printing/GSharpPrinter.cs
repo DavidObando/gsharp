@@ -521,7 +521,15 @@ public static class GSharpPrinter
         // Canonical form: drop the empty `()` on a zero-argument construction
         // so `List[int32](){...}` renders as `List[int32]{...}`.
         string target;
-        if (collection.Target is InvocationExpression invocation && invocation.Arguments.Count == 0)
+        if (collection.Target == null)
+        {
+            // Issue #1567: a target-less collection initializer is the member
+            // collection-initializer form `{ elems }` used as a composite/object-
+            // initializer member value to populate a get-only collection
+            // property (lowered to `.Add(...)` calls by gsc).
+            target = string.Empty;
+        }
+        else if (collection.Target is InvocationExpression invocation && invocation.Arguments.Count == 0)
         {
             var typeArgs = invocation.TypeArguments.Count == 0
                 ? string.Empty

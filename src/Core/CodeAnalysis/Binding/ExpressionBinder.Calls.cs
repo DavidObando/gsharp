@@ -156,6 +156,17 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindCollectionInitializerExpression(CollectionInitializerExpressionSyntax syntax)
     {
+        // Issue #1567: a target-less collection initializer only appears as a
+        // composite/object-initializer member value (`T{ Prop: { a, b } }`) and
+        // is consumed directly by the composite-literal binder — it never
+        // reaches general expression binding. Guard defensively.
+        if (syntax.Target == null)
+        {
+            Diagnostics.ReportTypeNotCollectionInitializable(syntax.OpenBraceToken.Location, TypeSymbol.Error);
+            BindCollectionElementsForDiagnostics(syntax);
+            return new BoundErrorExpression(null);
+        }
+
         var target = BindExpression(syntax.Target);
         if (target.Type == TypeSymbol.Error || target.Type == null)
         {
@@ -165,7 +176,6 @@ internal sealed partial class ExpressionBinder
 
         var resultType = target.Type;
         var clrType = resultType.ClrType;
-        var hasIndexedElement = syntax.Elements.Any(e => e is IndexedCollectionElementSyntax);
         var hasNonIndexedElement = syntax.Elements.Any(e => e is not IndexedCollectionElementSyntax);
 
         // A collection initializer requires an accessible instance `Add` for the
@@ -185,20 +195,38 @@ internal sealed partial class ExpressionBinder
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.Add(new BoundVariableDeclaration(syntax, tempVar, target));
+        EmitCollectionElementAddStatements(tempVar, syntax.Elements, statements);
 
-        foreach (var element in syntax.Elements)
+        var resultExpr = new BoundVariableExpression(syntax, tempVar);
+        return new BoundBlockExpression(syntax, statements.ToImmutable(), resultExpr);
+    }
+
+    /// <summary>
+    /// Issue #479 / ADR-0117 (and #1567): lowers each collection element into an
+    /// <c>Add(...)</c> call (bare / <c>key: value</c> entries) or an indexer set
+    /// (<c>[key] = value</c> entries) against the collection held by
+    /// <paramref name="collectionLocal"/>, appending one statement per element.
+    /// Shared by the standalone collection initializer and the member
+    /// collection initializer that populates a get-only collection property.
+    /// </summary>
+    private void EmitCollectionElementAddStatements(
+        LocalVariableSymbol collectionLocal,
+        SeparatedSyntaxList<CollectionElementSyntax> elements,
+        ImmutableArray<BoundStatement>.Builder statements)
+    {
+        foreach (var element in elements)
         {
             BoundExpression bound;
             switch (element)
             {
                 case ExpressionCollectionElementSyntax bare:
-                    bound = BindCollectionAddCall(tempVar, element, ImmutableArray.Create(bare.Expression));
+                    bound = BindCollectionAddCall(collectionLocal, element, ImmutableArray.Create(bare.Expression));
                     break;
                 case KeyedCollectionElementSyntax keyed:
-                    bound = BindCollectionAddCall(tempVar, element, ImmutableArray.Create(keyed.Key, keyed.Value));
+                    bound = BindCollectionAddCall(collectionLocal, element, ImmutableArray.Create(keyed.Key, keyed.Value));
                     break;
                 case IndexedCollectionElementSyntax indexed:
-                    bound = BindIndexedAssignmentToVariable(tempVar, indexed.Key, indexed.Value, indexed.EqualsToken.Location);
+                    bound = BindIndexedAssignmentToVariable(collectionLocal, indexed.Key, indexed.Value, indexed.EqualsToken.Location);
                     break;
                 default:
                     bound = new BoundErrorExpression(null);
@@ -207,10 +235,53 @@ internal sealed partial class ExpressionBinder
 
             statements.Add(new BoundExpressionStatement(element, bound));
         }
+    }
 
-        _ = hasIndexedElement;
-        var resultExpr = new BoundVariableExpression(syntax, tempVar);
-        return new BoundBlockExpression(syntax, statements.ToImmutable(), resultExpr);
+    /// <summary>
+    /// Issue #1567: lowers a <em>member</em> collection initializer
+    /// (<c>Member: { a, b }</c> / <c>Member = { a, b }</c>) that populates a
+    /// get-only (or settable) collection property of a just-constructed
+    /// <paramref name="receiver"/>. Reads <c>receiver.Member</c> — a get-only
+    /// property is readable even though it cannot be assigned — into a synthetic
+    /// local and reuses the standalone collection-initializer element lowering to
+    /// emit an <c>Add(...)</c> call / indexer set per element. Because the
+    /// collection is a reference type the local aliases the property's collection
+    /// in place, mirroring the C# <c>receiver.Member.Add(x)</c> lowering.
+    /// Returns <see langword="false"/> when the member is not a collection (its
+    /// type exposes no accessible <c>Add</c> for non-indexed elements), so the
+    /// caller falls back to its normal assignment / GS0127 handling.
+    /// </summary>
+    private bool TryEmitMemberCollectionInitializer(
+        BoundExpression receiver,
+        string memberName,
+        SyntaxNode anchor,
+        CollectionInitializerExpressionSyntax braced,
+        ImmutableArray<BoundStatement>.Builder statements)
+    {
+        var tree = anchor.SyntaxTree;
+        var position = anchor.Span.Start;
+        var nameToken = new SyntaxToken(tree, SyntaxKind.IdentifierToken, position, memberName, null);
+        var nameSyntax = new NameExpressionSyntax(tree, nameToken);
+        var propRead = BindAccessorStep(receiver, classSymbol: null, nameSyntax);
+        if (propRead is BoundErrorExpression || propRead.Type == null || propRead.Type == TypeSymbol.Error)
+        {
+            return false;
+        }
+
+        var clrType = propRead.Type.ClrType;
+        var hasNonIndexedElement = braced.Elements.Any(e => e is not IndexedCollectionElementSyntax);
+        var hasAdd = clrType != null && MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, "Add").Count > 0;
+        if (clrType == null || (hasNonIndexedElement && !hasAdd))
+        {
+            return false;
+        }
+
+        var tempName = "$collinit" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var memberLocal = new LocalVariableSymbol(tempName, isReadOnly: true, propRead.Type);
+        scope.TryDeclareVariable(memberLocal);
+        statements.Add(new BoundVariableDeclaration(braced, memberLocal, propRead));
+        EmitCollectionElementAddStatements(memberLocal, braced.Elements, statements);
+        return true;
     }
 
     /// <summary>

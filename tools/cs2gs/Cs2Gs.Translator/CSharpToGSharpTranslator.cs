@@ -7273,6 +7273,31 @@ public sealed class CSharpToGSharpTranslator
                 if (element is AssignmentExpressionSyntax assignment &&
                     assignment.Left is IdentifierNameSyntax name)
                 {
+                    // Issue #1567: a nested collection/object initializer as the
+                    // assignment RHS (`Prop = { a, b }` / `Prop = { ["k"] = v }`)
+                    // is the C# collection-initializer-in-object-initializer
+                    // pattern — it POPULATES a (typically get-only) collection
+                    // property via `Add(...)` rather than ASSIGNING it. Emit the
+                    // target-less member collection-initializer form
+                    // `Prop: { … }` that gsc lowers to `receiver.Prop.Add(x)`,
+                    // preserving the element shapes (bare / keyed / indexed). A
+                    // plain array/object initializer would wrongly render as an
+                    // assignment and hit GS0127 for a get-only property.
+                    if (assignment.Right is InitializerExpressionSyntax nestedInit &&
+                        (nestedInit.IsKind(SyntaxKind.CollectionInitializerExpression) ||
+                         nestedInit.IsKind(SyntaxKind.ObjectInitializerExpression)))
+                    {
+                        List<CollectionInitializerElement> memberElements =
+                            this.TranslateCollectionInitializerElements(nestedInit);
+                        if (memberElements != null)
+                        {
+                            fieldInitializers.Add(new FieldInitializer(
+                                name.Identifier.Text,
+                                new CollectionInitializerExpression(target: null, memberElements)));
+                            continue;
+                        }
+                    }
+
                     fieldInitializers.Add(new FieldInitializer(
                         name.Identifier.Text,
                         this.TranslateExpression(assignment.Right)));
@@ -7313,6 +7338,29 @@ public sealed class CSharpToGSharpTranslator
                 return false;
             }
 
+            List<CollectionInitializerElement> elements = this.TranslateCollectionInitializerElements(initializer);
+            if (elements == null)
+            {
+                return false;
+            }
+
+            GExpression construction = BuildConstruction(type, arguments);
+            result = new CollectionInitializerExpression(construction, elements);
+            return true;
+        }
+
+        /// <summary>
+        /// Translates the elements of a C# collection initializer into canonical
+        /// G# <see cref="CollectionInitializerElement"/>s (bare, keyed, or
+        /// indexed). Returns <see langword="null"/> when an element has no
+        /// canonical G# form (an unsupported diagnostic is reported). Shared by
+        /// the standalone collection initializer (ADR-0117) and the member
+        /// collection initializer used to populate a get-only collection property
+        /// at construction (issue #1567, <c>Prop = { … }</c>).
+        /// </summary>
+        private List<CollectionInitializerElement> TranslateCollectionInitializerElements(
+            InitializerExpressionSyntax initializer)
+        {
             var elements = new List<CollectionInitializerElement>();
             foreach (ExpressionSyntax element in initializer.Expressions)
             {
@@ -7324,7 +7372,7 @@ public sealed class CSharpToGSharpTranslator
                         this.context.ReportUnsupported(
                             element,
                             "multi-argument indexer initializer has no canonical G# collection-initializer form (ADR-0117).");
-                        return false;
+                        return null;
                     }
 
                     elements.Add(new CollectionInitializerElement(
@@ -7341,7 +7389,7 @@ public sealed class CSharpToGSharpTranslator
                         this.context.ReportUnsupported(
                             element,
                             "collection initializer element with other than two values has no canonical G# form (ADR-0117).");
-                        return false;
+                        return null;
                     }
 
                     elements.Add(new CollectionInitializerElement(
@@ -7356,9 +7404,7 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            GExpression construction = BuildConstruction(type, arguments);
-            result = new CollectionInitializerExpression(construction, elements);
-            return true;
+            return elements;
         }
 
         private static List<string> OrderedValueMemberNames(INamedTypeSymbol valueType)

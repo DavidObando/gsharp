@@ -9711,8 +9711,25 @@ public class Parser
     {
         var fieldId = MatchToken(SyntaxKind.IdentifierToken);
         var colon = MatchToken(SyntaxKind.ColonToken);
-        var value = ParseExpression();
+        var value = ParseFieldInitializerValue();
         return new FieldInitializerSyntax(syntaxTree, fieldId, colon, value);
+    }
+
+    // Issue #1567: a composite/object-initializer member value may be a braced
+    // `{ elements }` collection initializer that populates a get-only collection
+    // property by lowering to `.Add(...)` calls (the C# collection-initializer-
+    // in-object-initializer pattern `Prop = { a, b }`). A brace can never start a
+    // normal expression in value position, so its presence unambiguously selects
+    // the target-less collection-initializer form; anything else is an ordinary
+    // assignment value.
+    private ExpressionSyntax ParseFieldInitializerValue()
+    {
+        if (Current.Kind == SyntaxKind.OpenBraceToken)
+        {
+            return ParseCollectionInitializerExpression(target: null);
+        }
+
+        return ParseExpression();
     }
 
     private SeparatedSyntaxList<FieldInitializerSyntax> ParseFieldEqualsInitializers()
@@ -9725,7 +9742,7 @@ public class Parser
         {
             var fieldId = MatchToken(SyntaxKind.IdentifierToken);
             var equals = MatchToken(SyntaxKind.EqualsToken);
-            var value = ParseExpression();
+            var value = ParseFieldInitializerValue();
             nodesAndSeparators.Add(new FieldInitializerSyntax(syntaxTree, fieldId, equals, value));
             if (Current.Kind == SyntaxKind.CommaToken)
             {
