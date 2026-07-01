@@ -340,7 +340,8 @@ internal sealed class MethodBodyPlanner
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
         Dictionary<BoundBinaryExpression, LiftedBinarySlots> liftedBinarySlots,
         Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots,
-        InstructionEncoder il)
+        InstructionEncoder il,
+        Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots = null)
     {
         this.CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
         this.CollectBlockExpressionLocals(body, locals, localTypes);
@@ -481,6 +482,32 @@ internal sealed class MethodBodyPlanner
             var slot = localTypes.Count;
             localTypes.Add(TypeSymbol.Int32);
             receiverSpillSlots[sa] = slot;
+        }
+
+        // Issue #1522: a `stackalloc` used as a sub-expression (method/ctor
+        // argument, or any operand evaluated with a non-empty stack) must be
+        // spilled to a result local so its `localloc` runs at an empty stack
+        // (ECMA-335 III.3.47). Reserve a result-typed local — `Span<T>` for the
+        // safe form or `T*`/`void*` for the pointer form — for every stackalloc
+        // that is NOT in a statement-root (stack-empty) position. The emitter
+        // materialises the localloc into this local at an empty-stack point and
+        // then loads it at the original operand position. `.locals init`
+        // zero-inits the block and the localloc lifetime is the whole frame, so
+        // spilling the Span/pointer to a local is safe.
+        if (stackAllocResultSlots != null)
+        {
+            var rootStackAllocs = this.CollectRootStackAllocs(body);
+            foreach (var sa in this.CollectStackAllocs(body))
+            {
+                if (rootStackAllocs.Contains(sa) || stackAllocResultSlots.ContainsKey(sa))
+                {
+                    continue;
+                }
+
+                var slot = localTypes.Count;
+                localTypes.Add(sa.Type);
+                stackAllocResultSlots[sa] = slot;
+            }
         }
 
         foreach (var receiver in this.CollectReceiverSpills(body, function, locals))
@@ -1134,6 +1161,13 @@ internal sealed class MethodBodyPlanner
     {
         var sink = new List<BoundStackAllocExpression>();
         this.slotPlanner.CollectStackAllocs((BoundStatement)root, sink);
+        return sink;
+    }
+
+    private HashSet<BoundStackAllocExpression> CollectRootStackAllocs(BoundNode root)
+    {
+        var sink = new HashSet<BoundStackAllocExpression>();
+        this.slotPlanner.CollectRootStackAllocs((BoundStatement)root, sink);
         return sink;
     }
 

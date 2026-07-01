@@ -144,6 +144,18 @@ internal sealed class SlotPlanner
     public void CollectStackAllocs(BoundStatement root, List<BoundStackAllocExpression> sink)
         => new StackAllocCollector(sink).Visit(root);
 
+    // Issue #1522: collects the `stackalloc` nodes that occupy a stack-empty
+    // (statement-root) position — the whole value of an expression statement, a
+    // `return`, a local `var`-declaration initializer, or the right-hand side of
+    // a local-variable assignment. Those emit their `localloc` with an empty
+    // evaluation stack and are therefore already valid. Every OTHER stackalloc
+    // is a sub-expression (a method/ctor argument or nested operand) that would
+    // otherwise emit `localloc` while a receiver or prior arguments sit on the
+    // stack (ECMA-335 III.3.47 violation, ilverify `LocallocStackNotEmpty`) and
+    // must be spilled to a result local at an empty-stack point first.
+    public void CollectRootStackAllocs(BoundStatement root, HashSet<BoundStackAllocExpression> sink)
+        => new RootStackAllocCollector(sink).Visit(root);
+
     public void CollectReceiverSpills(
         BoundStatement root,
         FunctionSymbol function,
@@ -855,6 +867,55 @@ internal sealed class SlotPlanner
             }
 
             base.VisitExpression(node);
+        }
+    }
+
+    // Issue #1522: marks the stackalloc nodes that are emitted at an empty
+    // evaluation stack (statement-root positions) so the planner/emitter can
+    // spill every OTHER (sub-expression) stackalloc to a result local.
+    private sealed class RootStackAllocCollector : BoundTreeWalker
+    {
+        private readonly HashSet<BoundStackAllocExpression> sink;
+
+        public RootStackAllocCollector(HashSet<BoundStackAllocExpression> sink)
+        {
+            this.sink = sink;
+        }
+
+        public override void VisitStatement(BoundStatement node)
+        {
+            switch (node)
+            {
+                case BoundExpressionStatement es:
+                    // A bare `stackalloc` statement, or a local-variable
+                    // assignment `x = stackalloc …` (the RHS of an assignment to
+                    // a VariableSymbol is emitted at an empty stack).
+                    this.AddIfStackAlloc(es.Expression);
+                    if (es.Expression is BoundAssignmentExpression asn)
+                    {
+                        this.AddIfStackAlloc(asn.Expression);
+                    }
+
+                    break;
+                case BoundReturnStatement rs:
+                    this.AddIfStackAlloc(rs.Expression);
+                    break;
+                case BoundVariableDeclaration vd:
+                    this.AddIfStackAlloc(vd.Initializer);
+                    break;
+                default:
+                    break;
+            }
+
+            base.VisitStatement(node);
+        }
+
+        private void AddIfStackAlloc(BoundExpression expression)
+        {
+            if (expression is BoundStackAllocExpression sa)
+            {
+                this.sink.Add(sa);
+            }
         }
     }
 
