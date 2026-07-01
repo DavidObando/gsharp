@@ -2645,28 +2645,29 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// Issue #526: resolves a dotted-qualifier type clause (<c>Outer.Inner</c>,
-    /// <c>A.B.C</c>) to a <see cref="TypeSymbol"/> wrapping a (possibly nested)
-    /// CLR type.
+    /// Issue #526 / #1506: resolves a dotted-qualifier type clause (<c>Outer.Inner</c>,
+    /// <c>A.B.C</c>, <c>List[int32].Enumerator</c>) to a <see cref="TypeSymbol"/>
+    /// wrapping a (possibly nested, possibly constructed) CLR type.
     /// <para>
     /// Strategy: enumerate "split points" between an outer prefix that is a
     /// fully-qualified type name and the remaining segments that name nested
     /// types of that outer. The longest viable outer prefix wins, which lets
     /// callers write both <c>Outer.Inner</c> (with <c>import Probe.CSharp</c>
     /// providing the namespace prefix) and the fully-qualified
-    /// <c>Probe.CSharp.Outer.Inner</c>. Type arguments on the clause attach to
-    /// the deepest (last) segment so a nested generic such as
+    /// <c>Probe.CSharp.Outer.Inner</c>. A single trailing type-argument list
+    /// attaches to the deepest (last) segment so a nested generic such as
     /// <c>Outer.Generic[int]</c> resolves to the constructed
     /// <c>Outer.Generic`1</c> closed type.
     /// </para>
     /// <para>
-    /// TODO(issue-526): per-segment type-argument syntax (e.g.
-    /// <c>Outer[T].Inner</c>) is not yet expressible in the grammar — a single
-    /// trailing <c>[…]</c> attaches to the last segment only. Adding mid-chain
-    /// type-argument lists requires extending <see cref="TypeClauseSyntax"/>
-    /// and the parser to record arguments per qualifier segment; deferred to a
-    /// follow-up while keeping the non-generic and deepest-generic cases
-    /// working end-to-end.
+    /// Per-segment type-argument syntax (e.g. <c>Outer[T].Inner</c>,
+    /// <c>List[int32].Enumerator</c>, <c>A[T].B[U].C</c>) is now fully expressible:
+    /// the parser records a type-argument list per qualifier segment (see
+    /// <see cref="TypeClauseSyntax.GetSegmentTypeArguments"/>), and
+    /// <see cref="BindPerSegmentClrQualifiedTypeName"/> resolves the nested type against
+    /// the <em>constructed</em> outer — the nested CLR type definition (which carries the
+    /// outer's generic parameters) closed over the outer's type arguments plus each nested
+    /// segment's own arguments — rather than the open definition.
     /// </para>
     /// </summary>
     /// <summary>
@@ -2683,15 +2684,16 @@ public sealed class Binder
     };
 
     /// <summary>
-    /// Issue #1069: resolves a dotted type clause (<c>Outer.Entry</c>,
-    /// <c>Outer.Middle.Inner</c>) to a user-defined nested type declared in the
-    /// current compilation, by walking the enclosing-type chain. Each segment
-    /// after the first must name a type whose enclosing type is the symbol
-    /// resolved for the preceding segment. Returns <c>null</c> when the chain
-    /// does not resolve to such a user nested type, letting the caller fall back
-    /// to the reflection-based CLR nested-type walk. Type arguments on the
-    /// deepest segment construct the closed generic type; array suffixes are
-    /// applied by the caller.
+    /// Issue #1069 / #1506: resolves a dotted type clause (<c>Outer.Entry</c>,
+    /// <c>Outer.Middle.Inner</c>, <c>Outer[int32].Inner</c>) to a user-defined nested type
+    /// declared in the current compilation, by walking the enclosing-type chain. Each segment
+    /// after the first must name a type whose enclosing type is the symbol resolved for the
+    /// preceding segment. Type arguments may appear on <em>any</em> segment (issue #1506): the
+    /// deepest segment's arguments construct the returned closed generic, and every earlier
+    /// (outer) generic segment's arguments are bound and validated against that segment's
+    /// definition. Returns <c>null</c> when the chain does not resolve to such a user nested
+    /// type, letting the caller fall back to the reflection-based CLR nested-type walk. Array
+    /// suffixes are applied by the caller.
     /// </summary>
     private TypeSymbol TryResolveUserNestedTypeChain(TypeClauseSyntax syntax, string[] segmentTexts)
     {
@@ -2700,8 +2702,10 @@ public sealed class Binder
             return null;
         }
 
-        var current = LookupType(segmentTexts[0]);
-        if (current == null)
+        var headArity = syntax.SegmentHasTypeArguments(0) ? syntax.GetSegmentTypeArguments(0).Count : -1;
+        var definitions = new TypeSymbol[segmentTexts.Length];
+        definitions[0] = LookupType(segmentTexts[0], headArity > 0 ? headArity : -1);
+        if (definitions[0] == null)
         {
             return null;
         }
@@ -2712,27 +2716,62 @@ public sealed class Binder
             // previously-resolved container, NOT by global simple name. A bare
             // simple-name lookup returns a same-named top-level homonym, which
             // then fails the containment check and breaks `Container.Nested`
-            // references. Only the deepest segment carries the clause's type
-            // arguments, so it drives the preferred arity.
-            var preferredArity = (i == segmentTexts.Length - 1 && syntax.HasTypeArguments)
-                ? syntax.TypeArguments.Count
-                : -1;
-            if (!scope.TryLookupNestedTypeAlias(current, segmentTexts[i], preferredArity, out var nested))
+            // references. Issue #1506: each segment now drives its own preferred
+            // arity from its own type-argument list.
+            var preferredArity = syntax.SegmentHasTypeArguments(i) ? syntax.GetSegmentTypeArguments(i).Count : -1;
+            if (!scope.TryLookupNestedTypeAlias(definitions[i - 1], segmentTexts[i], preferredArity, out var nested))
             {
                 return null;
             }
 
-            current = nested;
+            definitions[i] = nested;
         }
 
-        if (!syntax.HasTypeArguments)
+        // The chain resolved to a user nested type. Construct generic segments
+        // against their definitions: the deepest segment yields the returned
+        // closed type; every earlier (outer) generic segment is bound and
+        // validated so a malformed `Outer[bad].Inner` is diagnosed here rather
+        // than falling through to a confusing CLR-path error.
+        var deepest = definitions[segmentTexts.Length - 1];
+        for (var i = 0; i < segmentTexts.Length; i++)
         {
-            return current;
+            if (!syntax.SegmentHasTypeArguments(i))
+            {
+                continue;
+            }
+
+            var segmentName = i == 0 ? syntax.Identifier.Text : string.Join(".", segmentTexts, 0, i + 1);
+            var segmentLocation = i == 0 ? syntax.Identifier.Location : syntax.QualifierIdentifierTokens[i - 1].Location;
+            var constructed = BindAndConstructUserGenericSegment(syntax, definitions[i], syntax.GetSegmentTypeArguments(i), segmentLocation, segmentName);
+            if (constructed == null)
+            {
+                return null;
+            }
+
+            if (i == segmentTexts.Length - 1)
+            {
+                deepest = constructed;
+            }
         }
 
-        // Construct the closed generic for the deepest (named) segment.
-        var typeArgsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.TypeArguments.Count);
-        foreach (var taSyntax in syntax.TypeArguments)
+        return deepest;
+    }
+
+    /// <summary>
+    /// Issue #1506: binds the type-argument clauses of one segment of a user-defined dotted
+    /// type name and constructs the corresponding closed generic (<see cref="StructSymbol"/>,
+    /// <see cref="InterfaceSymbol"/>, or <see cref="DelegateTypeSymbol"/>). Reports the usual
+    /// by-ref-like, wrong-arity, and not-generic diagnostics and returns <c>null</c> on error.
+    /// </summary>
+    private TypeSymbol BindAndConstructUserGenericSegment(
+        TypeClauseSyntax syntax,
+        TypeSymbol definition,
+        SeparatedSyntaxList<TypeClauseSyntax> argumentList,
+        TextLocation location,
+        string displayName)
+    {
+        var typeArgsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(argumentList.Count);
+        foreach (var taSyntax in argumentList)
         {
             var ta = BindTypeClause(taSyntax);
             if (ta == null)
@@ -2742,7 +2781,7 @@ public sealed class Binder
 
             if (TypeSymbol.IsByRefLike(ta))
             {
-                Diagnostics.ReportByRefLikeEscape(taSyntax.Identifier?.Location ?? syntax.Identifier.Location, ta, "be used as a generic type argument");
+                Diagnostics.ReportByRefLikeEscape(taSyntax.Identifier?.Location ?? location, ta, "be used as a generic type argument");
                 return null;
             }
 
@@ -2750,7 +2789,7 @@ public sealed class Binder
         }
 
         var typeArgs = typeArgsBuilder.MoveToImmutable();
-        switch (current)
+        switch (definition)
         {
             case StructSymbol genericStruct when genericStruct.IsGenericDefinition && genericStruct.TypeParameters.Length == typeArgs.Length:
                 return StructSymbol.Construct(genericStruct, typeArgs);
@@ -2759,7 +2798,7 @@ public sealed class Binder
             case DelegateTypeSymbol genericDelegate when genericDelegate.IsGenericDefinition && genericDelegate.TypeParameters.Length == typeArgs.Length:
                 return DelegateTypeSymbol.Construct(genericDelegate, typeArgs);
             default:
-                Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.DottedName);
+                Diagnostics.ReportTypeNotGeneric(location, displayName);
                 return null;
         }
     }
@@ -2785,6 +2824,19 @@ public sealed class Binder
         if (userNested != null)
         {
             return userNested;
+        }
+
+        // Issue #1506: a nested type named on a *constructed* generic outer —
+        // `List[int32].Enumerator`, `Dictionary[string, int32].Enumerator`,
+        // `A[T].B[U].C` — places type arguments on an outer segment and then dots
+        // into a nested type. Resolve the nested type against the constructed
+        // outer (the nested CLR type def closed over the outer's arguments plus
+        // each nested segment's own arguments). Only the genuinely per-segment
+        // form takes this path; the single-trailing-list and non-generic dotted
+        // forms keep the greedy prefix walk below unchanged.
+        if (syntax.HasOuterSegmentTypeArguments)
+        {
+            return BindPerSegmentClrQualifiedTypeName(syntax, segmentTexts);
         }
 
         // Greedy: prefer the longest outer prefix that resolves to a real type,
@@ -3005,6 +3057,244 @@ public sealed class Binder
             if (hasTypeParameterArg)
             {
                 return ImportedTypeSymbol.GetConstructed(closed, clrType, symbolicArgs.MoveToImmutable());
+            }
+
+            return TypeSymbol.FromClrType(closed);
+        }
+        catch (System.ArgumentException)
+        {
+            Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.DottedName);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1506: resolves a dotted type clause that places type arguments on an OUTER
+    /// segment and then dots into a nested type — <c>List[int32].Enumerator</c>,
+    /// <c>Dictionary[string, int32].Enumerator</c>, <c>A[T].B[U].C</c> — to the nested CLR
+    /// type closed over the <em>constructed</em> outer.
+    /// <para>
+    /// A nested type of a generic outer is reflected as the outer's open nested type
+    /// definition (e.g. <c>List`1+Enumerator</c>), which inherits the outer's generic
+    /// parameters. Resolution therefore (1) finds the longest viable outer prefix —
+    /// whose trailing segment may be a generic type carrying the outer's arguments while
+    /// every earlier prefix segment is a plain namespace component — keeping it OPEN, then
+    /// (2) walks the remaining segments as nested types (each preferring its OWN
+    /// arity-mangled name), and finally (3) constructs the deepest definition via
+    /// <see cref="Type.MakeGenericType(Type[])"/> over the cumulative argument vector
+    /// (outer segment's arguments followed, in source order, by each nested segment's own
+    /// arguments) — matching how reflection orders <see cref="Type.GetGenericArguments"/>.
+    /// </para>
+    /// </summary>
+    private TypeSymbol BindPerSegmentClrQualifiedTypeName(TypeClauseSyntax syntax, string[] segmentTexts)
+    {
+        var segmentCount = segmentTexts.Length;
+
+        // Greedy longest-prefix: segments[0..outerLen-1] form a (possibly generic)
+        // outer type name; segments[outerLen..] are nested types of it. Type
+        // arguments may appear only on the LAST prefix segment (the generic outer);
+        // earlier prefix segments are namespace components and cannot be generic.
+        for (var outerLen = segmentCount; outerLen >= 1; outerLen--)
+        {
+            var prefixOk = true;
+            for (var i = 0; i < outerLen - 1; i++)
+            {
+                if (syntax.SegmentHasTypeArguments(i))
+                {
+                    prefixOk = false;
+                    break;
+                }
+            }
+
+            if (!prefixOk)
+            {
+                continue;
+            }
+
+            var outerArity = syntax.SegmentHasTypeArguments(outerLen - 1) ? syntax.GetSegmentTypeArguments(outerLen - 1).Count : 0;
+            var outerClrType = TryResolveOuterPrefixWithArity(segmentTexts, outerLen, outerArity);
+            if (outerClrType == null)
+            {
+                continue;
+            }
+
+            var nestedDef = WalkNestedSegmentsPerArity(outerClrType, segmentTexts, syntax, outerLen, segmentCount);
+            if (nestedDef == null)
+            {
+                continue;
+            }
+
+            return ConstructNestedClrTypeFromSegments(syntax, nestedDef, outerLen - 1, segmentCount);
+        }
+
+        Diagnostics.ReportUndefinedType(syntax.Identifier.Location, syntax.DottedName);
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #1506: resolves the first <paramref name="outerLen"/> segments to a single
+    /// CLR type, honoring aliases and imports like <see cref="TryResolveOuterPrefix"/> but
+    /// driving the trailing segment's arity from <paramref name="arity"/> so a constructed
+    /// generic outer (<c>List[int32]</c> → <c>List`1</c>) resolves to its OPEN definition.
+    /// </summary>
+    private Type TryResolveOuterPrefixWithArity(string[] segmentTexts, int outerLen, int arity)
+    {
+        if (outerLen == 1)
+        {
+            if (arity > 0)
+            {
+                if (scope.TryLookupImportedGenericClass(segmentTexts[0], arity, out var imported))
+                {
+                    return imported;
+                }
+
+                return LookupType(segmentTexts[0], arity)?.ClrType;
+            }
+
+            return LookupType(segmentTexts[0])?.ClrType;
+        }
+
+        var prefix = string.Join(".", segmentTexts, 0, outerLen);
+        if (arity > 0)
+        {
+            prefix += "`" + arity;
+        }
+
+        if (scope.References.TryResolveType(prefix, out var direct))
+        {
+            return direct;
+        }
+
+        foreach (var import in scope.GetDeclaredImports())
+        {
+            if (scope.References.TryResolveType(import.Target + "." + prefix, out var viaImport))
+            {
+                return viaImport;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #1506: walks <paramref name="segmentTexts"/> from <paramref name="start"/> to
+    /// <paramref name="end"/>, treating each as a nested type of the previous. Each segment
+    /// prefers its OWN arity-mangled name (<c>Name`k</c> where <c>k</c> is that segment's
+    /// declared type-argument count) before the unmangled name, so a nested generic such as
+    /// <c>Outer[T].Inner[U]</c> matches. Returns <c>null</c> when any segment fails.
+    /// </summary>
+    private Type WalkNestedSegmentsPerArity(Type container, string[] segmentTexts, TypeClauseSyntax syntax, int start, int end)
+    {
+        var current = container;
+        for (var i = start; i < end; i++)
+        {
+            var name = segmentTexts[i];
+            var ownArity = syntax.SegmentHasTypeArguments(i) ? syntax.GetSegmentTypeArguments(i).Count : 0;
+            Type next = null;
+            if (ownArity > 0)
+            {
+                scope.References.TryResolveNestedType(current, name + "`" + ownArity, out next);
+            }
+
+            if (next == null)
+            {
+                scope.References.TryResolveNestedType(current, name, out next);
+            }
+
+            if (next == null)
+            {
+                return null;
+            }
+
+            current = next;
+        }
+
+        return current;
+    }
+
+    /// <summary>
+    /// Issue #1506: constructs the deepest nested CLR definition
+    /// <paramref name="nestedDef"/> over the cumulative type-argument vector gathered from
+    /// segments <paramref name="firstArgSegment"/>..<paramref name="segmentCount"/>-1 in
+    /// source order. The cumulative order matches reflection's
+    /// <see cref="Type.GetGenericArguments"/> (outer parameters first), so
+    /// <c>List[int32].Enumerator</c> closes <c>List`1+Enumerator</c> over
+    /// <c>int32</c>. Mirrors <see cref="ConstructIfGeneric"/>'s per-argument erasure
+    /// (#313 type parameters / #671 user types project onto <c>System.Object</c>) and
+    /// by-ref-like rejection (#367).
+    /// </summary>
+    private TypeSymbol ConstructNestedClrTypeFromSegments(TypeClauseSyntax syntax, Type nestedDef, int firstArgSegment, int segmentCount)
+    {
+        var argSyntaxes = new List<TypeClauseSyntax>();
+        for (var i = firstArgSegment; i < segmentCount; i++)
+        {
+            if (!syntax.SegmentHasTypeArguments(i))
+            {
+                continue;
+            }
+
+            foreach (var ta in syntax.GetSegmentTypeArguments(i))
+            {
+                argSyntaxes.Add(ta);
+            }
+        }
+
+        if (!nestedDef.IsGenericTypeDefinition)
+        {
+            if (argSyntaxes.Count == 0)
+            {
+                return TypeSymbol.FromClrType(nestedDef);
+            }
+
+            Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.DottedName);
+            return null;
+        }
+
+        var expected = nestedDef.GetGenericArguments().Length;
+        if (expected != argSyntaxes.Count)
+        {
+            Diagnostics.ReportWrongTypeArgumentCount(syntax.Identifier.Location, syntax.DottedName, expected, argSyntaxes.Count);
+            return null;
+        }
+
+        var clrArgs = new Type[argSyntaxes.Count];
+        var symbolicArgs = ImmutableArray.CreateBuilder<TypeSymbol>(argSyntaxes.Count);
+        var hasTypeParameterArg = false;
+        for (var i = 0; i < argSyntaxes.Count; i++)
+        {
+            var ta = BindTypeClause(argSyntaxes[i]);
+            if (ta == null)
+            {
+                return null;
+            }
+
+            symbolicArgs.Add(ta);
+
+            if (TypeSymbol.IsByRefLike(ta))
+            {
+                var taLocation = argSyntaxes[i].Identifier?.Location ?? syntax.Identifier.Location;
+                Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument");
+                return null;
+            }
+
+            // #313 / #671: in-scope type parameters and user types without a
+            // ClrType project onto System.Object under the type-erased model.
+            if (TypeSymbol.ContainsTypeParameter(ta) || ta.ClrType == null)
+            {
+                hasTypeParameterArg = true;
+                clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));
+                continue;
+            }
+
+            clrArgs[i] = ResolveClrTypeForGenericArg(ta) ?? scope.References.MapClrTypeToReferences(ta.ClrType);
+        }
+
+        try
+        {
+            var closed = nestedDef.MakeGenericType(clrArgs);
+            if (hasTypeParameterArg)
+            {
+                return ImportedTypeSymbol.GetConstructed(closed, nestedDef, symbolicArgs.MoveToImmutable());
             }
 
             return TypeSymbol.FromClrType(closed);

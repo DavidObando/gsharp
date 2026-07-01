@@ -12,6 +12,20 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 public sealed class TypeClauseSyntax : SyntaxNode
 {
     /// <summary>
+    /// Issue #1506: per-<em>outer</em>-segment type-argument lists, aligned to the segment
+    /// sequence (index 0 = <see cref="Identifier"/>; index <c>i</c> = qualifier segment
+    /// <c>i</c>). The last segment's arguments live in <see cref="TypeArguments"/>; these
+    /// arrays hold the brackets/lists for every earlier segment, with <c>null</c> entries
+    /// where a segment carries no type-argument list. Stored in plain arrays (rather than as
+    /// reflected child properties) because the reflection-based child walk only enumerates a
+    /// single <see cref="SeparatedSyntaxList"/> per property; <see cref="OuterSegmentTypeArgumentChildren"/>
+    /// re-exposes them for full-fidelity traversal.
+    /// </summary>
+    private readonly ImmutableArray<SyntaxToken> outerSegmentTypeArgumentOpenBracketTokens = ImmutableArray<SyntaxToken>.Empty;
+    private readonly ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>> outerSegmentTypeArgumentLists = ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>>.Empty;
+    private readonly ImmutableArray<SyntaxToken> outerSegmentTypeArgumentCloseBracketTokens = ImmutableArray<SyntaxToken>.Empty;
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a simple type.
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
@@ -105,6 +119,9 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <param name="typeArgumentCloseBracketToken">The closing bracket of the type-argument list, or <c>null</c>.</param>
     /// <param name="questionToken">The optional trailing <c>?</c> marking the type nullable.</param>
     /// <param name="arrayQuestionToken">The optional <c>?</c> placed immediately after <c>]</c>, marking the whole array nullable (<c>[]?T</c>, issue #1212).</param>
+    /// <param name="outerSegmentTypeArgumentOpenBracketTokens">Issue #1506: the opening <c>[</c> of the type-argument list carried by each <em>outer</em> (non-last) segment, aligned to the segment sequence (index 0 = <see cref="Identifier"/>; index <c>i</c> = qualifier segment <c>i</c>). A <c>null</c> entry means that segment carries no type-argument list. Empty when no outer segment is generic.</param>
+    /// <param name="outerSegmentTypeArgumentLists">Issue #1506: the type-argument list carried by each outer (non-last) segment, aligned identically to <paramref name="outerSegmentTypeArgumentOpenBracketTokens"/>. A <c>null</c> entry means that segment carries no type-argument list.</param>
+    /// <param name="outerSegmentTypeArgumentCloseBracketTokens">Issue #1506: the closing <c>]</c> of the type-argument list carried by each outer (non-last) segment, aligned identically to <paramref name="outerSegmentTypeArgumentOpenBracketTokens"/>.</param>
     public TypeClauseSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken openBracketToken,
@@ -117,7 +134,10 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SeparatedSyntaxList<TypeClauseSyntax> typeArguments,
         SyntaxToken typeArgumentCloseBracketToken,
         SyntaxToken questionToken,
-        SyntaxToken arrayQuestionToken = null)
+        SyntaxToken arrayQuestionToken = null,
+        ImmutableArray<SyntaxToken> outerSegmentTypeArgumentOpenBracketTokens = default,
+        ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>> outerSegmentTypeArgumentLists = default,
+        ImmutableArray<SyntaxToken> outerSegmentTypeArgumentCloseBracketTokens = default)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
@@ -131,6 +151,9 @@ public sealed class TypeClauseSyntax : SyntaxNode
         TypeArgumentCloseBracketToken = typeArgumentCloseBracketToken;
         QuestionToken = questionToken;
         ArrayQuestionToken = arrayQuestionToken;
+        this.outerSegmentTypeArgumentOpenBracketTokens = outerSegmentTypeArgumentOpenBracketTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : outerSegmentTypeArgumentOpenBracketTokens;
+        this.outerSegmentTypeArgumentLists = outerSegmentTypeArgumentLists.IsDefault ? ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>>.Empty : outerSegmentTypeArgumentLists;
+        this.outerSegmentTypeArgumentCloseBracketTokens = outerSegmentTypeArgumentCloseBracketTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : outerSegmentTypeArgumentCloseBracketTokens;
     }
 
     /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a tuple type <c>(T1, T2, ...)</c> (Phase 4.5).</summary>
@@ -571,8 +594,88 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets the closing <c>]</c> of the type-argument list (Phase 4.3c), or <c>null</c>.</summary>
     public SyntaxToken TypeArgumentCloseBracketToken { get; }
 
-    /// <summary>Gets a value indicating whether this clause carries a type-argument list <c>Foo[T1, T2]</c> (Phase 4.3c).</summary>
+    /// <summary>Gets a value indicating whether this clause carries a type-argument list <c>Foo[T1, T2]</c> (Phase 4.3c). This list attaches to the <em>last</em> (deepest) segment of the dotted name.</summary>
     public bool HasTypeArguments => TypeArgumentOpenBracketToken != null;
+
+    /// <summary>
+    /// Gets the number of segments in the (possibly dotted) named portion of this
+    /// type clause: <c>1</c> for a simple identifier, and <c>1 + n</c> for a dotted
+    /// name with <c>n</c> qualifier segments (issue #1506).
+    /// </summary>
+    public int SegmentCount => 1 + QualifierIdentifierTokens.Length;
+
+    /// <summary>
+    /// Gets a value indicating whether any <em>outer</em> (non-last) segment of the
+    /// dotted name carries its own type-argument list — e.g. <c>List[int32].Enumerator</c>
+    /// or <c>A[T].B[U].C</c> (issue #1506). The last segment's type arguments are tracked
+    /// separately by <see cref="TypeArguments"/> / <see cref="HasTypeArguments"/>.
+    /// </summary>
+    public bool HasOuterSegmentTypeArguments
+    {
+        get
+        {
+            if (outerSegmentTypeArgumentOpenBracketTokens.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            foreach (var open in outerSegmentTypeArgumentOpenBracketTokens)
+            {
+                if (open != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Gets the syntax children contributed by the per-segment type-argument lists of
+    /// the outer (non-last) segments (issue #1506), so the reflection-based
+    /// <see cref="SyntaxNode.GetChildren"/> walks the new brackets, argument clauses, and
+    /// separators (the last segment's arguments are walked via <see cref="TypeArguments"/>).
+    /// </summary>
+    public System.Collections.Generic.IEnumerable<SyntaxNode> OuterSegmentTypeArgumentChildren
+    {
+        get
+        {
+            if (outerSegmentTypeArgumentOpenBracketTokens.IsDefaultOrEmpty)
+            {
+                yield break;
+            }
+
+            for (var i = 0; i < outerSegmentTypeArgumentOpenBracketTokens.Length; i++)
+            {
+                var open = outerSegmentTypeArgumentOpenBracketTokens[i];
+                if (open == null)
+                {
+                    continue;
+                }
+
+                yield return open;
+
+                var list = i < outerSegmentTypeArgumentLists.Length ? outerSegmentTypeArgumentLists[i] : null;
+                if (list != null)
+                {
+                    foreach (var node in list.GetWithSeparators())
+                    {
+                        if (node != null)
+                        {
+                            yield return node;
+                        }
+                    }
+                }
+
+                var close = i < outerSegmentTypeArgumentCloseBracketTokens.Length ? outerSegmentTypeArgumentCloseBracketTokens[i] : null;
+                if (close != null)
+                {
+                    yield return close;
+                }
+            }
+        }
+    }
 
     /// <summary>Gets the <c>map</c> keyword for map types, or <c>null</c>.</summary>
     public SyntaxToken MapKeyword { get; }
@@ -646,6 +749,49 @@ public sealed class TypeClauseSyntax : SyntaxNode
             && index >= 0
             && index < FunctionParameterEllipsisTokens.Length
             && FunctionParameterEllipsisTokens[index] != null;
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether the segment at <paramref name="segmentIndex"/>
+    /// (0 = <see cref="Identifier"/>) carries a type-argument list (issue #1506).
+    /// </summary>
+    /// <param name="segmentIndex">The 0-based segment index.</param>
+    /// <returns>Whether that segment is generic.</returns>
+    public bool SegmentHasTypeArguments(int segmentIndex)
+    {
+        if (segmentIndex == SegmentCount - 1)
+        {
+            return HasTypeArguments;
+        }
+
+        return !outerSegmentTypeArgumentOpenBracketTokens.IsDefaultOrEmpty
+            && segmentIndex >= 0
+            && segmentIndex < outerSegmentTypeArgumentOpenBracketTokens.Length
+            && outerSegmentTypeArgumentOpenBracketTokens[segmentIndex] != null;
+    }
+
+    /// <summary>
+    /// Gets the type-argument clauses carried by the segment at
+    /// <paramref name="segmentIndex"/> (0 = <see cref="Identifier"/>), or <c>null</c>
+    /// when that segment carries no type-argument list (issue #1506). The last segment's
+    /// arguments are sourced from <see cref="TypeArguments"/>; all earlier (outer)
+    /// segments from the per-segment lists.
+    /// </summary>
+    /// <param name="segmentIndex">The 0-based segment index.</param>
+    /// <returns>The type-argument list, or <c>null</c>.</returns>
+    public SeparatedSyntaxList<TypeClauseSyntax> GetSegmentTypeArguments(int segmentIndex)
+    {
+        if (segmentIndex == SegmentCount - 1)
+        {
+            return TypeArguments;
+        }
+
+        if (outerSegmentTypeArgumentLists.IsDefaultOrEmpty || segmentIndex < 0 || segmentIndex >= outerSegmentTypeArgumentLists.Length)
+        {
+            return null;
+        }
+
+        return outerSegmentTypeArgumentLists[segmentIndex];
     }
 
     /// <summary>Creates a pointer type clause <c>*T</c> (ADR-0039).</summary>
