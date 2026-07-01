@@ -48,6 +48,16 @@ public class Parser
     // literals — e.g. `for v in Numbers{} { body }` is valid.
     private int suppressStructLiteral;
 
+    // Within a body-header controlling expression, an EMPTY `Ident{}` that is
+    // immediately followed by a body `{` is genuinely ambiguous. In a for-in
+    // collection it is a struct-literal collection (`for v in Numbers{} { .. }`);
+    // in a boolean if/while condition a struct literal is never valid, so the
+    // identifier is the condition and `{}` is the empty body
+    // (`if disposing {} { .. }`). This flag is set only while parsing a for-in
+    // collection so the empty-then-body form is treated as a struct literal
+    // there and only there (#1575 follow-up).
+    private bool allowEmptyStructLiteralInHeader;
+
     // ADR-0122 §4 / issue #1034: tracks the unsafe-context nesting depth while
     // parsing. Inside an unsafe context (`unsafe func`/`unsafe {}`/unsafe
     // type), a single-identifier `p->member` is parsed as pointer member
@@ -5681,7 +5691,7 @@ public class Parser
             rangeKeyword = null;
         }
 
-        var collection = ParseExpressionInBodyHeader();
+        var collection = ParseExpressionInBodyHeader(allowEmptyStructLiteralCollection: true);
         var body = ParseStatement();
         return new ForRangeStatementSyntax(syntaxTree, keyword, firstIdentifier, commaToken, secondIdentifier, colonEqualsToken, rangeKeyword, inToken, collection, body);
     }
@@ -8823,16 +8833,19 @@ public class Parser
     // empty struct literal (GS0157), because the struct-literal lookahead accepts
     // `{}` (a non-empty body already backtracks). Mirrors the if-expression
     // (#669), `if let`, and `fixed` headers, which suppress both forms.
-    private ExpressionSyntax ParseExpressionInBodyHeader()
+    private ExpressionSyntax ParseExpressionInBodyHeader(bool allowEmptyStructLiteralCollection = false)
     {
         suppressTrailingObjectInitializer++;
         suppressStructLiteral++;
+        var savedAllowEmptyStructLiteral = allowEmptyStructLiteralInHeader;
+        allowEmptyStructLiteralInHeader = allowEmptyStructLiteralCollection;
         try
         {
             return ParseExpression();
         }
         finally
         {
+            allowEmptyStructLiteralInHeader = savedAllowEmptyStructLiteral;
             suppressStructLiteral--;
             suppressTrailingObjectInitializer--;
         }
@@ -9673,7 +9686,12 @@ public class Parser
             return true;
         }
 
-        return Peek(braceOffset + 2).Kind == SyntaxKind.OpenBraceToken;
+        // Empty `Ident{}`: only a for-in collection may treat an empty struct
+        // literal immediately followed by a body `{` as a struct literal.
+        // In boolean if/while conditions the identifier is the condition and
+        // `{}` is the empty body (`if disposing {} { .. }`).
+        return allowEmptyStructLiteralInHeader
+            && Peek(braceOffset + 2).Kind == SyntaxKind.OpenBraceToken;
     }
 
     private ExpressionSyntax ParseStructLiteralExpression()

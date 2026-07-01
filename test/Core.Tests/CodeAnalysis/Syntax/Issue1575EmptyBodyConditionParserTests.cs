@@ -72,6 +72,38 @@ class C { func F(disposing bool) { while disposing { } var x = 1 } }
     }
 
     [Fact]
+    public void If_With_EmptyBody_Followed_By_Block_Parses_As_Condition()
+    {
+        // #1580 (follow-up): the empty-body `if` is immediately followed by a
+        // block statement. The identifier is still the condition and `{}` the
+        // empty body — the trailing block must NOT be consumed as the `if`
+        // condition's struct-literal body (`if (disposing{}) { .. }`).
+        const string source = @"
+package p
+class C { func F(disposing bool) { if disposing { } { var y = 2 } var x = 1 } }
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var ifStatement = Descendants(tree.Root).OfType<IfStatementSyntax>().Single();
+        Assert.Empty(Descendants(ifStatement.Condition).OfType<StructLiteralExpressionSyntax>());
+    }
+
+    [Fact]
+    public void While_With_EmptyBody_Followed_By_Block_Parses_As_Condition()
+    {
+        const string source = @"
+package p
+class C { func F(disposing bool) { while disposing { } { var y = 2 } var x = 1 } }
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var whileStatement = Descendants(tree.Root).OfType<WhileStatementSyntax>().Single();
+        Assert.Empty(Descendants(whileStatement.Condition).OfType<StructLiteralExpressionSyntax>());
+    }
+
+    [Fact]
     public void ParenthesizedStructLiteral_In_Condition_Still_Parses()
     {
         // Regression guard: a struct literal inside parentheses is a fresh inner
