@@ -3423,6 +3423,22 @@ internal static class OverloadResolution
                 }
             }
 
+            // Issue #1531: a void-returning source delegate/method-group must not
+            // make a value-returning delegate parameter whose return is (or
+            // contains) a method type parameter applicable. C# forbids inferring
+            // a type argument from a void return, so a `(...)->TResult` overload
+            // is not applicable when the supplied delegate returns void. Failing
+            // inference here prunes that overload, leaving a `(...)->void`
+            // overload as the unique match instead of a spurious GS0266.
+            if (parameterDelegateReturn is not null
+                && argumentDelegateReturn is not null
+                && string.Equals(argumentDelegateReturn.FullName, "System.Void", StringComparison.Ordinal)
+                && !string.Equals(parameterDelegateReturn.FullName, "System.Void", StringComparison.Ordinal)
+                && parameterDelegateReturn.ContainsGenericParameters)
+            {
+                return false;
+            }
+
             return UnifyForInference(parameterDelegateReturn, argumentDelegateReturn, bounds);
         }
 

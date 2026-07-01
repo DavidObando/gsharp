@@ -3620,6 +3620,20 @@ public sealed class Binder
     {
         if (parameterType is TypeParameterSymbol tp)
         {
+            // Issue #1531: `void` is never a valid type argument, so a type
+            // parameter must not be inferred from a void source. This arises
+            // when a void-returning delegate/method-group argument is matched
+            // against a `(...)->TResult` (type-parameter-return) delegate
+            // parameter: binding `TResult := void` would wrongly make that
+            // value-returning overload applicable and tie it with the intended
+            // `(...)->void` overload (spurious GS0266). Skipping the binding
+            // leaves the type parameter un-inferred, so the candidate is
+            // rejected and the `(...)->void` overload wins unambiguously.
+            if (argumentType == TypeSymbol.Void)
+            {
+                return;
+            }
+
             // First seen value wins. Cross-arg consistency is verified later
             // by the post-substitution argument-type check.
             if (!substitution.ContainsKey(tp))

@@ -837,6 +837,15 @@ internal sealed class OverloadResolver
             // Apply a small penalty to variadic candidates (per ADR §6.6).
             var score = defaultsUsed + (isVariadic ? 1 : 0);
 
+            // For generic candidates, compute the inferred method-type
+            // substitution so delegate parameter return types can be closed
+            // when scoring the value-return discard penalty below.
+            Dictionary<TypeParameterSymbol, TypeSymbol> candSubstitution = null;
+            if (cand.IsGeneric)
+            {
+                TryInferCandidateSubstitution(cand, boundArguments, argumentCount, out candSubstitution);
+            }
+
             // Score argument-type compatibility: +1 per exact-type match.
             for (var i = 0; i < paramCountForScore && i < boundArguments.Count; i++)
             {
@@ -845,6 +854,20 @@ internal sealed class OverloadResolver
                 if (argType != null && paramType != null && argType == paramType)
                 {
                     score -= 10;
+                }
+
+                // Issue #1531 control: a value-returning delegate/method-group
+                // argument that maps onto a `(...)->void` delegate parameter
+                // discards its result. Penalize that mapping so a sibling
+                // `(...)->TResult` overload (whose delegate return closes to the
+                // argument's actual return type) is preferred — matching C#'s
+                // "better conversion from a method group" rule — instead of
+                // tying and reporting a spurious GS0266. Scoped strictly to the
+                // value-return-to-void-delegate shape, so it never disturbs the
+                // concrete-over-generic or defaulted-parameter preferences.
+                if (IsValueReturnDiscardedToVoidDelegate(argType, paramType, candSubstitution))
+                {
+                    score += 1;
                 }
             }
 
@@ -1101,12 +1124,31 @@ internal sealed class OverloadResolver
         ImmutableArray<BoundExpression>.Builder boundArguments,
         int argumentCount)
     {
+        return TryInferCandidateSubstitution(candidate, boundArguments, argumentCount, out _);
+    }
+
+    /// <summary>
+    /// Computes the method-type-parameter substitution inferred from the
+    /// supplied argument types for a generic <paramref name="candidate"/>, and
+    /// reports whether every type parameter received a binding. Shared by the
+    /// #1124 applicability filter (<see cref="AllMethodTypeParametersInferable"/>)
+    /// and the Phase-2 exact-match scoring, which substitutes the inferred
+    /// bindings into each open delegate parameter type so a value-returning
+    /// delegate/method-group argument prefers the `(...)->TResult` overload over
+    /// the `(...)->void` one (issue #1531 control).
+    /// </summary>
+    private bool TryInferCandidateSubstitution(
+        FunctionSymbol candidate,
+        ImmutableArray<BoundExpression>.Builder boundArguments,
+        int argumentCount,
+        out Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
         if (!candidate.IsGeneric)
         {
             return true;
         }
 
-        var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
         var parameterOffset = candidate.ExplicitReceiverParameter == null ? 0 : 1;
         var paramLen = candidate.Parameters.Length - parameterOffset;
         var isVariadic = paramLen > 0 && candidate.Parameters[candidate.Parameters.Length - 1].IsVariadic;
@@ -1148,6 +1190,42 @@ internal sealed class OverloadResolver
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #1531 control: returns <see langword="true"/> when
+    /// <paramref name="argType"/> is a value-returning delegate/function type
+    /// and <paramref name="paramType"/> is a delegate parameter whose return
+    /// type is (or, via <paramref name="candSubstitution"/>, closes to)
+    /// <c>void</c> — i.e. the argument's result would be discarded. Used to
+    /// prefer a sibling <c>(...)-&gt;TResult</c> overload over a
+    /// <c>(...)-&gt;void</c> one when a value-returning argument is supplied.
+    /// </summary>
+    private bool IsValueReturnDiscardedToVoidDelegate(
+        TypeSymbol argType,
+        TypeSymbol paramType,
+        Dictionary<TypeParameterSymbol, TypeSymbol> candSubstitution)
+    {
+        if (argType is not FunctionTypeSymbol argFn
+            || paramType is not FunctionTypeSymbol paramFn
+            || argFn.ParameterTypes.Length != paramFn.ParameterTypes.Length)
+        {
+            return false;
+        }
+
+        var argReturn = argFn.ReturnType;
+        if (argReturn == null || argReturn == TypeSymbol.Void || argReturn == TypeSymbol.Error)
+        {
+            return false;
+        }
+
+        var paramReturn = paramFn.ReturnType;
+        if (candSubstitution != null && paramReturn != null && TypeSymbol.ContainsTypeParameter(paramReturn))
+        {
+            paramReturn = substituteType(paramReturn, candSubstitution) ?? paramReturn;
+        }
+
+        return paramReturn == TypeSymbol.Void;
     }
 
     /// <summary>
