@@ -4959,6 +4959,11 @@ public sealed class CSharpToGSharpTranslator
                     new PointerTypeReference(pointer.ElementType) { IsNullable = true },
                 TupleTypeReference tuple =>
                     new TupleTypeReference(tuple.ElementTypes) { IsNullable = true },
+                ArrowTypeReference arrow =>
+                    new ArrowTypeReference(arrow.ParameterTypes, arrow.ReturnTypes, arrow.IsAsync)
+                    {
+                        IsNullable = true,
+                    },
                 _ => reference,
             };
         }
@@ -5345,6 +5350,20 @@ public sealed class CSharpToGSharpTranslator
                 || declared.NullableAnnotation == NullableAnnotation.Annotated)
             {
                 return false;
+            }
+
+            // A function-type (delegate) parameter with an explicit `= null`
+            // default is nullable by construction: a non-nullable function type
+            // cannot carry a `nil` default at all (gsc GS0265 at the declaration
+            // itself), so it must render `((…) -> R)?`. This is scoped to delegate
+            // types because promoting arbitrary reference parameters cascades
+            // nullable-mismatch errors (GS0156) at pass-through call sites that
+            // would each need their own flow-driven promotion.
+            if (symbol is IParameterSymbol { HasExplicitDefaultValue: true } defaulted
+                && defaulted.ExplicitDefaultValue is null
+                && defaulted.Type.TypeKind == TypeKind.Delegate)
+            {
+                return true;
             }
 
             return this.IsUsedAsNullable(symbol, this.GetNullabilityScope(symbol));

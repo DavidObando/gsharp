@@ -325,6 +325,33 @@ namespace Demo
     }
 
     /// <summary>
+    /// A C# delegate parameter with an explicit <c>= null</c> default (e.g.
+    /// <c>Action&lt;T&gt; report = null</c>) is nullable by construction: a
+    /// non-nullable G# function type cannot carry a <c>nil</c> default (gsc GS0265),
+    /// so the parameter must render as the nullable arrow form
+    /// <c>((T) -&gt; void)? = nil</c> now that nullable function types exist (#1399).
+    /// </summary>
+    [Fact]
+    public void DelegateParameterWithNullDefault_RendersNullableArrow()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    using System;
+    public static class Notifier
+    {
+        public static void Run(int count, Action<int> report = null, Func<bool> cancel = null)
+        {
+            report?.Invoke(count);
+        }
+    }
+}");
+
+        Assert.Contains("report ((int32) -> void)? = nil", printed);
+        Assert.Contains("cancel (() -> bool)? = nil", printed);
+    }
+
+    /// <summary>
     /// ADR-0115 §B.12: a suffix-less integer literal whose C# type is wider or
     /// unsigned than int32 (`0xD800000000000000` is `ulong`) is emitted with the
     /// matching G# suffix so the lexer does not reject it.
