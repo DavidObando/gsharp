@@ -291,6 +291,14 @@ public sealed class BoundScope
     /// declared receiver. Inference is delegated to
     /// <see cref="Binder.InferTypeArguments"/>; the candidate qualifies when
     /// every type parameter mentioned in the receiver gets bound.</description></item>
+    /// <item><description><b>Implicit-conversion (subtype) receivers (issue
+    /// #1548)</b> — a declared receiver <c>R</c> is also applicable for a
+    /// call-site receiver <c>S</c> when <c>S</c> is implicitly convertible to
+    /// <c>R</c> (identity, implicit reference, or boxing conversion), matching
+    /// C#/Kotlin extension-method semantics. Among several applicable
+    /// convertible receivers the MOST specific (most-derived) one wins, so
+    /// <c>(self string)</c> beats <c>(self object)</c> for a <c>string</c>
+    /// receiver deterministically.</description></item>
     /// </list>
     /// </remarks>
     /// <param name="receiverType">The static type of the call receiver.</param>
@@ -371,6 +379,50 @@ public sealed class BoundScope
                 function = candidate;
                 return true;
             }
+
+            // Issue #1548: no exact and no generic-unification match in this
+            // scope. Broaden to implicitly-convertible (subtype) receivers: a
+            // declared receiver `R` is applicable when the call-site receiver
+            // `S` is implicitly convertible to `R` (identity/implicit-reference/
+            // boxing). Among applicable candidates pick the MOST specific
+            // (most-derived) declared receiver so this singular path stays
+            // deterministic (e.g. `string` beats `object`); ties fall back to
+            // declaration order.
+            FunctionSymbol subtypeCandidate = null;
+            var subtypeSpecificity = -1;
+            foreach (var ext in extensionFunctions)
+            {
+                if (ext.Name != name)
+                {
+                    continue;
+                }
+
+                if (!ext.TypeParameters.IsDefaultOrEmpty
+                    && ext.ExtensionReceiverType != null
+                    && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
+                {
+                    // Open receivers are handled by the unification pass above.
+                    continue;
+                }
+
+                if (!ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
+                {
+                    continue;
+                }
+
+                var specificity = ReceiverConvertibilitySpecificity(extensionFunctions, ext.ExtensionReceiverType, name);
+                if (subtypeCandidate == null || specificity > subtypeSpecificity)
+                {
+                    subtypeCandidate = ext;
+                    subtypeSpecificity = specificity;
+                }
+            }
+
+            if (subtypeCandidate != null)
+            {
+                function = subtypeCandidate;
+                return true;
+            }
         }
 
         return Parent?.TryLookupExtensionFunction(receiverType, name, out function) ?? false;
@@ -385,9 +437,12 @@ public sealed class BoundScope
     /// </summary>
     /// <remarks>
     /// Both dispatch paths used by <see cref="TryLookupExtensionFunction"/> are
-    /// honoured: the reference-equality receiver fast path (issue #1103) and the
-    /// generic-receiver unification fallback (issue #773 / #775). Candidates are
-    /// returned in declaration order, innermost scope first.
+    /// honoured: the reference-equality receiver fast path (issue #1103), the
+    /// generic-receiver unification fallback (issue #773 / #775) and the
+    /// implicit-conversion (subtype) receiver broadening (issue #1548).
+    /// Candidates are returned in declaration order, innermost scope first; the
+    /// caller's overload resolution scores the receiver as parameter 0 and so
+    /// selects the most specific applicable receiver.
     /// </remarks>
     /// <param name="receiverType">The static type of the call receiver.</param>
     /// <param name="name">The method name at the call site.</param>
@@ -416,6 +471,23 @@ public sealed class BoundScope
                     && ext.ExtensionReceiverType != TypeSymbol.Error
                     && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters)
                     && TryUnifyAndCheckConstraints(ext, receiverType, out _))
+                {
+                    matches = true;
+                }
+
+                // Issue #1548: broaden to implicitly-convertible (subtype)
+                // receivers with a CONCRETE declared receiver type. Open
+                // receivers (those mentioning the function's own type
+                // parameters) are handled by the unification pass above; a
+                // concrete `R` is applicable whenever the call-site receiver is
+                // implicitly convertible to it. Every applicable candidate is
+                // collected so the caller's overload resolution — which scores
+                // the receiver as parameter 0 — picks the most specific one.
+                if (!matches
+                    && (ext.TypeParameters.IsDefaultOrEmpty
+                        || ext.ExtensionReceiverType == null
+                        || !ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
+                    && ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
                 {
                     matches = true;
                 }
@@ -967,6 +1039,88 @@ public sealed class BoundScope
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issue #1548: determines whether a CONCRETE declared extension receiver
+    /// type <paramref name="declaredReceiverType"/> is applicable for a
+    /// call-site receiver <paramref name="receiverType"/> that is not an exact
+    /// (identity / same-CLR-type) match, by classifying the implicit
+    /// convertibility of the call-site receiver TO the declared receiver.
+    /// </summary>
+    /// <remarks>
+    /// Applicability requires an implicit conversion — identity, implicit
+    /// reference (derived-to-base, class-to-implemented-interface,
+    /// constructed-generic covariant reference), or boxing (value type to
+    /// <c>object</c> / an implemented interface) — mirroring C#/Kotlin
+    /// extension-method receiver semantics. Explicit (narrowing) conversions do
+    /// NOT qualify, so a genuinely unrelated receiver still fails to bind. The
+    /// exact/same-CLR fast path is checked by <see cref="ReceiverMatches"/>
+    /// before this method, so this only needs the conversion classification.
+    /// </remarks>
+    /// <param name="declaredReceiverType">The extension's declared receiver type.</param>
+    /// <param name="receiverType">The static type of the call receiver.</param>
+    /// <returns><c>true</c> when the call receiver is implicitly convertible to the declared receiver.</returns>
+    private static bool ReceiverConvertible(TypeSymbol declaredReceiverType, TypeSymbol receiverType)
+    {
+        if (declaredReceiverType == null
+            || receiverType == null
+            || declaredReceiverType == TypeSymbol.Error
+            || receiverType == TypeSymbol.Error)
+        {
+            return false;
+        }
+
+        var conversion = Conversion.Classify(receiverType, declaredReceiverType);
+        return conversion.Exists && conversion.IsImplicit;
+    }
+
+    /// <summary>
+    /// Issue #1548: ranks the specificity of a convertible extension receiver
+    /// among the same-named extension candidates declared in THIS scope. The
+    /// score is the number of those candidates' declared receiver types that
+    /// <paramref name="declaredReceiverType"/> is implicitly convertible to
+    /// (counting itself). A more-derived receiver converts to more of its
+    /// siblings' base/interface receivers, so it scores higher and wins on the
+    /// singular deterministic lookup path (e.g. <c>string</c> beats
+    /// <c>object</c> for a <c>string</c> receiver).
+    /// </summary>
+    /// <param name="extensionFunctions">The same-scope extension candidates to rank against.</param>
+    /// <param name="declaredReceiverType">The candidate's declared receiver type.</param>
+    /// <param name="name">The extension method name being resolved.</param>
+    /// <returns>The specificity score (higher is more specific).</returns>
+    private static int ReceiverConvertibilitySpecificity(
+        ImmutableArray<FunctionSymbol>.Builder extensionFunctions,
+        TypeSymbol declaredReceiverType,
+        string name)
+    {
+        if (extensionFunctions == null || declaredReceiverType == null)
+        {
+            return 0;
+        }
+
+        var score = 0;
+        foreach (var ext in extensionFunctions)
+        {
+            if (ext.Name != name || ext.ExtensionReceiverType == null)
+            {
+                continue;
+            }
+
+            if (declaredReceiverType == ext.ExtensionReceiverType)
+            {
+                score++;
+                continue;
+            }
+
+            var conversion = Conversion.Classify(declaredReceiverType, ext.ExtensionReceiverType);
+            if (conversion.Exists && conversion.IsImplicit)
+            {
+                score++;
+            }
+        }
+
+        return score;
     }
 
     /// <summary>
