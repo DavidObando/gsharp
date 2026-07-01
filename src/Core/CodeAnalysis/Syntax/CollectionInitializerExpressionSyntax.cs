@@ -21,6 +21,16 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// that constructs into a synthetic local, calls <c>Add(...)</c> / sets the
 /// indexer for each element, and yields the local.
 /// </para>
+/// <para>
+/// Issue #1567: <see cref="Target"/> is <see langword="null"/> for the
+/// <em>member</em> collection-initializer form used as a composite/object-
+/// initializer member value (<c>T{ GetOnlyProp: { a, b } }</c> /
+/// <c>T(){ GetOnlyProp = { a, b } }</c>). There is no construction — the
+/// composite-literal binder instead reads the (get-only) collection member of
+/// the just-constructed receiver and lowers each element to an
+/// <c>Add(...)</c> call / indexer set on it, mirroring the C# collection-
+/// initializer-in-object-initializer lowering.
+/// </para>
 /// </summary>
 public sealed class CollectionInitializerExpressionSyntax : ExpressionSyntax
 {

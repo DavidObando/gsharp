@@ -649,6 +649,7 @@ internal sealed partial class ExpressionBinder
 
         var seenFieldNames = new HashSet<string>();
         var inits = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
+        List<(string Name, TypeSymbol MemberType, CollectionInitializerExpressionSyntax Braced, SyntaxToken Anchor)> bracedCollectionMembers = null;
         foreach (var initSyntax in syntax.Initializers)
         {
             var fieldName = initSyntax.FieldIdentifier.Text;
@@ -667,14 +668,35 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName);
                     continue;
                 }
+            }
 
-                // A get-only property (no `set` and no `init` accessor) cannot
-                // be assigned in a composite literal — keep it diagnosed.
-                if (!property.HasSetter)
+            // Issue #1567: a braced member value `Member: { a, b }` populates the
+            // collection member by lowering to `.Add(...)` calls on the
+            // constructed receiver's `Member` (the C# collection-initializer-in-
+            // object-initializer pattern). It applies to get-only AND settable
+            // collection members alike — C# always uses Add semantics for the
+            // `= { … }` form — so it is handled before the get-only check. The
+            // Add lowering is deferred until after the literal is constructed
+            // (below), where a receiver to read `Member` from exists.
+            if (initSyntax.Value is CollectionInitializerExpressionSyntax { Target: null } bracedMemberInit)
+            {
+                if (!seenFieldNames.Add(fieldName))
                 {
-                    Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, fieldName);
+                    Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, fieldName);
                     continue;
                 }
+
+                bracedCollectionMembers ??= new List<(string, TypeSymbol, CollectionInitializerExpressionSyntax, SyntaxToken)>();
+                bracedCollectionMembers.Add((fieldName, hasField ? field.Type : property.Type, bracedMemberInit, initSyntax.FieldIdentifier));
+                continue;
+            }
+
+            // A get-only property (no `set` and no `init` accessor) cannot be
+            // assigned in a composite literal — keep it diagnosed.
+            if (!hasField && !property.HasSetter)
+            {
+                Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, fieldName);
+                continue;
             }
 
             if (!seenFieldNames.Add(fieldName))
@@ -715,7 +737,37 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        return new BoundStructLiteralExpression(null, structSymbol, inits.ToImmutable());
+        var structLiteral = new BoundStructLiteralExpression(null, structSymbol, inits.ToImmutable());
+        if (bracedCollectionMembers == null)
+        {
+            return structLiteral;
+        }
+
+        // Issue #1567: one or more members were populated with a braced
+        // collection initializer (`Member: { a, b }`). Construct the literal into
+        // a synthetic local, then lower each such member to `.Add(...)` calls on
+        // `local.Member`. Because the collection member is a reference type, the
+        // Adds mutate the same collection the literal already holds, so yielding
+        // the local returns the populated instance. Mirrors the imported-class
+        // and standalone collection-initializer lowerings (block + temp local).
+        var litTempName = "$implit" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var litTemp = new LocalVariableSymbol(litTempName, isReadOnly: true, structSymbol);
+        scope.TryDeclareVariable(litTemp);
+
+        var bracedStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+        bracedStatements.Add(new BoundVariableDeclaration(syntax, litTemp, structLiteral));
+        foreach (var (name, memberType, braced, anchor) in bracedCollectionMembers)
+        {
+            var litReceiver = new BoundVariableExpression(anchor, litTemp);
+            if (!TryEmitMemberCollectionInitializer(litReceiver, name, anchor, braced, bracedStatements))
+            {
+                Diagnostics.ReportTypeNotCollectionInitializable(anchor.Location, memberType);
+                BindCollectionElementsForDiagnostics(braced);
+            }
+        }
+
+        var litResult = new BoundVariableExpression(syntax, litTemp);
+        return new BoundBlockExpression(syntax, bracedStatements.ToImmutable(), litResult);
     }
 
     /// <summary>
@@ -787,6 +839,25 @@ internal sealed partial class ExpressionBinder
             {
                 Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, memberName);
                 _ = BindExpression(initSyntax.Value);
+                continue;
+            }
+
+            // Issue #1567: a braced member value `Member: { a, b }` populates the
+            // (typically get-only) collection member by lowering to `.Add(...)`
+            // calls on `receiver.Member` — the C# collection-initializer-in-
+            // object-initializer pattern. This applies whether or not the member
+            // is assignable (C# always uses Add semantics for the `= { … }`
+            // form), so it is handled before the writability check.
+            if (initSyntax.Value is CollectionInitializerExpressionSyntax { Target: null } bracedInit)
+            {
+                var bracedReceiver = new BoundVariableExpression(initSyntax, tempVar);
+                if (!TryEmitMemberCollectionInitializer(bracedReceiver, memberName, initSyntax.FieldIdentifier, bracedInit, statements))
+                {
+                    var memberClrType = member is PropertyInfo bp ? bp.PropertyType : ((FieldInfo)member).FieldType;
+                    Diagnostics.ReportTypeNotCollectionInitializable(initSyntax.FieldIdentifier.Location, TypeSymbol.FromClrType(memberClrType));
+                    BindCollectionElementsForDiagnostics(bracedInit);
+                }
+
                 continue;
             }
 
