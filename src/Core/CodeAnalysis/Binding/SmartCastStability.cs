@@ -128,4 +128,112 @@ internal static class SmartCastStability
         currentType = null;
         return false;
     }
+
+    /// <summary>
+    /// ADR-0069 addendum / issues #700/#712/#1180/#1545: recognises the leaf
+    /// nil-guard comparison (<c>x == nil</c> / <c>x != nil</c>) where the
+    /// non-nil operand is a stable, narrowable target of <see
+    /// cref="NullableTypeSymbol"/> type. The target may be a bare local or
+    /// parameter, or a stable immutable member path. This is the single shared
+    /// leaf used by BOTH the if-condition classifier
+    /// (<c>StatementBinder.TryClassifyNilGuard</c>) and the short-circuit
+    /// operand classifier (<c>ExpressionBinder.ClassifyTypeTestNarrowing</c>)
+    /// so the two nil-guard classifiers stay consistent.
+    /// </summary>
+    /// <param name="condition">The candidate comparison expression.</param>
+    /// <param name="restrictBareVariableToLocalsAndParams">
+    /// When <c>true</c>, a bare variable target is only accepted when it is a
+    /// local or parameter, matching the soundness restriction the type-test
+    /// (<c>x is T</c>) short-circuit classifier applies — a mutable global could
+    /// be reassigned by a side effect between the guard and the use across
+    /// <c>&amp;&amp;</c>/<c>||</c>. When <c>false</c> (the if-statement
+    /// classifier, which has flow-based mutation invalidation), any variable is
+    /// accepted. Stable member paths are always subject to their own
+    /// stable-root rules regardless of this flag.
+    /// </param>
+    /// <param name="referenceNullableOnly">
+    /// When <c>true</c> (the <c>&amp;&amp;</c>/<c>||</c> short-circuit
+    /// classifier), a nullable VALUE type (e.g. <c>int32?</c>) is rejected
+    /// because narrowing it to its non-nullable form is not an IL no-op and the
+    /// variable-load path does not emit the required unwrap (issue #1545). When
+    /// <c>false</c> (the if-statement classifier), value-type nullables are
+    /// accepted, preserving that path's pre-existing behaviour.
+    /// </param>
+    /// <param name="target">The narrowed access path, when successful.</param>
+    /// <param name="underlying">The non-nullable underlying type to narrow to.</param>
+    /// <param name="nonNilWhenTrue">
+    /// <c>true</c> for <c>x != nil</c> (the target is non-nil when the
+    /// comparison is true); <c>false</c> for <c>x == nil</c> (the target is
+    /// non-nil when the comparison is false).
+    /// </param>
+    /// <returns><c>true</c> when a nil-guard leaf was recognised.</returns>
+    public static bool TryClassifyNilGuardLeaf(BoundExpression condition, bool restrictBareVariableToLocalsAndParams, bool referenceNullableOnly, out AccessPath target, out TypeSymbol underlying, out bool nonNilWhenTrue)
+    {
+        target = null;
+        underlying = null;
+        nonNilWhenTrue = false;
+
+        if (condition is not BoundBinaryExpression be)
+        {
+            return false;
+        }
+
+        if (be.Op.Kind is not (BoundBinaryOperatorKind.Equals or BoundBinaryOperatorKind.NotEquals))
+        {
+            return false;
+        }
+
+        TypeSymbol targetType = null;
+        if (be.Left is BoundVariableExpression lv && IsAcceptableBareVariable(lv.Variable, restrictBareVariableToLocalsAndParams) && StatementBinder.IsNilLiteral(be.Right))
+        {
+            target = lv.Variable;
+            targetType = lv.Variable.Type;
+        }
+        else if (be.Right is BoundVariableExpression rv && IsAcceptableBareVariable(rv.Variable, restrictBareVariableToLocalsAndParams) && StatementBinder.IsNilLiteral(be.Left))
+        {
+            target = rv.Variable;
+            targetType = rv.Variable.Type;
+        }
+        else if (StatementBinder.IsNilLiteral(be.Right) && TryGetStableMemberPath(be.Left, out var leftPath, out var leftType))
+        {
+            target = leftPath;
+            targetType = leftType;
+        }
+        else if (StatementBinder.IsNilLiteral(be.Left) && TryGetStableMemberPath(be.Right, out var rightPath, out var rightType))
+        {
+            target = rightPath;
+            targetType = rightType;
+        }
+
+        if (target == null || targetType is not NullableTypeSymbol nullable)
+        {
+            target = null;
+            return false;
+        }
+
+        // Issue #1545: narrowing a nullable VALUE type (`int32?` → `int32`)
+        // requires an unwrap the variable-load path does not currently emit, so
+        // the narrowed static type and the `System.Nullable<T>` storage diverge
+        // and the method fails ilverify (a pre-existing latent gap; see the
+        // separately-tracked value-type nil-narrowing emit bug). For a nullable
+        // REFERENCE type the narrowed type and its storage are the same CLR type,
+        // so narrowing is an IL no-op and is safe. The short-circuit
+        // (`&&`/`||`) caller passes `referenceNullableOnly: true` to stay on the
+        // safe side; the statement classifier keeps its pre-existing behaviour.
+        if (referenceNullableOnly && NullableLifting.IsValueTypeNullable(nullable))
+        {
+            target = null;
+            return false;
+        }
+
+        underlying = nullable.UnderlyingType;
+        nonNilWhenTrue = be.Op.Kind == BoundBinaryOperatorKind.NotEquals;
+        return true;
+    }
+
+    private static bool IsAcceptableBareVariable(VariableSymbol variable, bool restrictToLocalsAndParams)
+    {
+        // ParameterSymbol derives from LocalVariableSymbol and is covered here.
+        return !restrictToLocalsAndParams || variable is LocalVariableSymbol;
+    }
 }
