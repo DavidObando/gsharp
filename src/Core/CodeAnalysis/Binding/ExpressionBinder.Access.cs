@@ -1053,6 +1053,40 @@ internal sealed partial class ExpressionBinder
         => TryResolveUserNestedTypeExpression(accessor, out nestedType);
 
     /// <summary>
+    /// Issue #942/#1537: returns the leftmost (root) identifier of a candidate
+    /// user-type-naming chain — the head of a bare name, generic name,
+    /// per-segment index, or accessor — WITHOUT binding any bracketed contents.
+    /// Used to gate the nested-type-chain probe on the head naming a user
+    /// aggregate TYPE before any bracket is speculatively bound as a type
+    /// argument, so a genuine indexer whose index is an identifier
+    /// (<c>xs[i]</c>) is never probed as a constructed nested type. Mirrors the
+    /// shapes accepted by <see cref="TryFlattenUserTypeExpressionSegments"/> so
+    /// the gate never rejects a chain the core would otherwise flatten.
+    /// </summary>
+    /// <param name="expr">The candidate type-naming expression.</param>
+    /// <param name="headName">The resolved root identifier on success.</param>
+    /// <returns>Whether a root identifier could be extracted.</returns>
+    private static bool TryGetUserTypeChainHead(ExpressionSyntax expr, out string headName)
+    {
+        switch (expr)
+        {
+            case NameExpressionSyntax name:
+                headName = name.IdentifierToken.Text;
+                return true;
+            case GenericNameExpressionSyntax generic:
+                headName = generic.Identifier.Text;
+                return true;
+            case IndexExpressionSyntax index when !index.IsNullConditional:
+                return TryGetUserTypeChainHead(index.Target, out headName);
+            case AccessorExpressionSyntax accessor when !accessor.IsNullConditional:
+                return TryGetUserTypeChainHead(accessor.LeftPart, out headName);
+            default:
+                headName = null;
+                return false;
+        }
+    }
+
+    /// <summary>
     /// Issue #1069/#1506/#1521/#1537: resolves an expression that names a
     /// (possibly nested, possibly per-segment generic) user type — e.g.
     /// <c>Outer.Middle</c>, <c>Outer[int32].Middle</c>,
@@ -1072,6 +1106,42 @@ internal sealed partial class ExpressionBinder
     /// <param name="nestedType">The resolved (possibly constructed) type symbol.</param>
     /// <returns>Whether the expression resolved to a user nested type.</returns>
     private bool TryResolveUserNestedTypeExpression(ExpressionSyntax expr, out TypeSymbol nestedType)
+    {
+        nestedType = null;
+
+        // Issue #942 regression guard: this probe speculatively binds each
+        // bracketed segment's contents as TYPE arguments to decide whether
+        // `expr` names a constructed nested type (#1537) rather than an indexer
+        // receiver. In a genuine per-segment nested-type chain the ROOT names a
+        // user aggregate TYPE (`Outer` in `Outer[int32].Middle[string]`); in a
+        // real indexer the root is a VALUE — a local/parameter/field such as
+        // `xs` in `xs[i]`. Gate on the head naming a user aggregate type (and
+        // NOT a value) BEFORE binding any bracket as a type — mirroring
+        // TryResolveConstructedGenericTypeReceiver — so a real indexer whose
+        // index is an identifier is never probed as a nested type (which would
+        // look the index up as a type and report a spurious GS0113).
+        if (!TryGetUserTypeChainHead(expr, out var headName)
+            || scope.TryLookupSymbol(headName) is VariableSymbol
+            || !scope.TryLookupTypeAlias(headName, out var headCandidate)
+            || !IsUserAggregateType(headCandidate))
+        {
+            return false;
+        }
+
+        return TryResolveUserNestedTypeExpressionCore(expr, out nestedType);
+    }
+
+    /// <summary>
+    /// Issue #1537: the flatten-and-construct core of
+    /// <see cref="TryResolveUserNestedTypeExpression"/>. Invoked only after the
+    /// wrapper has confirmed the chain head names a user aggregate type, so the
+    /// speculative type-argument binding it performs cannot mistake a genuine
+    /// indexer receiver for a nested-type chain.
+    /// </summary>
+    /// <param name="expr">The type-naming expression (accessor or index chain).</param>
+    /// <param name="nestedType">The resolved (possibly constructed) type symbol.</param>
+    /// <returns>Whether the expression resolved to a user nested type.</returns>
+    private bool TryResolveUserNestedTypeExpressionCore(ExpressionSyntax expr, out TypeSymbol nestedType)
     {
         nestedType = null;
         var segments = new List<(string Name, ImmutableArray<TypeSymbol> Args)>();
@@ -1184,6 +1254,34 @@ internal sealed partial class ExpressionBinder
     /// <param name="segments">The accumulator for resolved segments (outermost-first).</param>
     /// <returns>Whether the expression is a well-formed user-type name chain.</returns>
     private bool TryFlattenUserTypeExpressionSegments(ExpressionSyntax expr, List<(string Name, ImmutableArray<TypeSymbol> Args)> segments)
+    {
+        // Issue #942 regression guard: flattening speculatively binds each
+        // bracketed segment's contents as TYPE arguments. When the expression is
+        // NOT a well-formed user-type name chain (e.g. a genuine indexer whose
+        // index is a value), that speculative bind can report a type diagnostic
+        // (GS0113) even though this probe ultimately returns false and the caller
+        // falls back to normal binding. Snapshot the diagnostic bag and roll it
+        // back on failure so the probe is side-effect-free for ANY chain shape.
+        var diagMark = Diagnostics.Count;
+        if (TryFlattenUserTypeExpressionSegmentsCore(expr, segments))
+        {
+            return true;
+        }
+
+        Diagnostics.TruncateTo(diagMark);
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #1537: the recursive core of
+    /// <see cref="TryFlattenUserTypeExpressionSegments"/>. The wrapper snapshots
+    /// and rolls back the diagnostic bag around this method so a failed probe
+    /// never leaks the speculative type-argument-binding diagnostics it emits.
+    /// </summary>
+    /// <param name="expr">The type-naming expression.</param>
+    /// <param name="segments">The accumulator for resolved segments (outermost-first).</param>
+    /// <returns>Whether the expression is a well-formed user-type name chain.</returns>
+    private bool TryFlattenUserTypeExpressionSegmentsCore(ExpressionSyntax expr, List<(string Name, ImmutableArray<TypeSymbol> Args)> segments)
     {
         switch (expr)
         {
