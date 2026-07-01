@@ -276,6 +276,55 @@ namespace Demo
     }
 
     /// <summary>
+    /// A local whose address is taken — passed by C# `ref`/`out` to an existing
+    /// variable, or via an unsafe `&local` address-of — must be declared mutable
+    /// (`var`), never immutable (`let`): gsc rejects taking the address of a `let`
+    /// with GS9005 ("Cannot take address of constant").
+    /// </summary>
+    [Fact]
+    public void LocalPassedByRef_IsDeclaredMutable()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class RefX
+    {
+        private static bool Fill(ref int slot) { slot = 1; return true; }
+        public int Run()
+        {
+            int captured = 0;
+            Fill(ref captured);
+            return captured;
+        }
+    }
+}");
+
+        Assert.Contains("var captured", printed);
+        Assert.DoesNotContain("let captured", printed);
+    }
+
+    [Fact]
+    public void LocalWhoseAddressIsTaken_IsDeclaredMutable()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public static unsafe class AddrX
+    {
+        private static bool Native(int* p) => *p == 0;
+        public static bool Run()
+        {
+            int slot = 0;
+            return Native(&slot);
+        }
+    }
+}");
+
+        Assert.Contains("var slot", printed);
+        Assert.DoesNotContain("let slot", printed);
+    }
+
+    /// <summary>
     /// ADR-0115 §B.12: a suffix-less integer literal whose C# type is wider or
     /// unsigned than int32 (`0xD800000000000000` is `ulong`) is emitted with the
     /// matching G# suffix so the lexer does not reject it.
