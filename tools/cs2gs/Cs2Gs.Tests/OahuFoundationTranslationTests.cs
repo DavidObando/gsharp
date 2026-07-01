@@ -352,6 +352,62 @@ namespace Demo
     }
 
     /// <summary>
+    /// A C# delegate creation `new SomeDelegate(lambda)` wraps a lambda / method
+    /// group in a named delegate type. G# has no delegate wrapper type — a
+    /// delegate value IS a function value — so the redundant wrapper is unwrapped
+    /// to its sole target expression. Constructing the mapped delegate type would
+    /// otherwise leak the `ArrowTypeReference` AST node's CLR type name (issue
+    /// #914).
+    /// </summary>
+    [Fact]
+    public void DelegateConstructionWrappingLambda_UnwrapsToLambda()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    using System.Threading;
+    public static class Poster
+    {
+        public static void Post(SynchronizationContext ctx)
+        {
+            ctx.Send(new SendOrPostCallback((state) => { }), null);
+        }
+    }
+}");
+
+        Assert.DoesNotContain("ArrowTypeReference", printed);
+        Assert.DoesNotContain("SendOrPostCallback(", printed);
+        Assert.Contains("ctx.Send((state object?) -> {", printed);
+    }
+
+    /// <summary>
+    /// A C# bare `default` literal in a typed local (`TResult retval = default;`)
+    /// is emitted as the self-typed `default(TResult)`. Roslyn reports the bare
+    /// literal's natural type as the target type, so the local-declaration path
+    /// omits the type clause and relies on inference — yet bare `default` has
+    /// nothing to infer from, surfacing GS0362. Emitting `default(T)` keeps it
+    /// valid in every position (issue #914, ADR-0100).
+    /// </summary>
+    [Fact]
+    public void BareDefaultLiteral_RendersSelfTypedDefault()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public static class Boxes
+    {
+        public static TResult MakeDefault<TResult>()
+        {
+            TResult retval = default;
+            return retval;
+        }
+    }
+}");
+
+        Assert.Contains("default(TResult)", printed);
+    }
+
+    /// <summary>
     /// ADR-0115 §B.12: a suffix-less integer literal whose C# type is wider or
     /// unsigned than int32 (`0xD800000000000000` is `ulong`) is emitted with the
     /// matching G# suffix so the lexer does not reject it.
