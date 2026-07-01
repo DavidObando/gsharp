@@ -1368,6 +1368,44 @@ internal sealed partial class ExpressionBinder
     {
         bound = null;
 
+        if (!TryResolveInheritedClrInstanceMemberByBareName(name, out var receiver, out var member))
+        {
+            return false;
+        }
+
+        switch (member)
+        {
+            case PropertyInfo clrProp when clrProp.CanRead:
+                bound = new BoundClrPropertyAccessExpression(null, receiver, clrProp, TypeSymbol.FromClrType(clrProp.PropertyType));
+                return true;
+            case FieldInfo clrFld:
+                bound = new BoundClrPropertyAccessExpression(null, receiver, clrFld, TypeSymbol.FromClrType(clrFld.FieldType));
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1584: resolves a bare (unqualified) identifier inside an instance
+    /// method to an inherited CLR instance property/field of the enclosing G#
+    /// class's metadata base, returning the effective <c>this</c> receiver and
+    /// the resolved <see cref="MemberInfo"/>. Shared by the bare-name READ
+    /// fallback (<see cref="TryBindInheritedClrInstanceMemberByBareName"/>) and
+    /// the bare-name WRITE / COMPOUND-WRITE fallbacks in
+    /// <c>ExpressionBinder.Assignments.cs</c> so all three behave identically to
+    /// the <c>this.</c>-qualified paths. A property is preferred over a field of
+    /// the same name (mirroring the qualified member-lookup order).
+    /// </summary>
+    /// <param name="name">The bare identifier text.</param>
+    /// <param name="receiver">The effective <c>this</c> receiver on success.</param>
+    /// <param name="member">The resolved inherited CLR member on success.</param>
+    /// <returns><see langword="true"/> when an inherited CLR member was resolved.</returns>
+    private bool TryResolveInheritedClrInstanceMemberByBareName(string name, out BoundExpression receiver, out MemberInfo member)
+    {
+        receiver = null;
+        member = null;
+
         var effThis = GetEffectiveThisParameter();
         if (effThis?.Type is not StructSymbol thisStruct)
         {
@@ -1379,23 +1417,59 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var receiver = new BoundVariableExpression(null, effThis);
-
-        var clrProp = ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name);
-        if (clrProp != null && clrProp.CanRead)
+        member = ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name);
+        member ??= ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name);
+        if (member == null)
         {
-            bound = new BoundClrPropertyAccessExpression(null, receiver, clrProp, TypeSymbol.FromClrType(clrProp.PropertyType));
+            return false;
+        }
+
+        receiver = new BoundVariableExpression(null, effThis);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1584: tries to bind a bare (unqualified) simple write
+    /// <c>member = value</c> inside an instance method to an inherited CLR
+    /// instance property/field of the enclosing G# class's metadata base,
+    /// producing a <see cref="BoundClrPropertyAssignmentExpression"/> through the
+    /// effective <c>this</c> receiver — identical to the <c>this.member =
+    /// value</c> qualified path in <see cref="BindMemberFieldAssignmentExpression"/>.
+    /// A resolved-but-unsettable member (get-only property / readonly field)
+    /// reports <c>cannot assign</c> rather than GS0125, matching the qualified
+    /// path. Runs only after the bare name failed to resolve as a
+    /// local/parameter/implicit member.
+    /// </summary>
+    /// <param name="name">The bare identifier text.</param>
+    /// <param name="valueSyntax">The RHS value syntax.</param>
+    /// <param name="assignLocation">The location of the assignment operator, for diagnostics.</param>
+    /// <param name="bound">The bound assignment (or an error expression) on success.</param>
+    /// <returns><see langword="true"/> when an inherited CLR member was resolved.</returns>
+    private bool TryBindInheritedClrInstanceMemberWriteByBareName(
+        string name,
+        ExpressionSyntax valueSyntax,
+        TextLocation assignLocation,
+        out BoundExpression bound)
+    {
+        bound = null;
+
+        if (!TryResolveInheritedClrInstanceMemberByBareName(name, out var receiver, out var member))
+        {
+            return false;
+        }
+
+        if (!TryGetWritableClrMember(member, out _, out var targetSymbol, out _))
+        {
+            Diagnostics.ReportCannotAssign(assignLocation, name);
+            _ = BindExpression(valueSyntax);
+            bound = new BoundErrorExpression(null);
             return true;
         }
 
-        var clrFld = ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name);
-        if (clrFld != null)
-        {
-            bound = new BoundClrPropertyAccessExpression(null, receiver, clrFld, TypeSymbol.FromClrType(clrFld.FieldType));
-            return true;
-        }
-
-        return false;
+        var value = BindAssignmentRhs(valueSyntax, targetSymbol);
+        var converted = conversions.BindConversion(valueSyntax.Location, value, targetSymbol);
+        bound = new BoundClrPropertyAssignmentExpression(null, receiver, member, converted, targetSymbol);
+        return true;
     }
 
     /// <summary>

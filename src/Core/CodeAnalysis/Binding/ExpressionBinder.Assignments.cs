@@ -35,9 +35,26 @@ internal sealed partial class ExpressionBinder
         // `A : T?`) binds context-free, picks `T` from the non-nil arm, and then
         // rejects the `nil` arm with GS0155 — even though the identical RHS bound
         // through `let a T? = ...` (which does receive the target type) compiles.
-        var variable = BindVariableReference(name, syntax.IdentifierToken.Location);
+        var variable = BindVariableReference(name, syntax.IdentifierToken.Location, suppressNotAVariable: false, suppressUndefinedVariable: true);
         if (variable == null)
         {
+            // Issue #1584: a bare write to an inherited CLR instance
+            // property/field of a metadata base resolves to `this.member =
+            // value`, mirroring the qualified path and the bare-name READ
+            // fallback in BindNameExpression.
+            if (TryBindInheritedClrInstanceMemberWriteByBareName(name, syntax.Expression, syntax.EqualsToken.Location, out var inheritedWrite))
+            {
+                return inheritedWrite;
+            }
+
+            // Surface the diagnostic suppressed above (GS0125) only when the
+            // name is genuinely unresolved; a non-variable symbol already
+            // reported its own diagnostic.
+            if (scope.TryLookupSymbol(name) is null)
+            {
+                Diagnostics.ReportUndefinedVariable(syntax.IdentifierToken.Location, name);
+            }
+
             return BindExpression(syntax.Expression);
         }
 
@@ -855,12 +872,38 @@ internal sealed partial class ExpressionBinder
 
         // Not an event: fall back to compound assignment semantics.
         // Reconstruct `name = name +/- rhs` as the parser used to do.
-        var boundRhs = BindExpression(syntax.Value);
-        var variable = BindVariableReference(name, bareName.IdentifierToken.Location);
+        var variable = BindVariableReference(name, bareName.IdentifierToken.Location, suppressNotAVariable: false, suppressUndefinedVariable: true);
         if (variable == null)
         {
-            return boundRhs;
+            // Issue #1584: a bare compound-write to an inherited CLR instance
+            // property/field of a metadata base resolves to `this.member op=
+            // value`, mirroring the qualified compound path and the bare-name
+            // simple-write fallback.
+            var effThis = GetEffectiveThisParameter();
+            if (effThis?.Type is StructSymbol thisStruct
+                && GetInheritedClrBaseType(thisStruct) is System.Type inheritedBaseClr)
+            {
+                var inheritedReceiver = new BoundVariableExpression(null, effThis);
+                var inheritedCompound = TryBindChainedClrCompoundAssignment(
+                    inheritedReceiver, inheritedBaseClr, name, bareName, syntax, isAdd, includeInherited: true);
+                if (inheritedCompound != null)
+                {
+                    return inheritedCompound;
+                }
+            }
+
+            // Surface the diagnostic suppressed above (GS0125) only when the
+            // name is genuinely unresolved; a non-variable symbol already
+            // reported its own diagnostic.
+            if (scope.TryLookupSymbol(name) is null)
+            {
+                Diagnostics.ReportUndefinedVariable(bareName.IdentifierToken.Location, name);
+            }
+
+            return BindExpression(syntax.Value);
         }
+
+        var boundRhs = BindExpression(syntax.Value);
 
         // Synthesize the binary expression: variable op rhs.
         var leftExpr = BindNameExpressionCore(bareName);
