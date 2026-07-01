@@ -6678,6 +6678,27 @@ internal sealed class ReflectionMetadataEmitter
 
     private static bool TryUnify(TypeSymbol formal, TypeSymbol actual, TypeParameterSymbol tp, out TypeSymbol inferred)
     {
+        // Issue #1570: a `ref`/`out`/`in` parameter whose declared type mentions
+        // the method (or containing) type parameter arrives here with a byref
+        // formal and/or a byref actual (the argument expression's type for an
+        // `out`/`ref` argument is a managed pointer `T&`). A generic type
+        // argument can never itself be a byref, so peel the `T&` wrapper off
+        // both sides and unify the pointee types. Without this the inferred type
+        // argument for `TryMake[T](out result T)` becomes `T&`, which the
+        // MethodSpec encoder then rejects with "Cannot encode '*T' as a
+        // non-byref signature slot" (GS9998). Stripping the pointee also lets
+        // constructed byref actuals such as `out List[T]` reach the generic-
+        // instantiation unification branches below.
+        if (formal is ByRefTypeSymbol formalByRef)
+        {
+            return TryUnify(formalByRef.PointeeType, actual, tp, out inferred);
+        }
+
+        if (actual is ByRefTypeSymbol actualByRef)
+        {
+            return TryUnify(formal, actualByRef.PointeeType, tp, out inferred);
+        }
+
         if (ReferenceEquals(formal, tp))
         {
             inferred = actual;
