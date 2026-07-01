@@ -26,6 +26,15 @@ namespace GSharp.Compiler.Tests.Emit;
 /// Every facet failed to compile on current main and passes after the fix. Each
 /// uses a UNIQUE package/type name because the in-process
 /// <c>FunctionTypeSymbol</c> cache is name-keyed for user types.
+/// <para>
+/// The short-circuit path intentionally restricts nil-guard narrowing to
+/// nullable REFERENCE types: narrowing a nullable value type (<c>int32?</c>)
+/// is not an IL no-op and the variable-load path does not emit the required
+/// unwrap, so applying it produced invalid IL (regressed Issue1518's
+/// <c>v != nil &amp;&amp; v!! &gt; 0</c>). Value-type nullables still work in the
+/// guard via the nullable-lifted operator or an explicit <c>!!</c> — see
+/// <see cref="Control_ValueTypeNullable_ShortCircuitGuard_NotNarrowedButRuns"/>.
+/// </para>
 /// </summary>
 public class Issue1545ShortCircuitNilNarrowingEmitTests
 {
@@ -242,6 +251,34 @@ public class Issue1545ShortCircuitNilNarrowingEmitTests
         var (exit, output) = CompileOnly(source);
         Assert.NotEqual(0, exit);
         Assert.Contains("GS0129", output);
+    }
+
+    [Fact]
+    public void Control_ValueTypeNullable_ShortCircuitGuard_NotNarrowedButRuns()
+    {
+        // A nullable VALUE type in a short-circuit guard is intentionally NOT
+        // narrowed (that would need an unwrap the load path doesn't emit, giving
+        // invalid IL). The idiom still runs: `v!!` unwraps explicitly and the
+        // lifted `>` handles the un-narrowed operand. Both must produce valid,
+        // ilverify-clean IL and the correct runtime result.
+        const string source = """
+            package i1545vt
+
+            import System
+            import System.Linq
+
+            func CountForced(xs []int32?) int32 -> xs.Where((v int32?) -> v != nil && v!! > 0).Count()
+            func CountLifted(xs []int32?) int32 -> xs.Where((v int32?) -> v != nil && v > 0).Count()
+
+            func Main() {
+                var xs = []int32?{1, nil, 2, nil, 3}
+                Console.WriteLine(CountForced(xs))
+                Console.WriteLine(CountLifted(xs))
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("3\n3\n", output);
     }
 
     private static (int Exit, string Output) CompileOnly(string source)

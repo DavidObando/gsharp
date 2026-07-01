@@ -151,6 +151,14 @@ internal static class SmartCastStability
     /// accepted. Stable member paths are always subject to their own
     /// stable-root rules regardless of this flag.
     /// </param>
+    /// <param name="referenceNullableOnly">
+    /// When <c>true</c> (the <c>&amp;&amp;</c>/<c>||</c> short-circuit
+    /// classifier), a nullable VALUE type (e.g. <c>int32?</c>) is rejected
+    /// because narrowing it to its non-nullable form is not an IL no-op and the
+    /// variable-load path does not emit the required unwrap (issue #1545). When
+    /// <c>false</c> (the if-statement classifier), value-type nullables are
+    /// accepted, preserving that path's pre-existing behaviour.
+    /// </param>
     /// <param name="target">The narrowed access path, when successful.</param>
     /// <param name="underlying">The non-nullable underlying type to narrow to.</param>
     /// <param name="nonNilWhenTrue">
@@ -159,7 +167,7 @@ internal static class SmartCastStability
     /// non-nil when the comparison is false).
     /// </param>
     /// <returns><c>true</c> when a nil-guard leaf was recognised.</returns>
-    public static bool TryClassifyNilGuardLeaf(BoundExpression condition, bool restrictBareVariableToLocalsAndParams, out AccessPath target, out TypeSymbol underlying, out bool nonNilWhenTrue)
+    public static bool TryClassifyNilGuardLeaf(BoundExpression condition, bool restrictBareVariableToLocalsAndParams, bool referenceNullableOnly, out AccessPath target, out TypeSymbol underlying, out bool nonNilWhenTrue)
     {
         target = null;
         underlying = null;
@@ -198,6 +206,21 @@ internal static class SmartCastStability
         }
 
         if (target == null || targetType is not NullableTypeSymbol nullable)
+        {
+            target = null;
+            return false;
+        }
+
+        // Issue #1545: narrowing a nullable VALUE type (`int32?` → `int32`)
+        // requires an unwrap the variable-load path does not currently emit, so
+        // the narrowed static type and the `System.Nullable<T>` storage diverge
+        // and the method fails ilverify (a pre-existing latent gap; see the
+        // separately-tracked value-type nil-narrowing emit bug). For a nullable
+        // REFERENCE type the narrowed type and its storage are the same CLR type,
+        // so narrowing is an IL no-op and is safe. The short-circuit
+        // (`&&`/`||`) caller passes `referenceNullableOnly: true` to stay on the
+        // safe side; the statement classifier keeps its pre-existing behaviour.
+        if (referenceNullableOnly && NullableLifting.IsValueTypeNullable(nullable))
         {
             target = null;
             return false;

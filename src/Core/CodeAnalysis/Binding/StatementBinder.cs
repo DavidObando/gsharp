@@ -1871,7 +1871,7 @@ internal sealed class StatementBinder
         // support only single-variable/stable-path guards here at the leaf;
         // conjunctions, disjunctions and pattern-based narrowing compose via the
         // cases above.
-        if (!SmartCastStability.TryClassifyNilGuardLeaf(condition, restrictBareVariableToLocalsAndParams: false, out var target, out var underlying, out var nonNilWhenTrue))
+        if (!SmartCastStability.TryClassifyNilGuardLeaf(condition, restrictBareVariableToLocalsAndParams: false, referenceNullableOnly: false, out var target, out var underlying, out var nonNilWhenTrue))
         {
             return (null, null);
         }

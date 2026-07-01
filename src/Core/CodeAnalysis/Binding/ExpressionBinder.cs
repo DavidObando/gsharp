@@ -781,7 +781,7 @@ internal sealed partial class ExpressionBinder
         // `&&`/`||`, mirroring the type-test (`x is T`) cases above. Uses the
         // shared leaf classifier kept in sync with
         // StatementBinder.TryClassifyNilGuard.
-        if (SmartCastStability.TryClassifyNilGuardLeaf(condition, restrictBareVariableToLocalsAndParams: true, out var nilTarget, out var nilUnderlying, out var nonNilWhenTrue))
+        if (SmartCastStability.TryClassifyNilGuardLeaf(condition, restrictBareVariableToLocalsAndParams: true, referenceNullableOnly: true, out var nilTarget, out var nilUnderlying, out var nonNilWhenTrue))
         {
             var nonNilFrame = new Dictionary<AccessPath, TypeSymbol> { [nilTarget] = nilUnderlying };
             return nonNilWhenTrue ? (nonNilFrame, null) : (null, nonNilFrame);
