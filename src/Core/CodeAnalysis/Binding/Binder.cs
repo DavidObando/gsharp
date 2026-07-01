@@ -2733,8 +2733,10 @@ public sealed class Binder
         // validated so a malformed `Outer[bad].Inner` is diagnosed here rather
         // than falling through to a confusing CLR-path error.
         var deepest = definitions[segmentTexts.Length - 1];
+        var constructedSegments = new TypeSymbol[segmentTexts.Length];
         for (var i = 0; i < segmentTexts.Length; i++)
         {
+            constructedSegments[i] = definitions[i];
             if (!syntax.SegmentHasTypeArguments(i))
             {
                 continue;
@@ -2748,13 +2750,84 @@ public sealed class Binder
                 return null;
             }
 
+            constructedSegments[i] = constructed;
             if (i == segmentTexts.Length - 1)
             {
                 deepest = constructed;
             }
         }
 
+        // Issue #1521: when the deepest segment is a type nested inside one or
+        // more constructed generic enclosing segments (e.g. `Box[int32].Tag`),
+        // thread the flattened enclosing construction's type arguments
+        // (outermost-first) onto the nested type so a use-site reference /
+        // slot encodes `Box`1+Tag`1<int32>` rather than the open
+        // self-instantiation `Box`1+Tag`1<!0>`. This mirrors the enclosing-arg
+        // threading the binder applies to a nested type surfaced from within a
+        // constructed enclosing member (e.g. the return of `Box[int32].MakeTag()`),
+        // so the two representations are reference-equal and interconvertible.
+        if (deepest is StructSymbol deepestStruct && deepestStruct.TypeArguments.IsDefaultOrEmpty)
+        {
+            var enclosingArgs = CollectConstructedEnclosingArguments(constructedSegments, segmentTexts.Length - 1);
+            if (!enclosingArgs.IsDefaultOrEmpty)
+            {
+                deepest = StructSymbol.ConstructNested(deepestStruct.Definition ?? deepestStruct, enclosingArgs);
+            }
+        }
+
         return deepest;
+    }
+
+    /// <summary>
+    /// Issue #1521: gathers the flattened type arguments of the constructed
+    /// generic enclosing segments (outermost-first) of a nested type-clause
+    /// chain, aligned 1:1 with <see cref="StructSymbol.CollectEnclosingTypeParameters"/>.
+    /// Returns <c>default</c> when no enclosing segment is a constructed
+    /// generic, or when a generic enclosing segment was left open (its
+    /// parameters could not be threaded), so the caller keeps the open nested
+    /// definition unchanged.
+    /// </summary>
+    /// <param name="constructedSegments">The per-segment constructed (or open) type symbols.</param>
+    /// <param name="deepestIndex">The index of the deepest (nested) segment; enclosing segments are those before it.</param>
+    /// <returns>The flattened enclosing type-argument vector, or <c>default</c>.</returns>
+    private static ImmutableArray<TypeSymbol> CollectConstructedEnclosingArguments(TypeSymbol[] constructedSegments, int deepestIndex)
+    {
+        ImmutableArray<TypeSymbol>.Builder builder = null;
+        for (var i = 0; i < deepestIndex; i++)
+        {
+            var seg = constructedSegments[i];
+            var ownParams = seg switch
+            {
+                StructSymbol s => (s.Definition ?? s).TypeParameters,
+                InterfaceSymbol iface => (iface.Definition ?? iface).TypeParameters,
+                _ => ImmutableArray<TypeParameterSymbol>.Empty,
+            };
+
+            if (ownParams.IsDefaultOrEmpty)
+            {
+                // Non-generic enclosing segment contributes no enclosing params.
+                continue;
+            }
+
+            var ownArgs = seg switch
+            {
+                StructSymbol s => s.TypeArguments,
+                InterfaceSymbol iface => iface.TypeArguments,
+                _ => ImmutableArray<TypeSymbol>.Empty,
+            };
+
+            if (ownArgs.IsDefaultOrEmpty || ownArgs.Length != ownParams.Length)
+            {
+                // A generic enclosing segment was left open — cannot thread a
+                // concrete enclosing-argument vector, so keep the nested type open.
+                return default;
+            }
+
+            builder ??= ImmutableArray.CreateBuilder<TypeSymbol>();
+            builder.AddRange(ownArgs);
+        }
+
+        return builder?.ToImmutable() ?? default;
     }
 
     /// <summary>
@@ -3973,6 +4046,22 @@ public sealed class Binder
             return structChanged
                 ? StructSymbol.Construct(ss.Definition, newStructArgs.MoveToImmutable())
                 : type;
+        }
+
+        // Issue #1521: a member-signature type that is a reference to a type
+        // nested inside the generic being constructed (e.g. the return type
+        // `Tag` of `Box[T].MakeTag()`, or a field/local typed `Tag`) must thread
+        // the receiver's type-argument map through the enclosing construction so
+        // it surfaces as `Box[int32].Tag`. `Tag` declares no own type arguments,
+        // so the emitter parents its use-site references/slots at
+        // `Box`1+Tag`1<int32>` rather than the open `Box`1+Tag`1<!0>`.
+        if (type is StructSymbol nestedRef && nestedRef.TypeArguments.IsDefaultOrEmpty)
+        {
+            var newEnclosing = StructSymbol.SubstituteEnclosingArguments(nestedRef, t => SubstituteType(t, substitution));
+            if (!newEnclosing.IsDefault)
+            {
+                return StructSymbol.ConstructNested(nestedRef.Definition ?? nestedRef, newEnclosing);
+            }
         }
 
         // Issue #1250: same recursion for a constructed generic user interface

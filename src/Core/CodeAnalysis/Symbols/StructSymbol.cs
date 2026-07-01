@@ -20,6 +20,13 @@ public sealed class StructSymbol : TypeSymbol
 {
     private static readonly ConcurrentDictionary<(StructSymbol Def, string ArgsKey), StructSymbol> ConstructedCache = new();
 
+    // Issue #1521: identity cache for constructed references to types nested
+    // inside a generic enclosing type (`Box[int32].Tag`), keyed by the nested
+    // definition and the flattened enclosing type-argument vector so two
+    // references to the same construction share one symbol (preserving
+    // reference equality and TypeSpec caching in the emitter).
+    private static readonly ConcurrentDictionary<(StructSymbol Def, string ArgsKey), StructSymbol> ConstructedNestedCache = new();
+
     // Issue #1341: backing stores for the generically-erased member tables whose
     // reads are forwarded to Definition on a constructed instance. On a
     // definition (or non-generic type) these hold the canonical member set; on a
@@ -353,6 +360,29 @@ public sealed class StructSymbol : TypeSymbol
 
     /// <summary>Gets the type arguments when this is a constructed instance of a generic definition (Phase 4.3 / ADR-0020). Empty for generic definitions and for non-generic types.</summary>
     public ImmutableArray<TypeSymbol> TypeArguments { get; private set; } = ImmutableArray<TypeSymbol>.Empty;
+
+    /// <summary>
+    /// Gets the flattened type arguments of the enclosing construction when this
+    /// is a reference to a type nested inside a <em>generic</em> enclosing type
+    /// used from a <em>constructed</em> context (issue #1521) — e.g. the return
+    /// type <c>Tag</c> of <c>Box[int32].MakeTag()</c> surfaces as
+    /// <c>Box[int32].Tag</c>. The arguments are ordered outermost-first
+    /// (CLR order), aligned 1:1 with the enclosing generic parameters the
+    /// emitter reifies the nested type over (ECMA-335 §II.10.3.1), so a
+    /// use-site reference / local / field slot encodes
+    /// <c>Box`1+Tag`1&lt;int32&gt;</c> rather than the open self-instantiation
+    /// <c>Box`1+Tag`1&lt;!0&gt;</c>. Empty for a top-level type, for an open
+    /// nested type referenced from within its own enclosing generic's members
+    /// (which threads <c>!0…</c>), and for a nested type of a non-generic type.
+    /// </summary>
+    public ImmutableArray<TypeSymbol> EnclosingTypeArguments { get; private set; } = ImmutableArray<TypeSymbol>.Empty;
+
+    /// <summary>
+    /// Gets a value indicating whether this is a constructed reference to a type
+    /// nested inside a generic enclosing type (issue #1521) — it carries
+    /// <see cref="EnclosingTypeArguments"/> but declares no own type arguments.
+    /// </summary>
+    public bool IsConstructedNestedType => !EnclosingTypeArguments.IsDefaultOrEmpty;
 
     /// <summary>
     /// Gets, for a synthesized closure / capture-box class that was reified
@@ -1118,8 +1148,76 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>
-    /// Issue #1254: finds the constructed generic base instantiation in this
-    /// type's base-class chain whose definition satisfies
+    /// Issue #1521: constructs a reference to a type declared as a nested type
+    /// inside a <em>generic</em> enclosing type, closed over the enclosing
+    /// construction's type arguments (e.g. <c>Box[int32].Tag</c>). The nested
+    /// type has no own type parameters (the CLR models it as
+    /// <c>Box`1+Tag`1</c>, redeclaring the encloser's parameters — ECMA-335
+    /// §II.10.3.1); the enclosing arguments are recorded on
+    /// <see cref="EnclosingTypeArguments"/> and the member types that mention an
+    /// enclosing type parameter are substituted lazily (see
+    /// <see cref="GetSubstitutionMap"/>). The emitter threads
+    /// <see cref="EnclosingTypeArguments"/> as the nested type's type-argument
+    /// vector so a constructed use site encodes <c>Box`1+Tag`1&lt;int32&gt;</c>
+    /// instead of the open self-instantiation <c>Box`1+Tag`1&lt;!0&gt;</c>.
+    /// </summary>
+    /// <param name="nestedDefinition">The open nested-type definition (its <see cref="Definition"/> is used).</param>
+    /// <param name="enclosingTypeArguments">The flattened enclosing construction arguments in CLR order (outermost first), aligned with <see cref="CollectEnclosingTypeParameters(TypeSymbol)"/>.</param>
+    /// <returns>A constructed nested reference, or <paramref name="nestedDefinition"/> unchanged when no enclosing arguments apply.</returns>
+    public static StructSymbol ConstructNested(StructSymbol nestedDefinition, ImmutableArray<TypeSymbol> enclosingTypeArguments)
+    {
+        if (nestedDefinition == null || enclosingTypeArguments.IsDefaultOrEmpty)
+        {
+            return nestedDefinition;
+        }
+
+        var def = nestedDefinition.Definition ?? nestedDefinition;
+        var key = BuildArgsKey(enclosingTypeArguments);
+        return ConstructedNestedCache.GetOrAdd((def, key), _ => CreateConstructedNested(def, enclosingTypeArguments));
+    }
+
+    /// <summary>
+    /// Issue #1521: gathers the flattened generic parameters of every enclosing
+    /// type of <paramref name="nested"/>, in CLR order (outermost first). A type
+    /// nested inside <c>Outer[U].Inner[T]</c> sees <c>[U, T]</c>. Mirrors the
+    /// emitter's reification order so a nested type's
+    /// <see cref="EnclosingTypeArguments"/> line up 1:1 with the enclosing
+    /// parameters its <c>TypeDef</c> is reified over.
+    /// </summary>
+    /// <param name="nested">The nested type (definition or constructed reference).</param>
+    /// <returns>The flattened enclosing type parameters, or empty when not nested in a generic.</returns>
+    public static ImmutableArray<TypeParameterSymbol> CollectEnclosingTypeParameters(TypeSymbol nested)
+    {
+        List<ImmutableArray<TypeParameterSymbol>> levels = null;
+        for (var c = EnclosingTypeOf(nested); c != null; c = EnclosingTypeOf(c))
+        {
+            var tps = EnclosingTypeParametersOf(c);
+            if (!tps.IsDefaultOrEmpty)
+            {
+                levels ??= new List<ImmutableArray<TypeParameterSymbol>>();
+
+                // Prepend so the outermost enclosing type's parameters come first.
+                levels.Insert(0, tps);
+            }
+        }
+
+        if (levels == null)
+        {
+            return ImmutableArray<TypeParameterSymbol>.Empty;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<TypeParameterSymbol>();
+        foreach (var level in levels)
+        {
+            builder.AddRange(level);
+        }
+
+        return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Walks this type and its base-class chain looking for a constructed
+    /// generic ancestor whose definition satisfies
     /// <paramref name="declaringDefinitionPredicate"/>, composing the
     /// type-argument substitution across each inheritance hop so the returned
     /// symbol carries fully-resolved type arguments in this type's context.
@@ -1145,6 +1243,18 @@ public sealed class StructSymbol : TypeSymbol
         Dictionary<TypeParameterSymbol, TypeSymbol> running = null;
         for (var c = this; c != null; c = c.BaseClass)
         {
+            // Issue #1521: a constructed reference to a type nested inside a
+            // generic enclosing type (`Box[int32].Tag`) already carries the
+            // enclosing arguments on EnclosingTypeArguments and declares no own
+            // type arguments to compose. When such a receiver directly declares
+            // the sought member, return it verbatim so the field/method
+            // reference is parented at its own `Box`1+Tag`1<int32>` TypeSpec
+            // rather than a rebuilt open self-instantiation.
+            if (c.IsConstructedNestedType && declaringDefinitionPredicate(c.Definition ?? c))
+            {
+                return c;
+            }
+
             // Compose this level's type-argument mapping into the running
             // substitution before testing the predicate so a matching base's
             // arguments are already resolved in this type's context.
@@ -1277,6 +1387,49 @@ public sealed class StructSymbol : TypeSymbol
         Declaration = declaration;
     }
 
+    /// <summary>
+    /// Issue #1521: threads a type substitution through the enclosing
+    /// construction of a reference to a type nested inside a generic enclosing
+    /// type. For an open nested reference (<c>Box.Tag</c>) the starting vector is
+    /// the flattened enclosing type parameters; for an already-constructed
+    /// nested reference (<c>Box[T].Tag</c>) it is the recorded
+    /// <see cref="EnclosingTypeArguments"/>. Each element is mapped through
+    /// <paramref name="substituteOne"/>. Returns the new enclosing-argument
+    /// vector when at least one element changed, or <c>default</c> when
+    /// <paramref name="nested"/> is not nested in a generic or nothing changed.
+    /// </summary>
+    /// <param name="nested">The nested-type reference (definition or constructed).</param>
+    /// <param name="substituteOne">Substitution applied to each enclosing argument (the caller's recursion).</param>
+    /// <returns>The substituted enclosing-argument vector, or <c>default</c>.</returns>
+    internal static ImmutableArray<TypeSymbol> SubstituteEnclosingArguments(StructSymbol nested, Func<TypeSymbol, TypeSymbol> substituteOne)
+    {
+        if (nested == null || !nested.TypeArguments.IsDefaultOrEmpty)
+        {
+            return default;
+        }
+
+        var enclosingParams = CollectEnclosingTypeParameters(nested);
+        if (enclosingParams.IsDefaultOrEmpty)
+        {
+            return default;
+        }
+
+        var current = nested.IsConstructedNestedType
+            ? nested.EnclosingTypeArguments
+            : ImmutableArray.CreateRange(enclosingParams, static p => (TypeSymbol)p);
+
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>(current.Length);
+        var changed = false;
+        foreach (var arg in current)
+        {
+            var substituted = substituteOne(arg);
+            changed |= !ReferenceEquals(substituted, arg);
+            builder.Add(substituted);
+        }
+
+        return changed ? builder.MoveToImmutable() : default;
+    }
+
     private static string BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments)
     {
         var parts = new string[typeArguments.Length];
@@ -1287,6 +1440,21 @@ public sealed class StructSymbol : TypeSymbol
 
         return string.Join(",", parts);
     }
+
+    private static TypeSymbol EnclosingTypeOf(TypeSymbol type) => type switch
+    {
+        StructSymbol s => s.ContainingType,
+        InterfaceSymbol i => i.ContainingType,
+        EnumSymbol e => e.ContainingType,
+        _ => null,
+    };
+
+    private static ImmutableArray<TypeParameterSymbol> EnclosingTypeParametersOf(TypeSymbol type) => type switch
+    {
+        StructSymbol s => (s.Definition ?? s).TypeParameters,
+        InterfaceSymbol i => (i.Definition ?? i).TypeParameters,
+        _ => ImmutableArray<TypeParameterSymbol>.Empty,
+    };
 
     private static StructSymbol CreateConstructed(StructSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
     {
@@ -1392,6 +1560,47 @@ public sealed class StructSymbol : TypeSymbol
         return constructed;
     }
 
+    // Issue #1521: materializes a constructed reference to a type nested inside
+    // a generic enclosing type (`Box[int32].Tag`). Unlike CreateConstructed the
+    // nested type declares no own type parameters — its member types mention the
+    // ENCLOSING type's parameters — so the substitution map is keyed by the
+    // flattened enclosing parameters (see GetSubstitutionMap) rather than the
+    // nested type's own (empty) parameters. Instance-member reads forward to the
+    // definition and substitute lazily against that map, so a field/property/
+    // return of the nested type whose type is an enclosing parameter surfaces
+    // closed (e.g. `Tag.V : int32` on `Box[int32].Tag`).
+    private static StructSymbol CreateConstructedNested(StructSymbol definition, ImmutableArray<TypeSymbol> enclosingTypeArguments)
+    {
+        var constructed = new StructSymbol(
+            definition.Name,
+            definition.Fields,
+            definition.Accessibility,
+            definition.Declaration,
+            definition.PackageName,
+            definition.IsData,
+            definition.IsInline,
+            definition.IsClass,
+            definition.PrimaryConstructorParameters,
+            definition.IsOpen,
+            definition.BaseClass);
+
+        constructed.Definition = definition;
+        constructed.EnclosingTypeArguments = enclosingTypeArguments;
+        constructed.ContainingType = definition.ContainingType;
+        constructed.SetInterfaces(definition.Interfaces);
+        if (!definition.ImplementedClrInterfaces.IsDefaultOrEmpty)
+        {
+            constructed.SetImplementedClrInterfaces(definition.ImplementedClrInterfaces);
+        }
+
+        if (definition.ImportedBaseType != null)
+        {
+            constructed.SetImportedBaseType(definition.ImportedBaseType);
+        }
+
+        return constructed;
+    }
+
     // Issue #1341: builds (once) the type-parameter -> type-argument map used to
     // substitute the definition's instance-member types for this constructed
     // instance. Generic definitions are immutable in their type parameters and
@@ -1412,6 +1621,23 @@ public sealed class StructSymbol : TypeSymbol
             for (var i = 0; i < count; i++)
             {
                 map[def.TypeParameters[i]] = TypeArguments[i];
+            }
+        }
+
+        // Issue #1521: a constructed reference to a type nested inside a generic
+        // enclosing type carries the enclosing construction's arguments on
+        // EnclosingTypeArguments and declares no own type parameters. Its member
+        // types mention the ENCLOSING type's parameters, so key the substitution
+        // by the flattened enclosing parameters (outermost first) so a member
+        // typed as an enclosing parameter (`Tag.V : T`) surfaces closed
+        // (`int32`) on the construction (`Box[int32].Tag`).
+        if (!EnclosingTypeArguments.IsDefaultOrEmpty)
+        {
+            var enclosingParams = CollectEnclosingTypeParameters(this);
+            var count = System.Math.Min(enclosingParams.Length, EnclosingTypeArguments.Length);
+            for (var i = 0; i < count; i++)
+            {
+                map[enclosingParams[i]] = EnclosingTypeArguments[i];
             }
         }
 
@@ -1654,6 +1880,21 @@ public sealed class StructSymbol : TypeSymbol
             return structChanged
                 ? StructSymbol.Construct(ss.Definition, substitutedStructArgs.MoveToImmutable())
                 : type;
+        }
+
+        // Issue #1521: a member type that is a reference to a type nested inside
+        // the generic being constructed (e.g. a field/return typed `Tag` on
+        // `Box[T]`, where `Tag` is `struct Box[T].Tag`) must thread the
+        // enclosing construction so it surfaces as `Box[int32].Tag` on
+        // `Box[int32]`. `Tag` declares no own type arguments, so this is
+        // distinct from the constructed-generic branch above.
+        if (type is StructSymbol nestedRef && nestedRef.TypeArguments.IsDefaultOrEmpty)
+        {
+            var newEnclosing = SubstituteEnclosingArguments(nestedRef, t => SubstituteTypeForConstruction(t, subst));
+            if (!newEnclosing.IsDefault)
+            {
+                return ConstructNested(nestedRef.Definition ?? nestedRef, newEnclosing);
+            }
         }
 
         if (type is InterfaceSymbol iface && !iface.TypeArguments.IsDefaultOrEmpty)
