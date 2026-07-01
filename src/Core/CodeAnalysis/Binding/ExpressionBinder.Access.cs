@@ -680,12 +680,20 @@ internal sealed partial class ExpressionBinder
                     // Issue #208: apply any [MemberNotNull] narrowing so that
                     // chained access like `_name.Length` after a [MemberNotNull]
                     // call is accepted without a nil-guard.
-                    receiver = new BoundFieldAccessExpression(
-                        null,
-                        new BoundVariableExpression(null, implicitField.Receiver),
-                        implicitField.StructType,
-                        implicitField.Field,
-                        TryGetNarrowedType(implicitField));
+                    receiver = BuildNarrowedRead(
+                        new BoundFieldAccessExpression(
+                            null,
+                            new BoundVariableExpression(null, implicitField.Receiver),
+                            implicitField.StructType,
+                            implicitField.Field),
+                        implicitField.Field.Type,
+                        TryGetNarrowedType(implicitField),
+                        nt => new BoundFieldAccessExpression(
+                            null,
+                            new BoundVariableExpression(null, implicitField.Receiver),
+                            implicitField.StructType,
+                            implicitField.Field,
+                            nt));
                 }
                 else if (variable is ImplicitStaticFieldVariableSymbol implicitStaticField)
                 {
@@ -759,7 +767,11 @@ internal sealed partial class ExpressionBinder
                 }
                 else
                 {
-                    receiver = new BoundVariableExpression(null, variable, TryGetNarrowedType(variable));
+                    receiver = BuildNarrowedRead(
+                        new BoundVariableExpression(null, variable),
+                        variable.Type,
+                        TryGetNarrowedType(variable),
+                        narrowed => new BoundVariableExpression(null, variable, narrowed));
                 }
             }
             else if (scope.TryLookupImport(name, out var matchedImport)

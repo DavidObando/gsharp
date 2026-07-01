@@ -470,12 +470,20 @@ internal sealed partial class ExpressionBinder
             // `field.Member` accesses after a [MemberNotNull] helper call are
             // accepted without a nil-guard.
             var narrowedFieldType = TryGetNarrowedType(implicitField);
-            return new BoundFieldAccessExpression(
-                null,
-                new BoundVariableExpression(null, implicitField.Receiver),
-                implicitField.StructType,
-                implicitField.Field,
-                narrowedFieldType);
+            return BuildNarrowedRead(
+                new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, implicitField.Receiver),
+                    implicitField.StructType,
+                    implicitField.Field),
+                implicitField.Field.Type,
+                narrowedFieldType,
+                nt => new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, implicitField.Receiver),
+                    implicitField.StructType,
+                    implicitField.Field,
+                    nt));
         }
 
         // Issue #261: bare static field name inside a shared method body.
@@ -539,7 +547,65 @@ internal sealed partial class ExpressionBinder
                 implicitProp.Property);
         }
 
-        return new BoundVariableExpression(null, variable, TryGetNarrowedType(variable));
+        return BuildNarrowedRead(
+            new BoundVariableExpression(null, variable),
+            variable.Type,
+            TryGetNarrowedType(variable),
+            narrowed => new BoundVariableExpression(null, variable, narrowed));
+    }
+
+    /// <summary>
+    /// Issue #1547: builds a smart-cast-narrowed read from a bare (declared-type)
+    /// read and its narrowed static type.
+    /// <para>
+    /// For a nullable <em>value</em> type (e.g. <c>int32?</c> =
+    /// <c>System.Nullable&lt;int32&gt;</c>) narrowed to its underlying type, the
+    /// storage slot/field holds a <c>Nullable&lt;T&gt;</c> while the narrowed
+    /// static type is the bare <c>T</c>. A plain narrowed load would leave a
+    /// <c>Nullable&lt;T&gt;</c> on the stack where <c>T</c> is expected, which
+    /// fails ilverify. Instead we wrap the bare read in a synthesized <c>!!</c>
+    /// (<see cref="BoundUnaryOperatorKind.NullAssertion"/>), reusing the proven
+    /// value-type unwrap emit path (spill → <c>Nullable&lt;T&gt;::get_Value</c>).
+    /// The nil-guard already proved the value non-nil, so the assertion can never
+    /// throw at runtime.
+    /// </para>
+    /// <para>
+    /// For a nullable <em>reference</em> type the narrowed type and its storage
+    /// share the CLR representation, so narrowing is a metadata no-op and the
+    /// bare narrowed read is produced unchanged (wrapping in <c>!!</c> would add a
+    /// pointless runtime null-check).
+    /// </para>
+    /// </summary>
+    /// <param name="bareRead">A read of the declared (un-narrowed) type.</param>
+    /// <param name="declaredType">The variable/member's declared type.</param>
+    /// <param name="narrowedType">The narrowed static type, or <c>null</c>.</param>
+    /// <param name="makeNarrowedNode">Factory building the narrowed read node for
+    /// the reference-nullable (metadata no-op) case.</param>
+    /// <returns>The narrowed read (possibly a value-type unwrap).</returns>
+    private static BoundExpression BuildNarrowedRead(
+        BoundExpression bareRead,
+        TypeSymbol declaredType,
+        TypeSymbol narrowedType,
+        Func<TypeSymbol, BoundExpression> makeNarrowedNode)
+    {
+        if (narrowedType == null)
+        {
+            return bareRead;
+        }
+
+        // A value-type `Nullable<T>` narrowed to its (value-type) underlying `T`
+        // needs the storage `Nullable<T>` unwrapped on load. Reference-type
+        // nullables narrow to a reference underlying and share the CLR shape, so
+        // they fall through to the bare narrowed read.
+        if (declaredType is NullableTypeSymbol nullable
+            && NullableLifting.IsValueTypeNullable(nullable)
+            && narrowedType is not NullableTypeSymbol)
+        {
+            var op = BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, declaredType);
+            return new BoundUnaryExpression(null, op, bareRead);
+        }
+
+        return makeNarrowedNode(narrowedType);
     }
 
     private TypeSymbol TryGetNarrowedType(VariableSymbol variable)
@@ -612,7 +678,11 @@ internal sealed partial class ExpressionBinder
                     var narrowed = TryGetNarrowedType(path);
                     return narrowed == null
                         ? node
-                        : new BoundFieldAccessExpression(null, fa.Receiver, fa.StructType, fa.Field, narrowed);
+                        : BuildNarrowedRead(
+                            new BoundFieldAccessExpression(null, fa.Receiver, fa.StructType, fa.Field),
+                            fa.Field.Type,
+                            narrowed,
+                            nt => new BoundFieldAccessExpression(null, fa.Receiver, fa.StructType, fa.Field, nt));
                 }
 
             case BoundPropertyAccessExpression pa when pa.NarrowedType == null:
@@ -625,7 +695,11 @@ internal sealed partial class ExpressionBinder
                     var narrowed = TryGetNarrowedType(path);
                     return narrowed == null
                         ? node
-                        : new BoundPropertyAccessExpression(null, pa.Receiver, pa.StructType, pa.Property, narrowed);
+                        : BuildNarrowedRead(
+                            new BoundPropertyAccessExpression(null, pa.Receiver, pa.StructType, pa.Property),
+                            pa.Property.Type,
+                            narrowed,
+                            nt => new BoundPropertyAccessExpression(null, pa.Receiver, pa.StructType, pa.Property, nt));
                 }
 
             default:
