@@ -338,9 +338,12 @@ public sealed class Conversion
                 // non-null value reference-upcasts), so this is a representation-
                 // preserving no-op conversion — never boxing or wrapping. The
                 // value-type underlying case is handled by the lifted numeric
-                // rule above and intentionally excluded here. Note this never
-                // makes `T? → U` (non-nullable target, handled below) implicit,
-                // so the narrowing null-dropping conversion still errors.
+                // rule above and intentionally excluded here. Issue #1552 later
+                // made the sibling `T? → U` (non-nullable reference target) case
+                // implicit too — see the dedicated nullable-reference-source
+                // rule after this `to is NullableTypeSymbol` block — so a
+                // nullable reference argument narrows to its underlying/base as
+                // a representation-preserving reference conversion.
                 if (IsReferenceLikeTarget(fromNullable.UnderlyingType)
                     && IsReferenceLikeTarget(toNullable.UnderlyingType))
                 {
@@ -376,6 +379,36 @@ public sealed class Conversion
                 {
                     return Conversion.Implicit;
                 }
+            }
+        }
+
+        // Issue #1552: a nullable REFERENCE argument `S?` shares the CLR
+        // representation of its underlying reference type `S` (null stays null,
+        // a non-null value is the very same reference), so every implicit
+        // reference conversion available from the bare `S` — identity `S -> S`,
+        // an upcast `S -> Base`, or an interface implementation `S -> IFace` —
+        // is equally available from `S?`. Imported reference nullables already
+        // reach this through the #521 CLR-assignability rule below (their
+        // wrapper inherits the underlying's `ClrType`), but a user-declared
+        // class/interface/delegate underlying carries no `ClrType` during
+        // binding, so the #521 arm and the symbolic reference-upcast arms
+        // (which key on `from is StructSymbol`/`InterfaceSymbol`, not the
+        // nullable wrapper) never fire and `Dog? -> Dog`/`Dog? -> Animal`
+        // wrongly errored. Classify against the underlying reference symbol
+        // here so user and imported reference nullables narrow identically —
+        // matching the ranking the #1552 overload tie-break relies on. Scoped
+        // to reference-like underlyings and non-nullable targets: value-type
+        // `int32? -> int32` stays an explicit narrowing (handled elsewhere),
+        // and the `S? -> U?` nullable-target case is handled by the #1255 rule
+        // above.
+        if (from is NullableTypeSymbol fromNullableReference
+            && to is not NullableTypeSymbol
+            && IsReferenceLikeTarget(fromNullableReference.UnderlyingType))
+        {
+            var underlyingConversion = Classify(fromNullableReference.UnderlyingType, to);
+            if (underlyingConversion.Exists && (underlyingConversion.IsImplicit || underlyingConversion.IsIdentity))
+            {
+                return Conversion.Implicit;
             }
         }
 

@@ -21,9 +21,13 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <c>T? → U?</c> with <c>GS0155</c> (<c>GS0154</c> in argument position).
 ///
 /// These tests assert the positive base-class and interface cases in both
-/// argument and let-target positions, that the narrowing <c>T? → U</c>
-/// (non-nullable target) still errors, that the #1121 <c>T → U?</c> control still
-/// binds, and that an unrelated <c>T? → U?</c> still fails.
+/// argument and let-target positions, that the #1121 <c>T → U?</c> control still
+/// binds, and that an unrelated <c>T? → U?</c> still fails. Issue #1552 later
+/// made the narrowing <c>T? → U</c> (non-nullable reference target) an implicit
+/// conversion as well — a nullable reference shares its underlying's CLR
+/// representation, so <c>Derived? → Base</c> binds exactly like the imported
+/// <c>Type? → Type</c> already did; see
+/// <see cref="NullableDerived_To_NonNullableBase_Binds"/>.
 /// </summary>
 public class Issue1255NullableToNullableRefUpcastConversionTests
 {
@@ -99,8 +103,15 @@ func F(x Impl?) { TakeBase(x) }
     }
 
     [Fact]
-    public void NullableDerived_To_NonNullableBase_StillReportsGS0155()
+    public void NullableDerived_To_NonNullableBase_Binds()
     {
+        // Issue #1552: a nullable reference `Derived?` shares the CLR
+        // representation of its underlying reference type, so narrowing it to a
+        // non-nullable base `Base` is a representation-preserving reference
+        // upcast — implicit exactly as the imported `Type? -> Type` already is.
+        // (Previously #1255 rejected this user-class case with GS0155, an
+        // inconsistency #1552 removed so a nullable reference argument selects
+        // and binds the more-derived overload.)
         var source = @"
 open class Base {}
 class Derived : Base {}
@@ -109,11 +120,7 @@ func TakeBase(p Base) {}
 
 func F(x Derived?) { TakeBase(x) }
 ";
-        var result = Evaluate(source);
-        Assert.NotEmpty(result.Diagnostics);
-        Assert.Contains(
-            result.Diagnostics,
-            d => d.Message.Contains("Cannot convert") || d.Message.Contains("requires a value of type"));
+        Assert.Empty(Evaluate(source).Diagnostics);
     }
 
     [Fact]

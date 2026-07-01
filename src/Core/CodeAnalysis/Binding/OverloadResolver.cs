@@ -822,6 +822,7 @@ internal sealed class OverloadResolver
         var bestScore = int.MaxValue;
         FunctionSymbol best = null;
         var tie = false;
+        var scored = new List<(FunctionSymbol Candidate, int Score)>(applicable.Count);
         foreach (var cand in applicable)
         {
             var parameterOffset = cand.ExplicitReceiverParameter == null ? 0 : 1;
@@ -881,15 +882,225 @@ internal sealed class OverloadResolver
             {
                 tie = true;
             }
+
+            scored.Add((cand, score));
         }
 
         if (tie)
         {
+            // Issue #1552: a plain score tie can still be broken by C#
+            // §7.5.3.2's "more specific parameter" rule when the tied
+            // candidates differ only in a reference parameter that is a base
+            // type (e.g. `object`) versus a more-derived type (e.g. `Type` or
+            // a user base/derived class). The exact-type score above already
+            // resolves this for a NON-nullable argument (the derived parameter
+            // scores an exact match), but a nullable REFERENCE argument `S?`
+            // never equals a non-nullable parameter, so both candidates tie
+            // and the call is wrongly reported ambiguous. Treat such a nullable
+            // reference argument as its underlying reference type `S` and pick
+            // the candidate whose parameters are uniquely the most specific.
+            var tiedBest = new List<FunctionSymbol>();
+            foreach (var (candidate, score) in scored)
+            {
+                if (score == bestScore)
+                {
+                    tiedBest.Add(candidate);
+                }
+            }
+
+            var moreSpecific = TryBreakTieByReferenceParameterSpecificity(tiedBest, argumentCount, boundArguments);
+            if (moreSpecific != null)
+            {
+                return moreSpecific;
+            }
+
             ambiguous = true;
             return null;
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// Issue #1552: breaks a score tie among applicable user-function overloads
+    /// using C# §7.5.3.2's "more specific parameter" rule for reference types.
+    /// The tie-break engages only when at least one supplied argument is a
+    /// nullable REFERENCE type (<c>S?</c> over a class/interface/delegate or an
+    /// imported reference type). For the purpose of ranking, such an argument
+    /// behaves exactly like its underlying reference type <c>S</c>, so a
+    /// candidate whose parameter is the more-derived type (e.g. <c>Type</c> or
+    /// <c>Dog</c>) is preferred over one taking a base type (e.g. <c>object</c>
+    /// or <c>Animal</c>) — mirroring the selection already made for a non-null
+    /// <c>S</c> argument. A candidate wins only when, position by position, its
+    /// parameters are each at least as specific as every other tied candidate's
+    /// and strictly more specific in at least one position; a genuinely
+    /// non-orderable tie (e.g. two unrelated interfaces both implemented by the
+    /// argument) leaves the ambiguity intact. Value-type nullable arguments
+    /// (<c>int32?</c>) never engage this rule, preserving existing numeric and
+    /// lifted-operator ranking.
+    /// </summary>
+    /// <param name="tiedBest">The equally-scored candidate overloads.</param>
+    /// <param name="argumentCount">The number of supplied positional arguments.</param>
+    /// <param name="boundArguments">The bound argument expressions.</param>
+    /// <returns>The uniquely most-specific candidate, or <see langword="null"/> when the tie cannot be broken.</returns>
+    private static FunctionSymbol TryBreakTieByReferenceParameterSpecificity(
+        List<FunctionSymbol> tiedBest,
+        int argumentCount,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        if (tiedBest.Count < 2)
+        {
+            return null;
+        }
+
+        var hasNullableReferenceArgument = false;
+        for (var i = 0; i < argumentCount && i < boundArguments.Count; i++)
+        {
+            if (boundArguments[i]?.Type is NullableTypeSymbol nullable
+                && IsReferenceTypeSymbol(nullable.UnderlyingType))
+            {
+                hasNullableReferenceArgument = true;
+                break;
+            }
+        }
+
+        if (!hasNullableReferenceArgument)
+        {
+            return null;
+        }
+
+        // A generic candidate carries unsubstituted method type parameters in
+        // its signature, so its parameter specificity is unreliable here.
+        foreach (var candidate in tiedBest)
+        {
+            if (candidate.IsGeneric || candidate.ExplicitReceiverParameter != null)
+            {
+                return null;
+            }
+        }
+
+        FunctionSymbol winner = null;
+        foreach (var candidate in tiedBest)
+        {
+            var dominatesAll = true;
+            foreach (var other in tiedBest)
+            {
+                if (ReferenceEquals(candidate, other))
+                {
+                    continue;
+                }
+
+                if (!IsStrictlyMoreSpecific(candidate, other, argumentCount))
+                {
+                    dominatesAll = false;
+                    break;
+                }
+            }
+
+            if (dominatesAll)
+            {
+                if (winner != null)
+                {
+                    return null;
+                }
+
+                winner = candidate;
+            }
+        }
+
+        return winner;
+    }
+
+    /// <summary>
+    /// Issue #1552: returns <see langword="true"/> when <paramref name="a"/> is
+    /// strictly more specific than <paramref name="b"/> across the supplied
+    /// positional parameters — each of <paramref name="a"/>'s parameters is at
+    /// least as specific (as derived) as <paramref name="b"/>'s, and at least
+    /// one is strictly more specific. Specificity at a position is decided by
+    /// the implicit reference conversion direction: the more-derived type (the
+    /// source of the one-way implicit conversion) is the more specific one.
+    /// </summary>
+    private static bool IsStrictlyMoreSpecific(FunctionSymbol a, FunctionSymbol b, int argumentCount)
+    {
+        var count = Math.Min(argumentCount, Math.Min(a.Parameters.Length, b.Parameters.Length));
+        var hasStrictlyMoreSpecific = false;
+        for (var i = 0; i < count; i++)
+        {
+            var cmp = CompareParameterSpecificity(a.Parameters[i].Type, b.Parameters[i].Type);
+            if (cmp > 0)
+            {
+                return false;
+            }
+
+            if (cmp < 0)
+            {
+                hasStrictlyMoreSpecific = true;
+            }
+        }
+
+        return hasStrictlyMoreSpecific;
+    }
+
+    /// <summary>
+    /// Issue #1552: compares two reference parameter types for specificity.
+    /// Returns a negative value when <paramref name="a"/> is more specific
+    /// (more derived) than <paramref name="b"/>, a positive value when
+    /// <paramref name="b"/> is more specific, and 0 when they are equal or not
+    /// orderable by a one-way implicit reference conversion (e.g. two unrelated
+    /// interfaces). Only reference types participate; value-type parameters are
+    /// treated as non-orderable so numeric ranking is never disturbed.
+    /// </summary>
+    private static int CompareParameterSpecificity(TypeSymbol a, TypeSymbol b)
+    {
+        if (a == null || b == null || a == b)
+        {
+            return 0;
+        }
+
+        if (!IsReferenceTypeSymbol(a) || !IsReferenceTypeSymbol(b))
+        {
+            return 0;
+        }
+
+        var aToB = Conversion.Classify(a, b);
+        var bToA = Conversion.Classify(b, a);
+        var aIntoB = aToB.Exists && aToB.IsImplicit && !aToB.IsIdentity;
+        var bIntoA = bToA.Exists && bToA.IsImplicit && !bToA.IsIdentity;
+
+        if (aIntoB && !bIntoA)
+        {
+            // a implicitly converts to b (a is more derived) → a is more specific.
+            return -1;
+        }
+
+        if (bIntoA && !aIntoB)
+        {
+            return 1;
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Issue #1552: returns <see langword="true"/> when <paramref name="type"/>
+    /// is a reference type — a user class, interface, or delegate, or an
+    /// imported reference type — as opposed to a value type. Used to confine
+    /// the nullable-argument specificity tie-break to reference underlyings.
+    /// </summary>
+    private static bool IsReferenceTypeSymbol(TypeSymbol type)
+    {
+        switch (type)
+        {
+            case null:
+                return false;
+            case StructSymbol structSymbol:
+                return structSymbol.IsClass;
+            case InterfaceSymbol:
+            case DelegateTypeSymbol:
+                return true;
+        }
+
+        return type.ClrType is { IsValueType: false, IsPointer: false };
     }
 
     /// <summary>
