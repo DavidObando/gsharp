@@ -4755,15 +4755,38 @@ internal sealed class OverloadResolver
         // The extension's first parameter is the receiver; user arguments line
         // up against parameters[1..].
         var userParamCount = extension.Parameters.Length - 1;
-        if (arguments.Length != userParamCount)
+
+        // ADR-0063 / issue #1556: count the leading non-optional user
+        // parameters. A receiver-form (extension) call may omit any trailing
+        // parameter that declares a default value, mirroring the free-function,
+        // static (`shared`), and user-instance call paths. The receiver
+        // occupies `Parameters[0]`, so the scan runs over the user slice
+        // `Parameters[1..]` and the omitted trailing slots are synthesized from
+        // each parameter's captured default constant below.
+        var requiredUserParamCount = userParamCount;
+        for (var i = userParamCount - 1; i >= 0; i--)
+        {
+            if (extension.Parameters[i + 1].HasExplicitDefaultValue)
+            {
+                requiredUserParamCount = i;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        if (arguments.Length < requiredUserParamCount || arguments.Length > userParamCount)
         {
             Diagnostics.ReportWrongArgumentCount(ce.Location, extension.Name, userParamCount, arguments.Length);
             return new BoundErrorExpression(null);
         }
 
         // Issue #343: reorder named arguments into the extension's parameter
-        // order (excluding the synthetic receiver slot). User extensions have
-        // no default parameter values, so every callable parameter must be filled.
+        // order (excluding the synthetic receiver slot). ADR-0063 / issue #1556:
+        // positional calls may omit trailing optional parameters; the omitted
+        // slots are padded from each parameter's captured default value after
+        // the reorder below.
         ExpressionSyntax[] permutedSyntax;
         ImmutableArray<BoundExpression> permutedArguments;
         if (!argumentNames.IsDefault)
@@ -4789,6 +4812,24 @@ internal sealed class OverloadResolver
             }
 
             permutedArguments = arguments;
+        }
+
+        // ADR-0063 / issue #1556: pad any omitted trailing optional parameters
+        // with their captured default values so the generic-inference and
+        // per-position conversion loops below bind the full user parameter list
+        // (matching the free-function, static, and user-instance call paths).
+        // Named-argument calls are reordered above against the full parameter
+        // count, so this positional pad is gated on the unnamed shape.
+        if (argumentNames.IsDefault && permutedArguments.Length < userParamCount)
+        {
+            var padded = ImmutableArray.CreateBuilder<BoundExpression>(userParamCount);
+            padded.AddRange(permutedArguments);
+            for (var i = permutedArguments.Length; i < userParamCount; i++)
+            {
+                padded.Add(CreateOptionalUserDefaultArgument(extension.Parameters[i + 1]));
+            }
+
+            permutedArguments = padded.MoveToImmutable();
         }
 
         // Issue #326: a generic extension function
@@ -4893,7 +4934,8 @@ internal sealed class OverloadResolver
             else
             {
                 var expectedType = substitution != null ? substituteType(paramType, substitution) : paramType;
-                convertedArgs.Add(conversions.BindCallArgumentWithRefKind(permutedSyntax[i].Location, permutedArguments[i], expectedType, extension.Parameters[i + 1]));
+                var argLoc = i < permutedSyntax.Length ? permutedSyntax[i].Location : ce.Location;
+                convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, extension.Parameters[i + 1]));
             }
         }
 
