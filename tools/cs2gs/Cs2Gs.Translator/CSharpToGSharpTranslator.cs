@@ -5072,35 +5072,13 @@ public sealed class CSharpToGSharpTranslator
 
         private bool IsLocalReassigned(ILocalSymbol local)
         {
-            SyntaxNode scope = this.currentBodyScope;
-            if (scope == null)
-            {
-                return false;
-            }
-
-            foreach (SyntaxNode node in scope.DescendantNodes())
-            {
-                switch (node)
-                {
-                    case AssignmentExpressionSyntax assignment
-                        when this.BindsTo(assignment.Left, local):
-                        return true;
-
-                    case PostfixUnaryExpressionSyntax postfix
-                        when (postfix.IsKind(SyntaxKind.PostIncrementExpression)
-                                || postfix.IsKind(SyntaxKind.PostDecrementExpression))
-                            && this.BindsTo(postfix.Operand, local):
-                        return true;
-
-                    case PrefixUnaryExpressionSyntax prefix
-                        when (prefix.IsKind(SyntaxKind.PreIncrementExpression)
-                                || prefix.IsKind(SyntaxKind.PreDecrementExpression))
-                            && this.BindsTo(prefix.Operand, local):
-                        return true;
-                }
-            }
-
-            return false;
+            // A local is mutable in G# (`var`) when it is assigned, incremented,
+            // decremented, OR passed by `ref`/`out` (which cs2gs renders as an
+            // address-of `&arg`): taking the address of an immutable `let` is
+            // rejected by gsc with GS9005 ("Cannot take address of constant").
+            // Delegate to the general symbol walk, which already covers the
+            // `ref`/`out` argument case, so both paths stay consistent.
+            return this.IsSymbolReassigned(local, this.currentBodyScope);
         }
 
         private bool BindsTo(ExpressionSyntax expression, ISymbol target)
@@ -5143,6 +5121,11 @@ public sealed class CSharpToGSharpTranslator
                     case ArgumentSyntax argument
                         when !argument.RefOrOutKeyword.IsKind(SyntaxKind.None)
                             && this.BindsTo(argument.Expression, symbol):
+                        return true;
+
+                    case PrefixUnaryExpressionSyntax addressOf
+                        when addressOf.IsKind(SyntaxKind.AddressOfExpression)
+                            && this.BindsTo(addressOf.Operand, symbol):
                         return true;
                 }
             }
