@@ -424,16 +424,13 @@ internal sealed partial class ExpressionBinder
                 return new BoundPropertyAssignmentExpression(initSyntax, receiverExpr, structSymbol, prop, converted);
             }
 
-            // Issue #319 parity: fall through to imported base CLR members.
-            if (structSymbol.ImportedBaseType?.ClrType is Type inheritedBaseClr)
+            // Issue #319 / #1582 parity: fall through to imported base CLR
+            // members reachable through the user base chain, including inherited
+            // protected members.
+            if (GetInheritedClrBaseType(structSymbol) is Type inheritedBaseClr)
             {
-                MemberInfo inhMember = ClrTypeUtilities.SafeGetProperty(inheritedBaseClr, propertyName, BindingFlags.Public | BindingFlags.Instance);
-                if (inhMember is PropertyInfo inhIdxProp && inhIdxProp.GetIndexParameters().Length != 0)
-                {
-                    inhMember = null;
-                }
-
-                inhMember ??= ClrTypeUtilities.SafeGetField(inheritedBaseClr, propertyName, BindingFlags.Public | BindingFlags.Instance);
+                MemberInfo inhMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, propertyName);
+                inhMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, propertyName);
                 if (inhMember != null)
                 {
                     if (!TryGetWritableClrMember(inhMember, out _, out var inhTargetSymbol, out _))
@@ -709,20 +706,16 @@ internal sealed partial class ExpressionBinder
                 return new BoundPropertyAssignmentExpression(null, propReceiver, structSymbol, prop, propConverted);
             }
 
-            // Issue #319: a GSharp class inheriting an imported CLR base exposes
-            // the base's settable instance properties/fields. Fall back to CLR
-            // member lookup on the imported base type so `e.HResult = 42` style
-            // writes work the same as the read fallback further down.
-            if (structSymbol.ImportedBaseType?.ClrType is System.Type inheritedBaseClr)
+            // Issue #319 / #1582: a GSharp class inheriting an imported CLR base
+            // exposes the base's settable instance properties/fields — including
+            // inherited `protected` / `protected internal` members. Resolve the
+            // inherited CLR base type by walking the user base chain so `e.HResult
+            // = 42` and protected-field writes work the same as the read fallback.
+            if (GetInheritedClrBaseType(structSymbol) is System.Type inheritedBaseClr)
             {
                 var memberName = syntax.FieldIdentifier.Text;
-                MemberInfo clrMember = ClrTypeUtilities.SafeGetProperty(inheritedBaseClr, memberName, BindingFlags.Public | BindingFlags.Instance);
-                if (clrMember is PropertyInfo idxProp && idxProp.GetIndexParameters().Length != 0)
-                {
-                    clrMember = null;
-                }
-
-                clrMember ??= ClrTypeUtilities.SafeGetField(inheritedBaseClr, memberName, BindingFlags.Public | BindingFlags.Instance);
+                MemberInfo clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, memberName);
+                clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, memberName);
                 if (clrMember != null)
                 {
                     if (!TryGetWritableClrMember(clrMember, out var inhTargetType, out var inhTargetSymbol, out var inhWritable))
@@ -1147,11 +1140,12 @@ internal sealed partial class ExpressionBinder
             return new BoundPropertyAssignmentExpression(null, boundReceiver, structSym, prop, converted);
         }
 
-        // Inherited CLR base member fallback.
-        if (structSym.ImportedBaseType?.ClrType is System.Type inheritedBaseClr)
+        // Inherited CLR base member fallback (issue #1582: resolve through the
+        // user base chain and include inherited protected members).
+        if (GetInheritedClrBaseType(structSym) is System.Type inheritedBaseClr)
         {
             return TryBindChainedClrCompoundAssignment(
-                boundReceiver, inheritedBaseClr, memberName, memberNameSyntax, syntax, isAdd);
+                boundReceiver, inheritedBaseClr, memberName, memberNameSyntax, syntax, isAdd, includeInherited: true);
         }
 
         return null;
@@ -1167,17 +1161,30 @@ internal sealed partial class ExpressionBinder
         string memberName,
         NameExpressionSyntax memberNameSyntax,
         EventSubscriptionExpressionSyntax syntax,
-        bool isAdd)
+        bool isAdd,
+        bool includeInherited = false)
     {
         var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
 
-        MemberInfo instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
-        if (instanceMember is PropertyInfo propInfo && propInfo.GetIndexParameters().Length != 0)
+        MemberInfo instanceMember;
+        if (includeInherited)
         {
-            instanceMember = null;
+            // Issue #1582: the receiver is a derived G# type reaching into its
+            // metadata base — surface inherited protected/public members.
+            instanceMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrReceiverType, memberName);
+            instanceMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(clrReceiverType, memberName);
+        }
+        else
+        {
+            instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+            if (instanceMember is PropertyInfo propInfo && propInfo.GetIndexParameters().Length != 0)
+            {
+                instanceMember = null;
+            }
+
+            instanceMember ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
         }
 
-        instanceMember ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
         if (instanceMember == null)
         {
             return null;
@@ -1604,16 +1611,12 @@ internal sealed partial class ExpressionBinder
                 return new BoundPropertyAssignmentExpression(null, receiver, structSym, prop, propConverted);
             }
 
-            // Inherited CLR base member fallback.
-            if (structSym.ImportedBaseType?.ClrType is System.Type inheritedBaseClr)
+            // Inherited CLR base member fallback (issue #1582: walk the user
+            // base chain and include inherited protected members).
+            if (GetInheritedClrBaseType(structSym) is System.Type inheritedBaseClr)
             {
-                MemberInfo clrMember = ClrTypeUtilities.SafeGetProperty(inheritedBaseClr, fieldName, BindingFlags.Public | BindingFlags.Instance);
-                if (clrMember is PropertyInfo idxProp && idxProp.GetIndexParameters().Length != 0)
-                {
-                    clrMember = null;
-                }
-
-                clrMember ??= ClrTypeUtilities.SafeGetField(inheritedBaseClr, fieldName, BindingFlags.Public | BindingFlags.Instance);
+                MemberInfo clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, fieldName);
+                clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, fieldName);
                 if (clrMember != null)
                 {
                     if (!TryGetWritableClrMember(clrMember, out var inhTargetType, out var inhTargetSymbol, out var inhWritable))

@@ -432,6 +432,18 @@ internal sealed partial class ExpressionBinder
                 return importedStaticMember;
             }
 
+            // Issue #1582: a bare identifier inside an instance method of a G#
+            // class that derives from a metadata base may name an inherited CLR
+            // instance property/field (e.g. `return Message` in a class deriving
+            // from System.Exception). Unqualified inherited METHODS already
+            // resolve via the method-group path above; this mirrors that for
+            // properties/fields so bare and `this.`-qualified access behave
+            // identically for a metadata base, matching a user-defined base.
+            if (TryBindInheritedClrInstanceMemberByBareName(syntax.IdentifierToken.Text, out var inheritedClrMember))
+            {
+                return inheritedClrMember;
+            }
+
             // Not a method group: surface the suppressed diagnostics.
             if (scope.TryLookupSymbol(name) is null)
             {
@@ -1310,6 +1322,80 @@ internal sealed partial class ExpressionBinder
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Issue #1582: resolves the CLR/metadata base type that a user-defined G#
+    /// class (transitively) derives from, so inherited CLR members can be
+    /// surfaced on instances of the derived type. Walks the user
+    /// <see cref="StructSymbol.BaseClass"/> chain and returns the first
+    /// <see cref="StructSymbol.ImportedBaseType"/>'s CLR type encountered — the
+    /// point where the user inheritance chain meets metadata. From there,
+    /// reflection walks the remainder of the CLR base chain, so this covers a
+    /// direct metadata base (<c>class A : Exception</c>) as well as a metadata
+    /// base reached through one or more user classes (<c>class B : A</c> where
+    /// <c>A : Exception</c>). Returns <see langword="null"/> when the class
+    /// derives only from other user classes / <c>System.Object</c>.
+    /// </summary>
+    /// <param name="structSymbol">The user class to resolve the inherited CLR base for.</param>
+    /// <returns>The inherited CLR base type, or <see langword="null"/> when there is none.</returns>
+    private static Type GetInheritedClrBaseType(StructSymbol structSymbol)
+    {
+        for (var c = structSymbol; c != null; c = c.BaseClass)
+        {
+            if (c.ImportedBaseType?.ClrType is Type clr)
+            {
+                return clr;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #1582: tries to bind a bare (unqualified) identifier inside an
+    /// instance method to an inherited CLR instance property/field of the
+    /// enclosing G# class's metadata base. The bound node reads through the
+    /// effective <c>this</c> receiver, so it behaves identically to the
+    /// <c>this.</c>-qualified access resolved in
+    /// <c>ExpressionBinder.Access.cs</c>. Runs only after the name failed to
+    /// resolve as a local/parameter/implicit member or a method group.
+    /// </summary>
+    /// <param name="name">The bare identifier text.</param>
+    /// <param name="bound">The bound member access on success.</param>
+    /// <returns><see langword="true"/> when an inherited CLR member was bound.</returns>
+    private bool TryBindInheritedClrInstanceMemberByBareName(string name, out BoundExpression bound)
+    {
+        bound = null;
+
+        var effThis = GetEffectiveThisParameter();
+        if (effThis?.Type is not StructSymbol thisStruct)
+        {
+            return false;
+        }
+
+        if (GetInheritedClrBaseType(thisStruct) is not Type clrBase)
+        {
+            return false;
+        }
+
+        var receiver = new BoundVariableExpression(null, effThis);
+
+        var clrProp = ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name);
+        if (clrProp != null && clrProp.CanRead)
+        {
+            bound = new BoundClrPropertyAccessExpression(null, receiver, clrProp, TypeSymbol.FromClrType(clrProp.PropertyType));
+            return true;
+        }
+
+        var clrFld = ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name);
+        if (clrFld != null)
+        {
+            bound = new BoundClrPropertyAccessExpression(null, receiver, clrFld, TypeSymbol.FromClrType(clrFld.FieldType));
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>

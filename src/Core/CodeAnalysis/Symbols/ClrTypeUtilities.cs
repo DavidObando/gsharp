@@ -485,6 +485,72 @@ public static class ClrTypeUtilities
         => SafeGetMember(type, name, flags, (t, f) => t.GetField(name, f), SafeGetFields);
 
     /// <summary>
+    /// Issue #1582: looks up an instance FIELD named <paramref name="name"/>
+    /// inherited from <paramref name="type"/> (a CLR/metadata base class),
+    /// walking the CLR base chain and including non-public members whose
+    /// accessibility is visible to a derived type — <c>public</c>,
+    /// <c>protected</c> (Family), or <c>protected internal</c>
+    /// (FamilyOrAssembly). Private and (cross-assembly) internal fields are
+    /// excluded, mirroring the accessibility rule used for inherited CLR
+    /// methods in <c>CollectBaseClrMethodCandidates</c>. Reflection's
+    /// <see cref="Type.GetField(string, BindingFlags)"/> already surfaces
+    /// inherited (non-<c>DeclaredOnly</c>) members, so a single tolerant probe
+    /// covers the whole chain.
+    /// </summary>
+    /// <param name="type">The CLR base type to search (its base chain is walked by reflection).</param>
+    /// <param name="name">The field name.</param>
+    /// <returns>The matching visible inherited field, or <c>null</c> when none is found.</returns>
+    public static FieldInfo SafeGetInheritedInstanceField(Type type, string name)
+    {
+        if (type is null)
+        {
+            return null;
+        }
+
+        var field = SafeGetField(type, name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (field != null && (field.IsPublic || field.IsFamily || field.IsFamilyOrAssembly))
+        {
+            return field;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #1582: looks up a non-indexer instance PROPERTY named
+    /// <paramref name="name"/> inherited from <paramref name="type"/> (a
+    /// CLR/metadata base class), walking the CLR base chain and including
+    /// members with a non-public accessor whose accessibility is visible to a
+    /// derived type (<c>public</c>, <c>protected</c>, or
+    /// <c>protected internal</c>). See
+    /// <see cref="SafeGetInheritedInstanceField"/> for the accessibility rule.
+    /// </summary>
+    /// <param name="type">The CLR base type to search (its base chain is walked by reflection).</param>
+    /// <param name="name">The property name.</param>
+    /// <returns>The matching visible inherited property, or <c>null</c> when none is found.</returns>
+    public static PropertyInfo SafeGetInheritedInstanceProperty(Type type, string name)
+    {
+        if (type is null)
+        {
+            return null;
+        }
+
+        var property = SafeGetProperty(type, name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (property == null || property.GetIndexParameters().Length != 0)
+        {
+            return null;
+        }
+
+        var accessor = property.GetGetMethod(nonPublic: true) ?? property.GetSetMethod(nonPublic: true);
+        if (accessor != null && (accessor.IsPublic || accessor.IsFamily || accessor.IsFamilyOrAssembly))
+        {
+            return property;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Looks up a single event by name tolerantly (issue #338). See
     /// <see cref="SafeGetProperty"/> for the tolerance contract.
     /// </summary>

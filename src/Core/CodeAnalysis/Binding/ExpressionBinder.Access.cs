@@ -3366,19 +3366,22 @@ internal sealed partial class ExpressionBinder
                         }
                     }
 
-                    // Issue #296: a GSharp class inheriting an imported CLR base
-                    // exposes the base's instance properties/fields. Fall back to
-                    // CLR member lookup on the imported base type.
-                    if (structSym.ImportedBaseType?.ClrType is System.Type inheritedBaseClr)
+                    // Issue #296 / #1582: a GSharp class inheriting an imported
+                    // CLR base (directly or through user classes) exposes the
+                    // base's instance properties/fields — including inherited
+                    // `protected` / `protected internal` members. Resolve the
+                    // inherited CLR base type by walking the user base chain,
+                    // then reflect the member (reflection walks the CLR chain).
+                    if (GetInheritedClrBaseType(structSym) is System.Type inheritedBaseClr)
                     {
                         var memberName = ne.IdentifierToken.Text;
-                        var clrProp = ClrTypeUtilities.SafeGetProperty(inheritedBaseClr, memberName, BindingFlags.Public | BindingFlags.Instance);
-                        if (clrProp != null && clrProp.GetIndexParameters().Length == 0 && clrProp.CanRead)
+                        var clrProp = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, memberName);
+                        if (clrProp != null && clrProp.CanRead)
                         {
                             return new BoundClrPropertyAccessExpression(null, receiver, clrProp, TypeSymbol.FromClrType(clrProp.PropertyType));
                         }
 
-                        var clrFld = ClrTypeUtilities.SafeGetField(inheritedBaseClr, memberName, BindingFlags.Public | BindingFlags.Instance);
+                        var clrFld = ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, memberName);
                         if (clrFld != null)
                         {
                             return new BoundClrPropertyAccessExpression(null, receiver, clrFld, TypeSymbol.FromClrType(clrFld.FieldType));
