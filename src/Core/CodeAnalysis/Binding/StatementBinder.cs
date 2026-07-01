@@ -1865,52 +1865,24 @@ internal sealed class StatementBinder
                 }
         }
 
-        // Phase 3.C.4: recognise the canonical narrowing patterns. We support
-        // only single-variable guards here at the leaf; conjunctions, disjunctions
-        // and pattern-based narrowing compose via the cases above.
-        if (condition is not BoundBinaryExpression be)
+        // Phase 3.C.4: recognise the canonical narrowing patterns via the shared
+        // leaf classifier (SmartCastStability.TryClassifyNilGuardLeaf), kept in
+        // sync with ExpressionBinder.ClassifyTypeTestNarrowing (issue #1545). We
+        // support only single-variable/stable-path guards here at the leaf;
+        // conjunctions, disjunctions and pattern-based narrowing compose via the
+        // cases above.
+        if (!SmartCastStability.TryClassifyNilGuardLeaf(condition, restrictBareVariableToLocalsAndParams: false, out var target, out var underlying, out var nonNilWhenTrue))
         {
             return (null, null);
         }
 
-        AccessPath target = null;
-        TypeSymbol targetType = null;
-        if (be.Left is BoundVariableExpression lv && IsNilLiteral(be.Right))
-        {
-            target = lv.Variable;
-            targetType = lv.Variable.Type;
-        }
-        else if (be.Right is BoundVariableExpression rv && IsNilLiteral(be.Left))
-        {
-            target = rv.Variable;
-            targetType = rv.Variable.Type;
-        }
-        else if (IsNilLiteral(be.Right) && SmartCastStability.TryGetStableMemberPath(be.Left, out var leftPath, out var leftType))
-        {
-            // ADR-0069 addendum / issue #1180: nil-guard on a stable immutable
-            // member path narrows it to its non-nullable underlying type.
-            target = leftPath;
-            targetType = leftType;
-        }
-        else if (IsNilLiteral(be.Left) && SmartCastStability.TryGetStableMemberPath(be.Right, out var rightPath, out var rightType))
-        {
-            target = rightPath;
-            targetType = rightType;
-        }
-
-        if (target == null || targetType is not NullableTypeSymbol nullable)
-        {
-            return (null, null);
-        }
-
-        var underlying = nullable.UnderlyingType;
         Dictionary<AccessPath, TypeSymbol> nonNilFrame = null;
         Dictionary<AccessPath, TypeSymbol> nilFrame = null;
-        if (be.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+        if (nonNilWhenTrue)
         {
             nonNilFrame = new Dictionary<AccessPath, TypeSymbol> { [target] = underlying };
         }
-        else if (be.Op.Kind == BoundBinaryOperatorKind.Equals)
+        else
         {
             nilFrame = new Dictionary<AccessPath, TypeSymbol> { [target] = underlying };
         }

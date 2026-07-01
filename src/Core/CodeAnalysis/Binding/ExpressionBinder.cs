@@ -776,6 +776,17 @@ internal sealed partial class ExpressionBinder
                 }
         }
 
+        // ADR-0069 addendum / issue #1545: nil-guard leaf. Threads
+        // `x == nil` / `x != nil` narrowing into the right operand of
+        // `&&`/`||`, mirroring the type-test (`x is T`) cases above. Uses the
+        // shared leaf classifier kept in sync with
+        // StatementBinder.TryClassifyNilGuard.
+        if (SmartCastStability.TryClassifyNilGuardLeaf(condition, restrictBareVariableToLocalsAndParams: true, out var nilTarget, out var nilUnderlying, out var nonNilWhenTrue))
+        {
+            var nonNilFrame = new Dictionary<AccessPath, TypeSymbol> { [nilTarget] = nilUnderlying };
+            return nonNilWhenTrue ? (nonNilFrame, null) : (null, nonNilFrame);
+        }
+
         return (null, null);
     }
 
