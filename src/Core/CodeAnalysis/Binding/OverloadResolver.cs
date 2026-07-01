@@ -3721,6 +3721,34 @@ internal sealed class OverloadResolver
         }
     }
 
+    /// <summary>
+    /// Issue #1566: determines whether every top-level function overload with the
+    /// given name is an extension function. When true, an unqualified,
+    /// receiver-less call to that name inside a type should first try to bind
+    /// against an accessible member of the enclosing type (member-over-extension
+    /// shadowing) before falling back to the extension.
+    /// </summary>
+    /// <param name="name">The invoked identifier.</param>
+    /// <returns><see langword="true"/> when at least one overload exists and all of them are extension functions.</returns>
+    private bool IsAllExtensionOverloadSet(string name)
+    {
+        var overloads = Scope.TryLookupFunctions(name);
+        if (overloads.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var overload in overloads)
+        {
+            if (!overload.IsExtension)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     public BoundExpression BindCallExpression(CallExpressionSyntax syntax)
     {
         // ADR-0065 §2: a bare `init(args)` call inside a constructor body is
@@ -3895,7 +3923,21 @@ internal sealed class OverloadResolver
         }
 
         var symbol = Scope.TryLookupSymbol(syntax.Identifier.Text);
-        if (symbol == null)
+
+        // Issue #1566: an accessible in-scope member of the enclosing type
+        // shadows a same-named top-level EXTENSION function for an unqualified,
+        // receiver-less call — mirroring C#, where an in-scope member hides an
+        // extension method. Extension functions are flattened into the global
+        // function table (issue #1103) so `TryLookupSymbol` returns them for
+        // free-call syntax; when the resolved name denotes only extension
+        // function(s), route through the implicit-`this` member-resolution path
+        // first. If the enclosing type exposes no matching member the block
+        // falls through and the extension binds exactly as before (so both the
+        // receiver-form `x.Ext(...)` and free-call extension usage, and calls
+        // from types with no such member, are unaffected).
+        var resolvedIsExtensionOnly = symbol is FunctionSymbol
+            && IsAllExtensionOverloadSet(syntax.Identifier.Text);
+        if (symbol == null || resolvedIsExtensionOnly)
         {
             // Implicit `this`: if we are inside an instance method body and the
             // name matches a sibling method on the receiver type, dispatch via
@@ -4030,56 +4072,63 @@ internal sealed class OverloadResolver
                 }
             }
 
-            // Issue #1201 (C# `using static`): an unqualified call may resolve
-            // to a `shared` (static) method of a type brought into scope by a
-            // type import (`import Ns.Type`). Mirror C#'s using-static
-            // semantics — search every type-import's static method set and bind
-            // against the single match. When two or more imported types expose a
-            // same-named static method the reference is ambiguous (GS0414), but
-            // only here, where the name is actually used. The shared static-call
-            // finalizer (`bindUserTypeStaticCall`) provides full
-            // optional/variadic/generic fidelity, so an unqualified
-            // `GetValues[TEnum]()` resolves exactly like `EnumUtil.GetValues[TEnum]()`.
-            if (bindUserTypeStaticCall != null)
+            // Issue #1566: reaching here with a non-null symbol means the name
+            // denotes only extension function(s) and the enclosing type had no
+            // matching member — fall through to the free-function/extension
+            // binding below rather than the not-found paths.
+            if (symbol == null)
             {
-                StructSymbol matchedStaticImport = null;
-                var ambiguousStaticImport = false;
-                foreach (var importedType in binderCtx.GetStaticImportTypes())
+                // Issue #1201 (C# `using static`): an unqualified call may resolve
+                // to a `shared` (static) method of a type brought into scope by a
+                // type import (`import Ns.Type`). Mirror C#'s using-static
+                // semantics — search every type-import's static method set and bind
+                // against the single match. When two or more imported types expose a
+                // same-named static method the reference is ambiguous (GS0414), but
+                // only here, where the name is actually used. The shared static-call
+                // finalizer (`bindUserTypeStaticCall`) provides full
+                // optional/variadic/generic fidelity, so an unqualified
+                // `GetValues[TEnum]()` resolves exactly like `EnumUtil.GetValues[TEnum]()`.
+                if (bindUserTypeStaticCall != null)
                 {
-                    var importedStatics = TypeMemberModel.GetMethods(
-                        importedType,
-                        syntax.Identifier.Text,
-                        MemberQuery.Static(MemberKinds.Method));
-                    if (importedStatics.IsDefaultOrEmpty)
+                    StructSymbol matchedStaticImport = null;
+                    var ambiguousStaticImport = false;
+                    foreach (var importedType in binderCtx.GetStaticImportTypes())
                     {
-                        continue;
+                        var importedStatics = TypeMemberModel.GetMethods(
+                            importedType,
+                            syntax.Identifier.Text,
+                            MemberQuery.Static(MemberKinds.Method));
+                        if (importedStatics.IsDefaultOrEmpty)
+                        {
+                            continue;
+                        }
+
+                        if (matchedStaticImport == null)
+                        {
+                            matchedStaticImport = importedType;
+                        }
+                        else if (!ReferenceEquals(matchedStaticImport, importedType))
+                        {
+                            ambiguousStaticImport = true;
+                            break;
+                        }
                     }
 
-                    if (matchedStaticImport == null)
+                    if (ambiguousStaticImport)
                     {
-                        matchedStaticImport = importedType;
+                        Diagnostics.ReportAmbiguousImportedStaticMember(syntax.Identifier.Location, syntax.Identifier.Text);
+                        return new BoundErrorExpression(null);
                     }
-                    else if (!ReferenceEquals(matchedStaticImport, importedType))
+
+                    if (matchedStaticImport != null)
                     {
-                        ambiguousStaticImport = true;
-                        break;
+                        return bindUserTypeStaticCall(matchedStaticImport, syntax);
                     }
                 }
 
-                if (ambiguousStaticImport)
-                {
-                    Diagnostics.ReportAmbiguousImportedStaticMember(syntax.Identifier.Location, syntax.Identifier.Text);
-                    return new BoundErrorExpression(null);
-                }
-
-                if (matchedStaticImport != null)
-                {
-                    return bindUserTypeStaticCall(matchedStaticImport, syntax);
-                }
+                Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.Text);
+                return new BoundErrorExpression(null);
             }
-
-            Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.Text);
-            return new BoundErrorExpression(null);
         }
 
         // ADR-0122 §9 / issue #1035: invoking a function-pointer-typed
