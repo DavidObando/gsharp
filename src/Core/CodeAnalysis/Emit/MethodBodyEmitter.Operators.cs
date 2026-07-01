@@ -55,7 +55,7 @@ internal sealed partial class MethodBodyEmitter
             if (u.Operand.Type is NullableTypeSymbol userVtNullable
                 && NullableLifting.IsUserValueTypeNullable(userVtNullable))
             {
-                if (!this.receiverSpillSlots.TryGetValue(u, out var userVtSlot))
+                if (!this.receiverSpillSlots.TryGetValue(u.Operand, out var userVtSlot))
                 {
                     throw new InvalidOperationException(
                         "No scratch slot pre-allocated for user value-type Nullable<T> '!!' operand — "
@@ -81,7 +81,7 @@ internal sealed partial class MethodBodyEmitter
             if (u.Operand.Type is NullableTypeSymbol operandNullable
                 && operandNullable.UnderlyingType?.ClrType is { IsValueType: true } innerClr)
             {
-                if (!this.receiverSpillSlots.TryGetValue(u, out var unwrapSlot))
+                if (!this.receiverSpillSlots.TryGetValue(u.Operand, out var unwrapSlot))
                 {
                     throw new InvalidOperationException(
                         "No scratch slot pre-allocated for value-type Nullable<T> '!!' operand — "
@@ -112,7 +112,7 @@ internal sealed partial class MethodBodyEmitter
             // already collapsed to bare `T` after a null-check guard.
             if (TryGetOpenTypeParameter(u.Operand.Type, out var tpOperand))
             {
-                if (!this.receiverSpillSlots.TryGetValue(u, out var tpUnwrapSlot))
+                if (!this.receiverSpillSlots.TryGetValue(u.Operand, out var tpUnwrapSlot))
                 {
                     throw new InvalidOperationException(
                         "No scratch slot pre-allocated for class-constrained `T?` / open `T` '!!' operand — "
