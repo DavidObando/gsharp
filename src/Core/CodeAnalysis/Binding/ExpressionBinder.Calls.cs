@@ -1336,6 +1336,87 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #1507: builds the receiver type used to drive DEFERRED untyped
+    /// arrow-lambda inference over a slice (<c>[]T</c>) or array (<c>[N]T</c>)
+    /// receiver. Such a receiver's <see cref="TypeSymbol.ClrType"/> is
+    /// <see langword="null"/> for a same-compilation user element (and an array
+    /// CLR type otherwise), so the extension-method probe in
+    /// <see cref="ResolveDeferredArrowLambdaArguments"/> — which is gated on a
+    /// non-null receiver <c>ClrType</c> — is never reached and the element type
+    /// is never recovered to target-type the untyped lambda parameter. Normalize
+    /// to a symbolic constructed <c>IEnumerable[elementType]</c> carrying the
+    /// element type as a symbolic argument (mirroring the <c>List[T]</c> /
+    /// <c>sequence[T]</c> shapes), so the LINQ extension
+    /// <c>Where&lt;TSource&gt;(IEnumerable&lt;TSource&gt;, Func&lt;TSource,bool&gt;)</c>
+    /// (and every other delegate-taking extension) matches and <c>TSource</c> is
+    /// recovered as the element type. The constructed <c>ClrType</c> uses the
+    /// element's erased CLR projection, so a same-compilation user element
+    /// (<c>[]Item</c>) closes to <c>IEnumerable&lt;object&gt;</c> with the
+    /// symbolic <c>[Item]</c> argument (the symbolic recovery path re-derives
+    /// <c>Item</c>), while a primitive/BCL element (<c>[]int32</c>,
+    /// <c>[]string</c>) closes to the concrete <c>IEnumerable&lt;int&gt;</c> /
+    /// <c>IEnumerable&lt;string&gt;</c> so the CLR inference path recovers the
+    /// real element type instead of erasing it to <c>object</c>. This mirrors the
+    /// <c>List[T]</c> behaviour exactly. The <c>IEnumerable&lt;&gt;</c> open
+    /// definition and closed shape are resolved through the compilation's
+    /// reference set (<see cref="ReferenceResolver.MapClrTypeToReferences"/>) so
+    /// the constructed <c>OpenDefinition</c> is reference-identical to the
+    /// extension methods' <c>this IEnumerable&lt;TSource&gt;</c> parameter — the
+    /// symbolic unifier (<c>UnifyForMethodTypeArgs</c>) matches the open
+    /// definition by reference, which would otherwise fail whenever the reference
+    /// set is projected through a <see cref="System.Reflection.MetadataLoadContext"/>
+    /// (its <c>IEnumerable&lt;&gt;</c> is not the runtime <c>typeof</c>). The bound
+    /// call keeps the original slice/array receiver expression; the emitter
+    /// already normalizes slice/array receivers to their enumerable surface, so
+    /// emission is unaffected. Returns <see langword="false"/> when no
+    /// normalization applies.
+    /// </summary>
+    /// <param name="receiverType">The receiver's static type symbol.</param>
+    /// <param name="normalized">The normalized symbolic <c>IEnumerable[T]</c> receiver type, on success.</param>
+    /// <returns><see langword="true"/> when a normalized receiver type was produced.</returns>
+    private bool TryNormalizeSliceArrayReceiverForLambdaInference(TypeSymbol receiverType, out TypeSymbol normalized)
+    {
+        normalized = null;
+
+        TypeSymbol elementType;
+        switch (receiverType)
+        {
+            case SliceTypeSymbol slice:
+                elementType = slice.ElementType;
+                break;
+            case ArrayTypeSymbol array:
+                elementType = array.ElementType;
+                break;
+            default:
+                return false;
+        }
+
+        if (elementType == null || !MemberLookup.TryProjectErasedClrType(elementType, out var erasedElement))
+        {
+            return false;
+        }
+
+        Type openDefinition;
+        Type closedEnumerable;
+        try
+        {
+            openDefinition = scope.References.MapClrTypeToReferences(typeof(System.Collections.Generic.IEnumerable<>));
+            var mappedElement = scope.References.MapClrTypeToReferences(erasedElement);
+            closedEnumerable = openDefinition.MakeGenericType(mappedElement);
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex) || ex is ArgumentException || ex is InvalidOperationException)
+        {
+            return false;
+        }
+
+        normalized = ImportedTypeSymbol.GetConstructed(
+            closedEnumerable,
+            openDefinition,
+            ImmutableArray.Create(elementType));
+        return true;
+    }
+
+    /// <summary>
     /// Issue #794: when an instance call is dispatched against a receiver whose
     /// <see cref="ImportedTypeSymbol"/> carries symbolic type arguments
     /// (e.g. <c>List[T]</c>, <c>Dictionary[K, V]</c>) — including the
@@ -1935,6 +2016,22 @@ internal sealed partial class ExpressionBinder
         List<int> deferredIndices,
         BoundExpression[] boundArgs)
     {
+        // Issue #1507: a slice/array receiver (`[]T` / `[N]T`) carries a null
+        // (user element) or array-shaped ClrType, so the extension-method probe
+        // below — gated on a non-null receiver ClrType — would never be added
+        // and the untyped lambda parameter would never be target-typed from the
+        // matching LINQ delegate. Normalize such a receiver to a symbolic
+        // `IEnumerable[elementType]` (recovering the element type exactly as the
+        // `List[T]`/`sequence[T]` paths do) purely for the purpose of inferring
+        // the deferred lambda targets; the finally-bound call keeps the original
+        // slice/array receiver expression.
+        var receiverType = receiver?.Type;
+        if (receiverType != null
+            && TryNormalizeSliceArrayReceiverForLambdaInference(receiverType, out var normalizedReceiverType))
+        {
+            receiverType = normalizedReceiverType;
+        }
+
         var probes = new List<(IReadOnlyList<MethodInfo> Methods, int Offset)>();
         if (classSymbol != null)
         {
@@ -1946,7 +2043,7 @@ internal sealed partial class ExpressionBinder
                 probes.Add((statics, 0));
             }
         }
-        else if (receiver?.Type?.ClrType is System.Type receiverClrType)
+        else if (receiverType?.ClrType is System.Type receiverClrType)
         {
             var instance = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(receiverClrType, BindingFlags.Instance | BindingFlags.Public)
                 .Where(m => m.Name == methodName)
@@ -1983,7 +2080,7 @@ internal sealed partial class ExpressionBinder
         // referenced-element-type and primitive cases are untouched.
         foreach (var (methods, offset) in probes)
         {
-            if (TryMapDeferredLambdaTargetsSymbolic(methods, offset, receiver, ce, deferredIndices, boundArgs, deferred, out var symbolicTargets))
+            if (TryMapDeferredLambdaTargetsSymbolic(methods, offset, receiverType, ce, deferredIndices, boundArgs, deferred, out var symbolicTargets))
             {
                 foreach (var idx in deferredIndices)
                 {
@@ -2003,7 +2100,7 @@ internal sealed partial class ExpressionBinder
             var argTypes = new System.Type[boundArgs.Length + offset];
             if (offset == 1)
             {
-                argTypes[0] = receiver.Type.ClrType;
+                argTypes[0] = receiverType.ClrType;
             }
 
             var usable = true;
@@ -2092,7 +2189,7 @@ internal sealed partial class ExpressionBinder
         // types, leaving its return type to be inferred from the body.
         foreach (var (methods, offset) in probes)
         {
-            if (TryMapDeferredLambdaParameterTargets(methods, offset, receiver, ce, deferredIndices, boundArgs, out var partialTargets))
+            if (TryMapDeferredLambdaParameterTargets(methods, offset, receiverType, ce, deferredIndices, boundArgs, out var partialTargets))
             {
                 foreach (var idx in deferredIndices)
                 {
@@ -2122,7 +2219,7 @@ internal sealed partial class ExpressionBinder
     private bool TryMapDeferredLambdaParameterTargets(
         IReadOnlyList<MethodInfo> methods,
         int offset,
-        BoundExpression receiver,
+        TypeSymbol receiverType,
         CallExpressionSyntax ce,
         List<int> deferredIndices,
         BoundExpression[] boundArgs,
@@ -2134,7 +2231,7 @@ internal sealed partial class ExpressionBinder
         var argTypes = new System.Type[boundArgs.Length + offset];
         if (offset == 1)
         {
-            if (receiver?.Type?.ClrType is not System.Type receiverClrType)
+            if (receiverType?.ClrType is not System.Type receiverClrType)
             {
                 return false;
             }
@@ -2279,7 +2376,7 @@ internal sealed partial class ExpressionBinder
     private bool TryMapDeferredLambdaTargetsSymbolic(
         IReadOnlyList<MethodInfo> methods,
         int offset,
-        BoundExpression receiver,
+        TypeSymbol receiverType,
         CallExpressionSyntax ce,
         List<int> deferredIndices,
         BoundExpression[] boundArgs,
@@ -2298,7 +2395,7 @@ internal sealed partial class ExpressionBinder
         // not. The success gate below (`anySameCompilationType`) still ensures
         // this path only fires — and pre-empts the CLR erasure paths — when a
         // real same-compilation user type is recovered.
-        if (offset == 1 && receiver?.Type == null)
+        if (offset == 1 && receiverType == null)
         {
             return false;
         }
@@ -2310,7 +2407,7 @@ internal sealed partial class ExpressionBinder
         var symbolicArgs = new TypeSymbol[boundArgs.Length + offset];
         if (offset == 1)
         {
-            symbolicArgs[0] = receiver.Type;
+            symbolicArgs[0] = receiverType;
         }
 
         for (var i = 0; i < boundArgs.Length; i++)
