@@ -71,6 +71,42 @@ namespace Corpus.StaticMember
         Assert.Contains("Holder.Tab", rendered, StringComparison.Ordinal);
     }
 
+    private const string GenericSiblingSource = @"
+namespace Corpus.StaticMember
+{
+    public static class Box
+    {
+        public static int Helper() => 0;
+    }
+
+    public class Box<T>
+    {
+        private static int Tab = 5;
+
+        public static int Read()
+        {
+            return Tab;
+        }
+
+        public static string Mkr() => Read().ToString();
+    }
+}
+";
+
+    [Fact]
+    public void StaticMemberReferenced_FromGenericSibling_IsQualifiedWithTypeArguments()
+    {
+        // A generic owner (`Box<T>`) that lives beside a non-generic type of the
+        // same simple name (`static class Box`) must be qualified with its type
+        // arguments (`Box[T].Tab` / `Box[T].Read()`), not the bare arity-0 name —
+        // otherwise gsc binds the wrong (non-generic) type and reports GS0158.
+        string rendered = TranslateAndPrint(GenericSiblingSource);
+
+        Assert.Contains("Box[T].Tab", rendered, StringComparison.Ordinal);
+        Assert.Contains("Box[T].Read()", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("Box.Tab", rendered, StringComparison.Ordinal);
+    }
+
     private static string TranslateAndPrint(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
