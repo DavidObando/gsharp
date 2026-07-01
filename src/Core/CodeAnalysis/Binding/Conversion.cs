@@ -92,20 +92,46 @@ public sealed class Conversion
         // Mirrors C# §10.2.12 (implicit reference conversions involving type
         // parameters): an identity / implicit reference conversion exists from
         // `T` to its effective interface set and to any base-class constraint.
-        // The emitter materialises this with `box T` (a no-op for reference
-        // `T`), so a value-type or reference-type argument both satisfy the
-        // interface-typed slot.
+        // The interface/base-class rule above is materialised by the emitter
+        // with `box T` (a no-op for reference `T`), so a value-type or
+        // reference-type argument both satisfy the interface-typed slot.
         //
-        // NOTE: this deliberately does NOT cover `T -> object`. Open generic
-        // parameter slots (e.g. the `!0` element type of `List[T].Add(!0)`)
-        // are erased to the `object` singleton by the binder, so a `T -> object`
-        // rule here is indistinguishable from the identity argument conversion
-        // `T -> !0` and would make the emitter inject a spurious `box T`,
-        // producing invalid IL (the #1196 regression). `T` is passed straight
-        // through to an erased `!0` slot with no conversion.
+        // NOTE: the interface/base rule above deliberately does NOT cover
+        // `T -> object`; that genuine-object case is handled by the dedicated
+        // #1540 rule below, which is safe because erased `!0` slots are
+        // substituted back to their real `T` before this classifier runs (see
+        // the extended comment on that rule).
         if (from is TypeParameterSymbol fromTypeParam && to != null
             && to is not TypeParameterSymbol
             && TypeParameterConvertsTo(fromTypeParam, to))
+        {
+            return Conversion.Implicit;
+        }
+
+        // Issue #1540: a generic type parameter `T` is ALWAYS implicitly
+        // convertible to a GENUINE `object` slot — a boxing conversion for a
+        // value `T`, a reference conversion for a reference `T`, and `box !!T`
+        // (valid for both) for an unconstrained `T`. Mirrors C# §10.2.12: an
+        // implicit reference/boxing conversion exists from any `T` to `object`.
+        // This covers the implicit forms (`return val` with an `object` return
+        // type, `let o object = val`, passing `T` to an `object` parameter) and,
+        // since the conversion `Exists`, the explicit form `object(val)` too.
+        //
+        // Why this does NOT re-break #1196 (the erased-slot spurious box):
+        // an ERASED open generic parameter slot (e.g. the `!0` element type of
+        // `List[T].Add(!0)`) is presented as `object` ONLY at the raw CLR
+        // signature level. Before this classifier is consulted for such a call,
+        // `ConversionClassifier.BindClrParameterConversions` substitutes the
+        // receiver's type arguments back into the open `!0` slot, so the target
+        // type is the REAL type parameter `T` (not `object`) and the argument is
+        // classified as `T -> T` identity with NO conversion node and NO box.
+        // A `T -> object` conversion node is therefore only ever created for a
+        // GENUINE `System.Object` destination, where boxing is correct. The
+        // emitter materialises it with `box !!T` (see MethodBodyEmitter.
+        // Conversions.cs), verifier-correct for value, reference and
+        // unconstrained `T` alike.
+        if (from is TypeParameterSymbol && to is not TypeParameterSymbol
+            && to?.ClrType?.IsSameAs(typeof(object)) == true)
         {
             return Conversion.Implicit;
         }
