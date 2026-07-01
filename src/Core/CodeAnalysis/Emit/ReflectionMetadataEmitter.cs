@@ -332,6 +332,16 @@ internal sealed class ReflectionMetadataEmitter
     // (so its field-signature MemberRef matches the FieldDef blob exactly).
     internal readonly Dictionary<StructSymbol, Dictionary<TypeParameterSymbol, int>> iteratorStateMachineRemapsByClass = new Dictionary<StructSymbol, Dictionary<TypeParameterSymbol, int>>();
 
+    // Issue #1537: for each user-declared type nested inside a generic enclosing
+    // type that the emitter reifies over the flattened enclosing+own parameter
+    // list (RegisterNestedTypeEnclosingGenerics), the number of ENCLOSING
+    // parameters `k` (the low ordinals `0..k-1` of the reified TypeDef, ECMA-335
+    // §II.10.3.1). The nested type's own parameters occupy `k..k+m-1`.
+    // ResolveUserStructTypeSpecArguments consults this to split a use-site's
+    // combined type-argument vector into its enclosing and own halves. Keyed by
+    // the nested type's DEFINITION.
+    private readonly Dictionary<StructSymbol, int> nestedTypeEnclosingArity = new Dictionary<StructSymbol, int>(ReferenceEqualityComparer.Instance);
+
     /// <summary>
     /// Issue #810: push the SM remap for <paramref name="smClass"/> so that
     /// every <see cref="EncodeTypeSymbol"/> call made before the returned
@@ -428,21 +438,101 @@ internal sealed class ReflectionMetadataEmitter
         this.iteratorStateMachineRemapsByClass[smStruct] = remap;
     }
 
-    // Issue #1467: gathers the flattened generic parameters of every enclosing
-    // type of <paramref name="nested"/>, in CLR order (outermost first). A type
-    // nested inside `Outer[U].Inner[T]` sees `[U, T]`.
-    private static ImmutableArray<TypeParameterSymbol> CollectEnclosingTypeParameters(StructSymbol nested)
+    // Issue #1467 / #1537: reifies every user-declared type nested inside a
+    // generic type over an ordinal-aligned clone of the flattened enclosing +
+    // own type-parameter list (ECMA-335 §II.10.3.1): the enclosing parameters
+    // occupy the low ordinals `0..k-1` (outermost first), the nested type's OWN
+    // parameters are re-ordinalized to `k..k+m-1`. A per-class remap translates
+    // every reference to an original enclosing/own parameter (whose declared
+    // ordinal no longer matches its reified slot) into the correct `VAR(idx)`.
+    // A nested type with no own parameters (`Box[T].Tag`) reifies to arity `k`
+    // (issue #1467); one that declares its own (`Outer[U].Middle[T]`) reifies to
+    // arity `k + m` (`Outer`1+Middle`2`, issue #1537).
+    private void RegisterNestedTypeEnclosingGenerics()
+    {
+        // Snapshot every type's ORIGINAL own type parameters before any
+        // reification mutates them, so a DEEPER nested type collects its
+        // enclosing types' ORIGINAL parameters (not the reified clones) no
+        // matter the processing order.
+        var originalOwnParams = new Dictionary<StructSymbol, ImmutableArray<TypeParameterSymbol>>(ReferenceEqualityComparer.Instance);
+        foreach (var s in this.emitCtx.Program.Structs)
+        {
+            var def = s.Definition ?? s;
+            if (!originalOwnParams.ContainsKey(def))
+            {
+                originalOwnParams[def] = def.TypeParameters;
+            }
+        }
+
+        foreach (var s in this.emitCtx.Program.Structs)
+        {
+            if (s.ContainingType is not StructSymbol)
+            {
+                continue;
+            }
+
+            var enclosing = CollectOriginalEnclosingTypeParameters(s, originalOwnParams);
+            if (enclosing.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            var def = s.Definition ?? s;
+            var own = originalOwnParams.TryGetValue(def, out var snapshot) ? snapshot : def.TypeParameters;
+
+            var combined = ImmutableArray.CreateBuilder<TypeParameterSymbol>(
+                enclosing.Length + (own.IsDefaultOrEmpty ? 0 : own.Length));
+            combined.AddRange(enclosing);
+            if (!own.IsDefaultOrEmpty)
+            {
+                combined.AddRange(own);
+            }
+
+            var combinedList = combined.ToImmutable();
+
+            // Issue #1499: remap self-/cross-referential constraints onto the
+            // nested type's cloned combined-parameter set.
+            s.SetTypeParameters(SynthesizedClosureReifier.CloneWithRemappedConstraints(combinedList));
+
+            // Record the enclosing arity so a use site can split its combined
+            // type-argument vector into enclosing/own halves.
+            this.nestedTypeEnclosingArity[def] = enclosing.Length;
+
+            // Build the original-parameter -> reified-slot remap so member
+            // signatures/bodies encode the correct VAR(idx). An enclosing
+            // parameter of a single generic level keeps its ordinal (remap is a
+            // no-op then); a re-ordinalized own parameter or an enclosing
+            // parameter of a DEEPER level (whose ordinals collide) is translated.
+            var remap = new Dictionary<TypeParameterSymbol, int>(combinedList.Length);
+            for (var i = 0; i < combinedList.Length; i++)
+            {
+                remap[combinedList[i]] = i;
+            }
+
+            this.iteratorStateMachineRemapsByClass[s] = remap;
+        }
+    }
+
+    // Issue #1537: gathers the flattened ORIGINAL generic parameters of every
+    // enclosing type of <paramref name="nested"/>, in CLR order (outermost
+    // first), reading each enclosing type's pre-reification parameters from
+    // <paramref name="originalOwnParams"/> so a deeply-nested type sees the
+    // originals even after an intermediate enclosing type has been reified.
+    private static ImmutableArray<TypeParameterSymbol> CollectOriginalEnclosingTypeParameters(
+        StructSymbol nested,
+        Dictionary<StructSymbol, ImmutableArray<TypeParameterSymbol>> originalOwnParams)
     {
         List<ImmutableArray<TypeParameterSymbol>> levels = null;
         for (var c = nested.ContainingType as StructSymbol; c != null; c = c.ContainingType as StructSymbol)
         {
             var def = c.Definition ?? c;
-            if (!def.TypeParameters.IsDefaultOrEmpty)
+            var tps = originalOwnParams.TryGetValue(def, out var snapshot) ? snapshot : def.TypeParameters;
+            if (!tps.IsDefaultOrEmpty)
             {
                 levels ??= new List<ImmutableArray<TypeParameterSymbol>>();
 
                 // Prepend so the outermost enclosing type's parameters come first.
-                levels.Insert(0, def.TypeParameters);
+                levels.Insert(0, tps);
             }
         }
 
@@ -458,41 +548,6 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return builder.ToImmutable();
-    }
-
-    // Issue #1467: reifies every user-declared type nested inside a generic
-    // type over an ordinal-aligned clone of the enclosing type-parameter list
-    // (ECMA-335 §II.10.3.1). The enclosing parameters keep their original
-    // ordinals (outermost first), so a member that references an enclosing
-    // type parameter — whose `TypeParameterSymbol.Ordinal` already matches —
-    // encodes the correct `VAR` slot without any remap. Nested types that
-    // declare their OWN generic parameters are left untouched (their own
-    // parameters would need re-ordinalization, which is out of scope here and
-    // does not occur in the issue corpus).
-    private void RegisterNestedTypeEnclosingGenerics()
-    {
-        foreach (var s in this.emitCtx.Program.Structs)
-        {
-            if (s.ContainingType is not StructSymbol)
-            {
-                continue;
-            }
-
-            if (!s.TypeParameters.IsDefaultOrEmpty)
-            {
-                continue;
-            }
-
-            var enclosing = CollectEnclosingTypeParameters(s);
-            if (enclosing.IsDefaultOrEmpty)
-            {
-                continue;
-            }
-
-            // Issue #1499: remap self-/cross-referential constraints onto the
-            // nested type's cloned enclosing-parameter set.
-            s.SetTypeParameters(SynthesizedClosureReifier.CloneWithRemappedConstraints(enclosing));
-        }
     }
 
     // Issue #1477: builds the outer-TP → own-TP-ordinal remap for every
@@ -2000,7 +2055,16 @@ internal sealed class ReflectionMetadataEmitter
                     EmitClassTypeDefRow(ns);
                     break;
                 case StructSymbol ns:
-                    this.typeDefEmitter.EmitStructTypeDef(ns, structFirstFieldRow[ns], nestedMethodListRow[ns]);
+                    // Issue #1537: a nested struct reified over its enclosing +
+                    // own type parameters needs its remap active so field
+                    // signatures (and the TypeDef's own generic-param
+                    // constraints) encode the correct re-ordinalized VAR(idx)
+                    // slots. No-op for every other struct.
+                    using (this.PushSmRemap(ns))
+                    {
+                        this.typeDefEmitter.EmitStructTypeDef(ns, structFirstFieldRow[ns], nestedMethodListRow[ns]);
+                    }
+
                     EmitInterfaceImplRows(ns);
                     break;
                 case EnumSymbol ne:
@@ -7097,8 +7161,91 @@ internal sealed class ReflectionMetadataEmitter
     /// <param name="structSym">The struct reference being encoded.</param>
     /// <param name="def">The struct's emitted definition.</param>
     /// <returns>The type-argument vector aligned with <paramref name="def"/>'s type parameters.</returns>
-    private static ImmutableArray<TypeSymbol> ResolveUserStructTypeSpecArguments(StructSymbol structSym, StructSymbol def)
+    private ImmutableArray<TypeSymbol> ResolveUserStructTypeSpecArguments(StructSymbol structSym, StructSymbol def)
     {
+        // Issue #1537: a type nested inside a generic enclosing type is reified
+        // over the flattened enclosing+own parameter list (`Outer`1+Middle`2`),
+        // so its use-site argument vector is built from TWO halves — the
+        // enclosing arguments (`0..k-1`) then the nested type's own arguments
+        // (`k..k+m-1`). Each half is concrete when the reference carries it and
+        // the open reified parameters (encoded `VAR(idx)`) otherwise, so the
+        // vector is context-correct for constructed and open references alike.
+        if (this.nestedTypeEnclosingArity.TryGetValue(def, out var enclosingArity) && enclosingArity > 0)
+        {
+            var defTps = def.TypeParameters;
+            var total = defTps.Length;
+
+            // A self-reference from within the nested type's OWN body (the
+            // implicit `this` receiver, e.g. reading `FromU` inside a `Middle`
+            // method) is the self-instantiation over the reified definition's
+            // full parameter list, so its argument vector already spans BOTH
+            // halves (`<U, T>` == `<!0, !1>`). Emit it verbatim — splitting it
+            // into halves would double-count the enclosing slots.
+            if (structSym.EnclosingTypeArguments.IsDefaultOrEmpty
+                && structSym.TypeArguments.Length == total)
+            {
+                return structSym.TypeArguments;
+            }
+
+            var builder = ImmutableArray.CreateBuilder<TypeSymbol>(total);
+
+            // Enclosing half (`0..k-1`): the threaded enclosing arguments when
+            // present (constructed use site, `<int32, …>`), else the reified
+            // enclosing parameters (open reference from within the enclosing
+            // generic's members, `<!0, …>`).
+            if (!structSym.EnclosingTypeArguments.IsDefaultOrEmpty)
+            {
+                for (var i = 0; i < enclosingArity && i < structSym.EnclosingTypeArguments.Length; i++)
+                {
+                    builder.Add(structSym.EnclosingTypeArguments[i]);
+                }
+
+                for (var i = builder.Count; i < enclosingArity && i < total; i++)
+                {
+                    builder.Add(defTps[i]);
+                }
+            }
+            else
+            {
+                for (var i = 0; i < enclosingArity && i < total; i++)
+                {
+                    builder.Add(defTps[i]);
+                }
+            }
+
+            // Own half (`k..k+m-1`): the nested type's own arguments when
+            // present (`Middle[string]`), else its reified own parameters (open,
+            // `<…, !k>`).
+            if (!structSym.TypeArguments.IsDefaultOrEmpty)
+            {
+                builder.AddRange(structSym.TypeArguments);
+                for (var i = builder.Count; i < total; i++)
+                {
+                    builder.Add(defTps[i]);
+                }
+            }
+            else
+            {
+                for (var i = enclosingArity; i < total; i++)
+                {
+                    builder.Add(defTps[i]);
+                }
+            }
+
+            if (builder.Count > total)
+            {
+                var trimmed = ImmutableArray.CreateBuilder<TypeSymbol>(total);
+                for (var i = 0; i < total; i++)
+                {
+                    trimmed.Add(builder[i]);
+                }
+
+                return trimmed.MoveToImmutable();
+            }
+
+            return builder.ToImmutable();
+        }
+
         if (!structSym.TypeArguments.IsDefaultOrEmpty)
         {
             return structSym.TypeArguments;
@@ -7117,9 +7264,9 @@ internal sealed class ReflectionMetadataEmitter
         // EncodeTypeSymbol. For a nested type referenced from within its
         // enclosing generic's own members these are the reified enclosing
         // parameters, so the reference correctly threads `!0…`.
-        var defTps = def.TypeParameters;
-        var bld = ImmutableArray.CreateBuilder<TypeSymbol>(defTps.Length);
-        foreach (var tp in defTps)
+        var openTps = def.TypeParameters;
+        var bld = ImmutableArray.CreateBuilder<TypeSymbol>(openTps.Length);
+        foreach (var tp in openTps)
         {
             bld.Add(tp);
         }
