@@ -353,11 +353,68 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
-            // Defensive: any other value-typed LHS (raw struct or enum)
-            // remains unsupported by `??`. Today the encoder rejects
-            // nullable user-defined structs/enums, so this branch is
-            // unreachable from valid source, but fail loudly rather
-            // than silently producing PEVerify-rejected IL.
+            // Issue #1578: NullCoalesce over a user value-type nullable LHS —
+            // `Nullable<UserT>` where UserT is a user-declared value-kind
+            // struct or enum emitted in this compilation (#1572). The
+            // underlying has no runtime CLR type, so neither the primitive
+            // `Nullable<T>` spill arm at the top (which probes via the
+            // BCL-backed `get_HasValue`) nor the bottom `dup; brtrue` shape is
+            // usable. Mirror the sibling value-type spill (#831 / #1516) with a
+            // box-probe over the emitted `Nullable<UserT>` TypeSpec: spill the
+            // LHS to the pre-allocated `Nullable<UserT>` slot, box it (boxing a
+            // `Nullable<T>` yields `null` when `!HasValue`, else a boxed `T` —
+            // ECMA-335), and `brfalse` to the fallback on the empty case. On
+            // the non-null branch, reproduce the operator's result type: reload
+            // the wrapper when the result is itself `Nullable<UserT>`, else
+            // unwrap to `UserT` via the TypeSpec `get_Value` MemberRef (#1572).
+            if (b.Left.Type is NullableTypeSymbol userVtNullable
+                && NullableLifting.IsUserValueTypeNullable(userVtNullable))
+            {
+                if (!this.nullableCoalesceSpillSlots.TryGetValue(b, out var userVtSlot))
+                {
+                    throw new InvalidOperationException(
+                        "No scratch slot pre-allocated for user value-type Nullable<T> '??' LHS — "
+                        + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
+                }
+
+                var userVtBoxToken = this.outer.GetElementTypeToken(userVtNullable);
+                var fallback = this.il.DefineLabel();
+                var end = this.il.DefineLabel();
+
+                this.EmitExpression(b.Left);
+                this.il.StoreLocal(userVtSlot);
+                this.il.LoadLocal(userVtSlot);
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(userVtBoxToken);
+                this.il.Branch(ILOpCode.Brfalse, fallback);
+
+                if (b.Type is NullableTypeSymbol)
+                {
+                    // Result is `Nullable<UserT>` — reload the present wrapper.
+                    this.il.LoadLocal(userVtSlot);
+                }
+                else
+                {
+                    // Result is the underlying `UserT` — unwrap via get_Value.
+                    this.il.LoadLocalAddress(userVtSlot);
+                    this.il.OpCode(ILOpCode.Call);
+                    this.il.Token(this.outer.GetNullableGetValueMemberRefForUserValueType(userVtNullable));
+                }
+
+                this.il.Branch(ILOpCode.Br, end);
+
+                this.il.MarkLabel(fallback);
+                this.EmitExpression(b.Right);
+                this.il.MarkLabel(end);
+                return;
+            }
+
+            // Defensive: any other value-typed LHS remains unsupported by
+            // `??`. All known value-type shapes are handled above (primitive
+            // `Nullable<T>` #519, open struct-constrained `T?` #831, bare
+            // reference type-parameter #1516, user value-type nullable #1578);
+            // fail loudly rather than silently producing PEVerify-rejected IL
+            // for any unanticipated value-type stack shape.
             var leftType = b.Left.Type;
             if (ReflectionMetadataEmitter.IsValueTypeSymbol(leftType))
             {
