@@ -670,8 +670,9 @@ public static class GSharpPrinter
     {
         var sb = new StringBuilder();
         sb.Append('"');
-        foreach (var part in interpolated.Parts)
+        for (var i = 0; i < interpolated.Parts.Count; i++)
         {
+            var part = interpolated.Parts[i];
             if (!part.IsHole)
             {
                 sb.Append(RenderInterpolationText(part.Text));
@@ -680,7 +681,8 @@ public static class GSharpPrinter
 
             var canUseShorthand = part.Expression is IdentifierExpression
                 && string.IsNullOrEmpty(part.Alignment)
-                && string.IsNullOrEmpty(part.Format);
+                && string.IsNullOrEmpty(part.Format)
+                && !NextLiteralContinuesIdentifier(interpolated.Parts, i);
 
             if (canUseShorthand)
             {
@@ -708,6 +710,23 @@ public static class GSharpPrinter
 
         sb.Append('"');
         return sb.ToString();
+    }
+
+    private static bool NextLiteralContinuesIdentifier(IReadOnlyList<InterpolationPart> parts, int holeIndex)
+    {
+        if (holeIndex + 1 >= parts.Count)
+        {
+            return false;
+        }
+
+        var next = parts[holeIndex + 1];
+        if (next.IsHole || string.IsNullOrEmpty(next.Text))
+        {
+            return false;
+        }
+
+        var first = next.Text[0];
+        return char.IsLetterOrDigit(first) || first == '_';
     }
 
     private static string RenderStatement(GStatement statement, int indent)

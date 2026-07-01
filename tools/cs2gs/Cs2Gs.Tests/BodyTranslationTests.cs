@@ -322,6 +322,21 @@ public class BodyTranslationTests
         Assert.Contains("\"$n items at $$$n each\"", body);
     }
 
+    /// <summary>An identifier hole immediately followed by literal text that begins
+    /// with an identifier-continuation character (letter/digit/underscore) must use
+    /// the braced <c>${ident}</c> form so the trailing characters are not absorbed
+    /// into the interpolated variable name (regression: <c>$"{thrdid}_{ticks}"</c>).</summary>
+    [Fact]
+    public void StringInterpolation_BracesHoleWhenFollowedByIdentifierChar()
+    {
+        string body = GetMethodBody(
+            "var s = $\"{n}_more{n}x{n}.{n} end{n}\";",
+            extraLocals: "var more = 0; var x = 0;");
+
+        // `_`, `x`, follow the hole -> braced; `.`, ` `, and end-of-string do not -> shorthand.
+        Assert.Contains("\"${n}_more${n}x$n.$n end$n\"", body);
+    }
+
     /// <summary>local <c>var</c> never reassigned becomes <c>let</c>; a reassigned
     /// local becomes <c>var</c>; <c>const</c> stays <c>const</c> (ADR-0115 §B.3,
     /// data-flow driven).</summary>
