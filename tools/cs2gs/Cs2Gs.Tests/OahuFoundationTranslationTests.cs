@@ -414,6 +414,28 @@ namespace Demo
     }
 
 
+    /// <summary>
+    /// A C# `new` of a primitive type keyword (e.g. `new string(char, int)`) must be
+    /// emitted with the qualified CLR type name (`System.String(' ', n)`), because the
+    /// G# alias `string` is a language keyword and is not callable as a constructor —
+    /// emitting `string(...)` yields GS0130 ("Function 'string' doesn't exist").
+    /// </summary>
+    [Fact]
+    public void NewStringFromCharCount_EmitsQualifiedClrConstructor()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class PadX
+    {
+        public string Pad(int n) => new string(' ', n);
+    }
+}");
+
+        Assert.Contains("System.String(' ', n)", printed);
+        Assert.DoesNotContain("string(' '", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         (string printed, RoundTripResult result) = TranslateAndValidate(source);

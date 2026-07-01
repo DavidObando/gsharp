@@ -7194,13 +7194,32 @@ public sealed class CSharpToGSharpTranslator
 
         /// <summary>
         /// Maps a constructed type's G# name to a callable construction callee.
-        /// The G# alias <c>object</c> is a keyword, not a function, so constructing
-        /// a <see cref="object"/> (<c>new object()</c> / target-typed <c>new()</c>)
-        /// must spell the qualified type name <c>System.Object</c> instead (OD-T3,
-        /// otherwise GS0130 "Function 'object' doesn't exist").
+        /// A G# primitive type keyword (<c>object</c>, <c>string</c>, <c>decimal</c>,
+        /// …) is a language keyword, not a function, so constructing one
+        /// (<c>new object()</c>, <c>new string(' ', n)</c>, target-typed <c>new()</c>)
+        /// must spell the qualified CLR type name instead (e.g. <c>System.Object</c>,
+        /// <c>System.String</c>) — otherwise gsc reports GS0130 ("Function 'string'
+        /// doesn't exist"). Non-keyword type names are returned unchanged.
         /// </summary>
-        private static string ConstructionCalleeName(string typeName) =>
-            typeName == "object" ? "System.Object" : typeName;
+        private static string ConstructionCalleeName(string typeName) => typeName switch
+        {
+            "object" => "System.Object",
+            "string" => "System.String",
+            "bool" => "System.Boolean",
+            "char" => "System.Char",
+            "decimal" => "System.Decimal",
+            "int8" => "System.SByte",
+            "uint8" => "System.Byte",
+            "int16" => "System.Int16",
+            "uint16" => "System.UInt16",
+            "int32" => "System.Int32",
+            "uint32" => "System.UInt32",
+            "int64" => "System.Int64",
+            "uint64" => "System.UInt64",
+            "float32" => "System.Single",
+            "float64" => "System.Double",
+            _ => typeName,
+        };
 
         /// <summary>
         /// Builds the canonical G# struct literal <c>T{Field: value, ...}</c> from a
