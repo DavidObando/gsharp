@@ -641,57 +641,7 @@ internal sealed class MemberDefEmitter
                 && this.cache.StructFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
             {
                 // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
-                var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-                var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
-
-                // ldsfld backingField; stloc.0
-                il.OpCode(ILOpCode.Ldsfld);
-                il.Token(backingHandle);
-                il.OpCode(ILOpCode.Stloc_0);
-
-                // loop_start:
-                var loopStart = il.DefineLabel();
-                il.MarkLabel(loopStart);
-
-                // ldloc.0; stloc.1
-                il.OpCode(ILOpCode.Ldloc_0);
-                il.OpCode(ILOpCode.Stloc_1);
-
-                // ldloc.1; ldarg.0; call Delegate.Combine; castclass T; stloc.2
-                il.OpCode(ILOpCode.Ldloc_1);
-                il.LoadArgument(0);
-                il.OpCode(ILOpCode.Call);
-                il.Token(this.wellKnown.GetDelegateCombineRef());
-                il.OpCode(ILOpCode.Castclass);
-                il.Token(eventTypeHandle);
-                il.OpCode(ILOpCode.Stloc_2);
-
-                // ldsflda backingField; ldloc.2; ldloc.1
-                il.OpCode(ILOpCode.Ldsflda);
-                il.Token(backingHandle);
-                il.OpCode(ILOpCode.Ldloc_2);
-                il.OpCode(ILOpCode.Ldloc_1);
-
-                // call Interlocked.CompareExchange<T>; stloc.0
-                il.OpCode(ILOpCode.Call);
-                il.Token(this.GetInterlockedCompareExchangeSpec(ev.Type));
-                il.OpCode(ILOpCode.Stloc_0);
-
-                // ldloc.0; ldloc.1; bne.un.s loop_start
-                il.OpCode(ILOpCode.Ldloc_0);
-                il.OpCode(ILOpCode.Ldloc_1);
-                il.Branch(ILOpCode.Bne_un_s, loopStart);
-
-                il.OpCode(ILOpCode.Ret);
-
-                var localsSigBlob = new BlobBuilder();
-                var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(3);
-                this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
+                bodyOffset = this.EmitEventCasLoopBody(structSym, ev, backingHandle, isStatic: true, isAdd: true);
             }
             else if (ev.AddMethodSymbol != null && this.emitCtx.Program.Functions.TryGetValue(ev.AddMethodSymbol, out var addBody))
             {
@@ -742,57 +692,7 @@ internal sealed class MemberDefEmitter
                 && this.cache.StructFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
             {
                 // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
-                var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-                var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
-
-                // ldsfld backingField; stloc.0
-                il.OpCode(ILOpCode.Ldsfld);
-                il.Token(backingHandle);
-                il.OpCode(ILOpCode.Stloc_0);
-
-                // loop_start:
-                var loopStart = il.DefineLabel();
-                il.MarkLabel(loopStart);
-
-                // ldloc.0; stloc.1
-                il.OpCode(ILOpCode.Ldloc_0);
-                il.OpCode(ILOpCode.Stloc_1);
-
-                // ldloc.1; ldarg.0; call Delegate.Remove; castclass T; stloc.2
-                il.OpCode(ILOpCode.Ldloc_1);
-                il.LoadArgument(0);
-                il.OpCode(ILOpCode.Call);
-                il.Token(this.wellKnown.GetDelegateRemoveRef());
-                il.OpCode(ILOpCode.Castclass);
-                il.Token(eventTypeHandle);
-                il.OpCode(ILOpCode.Stloc_2);
-
-                // ldsflda backingField; ldloc.2; ldloc.1
-                il.OpCode(ILOpCode.Ldsflda);
-                il.Token(backingHandle);
-                il.OpCode(ILOpCode.Ldloc_2);
-                il.OpCode(ILOpCode.Ldloc_1);
-
-                // call Interlocked.CompareExchange<T>; stloc.0
-                il.OpCode(ILOpCode.Call);
-                il.Token(this.GetInterlockedCompareExchangeSpec(ev.Type));
-                il.OpCode(ILOpCode.Stloc_0);
-
-                // ldloc.0; ldloc.1; bne.un.s loop_start
-                il.OpCode(ILOpCode.Ldloc_0);
-                il.OpCode(ILOpCode.Ldloc_1);
-                il.Branch(ILOpCode.Bne_un_s, loopStart);
-
-                il.OpCode(ILOpCode.Ret);
-
-                var localsSigBlob = new BlobBuilder();
-                var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(3);
-                this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
+                bodyOffset = this.EmitEventCasLoopBody(structSym, ev, backingHandle, isStatic: true, isAdd: false);
             }
             else if (ev.RemoveMethodSymbol != null && this.emitCtx.Program.Functions.TryGetValue(ev.RemoveMethodSymbol, out var removeBody))
             {
@@ -1033,6 +933,90 @@ internal sealed class MemberDefEmitter
     }
 
     /// <summary>
+    /// Issue #1611: emits the thread-safe CAS-loop body shared by the instance/static
+    /// add/remove event accessors. Resolves the backing-field token through
+    /// <see cref="resolveFieldToken"/> when the owning type is a generic type (mirrors
+    /// the property fix for issue #989) so the emitted tokens are valid self-TypeSpec
+    /// MemberRefs instead of bare FieldDefs on a generic type.
+    /// </summary>
+    /// <param name="structSym">The struct/class declaring the event.</param>
+    /// <param name="ev">The field-like event being emitted.</param>
+    /// <param name="backingHandle">The FieldDef handle for the backing field.</param>
+    /// <param name="isStatic">Whether the accessor is static (ldsfld/ldsflda vs ldfld/ldflda, no `this`).</param>
+    /// <param name="isAdd">Whether this is the add accessor (Delegate.Combine) or remove (Delegate.Remove).</param>
+    private int EmitEventCasLoopBody(StructSymbol structSym, EventSymbol ev, FieldDefinitionHandle backingHandle, bool isStatic, bool isAdd)
+    {
+        var backingToken = ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym)
+            ? this.resolveFieldToken(structSym, ev.BackingField)
+            : (EntityHandle)backingHandle;
+
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
+
+        // Static accessors have no `this`; the value parameter is argument 0 instead of 1.
+        var valueArgIndex = isStatic ? 0 : 1;
+
+        // load backingField; stloc.0
+        if (!isStatic)
+        {
+            il.LoadArgument(0);
+        }
+
+        il.OpCode(isStatic ? ILOpCode.Ldsfld : ILOpCode.Ldfld);
+        il.Token(backingToken);
+        il.OpCode(ILOpCode.Stloc_0);
+
+        // loop_start:
+        var loopStart = il.DefineLabel();
+        il.MarkLabel(loopStart);
+
+        // ldloc.0; stloc.1
+        il.OpCode(ILOpCode.Ldloc_0);
+        il.OpCode(ILOpCode.Stloc_1);
+
+        // ldloc.1; ldarg value; call Delegate.Combine/Remove; castclass T; stloc.2
+        il.OpCode(ILOpCode.Ldloc_1);
+        il.LoadArgument(valueArgIndex);
+        il.OpCode(ILOpCode.Call);
+        il.Token(isAdd ? this.wellKnown.GetDelegateCombineRef() : this.wellKnown.GetDelegateRemoveRef());
+        il.OpCode(ILOpCode.Castclass);
+        il.Token(eventTypeHandle);
+        il.OpCode(ILOpCode.Stloc_2);
+
+        // load backingField address; ldloc.2; ldloc.1
+        if (!isStatic)
+        {
+            il.LoadArgument(0);
+        }
+
+        il.OpCode(isStatic ? ILOpCode.Ldsflda : ILOpCode.Ldflda);
+        il.Token(backingToken);
+        il.OpCode(ILOpCode.Ldloc_2);
+        il.OpCode(ILOpCode.Ldloc_1);
+
+        // call Interlocked.CompareExchange<T>; stloc.0
+        il.OpCode(ILOpCode.Call);
+        il.Token(this.GetInterlockedCompareExchangeSpec(ev.Type));
+        il.OpCode(ILOpCode.Stloc_0);
+
+        // ldloc.0; ldloc.1; bne.un.s loop_start
+        il.OpCode(ILOpCode.Ldloc_0);
+        il.OpCode(ILOpCode.Ldloc_1);
+        il.Branch(ILOpCode.Bne_un_s, loopStart);
+
+        il.OpCode(ILOpCode.Ret);
+
+        var localsSigBlob = new BlobBuilder();
+        var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(3);
+        this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+        this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+        this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+        var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
+
+        return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
+    }
+
+    /// <summary>
     /// ADR-0052: emits the add_X accessor MethodDef for an event.
     /// </summary>
     private MethodDefinitionHandle EmitEventAddAccessor(StructSymbol structSym, EventSymbol ev)
@@ -1044,59 +1028,7 @@ internal sealed class MemberDefEmitter
                 && this.cache.StructFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
             {
                 // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
-                var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-                var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
-
-                // ldarg.0; ldfld backingField; stloc.0
-                il.LoadArgument(0);
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(backingHandle);
-                il.OpCode(ILOpCode.Stloc_0);
-
-                // loop_start:
-                var loopStart = il.DefineLabel();
-                il.MarkLabel(loopStart);
-
-                // ldloc.0; stloc.1
-                il.OpCode(ILOpCode.Ldloc_0);
-                il.OpCode(ILOpCode.Stloc_1);
-
-                // ldloc.1; ldarg.1; call Delegate.Combine; castclass T; stloc.2
-                il.OpCode(ILOpCode.Ldloc_1);
-                il.LoadArgument(1);
-                il.OpCode(ILOpCode.Call);
-                il.Token(this.wellKnown.GetDelegateCombineRef());
-                il.OpCode(ILOpCode.Castclass);
-                il.Token(eventTypeHandle);
-                il.OpCode(ILOpCode.Stloc_2);
-
-                // ldarg.0; ldflda backingField; ldloc.2; ldloc.1
-                il.LoadArgument(0);
-                il.OpCode(ILOpCode.Ldflda);
-                il.Token(backingHandle);
-                il.OpCode(ILOpCode.Ldloc_2);
-                il.OpCode(ILOpCode.Ldloc_1);
-
-                // call Interlocked.CompareExchange<T>; stloc.0
-                il.OpCode(ILOpCode.Call);
-                il.Token(this.GetInterlockedCompareExchangeSpec(ev.Type));
-                il.OpCode(ILOpCode.Stloc_0);
-
-                // ldloc.0; ldloc.1; bne.un.s loop_start
-                il.OpCode(ILOpCode.Ldloc_0);
-                il.OpCode(ILOpCode.Ldloc_1);
-                il.Branch(ILOpCode.Bne_un_s, loopStart);
-
-                il.OpCode(ILOpCode.Ret);
-
-                var localsSigBlob = new BlobBuilder();
-                var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(3);
-                this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
+                bodyOffset = this.EmitEventCasLoopBody(structSym, ev, backingHandle, isStatic: false, isAdd: true);
             }
             else if (ev.AddMethodSymbol != null && this.emitCtx.Program.Functions.TryGetValue(ev.AddMethodSymbol, out var addBody))
             {
@@ -1161,59 +1093,7 @@ internal sealed class MemberDefEmitter
                 && this.cache.StructFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
             {
                 // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
-                var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-                var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
-
-                // ldarg.0; ldfld backingField; stloc.0
-                il.LoadArgument(0);
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(backingHandle);
-                il.OpCode(ILOpCode.Stloc_0);
-
-                // loop_start:
-                var loopStart = il.DefineLabel();
-                il.MarkLabel(loopStart);
-
-                // ldloc.0; stloc.1
-                il.OpCode(ILOpCode.Ldloc_0);
-                il.OpCode(ILOpCode.Stloc_1);
-
-                // ldloc.1; ldarg.1; call Delegate.Remove; castclass T; stloc.2
-                il.OpCode(ILOpCode.Ldloc_1);
-                il.LoadArgument(1);
-                il.OpCode(ILOpCode.Call);
-                il.Token(this.wellKnown.GetDelegateRemoveRef());
-                il.OpCode(ILOpCode.Castclass);
-                il.Token(eventTypeHandle);
-                il.OpCode(ILOpCode.Stloc_2);
-
-                // ldarg.0; ldflda backingField; ldloc.2; ldloc.1
-                il.LoadArgument(0);
-                il.OpCode(ILOpCode.Ldflda);
-                il.Token(backingHandle);
-                il.OpCode(ILOpCode.Ldloc_2);
-                il.OpCode(ILOpCode.Ldloc_1);
-
-                // call Interlocked.CompareExchange<T>; stloc.0
-                il.OpCode(ILOpCode.Call);
-                il.Token(this.GetInterlockedCompareExchangeSpec(ev.Type));
-                il.OpCode(ILOpCode.Stloc_0);
-
-                // ldloc.0; ldloc.1; bne.un.s loop_start
-                il.OpCode(ILOpCode.Ldloc_0);
-                il.OpCode(ILOpCode.Ldloc_1);
-                il.Branch(ILOpCode.Bne_un_s, loopStart);
-
-                il.OpCode(ILOpCode.Ret);
-
-                var localsSigBlob = new BlobBuilder();
-                var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(3);
-                this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
+                bodyOffset = this.EmitEventCasLoopBody(structSym, ev, backingHandle, isStatic: false, isAdd: false);
             }
             else if (ev.RemoveMethodSymbol != null && this.emitCtx.Program.Functions.TryGetValue(ev.RemoveMethodSymbol, out var removeBody))
             {
