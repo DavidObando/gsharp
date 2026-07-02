@@ -1430,13 +1430,25 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.OpCode(ILOpCode.Ldind_r8);
         }
-        else if (clrType.IsSameAs(typeof(short)) || clrType.IsSameAs(typeof(ushort)) || clrType.IsSameAs(typeof(char)))
+        else if (clrType.IsSameAs(typeof(short)))
         {
             this.il.OpCode(ILOpCode.Ldind_i2);
         }
-        else if (clrType.IsSameAs(typeof(byte)) || clrType.IsSameAs(typeof(sbyte)) || clrType.IsSameAs(typeof(bool)))
+        else if (clrType.IsSameAs(typeof(ushort)) || clrType.IsSameAs(typeof(char)))
+        {
+            // Issue #1613: ldind.i2 sign-extends to int32. ushort/char are
+            // unsigned pointees — mirror EmitLoadElement (issue #520) and use
+            // the unsigned form so values >= 0x8000 don't come back negative.
+            this.il.OpCode(ILOpCode.Ldind_u2);
+        }
+        else if (clrType.IsSameAs(typeof(sbyte)))
         {
             this.il.OpCode(ILOpCode.Ldind_i1);
+        }
+        else if (clrType.IsSameAs(typeof(byte)) || clrType.IsSameAs(typeof(bool)))
+        {
+            // Issue #1613: same fix for byte/bool — ldind.u1 zero-extends.
+            this.il.OpCode(ILOpCode.Ldind_u1);
         }
         else if (pointeeType is StructSymbol { IsClass: false } || (clrType != null && clrType.IsValueType))
         {
