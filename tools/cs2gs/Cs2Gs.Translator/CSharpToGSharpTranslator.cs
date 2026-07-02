@@ -6586,12 +6586,62 @@ public sealed class CSharpToGSharpTranslator
         {
             GExpression translated = this.TranslateExpression(recv);
 
-            if (this.ReceiverNeedsNullForgiveness(recv))
+            if (this.ReceiverNeedsNullForgiveness(recv)
+                || this.ReceiverIsNullableReferenceFieldOrProperty(recv))
             {
                 return new NonNullAssertionExpression(translated);
             }
 
             return translated;
+        }
+
+        /// <summary>
+        /// True when a member-/element-access <paramref name="recv"/> receiver is a
+        /// nullable-reference <em>field</em> or <em>property</em> (declared <c>T?</c>
+        /// or promoted to nullable, issue #1072) and therefore always needs a G#
+        /// <c>!!</c> assertion — independent of Roslyn flow state.
+        /// </summary>
+        /// <remarks>
+        /// Unlike a local variable, G#'s Kotlin-style smart-casts never narrow a
+        /// property/field-access chain, so <c>field.Member</c> / <c>field[i]</c> on a
+        /// <c>T?</c> field is rejected (GS0158/GS0116) no matter what null-guard
+        /// precedes it. The Oahu corpus compiles nullable-<em>disabled</em>, so
+        /// Roslyn's flow analysis reports these receivers as oblivious (never
+        /// flow-state <c>NotNull</c>) and the flow-driven
+        /// <see cref="ReceiverNeedsNullForgiveness"/> pass leaves them bare.
+        /// Asserting <c>field!!.Member</c> both compiles and preserves C#'s
+        /// throw-on-null semantics for the same access (a null field would
+        /// <c>NullReferenceException</c> in C# too). Locals/parameters keep the
+        /// flow-proven path, since G# does smart-cast them; comparison operands and
+        /// <c>?.</c> receivers are routed elsewhere and never reach this pass.
+        /// </remarks>
+        private bool ReceiverIsNullableReferenceFieldOrProperty(ExpressionSyntax recv)
+        {
+            if (recv is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                or ThisExpressionSyntax
+                or BaseExpressionSyntax
+                or LiteralExpressionSyntax
+                or ConditionalAccessExpressionSyntax)
+            {
+                return false;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(recv).Symbol;
+
+            ITypeSymbol declared = symbol switch
+            {
+                IPropertySymbol property => property.Type,
+                IFieldSymbol field => field.Type,
+                _ => null,
+            };
+
+            if (declared is not { IsReferenceType: true })
+            {
+                return false;
+            }
+
+            return declared.NullableAnnotation == NullableAnnotation.Annotated
+                || this.IsPromotedToNullableReference(symbol);
         }
 
         // True when <paramref name="member"/> binds to an extension method whose

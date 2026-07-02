@@ -21,9 +21,11 @@ namespace Cs2Gs.Tests;
 /// receiver is a <em>declared</em>-nullable reference that Roslyn has
 /// flow-proven non-null is emitted with G#'s postfix non-null assertion
 /// (<c>recv!!.Member</c> / <c>recv!![i]</c>), re-establishing the fact the guard
-/// already proved. The negative tests pin the precision guards so a stray
-/// assertion is never emitted on an unguarded, static, or already-asserted
-/// receiver.
+/// already proved. For an unguarded declared-nullable field/property receiver
+/// the assertion is likewise emitted, since G# cannot narrow such chains and a
+/// bare access would be GS0158 (matching C#'s NRE-if-null runtime semantics).
+/// The negative tests pin the precision guards so a stray assertion is never
+/// emitted on a non-nullable, static, or already-asserted receiver.
 /// </summary>
 public class NullableFlowForgivenessTranslationTests
 {
@@ -71,7 +73,7 @@ namespace Demo
     }
 
     [Fact]
-    public void UnguardedNullableProperty_MemberAccess_DoesNotAssert()
+    public void UnguardedNullableProperty_MemberAccess_EmitsNonNullAssertion()
     {
         string printed = TranslateUnit(@"
 #nullable enable
@@ -88,9 +90,12 @@ namespace Demo
     }
 }");
 
-        // No guard means the flow state is MayBeNull, so no `!!` is emitted.
-        Assert.DoesNotContain("!!", printed);
-        Assert.Contains("o.Child.Value", printed);
+        // Even without a guard, the receiver `o.Child` is a declared-nullable
+        // PROPERTY. G# smart-casts only local variables, never property/field
+        // chains, so a bare `o.Child.Value` would be GS0158. The receiver rule
+        // emits `o.Child!!.Value`, faithfully preserving C#'s NRE-if-null
+        // semantics (C# itself only warns here, CS8602).
+        Assert.Contains("o.Child!!.Value", printed);
     }
 
     [Fact]
