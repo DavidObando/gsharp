@@ -80,8 +80,15 @@ public sealed class ControlFlowGraph
             // up to a catch handler or off the frame entirely) and is therefore
             // a legitimate terminator for the "all paths return" check — the
             // path simply never falls off the end of the function.
+            //
+            // An exhaustive `switch` statement — one that has a `default` clause
+            // and whose every reachable arm definitely returns or throws — never
+            // falls off its end either, so it is likewise a valid terminator
+            // (issue #1596). Non-exhaustive switches (no `default`) still fall
+            // through and are rejected below.
             if (lastStatement.Kind != BoundNodeKind.ReturnStatement
-                && lastStatement.Kind != BoundNodeKind.ThrowStatement)
+                && lastStatement.Kind != BoundNodeKind.ThrowStatement
+                && !(lastStatement is BoundPatternSwitchStatement sw && SwitchAlwaysReturns(sw)))
             {
                 return false;
             }
@@ -127,6 +134,66 @@ public sealed class ControlFlowGraph
         }
 
         writer.WriteLine("}");
+    }
+
+    /// <summary>
+    /// Determines whether a pattern <c>switch</c> statement is exhaustive and
+    /// definitely returns — that is, it has a <c>default</c> arm and every arm
+    /// body definitely returns or throws. Such a switch never falls off its end
+    /// and therefore acts as a control-flow terminator for definite-return
+    /// analysis (issue #1596). A switch without a <c>default</c> arm can fall
+    /// through (the discriminant may match no arm) and is never treated as
+    /// definitely-returning.
+    /// </summary>
+    /// <param name="switchStatement">The pattern switch statement.</param>
+    /// <returns>Whether the switch definitely returns on every path.</returns>
+    private static bool SwitchAlwaysReturns(BoundPatternSwitchStatement switchStatement)
+    {
+        var hasDefault = false;
+        foreach (var arm in switchStatement.Arms)
+        {
+            if (arm.IsDefault)
+            {
+                hasDefault = true;
+            }
+
+            if (!StatementDefinitelyReturns(arm.Body))
+            {
+                return false;
+            }
+        }
+
+        return hasDefault;
+    }
+
+    /// <summary>
+    /// Structurally determines whether a bound statement definitely returns (or
+    /// throws) on the fall-through path — without constructing a sub control-flow
+    /// graph. This is deliberately conservative: escaping jumps such as
+    /// <c>continue</c>/<c>break</c>/<c>goto</c> (which the lowerer emits as goto
+    /// statements targeting labels outside the statement) are treated as NOT
+    /// returning. Building an isolated CFG for such a statement would fail
+    /// because those jump targets are not present in the isolated graph
+    /// (issue #1596 follow-up: fixes a crash on <c>continue</c>/<c>break</c>
+    /// inside a switch arm nested in a loop).
+    /// </summary>
+    /// <param name="statement">The bound statement.</param>
+    /// <returns>Whether the statement definitely returns or throws.</returns>
+    private static bool StatementDefinitelyReturns(BoundStatement statement)
+    {
+        switch (statement)
+        {
+            case BoundBlockStatement block:
+                // A block definitely returns iff its last reachable statement
+                // definitely returns.
+                var last = block.Statements.LastOrDefault();
+                return last != null && StatementDefinitelyReturns(last);
+            case BoundPatternSwitchStatement nestedSwitch:
+                return SwitchAlwaysReturns(nestedSwitch);
+            default:
+                return statement.Kind == BoundNodeKind.ReturnStatement
+                    || statement.Kind == BoundNodeKind.ThrowStatement;
+        }
     }
 
     /// <summary>
@@ -283,6 +350,18 @@ public sealed class ControlFlowGraph
                     case BoundNodeKind.ExpressionStatement:
                         statements.Add(statement);
                         break;
+                    case BoundNodeKind.PatternSwitchStatement:
+                        statements.Add(statement);
+
+                        // An exhaustive switch (default present and every arm
+                        // returns/throws) terminates the block like a return;
+                        // otherwise it falls through to the next statement.
+                        if (SwitchAlwaysReturns((BoundPatternSwitchStatement)statement))
+                        {
+                            StartBlock();
+                        }
+
+                        break;
                     case BoundNodeKind.TryStatement:
                     case BoundNodeKind.ThrowStatement:
                     case BoundNodeKind.GoStatement:
@@ -291,7 +370,6 @@ public sealed class ControlFlowGraph
                     case BoundNodeKind.ScopeStatement:
                     case BoundNodeKind.FixedStatement:
                     case BoundNodeKind.AwaitForRangeStatement:
-                    case BoundNodeKind.PatternSwitchStatement:
                     case BoundNodeKind.YieldStatement:
                         // Treat exception-flow constructs as opaque statements; precise
                         // CFG modeling of catch/finally edges is deferred to a later phase.
@@ -394,6 +472,21 @@ public sealed class ControlFlowGraph
                         case BoundNodeKind.ReturnStatement:
                             Connect(current, end);
                             break;
+                        case BoundNodeKind.PatternSwitchStatement:
+                            // An exhaustive switch (default present and every arm
+                            // returns/throws) terminates control like a return and
+                            // connects to the end block. A non-exhaustive switch may
+                            // fall through to the next statement (issue #1596).
+                            if (SwitchAlwaysReturns((BoundPatternSwitchStatement)statement))
+                            {
+                                Connect(current, end);
+                            }
+                            else if (isLastStatementInBlock)
+                            {
+                                Connect(current, next);
+                            }
+
+                            break;
                         case BoundNodeKind.VariableDeclaration:
                         case BoundNodeKind.LabelStatement:
                         case BoundNodeKind.ExpressionStatement:
@@ -404,7 +497,6 @@ public sealed class ControlFlowGraph
                         case BoundNodeKind.ScopeStatement:
                         case BoundNodeKind.FixedStatement:
                         case BoundNodeKind.AwaitForRangeStatement:
-                        case BoundNodeKind.PatternSwitchStatement:
                         case BoundNodeKind.YieldStatement:
                             // Issue #798: `yield` (ADR-0040) participates in the
                             // CFG as a fall-through to the next statement; the
