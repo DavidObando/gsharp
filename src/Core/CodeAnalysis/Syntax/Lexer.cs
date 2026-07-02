@@ -929,7 +929,11 @@ public sealed class Lexer
 
     private bool ScanInterpolationHoleCore(int holeStart)
     {
-        var depth = 1; // the opening '{' of '${'
+        // Issue #1609: track open delimiters by kind instead of a single
+        // shared counter. A stray/mismatched ')' or ']' must not decrement
+        // past the hole's own '{' — that let a later legit '}' slip through
+        // unmatched and swallow the rest of the file into one token.
+        var openDelimiters = new Stack<char>();
         while (true)
         {
             var c = Current;
@@ -981,20 +985,39 @@ public sealed class Lexer
 
             if (c == '(' || c == '[' || c == '{')
             {
-                depth++;
+                openDelimiters.Push(c);
             }
-            else if (c == ')' || c == ']')
+            else if (c == ')')
             {
-                depth--;
+                if (openDelimiters.Count > 0 && openDelimiters.Peek() == '(')
+                {
+                    openDelimiters.Pop();
+                }
+
+                // else: stray/mismatched ')' — ignore, nothing open to close.
+            }
+            else if (c == ']')
+            {
+                if (openDelimiters.Count > 0 && openDelimiters.Peek() == '[')
+                {
+                    openDelimiters.Pop();
+                }
+
+                // else: stray/mismatched ']' — ignore, nothing open to close.
             }
             else if (c == '}')
             {
-                if (depth == 1)
+                if (openDelimiters.Count == 0)
                 {
-                    return true; // matching close; leave it for the caller
+                    return true; // matches the hole's own '{'; leave it for the caller
                 }
 
-                depth--;
+                if (openDelimiters.Peek() == '{')
+                {
+                    openDelimiters.Pop();
+                }
+
+                // else: stray/mismatched '}' closing a '(' or '[' — ignore.
             }
 
             position++;
