@@ -66,6 +66,16 @@ public sealed class Evaluator
     private readonly Dictionary<(Symbols.InterfaceSymbol, Symbols.FieldSymbol), object> interfaceStaticFields = [];
     private Random random;
 
+    // Issue #1656: BoundBlockStatement is immutable, so the label->index map
+    // is the same on every execution of a given block. Every function/method
+    // call, switch arm, scope/try/select body, and await-for iteration used
+    // to rebuild this dictionary from scratch, making it an O(statements)
+    // allocation on the hottest path in the interpreter. Cache it per block
+    // instance instead; ConditionalWeakTable.GetValue is thread-safe and the
+    // factory is idempotent (rebuilding the same map is harmless), and
+    // entries are reclaimed once the owning block is unreachable.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<BoundBlockStatement, Dictionary<BoundLabel, int>> LabelIndexCache = new();
+
     /// <summary>
     /// Initializes a new instance of the <see cref="Evaluator"/> class.
     /// </summary>
@@ -224,17 +234,25 @@ public sealed class Evaluator
     /// <returns>A disposable guard that pops <paramref name="frame"/> exactly once.</returns>
     private FrameScope PushFrame(Dictionary<VariableSymbol, object> frame) => new(Locals, frame);
 
+    private static Dictionary<BoundLabel, int> GetLabelToIndex(BoundBlockStatement body) =>
+        LabelIndexCache.GetValue(body, static b =>
+        {
+            var map = new Dictionary<BoundLabel, int>();
+
+            for (var i = 0; i < b.Statements.Length; i++)
+            {
+                if (b.Statements[i] is BoundLabelStatement l)
+                {
+                    map.Add(l.Label, i + 1);
+                }
+            }
+
+            return map;
+        });
+
     private object EvaluateStatement(BoundBlockStatement body)
     {
-        var labelToIndex = new Dictionary<BoundLabel, int>();
-
-        for (var i = 0; i < body.Statements.Length; i++)
-        {
-            if (body.Statements[i] is BoundLabelStatement l)
-            {
-                labelToIndex.Add(l.Label, i + 1);
-            }
-        }
+        var labelToIndex = GetLabelToIndex(body);
 
         var index = 0;
 
