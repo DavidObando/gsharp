@@ -2703,13 +2703,13 @@ internal sealed class StatementBinder
             case BoundCallExpression call:
                 return new BoundCallExpression(null, call.Function, CaptureArguments(call.Arguments, prefix), call.ReturnType);
             case BoundIndirectCallExpression call:
-                return new BoundIndirectCallExpression(null, call.Target, call.FunctionType, CaptureArguments(call.Arguments, prefix));
+                return new BoundIndirectCallExpression(null, CaptureExpression(call.Target, prefix), call.FunctionType, CaptureArguments(call.Arguments, prefix));
             case BoundUserInstanceCallExpression call:
-                return new BoundUserInstanceCallExpression(null, call.Receiver, call.Method, CaptureArguments(call.Arguments, prefix), call.Type);
+                return new BoundUserInstanceCallExpression(null, CaptureExpression(call.Receiver, prefix), call.Method, CaptureArguments(call.Arguments, prefix), call.Type);
             case BoundImportedCallExpression call:
                 return new BoundImportedCallExpression(null, call.Function, CaptureArguments(call.Arguments, prefix));
             case BoundImportedInstanceCallExpression call:
-                return new BoundImportedInstanceCallExpression(null, call.Receiver, call.Method, call.Type, CaptureArguments(call.Arguments, prefix));
+                return new BoundImportedInstanceCallExpression(null, CaptureExpression(call.Receiver, prefix), call.Method, call.Type, CaptureArguments(call.Arguments, prefix));
             default:
                 throw new InvalidOperationException($"Unexpected deferred expression: {expression.Kind}");
         }
@@ -2725,13 +2725,22 @@ internal sealed class StatementBinder
         var capturedArguments = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         foreach (var argument in arguments)
         {
-            var variable = new LocalVariableSymbol($"$defer$arg${binderCtx.DeferArgumentCounter++}", isReadOnly: true, argument.Type ?? TypeSymbol.Error);
-            scope.TryDeclareVariable(variable);
-            prefix.Add(new BoundVariableDeclaration(null, variable, argument));
-            capturedArguments.Add(new BoundVariableExpression(null, variable));
+            capturedArguments.Add(CaptureExpression(argument, prefix));
         }
 
         return capturedArguments.ToImmutable();
+    }
+
+    // ADR-0030 / issue #1635: `defer` evaluates the call target eagerly (function value,
+    // receiver, and arguments), then invokes it at scope exit. Spill the receiver/indirect
+    // target the same way arguments are spilled, so reassigning it afterwards can't change
+    // which value the deferred call runs against.
+    private BoundExpression CaptureExpression(BoundExpression expression, ImmutableArray<BoundStatement>.Builder prefix)
+    {
+        var variable = new LocalVariableSymbol($"$defer$arg${binderCtx.DeferArgumentCounter++}", isReadOnly: true, expression.Type ?? TypeSymbol.Error);
+        scope.TryDeclareVariable(variable);
+        prefix.Add(new BoundVariableDeclaration(null, variable, expression));
+        return new BoundVariableExpression(null, variable);
     }
 
     private BoundStatement BindGoStatement(GoStatementSyntax syntax)
