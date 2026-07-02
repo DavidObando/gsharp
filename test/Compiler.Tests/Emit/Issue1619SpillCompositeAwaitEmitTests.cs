@@ -17,11 +17,14 @@ namespace GSharp.Compiler.Tests.Emit;
 /// them unchanged via <c>Trivial(...)</c>. Any await nested inside one of
 /// these leaked past the spiller to the emitter, which threw a mislocated
 /// <c>GS9998</c> ICE at (1,1). The fix gives each mechanical composite kind a
-/// real spill path (mirroring <c>SpillCall</c>/<c>SpillBinary</c>) and the
-/// ternary a genuine if/else control-flow expansion so only the taken arm's
-/// await actually runs. A few genuinely conditional-control-flow kinds
-/// (switch expression, null-conditional access, conditional address-of)
-/// remain gated behind a correctly-anchored diagnostic instead of a crash.
+/// real spill path (mirroring <c>SpillCall</c>/<c>SpillBinary</c>), and the
+/// ternary, switch expression, null-conditional access, and conditional
+/// address-of a genuine if/else control-flow expansion so only the taken
+/// branch's await actually runs. The one remaining diagnostic-gated shape is
+/// an <c>await</c> inside a switch-expression <c>when</c> guard (see
+/// <c>SpillSwitch</c> in <c>SpillSequenceSpiller.cs</c> for why that specific
+/// shape cannot be mechanically spilled without duplicating the whole
+/// pattern-matching decision tree).
 ///
 /// Each test here compiles the offending shape, IL-verifies the emitted
 /// assembly, runs it, and asserts the correct result.
@@ -237,16 +240,20 @@ public class Issue1619SpillCompositeAwaitEmitTests
     }
 
     [Fact]
-    public void Await_Inside_Switch_Expression_Arm_Reports_Anchored_Diagnostic_Not_ICE()
+    public void Await_In_Switch_Expression_Arm_Runs_Only_Selected_Arm()
     {
-        // Switch expressions require conditional pattern-match control flow
-        // that this pass genuinely does not spill (documented deferred work);
-        // it must surface a proper, correctly-anchored diagnostic rather than
-        // leak the await to the emitter as a mislocated GS9998 ICE at (1,1).
         var source = """
             package P1619G
 
             import System.Threading.Tasks
+
+            public var oneRuns = 0
+            public var defaultRuns = 0
+
+            func oneTask() Task[int32] {
+                oneRuns = oneRuns + 1
+                return Task.FromResult(111)
+            }
 
             class C {
                 init() {}
@@ -254,6 +261,122 @@ public class Issue1619SpillCompositeAwaitEmitTests
                 async func Pick(n int32, t Task[int32]) int32 {
                     let x = switch n {
                         case 1: await t
+                        default: 999 + defaultRuns
+                    }
+                    return x
+                }
+            }
+
+            public var whenOne = -1
+            public var whenDefault = -1
+            let c = C()
+            whenOne = c.Pick(1, oneTask()).Result
+            defaultRuns = defaultRuns + 1
+            whenDefault = c.Pick(2, Task.FromResult(0)).Result
+            """;
+
+        var assembly = CompileAndInvokeEntry(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+
+        Assert.Equal(111, ReadInt(program, "whenOne"));
+        Assert.Equal(1000, ReadInt(program, "whenDefault"));
+        Assert.Equal(1, ReadInt(program, "oneRuns"));
+    }
+
+    [Fact]
+    public void Await_In_Switch_Expression_Governing_Expression_Selects_Correct_Arm()
+    {
+        var source = """
+            package P1619H
+
+            import System.Threading.Tasks
+
+            class C {
+                init() {}
+
+                async func Pick(nTask Task[int32]) int32 {
+                    let x = switch await nTask {
+                        case 1: 100
+                        case 2: 200
+                        default: -1
+                    }
+                    return x
+                }
+            }
+
+            public var result1 = -1
+            public var result2 = -1
+            let c = C()
+            result1 = c.Pick(Task.FromResult(1)).Result
+            result2 = c.Pick(Task.FromResult(2)).Result
+            """;
+
+        var assembly = CompileAndInvokeEntry(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+
+        Assert.Equal(100, ReadInt(program, "result1"));
+        Assert.Equal(200, ReadInt(program, "result2"));
+    }
+
+    [Fact]
+    public void Await_In_Switch_Expression_Arm_Survives_Real_Suspension()
+    {
+        // Task.Yield() forces an actual suspend/resume through
+        // AwaitUnsafeOnCompleted (not the Task.FromResult fast path), so this
+        // also exercises the arm-index/result spill temps across a genuine
+        // state-machine re-entry.
+        var source = """
+            package P1619I
+
+            import System.Threading.Tasks
+
+            async func yieldThenGet() int32 {
+                await Task.Yield()
+                return 42
+            }
+
+            class C {
+                init() {}
+
+                async func Pick(n int32) int32 {
+                    let x = switch n {
+                        case 1: await yieldThenGet()
+                        default: -1
+                    }
+                    return x
+                }
+            }
+
+            public var result = -1
+            let c = C()
+            result = c.Pick(1).Result
+            """;
+
+        var assembly = CompileAndInvokeEntry(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+
+        Assert.Equal(42, ReadInt(program, "result"));
+    }
+
+    [Fact]
+    public void Await_Inside_Switch_Expression_Guard_Reports_Anchored_Diagnostic_Not_ICE()
+    {
+        // A `when`-guard containing await is the one shape this pass still
+        // cannot mechanically spill: a false guard must fall through to the
+        // next arm's pattern test, which would require re-implementing the
+        // whole pattern-match decision tree as bound-tree control flow rather
+        // than reusing the existing emitter's pattern dispatch.
+        var source = """
+            package P1619J
+
+            import System.Threading.Tasks
+
+            class C {
+                init() {}
+
+                async func Pick(n int32, t Task[bool]) int32 {
+                    let x = switch n {
+                        case 1 when await t: 10
                         default: 0
                     }
                     return x
@@ -266,16 +389,123 @@ public class Issue1619SpillCompositeAwaitEmitTests
         Assert.NotEqual(0, compileExit);
         var combined = stdout + stderr;
         Assert.Contains("GS9998", combined);
+        Assert.Contains("'await' inside a switch-expression 'when' guard is not yet supported", combined);
+    }
 
-        // The old symptom was a generic, uninformative ICE message
-        // ("'AwaitExpression' is not yet supported by the emitter"). The gate
-        // must instead surface a specific, actionable message naming the
-        // unsupported composite kind. (Note: BoundSwitchExpression nodes
-        // carry a null Syntax from the binder itself — a pre-existing,
-        // unrelated limitation — so the diagnostic still falls back to
-        // (1,1); only the message quality is asserted here.)
-        Assert.DoesNotContain("'AwaitExpression' is not yet supported by the emitter", combined);
-        Assert.Contains("'await' inside a 'SwitchExpression' is not yet supported", combined);
+    [Fact]
+    public void Await_In_NullConditional_Access_Argument_Nil_And_NonNil()
+    {
+        var source = """
+            package P1619K
+
+            import System.Threading.Tasks
+
+            class Box {
+                init(v int32) { this.v = v }
+                var v int32
+                func Add(n int32) int32 { return this.v + n }
+            }
+
+            class C {
+                init() {}
+
+                async func AddToBox(b Box?, t Task[int32]) int32? {
+                    return b?.Add(await t)
+                }
+            }
+
+            public var nonNilResult = -1
+            public var nilIsNil = 0
+            let c = C()
+            let box = Box(10)
+            let r1 = c.AddToBox(box, Task.FromResult(5)).Result
+            nonNilResult = r1 ?? -100
+            let r2 = c.AddToBox(nil, Task.FromResult(999)).Result
+            nilIsNil = (r2 == nil) ? 1 : 0
+            """;
+
+        var assembly = CompileAndInvokeEntry(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+
+        Assert.Equal(15, ReadInt(program, "nonNilResult"));
+        Assert.Equal(1, ReadInt(program, "nilIsNil"));
+    }
+
+    [Fact]
+    public void Await_In_NullConditional_Receiver_Evaluates_Chain()
+    {
+        var source = """
+            package P1619L
+
+            import System.Threading.Tasks
+
+            class C {
+                init() {}
+
+                async func GetLength(t Task[string?]) int32? {
+                    return (await t)?.Length
+                }
+            }
+
+            public var nonNilLen = -1
+            public var nilIsNil = 0
+            let c = C()
+            let r1 = c.GetLength(Task.FromResult[string?]("hello")).Result
+            nonNilLen = r1 ?? -100
+            let r2 = c.GetLength(Task.FromResult[string?](nil)).Result
+            nilIsNil = (r2 == nil) ? 1 : 0
+            """;
+
+        var assembly = CompileAndInvokeEntry(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+
+        Assert.Equal(5, ReadInt(program, "nonNilLen"));
+        Assert.Equal(1, ReadInt(program, "nilIsNil"));
+    }
+
+    [Fact]
+    public void Await_In_Conditional_Address_Condition_Selects_Correct_RefBranch()
+    {
+        var source = """
+            package P1619M
+
+            import System.Threading.Tasks
+
+            func bump(ref counter int32) {
+                counter = counter + 1
+            }
+
+            class C {
+                init() {}
+
+                async func BumpPicked(useA Task[bool], a int32, b int32) (int32, int32) {
+                    var aa = a
+                    var bb = b
+                    bump(ref (await useA) ? aa : bb)
+                    return (aa, bb)
+                }
+            }
+
+            public var aWhenTrue = -1
+            public var bWhenTrue = -1
+            public var aWhenFalse = -1
+            public var bWhenFalse = -1
+            let c = C()
+            let r1 = c.BumpPicked(Task.FromResult(true), 10, 20).Result
+            aWhenTrue = r1.Item1
+            bWhenTrue = r1.Item2
+            let r2 = c.BumpPicked(Task.FromResult(false), 10, 20).Result
+            aWhenFalse = r2.Item1
+            bWhenFalse = r2.Item2
+            """;
+
+        var assembly = CompileAndInvokeEntry(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+
+        Assert.Equal(11, ReadInt(program, "aWhenTrue"));
+        Assert.Equal(20, ReadInt(program, "bWhenTrue"));
+        Assert.Equal(10, ReadInt(program, "aWhenFalse"));
+        Assert.Equal(21, ReadInt(program, "bWhenFalse"));
     }
 
     private static int ReadInt(Type program, string fieldName)
