@@ -4292,6 +4292,27 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #1602: GS0417 — the source nests expressions, types, statements,
+    /// patterns, or string-interpolation holes more deeply than the compiler's
+    /// recursion limit. The recursive-descent parser (and the lexer's
+    /// interpolation-hole scanner) enforce a hard depth limit so that
+    /// pathological input — e.g. thousands of unbalanced <c>a[a[a[…</c> or
+    /// <c>((((…</c> — produces a clean diagnostic instead of an uncatchable
+    /// <see cref="System.StackOverflowException"/> that kills the process.
+    /// Mirrors Roslyn's CS8078 ("an expression is too long or complex to
+    /// compile").
+    /// </summary>
+    /// <param name="location">The source location where the nesting limit was exceeded.</param>
+    public void ReportNestingTooDeep(TextLocation location)
+    {
+        Report(
+            location,
+            "GS0417",
+            "The code is nested too deeply for the compiler to parse; simplify or flatten the nesting (issue #1602).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Issue #987: GS0386 — an attempt to construct (instantiate) an abstract
     /// class. A class is abstract when it declares (or inherits without
     /// overriding) an abstract method — a no-body <c>open func F() R;</c>. Like
