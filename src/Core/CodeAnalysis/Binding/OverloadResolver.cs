@@ -2204,6 +2204,13 @@ internal sealed class OverloadResolver
             }
             else
             {
+                // Issue #1629: the pre-bind below is a throwaway probe used only
+                // to infer type arguments — the same argument syntax is bound
+                // again for real once the type arguments are known (loop after
+                // this generic block). Roll back any diagnostics it produced so
+                // they are reported exactly once, by the real bind.
+                var inferenceDiagMark = Diagnostics.Count;
+
                 // Pre-bind arguments and infer type arguments from them.
                 // Issue #343: when an argument is named, locate its parameter
                 // by name (so type inference still works with named args) and
@@ -2290,6 +2297,10 @@ internal sealed class OverloadResolver
                         }
                     }
                 }
+
+                // Issue #1629: discard the pre-bind's speculative diagnostics —
+                // the arguments are bound again for real below.
+                Diagnostics.TruncateTo(inferenceDiagMark);
 
                 foreach (var tp in tps)
                 {
@@ -3120,6 +3131,13 @@ internal sealed class OverloadResolver
             // (first) explicit constructor's parameter list. The open-definition
             // constructor parameter types reference the class type parameters,
             // so binding each argument and unifying drives inference.
+            //
+            // Issue #1629: this is a throwaway probe — BindExplicitConstructorCallExpression
+            // re-binds the same argument syntax for real once the closed type is
+            // known. Roll back any diagnostics the probe produced so they are
+            // reported exactly once, by the real bind.
+            var inferenceDiagMark = Diagnostics.Count;
+
             var ctorOverloads = classType.EffectiveExplicitConstructors;
             var ctorParams = ctorOverloads.IsDefaultOrEmpty
                 ? ImmutableArray<ParameterSymbol>.Empty
@@ -3131,6 +3149,8 @@ internal sealed class OverloadResolver
                 var preBound = bindExpression(argSyntax);
                 inferTypeArguments(ctorParams[i].Type, preBound.Type, substitution);
             }
+
+            Diagnostics.TruncateTo(inferenceDiagMark);
 
             foreach (var tp in tps)
             {
