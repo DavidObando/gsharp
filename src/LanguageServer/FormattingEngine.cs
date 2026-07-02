@@ -14,15 +14,28 @@ namespace GSharp.LanguageServer;
 /// </summary>
 public static class FormattingEngine
 {
-    private const string Indent = "  ";
+    private const string DefaultIndent = "  ";
+
+    /// <summary>
+    /// Format the entire source text using the default two-space indent.
+    /// </summary>
+    /// <param name="source">Source code to format.</param>
+    /// <returns>Formatted source code.</returns>
+    public static string Format(string source) => Format(source, DefaultIndent);
 
     /// <summary>
     /// Format the entire source text.
     /// </summary>
     /// <param name="source">Source code to format.</param>
+    /// <param name="indent">The unit of indentation to apply per nesting depth (for example two spaces, four spaces, or a tab).</param>
     /// <returns>Formatted source code.</returns>
-    public static string Format(string source)
+    public static string Format(string source, string indent)
     {
+        if (string.IsNullOrEmpty(indent))
+        {
+            indent = DefaultIndent;
+        }
+
         var tokens = SyntaxTree.ParseTokens(source);
         var sb = new StringBuilder();
         var depth = 0;
@@ -30,12 +43,21 @@ public static class FormattingEngine
         SyntaxKind prevKind = SyntaxKind.BadToken;
         var prevWasNewline = true;
 
+        // The lexer folds source line breaks into the text of WhitespaceToken, so the only way
+        // to know the user had a line break between two tokens is to inspect that text.
+        var hadUserNewline = false;
+
         for (var i = 0; i < tokens.Length; i++)
         {
             var token = tokens[i];
 
             if (token.Kind == SyntaxKind.WhitespaceToken)
             {
+                if (token.Text.Contains('\n'))
+                {
+                    hadUserNewline = true;
+                }
+
                 continue;
             }
 
@@ -64,7 +86,8 @@ public static class FormattingEngine
             }
 
             // Determine if we need a newline before this token
-            var needsNewlineBefore = ShouldNewlineBefore(token.Kind, prevKind, prevWasNewline);
+            var needsNewlineBefore = ShouldNewlineBefore(token.Kind, prevKind, prevWasNewline, hadUserNewline);
+            hadUserNewline = false;
 
             if (needsNewlineBefore && !prevWasNewline)
             {
@@ -76,12 +99,12 @@ public static class FormattingEngine
             // Write indentation if at start of line
             if (lineStart && !prevWasNewline)
             {
-                WriteIndent(sb, depth);
+                WriteIndent(sb, depth, indent);
                 lineStart = false;
             }
             else if (prevWasNewline)
             {
-                WriteIndent(sb, depth);
+                WriteIndent(sb, depth, indent);
                 lineStart = false;
                 prevWasNewline = false;
             }
@@ -130,11 +153,19 @@ public static class FormattingEngine
         return result;
     }
 
-    private static bool ShouldNewlineBefore(SyntaxKind current, SyntaxKind previous, bool alreadyNewline)
+    private static bool ShouldNewlineBefore(SyntaxKind current, SyntaxKind previous, bool alreadyNewline, bool hadUserNewline)
     {
         if (alreadyNewline)
         {
             return false;
+        }
+
+        // A closing brace always starts its own line, regardless of how the user wrote it,
+        // so nested blocks (scope/if/try/select/struct/etc.) never glue their last statement
+        // to the brace that closes them.
+        if (current == SyntaxKind.CloseBraceToken)
+        {
+            return true;
         }
 
         // Top-level declarations on new lines
@@ -148,7 +179,26 @@ public static class FormattingEngine
             }
         }
 
+        // Preserve line breaks the user had, so multi-statement bodies keep one statement per
+        // line instead of collapsing (issue #1660). Tokens that continue the previous expression
+        // (closing brackets, punctuation) never start a new line even if the source had a break
+        // right before them.
+        if (hadUserNewline && !IsContinuationToken(current))
+        {
+            return true;
+        }
+
         return false;
+    }
+
+    private static bool IsContinuationToken(SyntaxKind kind)
+    {
+        return kind == SyntaxKind.CloseParenthesisToken ||
+               kind == SyntaxKind.CloseSquareBracketToken ||
+               kind == SyntaxKind.CommaToken ||
+               kind == SyntaxKind.DotToken ||
+               kind == SyntaxKind.ColonToken ||
+               kind == SyntaxKind.SemicolonToken;
     }
 
     private static bool NeedsSpaceBefore(SyntaxKind current, SyntaxKind previous)
@@ -205,11 +255,11 @@ public static class FormattingEngine
         return true;
     }
 
-    private static void WriteIndent(StringBuilder sb, int depth)
+    private static void WriteIndent(StringBuilder sb, int depth, string indent)
     {
         for (var i = 0; i < depth; i++)
         {
-            sb.Append(Indent);
+            sb.Append(indent);
         }
     }
 }
