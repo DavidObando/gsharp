@@ -25,6 +25,18 @@ public sealed class BoundScope
     private ImmutableArray<string>.Builder typeAliasKeys;
     private ImmutableArray<FunctionSymbol>.Builder extensionFunctions;
 
+    // Issue #1680: name-keyed index over extensionFunctions. Extension lookup is a
+    // per-call-site hot path run for every member call that doesn't resolve as an
+    // instance member, so a flat per-scope list forced an O(callsites x extensions)
+    // scan (plus an O(E^2) inner pass in ReceiverConvertibilitySpecificity). Every
+    // extension is bucketed by name here as it's declared; lookups probe the bucket
+    // for the call-site name instead of the full list, then run the exact same
+    // receiver-matching (identity/CLR, generic-unification, subtype-convertibility)
+    // logic as before over the narrowed candidate set. This changes only how
+    // candidates are FOUND, never which one wins: same receiver-matching rules, same
+    // scope/shadowing order, so resolution and diagnostics are unchanged.
+    private ImmutableDictionary<string, ImmutableArray<FunctionSymbol>.Builder>.Builder extensionFunctionsByName;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundScope"/> class.
     /// </summary>
@@ -261,17 +273,27 @@ public sealed class BoundScope
     public bool TryDeclareExtensionFunction(FunctionSymbol function)
     {
         extensionFunctions ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
+        extensionFunctionsByName ??= ImmutableDictionary.CreateBuilder<string, ImmutableArray<FunctionSymbol>.Builder>();
 
-        foreach (var existing in extensionFunctions)
+        if (extensionFunctionsByName.TryGetValue(function.Name, out var bucket))
         {
-            if (FunctionSignaturesEqual(existing, function)
-                && ExtensionTypeParameterConstraintsEqual(existing, function))
+            foreach (var existing in bucket)
             {
-                return false;
+                if (FunctionSignaturesEqual(existing, function)
+                    && ExtensionTypeParameterConstraintsEqual(existing, function))
+                {
+                    return false;
+                }
             }
+        }
+        else
+        {
+            bucket = ImmutableArray.CreateBuilder<FunctionSymbol>();
+            extensionFunctionsByName.Add(function.Name, bucket);
         }
 
         extensionFunctions.Add(function);
+        bucket.Add(function);
         return true;
     }
 
@@ -310,11 +332,16 @@ public sealed class BoundScope
     public bool TryLookupExtensionFunction(TypeSymbol receiverType, string name, out FunctionSymbol function)
     {
         function = null;
-        if (extensionFunctions != null)
+
+        // Issue #1680: probe the name-keyed bucket instead of scanning every
+        // extension declared in this scope. A scope with no extensions named
+        // `name` is skipped in O(1) instead of an O(extensions) miss.
+        if (extensionFunctionsByName != null
+            && extensionFunctionsByName.TryGetValue(name, out var bucket))
         {
-            foreach (var ext in extensionFunctions)
+            foreach (var ext in bucket)
             {
-                if (ext.Name == name && ReceiverMatches(ext.ExtensionReceiverType, receiverType))
+                if (ReceiverMatches(ext.ExtensionReceiverType, receiverType))
                 {
                     function = ext;
                     return true;
@@ -342,13 +369,8 @@ public sealed class BoundScope
             // call-binding path if applicable).
             FunctionSymbol candidate = null;
             int candidateSpecificity = -1;
-            foreach (var ext in extensionFunctions)
+            foreach (var ext in bucket)
             {
-                if (ext.Name != name)
-                {
-                    continue;
-                }
-
                 if (ext.TypeParameters.IsDefaultOrEmpty)
                 {
                     continue;
@@ -392,13 +414,8 @@ public sealed class BoundScope
             // declaration order.
             FunctionSymbol subtypeCandidate = null;
             var subtypeSpecificity = -1;
-            foreach (var ext in extensionFunctions)
+            foreach (var ext in bucket)
             {
-                if (ext.Name != name)
-                {
-                    continue;
-                }
-
                 if (!ext.TypeParameters.IsDefaultOrEmpty
                     && ext.ExtensionReceiverType != null
                     && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
@@ -412,7 +429,7 @@ public sealed class BoundScope
                     continue;
                 }
 
-                var specificity = ReceiverConvertibilitySpecificity(extensionFunctions, ext.ExtensionReceiverType, name);
+                var specificity = ReceiverConvertibilitySpecificity(bucket, ext.ExtensionReceiverType);
                 if (subtypeCandidate == null || specificity > subtypeSpecificity)
                 {
                     subtypeCandidate = ext;
@@ -454,18 +471,17 @@ public sealed class BoundScope
         ImmutableArray<FunctionSymbol>.Builder builder = null;
         for (var s = this; s != null; s = s.Parent)
         {
-            if (s.extensionFunctions == null)
+            // Issue #1680: probe the name-keyed bucket instead of scanning every
+            // extension declared in this scope; scopes with no extension named
+            // `name` are skipped in O(1).
+            if (s.extensionFunctionsByName == null
+                || !s.extensionFunctionsByName.TryGetValue(name, out var bucket))
             {
                 continue;
             }
 
-            foreach (var ext in s.extensionFunctions)
+            foreach (var ext in bucket)
             {
-                if (ext.Name != name)
-                {
-                    continue;
-                }
-
                 var matches = ReceiverMatches(ext.ExtensionReceiverType, receiverType);
                 if (!matches
                     && !ext.TypeParameters.IsDefaultOrEmpty
@@ -1221,14 +1237,12 @@ public sealed class BoundScope
     /// singular deterministic lookup path (e.g. <c>string</c> beats
     /// <c>object</c> for a <c>string</c> receiver).
     /// </summary>
-    /// <param name="extensionFunctions">The same-scope extension candidates to rank against.</param>
+    /// <param name="extensionFunctions">The same-scope, same-name extension candidates to rank against.</param>
     /// <param name="declaredReceiverType">The candidate's declared receiver type.</param>
-    /// <param name="name">The extension method name being resolved.</param>
     /// <returns>The specificity score (higher is more specific).</returns>
     private static int ReceiverConvertibilitySpecificity(
         ImmutableArray<FunctionSymbol>.Builder extensionFunctions,
-        TypeSymbol declaredReceiverType,
-        string name)
+        TypeSymbol declaredReceiverType)
     {
         if (extensionFunctions == null || declaredReceiverType == null)
         {
@@ -1238,7 +1252,7 @@ public sealed class BoundScope
         var score = 0;
         foreach (var ext in extensionFunctions)
         {
-            if (ext.Name != name || ext.ExtensionReceiverType == null)
+            if (ext.ExtensionReceiverType == null)
             {
                 continue;
             }
