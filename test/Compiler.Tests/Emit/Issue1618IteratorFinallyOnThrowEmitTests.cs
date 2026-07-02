@@ -129,6 +129,130 @@ public class Issue1618IteratorFinallyOnThrowEmitTests
         Assert.Equal("1\nFINALLY RAN\n", output);
     }
 
+    [Fact]
+    public void Iterator_NestedTryFinally_ThrowInInnerAfterYield_RunsInnerThenOuterFinally()
+    {
+        // Nested try/finally inside an iterator: inner try yields then
+        // throws. Both finallies must run, innermost first, before the
+        // exception reaches the consumer's catch. Exercises the planner's
+        // transitive suspend-state accumulation across nested protected
+        // regions and inner-entry-inside-outer-region routing.
+        const string source = """
+            package i1618nested
+            import System
+            import System.Collections.Generic
+
+            func gen() IEnumerable[int32] {
+                try {
+                    try {
+                        yield 1
+                        Int32.Parse("boom")
+                    } finally {
+                        Console.WriteLine("inner")
+                    }
+                } finally {
+                    Console.WriteLine("outer")
+                }
+            }
+
+            func Main() int32 {
+                try {
+                    for v in gen() {
+                        Console.WriteLine(v)
+                    }
+                } catch (e Exception) {
+                    Console.WriteLine("caught")
+                }
+                Console.WriteLine("done")
+                return 0
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("1\ninner\nouter\ncaught\ndone\n", output);
+    }
+
+    [Fact]
+    public void Iterator_TryThrowsBeforeAnyYield_RunsFinally_ThenPropagates()
+    {
+        // The try body throws before ever reaching a yield (state machine
+        // still at its initial dispatch point). A different yield elsewhere
+        // in the method makes this an iterator. Finally must still run.
+        const string source = """
+            package i1618prethrow
+            import System
+            import System.Collections.Generic
+
+            func gen() IEnumerable[int32] {
+                try {
+                    Int32.Parse("boom")
+                    yield 1
+                } finally {
+                    Console.WriteLine("FINALLY RAN")
+                }
+                yield 2
+            }
+
+            func Main() int32 {
+                try {
+                    for v in gen() {
+                        Console.WriteLine(v)
+                    }
+                } catch (e Exception) {
+                    Console.WriteLine("caught")
+                }
+                Console.WriteLine("done")
+                return 0
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("FINALLY RAN\ncaught\ndone\n", output);
+    }
+
+    [Fact]
+    public void Iterator_MultipleSequentialTryFinally_BothRun_ThrowInSecondCaught()
+    {
+        // Two independent (non-nested) try/finally regions in sequence
+        // within the same iterator. First completes normally; second
+        // yields then throws. Both finallies must run, in source order,
+        // and the throw in the second must be caught after "b" prints.
+        const string source = """
+            package i1618sequential
+            import System
+            import System.Collections.Generic
+
+            func gen() IEnumerable[int32] {
+                try {
+                    yield 1
+                } finally {
+                    Console.WriteLine("a")
+                }
+                try {
+                    yield 2
+                    Int32.Parse("boom")
+                } finally {
+                    Console.WriteLine("b")
+                }
+            }
+
+            func Main() int32 {
+                try {
+                    for v in gen() {
+                        Console.WriteLine(v)
+                    }
+                } catch (e Exception) {
+                    Console.WriteLine("caught")
+                }
+                Console.WriteLine("done")
+                return 0
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("1\na\n2\nb\ncaught\ndone\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_1618_exe_").FullName;
