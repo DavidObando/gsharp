@@ -4203,6 +4203,15 @@ internal sealed class DeclarationBinder
     /// capture, catch/for-loop variable, ...) shadows the instance member of
     /// the same name and must not be flagged. <paramref name="shadowedNames"/>
     /// carries the names bound by enclosing scopes down into this call.
+    /// Note: unlike C#, G#'s <c>is</c> operator (<see cref="IsExpressionSyntax"/>)
+    /// is a plain type test with no capture — <c>expr is T name</c> does not
+    /// exist. The only pattern captures reachable here come from
+    /// <c>switch</c>/<c>match</c> arm patterns (<see cref="TypePatternSyntax"/>,
+    /// <see cref="SlicePatternSyntax"/>), which the generic child walk already
+    /// scopes correctly: a capture is added to the shadow set only while
+    /// iterating the owning <see cref="SwitchCaseSyntax"/>/
+    /// <see cref="SwitchExpressionArmSyntax"/>'s own children (guard + body),
+    /// never leaking to sibling arms or the enclosing scope.
     /// </summary>
     private static bool TryFindInstanceMemberReference(
         SyntaxNode node,
@@ -4225,6 +4234,11 @@ internal sealed class DeclarationBinder
                 break;
 
             // Lambda / function-literal parameters shadow only within the body.
+            // Param default-value expressions (ADR-0063) and type clauses are
+            // intentionally not scanned: defaults are restricted by the binder
+            // to compile-time constants (numeric/bool/char/string/enum/nil),
+            // which can never resolve to an instance member, and type clauses
+            // carry no expressions either.
             case LambdaExpressionSyntax lambda:
                 return TryFindInstanceMemberReference(
                     lambda.Body, forbiddenNames, WithShadowed(shadowedNames, lambda.Parameters.Select(p => p.Identifier.Text)), out offendingName, out offendingLocation);
