@@ -216,6 +216,24 @@ public sealed class ImportedClassSymbol : Symbol
                 continue;
             }
 
+            // Issue #1599: a pre-declared `out r` (or `ref`) whose pointee is a
+            // same-compilation user value type (a user enum or non-class struct)
+            // has no reference-context CLR type, so its by-ref erasure cannot
+            // match a value-type-constrained generic by-ref parameter such as the
+            // `out TEnum` of `Enum.TryParse[Color](string, out r)` (the parameter
+            // is closed over an `object`/placeholder erasure). Feed the same
+            // "matches any by-ref parameter" sentinel used for inline `out var`
+            // so the value-type-constrained generic overload stays applicable;
+            // the recovered explicit type-argument symbols drive the constraint
+            // check and emit. Without this the call collapses to GS0159.
+            if (arguments[i] is BoundAddressOfExpression { Operand.Type: var byRefPointee }
+                && byRefPointee is EnumSymbol or StructSymbol { IsClass: false }
+                && byRefPointee.ClrType == null)
+            {
+                argTypes[i] = OverloadResolution.InlineOutVarArgumentType;
+                continue;
+            }
+
             // Issue #530: use effective CLR type so nullable value types
             // (e.g. int32?) are matched as Nullable<T> in overload resolution.
             // Issue #533: allow null (nil literal) through; overload resolution

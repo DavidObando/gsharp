@@ -778,6 +778,51 @@ internal static class OverloadResolution
     }
 
     /// <summary>
+    /// Issue #1599: determines whether the parameter at <paramref name="parameterIndex"/>
+    /// of a closed generic method's open definition is typed by exactly one of the
+    /// method's own type parameters — including through a by-ref (<c>out</c>/<c>ref</c>)
+    /// wrapper, e.g. the <c>out TEnum</c> parameter of
+    /// <c>bool TryParse&lt;TEnum&gt;(string, out TEnum)</c>. When it does, the caller can
+    /// recover the real parameter (pointee) type from the explicit type-argument symbol
+    /// at the reported position, which is necessary when the method was closed over a
+    /// value-type placeholder (or an <see cref="object"/> erasure) because the type
+    /// argument is a same-compilation user value type with no reference-context CLR type.
+    /// This is the parameter analogue of
+    /// <see cref="TryGetGenericMethodParameterReturnPosition(MethodInfo, out int)"/> and
+    /// is what lets an inline <c>out var</c> declaration recover the correct pointee type
+    /// instead of leaking the placeholder.
+    /// </summary>
+    /// <param name="closed">The closed generic method.</param>
+    /// <param name="parameterIndex">The zero-based parameter position to inspect.</param>
+    /// <param name="position">The method type-parameter position of the parameter, when matched.</param>
+    /// <returns><see langword="true"/> when the parameter (pointee) is a bare method type parameter.</returns>
+    public static bool TryGetGenericMethodParameterPosition(MethodInfo closed, int parameterIndex, out int position)
+    {
+        position = -1;
+        if (closed == null || !closed.IsGenericMethod || parameterIndex < 0)
+        {
+            return false;
+        }
+
+        var open = closed.IsGenericMethodDefinition ? closed : closed.GetGenericMethodDefinition();
+        var parameters = open.GetParameters();
+        if (parameterIndex >= parameters.Length)
+        {
+            return false;
+        }
+
+        var paramType = parameters[parameterIndex].ParameterType;
+        var pointee = paramType != null && paramType.IsByRef ? paramType.GetElementType() : paramType;
+        if (pointee != null && pointee.IsGenericParameter && pointee.DeclaringMethod != null)
+        {
+            position = pointee.GenericParameterPosition;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Compares two candidate conversion targets for the same source type per
     /// C# §7.5.3.4 "Better conversion target". Returns a negative value when
     /// <paramref name="t1"/> is the better target, a positive value when
