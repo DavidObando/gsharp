@@ -71,7 +71,10 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: nuget-packages
-          path: out/bin/Release/nupkgs/*.nupkg
+          # Include .snupkg symbol packages alongside .nupkg so they survive
+          # to the publish job (dotnet nuget push / gh release upload need
+          # them co-located in ./nupkgs to pick them up).
+          path: out/bin/Release/nupkgs/*
 
   e2e:
     runs-on: ubuntu-latest
@@ -225,7 +228,7 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes --title "$GITHUB_REF_NAME"
-          gh release upload "$GITHUB_REF_NAME" ./nupkgs/*.nupkg ./vsix/*.vsix --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$GITHUB_REF_NAME" ./nupkgs/*.nupkg ./nupkgs/*.snupkg ./vsix/*.vsix --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5

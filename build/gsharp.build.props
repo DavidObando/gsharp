@@ -86,7 +86,9 @@
     <ContinuousIntegrationBuild Condition="'$(TF_BUILD)' == 'true' or '$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
   <ItemGroup Condition="'$(IsTestProject)' != 'true'">
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+    <!-- Skip for content-only packages (e.g. Gsharp.Templates, IncludeBuildOutput=false):
+         SourceLink embeds build/debug info that such packages never produce. -->
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" Condition="'$(IncludeBuildOutput)' != 'false'" />
   </ItemGroup>
 
   <!-- Versioning Support -->
