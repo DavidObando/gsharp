@@ -398,7 +398,7 @@ public sealed class LspServer
     public Task<CodeLens[]> CodeLensAsync(CodeLensParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => CodeLensComputer.ComputeLenses(content, request.TextDocument.Uri?.ToString()).ToArray(),
+            (content, ct) => CodeLensComputer.ComputeLenses(content, request.TextDocument.Uri?.ToString(), ct).ToArray(),
             Array.Empty<CodeLens>(),
             cancellationToken);
 
@@ -491,7 +491,7 @@ public sealed class LspServer
     public Task<SemanticTokens> SemanticTokensFullAsync(SemanticTokensParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => this.ComputeSemanticTokens(content),
+            (content, ct) => this.ComputeSemanticTokens(content, ct),
             EmptySemanticTokens(),
             cancellationToken);
 
@@ -499,7 +499,7 @@ public sealed class LspServer
     public Task<SemanticTokens> SemanticTokensRangeAsync(SemanticTokensRangeParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => this.ComputeSemanticTokens(content),
+            (content, ct) => this.ComputeSemanticTokens(content, ct),
             EmptySemanticTokens(),
             cancellationToken);
 
@@ -598,8 +598,11 @@ public sealed class LspServer
     //     workspace) never blocks unrelated reads or, crucially, a didChange while typing.
     // Roslyn likewise dispatches non-mutating work via Task.Run "to enforce parallelizability".
     // CancellationToken is honored end-to-end: StreamJsonRpc maps the LSP $/cancelRequest
-    // notification onto this token, so superseded hovers/highlights abort instead of
-    // consuming a thread-pool thread to completion.
+    // notification onto this token, it is checked immediately before compute() runs below,
+    // and it is threaded into per-document computers with expensive per-item loops
+    // (CodeLensComputer, SemanticTokensComputer) so a superseded hover/codeLens/semanticTokens
+    // request aborts mid-loop instead of running the whole (potentially per-member
+    // FindReferences or per-token) walk to completion (issue #1662).
     private async Task<T> ReadDocumentAsync<T>(
         TextDocumentIdentifier identifier,
         Func<DocumentContent, CancellationToken, T> compute,
@@ -1061,11 +1064,11 @@ public sealed class LspServer
         return Convert.ToHexString(bytes);
     }
 
-    private SemanticTokens ComputeSemanticTokens(DocumentContent content)
+    private SemanticTokens ComputeSemanticTokens(DocumentContent content, CancellationToken ct = default)
     {
         var document = new SemanticTokensDocument(SemanticTokensHandler.Legend);
         var builder = document.Create();
-        SemanticTokensComputer.Tokenize(builder, content);
+        SemanticTokensComputer.Tokenize(builder, content, ct);
         builder.Commit();
         return document.GetSemanticTokens();
     }

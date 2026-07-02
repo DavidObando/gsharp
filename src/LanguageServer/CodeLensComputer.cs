@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.LanguageServer.Protocol;
 using Range = GSharp.LanguageServer.Protocol.Range;
@@ -15,7 +16,7 @@ namespace GSharp.LanguageServer;
 /// </summary>
 public static class CodeLensComputer
 {
-    public static IReadOnlyList<CodeLens> ComputeLenses(DocumentContent content, string uri = null)
+    public static IReadOnlyList<CodeLens> ComputeLenses(DocumentContent content, string uri = null, CancellationToken ct = default)
     {
         var lenses = new List<CodeLens>();
 
@@ -41,6 +42,9 @@ public static class CodeLensComputer
 
         foreach (var member in tree.Root.Members)
         {
+            // Each iteration can trigger a FindReferences walk; check between members so a
+            // superseded request (fast typing) aborts instead of running to completion.
+            ct.ThrowIfCancellationRequested();
             switch (member)
             {
                 case FunctionDeclarationSyntax func:
@@ -62,17 +66,17 @@ public static class CodeLensComputer
                         lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
 
-                    AddMemberLenses(compilation, lenses, structDecl.Fields.Select(f => f.Identifier), uri);
-                    AddMemberLenses(compilation, lenses, structDecl.Properties.Select(p => p.Identifier), uri);
-                    AddMemberLenses(compilation, lenses, structDecl.Events.Select(e => e.Identifier), uri);
-                    AddMemberLenses(compilation, lenses, structDecl.Methods.Select(m => m.Identifier), uri);
+                    AddMemberLenses(compilation, lenses, structDecl.Fields.Select(f => f.Identifier), uri, ct);
+                    AddMemberLenses(compilation, lenses, structDecl.Properties.Select(p => p.Identifier), uri, ct);
+                    AddMemberLenses(compilation, lenses, structDecl.Events.Select(e => e.Identifier), uri, ct);
+                    AddMemberLenses(compilation, lenses, structDecl.Methods.Select(m => m.Identifier), uri, ct);
 
                     if (structDecl.SharedBlock != null)
                     {
-                        AddMemberLenses(compilation, lenses, structDecl.SharedBlock.Fields.Select(f => f.Identifier), uri);
-                        AddMemberLenses(compilation, lenses, structDecl.SharedBlock.Properties.Select(p => p.Identifier), uri);
-                        AddMemberLenses(compilation, lenses, structDecl.SharedBlock.Events.Select(e => e.Identifier), uri);
-                        AddMemberLenses(compilation, lenses, structDecl.SharedBlock.Methods.Select(m => m.Identifier), uri);
+                        AddMemberLenses(compilation, lenses, structDecl.SharedBlock.Fields.Select(f => f.Identifier), uri, ct);
+                        AddMemberLenses(compilation, lenses, structDecl.SharedBlock.Properties.Select(p => p.Identifier), uri, ct);
+                        AddMemberLenses(compilation, lenses, structDecl.SharedBlock.Events.Select(e => e.Identifier), uri, ct);
+                        AddMemberLenses(compilation, lenses, structDecl.SharedBlock.Methods.Select(m => m.Identifier), uri, ct);
                     }
 
                     break;
@@ -85,7 +89,7 @@ public static class CodeLensComputer
                         lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
 
-                    AddMemberLenses(compilation, lenses, enumDecl.Members.Select(m => m.Identifier), uri);
+                    AddMemberLenses(compilation, lenses, enumDecl.Members.Select(m => m.Identifier), uri, ct);
                     break;
                 case InterfaceDeclarationSyntax ifaceDecl:
                     var ifaceSymbol = SemanticLookup.ResolveSymbol(compilation, ifaceDecl.Identifier);
@@ -96,9 +100,9 @@ public static class CodeLensComputer
                         lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
 
-                    AddMemberLenses(compilation, lenses, ifaceDecl.Methods.Select(m => m.Identifier), uri);
-                    AddMemberLenses(compilation, lenses, ifaceDecl.Properties.Select(p => p.Identifier), uri);
-                    AddMemberLenses(compilation, lenses, ifaceDecl.Events.Select(e => e.Identifier), uri);
+                    AddMemberLenses(compilation, lenses, ifaceDecl.Methods.Select(m => m.Identifier), uri, ct);
+                    AddMemberLenses(compilation, lenses, ifaceDecl.Properties.Select(p => p.Identifier), uri, ct);
+                    AddMemberLenses(compilation, lenses, ifaceDecl.Events.Select(e => e.Identifier), uri, ct);
                     break;
                 case TypeAliasDeclarationSyntax typeAlias:
                     var aliasSymbol = SemanticLookup.ResolveSymbol(compilation, typeAlias.Identifier);
@@ -133,10 +137,12 @@ public static class CodeLensComputer
         GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
         List<CodeLens> lenses,
         IEnumerable<SyntaxToken> identifiers,
-        string uri)
+        string uri,
+        CancellationToken ct)
     {
         foreach (var identifier in identifiers)
         {
+            ct.ThrowIfCancellationRequested();
             if (identifier == null || identifier.IsMissing)
             {
                 continue;

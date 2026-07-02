@@ -301,4 +301,20 @@ public class CodeLensReproTests
             System.IO.Directory.Delete(tempDir, true);
         }
     }
+
+    [Fact]
+    public void ComputeLenses_HonorsCancellation()
+    {
+        // Issue #1662: ComputeLenses accepted a CancellationToken but never observed it, so a
+        // superseded request ran the full per-member FindReferences walk to completion. An
+        // already-cancelled token must now short-circuit instead of returning a result.
+        const string source = "func add(a int32, b int32) int32 { return a + b }\nvar x = add(1, 2)\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        using var cts = new System.Threading.CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<System.OperationCanceledException>(
+            () => CodeLensComputer.ComputeLenses(content, uri: null, cts.Token));
+    }
 }

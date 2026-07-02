@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Generic;
+using System.Threading;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.LanguageServer.Protocol;
@@ -63,7 +64,7 @@ public static class SemanticTokensHandler
 /// </summary>
 public static class SemanticTokensComputer
 {
-    public static void Tokenize(SemanticTokensBuilder builder, DocumentContent content)
+    public static void Tokenize(SemanticTokensBuilder builder, DocumentContent content, CancellationToken ct = default)
     {
         var tree = content.SyntaxTree;
         var text = tree.Text;
@@ -85,6 +86,9 @@ public static class SemanticTokensComputer
         var allTokens = SyntaxTree.ParseTokens(text);
         foreach (var token in allTokens)
         {
+            // Whole-document token stream can be large; check between tokens so a
+            // superseded request (fast typing) aborts instead of running to completion.
+            ct.ThrowIfCancellationRequested();
             if (token.IsMissing || token.Span.Length == 0)
             {
                 continue;
