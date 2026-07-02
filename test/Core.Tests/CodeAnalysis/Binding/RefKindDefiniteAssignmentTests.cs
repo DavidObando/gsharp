@@ -144,4 +144,169 @@ func caller() {
         var result = Compile(Source);
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0239");
     }
+
+    // Issue #1642 — the definite-assignment CFG previously treated
+    // try/select/scope/fixed bodies as opaque, so assignments inside them
+    // were invisible and produced false GS0238/GS0239 errors on valid code.
+
+    [Fact]
+    public void OutParameterAssignedInTryAndFinally_NoDiagnostic()
+    {
+        // Exact repro from issue #1642.
+        const string Source = @"package TryDA1
+
+func ok(out a int32) {
+    try { a = 1 } finally { }
+}
+";
+        var result = Compile(Source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0238");
+    }
+
+    [Fact]
+    public void OutParameterAssignedOnlyInFinally_NoDiagnostic()
+    {
+        // `finally` always runs, so an assignment made only there is
+        // guaranteed regardless of what happens in the try body.
+        const string Source = @"package TryDA2
+
+func ok(out a int32) {
+    try { } finally { a = 1 }
+}
+";
+        var result = Compile(Source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0238");
+    }
+
+    [Fact]
+    public void OutParameterAssignedInTryBodyOnly_CatchDoesNotAssign_ReportsGS0238()
+    {
+        // An exception could skip the try-body assignment, and the catch
+        // clause (which can complete normally without assigning `a`)
+        // doesn't guarantee it either — must still be rejected.
+        const string Source = @"package TryDA3
+
+import System
+
+func bad(out a int32) {
+    try {
+        a = 1
+    } catch (e Exception) {
+    }
+}
+";
+        var result = Compile(Source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0238");
+    }
+
+    [Fact]
+    public void OutParameterAssignedInTryAndEveryCatch_NoDiagnostic()
+    {
+        const string Source = @"package TryDA4
+
+import System
+
+func ok(out a int32) {
+    try {
+        a = 1
+    } catch (e Exception) {
+        a = 2
+    }
+}
+";
+        var result = Compile(Source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0238");
+    }
+
+    [Fact]
+    public void OutParameterAssignedInScopeBody_NoDiagnostic()
+    {
+        const string Source = @"package ScopeDA1
+
+func ok(out a int32) {
+    scope {
+        a = 1
+    }
+}
+";
+        var result = Compile(Source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0238");
+    }
+
+    [Fact]
+    public void OutParameterAssignedInFixedBody_NoDiagnostic()
+    {
+        const string Source = @"package FixedDA1
+
+unsafe func ok(out a int32, arr []int32) {
+    fixed p *int32 = arr {
+        a = 1
+    }
+}
+";
+        var result = Compile(Source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0238");
+    }
+
+    [Fact]
+    public void OutParameterAssignedInEveryExhaustiveSelectArm_NoDiagnostic()
+    {
+        // `select` always blocks until exactly one arm runs its body, so an
+        // assignment made on every arm is guaranteed afterward.
+        const string Source = @"package SelectDA1
+
+func ok(out a int32) {
+    let ch = make(chan int32, 1)
+    ch <- 1
+    select {
+    case let v = <-ch {
+        a = v
+    }
+    default {
+        a = 0
+    }
+    }
+}
+";
+        var result = Compile(Source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0238");
+    }
+
+    [Fact]
+    public void IndirectAssignmentThroughPointer_CountsAsAssignment()
+    {
+        // `*p = expr` (BoundIndirectAssignmentExpression) through a pointer
+        // known to alias the out parameter must count as an assignment.
+        const string Source = @"package IndirectDA1
+
+unsafe func ok(out a int32) {
+    var p *int32 = &a
+    *p = 5
+}
+";
+        var result = Compile(Source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0238");
+    }
+
+    [Fact]
+    public void ReturnInsideTryWithoutAssigningOutParameter_ReportsGS0238()
+    {
+        // A `return` nested inside a try body still leaves the function; the
+        // out parameter must be assigned before it, same as a top-level return.
+        const string Source = @"package TryDA5
+
+func bad(out a int32, cond bool) {
+    try {
+        if cond {
+            return
+        }
+
+        a = 1
+    } finally {
+    }
+}
+";
+        var result = Compile(Source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0238");
+    }
 }
