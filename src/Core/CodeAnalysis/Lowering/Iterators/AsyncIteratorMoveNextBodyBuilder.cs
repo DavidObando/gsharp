@@ -256,89 +256,15 @@ public static class AsyncIteratorMoveNextBodyBuilder
         /// Walks the user body, replacing yields, awaits, variable accesses (hoisted to fields),
         /// and returns.
         /// </summary>
-        private sealed class InnerRewriter : BoundTreeRewriter
+        private sealed class InnerRewriter : HoistedFieldRewriter
         {
             private readonly BuildContext ctx;
             private int yieldIndex;
 
             public InnerRewriter(BuildContext ctx)
+                : base(ctx.smClass, ctx.thisParameter, ctx.fieldMap)
             {
                 this.ctx = ctx;
-            }
-
-            protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
-            {
-                if (ctx.fieldMap.TryGetValue(node.Variable, out var field))
-                {
-                    return ctx.ReadField(field);
-                }
-
-                return node;
-            }
-
-            protected override BoundExpression RewriteAssignmentExpression(BoundAssignmentExpression node)
-            {
-                var rewrittenValue = RewriteExpression(node.Expression);
-                if (ctx.fieldMap.TryGetValue(node.Variable, out var field))
-                {
-                    return ctx.WriteField(field, rewrittenValue);
-                }
-
-                if (rewrittenValue != node.Expression)
-                {
-                    return new BoundAssignmentExpression(null, node.Variable, rewrittenValue);
-                }
-
-                return node;
-            }
-
-            // Issue #655: explicitly rewrite field-access expressions whose
-            // receiver is a BoundVariableExpression referencing the user-class
-            // `this` (hoisted as <>4__this). The base class RewriteFieldAccess-
-            // Expression already calls RewriteExpression on the receiver, but
-            // this explicit override ensures the proxy load is applied directly
-            // — protecting against future changes to the base-class dispatch
-            // order that could leave a raw `this` reference in the MoveNext body
-            // and trigger GS9998 at emit time.
-            protected override BoundExpression RewriteFieldAccessExpression(BoundFieldAccessExpression node)
-            {
-                if (node.Receiver is BoundVariableExpression varExpr
-                    && ctx.fieldMap.TryGetValue(varExpr.Variable, out var proxyField))
-                {
-                    var rewrittenReceiver = ctx.ReadField(proxyField);
-                    return new BoundFieldAccessExpression(null, rewrittenReceiver, node.StructType, node.Field);
-                }
-
-                return base.RewriteFieldAccessExpression(node);
-            }
-
-            // Issue #641: rewrite field assignments whose receiver is the
-            // user-class `this` (hoisted as <>4__this) to use an expression
-            // receiver so the emitter loads the proxy field, not the
-            // non-existent MoveNext `this` parameter.
-            protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
-            {
-                var value = RewriteExpression(node.Value);
-                if (node.Receiver != null && ctx.fieldMap.TryGetValue(node.Receiver, out var proxyField))
-                {
-                    var receiverExpr = ctx.ReadField(proxyField);
-                    return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
-                }
-
-                if (node.ReceiverExpression != null)
-                {
-                    var receiverExpr = RewriteExpression(node.ReceiverExpression);
-                    if (!ReferenceEquals(value, node.Value) || !ReferenceEquals(receiverExpr, node.ReceiverExpression))
-                    {
-                        return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
-                    }
-                }
-                else if (!ReferenceEquals(value, node.Value))
-                {
-                    return new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, value);
-                }
-
-                return node;
             }
 
             protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
@@ -365,50 +291,6 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 }
 
                 return node;
-            }
-
-            // Issue #887: an index assignment (`arr[i] = v`, `m[k] = v`) whose
-            // target temp is hoisted into a state-machine field can't reference
-            // the field through its VariableSymbol target. Switch to the
-            // expression target form reading the hoisted field (same fix as
-            // closure boxing, issue #618).
-            protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
-            {
-                if (node.Target != null && ctx.fieldMap.TryGetValue(node.Target, out var targetField))
-                {
-                    return BoundIndexAssignmentExpression.WithExpressionTarget(
-                        null,
-                        ctx.ReadField(targetField),
-                        RewriteExpression(node.Index),
-                        RewriteExpression(node.Value),
-                        node.Type);
-                }
-
-                return base.RewriteIndexAssignmentExpression(node);
-            }
-
-            // Issue #887: same fix for CLR-indexer writes (e.g. `dict["k"] = v`
-            // or `psi.Environment["k"] = v`) whose target temp is hoisted.
-            protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
-            {
-                if (node.Target != null && ctx.fieldMap.TryGetValue(node.Target, out var targetField))
-                {
-                    var args = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
-                    foreach (var argument in node.Arguments)
-                    {
-                        args.Add(RewriteExpression(argument));
-                    }
-
-                    return BoundClrIndexAssignmentExpression.WithExpressionTarget(
-                        null,
-                        ctx.ReadField(targetField),
-                        node.Indexer,
-                        args.MoveToImmutable(),
-                        RewriteExpression(node.Value),
-                        node.Type);
-                }
-
-                return base.RewriteClrIndexAssignmentExpression(node);
             }
 
             protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
