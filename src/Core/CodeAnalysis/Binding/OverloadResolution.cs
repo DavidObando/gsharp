@@ -2931,9 +2931,12 @@ internal static class OverloadResolution
             // checks see through that erasure so a `where T : struct` candidate
             // (e.g. MemoryMarshal.Cast/AsBytes) is not wrongly filtered out and a
             // `where T : class` candidate is not wrongly admitted.
+            // Issue #1601: a value-type-constrained generic type parameter (e.g.
+            // a `TEnum` forwarded from an enclosing `[TEnum Enum struct]`) erases
+            // the same way and must classify as a value type here too.
             var argIsUserValueType = !typeArgSymbols.IsDefaultOrEmpty
                 && i < typeArgSymbols.Length
-                && IsUserValueTypeSymbol(typeArgSymbols[i]);
+                && IsValueTypeErasedSymbol(typeArgSymbols[i]);
 
             if ((special & GenericParameterAttributes.ReferenceTypeConstraint) != 0)
             {
@@ -3051,6 +3054,26 @@ internal static class OverloadResolution
         => symbol is StructSymbol { IsClass: false } or EnumSymbol;
 
     /// <summary>
+    /// Issue #1601: recognizes a type-argument symbol that has no reference-context
+    /// CLR type but is guaranteed to be a non-nullable value type — either a
+    /// same-compilation user value type (see <see cref="IsUserValueTypeSymbol"/>) or
+    /// an in-scope generic type parameter carrying a value-type (<c>struct</c>)
+    /// constraint (e.g. the <c>TEnum</c> of <c>func Parse[TEnum Enum struct]</c>
+    /// forwarded to <c>Enum.TryParse[TEnum]</c>). Both erase to a <c>System.Object</c>
+    /// placeholder in the CLR type-argument vector, so the value-type/struct generic
+    /// constraint checks (and the placeholder closure) need the symbol to classify
+    /// them correctly. Live-reflection <see cref="MethodInfo.MakeGenericMethod(Type[])"/>
+    /// cannot be called with such a symbol because it is not a real runtime
+    /// <see cref="Type"/>, so the closure over a value-type placeholder applies to it
+    /// exactly as it does to a same-compilation user value type.
+    /// </summary>
+    /// <param name="symbol">The recovered type-argument symbol.</param>
+    /// <returns><see langword="true"/> when the symbol erases to a value-type placeholder.</returns>
+    private static bool IsValueTypeErasedSymbol(TypeSymbol symbol)
+        => IsUserValueTypeSymbol(symbol)
+            || symbol is TypeParameterSymbol { HasValueTypeConstraint: true };
+
+    /// <summary>
     /// Issue #1325: attempts to close <paramref name="openDef"/> over a value-type
     /// placeholder for every type-argument slot whose CLR type was erased to a
     /// non-value-type placeholder but whose recovered symbol is a user value
@@ -3082,7 +3105,7 @@ internal static class OverloadResolution
         {
             if (substituted[i] != null
                 && !substituted[i].IsValueType
-                && IsUserValueTypeSymbol(recoveredSymbols[i]))
+                && IsValueTypeErasedSymbol(recoveredSymbols[i]))
             {
                 substituted[i] = typeof(UserValueTypeConstraintPlaceholder);
                 anyUserValueType = true;
