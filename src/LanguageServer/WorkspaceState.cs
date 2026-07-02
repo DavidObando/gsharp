@@ -17,6 +17,7 @@ public class WorkspaceState
 {
     private readonly ConcurrentDictionary<string, ProjectState> projects = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> fileToProject = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> openBuffers = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Gets or sets the workspace root path.
@@ -119,6 +120,39 @@ public class WorkspaceState
     {
         var normalized = Path.GetFullPath(filePath);
         fileToProject.TryRemove(normalized, out _);
+    }
+
+    /// <summary>
+    /// Records the client's current in-memory buffer for a file (didOpen/didChange/didSave).
+    /// Issue #1786 follow-up: the background workspace loader consults this so a file the
+    /// client already has open is always registered with the client's buffer text, never
+    /// stale disk text, regardless of how the two race.
+    /// </summary>
+    /// <param name="filePath">Absolute path to the <c>.gs</c> file.</param>
+    /// <param name="text">The client's current buffer text.</param>
+    public void SetOpenBuffer(string filePath, string text)
+    {
+        openBuffers[Path.GetFullPath(filePath)] = text;
+    }
+
+    /// <summary>
+    /// Clears the recorded buffer for a file once the client closes it (didClose).
+    /// </summary>
+    /// <param name="filePath">Absolute path to the <c>.gs</c> file.</param>
+    public void ClearOpenBuffer(string filePath)
+    {
+        openBuffers.TryRemove(Path.GetFullPath(filePath), out _);
+    }
+
+    /// <summary>
+    /// Gets the client's current buffer text for a file, if the client has it open.
+    /// </summary>
+    /// <param name="filePath">Absolute path to the <c>.gs</c> file.</param>
+    /// <param name="text">The buffer text, if present.</param>
+    /// <returns>True if the file is currently open with a recorded buffer.</returns>
+    public bool TryGetOpenBuffer(string filePath, out string text)
+    {
+        return openBuffers.TryGetValue(Path.GetFullPath(filePath), out text);
     }
 
     /// <summary>

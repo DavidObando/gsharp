@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace GSharp.LanguageServer;
@@ -16,7 +18,20 @@ public static class WorkspaceInitializer
     /// </summary>
     /// <param name="workspaceState"><see cref="WorkspaceState"/> instance.</param>
     /// <param name="rootPath">The workspace root path.</param>
-    public static void Initialize(WorkspaceState workspaceState, string rootPath)
+    /// <param name="cancellationToken">Cancelled when the server shuts down mid-load.</param>
+    /// <param name="tryGetOpenBuffer">Returns the client's current buffer text for a file
+    /// path if the client already has it open, or null. When the caller races this method
+    /// against didOpen/didChange (the LSP server does), this ensures the client's buffer
+    /// always wins over disk text. Callers that run single-threaded (tests) can omit it.</param>
+    /// <param name="withGate">Runs a single file's registration under the same gate used by
+    /// didOpen/didChange/didSave, so registration and buffer edits never interleave and
+    /// clobber each other. Callers that run single-threaded (tests) can omit it.</param>
+    public static void Initialize(
+        WorkspaceState workspaceState,
+        string rootPath,
+        CancellationToken cancellationToken = default,
+        Func<string, string> tryGetOpenBuffer = null,
+        Action<Action> withGate = null)
     {
         if (string.IsNullOrEmpty(rootPath))
         {
@@ -28,6 +43,8 @@ public static class WorkspaceInitializer
         var discovered = ProjectDiscovery.DiscoverProjects(rootPath);
         foreach (var disc in discovered)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var project = workspaceState.AddProject(disc.ProjectFilePath);
             project.AssemblyName = disc.AssemblyName;
             project.TargetFramework = disc.TargetFramework;
@@ -36,8 +53,34 @@ public static class WorkspaceInitializer
             project.References = disc.References;
             foreach (var sourceFile in disc.SourceFiles)
             {
-                project.AddFileFromDisk(sourceFile);
-                workspaceState.RegisterFile(sourceFile, project);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                void RegisterFile()
+                {
+                    // Issue #1786 follow-up (B1): prefer the client's open buffer over disk so a
+                    // didOpen/didChange that raced ahead of discovery is never clobbered with
+                    // stale disk text.
+                    var openText = tryGetOpenBuffer?.Invoke(sourceFile);
+                    if (openText != null)
+                    {
+                        project.UpdateFile(sourceFile, openText);
+                    }
+                    else
+                    {
+                        project.AddFileFromDisk(sourceFile);
+                    }
+
+                    workspaceState.RegisterFile(sourceFile, project);
+                }
+
+                if (withGate != null)
+                {
+                    withGate(RegisterFile);
+                }
+                else
+                {
+                    RegisterFile();
+                }
             }
         }
 
@@ -52,6 +95,11 @@ public static class WorkspaceInitializer
         // exception here so warm-up never crashes the LSP startup path.
         foreach (var disc in discovered)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
             var project = workspaceState.GetProject(disc.ProjectFilePath);
             if (project != null)
             {
@@ -59,6 +107,11 @@ public static class WorkspaceInitializer
                 {
                     try
                     {
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            return;
+                        }
+
                         var compilation = project.GetCompilation();
                         _ = compilation.BoundProgram;
 

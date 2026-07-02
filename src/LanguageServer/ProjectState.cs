@@ -179,6 +179,11 @@ public class ProjectState
         {
             return null;
         }
+        catch (UnauthorizedAccessException)
+        {
+            // An unreadable file (permissions) shouldn't abort loading the rest of the project.
+            return null;
+        }
     }
 
     /// <summary>
