@@ -2583,9 +2583,9 @@ public sealed class Evaluator
         switch (b.Op.Kind)
         {
             case BoundBinaryOperatorKind.Equals:
-                return Equals(left, right);
+                return NumericEquals(left, right);
             case BoundBinaryOperatorKind.NotEquals:
-                return !Equals(left, right);
+                return !NumericEquals(left, right);
             case BoundBinaryOperatorKind.LogicalAnd:
                 return (bool)left && (bool)right;
             case BoundBinaryOperatorKind.LogicalOr:
@@ -2664,13 +2664,27 @@ public sealed class Evaluator
             case BoundBinaryOperatorKind.ShiftRight:
                 return NarrowToResultType(NumericShr(left, (int)right), resultType);
             case BoundBinaryOperatorKind.Less:
-                return NumericCompare(left, right) < 0;
             case BoundBinaryOperatorKind.LessOrEquals:
-                return NumericCompare(left, right) <= 0;
             case BoundBinaryOperatorKind.Greater:
-                return NumericCompare(left, right) > 0;
             case BoundBinaryOperatorKind.GreaterOrEquals:
-                return NumericCompare(left, right) >= 0;
+                // Issue #1712: double/float.CompareTo (used by NumericCompare)
+                // sorts NaN as less than every value, but IEEE 754 says every
+                // ordered comparison against NaN is false. Guard here the same
+                // way the relational-pattern path already does (~line 3416)
+                // so operator and pattern semantics can't drift.
+                if (IsNaN(left) || IsNaN(right))
+                {
+                    return false;
+                }
+
+                var numCmp = NumericCompare(left, right);
+                return b.Op.Kind switch
+                {
+                    BoundBinaryOperatorKind.Less => numCmp < 0,
+                    BoundBinaryOperatorKind.LessOrEquals => numCmp <= 0,
+                    BoundBinaryOperatorKind.Greater => numCmp > 0,
+                    _ => numCmp >= 0,
+                };
             default:
                 throw new EvaluatorException($"Unexpected binary operator {b.Op}", b);
         }
@@ -3391,9 +3405,9 @@ public sealed class Evaluator
         switch (op)
         {
             case BoundBinaryOperatorKind.Equals:
-                return object.Equals(left, right);
+                return NumericEquals(left, right);
             case BoundBinaryOperatorKind.NotEquals:
-                return !object.Equals(left, right);
+                return !NumericEquals(left, right);
             case BoundBinaryOperatorKind.Less:
             case BoundBinaryOperatorKind.LessOrEquals:
             case BoundBinaryOperatorKind.Greater:
@@ -3430,6 +3444,19 @@ public sealed class Evaluator
                 throw new InvalidOperationException($"Unexpected relational pattern operator {op}.");
         }
     }
+
+    // Issue #1712: object.Equals(double, double) treats NaN as equal to
+    // itself (a documented .NET oddity so NaN can be used as a dictionary
+    // key / sort key), but IEEE-754 and the emitter's `ceq` opcode say
+    // NaN == NaN is false (and != is true). Route float/double equality
+    // through the native operators so NaN stays unordered/unequal
+    // everywhere; every other type keeps its normal Equals semantics.
+    private static bool NumericEquals(object l, object r) => (l, r) switch
+    {
+        (float lf, float rf) => lf == rf,
+        (double ld, double rd) => ld == rd,
+        _ => Equals(l, r),
+    };
 
     private static bool IsNaN(object value) => value switch
     {
