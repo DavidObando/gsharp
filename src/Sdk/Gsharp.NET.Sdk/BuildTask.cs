@@ -224,6 +224,26 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         };
 
         using var proc = Process.Start(psi);
+
+        // Issue #1667: Cancel() only requests cancellation via cts; without
+        // this registration the child gsc process is never signaled and
+        // WaitForExit() below blocks until gsc finishes on its own, making
+        // MSBuild's cancel a no-op and risking orphaned compiler processes.
+        using var cancelRegistration = this.cts.Token.Register(() =>
+        {
+            try
+            {
+                // netstandard2.0 (this task's TFM) lacks Process.Kill(bool);
+                // gsc.dll doesn't spawn grandchildren, so killing it directly
+                // is sufficient to stop the compile.
+                proc.Kill();
+            }
+            catch (InvalidOperationException)
+            {
+                // Process already exited.
+            }
+        });
+
         string lastStdoutLine = null;
         string lastStderrLine = null;
         proc.OutputDataReceived += (_, e) =>
@@ -259,6 +279,13 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();
         proc.WaitForExit();
+
+        if (this.cts.IsCancellationRequested)
+        {
+            // Build was cancelled: gsc was killed above, report failure
+            // without logging a spurious "gsc exited with code N" error.
+            return false;
+        }
 
         // Issue #519 + 6.2 SilentEmitFailure invariant (boundary ring): when
         // gsc exits non-zero but no structured diagnostic was logged, anchor
