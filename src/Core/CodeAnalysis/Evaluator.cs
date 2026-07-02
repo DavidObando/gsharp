@@ -3955,9 +3955,98 @@ public sealed class Evaluator
         var args = new object[node.Arguments.Length];
         var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
 
+        // Issue #1599: a generic BCL method closed over a same-compilation user
+        // value type (e.g. `Enum.TryParse[Color]`) was closed over a value-type
+        // placeholder during overload resolution because the user type has no
+        // reference-context CLR type. Such a method cannot be reflection-invoked
+        // (the placeholder parameter rejects the interpreter's boxed value), so
+        // emulate the ones the interpreter can service directly. `Enum.TryParse`
+        // maps a member name (or a numeric string) to the enum's underlying
+        // integer value — exactly the interpreter's representation of a user enum.
+        if (TryEmulateSameCompilationEnumTryParse(node, args, out var emulatedResult))
+        {
+            WriteBackRefSlots(refSlots, args);
+            return emulatedResult;
+        }
+
         var result = node.Function.Method.Invoke(null, args);
         WriteBackRefSlots(refSlots, args);
         return result;
+    }
+
+    /// <summary>
+    /// Issue #1599: emulates <c>Enum.TryParse&lt;TEnum&gt;(string, out TEnum)</c> and its
+    /// <c>(string, bool ignoreCase, out TEnum)</c> overload when <c>TEnum</c> is a
+    /// same-compilation user enum. The closed BCL method carries a value-type
+    /// placeholder for the erased user enum and therefore cannot be reflection-invoked;
+    /// the interpreter represents user-enum values as their underlying <see cref="int"/>,
+    /// so the parse can be serviced against the enum symbol's members. Writes the parsed
+    /// value into the <c>out</c> argument slot and reports success via
+    /// <paramref name="parseResult"/>.
+    /// </summary>
+    /// <param name="node">The imported call being evaluated.</param>
+    /// <param name="args">The evaluated argument slots (mutated for the out parameter).</param>
+    /// <param name="parseResult">The boolean parse outcome, when emulated.</param>
+    /// <returns><see langword="true"/> when the call was emulated; otherwise <see langword="false"/>.</returns>
+    private static bool TryEmulateSameCompilationEnumTryParse(BoundImportedCallExpression node, object[] args, out object parseResult)
+    {
+        parseResult = null;
+        var method = node.Function?.Method;
+        if (method == null
+            || !method.IsGenericMethod
+            || !string.Equals(method.Name, "TryParse", System.StringComparison.Ordinal)
+            || method.DeclaringType?.IsSameAs(typeof(System.Enum)) != true
+            || node.TypeArgumentSymbols.IsDefaultOrEmpty
+            || node.TypeArgumentSymbols[0] is not Symbols.EnumSymbol enumSymbol
+            || enumSymbol.ClrType != null)
+        {
+            return false;
+        }
+
+        // The out parameter is the final by-ref slot.
+        var outIndex = -1;
+        for (var i = 0; i < node.ArgumentRefKinds.Length; i++)
+        {
+            if (node.ArgumentRefKinds[i] == RefKind.Out)
+            {
+                outIndex = i;
+            }
+        }
+
+        if (outIndex < 0 || args.Length == 0)
+        {
+            return false;
+        }
+
+        var value = args[0] as string;
+        var ignoreCase = outIndex >= 2 && args[1] is bool ic && ic;
+        var comparison = ignoreCase ? System.StringComparison.OrdinalIgnoreCase : System.StringComparison.Ordinal;
+
+        var success = false;
+        var parsed = 0;
+        if (!string.IsNullOrEmpty(value))
+        {
+            foreach (var member in enumSymbol.Members)
+            {
+                if (string.Equals(member.Name, value, comparison))
+                {
+                    parsed = member.Value;
+                    success = true;
+                    break;
+                }
+            }
+
+            // .NET also accepts a numeric string for any underlying value.
+            if (!success && int.TryParse(value, out var numeric))
+            {
+                parsed = numeric;
+                success = true;
+            }
+        }
+
+        args[outIndex] = parsed;
+        parseResult = success;
+        return true;
     }
 
     private object EvaluateImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
@@ -4135,8 +4224,15 @@ public sealed class Evaluator
 
             if (rk != RefKind.None && arg is BoundAddressOfExpression addrOf)
             {
-                // Evaluate the operand to get current value.
-                args[i] = EvaluateExpression(addrOf.Operand);
+                // ADR-0039 / issue #1599: `out` never reads the incoming value,
+                // and for an inline `out var n` declaration the synthesized local
+                // is not yet present in the interpreter's locals map (it is only
+                // created by the write-back below). Evaluating the operand here
+                // would throw a KeyNotFoundException, so pass the pointee type's
+                // default for `out` and only read the current value for `ref`.
+                args[i] = rk == RefKind.Out
+                    ? DefaultValue(addrOf.Operand.Type)
+                    : EvaluateExpression(addrOf.Operand);
                 if (rk == RefKind.Ref || rk == RefKind.Out)
                 {
                     refSlots ??= [];

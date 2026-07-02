@@ -2789,13 +2789,15 @@ internal sealed partial class ExpressionBinder
     /// <param name="resolvedMethod">The chosen imported method (constructed if generic).</param>
     /// <param name="parameterMapping">The source-argument → parameter-position mapping; default for positional calls.</param>
     /// <param name="receiverType">The receiver's static type (for symbolic by-ref-parameter recovery); may be <see langword="null"/>.</param>
+    /// <param name="typeArgSymbols">The explicit type-argument symbols (issue #1599, for recovering a placeholder-closed out-parameter pointee); default when absent.</param>
     /// <returns>The argument vector with inline out-var placeholders rebound.</returns>
     private ImmutableArray<BoundExpression> RebindInlineOutVarArguments(
         CallExpressionSyntax ce,
         ImmutableArray<BoundExpression> arguments,
         System.Reflection.MethodInfo resolvedMethod,
         ImmutableArray<int> parameterMapping,
-        TypeSymbol receiverType = null)
+        TypeSymbol receiverType = null,
+        ImmutableArray<TypeSymbol> typeArgSymbols = default)
     {
         ImmutableArray<BoundExpression>.Builder rebuilt = null;
         System.Reflection.ParameterInfo[] parameters = null;
@@ -2824,6 +2826,7 @@ internal sealed partial class ExpressionBinder
             // Recover the symbolic pointee type from the receiver's symbolic
             // type arguments (mirroring `ResolveInstanceReturnTypeFromReceiver`).
             var pointeeType = ResolveInstanceParameterPointeeTypeFromReceiver(receiverType, resolvedMethod, paramIndex)
+                ?? ResolveMethodGenericParameterPointeeType(resolvedMethod, paramIndex, typeArgSymbols)
                 ?? TypeSymbol.FromClrType(pointeeClr);
             var syntheticParameter = new ParameterSymbol(
                 parameters[paramIndex].Name ?? "value",
@@ -2836,6 +2839,37 @@ internal sealed partial class ExpressionBinder
         }
 
         return rebuilt != null ? rebuilt.ToImmutable() : arguments;
+    }
+
+    /// <summary>
+    /// Issue #1599: recovers the pointee type of an <c>out</c>/<c>ref</c> parameter that
+    /// is typed by one of the resolved generic method's own type parameters (e.g. the
+    /// <c>out TEnum</c> of <c>Enum.TryParse&lt;TEnum&gt;(string, out TEnum)</c>) from the
+    /// explicit type-argument symbols. When the method was closed over a value-type
+    /// placeholder (or an <see cref="object"/> erasure) — as happens for a
+    /// same-compilation user value type under a <c>where T : struct</c> constraint — the
+    /// closed CLR parameter carries the placeholder, which must not leak into an inline
+    /// <c>out var</c> local. Returns <see langword="null"/> when no recovery applies so
+    /// the caller falls back to the CLR pointee type.
+    /// </summary>
+    /// <param name="resolvedMethod">The closed generic method selected by overload resolution.</param>
+    /// <param name="parameterIndex">The zero-based parameter position of the out/ref argument.</param>
+    /// <param name="typeArgSymbols">The explicit type-argument symbols, or default.</param>
+    /// <returns>The recovered pointee type symbol, or <see langword="null"/>.</returns>
+    private static TypeSymbol ResolveMethodGenericParameterPointeeType(
+        System.Reflection.MethodInfo resolvedMethod,
+        int parameterIndex,
+        ImmutableArray<TypeSymbol> typeArgSymbols)
+    {
+        if (!typeArgSymbols.IsDefaultOrEmpty
+            && OverloadResolution.TryGetGenericMethodParameterPosition(resolvedMethod, parameterIndex, out var position)
+            && position >= 0
+            && position < typeArgSymbols.Length)
+        {
+            return typeArgSymbols[position];
+        }
+
+        return null;
     }
 
     private BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)
@@ -2970,7 +3004,7 @@ internal sealed partial class ExpressionBinder
                 // would never exist for the rest of the body. Static calls have
                 // no receiver, so pass null; the mapping aligns source args to
                 // parameters for out-parameters in any position.
-                arguments = RebindInlineOutVarArguments(ce, arguments, staticFn.Method, staticMapping, receiver?.Type);
+                arguments = RebindInlineOutVarArguments(ce, arguments, staticFn.Method, staticMapping, receiver?.Type, typeArgSymbols);
 
                 // Issue #1330: when the receiver is a generic type constructed
                 // over an in-scope generic type parameter (`Comparer[TResult]`),
@@ -3434,7 +3468,7 @@ internal sealed partial class ExpressionBinder
                             // any inline `out var`/`out let`/`out _` placeholders
                             // against the resolved by-ref parameter so the new
                             // local is declared with the inferred pointee type.
-                            arguments = RebindInlineOutVarArguments(ce, arguments, resolution.Best, resolution.ParameterMapping, receiver?.Type);
+                            arguments = RebindInlineOutVarArguments(ce, arguments, resolution.Best, resolution.ParameterMapping, receiver?.Type, typeArgSymbols);
 
                             // Issue #1512: for a genuine INSTANCE method the receiver
                             // is `this`, not a formal parameter — `GetParameters()`
