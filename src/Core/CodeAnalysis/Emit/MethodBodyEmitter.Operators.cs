@@ -652,6 +652,13 @@ internal sealed partial class MethodBodyEmitter
         }
 
         bool isUnsigned = IsUnsignedOrChar(b.Left.Type);
+
+        // For `<=` and `>=` on floating-point operands the naive `!(a > b)` /
+        // `!(a < b)` lowering (cgt/clt + ceq 0) gives the wrong answer when
+        // either operand is NaN: IEEE 754 requires every ordered comparison
+        // involving NaN to be false, so we must use the unordered variants
+        // (cgt.un / clt.un) exactly as the relational-pattern lowering does.
+        bool isFloat = b.Left.Type == TypeSymbol.Float32 || b.Left.Type == TypeSymbol.Float64;
         switch (b.Op.Kind)
         {
             case BoundBinaryOperatorKind.Sum:
@@ -701,7 +708,7 @@ internal sealed partial class MethodBodyEmitter
                 this.il.OpCode(isUnsigned ? ILOpCode.Clt_un : ILOpCode.Clt);
                 break;
             case BoundBinaryOperatorKind.LessOrEquals:
-                this.il.OpCode(isUnsigned ? ILOpCode.Cgt_un : ILOpCode.Cgt);
+                this.il.OpCode(isUnsigned || isFloat ? ILOpCode.Cgt_un : ILOpCode.Cgt);
                 this.il.LoadConstantI4(0);
                 this.il.OpCode(ILOpCode.Ceq);
                 break;
@@ -709,7 +716,7 @@ internal sealed partial class MethodBodyEmitter
                 this.il.OpCode(isUnsigned ? ILOpCode.Cgt_un : ILOpCode.Cgt);
                 break;
             case BoundBinaryOperatorKind.GreaterOrEquals:
-                this.il.OpCode(isUnsigned ? ILOpCode.Clt_un : ILOpCode.Clt);
+                this.il.OpCode(isUnsigned || isFloat ? ILOpCode.Clt_un : ILOpCode.Clt);
                 this.il.LoadConstantI4(0);
                 this.il.OpCode(ILOpCode.Ceq);
                 break;
@@ -1302,13 +1309,17 @@ internal sealed partial class MethodBodyEmitter
         }
 
         bool isUnsigned = IsUnsignedOrChar(underlying);
+
+        // See EmitBinary: `<=`/`>=` on floating-point operands need the
+        // unordered comparison variants so NaN yields the IEEE 754 result.
+        bool isFloat = underlying == TypeSymbol.Float32 || underlying == TypeSymbol.Float64;
         switch (kind)
         {
             case BoundBinaryOperatorKind.Less:
                 this.il.OpCode(isUnsigned ? ILOpCode.Clt_un : ILOpCode.Clt);
                 break;
             case BoundBinaryOperatorKind.LessOrEquals:
-                this.il.OpCode(isUnsigned ? ILOpCode.Cgt_un : ILOpCode.Cgt);
+                this.il.OpCode(isUnsigned || isFloat ? ILOpCode.Cgt_un : ILOpCode.Cgt);
                 this.il.LoadConstantI4(0);
                 this.il.OpCode(ILOpCode.Ceq);
                 break;
@@ -1316,7 +1327,7 @@ internal sealed partial class MethodBodyEmitter
                 this.il.OpCode(isUnsigned ? ILOpCode.Cgt_un : ILOpCode.Cgt);
                 break;
             case BoundBinaryOperatorKind.GreaterOrEquals:
-                this.il.OpCode(isUnsigned ? ILOpCode.Clt_un : ILOpCode.Clt);
+                this.il.OpCode(isUnsigned || isFloat ? ILOpCode.Clt_un : ILOpCode.Clt);
                 this.il.LoadConstantI4(0);
                 this.il.OpCode(ILOpCode.Ceq);
                 break;

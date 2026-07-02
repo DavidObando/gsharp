@@ -277,11 +277,25 @@ internal sealed partial class MethodBodyEmitter
                 $"Method group '{methodGroup.Function.Name}' has no emitted MethodDef.");
         }
 
+        // Issue #1467: when the method group targets an instance method of a
+        // user-declared GENERIC type, the `ldftn`/`ldvirtftn` target must be a
+        // MemberRef parented at the constructed receiver TypeSpec — a bare
+        // MethodDef of a method on a generic type is not a valid delegate-ctor
+        // function token (ilverify `DelegateCtor`). Re-resolve through the
+        // receiver's type. Mirrors EmitMethodGroup.
+        EntityHandle ftnToken = staticHandle;
+        if (methodGroup.Receiver?.Type is StructSymbol receiverStruct
+            && ReflectionMetadataEmitter.IsUserGenericTypeReference(receiverStruct)
+            && this.outer.cache.MethodHandles.ContainsKey(methodGroup.Function))
+        {
+            ftnToken = this.outer.ResolveUserInstanceMethodToken(receiverStruct, methodGroup.Function);
+        }
+
         if (methodGroup.Receiver == null)
         {
             this.il.OpCode(ILOpCode.Ldnull);
             this.il.OpCode(ILOpCode.Ldftn);
-            this.il.Token(staticHandle);
+            this.il.Token(ftnToken);
         }
         else
         {
@@ -293,16 +307,20 @@ internal sealed partial class MethodBodyEmitter
                 this.il.Token(this.outer.GetElementTypeToken(methodGroup.Receiver.Type));
             }
 
-            if (methodGroup.Function.IsOpen || methodGroup.Function.IsOverride)
+            // Issue #1397: an interface-typed receiver must dispatch via
+            // `ldvirtftn` so the delegate invokes the concrete implementation
+            // through interface dispatch (as do `open`/`override` methods).
+            if (methodGroup.Function.IsOpen || methodGroup.Function.IsOverride
+                || methodGroup.Receiver.Type is InterfaceSymbol)
             {
                 this.il.OpCode(ILOpCode.Dup);
                 this.il.OpCode(ILOpCode.Ldvirtftn);
-                this.il.Token(staticHandle);
+                this.il.Token(ftnToken);
             }
             else
             {
                 this.il.OpCode(ILOpCode.Ldftn);
-                this.il.Token(staticHandle);
+                this.il.Token(ftnToken);
             }
         }
 

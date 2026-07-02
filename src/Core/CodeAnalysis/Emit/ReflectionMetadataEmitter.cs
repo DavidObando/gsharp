@@ -4224,14 +4224,11 @@ internal sealed class ReflectionMetadataEmitter
             constValues: constValues,
             stackAllocResultSlots: stackAllocResultSlots);
 
-        // base(args)
+        // base(args) — `this` followed by the (ref-kind aware) base arguments.
         il.LoadArgument(0);
         if (!init.Arguments.IsDefaultOrEmpty)
         {
-            foreach (var arg in init.Arguments)
-            {
-                emitter.EmitValue(arg);
-            }
+            emitter.EmitBaseConstructorArguments(init.Arguments, init.ArgumentRefKinds);
         }
 
         il.OpCode(ILOpCode.Call);
