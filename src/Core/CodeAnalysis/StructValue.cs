@@ -2,7 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -22,10 +22,10 @@ public sealed class StructValue
     public StructValue(StructSymbol structType)
     {
         StructType = structType;
-        Fields = new Dictionary<string, object>();
+        Fields = new ConcurrentDictionary<string, object>();
     }
 
-    private StructValue(StructSymbol structType, Dictionary<string, object> fields)
+    private StructValue(StructSymbol structType, ConcurrentDictionary<string, object> fields)
     {
         StructType = structType;
         Fields = fields;
@@ -34,8 +34,18 @@ public sealed class StructValue
     /// <summary>Gets the struct type.</summary>
     public StructSymbol StructType { get; }
 
+    // Issue #1718: class-typed StructValue instances (Evaluator.Assign skips
+    // Copy() for IsClass structs) are shared by reference, including the
+    // heap "box" cells CaptureBoxingRewriter synthesizes for a mutable
+    // variable captured by a function literal (isClass: true). Any number
+    // of goroutines that received the same class instance/box (as an
+    // argument, a captured variable, or a field) can write distinct fields
+    // on it at the same time, so this dictionary needs the same
+    // concurrent-write safety as an interpreter locals frame. Plain
+    // Dictionary&lt;,&gt; is not thread-safe under concurrent writes.
+
     /// <summary>Gets the mutable field dictionary backing this instance.</summary>
-    public Dictionary<string, object> Fields { get; }
+    public ConcurrentDictionary<string, object> Fields { get; }
 
     /// <summary>
     /// Gets or sets the CLR backing instance for a GSharp class that inherits an
@@ -52,7 +62,7 @@ public sealed class StructValue
     /// <returns>A new instance with the same fields.</returns>
     public StructValue Copy()
     {
-        var copy = new Dictionary<string, object>(Fields.Count);
+        var copy = new ConcurrentDictionary<string, object>();
         foreach (var kvp in Fields)
         {
             copy[kvp.Key] = kvp.Value is StructValue inner ? inner.Copy() : kvp.Value;
