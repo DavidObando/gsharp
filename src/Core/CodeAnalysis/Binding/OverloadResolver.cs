@@ -959,14 +959,40 @@ internal sealed class OverloadResolver
             // parameter type.
             var kinds = new OverloadResolution.ImplicitConversionKind[boundArguments.Count];
             var paramTypes = new TypeSymbol[boundArguments.Count];
+            var isTailSlot = new bool[boundArguments.Count];
+            var elementType = isVariadic && cand.Parameters[cand.Parameters.Length - 1].Type is SliceTypeSymbol variadicSlice
+                ? variadicSlice.ElementType
+                : null;
             for (var i = 0; i < boundArguments.Count; i++)
             {
                 var slot = MapArgumentIndexToParameterSlot(cand, argumentNames, i, parameterOffset, paramLen);
-                if (slot < 0 || slot >= paramCountForScore)
+                if (slot < 0)
                 {
-                    // Out of the fixed-parameter range (defaulted or variadic
-                    // tail) — neutral: contributes no per-argument preference.
+                    // Unmapped (shouldn't happen for an applicable candidate) —
+                    // neutral: contributes no per-argument preference.
                     kinds[i] = OverloadResolution.ImplicitConversionKind.Identity;
+                    continue;
+                }
+
+                if (slot >= paramCountForScore)
+                {
+                    // Issue #1631 (B1): variadic params-array tail argument.
+                    // Classify against the params ELEMENT type (so a genuine
+                    // widening in the tail is still visible) but flag the
+                    // slot as expanded-form. IsUserCandidateAtLeastAsGoodAs
+                    // below ranks an expanded-form slot strictly worse than a
+                    // normal-form slot on the SAME argument regardless of
+                    // conversion kind — C#'s "non-expanded form is preferred
+                    // over expanded form" rule (§7.5.3.2) — so a variadic
+                    // sibling can never dominate an applicable non-variadic
+                    // one purely because its tail was compared favourably.
+                    // Between two variadic candidates (both expanded), the
+                    // element-type kind still decides genuine betterness.
+                    isTailSlot[i] = true;
+                    var tailArgType = boundArguments[i]?.Type;
+                    kinds[i] = elementType == null
+                        ? OverloadResolution.ImplicitConversionKind.Identity
+                        : ClassifyUserArgumentConversionKind(tailArgType, elementType);
                     continue;
                 }
 
@@ -987,7 +1013,7 @@ internal sealed class OverloadResolver
                     : ClassifyUserArgumentConversionKind(argType, paramType);
             }
 
-            data.Add(new UserCandidateRankData(cand, kinds, paramTypes, defaultsUsed, isVariadic));
+            data.Add(new UserCandidateRankData(cand, kinds, paramTypes, isTailSlot, defaultsUsed, isVariadic));
         }
 
         // Phase 2a: pairwise domination. A candidate survives when no other
@@ -1026,7 +1052,12 @@ internal sealed class OverloadResolver
             }
         }
 
-        var pool = survivors.Count > 0 ? survivors : data;
+        // Domination is a strict partial order over a finite non-empty set
+        // (applicable.Count > 1 here), so a maximal element always survives —
+        // survivors is never empty; the old "fall back to data" branch was
+        // dead code.
+        System.Diagnostics.Debug.Assert(survivors.Count > 0, "pairwise domination must leave at least one survivor");
+        var pool = survivors;
 
         // Phase 2b: prefer the fewest defaulted parameters (an exact-arity
         // overload beats one that relies on defaults).
@@ -1079,11 +1110,12 @@ internal sealed class OverloadResolver
     /// </summary>
     private readonly struct UserCandidateRankData
     {
-        public UserCandidateRankData(FunctionSymbol candidate, OverloadResolution.ImplicitConversionKind[] kinds, TypeSymbol[] paramTypes, int defaultsUsed, bool isVariadic)
+        public UserCandidateRankData(FunctionSymbol candidate, OverloadResolution.ImplicitConversionKind[] kinds, TypeSymbol[] paramTypes, bool[] isTailSlot, int defaultsUsed, bool isVariadic)
         {
             Candidate = candidate;
             Kinds = kinds;
             ParamTypes = paramTypes;
+            IsTailSlot = isTailSlot;
             DefaultsUsed = defaultsUsed;
             IsVariadic = isVariadic;
         }
@@ -1093,6 +1125,13 @@ internal sealed class OverloadResolver
         public OverloadResolution.ImplicitConversionKind[] Kinds { get; }
 
         public TypeSymbol[] ParamTypes { get; }
+
+        /// <summary>
+        /// Gets per-argument flags set when the argument at that index bound
+        /// to this candidate's variadic params-array tail (as opposed to a
+        /// normal fixed parameter slot) (issue #1631, B1).
+        /// </summary>
+        public bool[] IsTailSlot { get; }
 
         public int DefaultsUsed { get; }
 
@@ -1111,7 +1150,7 @@ internal sealed class OverloadResolver
         var hasStrictlyBetter = false;
         for (var i = 0; i < a.Kinds.Length; i++)
         {
-            var cmp = CompareUserConversions(a.Kinds[i], a.ParamTypes[i], b.Kinds[i], b.ParamTypes[i], argTypes[i]);
+            var cmp = CompareUserConversions(a.Kinds[i], a.ParamTypes[i], a.IsTailSlot[i], b.Kinds[i], b.ParamTypes[i], b.IsTailSlot[i], argTypes[i]);
             if (cmp > 0)
             {
                 return false;
@@ -1136,8 +1175,23 @@ internal sealed class OverloadResolver
     /// helper rather than reimplementing the numeric/signed-vs-unsigned
     /// lattice a second time.
     /// </summary>
-    private static int CompareUserConversions(OverloadResolution.ImplicitConversionKind ka, TypeSymbol paramA, OverloadResolution.ImplicitConversionKind kb, TypeSymbol paramB, TypeSymbol source)
+    private static int CompareUserConversions(OverloadResolution.ImplicitConversionKind ka, TypeSymbol paramA, bool tailA, OverloadResolution.ImplicitConversionKind kb, TypeSymbol paramB, bool tailB, TypeSymbol source)
     {
+        // Issue #1631 (B1): a normal-form (fixed-parameter) slot is always
+        // strictly better than an expanded-form (variadic tail) slot on the
+        // SAME argument, independent of each side's own conversion kind —
+        // C#'s "non-expanded form preferred over expanded form" rule
+        // (§7.5.3.2). Without this, a variadic candidate's tail argument
+        // (classified against the params element type) can out-rank a
+        // non-variadic sibling's real widening conversion and wrongly
+        // dominate it. When both sides are tail slots (two variadic
+        // candidates), fall through to the normal kind comparison so genuine
+        // element-type betterness still decides.
+        if (tailA != tailB)
+        {
+            return tailA ? 1 : -1;
+        }
+
         if (ka != kb)
         {
             return ((int)ka).CompareTo((int)kb);
@@ -1185,6 +1239,12 @@ internal sealed class OverloadResolver
             return OverloadResolution.ImplicitConversionKind.NullableWrap;
         }
 
+        // ponytail: widening-then-wrap (e.g. int32 -> int64?) is not caught by
+        // the identity-underlying check above (argType != nullableParam.UnderlyingType)
+        // and falls through to the Reference bucket below instead of a rank
+        // between NumericWidening and Reference. No ImplicitConversionKind slot
+        // exists for it today; add one (and a matching CompareNumericTargets
+        // path against nullableParam.UnderlyingType) if a real ambiguity shows up.
         var argClr = argType.ClrType;
         var paramClr = paramType.ClrType;
         if (argClr != null && paramClr != null
@@ -1195,6 +1255,13 @@ internal sealed class OverloadResolver
             return OverloadResolution.ImplicitConversionKind.NumericWidening;
         }
 
+        // ponytail: object vs. an implemented interface (e.g. f(object) vs.
+        // f(IInterface) for a class arg) both fold into Reference here, so
+        // they tie and report GS0266 where C# would prefer the interface.
+        // Pre-existing ceiling (parity with the old linear score), not a
+        // #1631 regression. Upgrade path: split Reference into sub-kinds
+        // (exact-interface-satisfaction vs. base-class/object upcast) sharing
+        // more of Conversion.Classify's structure, if this surfaces in practice.
         return OverloadResolution.ImplicitConversionKind.Reference;
     }
 
