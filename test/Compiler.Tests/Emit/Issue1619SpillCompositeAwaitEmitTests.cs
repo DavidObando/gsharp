@@ -508,6 +508,139 @@ public class Issue1619SpillCompositeAwaitEmitTests
         Assert.Equal(21, ReadInt(program, "bWhenFalse"));
     }
 
+    [Fact]
+    public void Await_In_Conditional_Address_Arm_Evaluates_NonAwaiting_Condition_Exactly_Once()
+    {
+        // Regression for the double/triple-eval defect: when the condition
+        // itself has no await but one of the arms does, the condition used
+        // to be re-emitted once per guard plus once more in the rebuilt
+        // BoundConditionalAddressExpression - up to 2-3 evaluations of a
+        // side-effectful condition instead of exactly 1.
+        var source = """
+            package P1619N
+
+            import System.Threading.Tasks
+
+            public var pickCount = 0
+
+            func pick() bool {
+                pickCount = pickCount + 1
+                return true
+            }
+
+            func bump(ref counter int32) {
+                counter = counter + 1
+            }
+
+            class CondPicker {
+                init() {}
+
+                async func BumpPicked(arr []int32, idxTask Task[int32]) []int32 {
+                    bump(ref pick() ? arr[await idxTask] : arr[2])
+                    return arr
+                }
+            }
+
+            public var elem0 = -1
+            public var elem2 = -1
+            let c = CondPicker()
+            let arr = []int32{10, 20, 30}
+            let r = c.BumpPicked(arr, Task.FromResult(0)).Result
+            elem0 = r[0]
+            elem2 = r[2]
+            """;
+
+        var assembly = CompileAndInvokeEntry(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+
+        // pick() always selects the true branch (arr[await idxTask] with
+        // idxTask == 0), so only element 0 is bumped, and pick()'s side
+        // effect must run exactly once regardless of how many branches
+        // reference the condition during spilling.
+        Assert.Equal(11, ReadInt(program, "elem0"));
+        Assert.Equal(30, ReadInt(program, "elem2"));
+        Assert.Equal(1, ReadInt(program, "pickCount"));
+    }
+
+    [Fact]
+    public void Await_In_NullConditional_Access_On_ValueType_Nullable_Emits_Invalid_IL_KnownLimitation()
+    {
+        // Watch-item: T? for a value type (struct) receiver, with an await
+        // inside the null-conditional invocation's argument. Unlike the
+        // reference-type case above (Await_In_NullConditional_Access_...),
+        // gsc currently emits INVALID IL for this shape: the spiller's
+        // rebuilt receiver ends up boxed as System.Nullable`1<Pt> where the
+        // emitter expects the unwrapped Pt value, caught here by ilverify's
+        // StackUnexpected error. This is a pre-existing, separate defect in
+        // how nullable *value types* are represented across the
+        // null-conditional spill path - unrelated to the
+        // SpillConditionalAddress double-eval fixed above - and is out of
+        // scope for issue #1619 / this fix. This test pins the current
+        // (broken) behavior so a future fix has a regression test to flip
+        // green, and so this gap doesn't silently regress further.
+        var source = """
+            package P1619O
+
+            import System.Threading.Tasks
+
+            struct Pt {
+                var X int32
+                func Add(n int32) int32 { return this.X + n }
+            }
+
+            class C {
+                init() {}
+
+                async func AddToPoint(p Pt?, t Task[int32]) int32? {
+                    return p?.Add(await t)
+                }
+            }
+
+            public var nonNilResult = -1
+            let c = C()
+            let p = Pt{X: 10}
+            let r1 = c.AddToPoint(p, Task.FromResult(5)).Result
+            nonNilResult = r1 ?? -100
+            """;
+
+        var ex = Assert.Throws<Xunit.Sdk.XunitException>(() => CompileAndInvokeEntry(source));
+        Assert.Contains("StackUnexpected", ex.Message);
+    }
+
+    [Fact]
+    public void Await_In_Switch_Expression_Without_Default_Is_Rejected_At_Compile_Time()
+    {
+        // Watch-item: a non-exhaustive switch expression (no default/missing
+        // match) that silently executes arm 0 instead of throwing. This
+        // cannot be constructed in G#: the binder requires every switch
+        // *expression* to have a 'default' arm (GS0176) regardless of
+        // whether await appears inside it, so there is no bound tree shape
+        // for SpillSwitch to mis-lower here - the language's exhaustiveness
+        // rule, not the spiller, is what prevents the "no-match silently
+        // runs arm 0" failure mode.
+        var source = """
+            package P1619P
+
+            import System.Threading.Tasks
+
+            class C {
+                init() {}
+
+                async func Pick(n int32, t Task[int32]) int32 {
+                    let x = switch n {
+                        case 1: await t
+                    }
+                    return x
+                }
+            }
+            """;
+
+        var (compileExit, stdout, stderr) = TryCompile(source);
+
+        Assert.NotEqual(0, compileExit);
+        Assert.Contains("GS0176", stdout + stderr);
+    }
+
     private static int ReadInt(Type program, string fieldName)
     {
         var field = program.GetField(fieldName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);

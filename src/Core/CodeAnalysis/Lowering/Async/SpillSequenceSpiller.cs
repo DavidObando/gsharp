@@ -1665,10 +1665,9 @@ public static class SpillSequenceSpiller
             var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
             var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
 
-            // The condition is spilled (if needed) exactly once, up front.
-            // The resulting value is side-effect-free (a temp/variable read
-            // or the original trivial expression), so it is safe to
-            // reference it again below without re-running any await.
+            // If the condition contains an await, spill it exactly once, up
+            // front, so the guards/rebuild below reference the resulting
+            // value rather than re-running the await.
             var condition = condAddr.Condition;
             if (conditionHasAwait)
             {
@@ -1676,6 +1675,20 @@ public static class SpillSequenceSpiller
                 locals.AddRange(spilledCondition.Locals);
                 sideEffects.AddRange(spilledCondition.SideEffects);
                 condition = spilledCondition.Value;
+            }
+
+            // The condition is read up to three times below: the "then"
+            // guard, the "else" guard, and the rebuilt
+            // BoundConditionalAddressExpression that EmitConditionalAddress
+            // re-evaluates. If it isn't already side-effect-free, materialize
+            // it into a spill temp exactly once here so a side effect in the
+            // condition (e.g. a method call) can't fire more than once.
+            if (!IsPureOrConstant(condition))
+            {
+                var condTemp = MakeSpillTemp(condition.Type);
+                locals.Add(condTemp);
+                sideEffects.Add(new BoundVariableDeclaration(null, condTemp, condition));
+                condition = new BoundVariableExpression(null, condTemp);
             }
 
             var trueOperand = condAddr.WhenTrueOperand;
