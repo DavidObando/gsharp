@@ -639,6 +639,60 @@ namespace Demo
         Assert.DoesNotContain("string(' '", printed);
     }
 
+    /// <summary>
+    /// Issue #914 (GS0128): C# `!x.HasValue` on a nullable value type must
+    /// parenthesize the mapped null test, otherwise `.HasValue` -> `x != nil`
+    /// composes under the prefix `!` as `!x != nil`, which G# parses as
+    /// `(!x) != nil` (GS0128, `!` undefined for the nullable type). The correct
+    /// form is `!(x != nil)`.
+    /// </summary>
+    [Fact]
+    public void NegatedHasValue_ParenthesizesNullTest()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class NegHasX
+    {
+        public bool Missing(System.DateTime? when) => !when.HasValue;
+    }
+}");
+
+        Assert.Contains("!(when != nil)", printed);
+        Assert.DoesNotContain("!when != nil", printed);
+    }
+
+    /// <summary>
+    /// Issue #914 (GS0131): directly invoking a nullable-reference delegate
+    /// *field* (`handler(args)` where `handler` is `((T) -&gt; R)?`) needs a `!!`
+    /// assertion on the callee — G# smart-casts only locals, never a field/
+    /// property chain, so the field stays nullable and "is not a function" even
+    /// inside an `if handler != nil` guard. cs2gs must emit `handler!!(args)`.
+    /// </summary>
+    [Fact]
+    public void NullableDelegateFieldInvocation_AssertsCalleeNonNull()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class DelInvX
+    {
+        private readonly System.Func<int, int>? handler;
+        public DelInvX(System.Func<int, int>? h) => this.handler = h;
+        public int Fire(int value)
+        {
+            if (this.handler != null)
+            {
+                return this.handler(value);
+            }
+            return 0;
+        }
+    }
+}");
+
+        Assert.Contains("this.handler!!(value)", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         (string printed, RoundTripResult result) = TranslateAndValidate(source);
