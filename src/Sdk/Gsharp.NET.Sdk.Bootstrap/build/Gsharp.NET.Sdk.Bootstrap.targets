@@ -72,6 +72,8 @@
       <_GsharpCoreCompileInputsToHash Include="$(Optimize)" />
       <_GsharpCoreCompileInputsToHash Include="$(SourceLink)" />
       <_GsharpCoreCompileInputsToHash Include="$(EmbedAllSources)" />
+      <_GsharpCoreCompileInputsToHash Include="$(ProduceReferenceAssembly)" />
+      <_GsharpCoreCompileInputsToHash Include="$(GenerateDocumentationFile)" />
     </ItemGroup>
 
     <Hash ItemsToHash="@(_GsharpCoreCompileInputsToHash)">

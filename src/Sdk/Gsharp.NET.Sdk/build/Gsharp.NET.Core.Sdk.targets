@@ -31,8 +31,8 @@
        CoreCompile's own up-to-date check silently skips gsc and ships a
        stale assembly (e.g. with the previous build's version stamp). csc
        avoids this via the .NET SDK's CoreCompileInputs.cache idiom (see
-       Microsoft.NET.GenerateAssemblyInfo.targets /
-       CreateGeneratedAssemblyInfoInputsCacheFile): hash every
+       Microsoft.Managed.Core.targets / _GenerateCompileDependencyCache):
+       hash every
        compilation-affecting property BuildTask consumes into a cache file
        whose timestamp — via WriteOnlyWhenDifferent — only advances when the
        hash actually changes, then list that file as a CoreCompile input. -->
@@ -53,6 +53,8 @@
       <_GsharpCoreCompileInputsToHash Include="$(Optimize)" />
       <_GsharpCoreCompileInputsToHash Include="$(SourceLink)" />
       <_GsharpCoreCompileInputsToHash Include="$(EmbedAllSources)" />
+      <_GsharpCoreCompileInputsToHash Include="$(ProduceReferenceAssembly)" />
+      <_GsharpCoreCompileInputsToHash Include="$(GenerateDocumentationFile)" />
     </ItemGroup>
 
     <Hash ItemsToHash="@(_GsharpCoreCompileInputsToHash)">
