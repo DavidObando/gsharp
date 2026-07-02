@@ -1,8 +1,12 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as os from 'os';
+import * as fs from 'fs';
 import * as cp from 'child_process';
 import { LanguageClient } from 'vscode-languageclient/node';
 import { Logger } from '../utils/logger';
+import { aggregateTrxResults, matchTrxResults, parseTrx, TrxTestResult } from './trx';
+import { killProcessTree } from './processKill';
 
 interface TestItem {
   id: string;
@@ -293,6 +297,9 @@ async function runTests(
     forEachLeaf(item, (leaf) => run.started(leaf));
   }
 
+  // `run.end()` must happen no matter how this exits (early return, thrown error while
+  // building the run itself, etc.) — otherwise the Test Explorer UI stays "running"
+  // forever because VS Code never learns the run finished.
   try {
     // Group the selection by the owning project so each `dotnet test` invocation runs
     // against the correct `.gsproj`. A multi-project workspace (e.g. several test
@@ -304,7 +311,6 @@ async function runTests(
           run.errored(leaf, new vscode.TestMessage('No .gsproj file found.')),
         );
       }
-      run.end();
       return;
     }
 
@@ -320,9 +326,9 @@ async function runTests(
     for (const item of items) {
       forEachLeaf(item, (leaf) => run.errored(leaf, new vscode.TestMessage(message)));
     }
+  } finally {
+    run.end();
   }
-
-  run.end();
 }
 
 /**
@@ -401,49 +407,118 @@ async function runProject(
     forEachLeaf(item, (leaf) => leaves.push(leaf));
   }
 
-  const args = ['test', projectFile, '--logger', 'trx'];
+  // A dedicated, unique results directory + fixed file name gives a deterministic
+  // path to the TRX file `dotnet test` writes, regardless of project name or
+  // concurrent runs of other projects/tests.
+  const resultsDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'gsharp-test-'));
+  const trxFileName = 'result.trx';
+  const trxPath = path.join(resultsDirectory, trxFileName);
+
+  const args = [
+    'test',
+    projectFile,
+    '--logger',
+    `trx;LogFileName=${trxFileName}`,
+    '--results-directory',
+    resultsDirectory,
+  ];
   if (filterExpression) {
     args.push('--filter', filterExpression);
   }
 
   const projectUri = vscode.Uri.file(projectFile);
-  if (debug) {
-    await debugTests(projectUri, args, leaves, run, logger, token);
-    return;
+
+  try {
+    const exitCode = debug
+      ? await runDebugProcess(projectUri, args, run, logger, token)
+      : await runTestProcess(projectUri, args, run, token);
+
+    reportTrxResults(leaves, trxPath, exitCode, token, run);
+  } finally {
+    removeResultsDirectory(resultsDirectory);
   }
+}
 
-  const task = new vscode.Task(
-    { type: 'gsharp', task: 'test', project: projectFile },
-    vscode.TaskScope.Workspace,
-    'test',
-    'gsharp',
-    new vscode.ShellExecution('dotnet', args),
-  );
-
-  await vscode.tasks.executeTask(task);
-
-  // Mark all as passed (actual result parsing from TRX would be added here).
-  for (const leaf of leaves) {
-    run.passed(leaf);
+/**
+ * Best-effort cleanup of the temporary results directory. If the test host process
+ * wasn't fully torn down (see `killProcessTree`) the TRX file or directory can still
+ * be locked for a moment after the child process is reported closed; retrying a few
+ * times with a short delay avoids `fs.rmSync` throwing and aborting the run instead of
+ * merely leaving a stray temp directory behind.
+ */
+function removeResultsDirectory(dir: string, retriesLeft = 5): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    const retryable = code === 'EBUSY' || code === 'ENOTEMPTY' || code === 'EPERM';
+    if (retryable && retriesLeft > 0) {
+      setTimeout(() => removeResultsDirectory(dir, retriesLeft - 1), 200).unref();
+    }
+    // Otherwise give up silently: a leftover temp directory is not fatal.
   }
+}
+
+/**
+ * Runs `dotnet test` as a plain child process and awaits its actual exit (as opposed
+ * to `vscode.tasks.executeTask`, which resolves once the task *starts*). Cancelling
+ * the test run kills the process.
+ */
+async function runTestProcess(
+  projectUri: vscode.Uri,
+  args: string[],
+  run: vscode.TestRun,
+  token: vscode.CancellationToken,
+): Promise<number> {
+  const child = spawnDotnet(args, path.dirname(projectUri.fsPath));
+
+  const handleOutput = (data: Buffer) => {
+    run.appendOutput(data.toString().replace(/\r?\n/g, '\r\n'));
+  };
+  child.stdout.on('data', handleOutput);
+  child.stderr.on('data', handleOutput);
+
+  const cancellation = token.onCancellationRequested(() => killProcessTree(child));
+  try {
+    return await new Promise<number>((resolve) => {
+      child.on('error', () => resolve(1));
+      child.on('close', (code) => resolve(code ?? 0));
+    });
+  } finally {
+    cancellation.dispose();
+  }
+}
+
+/**
+ * Spawns `dotnet` for a test run. On POSIX the child is detached into its own process
+ * group so `killProcessTree` can terminate every process it spawns (e.g. `testhost`)
+ * via the group, not just the `dotnet` launcher itself. Windows has no equivalent of
+ * process groups here; `killProcessTree` instead uses `taskkill /T` to walk the actual
+ * process tree by pid.
+ */
+function spawnDotnet(args: string[], cwd: string, env?: NodeJS.ProcessEnv): cp.ChildProcessWithoutNullStreams {
+  return cp.spawn('dotnet', args, {
+    cwd,
+    env,
+    detached: process.platform !== 'win32',
+  });
 }
 
 /**
  * Runs `dotnet test` with VSTEST_HOST_DEBUG enabled so the test host pauses and
  * prints its process id, then attaches the CoreCLR debugger to that process.
  */
-async function debugTests(
+async function runDebugProcess(
   projectUri: vscode.Uri,
   args: string[],
-  items: vscode.TestItem[],
   run: vscode.TestRun,
   logger: Logger,
   token: vscode.CancellationToken,
-) {
+): Promise<number> {
   const folder = vscode.workspace.getWorkspaceFolder(projectUri);
-  const child = cp.spawn('dotnet', args, {
-    cwd: path.dirname(projectUri.fsPath),
-    env: { ...process.env, VSTEST_HOST_DEBUG: '1' },
+  const child = spawnDotnet(args, path.dirname(projectUri.fsPath), {
+    ...process.env,
+    VSTEST_HOST_DEBUG: '1',
   });
 
   let attached = false;
@@ -466,26 +541,92 @@ async function debugTests(
   child.stderr.on('data', handleOutput);
 
   const cancellation = token.onCancellationRequested(() => {
-    child.kill();
+    killProcessTree(child);
   });
 
-  const exitCode = await new Promise<number>((resolve) => {
-    child.on('error', (err) => {
-      logger.error('Failed to launch dotnet test for debugging', err);
-      resolve(1);
+  try {
+    return await new Promise<number>((resolve) => {
+      child.on('error', (err) => {
+        logger.error('Failed to launch dotnet test for debugging', err);
+        resolve(1);
+      });
+      child.on('close', (code) => resolve(code ?? 0));
     });
-    child.on('close', (code) => resolve(code ?? 0));
-  });
+  } finally {
+    cancellation.dispose();
+  }
+}
 
-  cancellation.dispose();
+/**
+ * Reads and parses the TRX file `dotnet test` produced and reports per-test outcomes.
+ * Never marks a test as passed just because the process exited cleanly: a missing or
+ * unparseable TRX file (e.g. the run crashed before writing it, or was cancelled) is
+ * reported as an error/skip on every requested test instead of a false pass.
+ */
+function reportTrxResults(
+  leaves: vscode.TestItem[],
+  trxPath: string,
+  exitCode: number,
+  token: vscode.CancellationToken,
+  run: vscode.TestRun,
+) {
+  let trxResults: TrxTestResult[] = [];
+  let trxError: string | undefined;
 
-  for (const item of items) {
+  if (!fs.existsSync(trxPath)) {
+    trxError = token.isCancellationRequested
+      ? 'Test run was cancelled before results were produced.'
+      : `No TRX results file was produced (dotnet test exited with code ${exitCode}).`;
+  } else {
+    try {
+      trxResults = parseTrx(fs.readFileSync(trxPath, 'utf8'));
+      if (trxResults.length === 0) {
+        trxError = 'The TRX results file did not contain any test results.';
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      trxError = `Failed to parse TRX results file: ${message}`;
+    }
+  }
+
+  for (const leaf of leaves) {
     if (token.isCancellationRequested) {
-      run.skipped(item);
-    } else if (exitCode === 0) {
-      run.passed(item);
-    } else {
-      run.errored(item, new vscode.TestMessage(`Test host exited with code ${exitCode}.`));
+      run.skipped(leaf);
+      continue;
+    }
+
+    if (trxError) {
+      run.errored(leaf, new vscode.TestMessage(trxError));
+      continue;
+    }
+
+    const key = testFilters.get(leaf.id) ?? leaf.label;
+    const matches = matchTrxResults(key, trxResults);
+    const aggregated = aggregateTrxResults(matches);
+    if (!aggregated) {
+      run.errored(
+        leaf,
+        new vscode.TestMessage(`No matching result found in TRX output for '${key}'.`),
+      );
+      continue;
+    }
+
+    switch (aggregated.outcome) {
+      case 'passed':
+        run.passed(leaf);
+        break;
+      case 'failed':
+        run.failed(leaf, new vscode.TestMessage(aggregated.message ?? `Test failed: ${key}`));
+        break;
+      case 'skipped':
+        run.skipped(leaf);
+        break;
+      default:
+        run.errored(
+          leaf,
+          new vscode.TestMessage(aggregated.message ?? `Test outcome: ${aggregated.outcome}`),
+        );
+        break;
     }
   }
 }
