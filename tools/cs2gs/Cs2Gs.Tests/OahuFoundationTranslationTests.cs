@@ -112,6 +112,42 @@ namespace Demo
     }
 
     /// <summary>
+    /// Issue #914: G#'s smart-casts never narrow a property/field-access chain
+    /// (only locals), so a member/element access on a nullable-reference *field*
+    /// or *property* (declared `T?` or promoted to nullable per #1072) is rejected
+    /// (GS0158/GS0116) regardless of any preceding null-guard. cs2gs must assert
+    /// the receiver non-null (`field!!.Member`), which also matches C#'s
+    /// throw-on-null semantics for the same access. A field that stays non-null
+    /// (initialized, never null-checked/assigned) keeps a bare receiver.
+    /// </summary>
+    [Fact]
+    public void NullableReferenceFieldReceiver_GetsNonNullAssertion()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class ResFR { public bool Ok => true; }
+    public class NullFieldRecvX
+    {
+        private ResFR res;
+        private ResFR always = new ResFR();
+        public void Init() { res = new ResFR(); }
+        public bool Direct() => res.Ok;
+        public bool Guarded() => !(res is null) && res.Ok;
+        public bool Fixed() => always.Ok;
+    }
+}");
+
+        // The null-checked (`res is null`) field `res` is promoted to `ResFR?`, so
+        // every member-access receiver on it is asserted non-null.
+        Assert.Contains("res!!.Ok", printed);
+        Assert.DoesNotContain("res.Ok", printed);
+        // A field that is never null-checked/assigned-null stays non-null and
+        // keeps a bare receiver.
+        Assert.Contains("always.Ok", printed);
+    }
+
+    /// <summary>
     /// ADR-0115 §B: `x is null` / `x is not null` map to G# `== nil` / `!= nil`,
     /// and a type-test with a binder (`x is T t`) becomes a smart-cast `is T`
     /// test that drops the binder (the receiver is narrowed inside the block).
