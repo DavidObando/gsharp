@@ -23,7 +23,15 @@ public abstract class SyntaxNode
     // simple lazy cache is safe and turns Span from an O(subtree) walk into O(1)
     // amortized (each new wrapper node only re-scans its direct, already-cached
     // children). This is what kills the quadratic `*` chain parse (issue #1604).
-    private TextSpan? cachedSpan;
+    //
+    // ponytail: the LSP parses/analyzes in parallel, so first-read of .Span can
+    // race across threads. TextSpan? is a multi-field struct (bool + Start/Length)
+    // and a non-atomic write with no memory barrier can torn-read. Publish via the
+    // volatile flag below: write cachedSpan, then set spanComputed (release barrier)
+    // so readers that observe spanComputed==true (acquire barrier) see the full value.
+    // Racing threads may both compute -- fine, span is idempotent.
+    private TextSpan cachedSpan;
+    private volatile bool spanComputed;
 
     // ponytail: GetType().GetProperties() is uncached reflection, paid on every
     // GetChildren() call (i.e. every Span/Location access). One PropertyInfo[]
@@ -51,9 +59,9 @@ public abstract class SyntaxNode
     {
         get
         {
-            if (cachedSpan != null)
+            if (spanComputed)
             {
-                return cachedSpan.Value;
+                return cachedSpan;
             }
 
             // Compute the bounding span from min(start) and max(end) across all children, rather
@@ -85,6 +93,7 @@ public abstract class SyntaxNode
 
             var span = hasChild ? TextSpan.FromBounds(start, end) : new TextSpan(0, 0);
             cachedSpan = span;
+            spanComputed = true;
             return span;
         }
     }
