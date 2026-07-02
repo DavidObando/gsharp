@@ -265,6 +265,9 @@ public sealed class InitializeParams
 
     [JsonPropertyName("capabilities")]
     public JsonElement Capabilities { get; set; }
+
+    [JsonPropertyName("initializationOptions")]
+    public JsonElement InitializationOptions { get; set; }
 }
 
 public sealed class ServerInfo

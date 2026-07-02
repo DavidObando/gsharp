@@ -713,8 +713,10 @@ public class Program
     }
 
     /// <summary>
-    /// Parses a comma-separated list of diagnostic IDs. Accepts both canonical
-    /// form (<c>GS0001</c>) and bare numeric form (<c>0001</c> or <c>1</c>).
+    /// Parses a comma- or semicolon-separated list of diagnostic IDs. Accepts both canonical
+    /// form (<c>GS0001</c>) and bare numeric form (<c>0001</c> or <c>1</c>). Semicolon is
+    /// supported because MSBuild-forwarded properties such as NoWarn/WarningsAsErrors are
+    /// conventionally semicolon-delimited (e.g. <c>$(NoWarn);GS0012</c>).
     /// </summary>
     private static IEnumerable<string> ParseIdList(string value)
     {
@@ -723,7 +725,7 @@ public class Program
             yield break;
         }
 
-        foreach (var raw in value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var raw in value.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             if (raw.StartsWith("GS", StringComparison.OrdinalIgnoreCase))
             {

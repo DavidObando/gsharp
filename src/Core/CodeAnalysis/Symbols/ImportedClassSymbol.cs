@@ -216,6 +216,24 @@ public sealed class ImportedClassSymbol : Symbol
                 continue;
             }
 
+            // Issue #1599: a pre-declared `out r` (or `ref`) whose pointee is a
+            // same-compilation user value type (a user enum or non-class struct)
+            // has no reference-context CLR type, so its by-ref erasure cannot
+            // match a value-type-constrained generic by-ref parameter such as the
+            // `out TEnum` of `Enum.TryParse[Color](string, out r)` (the parameter
+            // is closed over an `object`/placeholder erasure). Feed the same
+            // "matches any by-ref parameter" sentinel used for inline `out var`
+            // so the value-type-constrained generic overload stays applicable;
+            // the recovered explicit type-argument symbols drive the constraint
+            // check and emit. Without this the call collapses to GS0159.
+            if (arguments[i] is BoundAddressOfExpression { Operand.Type: var byRefPointee }
+                && byRefPointee is EnumSymbol or StructSymbol { IsClass: false }
+                && byRefPointee.ClrType == null)
+            {
+                argTypes[i] = OverloadResolution.InlineOutVarArgumentType;
+                continue;
+            }
+
             // Issue #530: use effective CLR type so nullable value types
             // (e.g. int32?) are matched as Nullable<T> in overload resolution.
             // Issue #533: allow null (nil literal) through; overload resolution
@@ -275,32 +293,29 @@ public sealed class ImportedClassSymbol : Symbol
             argTypes[i] = t;
         }
 
-        // Issue #658: set up supplementary interface check for user-class args.
-        if (hasUserClassArg)
-        {
-            OverloadResolution.SupplementaryInterfaceCheck = (source, target) =>
-                IsUserClassAssignableToInterface(arguments, argTypes, source, target);
-        }
+        // Issue #658 / #1634: supplementary interface check for user-class args,
+        // threaded as a call-local parameter into Resolve instead of a shared
+        // static so nested/concurrent binds can't clobber it.
+        Func<Type, Type, bool> supplementaryInterfaceCheck = hasUserClassArg
+            ? (source, target) => IsUserClassAssignableToInterface(arguments, argTypes, source, target)
+            : null;
 
-        OverloadResolution.Result<MethodInfo> result;
-        try
-        {
-            // Issue #1325: recover the symbolic type-argument vector per candidate
-            // so the generic-constraint check can see through the `object`
-            // erasure of same-compilation user value types (a user struct must
-            // satisfy `where T : struct`, e.g. MemoryMarshal.Cast/AsBytes).
-            var symbolicArgVector = MemberLookup.BuildSymbolicArgTypeVector(
-                receiverType: null,
-                ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
-            result = OverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs, projectTypeArgument, ComputeInterpolatedStringArgFlags(callExpression, arguments.Length), argumentNames, closed => MemberLookup.BuildSymbolicMethodTypeArgs(closed, typeArgSymbols, symbolicArgVector));
-        }
-        finally
-        {
-            if (hasUserClassArg)
-            {
-                OverloadResolution.SupplementaryInterfaceCheck = null;
-            }
-        }
+        // Issue #1325: recover the symbolic type-argument vector per candidate
+        // so the generic-constraint check can see through the `object`
+        // erasure of same-compilation user value types (a user struct must
+        // satisfy `where T : struct`, e.g. MemoryMarshal.Cast/AsBytes).
+        var symbolicArgVector = MemberLookup.BuildSymbolicArgTypeVector(
+            receiverType: null,
+            ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+        var result = OverloadResolution.Resolve(
+            nameMatches,
+            argTypes,
+            explicitTypeArgs,
+            projectTypeArgument,
+            ComputeInterpolatedStringArgFlags(callExpression, arguments.Length),
+            argumentNames,
+            closed => MemberLookup.BuildSymbolicMethodTypeArgs(closed, typeArgSymbols, symbolicArgVector),
+            supplementaryInterfaceCheck: supplementaryInterfaceCheck);
 
         switch (result.Outcome)
         {
@@ -325,9 +340,6 @@ public sealed class ImportedClassSymbol : Symbol
                 // the type-erased `IEnumerable<object>`.
                 if (returnOverride == null)
                 {
-                    var symbolicArgVector = MemberLookup.BuildSymbolicArgTypeVector(
-                        receiverType: null,
-                        ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
                     var symbolicMethodTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(result.Best, typeArgSymbols, symbolicArgVector);
                     returnOverride = MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(result.Best, symbolicMethodTypeArgs, receiverType: null);
                 }

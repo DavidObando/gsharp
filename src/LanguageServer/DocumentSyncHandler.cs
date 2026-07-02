@@ -37,21 +37,11 @@ public static class DocumentSyncHandler
 
     public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState project, string filePath, WorkspaceState workspace)
     {
-        var newLines = new List<int>();
-        int nextNewLine = text.IndexOf('\n');
-        while (nextNewLine >= 0)
-        {
-            newLines.Add(nextNewLine);
-            nextNewLine = text.IndexOf('\n', nextNewLine + 1);
-        }
-
-        var diagnostics = new List<Diagnostic>();
-
-        // When the file belongs to a project, bind it as part of the project-level compilation
-        // for cross-file awareness, but make sure that compilation reflects the in-memory editor
-        // text. The project keeps its own SyntaxTree per file; we sync this file's tree with the
-        // current text and then filter diagnostics by that exact tree so squiggles for the edited
-        // file are reported (and diagnostics for other files in the project are excluded).
+        // Mutating path: only safe to call while holding the write gate (didOpen/didChange/
+        // didSave). UpdateFile overwrites the project's shared per-file SyntaxTree with no lock
+        // of its own; calling it off-gate lets a stale snapshot clobber a newer concurrently
+        // written tree (issue #1657). Non-mutating requests must use
+        // <see cref="ComputeDiagnosticsForSnapshot"/> instead.
         Compilation compilation;
         SyntaxTree syntaxTree;
         bool useProject = project != null && !string.IsNullOrEmpty(filePath) && project.ContainsFile(filePath);
@@ -65,6 +55,47 @@ public static class DocumentSyncHandler
             syntaxTree = SyntaxTree.Parse(text);
             compilation = new Compilation(syntaxTree);
         }
+
+        return BuildResult(syntaxTree, compilation, useProject, skipBinding, project, workspace);
+    }
+
+    /// <summary>
+    /// Read-only counterpart to <see cref="ComputeDiagnostics(string, bool, ProjectState, string, WorkspaceState)"/>
+    /// for non-mutating requests (e.g. the textDocument/diagnostic pull handler) that run off the
+    /// write gate. Binds against the caller-supplied <paramref name="syntaxTree"/> snapshot
+    /// exactly as-is: it never calls <see cref="ProjectState.UpdateFile"/> and never mutates
+    /// <paramref name="project"/>'s cached trees or compilation, so a diagnostics pull for a
+    /// stale snapshot can never overwrite a newer tree written by a concurrent didChange
+    /// (issue #1657). The returned diagnostics always reflect exactly the requested snapshot text.
+    /// </summary>
+    /// <param name="syntaxTree">The already-parsed snapshot tree to bind and report diagnostics for.</param>
+    /// <param name="skipBinding">When <see langword="true"/>, skips the (potentially expensive) binding pass and reports only syntax diagnostics.</param>
+    /// <param name="project">The project owning <paramref name="filePath"/>, or <see langword="null"/> if the file is not part of a project.</param>
+    /// <param name="filePath">Absolute path to the <c>.gs</c> file the snapshot belongs to.</param>
+    /// <param name="workspace">The current workspace state, used to resolve cross-file symbols during binding.</param>
+    /// <returns>The computed diagnostics and binding metadata for <paramref name="syntaxTree"/>.</returns>
+    public static DiagnosticComputationResult ComputeDiagnosticsForSnapshot(SyntaxTree syntaxTree, bool skipBinding, ProjectState project, string filePath, WorkspaceState workspace)
+    {
+        bool useProject = project != null && !string.IsNullOrEmpty(filePath) && project.ContainsFile(filePath);
+        Compilation compilation = useProject
+            ? project.GetCompilationForSnapshot(filePath, syntaxTree)
+            : new Compilation(syntaxTree);
+
+        return BuildResult(syntaxTree, compilation, useProject, skipBinding, project, workspace);
+    }
+
+    private static DiagnosticComputationResult BuildResult(SyntaxTree syntaxTree, Compilation compilation, bool useProject, bool skipBinding, ProjectState project, WorkspaceState workspace)
+    {
+        var text = syntaxTree.Text.ToString();
+        var newLines = new List<int>();
+        int nextNewLine = text.IndexOf('\n');
+        while (nextNewLine >= 0)
+        {
+            newLines.Add(nextNewLine);
+            nextNewLine = text.IndexOf('\n', nextNewLine + 1);
+        }
+
+        var diagnostics = new List<Diagnostic>();
 
         foreach (var d in syntaxTree.Diagnostics)
         {

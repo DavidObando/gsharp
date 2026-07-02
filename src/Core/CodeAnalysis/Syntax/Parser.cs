@@ -6230,8 +6230,18 @@ public class Parser
             MatchToken(SyntaxKind.LetKeyword);
         }
 
-        var decl = (VariableDeclarationSyntax)ParseVariableDeclaration();
-        return new UsingStatementSyntax(syntaxTree, keyword, decl);
+        var decl = ParseVariableDeclaration();
+        if (decl is not VariableDeclarationSyntax variableDecl)
+        {
+            // Issue #1603: `let (a, b) = …` / `let { … } = …` deconstructions
+            // aren't a single variable declaration, so `using` can't wrap
+            // them. Report and recover with the deconstruction statement
+            // itself (no disposal), instead of an InvalidCastException.
+            Diagnostics.ReportUsingRequiresSingleVariableDeclaration(decl.Location);
+            return decl;
+        }
+
+        return new UsingStatementSyntax(syntaxTree, keyword, variableDecl);
     }
 
     private StatementSyntax ParseAwaitUsingStatement()
@@ -6245,8 +6255,14 @@ public class Parser
             MatchToken(SyntaxKind.LetKeyword);
         }
 
-        var decl = (VariableDeclarationSyntax)ParseVariableDeclaration();
-        return new AwaitUsingStatementSyntax(syntaxTree, awaitKeyword, usingKeyword, decl);
+        var decl = ParseVariableDeclaration();
+        if (decl is not VariableDeclarationSyntax variableDecl)
+        {
+            Diagnostics.ReportUsingRequiresSingleVariableDeclaration(decl.Location);
+            return decl;
+        }
+
+        return new AwaitUsingStatementSyntax(syntaxTree, awaitKeyword, usingKeyword, variableDecl);
     }
 
     private StatementSyntax ParseGoStatement()

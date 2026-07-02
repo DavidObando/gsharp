@@ -4292,6 +4292,23 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #1603: GS0417 — a <c>using</c> or <c>await using</c> statement's
+    /// declaration was a tuple or named deconstruction (<c>let (a, b) = …</c>
+    /// or <c>let { … } = …</c>) rather than a single variable declaration.
+    /// <c>using</c> disposes exactly one bound value, so deconstruction is not
+    /// supported there; report a diagnostic instead of crashing the parser.
+    /// </summary>
+    /// <param name="location">The text location of the offending declaration.</param>
+    public void ReportUsingRequiresSingleVariableDeclaration(TextLocation location)
+    {
+        Report(
+            location,
+            "GS0417",
+            "A 'using' statement requires a single variable declaration ('let'/'var'/'const name = …'); tuple or named deconstruction is not supported here (issue #1603).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Issue #987: GS0386 — an attempt to construct (instantiate) an abstract
     /// class. A class is abstract when it declares (or inherits without
     /// overriding) an abstract method — a no-body <c>open func F() R;</c>. Like

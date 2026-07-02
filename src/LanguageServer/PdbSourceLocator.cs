@@ -10,6 +10,7 @@ using System.Linq;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
+using System.Threading;
 
 namespace GSharp.LanguageServer;
 
@@ -22,8 +23,12 @@ namespace GSharp.LanguageServer;
 /// Per-assembly readers are cached for the lifetime of the language server.
 /// The cache key is the resolved assembly path plus its last-write time, so a
 /// successful rebuild invalidates the cached PDB automatically on the next
-/// lookup. <see cref="MetadataReaderProvider"/> instances are intentionally not
-/// disposed: the LSP holds them open for as long as the workspace lives.
+/// lookup. The cache stores the owning <see cref="MetadataReaderProvider"/>
+/// alongside its <see cref="MetadataReader"/> so the provider (and the native
+/// or managed memory it owns) stays rooted for as long as the reader is in
+/// use. When a rebuild replaces a cache entry, the previous provider is
+/// disposed under the same per-path lock used to hand out readers, so it is
+/// never disposed while another thread is still reading through it.
 /// <para>
 /// MSBuild emits the public-API <c>refint/{Name}.dll</c> for any project with
 /// <c>ProduceReferenceAssembly=true</c> (the SDK default for libraries), and
@@ -36,6 +41,13 @@ namespace GSharp.LanguageServer;
 public static class PdbSourceLocator
 {
     private static readonly ConcurrentDictionary<string, CachedReader> ReaderCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Per-path locks that serialize cache load/replace against reader use, so
+    /// a cache replacement never disposes a <see cref="MetadataReaderProvider"/>
+    /// while another thread is still reading through it.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, object> PathLocks = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Resolves a method's first sequence point to a source file and span.
@@ -59,18 +71,21 @@ public static class PdbSourceLocator
 
         // Per cmt above: prefer the runtime assembly's PDB when the input is a refint shim.
         var probePath = RebaseRefIntPath(assemblyFilePath);
-        var reader = GetOrLoadReader(probePath);
-        if (reader == null && !string.Equals(probePath, assemblyFilePath, StringComparison.OrdinalIgnoreCase))
+        var lease = GetOrLoadReaderLease(probePath);
+        if (!lease.IsValid && !string.Equals(probePath, assemblyFilePath, StringComparison.OrdinalIgnoreCase))
         {
-            reader = GetOrLoadReader(assemblyFilePath);
+            lease = GetOrLoadReaderLease(assemblyFilePath);
         }
 
-        if (reader == null)
+        using (lease)
         {
-            return false;
-        }
+            if (!lease.IsValid)
+            {
+                return false;
+            }
 
-        return TryReadFirstSequencePoint(reader, methodMetadataToken, out location);
+            return TryReadFirstSequencePoint(lease.Reader, methodMetadataToken, out location);
+        }
     }
 
     /// <summary>
@@ -94,55 +109,58 @@ public static class PdbSourceLocator
         }
 
         var probePath = RebaseRefIntPath(assemblyFilePath);
-        var reader = GetOrLoadReader(probePath);
-        if (reader == null && !string.Equals(probePath, assemblyFilePath, StringComparison.OrdinalIgnoreCase))
+        var lease = GetOrLoadReaderLease(probePath);
+        if (!lease.IsValid && !string.Equals(probePath, assemblyFilePath, StringComparison.OrdinalIgnoreCase))
         {
-            reader = GetOrLoadReader(assemblyFilePath);
+            lease = GetOrLoadReaderLease(assemblyFilePath);
         }
 
-        if (reader == null)
+        using (lease)
         {
-            return false;
-        }
-
-        // The PDB MethodDebugInformation table is parallel to the PE
-        // MethodDef table; we don't need the PE here because the supplied
-        // method tokens are already resolved by the caller from
-        // typeDef.GetMethods(). Resolve them via the PE alongside the PDB.
-        if (!TryReadTypeMethodTokens(probePath, typeMetadataToken, out var methodTokens))
-        {
-            if (!string.Equals(probePath, assemblyFilePath, StringComparison.OrdinalIgnoreCase))
+            if (!lease.IsValid)
             {
-                if (!TryReadTypeMethodTokens(assemblyFilePath, typeMetadataToken, out methodTokens))
+                return false;
+            }
+
+            // The PDB MethodDebugInformation table is parallel to the PE
+            // MethodDef table; we don't need the PE here because the supplied
+            // method tokens are already resolved by the caller from
+            // typeDef.GetMethods(). Resolve them via the PE alongside the PDB.
+            if (!TryReadTypeMethodTokens(probePath, typeMetadataToken, out var methodTokens))
+            {
+                if (!string.Equals(probePath, assemblyFilePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!TryReadTypeMethodTokens(assemblyFilePath, typeMetadataToken, out methodTokens))
+                    {
+                        return false;
+                    }
+                }
+                else
                 {
                     return false;
                 }
             }
-            else
+
+            SourceLocation? best = null;
+            foreach (var methodToken in methodTokens)
+            {
+                if (TryReadFirstSequencePoint(lease.Reader, methodToken, out var candidate))
+                {
+                    if (best == null || IsEarlier(candidate, best.Value))
+                    {
+                        best = candidate;
+                    }
+                }
+            }
+
+            if (best == null)
             {
                 return false;
             }
-        }
 
-        SourceLocation? best = null;
-        foreach (var methodToken in methodTokens)
-        {
-            if (TryReadFirstSequencePoint(reader, methodToken, out var candidate))
-            {
-                if (best == null || IsEarlier(candidate, best.Value))
-                {
-                    best = candidate;
-                }
-            }
+            location = best.Value;
+            return true;
         }
-
-        if (best == null)
-        {
-            return false;
-        }
-
-        location = best.Value;
-        return true;
     }
 
     private static bool IsEarlier(SourceLocation a, SourceLocation b)
@@ -252,39 +270,95 @@ public static class PdbSourceLocator
         }
     }
 
-    private static MetadataReader GetOrLoadReader(string assemblyFilePath)
+    /// <summary>
+    /// Acquires the per-path lock, ensures the cached reader for
+    /// <paramref name="assemblyFilePath"/> is up to date with the file's
+    /// current write time (disposing and replacing a stale
+    /// <see cref="MetadataReaderProvider"/> if needed), and returns a lease
+    /// that holds the lock until disposed. The caller must use the reader
+    /// only while the lease is held (e.g. inside a <c>using</c> block) and
+    /// must check <see cref="ReaderLease.IsValid"/> before use.
+    /// </summary>
+    /// <remarks>
+    /// Every path out of this method (normal return, invalid-lease return,
+    /// or an exception) releases <c>pathLock</c> exactly once: the lock is
+    /// only handed off to the returned <see cref="ReaderLease"/> on success,
+    /// and the local reference is cleared as soon as ownership transfers, so
+    /// the <c>finally</c> block only releases the lock when this method is
+    /// still holding it itself. This keeps a thrown exception (e.g. a
+    /// <see cref="BadImageFormatException"/> from a partially-written PDB)
+    /// from leaving the lock held forever, which would otherwise deadlock
+    /// every future lookup for the same assembly path. A freshly loaded
+    /// <see cref="MetadataReaderProvider"/> that has not yet been installed
+    /// into the cache is disposed on the exception path so it does not leak
+    /// its native or managed buffer.
+    /// </remarks>
+    private static ReaderLease GetOrLoadReaderLease(string assemblyFilePath)
     {
-        if (!File.Exists(assemblyFilePath))
-        {
-            return null;
-        }
+        var pathLock = PathLocks.GetOrAdd(assemblyFilePath, static _ => new object());
+        Monitor.Enter(pathLock);
 
-        DateTime mtimeUtc;
+        MetadataReaderProvider loadedProvider = null;
         try
         {
-            mtimeUtc = File.GetLastWriteTimeUtc(assemblyFilePath);
-        }
-        catch (IOException)
-        {
-            return null;
-        }
+            if (!File.Exists(assemblyFilePath))
+            {
+                return ReaderLease.Invalid;
+            }
 
-        if (ReaderCache.TryGetValue(assemblyFilePath, out var cached) && cached.MtimeUtc == mtimeUtc)
-        {
-            return cached.Reader;
-        }
+            DateTime mtimeUtc;
+            try
+            {
+                mtimeUtc = File.GetLastWriteTimeUtc(assemblyFilePath);
+            }
+            catch (IOException)
+            {
+                return ReaderLease.Invalid;
+            }
 
-        var loaded = LoadReader(assemblyFilePath);
-        if (loaded == null)
-        {
-            return null;
-        }
+            if (ReaderCache.TryGetValue(assemblyFilePath, out var cached) && cached.MtimeUtc == mtimeUtc)
+            {
+                var hitLease = new ReaderLease(pathLock, cached.Reader);
+                pathLock = null; // Ownership transferred to the lease; do not release in finally.
+                return hitLease;
+            }
 
-        ReaderCache[assemblyFilePath] = new CachedReader(loaded, mtimeUtc);
-        return loaded;
+            loadedProvider = LoadReaderProvider(assemblyFilePath);
+            if (loadedProvider == null)
+            {
+                return ReaderLease.Invalid;
+            }
+
+            var loadedReader = loadedProvider.GetMetadataReader();
+            ReaderCache[assemblyFilePath] = new CachedReader(loadedProvider, loadedReader, mtimeUtc);
+            loadedProvider = null; // Now owned by the cache; do not dispose it below.
+
+            // The stale entry's reader is no longer reachable from the cache and no
+            // other thread can be reading it: we hold this path's lock, and every
+            // reader is only ever used while that lock is held.
+            cached.Provider?.Dispose();
+
+            var missLease = new ReaderLease(pathLock, loadedReader);
+            pathLock = null; // Ownership transferred to the lease; do not release in finally.
+            return missLease;
+        }
+        catch
+        {
+            // A provider that was loaded but never installed into the cache
+            // would otherwise leak its underlying buffer.
+            loadedProvider?.Dispose();
+            throw;
+        }
+        finally
+        {
+            if (pathLock != null)
+            {
+                Monitor.Exit(pathLock);
+            }
+        }
     }
 
-    private static MetadataReader LoadReader(string assemblyFilePath)
+    private static MetadataReaderProvider LoadReaderProvider(string assemblyFilePath)
     {
         try
         {
@@ -295,8 +369,7 @@ public static class PdbSourceLocator
                 // bytes alive after the underlying file handle is closed
                 // (FromPortablePdbImage stores the buffer directly).
                 var bytes = File.ReadAllBytes(sidecar);
-                var provider = MetadataReaderProvider.FromPortablePdbImage(System.Collections.Immutable.ImmutableArray.Create(bytes));
-                return provider.GetMetadataReader();
+                return MetadataReaderProvider.FromPortablePdbImage(System.Collections.Immutable.ImmutableArray.Create(bytes));
             }
 
             // Probe the PE for an embedded PDB.
@@ -314,8 +387,11 @@ public static class PdbSourceLocator
                 return null;
             }
 
-            var embeddedProvider = peReader.ReadEmbeddedPortablePdbDebugDirectoryData(embedded);
-            return embeddedProvider.GetMetadataReader();
+            // The embedded-PDB provider owns a native-heap buffer that is
+            // released by its finalizer; it must be cached (not just the
+            // reader it hands out) so the buffer stays alive for as long as
+            // the reader is used.
+            return peReader.ReadEmbeddedPortablePdbDebugDirectoryData(embedded);
         }
         catch (IOException)
         {
@@ -373,5 +449,60 @@ public static class PdbSourceLocator
     /// </summary>
     public readonly record struct SourceLocation(string FilePath, int StartLine, int StartColumn, int EndLine, int EndColumn);
 
-    private readonly record struct CachedReader(MetadataReader Reader, DateTime MtimeUtc);
+    /// <summary>
+    /// A cache entry that keeps the <see cref="MetadataReaderProvider"/>
+    /// rooted alongside the <see cref="MetadataReader"/> it produced, so the
+    /// provider (and any native or managed buffer it owns) cannot be
+    /// collected and finalized while the reader is still cached and in use.
+    /// </summary>
+    private readonly record struct CachedReader(MetadataReaderProvider Provider, MetadataReader Reader, DateTime MtimeUtc);
+
+    /// <summary>
+    /// Holds the per-path lock for a cached reader while the caller uses it.
+    /// Disposing the lease releases the lock. Always check
+    /// <see cref="IsValid"/> before using <see cref="Reader"/>: an invalid
+    /// lease means no lock is held and <see cref="Reader"/> is <see langword="null"/>.
+    /// </summary>
+    private readonly struct ReaderLease : IDisposable
+    {
+        /// <summary>
+        /// A lease value representing a failed lookup: no lock is held.
+        /// </summary>
+        public static readonly ReaderLease Invalid = default;
+
+        private readonly object pathLock;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ReaderLease"/> struct
+        /// that holds <paramref name="pathLock"/> until disposed.
+        /// </summary>
+        /// <param name="pathLock">The per-path lock, already entered by the caller.</param>
+        /// <param name="reader">The cached reader to hand out while the lock is held.</param>
+        public ReaderLease(object pathLock, MetadataReader reader)
+        {
+            this.pathLock = pathLock;
+            Reader = reader;
+        }
+
+        /// <summary>
+        /// Gets the cached reader. Only valid to use while the lease is held (i.e. before <see cref="Dispose"/> is called).
+        /// </summary>
+        public MetadataReader Reader { get; }
+
+        /// <summary>
+        /// Gets a value indicating whether this lease holds a lock and carries a usable <see cref="Reader"/>.
+        /// </summary>
+        public bool IsValid => pathLock != null;
+
+        /// <summary>
+        /// Releases the per-path lock acquired for this lease, if any.
+        /// </summary>
+        public void Dispose()
+        {
+            if (pathLock != null)
+            {
+                Monitor.Exit(pathLock);
+            }
+        }
+    }
 }

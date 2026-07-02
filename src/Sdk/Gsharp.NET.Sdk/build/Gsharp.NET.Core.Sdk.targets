@@ -24,9 +24,62 @@
     <_ExplicitReference Include="$(FrameworkPathOverride)\mscorlib.dll" Condition=" '$(FrameworkPathOverride)' != '' " />
   </ItemGroup>
 
+  <!-- Issue #1666: property-only changes (e.g. `-p:Version=`, `-p:DebugType=`,
+       `-p:Deterministic=`, `-p:NoWarn=`, `-p:TreatWarningsAsErrors=`,
+       `-p:OutputType=`, ...) touch nothing on disk that $(MSBuildAllProjects),
+       @(Compile), or @(ReferencePathWithRefAssemblies) would catch, so
+       CoreCompile's own up-to-date check silently skips gsc and ships a
+       stale assembly (e.g. with the previous build's version stamp). csc
+       avoids this via the .NET SDK's CoreCompileInputs.cache idiom (see
+       Microsoft.Managed.Core.targets / _GenerateCompileDependencyCache):
+       hash every
+       compilation-affecting property BuildTask consumes into a cache file
+       whose timestamp — via WriteOnlyWhenDifferent — only advances when the
+       hash actually changes, then list that file as a CoreCompile input. -->
+  <Target Name="_GsharpCreateCoreCompileInputsCache"
+          BeforeTargets="CoreCompile">
+    <PropertyGroup>
+      <_GsharpCoreCompileInputsCacheFile>$(IntermediateOutputPath)$(TargetName).CoreCompileInputs.cache</_GsharpCoreCompileInputsCacheFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <_GsharpCoreCompileInputsToHash Include="$(Version)" />
+      <_GsharpCoreCompileInputsToHash Include="$(DebugType)" />
+      <_GsharpCoreCompileInputsToHash Include="$(Deterministic)" />
+      <_GsharpCoreCompileInputsToHash Include="$(NoWarn)" />
+      <_GsharpCoreCompileInputsToHash Include="$(TreatWarningsAsErrors)" />
+      <_GsharpCoreCompileInputsToHash Include="$(WarningsAsErrors)" />
+      <_GsharpCoreCompileInputsToHash Include="$(OutputType)" />
+      <_GsharpCoreCompileInputsToHash Include="$(Optimize)" />
+      <_GsharpCoreCompileInputsToHash Include="$(SourceLink)" />
+      <_GsharpCoreCompileInputsToHash Include="$(EmbedAllSources)" />
+      <_GsharpCoreCompileInputsToHash Include="$(ProduceReferenceAssembly)" />
+      <_GsharpCoreCompileInputsToHash Include="$(GenerateDocumentationFile)" />
+    </ItemGroup>
+
+    <Hash ItemsToHash="@(_GsharpCoreCompileInputsToHash)">
+      <Output TaskParameter="HashResult" PropertyName="_GsharpCoreCompileInputsHash" />
+    </Hash>
+
+    <WriteLinesToFile Lines="$(_GsharpCoreCompileInputsHash)"
+                       File="$(_GsharpCoreCompileInputsCacheFile)"
+                       Overwrite="True"
+                       WriteOnlyWhenDifferent="True" />
+
+    <ItemGroup>
+      <FileWrites Include="$(_GsharpCoreCompileInputsCacheFile)" />
+    </ItemGroup>
+  </Target>
+
   <Target Name="CoreCompile"
-          Inputs="$(MSBuildAllProjects);@(Compile);@(ReferencePathWithRefAssemblies)"
-          Outputs="@(IntermediateAssembly)"
+          Inputs="$(MSBuildAllProjects);
+                  @(Compile);
+                  @(ReferencePathWithRefAssemblies);
+                  $(IntermediateOutputPath)$(TargetName).CoreCompileInputs.cache"
+          Outputs="@(IntermediateAssembly);
+                   $(DocumentationFile);
+                   @(IntermediateRefAssembly);
+                   @(_DebugSymbolsIntermediatePath)"
           DependsOnTargets="$(CoreCompileDependsOn)">
 
     <!-- When the SDK asks for a reference assembly (ProduceReferenceAssembly=true),

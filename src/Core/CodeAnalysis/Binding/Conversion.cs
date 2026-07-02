@@ -870,6 +870,27 @@ public sealed class Conversion
         // required), so the emitter treats this as a no-op. Restricted to
         // genuine reference types on both sides to avoid colliding with
         // the boxing / unboxing / value-type-to-interface rules above.
+        //
+        // Issue #1627: this arm only checks CLR-level assignability, and
+        // `NullableTypeSymbol` relays its underlying CLR type (see
+        // `NullableTypeSymbol.ClrType`), so an imported nullable-reference
+        // source `S?` and its non-nullable form `S` looked like two ordinary
+        // non-value-type CLR types — misclassifying `S? -> S` as an implicit
+        // no-op upcast (Kotlin-model null safety requires GS0154/GS0155 there
+        // instead; the caller must write `!!`). User-declared classes/
+        // interfaces carry a null ClrType during binding and were never
+        // affected by that leak. Guard this arm specifically (rather than
+        // rejecting earlier in the function) so it does not disturb any later
+        // EXPLICIT conversion arm — e.g. the #1532 `object?/object -> T`
+        // explicit unboxing cast — which must still see a genuine `S?` source
+        // and classify it on its own terms. Every `S? -> U?` (nullable
+        // target) case was already handled above and never reaches this arm.
+        if (from is NullableTypeSymbol fromNullableUpcastSrc
+            && IsReferenceLikeTarget(fromNullableUpcastSrc.UnderlyingType))
+        {
+            return Conversion.None;
+        }
+
         if (from?.ClrType != null && to?.ClrType != null
             && !from.ClrType.IsValueType && !to.ClrType.IsValueType
             && !from.ClrType.IsPointer && !to.ClrType.IsPointer

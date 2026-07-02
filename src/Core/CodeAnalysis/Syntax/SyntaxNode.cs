@@ -18,6 +18,17 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public abstract class SyntaxNode
 {
+    // ponytail: nodes are immutable once handed back to the caller -- the parser's
+    // few `{ get; set; }` properties (e.g. StructDeclarationSyntax.SharedBlock) are
+    // only ever assigned right after `new X(...)`, before anyone reads .Span. So a
+    // simple lazy cache is safe and turns Span from an O(subtree) walk into O(1)
+    // amortized (each new wrapper node only re-scans its direct, already-cached
+    // children). This is what kills the quadratic `*` chain parse (issue #1604).
+    //
+    // ponytail: the LSP parses/analyzes in parallel, so first-read of .Span can
+    // race across threads. The cache is published as a single boxed reference store
+    // below (see cachedSpan), which is atomic and needs no separate "computed" flag.
+
     /// <summary>
     /// Cached, per-type child accessors used by <see cref="GetChildren"/>. Built once per
     /// concrete node type from <c>GetType().GetProperties()</c> so the enumeration order is
