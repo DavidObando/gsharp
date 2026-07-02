@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.LanguageServer.Protocol;
 
@@ -39,14 +40,16 @@ public static class FoldingComputer
     /// given <see cref="DocumentContent"/>.
     /// </remarks>
     /// <param name="content">The document content to compute folding ranges for.</param>
+    /// <param name="ct">Token checked between tree nodes so a superseded request aborts a large-file walk.</param>
     /// <returns>The folding ranges, ordered by start line then end line.</returns>
-    public static IEnumerable<FoldingRange> ComputeFoldings(DocumentContent content)
+    public static IEnumerable<FoldingRange> ComputeFoldings(DocumentContent content, CancellationToken ct = default)
     {
         var seen = new HashSet<(int StartLine, int EndLine)>();
         var ranges = new List<FoldingRange>();
 
         foreach (SyntaxNode node in DescendantNodesAndSelf(content.SyntaxTree.Root))
         {
+            ct.ThrowIfCancellationRequested();
             FoldingRange range = TryComputeBraceFold(node, content);
             if (range != null && seen.Add((range.StartLine, range.EndLine)))
             {

@@ -6,6 +6,8 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -118,14 +120,14 @@ public static class SemanticLookup
         return best;
     }
 
-    public static Symbol ResolveSymbol(Compilation compilation, SyntaxToken identifierToken)
+    public static Symbol ResolveSymbol(Compilation compilation, SyntaxToken identifierToken, CancellationToken ct = default)
     {
         if (identifierToken == null || identifierToken.IsMissing || identifierToken.Kind != SyntaxKind.IdentifierToken)
         {
             return null;
         }
 
-        var model = BuildModel(compilation);
+        var model = BuildModel(compilation, ct);
         return model.Resolve(identifierToken);
     }
 
@@ -377,7 +379,7 @@ public static class SemanticLookup
         return null;
     }
 
-    public static IEnumerable<SyntaxToken> FindReferences(Compilation compilation, Symbol target)
+    public static IEnumerable<SyntaxToken> FindReferences(Compilation compilation, Symbol target, CancellationToken ct = default)
     {
         if (target == null)
         {
@@ -392,7 +394,7 @@ public static class SemanticLookup
         // ResolveImplicitThisMember). On a small project with a handful of files
         // this still adds up to many seconds. Caching the reverse index on the
         // SemanticModel collapses N FindReferences calls into one walk.
-        return BuildModel(compilation).GetReferences(target);
+        return BuildModel(compilation, ct).GetReferences(target, ct);
     }
 
     public static bool IsValidIdentifier(string text)
@@ -558,9 +560,9 @@ public static class SemanticLookup
         }
     }
 
-    private static SemanticModel BuildModel(Compilation compilation)
+    private static SemanticModel BuildModel(Compilation compilation, CancellationToken ct = default)
     {
-        return ModelCache.GetValue(compilation, c => BuildModelUncached(c, useIncrementalCaches: true));
+        return ModelCache.GetValue(compilation, c => BuildModelUncached(c, useIncrementalCaches: true, ct));
     }
 
     /// <summary>
@@ -577,13 +579,18 @@ public static class SemanticLookup
     /// </summary>
     /// <param name="compilation">The compilation to build a model for.</param>
     /// <param name="useIncrementalCaches">Whether to read/write the instance-keyed memo caches.</param>
+    /// <param name="ct">Token observed between per-file/per-struct build steps.</param>
     /// <returns>The semantic model.</returns>
-    private static SemanticModel BuildModelUncached(Compilation compilation, bool useIncrementalCaches)
+    private static SemanticModel BuildModelUncached(Compilation compilation, bool useIncrementalCaches, CancellationToken ct = default)
     {
         var trees = compilation.SyntaxTrees;
         var bucketsByTree = new Dictionary<SyntaxTree, NodeBuckets>(trees.Length);
         foreach (var tree in trees)
         {
+            // Bucketing walks every node in the tree; check between files so a
+            // superseded request (fast typing) aborts instead of running the
+            // whole cold multi-file build to completion (issue #1662).
+            ct.ThrowIfCancellationRequested();
             bucketsByTree[tree] = GetNodeBuckets(tree, useIncrementalCaches);
         }
 
@@ -621,6 +628,9 @@ public static class SemanticLookup
 
         foreach (var aggregate in compilation.GlobalScope.Structs)
         {
+            // Per-struct member mapping below is O(members); check between structs
+            // so cancellation lands within one cold build instead of after it.
+            ct.ThrowIfCancellationRequested();
             globals[aggregate.Name] = aggregate;
             if (aggregate.Declaration != null)
             {
@@ -1530,7 +1540,7 @@ public static class SemanticLookup
             return Array.Empty<VariableSymbol>();
         }
 
-        public IReadOnlyList<SyntaxToken> GetReferences(Symbol target)
+        public IReadOnlyList<SyntaxToken> GetReferences(Symbol target, CancellationToken ct = default)
         {
             if (target == null)
             {
@@ -1549,7 +1559,7 @@ public static class SemanticLookup
                 {
                     if (this.referencesIndex == null)
                     {
-                        this.referencesIndex = this.BuildReferencesIndex();
+                        this.referencesIndex = this.BuildReferencesIndex(ct);
                     }
 
                     index = this.referencesIndex;
@@ -1559,7 +1569,7 @@ public static class SemanticLookup
             return index.TryGetValue(target, out var tokens) ? tokens : (IReadOnlyList<SyntaxToken>)Array.Empty<SyntaxToken>();
         }
 
-        private Dictionary<Symbol, List<SyntaxToken>> BuildReferencesIndex()
+        private Dictionary<Symbol, List<SyntaxToken>> BuildReferencesIndex(CancellationToken ct = default)
         {
             // Resolving every identifier token in the workspace is the dominant cost of the index
             // build (the only thing that touches the model is read-only — all lookup tables are
@@ -1569,7 +1579,11 @@ public static class SemanticLookup
             var trees = this.compilation.SyntaxTrees;
             var partials = new Dictionary<Symbol, List<SyntaxToken>>[trees.Length];
 
-            System.Threading.Tasks.Parallel.For(0, trees.Length, i =>
+            // Parallel.For observes ct itself (aborting in-flight iterations with
+            // OperationCanceledException) so a superseded hover/definition/references/
+            // rename request aborts the cold whole-workspace index build instead of
+            // running it to completion (issue #1662).
+            System.Threading.Tasks.Parallel.For(0, trees.Length, new ParallelOptions { CancellationToken = ct }, i =>
             {
                 var local = new Dictionary<Symbol, List<SyntaxToken>>();
                 foreach (var token in EnumerateTokens(trees[i].Root))

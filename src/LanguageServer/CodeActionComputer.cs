@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -48,8 +49,9 @@ public static class CodeActionComputer
     /// <param name="uri">The document URI for edit attribution.</param>
     /// <param name="content">The cached document content (parsed syntax + project).</param>
     /// <param name="range">The LSP request range.</param>
+    /// <param name="ct">Token checked between quick-fix-eligible diagnostics.</param>
     /// <returns>An LSP <see cref="CommandOrCodeActionContainer"/>.</returns>
-    public static CommandOrCodeActionContainer ComputeCodeActions(DocumentUri uri, DocumentContent content, Range range)
+    public static CommandOrCodeActionContainer ComputeCodeActions(DocumentUri uri, DocumentContent content, Range range, CancellationToken ct = default)
     {
         var actions = new List<CommandOrCodeAction>();
 
@@ -59,7 +61,7 @@ public static class CodeActionComputer
             actions.Add(new CommandOrCodeAction(sortImports));
         }
 
-        AppendNullabilityQuickFixes(uri, content, range, actions);
+        AppendNullabilityQuickFixes(uri, content, range, actions, ct);
 
         return new CommandOrCodeActionContainer(actions);
     }
@@ -115,7 +117,7 @@ public static class CodeActionComputer
         };
     }
 
-    private static void AppendNullabilityQuickFixes(DocumentUri uri, DocumentContent content, Range range, List<CommandOrCodeAction> actions)
+    private static void AppendNullabilityQuickFixes(DocumentUri uri, DocumentContent content, Range range, List<CommandOrCodeAction> actions, CancellationToken ct = default)
     {
         // ADR-0099 / issue #730. Skip the (expensive) BoundProgram pull
         // entirely when the document has no syntax-level diagnostics or
@@ -127,6 +129,7 @@ public static class CodeActionComputer
 
         foreach (var diag in EnumerateRelevantDiagnostics(compilation, content.SyntaxTree))
         {
+            ct.ThrowIfCancellationRequested();
             if (!Overlaps(diag.Location.Span, requestSpan))
             {
                 continue;
