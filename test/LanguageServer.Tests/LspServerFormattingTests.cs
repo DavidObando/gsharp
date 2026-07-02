@@ -73,6 +73,53 @@ public class LspServerFormattingTests
     }
 
     [Fact]
+    public async Task RangeFormattingAsync_ReturnsEmptyEdits_DoesNotRewriteWholeDocument()
+    {
+        var (server, uri, gsPath) = await OpenDocumentAsync("func foo() {\nvar x = 1\nvar y = 2\n}\n");
+        try
+        {
+            var edits = await server.RangeFormattingAsync(new DocumentRangeFormattingParams
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = uri },
+                Range = new GSharp.LanguageServer.Protocol.Range
+                {
+                    Start = new Position { Line = 1, Character = 0 },
+                    End = new Position { Line = 1, Character = 9 },
+                },
+                Options = new FormattingOptions { TabSize = 2, InsertSpaces = true },
+            });
+
+            Assert.Empty(edits);
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(Path.GetDirectoryName(gsPath))!, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task OnTypeFormattingAsync_ReturnsEmptyEdits_DoesNotRewriteWholeDocument()
+    {
+        var (server, uri, gsPath) = await OpenDocumentAsync("func foo() {\nvar x = 1\nvar y = 2\n}\n");
+        try
+        {
+            var edits = await server.OnTypeFormattingAsync(new DocumentOnTypeFormattingParams
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = uri },
+                Position = new Position { Line = 2, Character = 9 },
+                Ch = "\n",
+                Options = new FormattingOptions { TabSize = 2, InsertSpaces = true },
+            });
+
+            Assert.Empty(edits);
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(Path.GetDirectoryName(gsPath))!, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task InitializeAsync_FormattingIndentSizeInitializationOption_IsUsedWhenRequestOmitsOptions()
     {
         var (server, uri, gsPath) = await OpenDocumentAsync("func foo() {\nvar x = 1\n}\n", indentSize: 4, useTabs: false);

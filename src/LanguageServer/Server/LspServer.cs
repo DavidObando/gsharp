@@ -513,23 +513,17 @@ public sealed class LspServer
     // whole-token-stream FormattingEngine would require re-deriving per-statement offsets and
     // splicing them back into an unrelated slice of the document, which is substantially more
     // risk than value for a formatter that already produces a correct, idempotent whole-document
-    // result. These handlers are kept only as a defensive fallback in case a client invokes them
-    // despite the missing capability; they perform the same safe whole-document format.
+    // result. These handlers are kept registered as safe no-ops in case a non-conformant client
+    // invokes them despite the missing capability; they intentionally do not fall back to a
+    // whole-document format, since that would reintroduce the whole-document mangling this fix
+    // removes for the range/on-type case.
     [JsonRpcMethod("textDocument/rangeFormatting", UseSingleObjectParameterDeserialization = true)]
     public Task<TextEdit[]> RangeFormattingAsync(DocumentRangeFormattingParams request, CancellationToken cancellationToken = default)
-        => this.ReadDocumentAsync(
-            request.TextDocument,
-            (content, ct) => this.FormatDocument(content, request.Options),
-            Array.Empty<TextEdit>(),
-            cancellationToken);
+        => Task.FromResult(Array.Empty<TextEdit>());
 
     [JsonRpcMethod("textDocument/onTypeFormatting", UseSingleObjectParameterDeserialization = true)]
     public Task<TextEdit[]> OnTypeFormattingAsync(DocumentOnTypeFormattingParams request, CancellationToken cancellationToken = default)
-        => this.ReadDocumentAsync(
-            request.TextDocument,
-            (content, ct) => this.FormatDocument(content, request.Options),
-            Array.Empty<TextEdit>(),
-            cancellationToken);
+        => Task.FromResult(Array.Empty<TextEdit>());
 
     [JsonRpcMethod("textDocument/implementation", UseSingleObjectParameterDeserialization = true)]
     public Task<Location[]> ImplementationAsync(ImplementationParams request, CancellationToken cancellationToken = default)
