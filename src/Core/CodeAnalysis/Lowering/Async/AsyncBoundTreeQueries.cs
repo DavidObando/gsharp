@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 
@@ -57,6 +58,29 @@ public static class AsyncBoundTreeQueries
         return probe.Found;
     }
 
+    /// <summary>
+    /// Finds the syntax of the first <see cref="BoundAwaitExpression"/> in
+    /// the given subtree, or <see langword="null"/> when none is found.
+    /// Used by <c>SpillSequenceSpiller</c> (issue #1619) to anchor a
+    /// diagnostic at the actual <c>await</c> keyword when the enclosing
+    /// composite expression's own <c>Syntax</c> is unavailable — some
+    /// upstream rewriter passes rebuild nodes with a <c>null</c> syntax when
+    /// nothing else about them changes structurally.
+    /// </summary>
+    /// <param name="expression">The bound expression to inspect.</param>
+    /// <returns>The first await's syntax node, or <see langword="null"/>.</returns>
+    public static SyntaxNode FindFirstAwaitSyntax(BoundExpression expression)
+    {
+        if (expression == null)
+        {
+            return null;
+        }
+
+        var probe = new AwaitSyntaxFinder();
+        probe.Visit(expression);
+        return probe.Syntax;
+    }
+
     private sealed class AwaitDetector : BoundTreeWalker
     {
         public bool Found { get; private set; }
@@ -64,6 +88,16 @@ public static class AsyncBoundTreeQueries
         protected override void VisitAwaitExpression(BoundAwaitExpression node)
         {
             Found = true;
+        }
+    }
+
+    private sealed class AwaitSyntaxFinder : BoundTreeWalker
+    {
+        public SyntaxNode Syntax { get; private set; }
+
+        protected override void VisitAwaitExpression(BoundAwaitExpression node)
+        {
+            Syntax ??= node.Syntax;
         }
     }
 }
