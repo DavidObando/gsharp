@@ -857,41 +857,35 @@ internal sealed partial class ExpressionBinder
         bool ctorIsExpanded = false;
         if (argsAllTyped)
         {
-            // Issue #658: when any argument is a user-defined G# class, set up
-            // the supplementary interface check so ClassifyImplicit recognises
-            // the user-class → CLR-interface implicit reference conversion.
-            if (hasUserClassArg)
-            {
-                OverloadResolution.SupplementaryInterfaceCheck = (source, target) =>
-                    IsUserClassAssignableToInterface(boundArguments, argTypes, source, target);
-            }
+            // Issue #658 / #1634: when any argument is a user-defined G# class,
+            // pass a supplementary interface check into Resolve so
+            // ClassifyImplicit recognises the user-class → CLR-interface
+            // implicit reference conversion. Threaded as a call-local
+            // parameter (not a shared static) so concurrent/nested binds never
+            // observe another call's closure.
+            Func<Type, Type, bool> supplementaryInterfaceCheck = hasUserClassArg
+                ? (source, target) => IsUserClassAssignableToInterface(boundArguments, argTypes, source, target)
+                : null;
 
-            OverloadResolution.ConstantNarrowingArgumentCheck = MakeConstantNarrowingArgumentCheck(boundArguments);
-            try
+            var resolution = OverloadResolution.Resolve(
+                ctors,
+                argTypes,
+                interpolatedStringArgs: ComputeInterpolatedStringArgFlags(syntax.Arguments, boundArguments.Count),
+                argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
+                supplementaryInterfaceCheck: supplementaryInterfaceCheck,
+                constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(boundArguments));
+            switch (resolution.Outcome)
             {
-                var resolution = OverloadResolution.Resolve(ctors, argTypes, interpolatedStringArgs: ComputeInterpolatedStringArgFlags(syntax.Arguments, boundArguments.Count), argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
-                switch (resolution.Outcome)
-                {
-                    case OverloadResolution.ResolutionOutcome.Resolved:
-                        bestCtor = resolution.Best;
-                        ctorMapping = resolution.ParameterMapping;
-                        ctorIsExpanded = resolution.IsExpanded;
-                        break;
-                    case OverloadResolution.ResolutionOutcome.Ambiguous:
-                        Diagnostics.ReportAmbiguousOverload(syntax.Location, clrType.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
-                        return false;
-                    default:
-                        break;
-                }
-            }
-            finally
-            {
-                if (hasUserClassArg)
-                {
-                    OverloadResolution.SupplementaryInterfaceCheck = null;
-                }
-
-                OverloadResolution.ConstantNarrowingArgumentCheck = null;
+                case OverloadResolution.ResolutionOutcome.Resolved:
+                    bestCtor = resolution.Best;
+                    ctorMapping = resolution.ParameterMapping;
+                    ctorIsExpanded = resolution.IsExpanded;
+                    break;
+                case OverloadResolution.ResolutionOutcome.Ambiguous:
+                    Diagnostics.ReportAmbiguousOverload(syntax.Location, clrType.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
+                    return false;
+                default:
+                    break;
             }
         }
 
@@ -3450,76 +3444,71 @@ internal sealed partial class ExpressionBinder
 
             if (argsAllTyped)
             {
-                // Issue #658: set up supplementary interface check for user-class args.
-                if (hasUserClassArg)
-                {
-                    OverloadResolution.SupplementaryInterfaceCheck = (source, target) =>
-                        IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target);
-                }
+                // Issue #658 / #1634: supplementary interface check for user-class
+                // args, threaded as a call-local parameter into Resolve instead of
+                // a shared static so nested/concurrent binds can't clobber it.
+                Func<Type, Type, bool> supplementaryInterfaceCheck = hasUserClassArg
+                    ? (source, target) => IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target)
+                    : null;
 
-                try
+                var resolution = OverloadResolution.Resolve(
+                    candidates,
+                    argTypes,
+                    explicitTypeArgs,
+                    scope.References.MapClrTypeToReferences,
+                    ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length),
+                    argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
+                    supplementaryInterfaceCheck: supplementaryInterfaceCheck,
+                    constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments));
+                switch (resolution.Outcome)
                 {
-                    OverloadResolution.ConstantNarrowingArgumentCheck = MakeConstantNarrowingArgumentCheck(arguments);
-                    var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length), argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
-                    switch (resolution.Outcome)
-                    {
-                        case OverloadResolution.ResolutionOutcome.Resolved:
-                            // Issue #977: now that the overload is chosen, re-bind
-                            // any inline `out var`/`out let`/`out _` placeholders
-                            // against the resolved by-ref parameter so the new
-                            // local is declared with the inferred pointee type.
-                            arguments = RebindInlineOutVarArguments(ce, arguments, resolution.Best, resolution.ParameterMapping, receiver?.Type, typeArgSymbols);
+                    case OverloadResolution.ResolutionOutcome.Resolved:
+                        // Issue #977: now that the overload is chosen, re-bind
+                        // any inline `out var`/`out let`/`out _` placeholders
+                        // against the resolved by-ref parameter so the new
+                        // local is declared with the inferred pointee type.
+                        arguments = RebindInlineOutVarArguments(ce, arguments, resolution.Best, resolution.ParameterMapping, receiver?.Type, typeArgSymbols);
 
-                            // Issue #1512: for a genuine INSTANCE method the receiver
-                            // is `this`, not a formal parameter — `GetParameters()`
-                            // excludes it. The method-type-argument inference vector
-                            // must therefore align with the method's parameters and
-                            // must NOT carry the receiver as slot 0 (unlike the
-                            // extension-method path, where the receiver IS param 0).
-                            // Including it shifted every real argument by one slot, so
-                            // a method type parameter inferable only from a lambda
-                            // argument (e.g. `TResult` of
-                            // `Task.ContinueWith<TResult>(Func<Task,TResult>)`) was
-                            // never unified and the call collapsed to `<object>`. The
-                            // receiver still drives return-type Var substitution via
-                            // `ResolveCallReturnTypeFromSymbolicTypeArgs` below.
-                            var instSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(null, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
-                            var instSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(resolution.Best, typeArgSymbols, instSymbolicArgs);
-                            var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : typeArgSymbols;
-                            var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
-                                ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(resolution.Best, instSymbolicTypeArgs, effectiveReceiverType)
-                                ?? ResolveInstanceReturnTypeFromReceiver(effectiveReceiverType, resolution.Best)
-                                ?? MapClrMethodReturnType(resolution.Best);
-                            var instParameters = resolution.Best.GetParameters();
-                            var instMapping = resolution.ParameterMapping;
-                            var instExpandedArgs = resolution.IsExpanded
-                                ? overloads.ExpandParamsArguments(arguments, instParameters, ce, parameterMapping: instMapping)
-                                : arguments;
-                            var instDownstreamMapping = resolution.IsExpanded ? default : instMapping;
-                            var instRebound = RebindFormattableInterpolationArguments(instExpandedArgs, ce.Arguments, instParameters, instDownstreamMapping);
-                            var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instDownstreamMapping, out var instHandlerPrelude, out var instUpdatedReceiver);
-                            var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instDownstreamMapping, resolution.Best, instTypeArgSymbolsForCall, effectiveReceiverType);
-                            var instConvertedArgs = conversions.BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping, method: resolution.Best, receiverType: receiver?.Type, symbolicMethodTypeArgs: instTypeArgSymbolsForCall);
-                            var instArguments = OverloadResolver.BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
-                            var instRefKinds = ComputeArgumentRefKinds(instParameters);
-                            overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
-                            BoundExpression instCall = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, instUpdatedReceiver ?? receiver, resolution.Best, returnType, instArguments, instRefKinds, instTypeArgSymbolsForCall));
-                            return WrapWithHandlerPrelude(instCall, instHandlerPrelude, ce);
-                        case OverloadResolution.ResolutionOutcome.Ambiguous:
-                            Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
-                            return new BoundErrorExpression(null);
-                        default:
-                            break;
-                    }
-                }
-                finally
-                {
-                    if (hasUserClassArg)
-                    {
-                        OverloadResolution.SupplementaryInterfaceCheck = null;
-                    }
-
-                    OverloadResolution.ConstantNarrowingArgumentCheck = null;
+                        // Issue #1512: for a genuine INSTANCE method the receiver
+                        // is `this`, not a formal parameter — `GetParameters()`
+                        // excludes it. The method-type-argument inference vector
+                        // must therefore align with the method's parameters and
+                        // must NOT carry the receiver as slot 0 (unlike the
+                        // extension-method path, where the receiver IS param 0).
+                        // Including it shifted every real argument by one slot, so
+                        // a method type parameter inferable only from a lambda
+                        // argument (e.g. `TResult` of
+                        // `Task.ContinueWith<TResult>(Func<Task,TResult>)`) was
+                        // never unified and the call collapsed to `<object>`. The
+                        // receiver still drives return-type Var substitution via
+                        // `ResolveCallReturnTypeFromSymbolicTypeArgs` below.
+                        var instSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(null, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+                        var instSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(resolution.Best, typeArgSymbols, instSymbolicArgs);
+                        var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : typeArgSymbols;
+                        var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
+                            ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(resolution.Best, instSymbolicTypeArgs, effectiveReceiverType)
+                            ?? ResolveInstanceReturnTypeFromReceiver(effectiveReceiverType, resolution.Best)
+                            ?? MapClrMethodReturnType(resolution.Best);
+                        var instParameters = resolution.Best.GetParameters();
+                        var instMapping = resolution.ParameterMapping;
+                        var instExpandedArgs = resolution.IsExpanded
+                            ? overloads.ExpandParamsArguments(arguments, instParameters, ce, parameterMapping: instMapping)
+                            : arguments;
+                        var instDownstreamMapping = resolution.IsExpanded ? default : instMapping;
+                        var instRebound = RebindFormattableInterpolationArguments(instExpandedArgs, ce.Arguments, instParameters, instDownstreamMapping);
+                        var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instDownstreamMapping, out var instHandlerPrelude, out var instUpdatedReceiver);
+                        var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instDownstreamMapping, resolution.Best, instTypeArgSymbolsForCall, effectiveReceiverType);
+                        var instConvertedArgs = conversions.BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping, method: resolution.Best, receiverType: receiver?.Type, symbolicMethodTypeArgs: instTypeArgSymbolsForCall);
+                        var instArguments = OverloadResolver.BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
+                        var instRefKinds = ComputeArgumentRefKinds(instParameters);
+                        overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
+                        BoundExpression instCall = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, instUpdatedReceiver ?? receiver, resolution.Best, returnType, instArguments, instRefKinds, instTypeArgSymbolsForCall));
+                        return WrapWithHandlerPrelude(instCall, instHandlerPrelude, ce);
+                    case OverloadResolution.ResolutionOutcome.Ambiguous:
+                        Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
+                        return new BoundErrorExpression(null);
+                    default:
+                        break;
                 }
             }
         }
@@ -4115,28 +4104,21 @@ internal sealed partial class ExpressionBinder
             argTypes[i] = t;
         }
 
-        // Issue #658: set up supplementary interface check for user-class args.
-        if (hasUserClassArg)
-        {
-            OverloadResolution.SupplementaryInterfaceCheck = (source, target) =>
-                IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target);
-        }
+        // Issue #658 / #1634: supplementary interface check for user-class args,
+        // threaded as a call-local parameter into Resolve instead of a shared
+        // static so nested/concurrent binds can't clobber it.
+        Func<Type, Type, bool> supplementaryInterfaceCheck = hasUserClassArg
+            ? (source, target) => IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target)
+            : null;
 
-        OverloadResolution.Result<MethodInfo> resolution;
-        try
-        {
-            OverloadResolution.ConstantNarrowingArgumentCheck = MakeConstantNarrowingArgumentCheck(arguments);
-            resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
-        }
-        finally
-        {
-            if (hasUserClassArg)
-            {
-                OverloadResolution.SupplementaryInterfaceCheck = null;
-            }
-
-            OverloadResolution.ConstantNarrowingArgumentCheck = null;
-        }
+        var resolution = OverloadResolution.Resolve(
+            candidates,
+            argTypes,
+            explicitTypeArgs,
+            scope.References.MapClrTypeToReferences,
+            argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
+            supplementaryInterfaceCheck: supplementaryInterfaceCheck,
+            constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments));
 
         switch (resolution.Outcome)
         {
@@ -4375,31 +4357,24 @@ internal sealed partial class ExpressionBinder
         // when the call site supplied explicit type arguments (e.g.
         // services.AddSingleton[IService, Service]()), those are used to close
         // the generic method instead of inference.
-        // Issue #658: set up supplementary interface check for user-class args.
-        if (hasUserClassArg)
-        {
-            OverloadResolution.SupplementaryInterfaceCheck = (source, target) =>
-                IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target);
-        }
+        // Issue #658 / #1634: supplementary interface check for user-class args,
+        // threaded as a call-local parameter into Resolve instead of a shared
+        // static so nested/concurrent binds can't clobber it.
+        Func<Type, Type, bool> supplementaryInterfaceCheck = hasUserClassArg
+            ? (source, target) => IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target)
+            : null;
 
-        OverloadResolution.Result<MethodInfo> resolution;
-        try
-        {
-            // Issue #1311: imported extension calls dispatch as
-            // `Class.Method(this receiver, args…)`, so argTypes slot 0 is the
-            // receiver and user argument `i` lives at slot `i + 1`.
-            OverloadResolution.ConstantNarrowingArgumentCheck = MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1);
-            resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, argumentNames: extensionArgumentNames);
-        }
-        finally
-        {
-            if (hasUserClassArg)
-            {
-                OverloadResolution.SupplementaryInterfaceCheck = null;
-            }
-
-            OverloadResolution.ConstantNarrowingArgumentCheck = null;
-        }
+        // Issue #1311: imported extension calls dispatch as
+        // `Class.Method(this receiver, args…)`, so argTypes slot 0 is the
+        // receiver and user argument `i` lives at slot `i + 1`.
+        var resolution = OverloadResolution.Resolve(
+            candidates,
+            argTypes,
+            explicitTypeArgs,
+            scope.References.MapClrTypeToReferences,
+            argumentNames: extensionArgumentNames,
+            supplementaryInterfaceCheck: supplementaryInterfaceCheck,
+            constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1));
 
         switch (resolution.Outcome)
         {
@@ -4727,8 +4702,9 @@ internal sealed partial class ExpressionBinder
     /// Issue #658: determines whether a user-defined G# class argument (identified
     /// by its surrogate CLR type in <paramref name="argTypes"/>) implements the
     /// specified CLR <paramref name="target"/> interface. Used as the
-    /// <see cref="OverloadResolution.SupplementaryInterfaceCheck"/> callback during
-    /// overload resolution for calls that include user-class arguments.
+    /// <c>supplementaryInterfaceCheck</c> argument to
+    /// <see cref="OverloadResolution.Resolve{T}"/> during overload resolution for
+    /// calls that include user-class arguments.
     /// </summary>
     private static bool IsUserClassAssignableToInterface(
         ImmutableArray<BoundExpression>.Builder boundArguments,

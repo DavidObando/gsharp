@@ -728,6 +728,109 @@ public class OverloadResolutionTests
         Assert.Equal(OverloadResolution.ResolutionOutcome.Ambiguous, result.Outcome);
     }
 
+    // ----- Issue #1634: supplementaryInterfaceCheck / constantNarrowingArgumentCheck
+    // must be per-call parameters, not shared mutable state, so that concurrent
+    // and nested (reentrant) `Resolve<T>` calls never observe each other's hook. -----
+
+    [Fact]
+    public async System.Threading.Tasks.Task Resolve_SupplementaryInterfaceCheck_IsIsolatedAcrossConcurrentCalls()
+    {
+        // Two disjoint interface targets, both applicable only through a
+        // per-call supplementaryInterfaceCheck (the `object`-typed argument
+        // stands in for a user-class surrogate CLR type, mirroring issue
+        // #658). Hammer Resolve<T> from many threads at once, each thread
+        // consistently requesting ONE of the two targets: if the hooks were
+        // still shared static state, some iterations would race and resolve
+        // to the wrong candidate (or throw NullReferenceException from a
+        // hook nulled out mid-flight by another thread).
+        var takeIA = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IA), BindingFlags.Public | BindingFlags.Static);
+        var takeIB = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IB), BindingFlags.Public | BindingFlags.Static);
+        var candidates = new[] { takeIA, takeIB };
+
+        void RunFor(Type wantInterface, string expectedName, int iterations, List<Exception> errors)
+        {
+            for (var i = 0; i < iterations; i++)
+            {
+                try
+                {
+                    var result = OverloadResolution.Resolve(
+                        candidates,
+                        new[] { typeof(object) },
+                        supplementaryInterfaceCheck: (source, target) => target == wantInterface);
+                    if (result.Outcome != OverloadResolution.ResolutionOutcome.Resolved
+                        || result.Best.Name != expectedName)
+                    {
+                        lock (errors)
+                        {
+                            errors.Add(new Exception($"Expected {expectedName} for {wantInterface}, got {result.Outcome}/{result.Best?.Name}"));
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    lock (errors)
+                    {
+                        errors.Add(ex);
+                    }
+                }
+            }
+        }
+
+        var errors = new List<Exception>();
+        const int iterations = 500;
+        var taskA = System.Threading.Tasks.Task.Run(() => RunFor(typeof(EqualLike.IA), nameof(EqualLike.Take_IA), iterations, errors));
+        var taskB = System.Threading.Tasks.Task.Run(() => RunFor(typeof(EqualLike.IB), nameof(EqualLike.Take_IB), iterations, errors));
+        await System.Threading.Tasks.Task.WhenAll(taskA, taskB);
+
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void Resolve_SupplementaryInterfaceCheck_SurvivesNestedResolveInsideHookCallback()
+    {
+        // Reentrancy guard: a supplementaryInterfaceCheck callback that itself
+        // triggers a nested Resolve<T> call (mirroring RebindInlineOutVarArguments
+        // / lambda re-binding running "inside the hook window" per issue #1634)
+        // must not corrupt the outer call's own hook. With hooks threaded as
+        // parameters instead of mutable statics, the outer closure is captured
+        // by value and is unaffected by whatever the nested call does.
+        var takeIA = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IA), BindingFlags.Public | BindingFlags.Static);
+        var takeIB = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IB), BindingFlags.Public | BindingFlags.Static);
+        var candidates = new[] { takeIA, takeIB };
+
+        var nestedCallCount = 0;
+        var outerResult = OverloadResolution.Resolve(
+            candidates,
+            new[] { typeof(object) },
+            supplementaryInterfaceCheck: (source, target) =>
+            {
+                if (target == typeof(EqualLike.IA))
+                {
+                    // Nested resolution, run from *inside* the outer hook,
+                    // using a DIFFERENT hook that targets IB. Under the old
+                    // "install -> Resolve -> finally null" static-field
+                    // pattern this would null the outer's field once the
+                    // nested call's finally ran, and any subsequent
+                    // ClassifyImplicit probe of the outer call would silently
+                    // stop recognising IA.
+                    nestedCallCount++;
+                    var nested = OverloadResolution.Resolve(
+                        candidates,
+                        new[] { typeof(object) },
+                        supplementaryInterfaceCheck: (nestedSource, nestedTarget) => nestedTarget == typeof(EqualLike.IB));
+                    Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, nested.Outcome);
+                    Assert.Equal(nameof(EqualLike.Take_IB), nested.Best.Name);
+                    return true;
+                }
+
+                return false;
+            });
+
+        Assert.True(nestedCallCount > 0);
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, outerResult.Outcome);
+        Assert.Equal(nameof(EqualLike.Take_IA), outerResult.Best.Name);
+    }
+
     private static IEnumerable<MethodInfo> ThreeWayCandidates()
     {
         yield return typeof(ThreeWayClass).GetMethod(nameof(ThreeWayClass.Choose), BindingFlags.Public | BindingFlags.Static);

@@ -274,7 +274,7 @@ internal sealed partial class ExpressionBinder
 
     /// <summary>
     /// ADR-0055 Tier 4 (#369): builds the per-argument flags consumed by
-    /// <see cref="OverloadResolution.Resolve{T}(System.Collections.Generic.IEnumerable{T}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Func{System.Type, System.Type}, System.Collections.Generic.IReadOnlyList{bool}, System.Collections.Generic.IReadOnlyList{string}, System.Func{System.Reflection.MethodInfo, System.Collections.Immutable.ImmutableArray{GSharp.Core.CodeAnalysis.Symbols.TypeSymbol}})"/>,
+    /// <see cref="OverloadResolution.Resolve{T}"/>,
     /// marking each positional argument whose syntax is an interpolated-string
     /// literal. These arguments may convert to an
     /// <c>IFormattable</c>/<c>FormattableString</c> parameter in addition to
