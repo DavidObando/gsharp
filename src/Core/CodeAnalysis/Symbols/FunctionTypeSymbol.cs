@@ -281,6 +281,24 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 builder.Append(')');
                 break;
 
+            // #1777 follow-up: SliceTypeSymbol/ArrayTypeSymbol both build their
+            // ClrType as `elementType.ClrType.MakeArrayType()` — a fixed-length
+            // array's Length is symbol-only metadata that never reaches the CLR
+            // shape, so `[]int32`, `[3]int32`, and `[5]int32` all resolve to the
+            // identical `typeof(int[])` instance. PinnedTypeSymbol copies its
+            // underlying type's ClrType verbatim, and NullabilityAnnotatedTypeSymbol
+            // copies both Name and ClrType from its BaseType. None of these carry a
+            // type parameter or same-compilation user type, so all four would
+            // otherwise fall through to the ClrType/name fallback below and alias
+            // distinct shapes in the process-wide Tuple/FunctionPointer caches —
+            // the same failure mode as #1624. Always key them structurally.
+            case SliceTypeSymbol:
+            case ArrayTypeSymbol:
+            case PinnedTypeSymbol:
+            case NullabilityAnnotatedTypeSymbol:
+                AppendStructuralKey(builder, type);
+                break;
+
             // Issue #1620: a composite type (List[T], []T, T?, (T, int32), ...)
             // that structurally carries a type parameter must NOT fall through
             // to the name-based default below — two distinct generic
@@ -323,8 +341,31 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 builder.Append(')');
                 break;
             case ArrayTypeSymbol a:
-                builder.Append("!array(");
+                // Length must be part of the key: it is symbol-only metadata
+                // absent from the shared `elementType[]` ClrType, so `[3]int32`
+                // and `[5]int32` (and `[]int32`, via the distinct `!slice` tag
+                // above) would otherwise collide.
+                builder.Append("!array(").Append(a.Length).Append(',');
                 AppendIdentityKey(builder, a.ElementType);
+                builder.Append(')');
+                break;
+            case PinnedTypeSymbol p:
+                builder.Append("!pinned(");
+                AppendIdentityKey(builder, p.UnderlyingType);
+                builder.Append(')');
+                break;
+            case NullabilityAnnotatedTypeSymbol na:
+                // Include NullableFlags so two annotations of the same base
+                // type with different inner-position nullability (e.g. key
+                // vs. value nullable in Dictionary<K,V>) also key distinctly,
+                // not just annotated-vs-bare.
+                builder.Append("!nann(");
+                for (var i = 0; i < na.NullableFlags.Length; i++)
+                {
+                    builder.Append(na.NullableFlags[i]).Append(',');
+                }
+
+                AppendIdentityKey(builder, na.BaseType);
                 builder.Append(')');
                 break;
             case SequenceTypeSymbol seq:
