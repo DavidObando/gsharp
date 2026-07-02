@@ -75,6 +75,89 @@ DeferFixture.Snapshot()
     }
 
     [Fact]
+    public void Defer_InstanceReceiverEvaluatesEagerly()
+    {
+        // Issue #1635 / ADR-0030: `defer r.Close()` must capture the receiver
+        // `r` at the defer point. Reassigning `r` afterwards must not change
+        // which instance the deferred call runs against.
+        var result = Evaluate(@"
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+class Recorder(Name string) {
+    func Close() {
+        DeferFixture.Record(Name)
+    }
+}
+
+DeferFixture.Reset()
+{
+    var r = Recorder(""orig"")
+    defer r.Close()
+    r = Recorder(""other"")
+}
+DeferFixture.Snapshot()
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("orig", result.Value);
+    }
+
+    [Fact]
+    public void Defer_IndirectCallTargetEvaluatesEagerly()
+    {
+        // Issue #1635 / ADR-0030: `defer g()` through a function value must
+        // capture the function value at the defer point. Reassigning `g`
+        // afterwards must not change which function runs at scope exit.
+        var result = Evaluate(@"
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+DeferFixture.Reset()
+{
+    var g = func() { DeferFixture.Record(""orig"") }
+    defer g()
+    g = func() { DeferFixture.Record(""other"") }
+}
+DeferFixture.Snapshot()
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("orig", result.Value);
+    }
+
+    [Fact]
+    public void Defer_ReceiverProducedByCallEvaluatesAtDeferPoint()
+    {
+        // Issue #1635 / ADR-0030: `defer getX().M()` must evaluate `getX()`
+        // eagerly at the defer point, not at scope exit. Observed via
+        // side-effect ordering: the "get" event must precede "body", and the
+        // deferred "close" event must come last.
+        var result = Evaluate(@"
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+class Recorder(Name string) {
+    func Close() {
+        DeferFixture.Record(""close-"" + Name)
+    }
+}
+
+func getRecorder() Recorder {
+    DeferFixture.Record(""get"")
+    return Recorder(""x"")
+}
+
+DeferFixture.Reset()
+{
+    defer getRecorder().Close()
+    DeferFixture.Record(""body"")
+}
+DeferFixture.Snapshot()
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("get,body,close-x", result.Value);
+    }
+
+    [Fact]
     public void Defer_RunsOnException()
     {
         var result = Evaluate(@"
@@ -105,6 +188,27 @@ defer 42
 ");
 
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("'defer'"));
+    }
+
+    [Fact]
+    public void Defer_CallWithOutArgument_ReportsGS0460()
+    {
+        // Issue #1635 NB-1: a by-ref (ref/out/in) argument's bound value is
+        // the ADDRESS of its target storage. Eager capture spilling that
+        // address into an ordinary readonly local is not a meaningful by-ref
+        // capture, so `defer` on such a call is rejected rather than
+        // mis-compiled.
+        var result = Evaluate(@"
+import System
+import System.Collections.Generic
+
+var dict = Dictionary[string, int32]()
+dict[""key""] = 42
+var value = 0
+defer dict.TryGetValue(""key"", &value)
+");
+
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0460");
     }
 
     [Fact]

@@ -884,6 +884,22 @@ expression is too long or complex to compile"). Realistic programs never
 approach the limit; generated code that does should be restructured to reduce
 nesting depth.
 
+## Defer with by-reference arguments (GS0460)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0460 | Error | The operand of a `defer` statement is a call with one or more `ref`, `out`, or `in` arguments. |
+
+`defer` eagerly captures each argument's evaluated value into a fresh readonly
+local ahead of the deferred invocation (issue #1635). A by-reference argument's
+value *is* the address of its target storage, which cannot be spilled into an
+ordinary local without either aliasing an unrelated temp (silently breaking the
+by-ref contract) or requiring verifiable-IL support for spilled managed pointers
+that the emitter does not provide. Rather than mis-defer the call, `defer` on
+such a call is rejected outright. Restructure so the deferred work takes its
+arguments by value, or wrap the by-ref call in a `func` captured by the
+`defer`.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |
