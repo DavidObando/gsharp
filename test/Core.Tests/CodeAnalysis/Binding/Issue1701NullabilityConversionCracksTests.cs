@@ -18,15 +18,19 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// non-nullable <c>T</c>"), surfaced during the #1627 review.
 ///
 /// Crack 2 — <c>Conversion.Classify</c>'s nullable-open-type-parameter arm
-/// (issue #1455) let a nullable <c>T?</c>, where <c>T</c> is reference-like
-/// (unconstrained or <c>class</c>-constrained), implicitly box to a
-/// non-nullable <c>object</c> target — erasing a possibly-null value into a
-/// non-null slot. The fix restricts that implicit arm to
-/// <c>struct</c>-constrained <c>T</c> (a genuine <c>Nullable&lt;T&gt;</c>
-/// boxing, which is legitimate: a null value boxes to an actual null
-/// reference). These tests assert the non-nullable-target erasure now
-/// reports a null-safety diagnostic while every legitimate sibling
-/// conversion keeps compiling.
+/// (issue #1455) must block the implicit box ONLY when <c>T</c> is provably
+/// reference-type-constrained (<c>HasReferenceTypeConstraint</c>, e.g.
+/// <c>[T class]</c>) — that is the sole shape where <c>T?</c> is a genuine
+/// nullable REFERENCE per the Kotlin-model null-safety invariant, so the
+/// implicit box would erase a possibly-null value into a non-null slot.
+/// Every other shape — <c>struct</c>-constrained (genuine
+/// <c>Nullable&lt;T&gt;</c>), interface-constrained, class-base-constrained,
+/// and unconstrained — boxes via the CLR's ordinary generic <c>box !!T</c>
+/// rule and must remain implicit (issue #1455); an earlier revision of this
+/// fix over-broadly gated on <c>HasValueTypeConstraint</c> and regressed
+/// #1455 for all non-struct-constrained shapes. These tests assert the
+/// class-constrained erasure reports a null-safety diagnostic while every
+/// legitimate sibling conversion keeps compiling.
 /// </summary>
 public class Issue1701NullabilityConversionCracksTests
 {
@@ -47,17 +51,29 @@ func Issue1701ASink[T class](x T?) object -> x
     }
 
     [Fact]
-    public void UnconstrainedNullableTypeParam_ToObject_ReportsNullSafetyDiagnostic()
+    public void UnconstrainedNullableTypeParam_ToObject_StillCompiles()
     {
+        // #1455 guard: an unconstrained T's `!!T` box works for both struct
+        // and reference instantiations, so this must NOT be blocked.
         var source = @"
 package p
 func Issue1701BSink[T](x T?) object -> x
 ";
-        var result = Evaluate(source);
-        Assert.NotEmpty(result.Diagnostics);
-        Assert.Contains(
-            result.Diagnostics,
-            d => d.Id == "GS0154" || d.Id == "GS0155" || d.Message.Contains("Cannot convert"));
+        Assert.Empty(Evaluate(source).Diagnostics);
+    }
+
+    [Fact]
+    public void InterfaceConstrainedNullableTypeParam_ToInterface_StillCompiles()
+    {
+        // #1455 guard: interface-only constraint is not provably
+        // reference-nullable (a struct can implement the interface), so this
+        // must NOT be blocked.
+        var source = @"
+package p
+import System
+func Issue1701GSink[T IComparable](x T?) IComparable -> x
+";
+        Assert.Empty(Evaluate(source).Diagnostics);
     }
 
     [Fact]

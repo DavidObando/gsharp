@@ -381,36 +381,39 @@ public sealed class Conversion
 
         // Issue #1455 / #1701: a nullable wrapper over an open type parameter
         // (`T?`) boxes implicitly to `object` (and reference-upcasts to any
-        // interface in `T`'s effective constraint set) ONLY when `T` is
-        // value-type-constrained (`HasValueTypeConstraint`, e.g. `[T struct]`).
-        // There, `T?` erases to a genuine `Nullable<T>` at runtime, and boxing
-        // `Nullable<T>` to `object` is the ordinary, legitimate CLR rule
-        // (`box Nullable<!!T>` — a `null` value boxes to an actual null
-        // reference, so no non-null value is fabricated).
-        //
-        // For a ref-like or unconstrained `T` — where `T?` is a genuine
-        // nullable REFERENCE per the Kotlin-model null-safety invariant — the
-        // same implicit boxing would erase a possibly-null `T?` into a
-        // non-nullable `object`/interface target, which is exactly the
-        // residual crack tracked by #1701. That case must fall through to
+        // interface in `T`'s effective constraint set) for EVERY constraint
+        // shape EXCEPT one: `T` provably reference-type-constrained
+        // (`HasReferenceTypeConstraint`, e.g. `[T class]`). That is the only
+        // shape where `T?` is a genuine nullable REFERENCE per the
+        // Kotlin-model null-safety invariant, so implicit boxing would erase a
+        // possibly-null `T?` into a non-nullable `object`/interface target —
+        // the residual crack tracked by #1701. That case must fall through to
         // `Conversion.None` here so the caller is forced to target `object?`
         // (or any nullable interface target, handled by the nullable-target
         // arms above) or use `!!`.
+        //
+        // Every other shape — value-type-constrained (`[T struct]`, `T?`
+        // erases to genuine `Nullable<T>`), interface-constrained, class-base-
+        // constrained, and unconstrained — boxes via the CLR's ordinary
+        // generic `box !!T` rule: a `null` value boxes to an actual null
+        // reference (for reference instantiations) or to a boxed
+        // `Nullable<T>` (for value instantiations), so no non-null value is
+        // ever fabricated. Blocking those shapes regresses #1455.
         //
         // Unlike the bare `T -> object` case — deliberately excluded above
         // because an erased `!0` parameter slot is indistinguishable from a
         // genuine `object` and would inject a spurious box (#1196 regression)
         // — a `T?` argument is NEVER identity with an erased `!0`/`T` slot, so
-        // the value-type-constrained boxing here is always genuine and
-        // unambiguous. This wraps the implicit-boxing argument/return/
-        // delegate-covariance positions (where no explicit cast is written) in
-        // a BoundConversionExpression so emit materialises `box Nullable<!!T>`.
-        // Scoped to `object` and constraint-satisfying interface targets so no
-        // narrowing or otherwise-invalid conversion is admitted.
+        // the boxing here is always genuine and unambiguous. This wraps the
+        // implicit-boxing argument/return/delegate-covariance positions (where
+        // no explicit cast is written) in a BoundConversionExpression so emit
+        // materialises the appropriate `box` instruction. Scoped to `object`
+        // and constraint-satisfying interface targets so no narrowing or
+        // otherwise-invalid conversion is admitted.
         if (from is NullableTypeSymbol fromNullableTypeParam
             && fromNullableTypeParam.UnderlyingType is TypeParameterSymbol nullableUnderlyingTypeParam
             && to is not NullableTypeSymbol
-            && nullableUnderlyingTypeParam.HasValueTypeConstraint)
+            && !nullableUnderlyingTypeParam.HasReferenceTypeConstraint)
         {
             if (to?.ClrType.IsSameAs(typeof(object)) == true)
             {
