@@ -387,6 +387,101 @@ public class ProgramTests
     }
 
     [Fact]
+    public void Main_NowarnFlag_AcceptsSemicolonDelimitedList()
+    {
+        // Issue #1665: MSBuild forwards NoWarn as a semicolon-delimited list
+        // (e.g. "/nowarn:;NU5131;GS0001,GS0002") since $(NoWarn) conventionally
+        // starts with an empty/leading separator (see Sdk.props: "$(NoWarn);NU5131").
+        // gsc must split on ';' as well as ',' or the IDs after the first ';' are
+        // never recognised.
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package P\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_nowarn_semi_").FullName;
+        var outPath = Path.Combine(tempDir, "P.dll");
+        using var outWriter = new StringWriter();
+        using var errWriter = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(outWriter);
+        Console.SetError(errWriter);
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/nowarn:;NU5131;GS0001,GS0002", sample });
+            Assert.Equal(0, exit);
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Main_UnderReferencedClosure_SemicolonNoWarnSuppressesGs9100()
+    {
+        // Issue #1665: reproduces the exact SDK-forwarded shape (leading empty
+        // token + semicolon separators) and confirms the previously-broken
+        // suppression now works end to end.
+        var refDir = Directory.CreateTempSubdirectory("gsc_ref1665n_").FullName;
+        var libPath = BuildLibraryWithMissingDependency(refDir);
+
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package P\n\nfunc Main() {\n}\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_outn1665_").FullName;
+        var outPath = Path.Combine(tempDir, "P.dll");
+
+        using var outWriter = new StringWriter();
+        var prevOut = Console.Out;
+        Console.SetOut(outWriter);
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/nowarn:;NU5131;GS9100", "/r:" + libPath, sample });
+            Assert.Equal(0, exit);
+            Assert.DoesNotContain("GS9100", outWriter.ToString());
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { Directory.Delete(refDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Main_SemicolonWarnAsErrorPromotesRealWarningToError()
+    {
+        // Issue #1665: the WarningsAsErrors counterpart of the NoWarn tests —
+        // a semicolon-delimited /warnaserror+ value (as MSBuild forwards it,
+        // e.g. "$(WarningsAsErrors);GS0166") must promote the targeted
+        // warning to an error and fail the build. GS0166 (ADR-0066 D6: TLS +
+        // explicit Main coexistence) is a real warning emitted through the
+        // normal diagnostics pipeline, unlike the advisory GS9100.
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package P\nimport System\n\nConsole.WriteLine(\"tls\")\n\nfunc Main() {\n}\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_wae1665_").FullName;
+        var outPath = Path.Combine(tempDir, "P.dll");
+
+        using var outWriter = new StringWriter();
+        var prevOut = Console.Out;
+        Console.SetOut(outWriter);
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:exe", "/warnaserror+:;GS0166", sample });
+            Assert.NotEqual(0, exit);
+            Assert.Contains("error GS0166", outWriter.ToString());
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
     public void Diagnostic_HasStableId_AndSeverity()
     {
         // Verify that a compile error produces a diagnostic with a stable GS#### ID and Error severity.
