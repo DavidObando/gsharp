@@ -4193,27 +4193,222 @@ internal sealed class DeclarationBinder
         SyntaxNode node,
         HashSet<string> forbiddenNames,
         out string offendingName,
+        out TextLocation offendingLocation) =>
+        TryFindInstanceMemberReference(node, forbiddenNames, new HashSet<string>(StringComparer.Ordinal), out offendingName, out offendingLocation);
+
+    /// <summary>
+    /// Issue #1641: scoped/shadow-aware variant of the scan above. A name that
+    /// resolves to a locally-introduced binding (lambda/function-literal
+    /// parameter, local <c>let</c>/<c>var</c>, deconstruction binding, pattern
+    /// capture, catch/for-loop variable, ...) shadows the instance member of
+    /// the same name and must not be flagged. <paramref name="shadowedNames"/>
+    /// carries the names bound by enclosing scopes down into this call.
+    /// Note: unlike C#, G#'s <c>is</c> operator (<see cref="IsExpressionSyntax"/>)
+    /// is a plain type test with no capture — <c>expr is T name</c> does not
+    /// exist. The only pattern captures reachable here come from
+    /// <c>switch</c>/<c>match</c> arm patterns (<see cref="TypePatternSyntax"/>,
+    /// <see cref="SlicePatternSyntax"/>), which the generic child walk already
+    /// scopes correctly: a capture is added to the shadow set only while
+    /// iterating the owning <see cref="SwitchCaseSyntax"/>/
+    /// <see cref="SwitchExpressionArmSyntax"/>'s own children (guard + body),
+    /// never leaking to sibling arms or the enclosing scope.
+    /// </summary>
+    private static bool TryFindInstanceMemberReference(
+        SyntaxNode node,
+        HashSet<string> forbiddenNames,
+        HashSet<string> shadowedNames,
+        out string offendingName,
         out TextLocation offendingLocation)
     {
-        if (node is NameExpressionSyntax nameExpr &&
-            forbiddenNames.Contains(nameExpr.IdentifierToken.Text))
+        switch (node)
         {
-            offendingName = nameExpr.IdentifierToken.Text;
-            offendingLocation = nameExpr.IdentifierToken.Location;
-            return true;
+            case NameExpressionSyntax nameExpr:
+                if (forbiddenNames.Contains(nameExpr.IdentifierToken.Text) &&
+                    !shadowedNames.Contains(nameExpr.IdentifierToken.Text))
+                {
+                    offendingName = nameExpr.IdentifierToken.Text;
+                    offendingLocation = nameExpr.IdentifierToken.Location;
+                    return true;
+                }
+
+                break;
+
+            // Lambda / function-literal parameters shadow only within the body.
+            // Param default-value expressions (ADR-0063) and type clauses are
+            // intentionally not scanned: defaults are restricted by the binder
+            // to compile-time constants (numeric/bool/char/string/enum/nil),
+            // which can never resolve to an instance member, and type clauses
+            // carry no expressions either.
+            case LambdaExpressionSyntax lambda:
+                return TryFindInstanceMemberReference(
+                    lambda.Body, forbiddenNames, WithShadowed(shadowedNames, lambda.Parameters.Select(p => p.Identifier.Text)), out offendingName, out offendingLocation);
+
+            case FunctionLiteralExpressionSyntax func:
+                return TryFindInstanceMemberReference(
+                    func.Body, forbiddenNames, WithShadowed(shadowedNames, func.Parameters.Select(p => p.Identifier.Text)), out offendingName, out offendingLocation);
+
+            // Catch and loop variables shadow only within their body; the
+            // scrutinee/collection/bounds are evaluated in the outer scope.
+            case CatchClauseSyntax catchClause when catchClause.Identifier != null:
+                return TryFindInstanceMemberReference(
+                    catchClause.Body, forbiddenNames, WithShadowed(shadowedNames, new[] { catchClause.Identifier.Text }), out offendingName, out offendingLocation);
+
+            case ForRangeStatementSyntax forRange:
+                if (TryFindInstanceMemberReference(forRange.Collection, forbiddenNames, shadowedNames, out offendingName, out offendingLocation))
+                {
+                    return true;
+                }
+
+                var forRangeNames = forRange.SecondIdentifier != null
+                    ? new[] { forRange.FirstIdentifier.Text, forRange.SecondIdentifier.Text }
+                    : new[] { forRange.FirstIdentifier.Text };
+                return TryFindInstanceMemberReference(forRange.Body, forbiddenNames, WithShadowed(shadowedNames, forRangeNames), out offendingName, out offendingLocation);
+
+            case ForEllipsisStatementSyntax forEllipsis:
+                if (TryFindInstanceMemberReference(forEllipsis.LowerBound, forbiddenNames, shadowedNames, out offendingName, out offendingLocation) ||
+                    TryFindInstanceMemberReference(forEllipsis.UpperBound, forbiddenNames, shadowedNames, out offendingName, out offendingLocation))
+                {
+                    return true;
+                }
+
+                return TryFindInstanceMemberReference(
+                    forEllipsis.Body, forbiddenNames, WithShadowed(shadowedNames, new[] { forEllipsis.Identifier.Text }), out offendingName, out offendingLocation);
+
+            case AwaitForRangeStatementSyntax awaitForRange:
+                if (TryFindInstanceMemberReference(awaitForRange.Stream, forbiddenNames, shadowedNames, out offendingName, out offendingLocation))
+                {
+                    return true;
+                }
+
+                return TryFindInstanceMemberReference(
+                    awaitForRange.Body, forbiddenNames, WithShadowed(shadowedNames, new[] { awaitForRange.Identifier.Text }), out offendingName, out offendingLocation);
+
+            // `if let` bindings are visible only in the then/else clauses, not
+            // to statements following the `if`.
+            case IfLetStatementSyntax ifLet:
+                var ifLetNames = new List<string>();
+                foreach (var binding in ifLet.Bindings)
+                {
+                    if (TryFindInstanceMemberReference(binding.Initializer, forbiddenNames, shadowedNames, out offendingName, out offendingLocation))
+                    {
+                        return true;
+                    }
+
+                    ifLetNames.Add(binding.Identifier.Text);
+                }
+
+                var ifLetShadowed = WithShadowed(shadowedNames, ifLetNames);
+                if (TryFindInstanceMemberReference(ifLet.ThenStatement, forbiddenNames, ifLetShadowed, out offendingName, out offendingLocation))
+                {
+                    return true;
+                }
+
+                return ifLet.ElseClause != null &&
+                    TryFindInstanceMemberReference(ifLet.ElseClause, forbiddenNames, shadowedNames, out offendingName, out offendingLocation);
         }
 
+        // Generic default: sequentially walk this node's children, growing a
+        // local shadow set as declaration-introducing children are seen so
+        // later siblings (e.g. a subsequent statement in the same block) see
+        // names bound by an earlier `let`/`var`, deconstruction, `guard let`,
+        // or pattern capture — matching how those bindings extend the
+        // enclosing scope.
+        var local = shadowedNames;
+        var cloned = false;
         foreach (var child in node.GetChildren())
         {
-            if (TryFindInstanceMemberReference(child, forbiddenNames, out offendingName, out offendingLocation))
+            if (TryFindInstanceMemberReference(child, forbiddenNames, local, out offendingName, out offendingLocation))
             {
                 return true;
+            }
+
+            var declared = GetSequentiallyDeclaredNames(child);
+            if (declared != null)
+            {
+                if (!cloned)
+                {
+                    local = new HashSet<string>(local, StringComparer.Ordinal);
+                    cloned = true;
+                }
+
+                foreach (var name in declared)
+                {
+                    local.Add(name);
+                }
             }
         }
 
         offendingName = null;
         offendingLocation = default;
         return false;
+    }
+
+    /// <summary>Returns a copy of <paramref name="shadowedNames"/> with <paramref name="newNames"/> added.</summary>
+    private static HashSet<string> WithShadowed(HashSet<string> shadowedNames, IEnumerable<string> newNames)
+    {
+        var result = new HashSet<string>(shadowedNames, StringComparer.Ordinal);
+        foreach (var name in newNames)
+        {
+            result.Add(name);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Names bound by <paramref name="node"/> that remain visible to its
+    /// following siblings within the enclosing node's child list — plain
+    /// local declarations (<c>let</c>/<c>var</c>, tuple/named deconstruction,
+    /// <c>guard let</c>) and pattern captures (e.g. <c>x is Foo y</c> or a
+    /// <c>match</c> arm pattern), which this scan conservatively treats as
+    /// shadowing for the rest of the initializer rather than modelling
+    /// precise flow-sensitive scoping. Returns <c>null</c> when the node
+    /// introduces no such bindings.
+    /// </summary>
+    private static IEnumerable<string> GetSequentiallyDeclaredNames(SyntaxNode node)
+    {
+        switch (node)
+        {
+            case VariableDeclarationSyntax variableDeclaration:
+                return new[] { variableDeclaration.Identifier.Text };
+
+            case TupleDeconstructionStatementSyntax tupleDeconstruction:
+                return tupleDeconstruction.Identifiers.Select(t => t.Text).ToArray();
+
+            case NamedDeconstructionStatementSyntax namedDeconstruction:
+                return namedDeconstruction.Fields.Select(f => f.LocalIdentifier.Text).ToArray();
+
+            case GuardLetStatementSyntax guardLet:
+                return guardLet.Bindings.Select(b => b.Identifier.Text).ToArray();
+
+            case PatternSyntax pattern:
+                var captures = new List<string>();
+                CollectPatternCaptureNames(pattern, captures);
+                return captures.Count > 0 ? captures : null;
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>Recursively collects capture names (e.g. <c>y</c> in the type pattern <c>Foo y</c>, or <c>rest</c> in a slice pattern) from a pattern subtree.</summary>
+    private static void CollectPatternCaptureNames(SyntaxNode node, List<string> captures)
+    {
+        switch (node)
+        {
+            case TypePatternSyntax typePattern when typePattern.Identifier != null:
+                captures.Add(typePattern.Identifier.Text);
+                break;
+
+            case SlicePatternSyntax slicePattern when slicePattern.CaptureIdentifier != null:
+                captures.Add(slicePattern.CaptureIdentifier.Text);
+                break;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectPatternCaptureNames(child, captures);
+        }
     }
 
     /// <summary>

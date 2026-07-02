@@ -9809,7 +9809,12 @@ public class Parser
         // If the current token is `if` and this could be an if-expression
         // (value-producing), parse it as an expression statement wrapping
         // an IfExpressionSyntax. This handles nested `if` in block position.
-        if (Current.Kind == SyntaxKind.IfKeyword && LooksLikeIfExpression())
+        // `if let` (ADR-0071) is always a statement, never a value-producing
+        // if-expression, even when it ends in a plain `else { … }` — without
+        // this check `LooksLikeIfExpression` would misparse `if let x = y {
+        // … } else { … }` as an if-expression, since it only inspects the
+        // shape of the trailing else, not the `let` after `if`.
+        if (Current.Kind == SyntaxKind.IfKeyword && Peek(1).Kind != SyntaxKind.LetKeyword && LooksLikeIfExpression())
         {
             var ifExpr = ParseIfExpression();
             return new ExpressionStatementSyntax(syntaxTree, ifExpr);
