@@ -13,9 +13,10 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <summary>
 /// End-to-end regression coverage for issue #1701 crack 2
 /// (<c>Conversion.Classify</c>'s nullable-open-type-parameter arm). The fix
-/// blocks the implicit <c>T? -> object</c>/interface box ONLY when <c>T</c>
-/// is provably reference-type-constrained (<c>HasReferenceTypeConstraint</c>,
-/// e.g. <c>[T class]</c>) — the sole shape where <c>T?</c> is a genuine
+/// blocks the implicit <c>T? -> object</c>/interface box when <c>T</c> is
+/// provably a reference type: bare <c>class</c> (<c>HasReferenceTypeConstraint</c>,
+/// e.g. <c>[T class]</c>) or a class-base constraint (<c>ClassConstraint</c>,
+/// e.g. <c>[T Box]</c>) — the only shapes where <c>T?</c> is a genuine
 /// nullable reference. An earlier revision of the fix instead gated on
 /// <c>HasValueTypeConstraint</c>, which blocked every non-struct-constrained
 /// shape (unconstrained, interface-constrained) and regressed issue #1455.
@@ -34,6 +35,28 @@ public class Issue1701NullabilityConversionCracksEmitTests
         var source = """
             package Probe1701Block
             func Sink[T class](x T?) object -> x
+            """;
+
+        var (exitCode, stderr) = TryCompile(source);
+        Assert.NotEqual(0, exitCode);
+        Assert.True(
+            stderr.Contains("GS0154") || stderr.Contains("GS0155") || stderr.Contains("Cannot convert"),
+            $"expected a null-safety diagnostic, got:\n{stderr}");
+    }
+
+    [Fact]
+    public void ClassBaseConstrainedNullableTypeParam_ToObject_ReportsNullSafetyDiagnostic()
+    {
+        // Same crack, different constraint shape: a class-BASE constraint
+        // (`[T Box]`) only populates `ClassConstraint`, never
+        // `HasReferenceTypeConstraint` (that flag is set solely by the bare
+        // `class` keyword). But `Box` being an `open class` still proves `T`
+        // is a reference type, so `T?` is a genuine nullable reference here
+        // too — the implicit box must be rejected exactly like `[T class]`.
+        var source = """
+            package Probe1701ClassBaseBlock
+            open class Box { }
+            func Sink[T Box](x T?) object -> x
             """;
 
         var (exitCode, stderr) = TryCompile(source);

@@ -382,23 +382,24 @@ public sealed class Conversion
         // Issue #1455 / #1701: a nullable wrapper over an open type parameter
         // (`T?`) boxes implicitly to `object` (and reference-upcasts to any
         // interface in `T`'s effective constraint set) for EVERY constraint
-        // shape EXCEPT one: `T` provably reference-type-constrained
-        // (`HasReferenceTypeConstraint`, e.g. `[T class]`). That is the only
-        // shape where `T?` is a genuine nullable REFERENCE per the
-        // Kotlin-model null-safety invariant, so implicit boxing would erase a
-        // possibly-null `T?` into a non-nullable `object`/interface target —
-        // the residual crack tracked by #1701. That case must fall through to
-        // `Conversion.None` here so the caller is forced to target `object?`
-        // (or any nullable interface target, handled by the nullable-target
-        // arms above) or use `!!`.
+        // shape EXCEPT the ones where `T` is PROVABLY a reference type: bare
+        // `class` (`HasReferenceTypeConstraint`, e.g. `[T class]`) and
+        // class-base constraints (`ClassConstraint`, e.g. `[T Box]` where
+        // `Box` is a reference type). Both shapes are genuine nullable
+        // REFERENCES per the Kotlin-model null-safety invariant, so implicit
+        // boxing would erase a possibly-null `T?` into a non-nullable
+        // `object`/interface target — the residual crack tracked by #1701.
+        // Those cases must fall through to `Conversion.None` here so the
+        // caller is forced to target `object?` (or any nullable interface
+        // target, handled by the nullable-target arms above) or use `!!`.
         //
         // Every other shape — value-type-constrained (`[T struct]`, `T?`
-        // erases to genuine `Nullable<T>`), interface-constrained, class-base-
-        // constrained, and unconstrained — boxes via the CLR's ordinary
-        // generic `box !!T` rule: a `null` value boxes to an actual null
-        // reference (for reference instantiations) or to a boxed
-        // `Nullable<T>` (for value instantiations), so no non-null value is
-        // ever fabricated. Blocking those shapes regresses #1455.
+        // erases to genuine `Nullable<T>`), interface-only-constrained, and
+        // unconstrained — boxes via the CLR's ordinary generic `box !!T`
+        // rule: a `null` value boxes to an actual null reference (for
+        // reference instantiations) or to a boxed `Nullable<T>` (for value
+        // instantiations), so no non-null value is ever fabricated. Blocking
+        // those shapes regresses #1455.
         //
         // Unlike the bare `T -> object` case — deliberately excluded above
         // because an erased `!0` parameter slot is indistinguishable from a
@@ -413,7 +414,8 @@ public sealed class Conversion
         if (from is NullableTypeSymbol fromNullableTypeParam
             && fromNullableTypeParam.UnderlyingType is TypeParameterSymbol nullableUnderlyingTypeParam
             && to is not NullableTypeSymbol
-            && !nullableUnderlyingTypeParam.HasReferenceTypeConstraint)
+            && !nullableUnderlyingTypeParam.HasReferenceTypeConstraint
+            && nullableUnderlyingTypeParam.ClassConstraint is null)
         {
             if (to?.ClrType.IsSameAs(typeof(object)) == true)
             {
