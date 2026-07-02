@@ -38,21 +38,15 @@ Console.WriteLine(default(int32))
     }
 
     [Fact]
-    public void Default_String_ReturnsEmptyString()
+    public void Default_String_ReturnsNull()
     {
-        // Issue #1714: `string` has Go-style value semantics in G# — its zero
-        // value is `""`, not `nil`. This must agree with the interpreter
-        // (Evaluator.DefaultValue special-cases TypeSymbol.String to
-        // string.Empty).
         const string Source = @"package main
 import System
 let s string = default(string)
-Console.WriteLine(s == """")
 Console.WriteLine(s == nil)
 ";
         var lines = CompileAndRun(Source, "Issue795-Default-String");
         Assert.Equal("True", lines[0]);
-        Assert.Equal("False", lines[1]);
     }
 
     [Fact]

@@ -975,19 +975,17 @@ internal sealed partial class MethodBodyEmitter
             || (type is ImportedTypeSymbol erasedGen && erasedGen.HasTypeParameterArgument)
             || (type is NullableTypeSymbol nullableTp && nullableTp.UnderlyingType is TypeParameterSymbol);
 
-        // Issue #1714: `string` is a CLR reference type but G# gives it Go-style
-        // value semantics — its zero value is `""`, not `null` (matching the
-        // interpreter's Evaluator.DefaultValue, which special-cases
-        // TypeSymbol.String ahead of the reference-type fallback). Emit the
-        // empty-string literal instead of `ldnull` so `default(string)` agrees
-        // across both backends.
-        if (type == TypeSymbol.String)
-        {
-            this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(string.Empty));
-            return;
-        }
-
         // Reference types: ldnull
+        //
+        // Issue #1714: `string`'s Go-style `""` zero value applies only to
+        // *uninitialized storage* (map-miss reads, struct/class instance
+        // fields, auto-property backing fields) — not to the explicit
+        // `default`/`default(string)` *expression*, which keeps its
+        // pre-existing, intentionally-tested CLR-null semantics (see
+        // Issue1391 generic-arg default, Issue1496 bare `default` in a
+        // string-returning if-arm, and ADR-0100's EvaluateDefaultExpression
+        // short-circuit for reference types). So `string` falls straight
+        // through to the ordinary reference-type `ldnull` here.
         if (!typeParamLike && !ReflectionMetadataEmitter.IsValueTypeSymbol(type))
         {
             this.il.OpCode(ILOpCode.Ldnull);

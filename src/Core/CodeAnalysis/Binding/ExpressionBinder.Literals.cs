@@ -741,7 +741,12 @@ internal sealed partial class ExpressionBinder
                 }
                 else if (field.Type == TypeSymbol.String)
                 {
-                    inits.Add(new BoundFieldInitializer(field, new BoundDefaultExpression(null, TypeSymbol.String)));
+                    // Issue #1714: this is a storage-default site (an omitted
+                    // field in a struct literal), not the explicit `default`
+                    // expression, so synthesize a plain `""` literal here
+                    // rather than a BoundDefaultExpression — the latter now
+                    // intentionally keeps CLR-null semantics for `string`.
+                    inits.Add(new BoundFieldInitializer(field, new BoundLiteralExpression(null, string.Empty, TypeSymbol.String)));
                     seenFieldNames.Add(field.Name);
                 }
             }

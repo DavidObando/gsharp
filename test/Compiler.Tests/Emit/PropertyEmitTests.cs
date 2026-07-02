@@ -258,8 +258,11 @@ public class PropertyEmitTests
     }
 
     [Fact]
-    public void Property_DefaultValue_IsNullForString()
+    public void Property_DefaultValue_IsEmptyStringForString()
     {
+        // Issue #1714: an unset `string` auto-property backing field is a
+        // storage-default site, so it zero-inits to Go-style `""`, not the
+        // CLR reference-type default `null`.
         var source = """
             package MyLib
             import System
@@ -276,7 +279,7 @@ public class PropertyEmitTests
 
         Assert.NotNull(prop);
         var result = prop!.GetMethod!.Invoke(instance, null);
-        Assert.Null(result);
+        Assert.Equal(string.Empty, result);
     }
 
     [Fact]

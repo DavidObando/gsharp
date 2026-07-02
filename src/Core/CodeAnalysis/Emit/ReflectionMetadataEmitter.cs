@@ -4030,7 +4030,7 @@ internal sealed class ReflectionMetadataEmitter
             // (those are populated from the argument, not defaulted).
             if (field.Type == TypeSymbol.String && primaryParamFieldNames?.Contains(field.Name) != true)
             {
-                var defaultExpr = new BoundDefaultExpression(null, TypeSymbol.String);
+                var defaultExpr = new BoundLiteralExpression(null, string.Empty, TypeSymbol.String); // Issue #1714: storage default site, not the `default` expression.
                 var assignment = new BoundFieldAssignmentExpression(null, thisParam, classSym, field, defaultExpr);
                 statements.Add(new BoundExpressionStatement(null, assignment));
                 continue;
@@ -4062,7 +4062,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             if (property.IsAutoProperty && property.BackingField != null && property.Type == TypeSymbol.String)
             {
-                var defaultExpr = new BoundDefaultExpression(null, TypeSymbol.String);
+                var defaultExpr = new BoundLiteralExpression(null, string.Empty, TypeSymbol.String); // Issue #1714: storage default site, not the `default` expression.
                 var assignment = new BoundFieldAssignmentExpression(null, thisParam, classSym, property.BackingField, defaultExpr);
                 statements.Add(new BoundExpressionStatement(null, assignment));
             }
@@ -4101,7 +4101,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 if (field.Type == TypeSymbol.String)
                 {
-                    var defaultExpr = new BoundDefaultExpression(null, TypeSymbol.String);
+                    var defaultExpr = new BoundLiteralExpression(null, string.Empty, TypeSymbol.String); // Issue #1714: storage default site, not the `default` expression.
                     var assignment = BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, t, field, defaultExpr);
                     statements.Add(new BoundExpressionStatement(null, assignment));
                 }

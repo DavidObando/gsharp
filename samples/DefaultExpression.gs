@@ -4,13 +4,9 @@
 // of a type via `default(T)` for any type `T`, and via the bare `default`
 // literal in target-typed positions (let/var with explicit type, return
 // with known return type, argument to a typed parameter, and conditional
-// branches typed by their sibling). Semantics mirror C#, except for
-// `string`:
+// branches typed by their sibling). Semantics mirror C#:
 //   * value types — zero-initialised
-//   * `string` — Go-style value semantics: its zero value is `""`, not
-//     `nil` (issue #1714 — kept the interpreter's pre-existing behavior
-//     and made the emitter agree with it)
-//   * other reference types and nullable `T?` — `nil`
+//   * reference types and nullable `T?` — `nil`
 //   * unconstrained type parameters `T` — emits `initobj T` so both the
 //     value-type and reference-type substitutions Just Work
 //
@@ -40,10 +36,9 @@ Console.WriteLine(default(int64))                  // 0
 Console.WriteLine(default(float64))                // 0
 Console.WriteLine(default(bool))                   // False
 
-// `default(T)` for `string` — issue #1714: Go-style zero value `""`, not `nil`.
+// `default(T)` for reference types — `nil`.
 let s string = default(string)
-Console.WriteLine(s == "")                         // True
-Console.WriteLine(s == nil)                        // False
+Console.WriteLine(s == nil)                        // True
 
 // `default(T?)` for nullable value types — `nil`.
 let n int32? = default(int32?)
@@ -65,9 +60,7 @@ Console.WriteLine(pick)                            // 42
 
 // `default(T)` inside a generic function — the reified-generics emit
 // pass (ADR-0087) produces `ldloca; initobj T; ldloc` so the same body
-// produces a zero `int32` and, for `string`, `initobj` still yields the
-// CLR `null` here — the type-parameter erasure path is out of scope for
-// issue #1714's fix (see MethodBodyEmitter.EmitDefault), so this keeps
-// its pre-existing (pre-#1714) behavior.
+// produces a zero `int32` and a `nil` `string` depending on the
+// substituted type argument.
 Console.WriteLine(MakeZero[int32]())               // 0
 Console.WriteLine(MakeZero[string]() == nil)       // True

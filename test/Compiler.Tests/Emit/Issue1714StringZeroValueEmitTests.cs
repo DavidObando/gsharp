@@ -122,8 +122,14 @@ public class Issue1714StringZeroValueEmitTests
     }
 
     [Fact]
-    public void EndToEnd_DefaultStringExpression_IsEmptyString()
+    public void EndToEnd_DefaultStringExpression_IsNull()
     {
+        // Issue #1714 scopes the Go-style `""` zero value to UNINITIALIZED
+        // STORAGE (map-miss, struct/class field, auto-property) — not to the
+        // explicit `default`/`default(string)` EXPRESSION, which keeps its
+        // pre-existing, intentionally-tested CLR-null semantics (ADR-0100's
+        // EvaluateDefaultExpression short-circuits `nil` for reference types;
+        // see also Issue1391/Issue1496/Issue795 default-expression tests).
         const string source = """
             package i1714defaultexpr
             import System
@@ -136,13 +142,14 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal("False\nTrue\n", output);
 
-        // Not asserting interpreter parity here: Evaluator.EvaluateDefaultExpression
-        // returns `nil` for any reference-type `default(T)` ahead of ever
-        // calling DefaultValue (ADR-0100) — a separate, pre-existing code
-        // path from the recursive struct-field defaulting this fix targets,
-        // and out of scope for the nested-struct-field gap closed here.
+        // Not asserting interpreter parity here: Evaluator.DefaultValue
+        // special-cases `string` to `""` for ALL defaulting, including the
+        // explicit `default` expression — a separate, pre-existing
+        // interpreter/emit divergence for the default-EXPRESSION path,
+        // rooted in ADR-0100, that is out of scope for issue #1714 (which
+        // scopes only the three uninitialized-storage sites).
     }
 
     [Fact]
