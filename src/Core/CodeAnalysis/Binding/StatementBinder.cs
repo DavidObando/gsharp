@@ -1839,13 +1839,23 @@ internal sealed class StatementBinder
             return true;
         }
 
-        // For any other shape, accept it as a narrowing as long as the
-        // declared and candidate types are distinct. The runtime `is`
-        // test has already proved that the value is of the candidate
-        // type, so binder-time soundness is satisfied regardless of
-        // whether the candidate is a strict subtype in the type
-        // hierarchy.
-        return true;
+        // Issue #1636: a candidate distinct from the declared type is only a
+        // genuine narrowing if it is actually a subtype of the declared type
+        // (candidate implicitly converts to declared — every candidate value
+        // is already usable as declared). `Conversion.Classify` already
+        // encodes the full class/interface/base-type lattice (class → base
+        // class, class → implemented interface, interface → base interface,
+        // struct → interface, etc.), so reuse it instead of re-deriving the
+        // subtype relation here.
+        //
+        // A supertype/interface/unrelated candidate (e.g. `Circle is
+        // IDrawable`, `string is object`) does NOT implicitly convert back to
+        // the (narrower) declared type — that's a widening or unrelated test,
+        // and replacing the declared type with it would hide members the
+        // declared type actually has (C# keeps the declared type in that
+        // case).
+        var conversion = Conversion.Classify(candidate, declared);
+        return conversion.Exists && conversion.IsImplicit;
     }
 
     private (Dictionary<AccessPath, TypeSymbol> NonNil, Dictionary<AccessPath, TypeSymbol> Nil) TryClassifyNilGuard(BoundExpression condition)
