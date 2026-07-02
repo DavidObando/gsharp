@@ -250,6 +250,27 @@ ADR-0056 §1/§2 makes spans indexable: a `Span[T]` / `ReadOnlySpan[T]` indexer 
 |----|----------|-------------|-----------------|
 | GS0226 | Error | Cannot assign through a read-only span element (`ReadOnlySpan[T]` is read-only). | `var s ReadOnlySpan[int32] = arr` then `s[0] = 1` — a `ReadOnlySpan[T]` indexer is `ref readonly T`; use `Span[T]` to write. |
 
+Issue #1655: the ref-kind-on-async/iterator ban was previously misfiled under this ID; it now ships as **GS0422** — see [Reassigned diagnostics (GS0419–GS0424)](#reassigned-diagnostics-gs0419gs0424).
+
+### Nested-type resolution diagnostics (GS0268)
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0268 | Error | Type does not contain a nested type of the requested name. | `Outer.Missing` when `Outer` exists but declares no nested type named `Missing` (issue #526). |
+
+### Reassigned diagnostics (GS0419–GS0424)
+
+Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (GS0189, GS0190, GS0226, GS0241, GS0268 respectively). Each collision has been resolved by keeping the earliest-established meaning on the original ID and moving the newer, unrelated meaning to a fresh ID.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0419 | Error | Property cannot be an auto-property in a `data struct`; use a computed property with an explicit body instead. | `data struct P { var X int32; prop Y int32 }` — `Y` has no explicit getter/setter body (ADR-0051). Previously misfiled under GS0189. |
+| GS0420 | Error | The argument to `nameof` must be a name reference: an identifier, member access, or type. | `nameof(123)` or `nameof(Console.WriteLine("hi"))`. Previously misfiled under GS0190. |
+| GS0421 | Error | Member is marked `open` but the enclosing class is not open. | `class C { open func M() {} }` where `C` is not declared `open` (ADR-0051). Previously misfiled under GS0190. |
+| GS0422 | Error | A ref-kind parameter (`ref`/`out`/`in`) cannot appear on an `async`, `sequence`, or `async sequence` function. | `async func f(ref x int32) { }` — the state-machine rewriter cannot hoist a managed pointer into a field (ADR-0060 §10). Previously misfiled under GS0226. |
+| GS0423 | Error | Type does not implement a usable `GetEnumerator()` method and cannot be iterated with `for ... in`. | `for x in 42 { }` where `42`'s type has no usable `GetEnumerator()`. Previously misfiled under GS0268. |
+| GS0424 | Error | A ref-kind modifier (`ref`/`out`/`in`) is not legal on a primary-constructor parameter. | `class Vec(ref x int32) { }` — primary-constructor parameters materialize fields, and the CLR cannot store a managed pointer in a field (ADR-0060 / ADR-0029). Previously misfiled under GS0241. |
+
 ### Pointer / by-ref diagnostics (GS9001–GS9006)
 
 | ID | Severity | Description | Example trigger |
@@ -305,7 +326,7 @@ ADR-0059 / Issue #255: `type Name = delegate func(...)` declares a real CLR `Mul
 
 ## Ref-kind parameter diagnostics (GS0235–GS0243)
 
-ADR-0060 introduces explicit `ref`, `out`, and `in` parameter passing modes at both call sites and method-definition sites. The ADR (§8) originally enumerated diagnostics GS0230–GS0238, but those codes were already in use by ADR-0029 / ADR-0030 / ADR-0056 / ADR-0059; the ADR-0060 diagnostics ship at the next free range, GS0235–GS0243, with a 1:1 mapping (GS0230→GS0235, GS0231→GS0236, …, GS0238→GS0243). The async/iterator ban (§10) reuses the existing GS0226 family.
+ADR-0060 introduces explicit `ref`, `out`, and `in` parameter passing modes at both call sites and method-definition sites. The ADR (§8) originally enumerated diagnostics GS0230–GS0238, but those codes were already in use by ADR-0029 / ADR-0030 / ADR-0056 / ADR-0059; the ADR-0060 diagnostics ship at the next free range, GS0235–GS0243, with a 1:1 mapping (GS0230→GS0235, GS0231→GS0236, …, GS0238→GS0243). The async/iterator ban (§10) is reported as **GS0422** and the primary-constructor ban (ADR-0060 + ADR-0029) as **GS0424** — see [Reassigned diagnostics (GS0419–GS0424)](#reassigned-diagnostics-gs0419gs0424).
 
 | Code | Severity | Message |
 |------|----------|---------|

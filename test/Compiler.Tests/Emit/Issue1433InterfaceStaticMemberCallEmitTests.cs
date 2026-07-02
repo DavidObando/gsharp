@@ -15,7 +15,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// user-defined <c>interface</c>. Before the fix the binder produced no
 /// resolution for <c>IName.Method(args)</c> (and interface static property
 /// reads / method groups), leaking a <see cref="GSharp.Core.CodeAnalysis.Binding.BoundErrorExpression"/>
-/// into emit which crashed with a misleading <c>GS0268</c> ("for-in loop")
+/// into emit which crashed with a misleading <c>GS0423</c> ("for-in loop")
 /// internal compiler error. These tests cover the generalized fix: interface
 /// static method calls (used + discarded), a static method group, a static
 /// property read, and a constructed generic interface static method call,

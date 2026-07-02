@@ -1492,7 +1492,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="propertyName">The property name.</param>
     public void ReportAutoPropertyInDataStruct(TextLocation location, string propertyName)
     {
-        Report(location, "GS0189", $"Property '{propertyName}' cannot be an auto-property in a data struct; use a computed property with an explicit body instead.");
+        Report(location, "GS0419", $"Property '{propertyName}' cannot be an auto-property in a data struct; use a computed property with an explicit body instead.");
     }
 
     /// <summary>ADR-0051: reports an <c>open</c> member declared on a class that is not itself <c>open</c>.</summary>
@@ -1500,7 +1500,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="memberName">The member name.</param>
     public void ReportOpenMemberInNonOpenClass(TextLocation location, string memberName)
     {
-        Report(location, "GS0190", $"Member '{memberName}' is marked 'open' but the enclosing class is not open.");
+        Report(location, "GS0421", $"Member '{memberName}' is marked 'open' but the enclosing class is not open.");
     }
 
     /// <summary>GS9001: Cannot take address of a non-lvalue expression.</summary>
@@ -1769,7 +1769,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="location">The text location of the argument.</param>
     public void ReportNameOfRequiresNameReference(TextLocation location)
     {
-        Report(location, "GS0190", "The argument to 'nameof' must be a name reference: an identifier, member access, or type.");
+        Report(location, "GS0420", "The argument to 'nameof' must be a name reference: an identifier, member access, or type.");
     }
 
     /// <summary>
@@ -2323,7 +2323,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="parameterName">The parameter name.</param>
     public void ReportRefKindOnPrimaryCtorParameter(TextLocation location, string parameterName)
     {
-        Report(location, "GS0241", $"'ref'/'out'/'in' is not a legal modifier on the primary-constructor parameter '{parameterName}'; primary-ctor parameters materialize fields, and the CLR cannot store a managed pointer in a field. Move the constructor to an 'init(...)' body if a by-reference parameter is required.");
+        Report(location, "GS0424", $"'ref'/'out'/'in' is not a legal modifier on the primary-constructor parameter '{parameterName}'; primary-ctor parameters materialize fields, and the CLR cannot store a managed pointer in a field. Move the constructor to an 'init(...)' body if a by-reference parameter is required.");
     }
 
     /// <summary>
@@ -2356,15 +2356,14 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <summary>
     /// ADR-0060 §10: reports a ref-kind parameter on an <c>async</c>, <c>sequence</c>, or
     /// <c>async sequence</c> function. The state-machine rewriter cannot hoist a managed
-    /// pointer into a field, so the parameter is rejected. (Same GS0226 family as the
-    /// existing async/iterator restrictions.)
+    /// pointer into a field, so the parameter is rejected.
     /// </summary>
     /// <param name="location">The parameter location.</param>
     /// <param name="parameterName">The parameter name.</param>
     /// <param name="functionKind">"async", "sequence", or "async sequence".</param>
     public void ReportRefKindOnAsyncOrIterator(TextLocation location, string parameterName, string functionKind)
     {
-        Report(location, "GS0226", $"Ref-kind parameter '{parameterName}' cannot appear on a {functionKind} function.");
+        Report(location, "GS0422", $"Ref-kind parameter '{parameterName}' cannot appear on a {functionKind} function.");
     }
 
     /// <summary>
@@ -2662,7 +2661,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportTypeNotIterable(TextLocation location, TypeSymbol type)
     {
         var message = $"Type '{type.Name}' does not implement a usable 'GetEnumerator()' method and cannot be iterated with 'for ... in'.";
-        Report(location, "GS0268", message);
+        Report(location, "GS0423", message);
     }
 
     /// <summary>
