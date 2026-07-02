@@ -45,6 +45,7 @@ public sealed class LspServer
     private bool clientSupportsDiagnosticRefresh;
     private Timer refreshTimer;
     private string defaultFormattingIndent = "  ";
+    private string pendingWorkspaceRootPath;
 
     public LspServer(DocumentContentService documentContentService, WorkspaceState workspaceState, ILogger logger = null)
     {
@@ -67,17 +68,9 @@ public sealed class LspServer
     [JsonRpcMethod("initialize", UseSingleObjectParameterDeserialization = true)]
     public Task<InitializeResult> InitializeAsync(InitializeParams request)
     {
-        var rootPath = request?.RootPath ?? request?.RootUri?.GetFileSystemPath();
+        this.pendingWorkspaceRootPath = request?.RootPath ?? request?.RootUri?.GetFileSystemPath();
         this.DetectClientDiagnosticCapabilities(request?.Capabilities ?? default);
         this.defaultFormattingIndent = ResolveDefaultFormattingIndent(request?.InitializationOptions ?? default);
-        try
-        {
-            WorkspaceInitializer.Initialize(this.workspaceState, rootPath);
-        }
-        catch
-        {
-            // Workspace discovery is best-effort; single-file editing still works without it.
-        }
 
         return Task.FromResult(new InitializeResult
         {
@@ -89,7 +82,26 @@ public sealed class LspServer
     [JsonRpcMethod("initialized")]
     public void Initialized(JsonElement @params)
     {
-        // No-op: capabilities are advertised statically in the initialize result.
+        // Issue #1663: workspace discovery (globbing every project, reading and parsing every
+        // source file) used to run inline in "initialize", blocking the handshake for
+        // seconds-to-minutes on a large workspace. Kick it off in the background instead, now
+        // that the client has the capabilities and can start sending requests. WorkspaceState's
+        // maps are ConcurrentDictionary-backed, so requests racing the load see either "not
+        // found yet" (handled today via GetProjectForFile returning null → empty diagnostics,
+        // same as an unopened file) or the fully-populated project once loading catches up; no
+        // extra locking is needed for correctness.
+        var rootPath = this.pendingWorkspaceRootPath;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                WorkspaceInitializer.Initialize(this.workspaceState, rootPath);
+            }
+            catch
+            {
+                // Workspace discovery is best-effort; single-file editing still works without it.
+            }
+        });
     }
 
     [JsonRpcMethod("shutdown")]
