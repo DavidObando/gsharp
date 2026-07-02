@@ -57,12 +57,13 @@ public sealed class BoundScope
     /// <param name="preprocessorSymbols">The active preprocessor symbol set; defaults to the parent's set, or an empty set if none.</param>
     public BoundScope(BoundScope parent, ReferenceResolver references, ImmutableHashSet<string> preprocessorSymbols)
     {
+        // Issue #1647: symbolKeys/functionKeys/imports/typeAliases/typeAliasKeys
+        // are kept PER-SCOPE only (declared-here entries), just like the
+        // `symbols`/`functions` dictionaries already were. Resolution walks
+        // the Parent chain lazily instead of eagerly duplicating the parent's
+        // entire state into every child scope (every block/loop/switch arm
+        // created a BoundScope, making the old eager copy O(scopes x entries)).
         Parent = parent;
-        symbolKeys = parent?.symbolKeys?.ToImmutable().ToBuilder();
-        functionKeys = parent?.functionKeys?.ToImmutable().ToBuilder();
-        imports = parent?.imports.ToImmutable().ToBuilder() ?? ImmutableArray.CreateBuilder<ImportSymbol>();
-        typeAliases = parent?.typeAliases.ToImmutable().ToBuilder() ?? ImmutableDictionary.CreateBuilder<string, TypeSymbol>();
-        typeAliasKeys = parent?.typeAliasKeys.ToImmutable().ToBuilder() ?? ImmutableArray.CreateBuilder<string>();
         References = references ?? parent?.References ?? ReferenceResolver.Default();
         PreprocessorSymbols = preprocessorSymbols ?? parent?.PreprocessorSymbols ?? ImmutableHashSet<string>.Empty;
     }
@@ -92,6 +93,7 @@ public sealed class BoundScope
     /// <returns>Whether the import was registered or not.</returns>
     public bool TryImport(ImportSymbol import)
     {
+        imports ??= ImmutableArray.CreateBuilder<ImportSymbol>();
         imports.Add(import);
         return true;
     }
@@ -541,7 +543,7 @@ public sealed class BoundScope
         }
 
         var mangled = name + "`" + arity;
-        foreach (var import in imports)
+        foreach (var import in EnumerateImports())
         {
             var typeName = import.Target + "." + mangled;
             if (References.TryResolveType(typeName, out var t))
@@ -565,7 +567,7 @@ public sealed class BoundScope
     {
         importedClass = null;
 
-        foreach (var import in imports)
+        foreach (var import in EnumerateImports())
         {
             var typeName = import.Target + "." + name;
             if (References.TryResolveType(typeName, out var type))
@@ -589,7 +591,7 @@ public sealed class BoundScope
     {
         import = null;
 
-        foreach (var candidate in imports)
+        foreach (var candidate in EnumerateImports())
         {
             if (string.Equals(candidate.Name, name, System.StringComparison.Ordinal))
             {
@@ -637,7 +639,7 @@ public sealed class BoundScope
     /// </summary>
     /// <returns>The declared imports.</returns>
     public ImmutableArray<ImportSymbol> GetDeclaredImports()
-        => imports.ToImmutable();
+        => EnumerateImports().ToImmutableArray();
 
     /// <summary>
     /// Tries to declare a type alias.
@@ -657,7 +659,7 @@ public sealed class BoundScope
         // same name AND same arity — still collides and reports GS0102.
         var arity = GetTypeAliasArity(target);
         var key = MangleArity(name, arity);
-        if (!typeAliases.ContainsKey(key))
+        if (!TypeAliasVisible(key))
         {
             AddTypeAlias(key, target);
             return true;
@@ -673,7 +675,7 @@ public sealed class BoundScope
         // name, while the nested "loser" is retained under its containing-type-
         // qualified key (so emit — which enumerates the stored values — still
         // produces its TypeDef).
-        var existing = typeAliases[key];
+        var existing = TryGetTypeAliasInChain(key, out var existingValue) ? existingValue : null;
         var targetEnclosing = TypeContainingType(target);
         var existingEnclosing = TypeContainingType(existing);
         if (IsSameDeclarationScope(existingEnclosing, targetEnclosing))
@@ -688,13 +690,13 @@ public sealed class BoundScope
         if (targetEnclosing == null && existingEnclosing != null)
         {
             var existingQualifiedKey = MangleArity(QualifiedTypeName(existing), arity);
-            if (typeAliases.TryGetValue(existingQualifiedKey, out var occupant) && !ReferenceEquals(occupant, existing))
+            if (TryGetTypeAliasInChain(existingQualifiedKey, out var occupant) && !ReferenceEquals(occupant, existing))
             {
                 return false;
             }
 
             AddTypeAlias(existingQualifiedKey, existing);
-            typeAliases[key] = target;
+            SetTypeAliasOverride(key, target);
             return true;
         }
 
@@ -703,7 +705,7 @@ public sealed class BoundScope
         // clash on the qualified key means a genuine duplicate within the SAME
         // enclosing type — report GS0102.
         var qualifiedKey = MangleArity(QualifiedTypeName(target), arity);
-        if (typeAliases.ContainsKey(qualifiedKey))
+        if (TypeAliasVisible(qualifiedKey))
         {
             return false;
         }
@@ -729,7 +731,7 @@ public sealed class BoundScope
             return false;
         }
 
-        if (typeAliases.ContainsKey(key))
+        if (TypeAliasVisible(key))
         {
             return false;
         }
@@ -762,7 +764,7 @@ public sealed class BoundScope
     public bool TryLookupTypeAlias(string name, int preferredArity, out TypeSymbol type)
     {
         type = null;
-        if (name == null || typeAliases == null)
+        if (name == null)
         {
             return false;
         }
@@ -770,14 +772,14 @@ public sealed class BoundScope
         if (preferredArity > 0)
         {
             var key = MangleArity(name, preferredArity);
-            if (typeAliases.TryGetValue(key, out type))
+            if (TryGetTypeAliasInChain(key, out type))
             {
                 return true;
             }
         }
 
         // Fall back to the arity-0 type (whose key is the plain simple name).
-        if (typeAliases.TryGetValue(name, out type))
+        if (TryGetTypeAliasInChain(name, out type))
         {
             return true;
         }
@@ -786,7 +788,7 @@ public sealed class BoundScope
         // so a lone generic definition keeps resolving by simple name.
         TypeSymbol best = null;
         var bestArity = int.MaxValue;
-        foreach (var pair in typeAliases)
+        foreach (var pair in EnumerateTypeAliasesInChain())
         {
             if (TryParseAritySuffix(pair.Key, name, out var arity) && arity < bestArity)
             {
@@ -824,7 +826,7 @@ public sealed class BoundScope
     public bool TryLookupNestedTypeAlias(TypeSymbol container, string simpleName, int preferredArity, out TypeSymbol type)
     {
         type = null;
-        if (container == null || string.IsNullOrEmpty(simpleName) || typeAliases == null)
+        if (container == null || string.IsNullOrEmpty(simpleName))
         {
             return false;
         }
@@ -837,7 +839,7 @@ public sealed class BoundScope
         if (preferredArity > 0)
         {
             var arityKey = MangleArity(qualifiedName, preferredArity);
-            if (typeAliases.TryGetValue(arityKey, out var arityMatch)
+            if (TryGetTypeAliasInChain(arityKey, out var arityMatch)
                 && IsNestedDirectlyIn(arityMatch, container))
             {
                 type = arityMatch;
@@ -846,7 +848,7 @@ public sealed class BoundScope
         }
 
         // Arity-0 (plain) qualified key.
-        if (typeAliases.TryGetValue(qualifiedName, out var exact)
+        if (TryGetTypeAliasInChain(qualifiedName, out var exact)
             && IsNestedDirectlyIn(exact, container))
         {
             type = exact;
@@ -856,7 +858,7 @@ public sealed class BoundScope
         // Lowest-arity same-name generic variant under the qualified key.
         TypeSymbol best = null;
         var bestArity = int.MaxValue;
-        foreach (var pair in typeAliases)
+        foreach (var pair in EnumerateTypeAliasesInChain())
         {
             if (TryParseAritySuffix(pair.Key, qualifiedName, out var arity)
                 && arity < bestArity
@@ -879,7 +881,7 @@ public sealed class BoundScope
         if (preferredArity > 0)
         {
             var simpleArityKey = MangleArity(simpleName, preferredArity);
-            if (typeAliases.TryGetValue(simpleArityKey, out var simpleArityMatch)
+            if (TryGetTypeAliasInChain(simpleArityKey, out var simpleArityMatch)
                 && IsNestedDirectlyIn(simpleArityMatch, container))
             {
                 type = simpleArityMatch;
@@ -887,14 +889,14 @@ public sealed class BoundScope
             }
         }
 
-        if (typeAliases.TryGetValue(simpleName, out var simpleMatch)
+        if (TryGetTypeAliasInChain(simpleName, out var simpleMatch)
             && IsNestedDirectlyIn(simpleMatch, container))
         {
             type = simpleMatch;
             return true;
         }
 
-        foreach (var pair in typeAliases)
+        foreach (var pair in EnumerateTypeAliasesInChain())
         {
             if (TryParseAritySuffix(pair.Key, simpleName, out var arity)
                 && arity < bestArity
@@ -919,7 +921,15 @@ public sealed class BoundScope
     /// </summary>
     /// <returns>The map of alias names to underlying types.</returns>
     public ImmutableDictionary<string, TypeSymbol> GetDeclaredTypeAliases()
-        => typeAliases.ToImmutable();
+    {
+        var builder = ImmutableDictionary.CreateBuilder<string, TypeSymbol>();
+        foreach (var pair in GetOrderedTypeAliases())
+        {
+            builder[pair.Key] = pair.Value;
+        }
+
+        return builder.ToImmutable();
+    }
 
     /// <summary>
     /// Gets the set of declared user-defined struct types in this scope chain.
@@ -949,19 +959,145 @@ public sealed class BoundScope
     public ImmutableArray<DelegateTypeSymbol> GetDeclaredDelegates()
         => GetDeclaredTypeSymbols<DelegateTypeSymbol>();
 
+    /// <summary>
+    /// Adds a brand-new type-alias key, not previously visible anywhere in the
+    /// scope chain. Records the key in this scope's own <see cref="typeAliasKeys"/>
+    /// so its declaration-order position (root-first across the chain) is fixed
+    /// the first time it is introduced.
+    /// </summary>
     private void AddTypeAlias(string key, TypeSymbol target)
     {
+        typeAliases ??= ImmutableDictionary.CreateBuilder<string, TypeSymbol>();
         typeAliases.Add(key, target);
+        typeAliasKeys ??= ImmutableArray.CreateBuilder<string>();
         typeAliasKeys.Add(key);
+    }
+
+    /// <summary>
+    /// Overrides the value of a type-alias key that already exists somewhere in
+    /// the scope chain (the eviction/promotion case in <see cref="TryDeclareTypeAlias"/>).
+    /// Only overwrites the value at this scope; it does not move the key's
+    /// declaration-order position (which was fixed when the key was first
+    /// introduced by <see cref="AddTypeAlias"/>) and does not mutate the
+    /// ancestor scope that originally owns the key.
+    /// </summary>
+    private void SetTypeAliasOverride(string key, TypeSymbol target)
+    {
+        typeAliases ??= ImmutableDictionary.CreateBuilder<string, TypeSymbol>();
+        typeAliases[key] = target;
+    }
+
+    /// <summary>Whether <paramref name="key"/> is visible anywhere in this scope chain.</summary>
+    private bool TypeAliasVisible(string key)
+    {
+        for (var s = this; s != null; s = s.Parent)
+        {
+            if (s.typeAliases != null && s.typeAliases.ContainsKey(key))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Looks up <paramref name="key"/> from this scope outward through the
+    /// Parent chain, so a nearer (child) scope's value shadows a farther
+    /// (ancestor) scope's value for the same key.
+    /// </summary>
+    private bool TryGetTypeAliasInChain(string key, out TypeSymbol value)
+    {
+        for (var s = this; s != null; s = s.Parent)
+        {
+            if (s.typeAliases != null && s.typeAliases.TryGetValue(key, out value))
+            {
+                return true;
+            }
+        }
+
+        value = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Enumerates every (key, value) pair visible from this scope, nearest
+    /// scope first, yielding each key only once (the nearest-scope value wins,
+    /// matching <see cref="TryGetTypeAliasInChain"/>).
+    /// </summary>
+    private IEnumerable<KeyValuePair<string, TypeSymbol>> EnumerateTypeAliasesInChain()
+    {
+        var seen = new HashSet<string>();
+        for (var s = this; s != null; s = s.Parent)
+        {
+            if (s.typeAliases == null)
+            {
+                continue;
+            }
+
+            foreach (var pair in s.typeAliases)
+            {
+                if (seen.Add(pair.Key))
+                {
+                    yield return pair;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Builds the full set of type aliases visible from this scope, ordered the
+    /// way the old eager parent-to-child copy produced them: each key keeps the
+    /// position it had when FIRST introduced (root-most scope first), while its
+    /// value reflects the nearest (most specific) scope that declared or
+    /// overrode it.
+    /// </summary>
+    private List<KeyValuePair<string, TypeSymbol>> GetOrderedTypeAliases()
+    {
+        var merged = new Dictionary<string, TypeSymbol>();
+        var order = new List<string>();
+        CollectTypeAliasesInto(merged, order);
+
+        var result = new List<KeyValuePair<string, TypeSymbol>>(order.Count);
+        foreach (var key in order)
+        {
+            result.Add(new KeyValuePair<string, TypeSymbol>(key, merged[key]));
+        }
+
+        return result;
+    }
+
+    private void CollectTypeAliasesInto(Dictionary<string, TypeSymbol> merged, List<string> order)
+    {
+        Parent?.CollectTypeAliasesInto(merged, order);
+
+        if (typeAliasKeys != null)
+        {
+            foreach (var key in typeAliasKeys)
+            {
+                if (!merged.ContainsKey(key))
+                {
+                    order.Add(key);
+                }
+            }
+        }
+
+        if (typeAliases != null)
+        {
+            foreach (var pair in typeAliases)
+            {
+                merged[pair.Key] = pair.Value;
+            }
+        }
     }
 
     private ImmutableArray<TSymbol> GetDeclaredTypeSymbols<TSymbol>()
         where TSymbol : TypeSymbol
     {
         var builder = ImmutableArray.CreateBuilder<TSymbol>();
-        foreach (var key in typeAliasKeys)
+        foreach (var pair in GetOrderedTypeAliases())
         {
-            if (typeAliases.TryGetValue(key, out var symbol) && symbol is TSymbol typed)
+            if (pair.Value is TSymbol typed)
             {
                 builder.Add(typed);
             }
@@ -1287,6 +1423,30 @@ public sealed class BoundScope
         }
 
         return -1;
+    }
+
+    /// <summary>
+    /// Enumerates every import visible from this scope: ancestor scopes'
+    /// imports first (outermost first), then this scope's own — matching the
+    /// order the old eager parent-to-child copy produced.
+    /// </summary>
+    private IEnumerable<ImportSymbol> EnumerateImports()
+    {
+        if (Parent != null)
+        {
+            foreach (var import in Parent.EnumerateImports())
+            {
+                yield return import;
+            }
+        }
+
+        if (imports != null)
+        {
+            foreach (var import in imports)
+            {
+                yield return import;
+            }
+        }
     }
 
     private void AddSymbol(string name, Symbol symbol)
