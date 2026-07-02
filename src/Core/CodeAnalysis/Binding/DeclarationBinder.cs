@@ -1370,6 +1370,15 @@ internal sealed class DeclarationBinder
             existingNames.Add(f.Name);
         }
 
+        // Issue #1640: methods overload by signature, so a same-named method
+        // is not itself a duplicate — but a non-method member (property,
+        // event, or field) sharing a method's name IS a collision (CS0102).
+        // Method names are tracked separately from existingNames so the
+        // method-vs-method checks below (including instance-vs-shared/static
+        // overload, issue #1147) stay unaffected, while property/event/field
+        // checks can still see method names.
+        var methodNames = new HashSet<string>();
+
         // Phase 3.B.3 sub-step 2b: bind methods declared inside the class body.
         // Issue #938 / ADR-0079: in-body methods are the canonical declaration
         // site for owned `class` AND owned `struct`/`data struct` instance
@@ -1724,6 +1733,15 @@ internal sealed class DeclarationBinder
             }
 
             structSymbol.SetMethods(methodsBuilder.ToImmutable());
+
+            // Issue #1640: register instance method names so later
+            // property/event/field checks reject a name collision with a
+            // method, per the "fields + methods + other properties" contract
+            // the duplicate-check comments have always claimed.
+            foreach (var m in methodsBuilder)
+            {
+                methodNames.Add(m.Name);
+            }
         }
 
         // ADR-0051: bind property declarations.
@@ -1765,7 +1783,7 @@ internal sealed class DeclarationBinder
                 var propName = isIndexer ? "Item" : propSyntax.Identifier.Text;
 
                 // Check for duplicate names (fields + methods + other properties)
-                if (!existingNames.Add(propName))
+                if (methodNames.Contains(propName) || !existingNames.Add(propName))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(propSyntax.Identifier.Location, propName);
                     continue;
@@ -1969,7 +1987,7 @@ internal sealed class DeclarationBinder
                 var eventName = eventSyntax.Identifier.Text;
 
                 // Check for duplicate names
-                if (!existingNames.Add(eventName))
+                if (methodNames.Contains(eventName) || !existingNames.Add(eventName))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(eventSyntax.Identifier.Location, eventName);
                     continue;
@@ -2112,7 +2130,7 @@ internal sealed class DeclarationBinder
             foreach (var fieldSyntax in syntax.SharedBlock.Fields)
             {
                 var fieldName = fieldSyntax.Identifier.Text;
-                if (!existingNames.Add(fieldName))
+                if (methodNames.Contains(fieldName) || !existingNames.Add(fieldName))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName);
                     continue;
@@ -2378,6 +2396,15 @@ internal sealed class DeclarationBinder
 
             structSymbol.SetStaticMethods(staticMethodsBuilder.ToImmutable());
 
+            // Issue #1640: register shared/static method names too, so a
+            // shared property/event/field colliding with a shared method name
+            // is still caught (methods vs methods remain overload-compatible;
+            // see the ADR-0063 signature check above).
+            foreach (var m in staticMethodsBuilder)
+            {
+                methodNames.Add(m.Name);
+            }
+
             // Static properties
             var staticPropertiesBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
             foreach (var propSyntax in syntax.SharedBlock.Properties)
@@ -2391,7 +2418,7 @@ internal sealed class DeclarationBinder
                 }
 
                 var propName = propSyntax.Identifier.Text;
-                if (!existingNames.Add(propName))
+                if (methodNames.Contains(propName) || !existingNames.Add(propName))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(propSyntax.Identifier.Location, propName);
                     continue;
@@ -2526,7 +2553,7 @@ internal sealed class DeclarationBinder
             foreach (var eventSyntax in syntax.SharedBlock.Events)
             {
                 var eventName = eventSyntax.Identifier.Text;
-                if (!existingNames.Add(eventName))
+                if (methodNames.Contains(eventName) || !existingNames.Add(eventName))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(eventSyntax.Identifier.Location, eventName);
                     continue;
