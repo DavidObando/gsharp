@@ -9,6 +9,13 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public sealed class FunctionDeclarationSyntax : MemberSyntax
 {
+    // Backing fields for the properties the parser assigns after construction. Their setters
+    // invalidate the node's cached span (issue #1675).
+    private SyntaxToken semicolonBodyToken;
+    private SyntaxToken staticModifier;
+    private SyntaxToken returnRefModifier;
+    private SyntaxToken unsafeModifier;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="FunctionDeclarationSyntax"/> class.
     /// </summary>
@@ -221,7 +228,15 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// unmanaged library. Assigned by the parser; <c>null</c> for ordinary
     /// function declarations.
     /// </summary>
-    public SyntaxToken SemicolonBodyToken { get; set; }
+    public SyntaxToken SemicolonBodyToken
+    {
+        get => semicolonBodyToken;
+        set
+        {
+            semicolonBodyToken = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this declaration uses a
     /// <c>;</c> body marker instead of a block body (ADR-0086).</summary>
@@ -257,7 +272,15 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     public SyntaxToken AsyncModifier { get; }
 
     /// <summary>Gets or sets the optional <c>static</c> contextual keyword (ADR-0089 / issue #755). Non-null when the function was declared inside <c>interface { … }</c> as a static-virtual member; the binder rejects this token on non-interface members.</summary>
-    public SyntaxToken StaticModifier { get; set; }
+    public SyntaxToken StaticModifier
+    {
+        get => staticModifier;
+        set
+        {
+            staticModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this function carries a <c>static</c> contextual keyword (ADR-0089).</summary>
     public bool HasStaticModifier => StaticModifier != null;
@@ -278,7 +301,15 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// managed pointer to its declared return type and callers receive a <c>T&amp;</c>.
     /// Assigned by the parser; <c>null</c> otherwise.
     /// </summary>
-    public SyntaxToken ReturnRefModifier { get; set; }
+    public SyntaxToken ReturnRefModifier
+    {
+        get => returnRefModifier;
+        set
+        {
+            returnRefModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this function declares a <c>ref</c> return (issue #490).</summary>
     public bool IsRefReturn => ReturnRefModifier != null;
@@ -291,7 +322,15 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// operations are permitted in its signature and body. Assigned by the
     /// parser; <c>null</c> otherwise.
     /// </summary>
-    public SyntaxToken UnsafeModifier { get; set; }
+    public SyntaxToken UnsafeModifier
+    {
+        get => unsafeModifier;
+        set
+        {
+            unsafeModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this function is marked <c>unsafe</c> (ADR-0122 / issue #1014).</summary>
     public bool IsUnsafe => UnsafeModifier != null;

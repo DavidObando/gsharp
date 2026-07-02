@@ -11,6 +11,13 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public sealed class ParameterSyntax : SyntaxNode
 {
+    // Backing fields for the properties the parser assigns after construction. Their setters
+    // invalidate the node's cached span (issue #1675).
+    private SyntaxToken scopedModifier;
+    private SyntaxToken refKindModifier;
+    private SyntaxToken equalsToken;
+    private ExpressionSyntax defaultValue;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="ParameterSyntax"/> class.
     /// </summary>
@@ -70,7 +77,15 @@ public sealed class ParameterSyntax : SyntaxNode
     /// the current function body and the value may not be returned.
     /// Assigned by the parser; <c>null</c> otherwise.
     /// </summary>
-    public SyntaxToken ScopedModifier { get; set; }
+    public SyntaxToken ScopedModifier
+    {
+        get => scopedModifier;
+        set
+        {
+            scopedModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this parameter carries the <c>scoped</c> modifier (ADR-0058).</summary>
     public bool IsScoped => ScopedModifier != null;
@@ -80,7 +95,15 @@ public sealed class ParameterSyntax : SyntaxNode
     /// identifier. The modifier carries the CLR ref-kind contract for this parameter; it composes with
     /// <see cref="ScopedModifier"/> (which precedes it). Assigned by the parser; <c>null</c> otherwise.
     /// </summary>
-    public SyntaxToken RefKindModifier { get; set; }
+    public SyntaxToken RefKindModifier
+    {
+        get => refKindModifier;
+        set
+        {
+            refKindModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this parameter carries a <c>ref</c>/<c>out</c>/<c>in</c> modifier (ADR-0060).</summary>
     public bool HasRefKindModifier => RefKindModifier != null;
@@ -89,7 +112,15 @@ public sealed class ParameterSyntax : SyntaxNode
     /// Gets or sets the ADR-0063 <c>=</c> token preceding the default-value expression.
     /// When non-null the parameter declares a default value, making it optional at call sites.
     /// </summary>
-    public SyntaxToken EqualsToken { get; set; }
+    public SyntaxToken EqualsToken
+    {
+        get => equalsToken;
+        set
+        {
+            equalsToken = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>
     /// Gets or sets the ADR-0063 default-value expression for an optional parameter.
@@ -97,7 +128,15 @@ public sealed class ParameterSyntax : SyntaxNode
     /// parameter metadata (numeric/bool/char/string/enum constant, or <c>nil</c>
     /// for a nullable/reference type).
     /// </summary>
-    public ExpressionSyntax DefaultValue { get; set; }
+    public ExpressionSyntax DefaultValue
+    {
+        get => defaultValue;
+        set
+        {
+            defaultValue = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this parameter declares a default value (ADR-0063).</summary>
     public bool HasDefaultValue => EqualsToken != null && DefaultValue != null;
@@ -108,6 +147,7 @@ public sealed class ParameterSyntax : SyntaxNode
     internal ParameterSyntax WithAnnotations(ImmutableArray<AnnotationSyntax> annotations)
     {
         Annotations = annotations.IsDefault ? ImmutableArray<AnnotationSyntax>.Empty : annotations;
+        InvalidateCachedSpan();
         return this;
     }
 }

@@ -111,6 +111,7 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
     internal FieldDeclarationSyntax WithFixedBuffer(SyntaxToken fixedKeyword)
     {
         FixedKeyword = fixedKeyword;
+        InvalidateCachedSpan();
         return this;
     }
 
@@ -120,6 +121,7 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
     internal FieldDeclarationSyntax WithAnnotations(ImmutableArray<AnnotationSyntax> annotations)
     {
         Annotations = annotations.IsDefault ? ImmutableArray<AnnotationSyntax>.Empty : annotations;
+        InvalidateCachedSpan();
         return this;
     }
 }

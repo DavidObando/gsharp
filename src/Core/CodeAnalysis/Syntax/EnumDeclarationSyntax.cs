@@ -9,6 +9,10 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public sealed class EnumDeclarationSyntax : MemberSyntax
 {
+    // Backing field for the property the parser assigns after construction. Its setter
+    // invalidates the node's cached span (issue #1675).
+    private SyntaxToken sealedKeyword;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="EnumDeclarationSyntax"/> class.
     /// </summary>
@@ -65,5 +69,13 @@ public sealed class EnumDeclarationSyntax : MemberSyntax
     public SyntaxToken CloseBraceToken { get; }
 
     /// <summary>Gets or sets the optional <c>sealed</c> contextual keyword (ADR-0078). The parser sets this to non-null for an enum declared <c>sealed enum Foo { ... }</c>, but the new grammar rejects that combination — kept as a field only for diagnostic recovery. Discriminated-union enums are already closed-hierarchy by construction.</summary>
-    public SyntaxToken SealedKeyword { get; set; }
+    public SyntaxToken SealedKeyword
+    {
+        get => sealedKeyword;
+        set
+        {
+            sealedKeyword = value;
+            InvalidateCachedSpan();
+        }
+    }
 }

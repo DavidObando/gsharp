@@ -41,6 +41,7 @@ public abstract class MemberSyntax : SyntaxNode
     internal MemberSyntax WithAnnotations(ImmutableArray<AnnotationSyntax> annotations)
     {
         Annotations = annotations.IsDefault ? ImmutableArray<AnnotationSyntax>.Empty : annotations;
+        InvalidateCachedSpan();
         return this;
     }
 }

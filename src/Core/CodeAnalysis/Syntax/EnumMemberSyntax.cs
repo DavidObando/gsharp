@@ -11,6 +11,12 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public sealed class EnumMemberSyntax : SyntaxNode
 {
+    // Backing fields for the properties the parser assigns after construction. Their setters
+    // invalidate the node's cached span (issue #1675).
+    private SyntaxToken payloadOpenParenthesis;
+    private SeparatedSyntaxList<ParameterSyntax> payloadParameters;
+    private SyntaxToken payloadCloseParenthesis;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="EnumMemberSyntax"/> class.
     /// </summary>
@@ -44,20 +50,44 @@ public sealed class EnumMemberSyntax : SyntaxNode
     /// Gets the opening parenthesis for the optional payload parameter list
     /// (ADR-0078 / issue #725). Null when the case has no payload.
     /// </summary>
-    public SyntaxToken PayloadOpenParenthesis { get; internal set; }
+    public SyntaxToken PayloadOpenParenthesis
+    {
+        get => payloadOpenParenthesis;
+        internal set
+        {
+            payloadOpenParenthesis = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>
     /// Gets the optional primary-constructor parameter list for this enum
     /// case (ADR-0078 / issue #725). Empty when the case has no payload —
     /// inspect <see cref="HasPayload"/> to distinguish.
     /// </summary>
-    public SeparatedSyntaxList<ParameterSyntax> PayloadParameters { get; internal set; }
+    public SeparatedSyntaxList<ParameterSyntax> PayloadParameters
+    {
+        get => payloadParameters;
+        internal set
+        {
+            payloadParameters = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>
     /// Gets the closing parenthesis for the optional payload parameter list
     /// (ADR-0078 / issue #725). Null when the case has no payload.
     /// </summary>
-    public SyntaxToken PayloadCloseParenthesis { get; internal set; }
+    public SyntaxToken PayloadCloseParenthesis
+    {
+        get => payloadCloseParenthesis;
+        internal set
+        {
+            payloadCloseParenthesis = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this case has a payload parameter list.</summary>
     public bool HasPayload => PayloadOpenParenthesis != null;
@@ -68,6 +98,7 @@ public sealed class EnumMemberSyntax : SyntaxNode
     internal EnumMemberSyntax WithAnnotations(ImmutableArray<AnnotationSyntax> annotations)
     {
         Annotations = annotations.IsDefault ? ImmutableArray<AnnotationSyntax>.Empty : annotations;
+        InvalidateCachedSpan();
         return this;
     }
 }
