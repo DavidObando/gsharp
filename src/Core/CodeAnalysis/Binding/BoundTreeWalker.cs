@@ -726,6 +726,16 @@ public abstract class BoundTreeWalker
 
     protected virtual void VisitFieldAssignmentExpression(BoundFieldAssignmentExpression node)
     {
+        // Issue #1614: an expression-based receiver (issue #567, closure
+        // boxing) is an arbitrary BoundExpression subtree — visit it so
+        // pre-pass collectors (e.g. AssignmentValueSpillCollector,
+        // ReceiverSpillCollector) see any nested spill-worthy nodes inside
+        // it, not just the top-level field assignment node.
+        if (node.ReceiverExpression != null)
+        {
+            VisitExpression(node.ReceiverExpression);
+        }
+
         VisitExpression(node.Value);
     }
 
