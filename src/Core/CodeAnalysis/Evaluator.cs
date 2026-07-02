@@ -77,6 +77,21 @@ public sealed class Evaluator
     // entries are reclaimed once the owning block is unreachable.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<BoundBlockStatement, Dictionary<BoundLabel, int>> LabelIndexCache = new();
 
+    // Issue #1799: a G# map value is Go-style reference-shared — the SAME
+    // Dictionary<,> instance can be captured by multiple goroutine closures
+    // and read/written concurrently. Plain Dictionary<,> is not thread-safe
+    // under concurrent access (a write racing another write, or even a read
+    // racing a write, can corrupt its internal buckets/entries array mid-
+    // resize). The map's declared CLR type must stay Dictionary<,> (see
+    // EvaluateMapLiteralExpression), so — unlike frames/StructValue.Fields
+    // in #1718 — this can't be fixed by swapping the storage type. Instead,
+    // every interpreter-owned map access (index read, index write, delete,
+    // len) takes a lock keyed by the dictionary instance itself via this
+    // table, giving the same "no corruption under concurrent access"
+    // guarantee ConcurrentDictionary provides, scoped to the operations the
+    // interpreter itself performs.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, object> MapLocks = new();
+
     /// <summary>
     /// Initializes a new instance of the <see cref="Evaluator"/> class.
     /// </summary>
@@ -1249,6 +1264,23 @@ public sealed class Evaluator
     {
         var keyClr = node.MapType.KeyType.ClrType ?? typeof(object);
         var valClr = node.MapType.ValueType.ClrType ?? typeof(object);
+
+        // Issue #1799 (follow-up to #1718): map literals must stay backed
+        // by a real System.Collections.Generic.Dictionary<,> — MapTypeSymbol
+        // .ClrType (used both by the binder for CLR-reflection member access
+        // like `self.Count`/`.ContainsKey(...)` and by the compiled-emit
+        // backend's real IL for `m[k]`/`delete(m, k)`, see
+        // MethodBodyEmitter.EmitMapIndexRead/EmitMapDelete) is fixed at
+        // Dictionary<,>, and ConcurrentDictionary<,> doesn't even expose the
+        // same public surface (e.g. no public Remove(TKey), only
+        // TryRemove) — swapping the runtime type here would desync
+        // reflection-bound member access from the actual instance and break
+        // the compiled backend's method lookups. Thread-safety for the
+        // interpreter's own map read/write/delete paths below is instead
+        // provided by a lock keyed off the dictionary instance (see
+        // <see cref="GetMapLock"/>); insertion behavior, key equality, and
+        // iteration order (unspecified by G#, same as real Go maps) are
+        // unaffected.
         var dictType = typeof(System.Collections.Generic.Dictionary<,>).MakeGenericType(keyClr, valClr);
         var dict = (System.Collections.IDictionary)System.Activator.CreateInstance(dictType);
         foreach (var entry in node.Entries)
@@ -1261,13 +1293,21 @@ public sealed class Evaluator
         return dict;
     }
 
+    // Returns the shared lock guarding all interpreter-owned access to
+    // `dict` (see the <see cref="MapLocks"/> field doc for why maps need
+    // this instead of a ConcurrentDictionary swap).
+    private static object GetMapLock(object dict) => MapLocks.GetValue(dict, static _ => new object());
+
     private object EvaluateMapDeleteExpression(BoundMapDeleteExpression node)
     {
         var dict = (System.Collections.IDictionary)EvaluateExpression(node.Map);
         var key = EvaluateExpression(node.Key);
-        if (dict.Contains(key))
+        lock (GetMapLock(dict))
         {
-            dict.Remove(key);
+            if (dict.Contains(key))
+            {
+                dict.Remove(key);
+            }
         }
 
         return null;
@@ -1283,9 +1323,12 @@ public sealed class Evaluator
         if (node.Target.Type is MapTypeSymbol mapType && target is System.Collections.IDictionary dict)
         {
             var key = EvaluateExpression(node.Index);
-            if (dict.Contains(key))
+            lock (GetMapLock(dict))
             {
-                return dict[key];
+                if (dict.Contains(key))
+                {
+                    return dict[key];
+                }
             }
 
             return DefaultValue(mapType.ValueType);
@@ -1315,7 +1358,11 @@ public sealed class Evaluator
         {
             var key = EvaluateExpression(node.Index);
             var value = EvaluateExpression(node.Value);
-            dict[key] = value;
+            lock (GetMapLock(dict))
+            {
+                dict[key] = value;
+            }
+
             return value;
         }
 
@@ -1333,9 +1380,23 @@ public sealed class Evaluator
         {
             string s => s.Length,
             System.Array a => a.Length,
-            System.Collections.IDictionary d => d.Count,
+
+            // Issue #1799: `.Count` on a Dictionary<,> is a plain field read
+            // with no internal synchronization; take the same per-instance
+            // lock as every other interpreter-owned map access so `len(m)`
+            // can't observe (or crash on) a torn read during a concurrent
+            // `m[k] = v` write from another goroutine.
+            System.Collections.IDictionary d => EvaluateMapLen(d),
             _ => throw new EvaluatorException($"len: unsupported operand of CLR type '{v?.GetType()}'.", node),
         };
+    }
+
+    private static int EvaluateMapLen(System.Collections.IDictionary dict)
+    {
+        lock (GetMapLock(dict))
+        {
+            return dict.Count;
+        }
     }
 
     private static object EvaluateTypeOfExpression(BoundTypeOfExpression node)
@@ -4043,11 +4104,23 @@ public sealed class Evaluator
 
         // Strategy 2: walk locals for any in-scope StructValue
         // implementing the slot's interface.
+        //
+        // Issue #1799: frames became ConcurrentDictionary in #1718 (needed
+        // for goroutine-shared writes), so `foreach (var kv in frame)`
+        // enumerates in internal bucket-hash order instead of Dictionary's
+        // de-facto insertion order — when two in-scope locals both
+        // implement the slot's interface, first-match-wins could pick
+        // either one from run to run. Sort each frame's entries by variable
+        // name before scanning: names are unique within a single frame (a
+        // frame's keys are one call's parameters/captures, and a valid
+        // program cannot declare two same-named bindings in one scope), so
+        // ordinal-name order is a total, stable order that is the same on
+        // every run regardless of ConcurrentDictionary's bucket layout.
         if (resolvedImpl == null && slotIface != null)
         {
             foreach (var frame in Locals)
             {
-                foreach (var kv in frame)
+                foreach (var kv in frame.OrderBy(static kv => kv.Key.Name, StringComparer.Ordinal))
                 {
                     if (kv.Value is StructValue sv && sv.StructType != null)
                     {
