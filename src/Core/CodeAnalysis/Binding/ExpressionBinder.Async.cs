@@ -453,7 +453,7 @@ internal sealed partial class ExpressionBinder
             || importedAwaitable.OpenDefinition == null
             || importedAwaitable.TypeArguments.IsDefaultOrEmpty
             || importedAwaitable.HasTypeParameterArgument
-            || !importedAwaitable.TypeArguments.Any(static a => a is StructSymbol or InterfaceSymbol or EnumSymbol))
+            || !importedAwaitable.TypeArguments.Any(static a => a is StructSymbol or InterfaceSymbol or EnumSymbol or NullableTypeSymbol { UnderlyingType: StructSymbol or EnumSymbol }))
         {
             return null;
         }

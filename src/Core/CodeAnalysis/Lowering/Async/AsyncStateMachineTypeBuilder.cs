@@ -271,7 +271,27 @@ public static class AsyncStateMachineTypeBuilder
                 var shape = AwaitableShape.Resolve(awaitableClrType);
                 if (shape != null)
                 {
-                    AwaiterTypes.Add((shape.AwaiterType, node.AwaiterTypeSymbol ?? TypeSymbol.FromClrType(shape.AwaiterType)));
+                    // Issue #1785: when the type argument is Nullable<userStruct>
+                    // and the user struct has ClrType == null, the erased CLR type
+                    // becomes Task<object>, causing shape.AwaiterType to be
+                    // TaskAwaiter<object>. In that case we must use the symbolically
+                    // correct AwaiterTypeSymbol (which carries Nullable<userStruct>)
+                    // as the sole source of truth for field type registration.
+                    var awaitedTypeSymbol = node.AwaiterTypeSymbol;
+                    if (awaitedTypeSymbol != null)
+                    {
+                        var expectedAwaiterType = awaitedTypeSymbol.ClrType;
+                        if (expectedAwaiterType == null && shape.AwaiterType != null)
+                        {
+                            // The symbolic awaiter type has no valid CLR projection
+                            // (e.g. Nullable<Pt> where Pt is a user struct), so the
+                            // erased ClrType key (TaskAwaiter<object>) is all we have
+                            // for pool registration, but we keep the symbolically-correct
+                            // type as the field's type annotation.
+                        }
+                    }
+
+                    AwaiterTypes.Add((shape.AwaiterType, awaitedTypeSymbol ?? TypeSymbol.FromClrType(shape.AwaiterType)));
                 }
             }
 

@@ -86,6 +86,36 @@ Console.WriteLine(t.Result)
     }
 
     [Fact]
+    public void Await_TaskNullableUserStruct_DoesNotMistypeAwaiterField_AsObject()
+    {
+        // Issue #1785: awaiting Task[Pt?] where Pt is a user struct should NOT
+        // hoist the awaiter field as object. The AwaiterTypeSymbol must resolve
+        // to TaskAwaiter<Nullable<Pt>> so that GetResult() returns Pt? and not
+        // object. Previously the awaiter pool field was typed as object, causing
+        // GetResult() to return object and all member access on the awaited value
+        // to fail. The simplest regression check: the await should compile and
+        // the returned value's struct property should be accessible.
+        const string Source = @"package NullableStructAwaitTest
+import System
+import System.Threading.Tasks
+
+struct Pt { var x int32 }
+
+async func acceptNullableTask(t Task[Pt?]) Pt? {
+    return await t
+}
+
+var p Pt? = Pt{x: 42}
+var task = Task.FromResult(p)
+var result = acceptNullableTask(task)
+result.Wait()
+Console.WriteLine(result.Result.x)
+";
+        var output = CompileAndRun(Source, "NullableStructAwaitTest");
+        Assert.Contains("42", output);
+    }
+
+    [Fact]
     public void Await_Inside_InterpolationHole_Emits_And_Runs()
     {
         // Issue #368: an `await` inside an interpolation hole. The hole value is

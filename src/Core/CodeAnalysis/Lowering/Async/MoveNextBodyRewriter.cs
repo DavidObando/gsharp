@@ -698,6 +698,12 @@ public static class MoveNextBodyRewriter
                     throw new InvalidOperationException("Await expression has no assigned resume state.");
                 }
 
+                // Issue #1785: when awaiting Task[Nullable<UserStruct>], the operand's
+                // ClrType is erased to Task<object>, so AwaitableShape.Resolve returns
+                // shape for TaskAwaiter<object>. We still resolve the shape because it
+                // gives us the correct MethodInfo/PropertyInfo to emit against, but we
+                // must prefer the symbolically-correct AwaiterTypeSymbol for local and
+                // field typing.
                 var shape = AwaitableShape.Resolve(awaitExpr.Expression?.Type?.ClrType);
                 if (shape == null)
                 {
@@ -706,7 +712,17 @@ public static class MoveNextBodyRewriter
                 }
 
                 var awaiterClrType = shape.AwaiterType;
-                var awaiterTypeSymbol = awaitExpr.AwaiterTypeSymbol ?? TypeSymbol.FromClrType(awaiterClrType);
+
+                // Prefer the symbolically-correct awaiter type when available. This is
+                // critical for Task[Nullable<UserStruct>] where ClrType erasure would
+                // give TaskAwaiter<object> but the actual return type of GetResult()
+                // is Nullable<UserStruct>.
+                var awaiterTypeSymbol = awaitExpr.AwaiterTypeSymbol;
+                if (awaiterTypeSymbol == null)
+                {
+                    awaiterTypeSymbol = TypeSymbol.FromClrType(awaiterClrType);
+                }
+
                 var awaiterLocal = new LocalVariableSymbol(
                     "<>awaiter_" + resumePoint.State, isReadOnly: false, awaiterTypeSymbol);
                 ctx.allLocals.Add(awaiterLocal);
