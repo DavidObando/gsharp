@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -16,6 +17,27 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public abstract class SyntaxNode
 {
+    // ponytail: nodes are immutable once handed back to the caller -- the parser's
+    // few `{ get; set; }` properties (e.g. StructDeclarationSyntax.SharedBlock) are
+    // only ever assigned right after `new X(...)`, before anyone reads .Span. So a
+    // simple lazy cache is safe and turns Span from an O(subtree) walk into O(1)
+    // amortized (each new wrapper node only re-scans its direct, already-cached
+    // children). This is what kills the quadratic `*` chain parse (issue #1604).
+    //
+    // ponytail: the LSP parses/analyzes in parallel, so first-read of .Span can
+    // race across threads. TextSpan? is a multi-field struct (bool + Start/Length)
+    // and a non-atomic write with no memory barrier can torn-read. Publish via the
+    // volatile flag below: write cachedSpan, then set spanComputed (release barrier)
+    // so readers that observe spanComputed==true (acquire barrier) see the full value.
+    // Racing threads may both compute -- fine, span is idempotent.
+    private TextSpan cachedSpan;
+    private volatile bool spanComputed;
+
+    // ponytail: GetType().GetProperties() is uncached reflection, paid on every
+    // GetChildren() call (i.e. every Span/Location access). One PropertyInfo[]
+    // per concrete node type never changes, so cache it once per Type (issue #1604).
+    private static readonly ConcurrentDictionary<Type, PropertyInfo[]> PropertyCache = new();
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SyntaxNode"/> class.
     /// </summary>
@@ -37,6 +59,11 @@ public abstract class SyntaxNode
     {
         get
         {
+            if (spanComputed)
+            {
+                return cachedSpan;
+            }
+
             // Compute the bounding span from min(start) and max(end) across all children, rather
             // than the first/last child in reflection order. The reflection-based enumeration in
             // GetChildren() returns properties in C# declaration order, which is not always the
@@ -64,7 +91,10 @@ public abstract class SyntaxNode
                 hasChild = true;
             }
 
-            return hasChild ? TextSpan.FromBounds(start, end) : new TextSpan(0, 0);
+            var span = hasChild ? TextSpan.FromBounds(start, end) : new TextSpan(0, 0);
+            cachedSpan = span;
+            spanComputed = true;
+            return span;
         }
     }
 
@@ -84,7 +114,7 @@ public abstract class SyntaxNode
     /// <returns>An <see cref="IEnumerable{SyntaxNode}"/> with the children of this syntax node.</returns>
     public IEnumerable<SyntaxNode> GetChildren()
     {
-        var properties = GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
+        var properties = PropertyCache.GetOrAdd(GetType(), static t => t.GetProperties(BindingFlags.Public | BindingFlags.Instance));
 
         foreach (var property in properties)
         {
