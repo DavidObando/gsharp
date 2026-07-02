@@ -607,7 +607,14 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundCallExpression(null, node.Function, builder.MoveToImmutable(), node.ReturnType, node.IsConditionalElided);
+        // Issue #1644: preserve the set-after-construction generic-owner properties
+        // (#1209 / #1433) so the emitter still parents the call at the construction's
+        // TypeSpec instead of a bare open-generic MethodDef.
+        return new BoundCallExpression(null, node.Function, builder.MoveToImmutable(), node.ReturnType, node.IsConditionalElided)
+        {
+            StaticGenericOwnerType = node.StaticGenericOwnerType,
+            StaticGenericInterfaceOwnerType = node.StaticGenericInterfaceOwnerType,
+        };
     }
 
     /// <summary>
@@ -1926,7 +1933,10 @@ public abstract class BoundTreeRewriter
     /// <returns>The rewritten node.</returns>
     protected virtual BoundExpression RewriteFieldAccessExpression(BoundFieldAccessExpression node)
     {
-        // ADR-0053: static field access has no receiver (null).
+        // ADR-0053: static field access has no receiver (null). This also covers
+        // the interface static-field read form (ADR-0089 / #1030, InterfaceType
+        // != null), which likewise has a null Receiver — nothing to rewrite, so
+        // returning the original node here can never drop InterfaceType (issue #1644).
         if (node.Receiver == null)
         {
             return node;
@@ -1953,7 +1963,20 @@ public abstract class BoundTreeRewriter
             return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
         }
 
-        return value == node.Value ? node : new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, value);
+        if (value == node.Value)
+        {
+            return node;
+        }
+
+        // Issue #1644 / ADR-0089 #1030: an interface static field write is built
+        // with (syntax, field, interfaceType, value) — Receiver/StructType are
+        // both null and InterfaceType carries the owning (possibly constructed)
+        // interface. Reconstruct via that constructor instead of the
+        // variable-receiver one, or the emitter/interpreter lose the interface
+        // static routing and mis-codegen/crash.
+        return node.InterfaceType != null
+            ? new BoundFieldAssignmentExpression(null, node.Field, node.InterfaceType, value)
+            : new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, value);
     }
 
     /// <summary>Rewrites a property read (ADR-0051).</summary>
