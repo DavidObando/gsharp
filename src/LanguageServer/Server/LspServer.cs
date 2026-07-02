@@ -123,6 +123,10 @@ public sealed class LspServer
             {
                 // Shutdown raced the background load; nothing left to do.
             }
+            catch (ObjectDisposedException)
+            {
+                // Shutdown disposed the CTS while the load observed its token; benign.
+            }
             catch (Exception ex)
             {
                 // Workspace discovery is best-effort; single-file editing still works without
