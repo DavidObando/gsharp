@@ -792,6 +792,18 @@ internal sealed partial class ExpressionBinder
                         return (null, null);
                     }
 
+                    // Issue #1636: mirror StatementBinder.IsStrictlyNarrower —
+                    // only install the narrowing when the candidate is
+                    // actually a subtype of the declared type (candidate
+                    // implicitly converts to declared). A supertype/interface/
+                    // unrelated candidate is a widening or unrelated test and
+                    // must not replace the declared type.
+                    var conversion = Conversion.Classify(targetType, declaredType);
+                    if (!conversion.Exists || !conversion.IsImplicit)
+                    {
+                        return (null, null);
+                    }
+
                     return (new Dictionary<AccessPath, TypeSymbol> { [targetPath] = targetType }, null);
                 }
 
