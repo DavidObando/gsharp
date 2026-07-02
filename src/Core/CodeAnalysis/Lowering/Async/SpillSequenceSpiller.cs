@@ -951,15 +951,22 @@ public static class SpillSequenceSpiller
                 value);
         }
 
-        private BoundSpillSequenceExpression SpillImportedInstanceCall(BoundImportedInstanceCallExpression call)
+        /// <summary>
+        /// Shared receiver+argument spilling used by every instance-call
+        /// spill (<see cref="SpillImportedInstanceCall"/>, <see cref="SpillUserInstanceCall"/>,
+        /// <see cref="SpillBaseInterfaceCall"/>, <see cref="SpillBaseClassCall"/>):
+        /// spill the receiver if it (or any argument) contains an await, then
+        /// spill the argument list itself.
+        /// </summary>
+        private (ImmutableArray<LocalVariableSymbol> Locals, ImmutableArray<BoundStatement> SideEffects, BoundExpression Receiver, ImmutableArray<BoundExpression> Args) SpillReceiverAndArguments(
+            BoundExpression receiver, ImmutableArray<BoundExpression> arguments)
         {
             var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
             var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
 
             // Spill the receiver if args contain an await.
-            BoundExpression receiver = call.Receiver;
             var argsHaveAwait = false;
-            foreach (var arg in call.Arguments)
+            foreach (var arg in arguments)
             {
                 if (HasAwait(arg))
                 {
@@ -984,168 +991,59 @@ public static class SpillSequenceSpiller
                 receiver = new BoundVariableExpression(null, recvTemp);
             }
 
-            var (argLocals, argSideEffects, args) = SpillArgumentList(call.Arguments);
+            var (argLocals, argSideEffects, args) = SpillArgumentList(arguments);
             locals.AddRange(argLocals);
             sideEffects.AddRange(argSideEffects);
 
-            if (locals.Count == 0 && sideEffects.Count == 0)
+            return (locals.ToImmutable(), sideEffects.ToImmutable(), receiver, args.ToImmutable());
+        }
+
+        private BoundSpillSequenceExpression SpillImportedInstanceCall(BoundImportedInstanceCallExpression call)
+        {
+            var (locals, sideEffects, receiver, args) = SpillReceiverAndArguments(call.Receiver, call.Arguments);
+            if (locals.IsEmpty && sideEffects.IsEmpty)
             {
                 return Trivial(call);
             }
 
-            var value = new BoundImportedInstanceCallExpression(null, receiver, call.Method, call.Type, args.ToImmutable(), call.ArgumentRefKinds);
-            return new BoundSpillSequenceExpression(
-                null,
-                locals.ToImmutable(),
-                sideEffects.ToImmutable(),
-                value);
+            var value = new BoundImportedInstanceCallExpression(null, receiver, call.Method, call.Type, args, call.ArgumentRefKinds);
+            return new BoundSpillSequenceExpression(null, locals, sideEffects, value);
         }
 
         private BoundSpillSequenceExpression SpillUserInstanceCall(BoundUserInstanceCallExpression call)
         {
-            var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
-            var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
-
-            BoundExpression receiver = call.Receiver;
-            var argsHaveAwait = false;
-            foreach (var arg in call.Arguments)
-            {
-                if (HasAwait(arg))
-                {
-                    argsHaveAwait = true;
-                    break;
-                }
-            }
-
-            if (HasAwait(receiver))
-            {
-                var spilledReceiver = SpillExpression(receiver);
-                locals.AddRange(spilledReceiver.Locals);
-                sideEffects.AddRange(spilledReceiver.SideEffects);
-                receiver = spilledReceiver.Value;
-            }
-
-            if (argsHaveAwait && !IsPureOrConstant(receiver))
-            {
-                var recvTemp = MakeSpillTemp(receiver.Type);
-                locals.Add(recvTemp);
-                sideEffects.Add(new BoundVariableDeclaration(null, recvTemp, receiver));
-                receiver = new BoundVariableExpression(null, recvTemp);
-            }
-
-            var (argLocals, argSideEffects, args) = SpillArgumentList(call.Arguments);
-            locals.AddRange(argLocals);
-            sideEffects.AddRange(argSideEffects);
-
-            if (locals.Count == 0 && sideEffects.Count == 0)
+            var (locals, sideEffects, receiver, args) = SpillReceiverAndArguments(call.Receiver, call.Arguments);
+            if (locals.IsEmpty && sideEffects.IsEmpty)
             {
                 return Trivial(call);
             }
 
-            var value = new BoundUserInstanceCallExpression(null, receiver, call.Method, args.ToImmutable(), call.Type);
-            return new BoundSpillSequenceExpression(
-                null,
-                locals.ToImmutable(),
-                sideEffects.ToImmutable(),
-                value);
+            var value = new BoundUserInstanceCallExpression(null, receiver, call.Method, args, call.Type);
+            return new BoundSpillSequenceExpression(null, locals, sideEffects, value);
         }
 
         private BoundSpillSequenceExpression SpillBaseInterfaceCall(BoundBaseInterfaceCallExpression call)
         {
-            var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
-            var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
-
-            BoundExpression receiver = call.Receiver;
-            var argsHaveAwait = false;
-            foreach (var arg in call.Arguments)
-            {
-                if (HasAwait(arg))
-                {
-                    argsHaveAwait = true;
-                    break;
-                }
-            }
-
-            if (HasAwait(receiver))
-            {
-                var spilledReceiver = SpillExpression(receiver);
-                locals.AddRange(spilledReceiver.Locals);
-                sideEffects.AddRange(spilledReceiver.SideEffects);
-                receiver = spilledReceiver.Value;
-            }
-
-            if (argsHaveAwait && !IsPureOrConstant(receiver))
-            {
-                var recvTemp = MakeSpillTemp(receiver.Type);
-                locals.Add(recvTemp);
-                sideEffects.Add(new BoundVariableDeclaration(null, recvTemp, receiver));
-                receiver = new BoundVariableExpression(null, recvTemp);
-            }
-
-            var (argLocals, argSideEffects, args) = SpillArgumentList(call.Arguments);
-            locals.AddRange(argLocals);
-            sideEffects.AddRange(argSideEffects);
-
-            if (locals.Count == 0 && sideEffects.Count == 0)
+            var (locals, sideEffects, receiver, args) = SpillReceiverAndArguments(call.Receiver, call.Arguments);
+            if (locals.IsEmpty && sideEffects.IsEmpty)
             {
                 return Trivial(call);
             }
 
-            var value = new BoundBaseInterfaceCallExpression(null, receiver, call.Interface, call.Method, args.ToImmutable());
-            return new BoundSpillSequenceExpression(
-                null,
-                locals.ToImmutable(),
-                sideEffects.ToImmutable(),
-                value);
+            var value = new BoundBaseInterfaceCallExpression(null, receiver, call.Interface, call.Method, args);
+            return new BoundSpillSequenceExpression(null, locals, sideEffects, value);
         }
 
         private BoundSpillSequenceExpression SpillBaseClassCall(BoundBaseClassCallExpression call)
         {
-            var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
-            var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
-
-            BoundExpression receiver = call.Receiver;
-            var argsHaveAwait = false;
-            foreach (var arg in call.Arguments)
-            {
-                if (HasAwait(arg))
-                {
-                    argsHaveAwait = true;
-                    break;
-                }
-            }
-
-            if (HasAwait(receiver))
-            {
-                var spilledReceiver = SpillExpression(receiver);
-                locals.AddRange(spilledReceiver.Locals);
-                sideEffects.AddRange(spilledReceiver.SideEffects);
-                receiver = spilledReceiver.Value;
-            }
-
-            if (argsHaveAwait && !IsPureOrConstant(receiver))
-            {
-                var recvTemp = MakeSpillTemp(receiver.Type);
-                locals.Add(recvTemp);
-                sideEffects.Add(new BoundVariableDeclaration(null, recvTemp, receiver));
-                receiver = new BoundVariableExpression(null, recvTemp);
-            }
-
-            var (argLocals, argSideEffects, args) = SpillArgumentList(call.Arguments);
-            locals.AddRange(argLocals);
-            sideEffects.AddRange(argSideEffects);
-
-            if (locals.Count == 0 && sideEffects.Count == 0)
+            var (locals, sideEffects, receiver, args) = SpillReceiverAndArguments(call.Receiver, call.Arguments);
+            if (locals.IsEmpty && sideEffects.IsEmpty)
             {
                 return Trivial(call);
             }
 
-            var value = new BoundBaseClassCallExpression(null, receiver, call.BaseClass, call.Method, args.ToImmutable(), call.Type, call.Property, call.IsSetterAccessor);
-            return new BoundSpillSequenceExpression(
-                null,
-                locals.ToImmutable(),
-                sideEffects.ToImmutable(),
-                value);
+            var value = new BoundBaseClassCallExpression(null, receiver, call.BaseClass, call.Method, args, call.Type, call.Property, call.IsSetterAccessor);
+            return new BoundSpillSequenceExpression(null, locals, sideEffects, value);
         }
 
         private BoundSpillSequenceExpression SpillConversion(BoundConversionExpression conv)
