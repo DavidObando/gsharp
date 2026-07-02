@@ -2340,7 +2340,7 @@ internal sealed class OverloadResolver
         return false;
     }
 
-    public ImmutableArray<BoundExpression> ValidateRefArguments(
+    public void ValidateRefArguments(
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<RefKind> refKinds,
         string methodName,
@@ -2348,10 +2348,9 @@ internal sealed class OverloadResolver
     {
         if (refKinds.IsDefault || refKinds.Length == 0)
         {
-            return arguments;
+            return;
         }
 
-        var builder = arguments.ToBuilder();
         for (int i = 0; i < refKinds.Length && i < arguments.Length; i++)
         {
             var rk = refKinds[i];
@@ -2381,8 +2380,6 @@ internal sealed class OverloadResolver
 
             // For `in`: accept either &expr or plain value (emitter spills temp).
         }
-
-        return builder.ToImmutable();
     }
 
     private static bool IsByRefInterpolatedHandlerArgument(BoundExpression argument, RefKind expected)
