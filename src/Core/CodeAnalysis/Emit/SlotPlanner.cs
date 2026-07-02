@@ -990,9 +990,27 @@ internal sealed class SlotPlanner
             if (node.Receiver != null)
             {
                 this.AddIfNeeded(node.Receiver);
+                this.AddIfCompoundReused(node.Receiver, node.Value);
             }
 
             base.VisitClrPropertyAssignmentExpression(node);
+        }
+
+        // Issue #1688: a field assignment through an expression-based receiver
+        // (issue #567 / ADR-0112) whose Value re-reads the SAME receiver node —
+        // the shape TryBindChainedCompoundAssignment produces for
+        // `getObj().Field += x` (the compound RHS embeds a
+        // BoundFieldAccessExpression over the identical receiver instance) —
+        // must spill the receiver to a temp and evaluate it exactly once
+        // instead of once for the read and once more for the write.
+        protected override void VisitFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+        {
+            if (node.ReceiverExpression != null)
+            {
+                this.AddIfCompoundReused(node.ReceiverExpression, node.Value);
+            }
+
+            base.VisitFieldAssignmentExpression(node);
         }
 
         // Issue #418 (P1-5): G# computed/auto properties also need the spill
@@ -1013,6 +1031,7 @@ internal sealed class SlotPlanner
             if (node.Receiver != null)
             {
                 this.AddIfNeeded(node.Receiver);
+                this.AddIfCompoundReused(node.Receiver, node.Value);
             }
 
             base.VisitPropertyAssignmentExpression(node);
@@ -1078,6 +1097,83 @@ internal sealed class SlotPlanner
             if (this.needsRvalueReceiverSpill(receiver, this.function, this.locals))
             {
                 this.sink.Add(receiver);
+            }
+        }
+
+        // Issue #1688: a compound member assignment (`getObj().F += x` /
+        // `getObj().P += x`) binds the receiver ONCE (TryBindChainedCompoundAssignment
+        // / TryBindChainedClrCompoundAssignment reuse the same BoundExpression
+        // instance for the read side embedded in `value` and the write side on
+        // the assignment node itself). A trivial receiver (a local, parameter,
+        // global, or `this` — all represented as BoundVariableExpression) has no
+        // side effect and no observable identity to preserve, so re-emitting it
+        // is harmless and needs no temp. Any other receiver shape (a call, an
+        // indexer, a chained member access, etc.) must be spilled to a temp and
+        // evaluated exactly once — otherwise a side-effecting or non-idempotent
+        // receiver expression runs twice and the read/write can target two
+        // different instances.
+        private void AddIfCompoundReused(BoundExpression receiver, BoundExpression value)
+        {
+            if (receiver is BoundVariableExpression)
+            {
+                return;
+            }
+
+            var found = ReceiverReuseWalker.ContainsReceiverReference(value, receiver);
+            if (found)
+            {
+                this.sink.Add(receiver);
+            }
+        }
+    }
+
+    // Issue #1688: walks a compound-assignment's bound RHS (the lowered
+    // `<field/property access> OP rhs` expression) looking for a field/property
+    // read whose receiver is the SAME BoundExpression instance as the outer
+    // assignment's receiver — the shape the compound-assignment binder helpers
+    // produce. Used by ReceiverSpillCollector.AddIfCompoundReused to decide
+    // whether the receiver needs a once-only spill.
+    private sealed class ReceiverReuseWalker : BoundTreeWalker
+    {
+        private readonly BoundExpression target;
+
+        private ReceiverReuseWalker(BoundExpression target)
+        {
+            this.target = target;
+        }
+
+        private bool Found { get; set; }
+
+        public static bool ContainsReceiverReference(BoundExpression tree, BoundExpression target)
+        {
+            var walker = new ReceiverReuseWalker(target);
+            walker.Visit(tree);
+            return walker.Found;
+        }
+
+        protected override void VisitFieldAccessExpression(BoundFieldAccessExpression node)
+        {
+            this.CheckReceiver(node.Receiver);
+            base.VisitFieldAccessExpression(node);
+        }
+
+        protected override void VisitPropertyAccessExpression(BoundPropertyAccessExpression node)
+        {
+            this.CheckReceiver(node.Receiver);
+            base.VisitPropertyAccessExpression(node);
+        }
+
+        protected override void VisitClrPropertyAccessExpression(BoundClrPropertyAccessExpression node)
+        {
+            this.CheckReceiver(node.Receiver);
+            base.VisitClrPropertyAccessExpression(node);
+        }
+
+        private void CheckReceiver(BoundExpression receiver)
+        {
+            if (receiver != null && ReferenceEquals(receiver, this.target))
+            {
+                this.Found = true;
             }
         }
     }

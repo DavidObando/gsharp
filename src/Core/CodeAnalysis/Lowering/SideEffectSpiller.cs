@@ -200,15 +200,33 @@ internal sealed class SideEffectSpiller : BoundTreeRewriter
         var rewritten = (BoundPropertyAssignmentExpression)base.RewritePropertyAssignmentExpression(node);
 
         var spillReceiver = SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver);
-        var spillValue = SideEffectAnalyzer.HasObservableSideEffect(rewritten.Value);
+        var value = rewritten.Value;
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+
+        var receiver = rewritten.Receiver;
+        if (spillReceiver)
+        {
+            receiver = this.MaybeSpill(rewritten.Receiver, true, "recv", statements);
+
+            // Issue #1688: a compound assignment (`getObj().P += x`) lowers
+            // to `assign(receiver, get(receiver) OP rhs)` — the SAME
+            // receiver node appears both as the assignment's own receiver
+            // and nested inside `value` as the read side. Spilling only
+            // the copy above and leaving the nested read pointing at the
+            // original (still side-effecting) receiver expression would
+            // evaluate it a second time. Substitute every occurrence of
+            // the shared receiver inside `value` with the freshly spilled
+            // temp so both sides observe exactly one evaluation.
+            value = ReceiverSubstitutionRewriter.Replace(value, rewritten.Receiver, receiver);
+        }
+
+        var spillValue = SideEffectAnalyzer.HasObservableSideEffect(value);
         if (!spillReceiver && !spillValue)
         {
             return rewritten;
         }
 
-        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        var receiver = this.MaybeSpill(rewritten.Receiver, spillReceiver, "recv", statements);
-        var value = this.MaybeSpill(rewritten.Value, spillValue, "val", statements);
+        value = this.MaybeSpill(value, spillValue, "val", statements);
 
         var assignment = new BoundPropertyAssignmentExpression(
             rewritten.Syntax,
@@ -227,17 +245,26 @@ internal sealed class SideEffectSpiller : BoundTreeRewriter
 
         var spillReceiver = rewritten.Receiver != null
             && SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver);
-        var spillValue = SideEffectAnalyzer.HasObservableSideEffect(rewritten.Value);
+        var value = rewritten.Value;
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+
+        var receiver = rewritten.Receiver;
+        if (spillReceiver)
+        {
+            receiver = this.MaybeSpill(rewritten.Receiver, true, "recv", statements);
+
+            // Issue #1688: same double-eval hazard as the user-property
+            // path above, for CLR properties (`obj.ClrProp += x`).
+            value = ReceiverSubstitutionRewriter.Replace(value, rewritten.Receiver, receiver);
+        }
+
+        var spillValue = SideEffectAnalyzer.HasObservableSideEffect(value);
         if (!spillReceiver && !spillValue)
         {
             return rewritten;
         }
 
-        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        var receiver = rewritten.Receiver == null
-            ? null
-            : this.MaybeSpill(rewritten.Receiver, spillReceiver, "recv", statements);
-        var value = this.MaybeSpill(rewritten.Value, spillValue, "val", statements);
+        value = this.MaybeSpill(value, spillValue, "val", statements);
 
         var assignment = new BoundClrPropertyAssignmentExpression(
             rewritten.Syntax,
@@ -279,5 +306,41 @@ internal sealed class SideEffectSpiller : BoundTreeRewriter
             type: expression.Type);
         statements.Add(new BoundVariableDeclaration(expression.Syntax, local, expression));
         return new BoundVariableExpression(expression.Syntax, local);
+    }
+
+    /// <summary>
+    /// Issue #1688: rewrites a bound expression tree, replacing every
+    /// reference-equal occurrence of a shared receiver node with a
+    /// replacement expression (typically a read of the temp local it was
+    /// just spilled into). Used to keep the nested read embedded in a
+    /// compound assignment's <c>value</c> in sync with the receiver copy
+    /// the assignment itself was rewritten to use.
+    /// </summary>
+    private sealed class ReceiverSubstitutionRewriter : BoundTreeRewriter
+    {
+        private readonly BoundExpression target;
+        private readonly BoundExpression replacement;
+
+        private ReceiverSubstitutionRewriter(BoundExpression target, BoundExpression replacement)
+        {
+            this.target = target;
+            this.replacement = replacement;
+        }
+
+        public static BoundExpression Replace(BoundExpression tree, BoundExpression target, BoundExpression replacement)
+        {
+            var rewriter = new ReceiverSubstitutionRewriter(target, replacement);
+            return rewriter.RewriteExpression(tree);
+        }
+
+        // Intercepting the single generic dispatch point (rather than each
+        // Rewrite*AccessExpression override) means every parent-node
+        // reconstruction still goes through the normal Rewrite* overrides,
+        // which already know how to preserve NarrowedType / InterfaceType /
+        // StaticContainerType — no risk of silently dropping a field here.
+        protected override BoundExpression RewriteExpression(BoundExpression node)
+        {
+            return ReferenceEquals(node, this.target) ? this.replacement : base.RewriteExpression(node);
+        }
     }
 }

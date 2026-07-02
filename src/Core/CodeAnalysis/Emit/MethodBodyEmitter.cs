@@ -65,6 +65,17 @@ internal sealed partial class MethodBodyEmitter
     private readonly Dictionary<BoundExpression, int> receiverSpillSlots;
     private readonly Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots;
     private readonly HashSet<BoundStackAllocExpression> materializedStackAllocs = new HashSet<BoundStackAllocExpression>();
+
+    // Issue #1688: tracks which planned receiverSpillSlots entries have
+    // already been evaluated-and-cached during this method's emission. A
+    // compound member assignment (`getObj().F += x` / `getObj().P += x`)
+    // reuses the SAME receiver BoundExpression instance for both the read
+    // (embedded in the compound RHS) and the write (the assignment's own
+    // target) — see TryEmitCachedReceiver. The first encounter evaluates the
+    // receiver and stores it; every later encounter of the identical node
+    // instance loads the cached value/address instead of re-running the
+    // (potentially side-effecting) receiver expression.
+    private readonly HashSet<BoundExpression> spilledCompoundReceivers = new HashSet<BoundExpression>();
     private readonly Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots;
     private readonly Dictionary<BoundExpression, int> indexAssignmentValueSlots;
     private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;

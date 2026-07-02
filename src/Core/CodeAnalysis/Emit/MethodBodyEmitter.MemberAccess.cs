@@ -479,8 +479,11 @@ internal sealed partial class MethodBodyEmitter
         {
             // address is on the stack
         }
-        else
+        else if (!this.TryEmitCachedReceiver(fa.Receiver, needAddress: false))
         {
+            // Issue #1688: TryEmitCachedReceiver returns false when this
+            // receiver isn't the shared receiver of a compound assignment
+            // (no planned slot) — fall back to a plain evaluation.
             this.EmitExpression(fa.Receiver);
         }
 
@@ -585,7 +588,15 @@ internal sealed partial class MethodBodyEmitter
                     + "Check AssignmentValueSpillCollector and its ancestor walker.");
             }
 
-            this.EmitExpression(addressReceiver ?? fas.ReceiverExpression);
+            // Issue #1688: this receiver is a plain value push for `stfld`
+            // (not an address), so needAddress: false — TryEmitCachedReceiver
+            // falls back to a normal EmitExpression when no compound-reuse
+            // slot was planned (the common #1614 simple-assignment case).
+            if (!this.TryEmitCachedReceiver(addressReceiver ?? fas.ReceiverExpression, needAddress: false))
+            {
+                this.EmitExpression(addressReceiver ?? fas.ReceiverExpression);
+            }
+
             this.EmitExpression(fas.Value);
             this.il.OpCode(ILOpCode.Dup);
             this.il.StoreLocal(valueSlot);
@@ -1181,21 +1192,69 @@ internal sealed partial class MethodBodyEmitter
             // addressable storage. Spill it to a pre-declared local and
             // pass `ldloca` as `this`; this is valid for ordinary structs
             // and by-ref-like `ref struct` values, which cannot be boxed.
-            this.EmitExpression(receiver);
-            if (!this.receiverSpillSlots.TryGetValue(receiver, out var slot))
+            // Issue #1688: if this exact receiver instance is ALSO the
+            // shared receiver of a compound member assignment, it was (or
+            // will be) cached once via TryEmitCachedReceiver — reuse that
+            // cache instead of re-evaluating the receiver a second time.
+            if (this.TryEmitCachedReceiver(receiver, needAddress: true))
             {
-                throw new InvalidOperationException(
-                    $"No slot populated for {receiver.Kind} receiver of type '{receiver.Type}' — "
-                    + "walker pre-pass missed this child? "
-                    + "Check ReceiverSpillCollector and its ancestor walker.");
+                return;
             }
 
-            this.il.StoreLocal(slot);
-            this.il.LoadLocalAddress(slot);
+            throw new InvalidOperationException(
+                $"No slot populated for {receiver.Kind} receiver of type '{receiver.Type}' — "
+                + "walker pre-pass missed this child? "
+                + "Check ReceiverSpillCollector and its ancestor walker.");
+        }
+
+        // Issue #1688: a reference-type receiver shared between the read and
+        // write side of a compound member assignment (`getObj().F += x` /
+        // `getObj().P += x`) must be evaluated exactly once. Route through
+        // the cache before falling back to a plain re-emit.
+        if (this.TryEmitCachedReceiver(receiver, needAddress: false))
+        {
             return;
         }
 
         this.EmitExpression(receiver);
+    }
+
+    /// <summary>
+    /// Issue #1688: when <paramref name="receiver"/> was flagged by
+    /// <c>SlotPlanner.ReceiverSpillCollector.AddIfCompoundReused</c> — i.e. it
+    /// is the shared receiver of a compound field/property assignment
+    /// (<c>getObj().F += x</c> / <c>getObj().P += x</c>) — evaluates it
+    /// exactly once into its planned slot and loads from the slot on every
+    /// subsequent encounter of the SAME node instance, instead of re-running
+    /// the (potentially side-effecting) receiver expression for each of the
+    /// read and write sides.
+    /// </summary>
+    /// <param name="receiver">The receiver expression to emit or reuse from cache.</param>
+    /// <param name="needAddress">Whether the caller needs the receiver's address (value-type <c>this</c>) rather than its value.</param>
+    /// <returns><see langword="true"/> when the receiver was handled via the cache (planned slot found); <see langword="false"/> when no slot was planned and the caller should fall back to its own emission.</returns>
+    private bool TryEmitCachedReceiver(BoundExpression receiver, bool needAddress)
+    {
+        if (!this.receiverSpillSlots.TryGetValue(receiver, out var slot))
+        {
+            return false;
+        }
+
+        if (this.spilledCompoundReceivers.Add(receiver))
+        {
+            this.EmitExpression(receiver);
+            this.il.StoreLocal(slot);
+        }
+
+        if (needAddress)
+        {
+            this.il.LoadLocalAddress(slot);
+        }
+        else
+        {
+            this.il.LoadLocal(slot);
+        }
+
+        return true;
     }
 
     /// <summary>
