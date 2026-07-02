@@ -536,7 +536,12 @@ public sealed class Evaluator
         catch (Exception ex) when (TryFindCatchHandler(node, ex, out _))
         {
             TryFindCatchHandler(node, ex, out var handler);
-            Assign(handler.Variable, ex);
+
+            // Issue #1649: bind the handler variable to the REAL exception object,
+            // not the EvaluatorException wrapper that EvaluateExpression attaches
+            // for node context. Without this, `e is T`, typeof(e), and rethrow all
+            // observe the wrapper instead of the exception the user actually threw.
+            Assign(handler.Variable, UnwrapRuntimeException(ex));
             EvaluateStatement((BoundBlockStatement)handler.Body);
         }
         finally
@@ -608,9 +613,37 @@ public sealed class Evaluator
         throw new Exception(value?.ToString());
     }
 
+    /// <summary>
+    /// Issue #1649: EvaluateExpression wraps every non-EvaluatorException in an
+    /// EvaluatorException to attach node context (for GS9999 reporting when
+    /// nothing catches it). That wrapping must not leak into typed catch
+    /// matching or handler-variable binding, so unwrap repeatedly down to the
+    /// innermost real exception. TargetInvocationException (thrown by
+    /// reflection-based CLR calls) gets the same treatment.
+    /// </summary>
+    private static Exception UnwrapRuntimeException(Exception ex)
+    {
+        while (true)
+        {
+            if (ex is EvaluatorException { InnerException: { } inner })
+            {
+                ex = inner;
+                continue;
+            }
+
+            if (ex is TargetInvocationException { InnerException: { } tieInner })
+            {
+                ex = tieInner;
+                continue;
+            }
+
+            return ex;
+        }
+    }
+
     private static bool TryFindCatchHandler(BoundTryStatement node, Exception ex, out BoundCatchClause matched)
     {
-        var actualType = ex.GetType();
+        var actualType = UnwrapRuntimeException(ex).GetType();
         foreach (var clause in node.CatchClauses)
         {
             var clrName = clause.ExceptionType?.ClrType?.FullName;
