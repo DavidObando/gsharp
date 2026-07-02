@@ -3,6 +3,7 @@
 // out of StyleCop documentation/ordering rules; this is protocol plumbing, not product logic.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -36,6 +37,15 @@ public sealed class LspServer
     private readonly WorkspaceState workspaceState;
     private readonly ILogger logger;
     private readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> pushBindCts = new ConcurrentDictionary<string, CancellationTokenSource>();
+
+    // Test-only seams (issue #1664): letting tests observe/control the off-gate push-diagnostics
+    // bind deterministically, without sleeps or a real JsonRpc transport. Unused in production
+    // (rpc is null in these unit tests anyway, so publishing is otherwise unobservable).
+    internal Action<DocumentUri, DiagnosticComputationResult> TestOnParseResult;
+    internal Action<DocumentUri, DiagnosticComputationResult> TestOnBindResult;
+    internal Action<DocumentUri, IReadOnlyList<Diagnostic>> TestOnPublish;
+    internal Func<CancellationToken, Task> TestPushBindDelay;
     private readonly TaskCompletionSource<int> exitSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object refreshLock = new object();
 
@@ -163,8 +173,10 @@ public sealed class LspServer
 
         return this.GuardAsync(() =>
         {
-            this.UpdateDocument(uri, text);
-            this.PublishDiagnosticsIfPushMode(uri, text, skipBinding: true);
+            // Issue #1664: UpdateDocument already parses text and computes skipBinding:true
+            // diagnostics; reuse that result instead of re-parsing the same text a second time.
+            var result = this.UpdateDocument(uri, text);
+            this.PublishDiagnosticsIfPushMode(uri, result);
             return 0;
         });
     }
@@ -181,8 +193,8 @@ public sealed class LspServer
 
         return this.GuardAsync(() =>
         {
-            this.UpdateDocument(uri, text);
-            this.PublishDiagnosticsIfPushMode(uri, text, skipBinding: true);
+            var result = this.UpdateDocument(uri, text);
+            this.PublishDiagnosticsIfPushMode(uri, result);
 
             // Inter-file edits can change diagnostics in other open documents; ask the
             // client to re-pull them. Debounced so a burst of keystrokes coalesces.
@@ -203,11 +215,17 @@ public sealed class LspServer
 
         return this.GuardAsync(() =>
         {
-            this.UpdateDocument(uri, text);
+            var result = this.UpdateDocument(uri, text);
 
-            // Pull clients already receive live binding diagnostics; only push clients need
-            // the full pipeline run here.
-            this.PublishDiagnosticsIfPushMode(uri, text, skipBinding: false);
+            // Pull clients already receive live binding diagnostics via textDocument/diagnostic;
+            // only push clients need the full (binding + DocumentationValidator) pipeline here.
+            // Issue #1664: that full bind used to run inline, under this gate — freezing every
+            // other request for the duration of a cold whole-project bind. Snapshot the just-
+            // parsed tree/project (brief, done above under the gate) and kick the bind off the
+            // gate on the thread pool instead, mirroring DocumentDiagnosticAsync. The fire-and-
+            // forget task below does not block GuardAsync's body, so the gate is released
+            // immediately.
+            this.SchedulePushDiagnosticsBind(uri, result);
             return 0;
         });
     }
@@ -228,6 +246,14 @@ public sealed class LspServer
             if (!string.IsNullOrEmpty(filePath))
             {
                 this.workspaceState.ClearOpenBuffer(filePath);
+            }
+
+            // Issue #1664: a still-running push-mode didSave bind for this file would otherwise
+            // publish diagnostics for a document the client no longer has open.
+            if (this.pushBindCts.TryRemove(uri.ToString(), out var cts))
+            {
+                cts.Cancel();
+                cts.Dispose();
             }
 
             return 0;
@@ -957,7 +983,7 @@ public sealed class LspServer
         return uri != null && this.documentContentService.TryGet(uri.ToString(), out content);
     }
 
-    private void UpdateDocument(DocumentUri uri, string text)
+    private DiagnosticComputationResult UpdateDocument(DocumentUri uri, string text)
     {
         var filePath = uri.GetFileSystemPath();
 
@@ -977,11 +1003,20 @@ public sealed class LspServer
 
         // Parse-only content (no binding) feeds the content service used by other features;
         // diagnostics are produced on demand by the textDocument/diagnostic pull handler.
+        // Issue #1664: this is the only parse of `text`; callers (didOpen/didChange push
+        // publish, didSave's off-gate bind) reuse this result instead of re-parsing it.
         var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: true, project, filePath, this.workspaceState);
         this.documentContentService.AddOrUpdate(uri.ToString(), result.Content);
+        this.TestOnParseResult?.Invoke(uri, result);
+        return result;
     }
 
-    private void PublishDiagnosticsIfPushMode(DocumentUri uri, string text, bool skipBinding)
+    /// <summary>
+    /// Publishes the already-computed (parse-only) diagnostics for push-mode clients. Used by
+    /// didOpen/didChange, where <see cref="UpdateDocument"/>'s skipBinding:true result is exactly
+    /// what push clients should see, so no recomputation is needed (issue #1664).
+    /// </summary>
+    private void PublishDiagnosticsIfPushMode(DocumentUri uri, DiagnosticComputationResult result)
     {
         // Clients advertising pull diagnostics request them via textDocument/diagnostic, so push
         // is suppressed to avoid double reporting. Older push-only clients still get notifications.
@@ -990,13 +1025,98 @@ public sealed class LspServer
             return;
         }
 
-        var filePath = uri.GetFileSystemPath();
-        var project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
-        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding, project, filePath, this.workspaceState);
-
+        this.TestOnPublish?.Invoke(uri, result.Diagnostics);
         this.rpc?.NotifyWithParameterObjectAsync(
             "textDocument/publishDiagnostics",
             new PublishDiagnosticsParams { Uri = uri, Diagnostics = result.Diagnostics });
+    }
+
+    /// <summary>
+    /// Schedules the full (binding + <c>DocumentationValidator</c>) diagnostics pass a push-mode
+    /// didSave needs, off the write gate. Mirrors <see cref="DocumentDiagnosticAsync"/>: the
+    /// already-parsed <paramref name="parseResult"/>'s <see cref="SyntaxTree"/> and owning
+    /// project were captured under the gate by <see cref="UpdateDocument"/> (brief, parse-only);
+    /// the (potentially ~seconds-long, cold-workspace) bind itself runs on the thread pool via
+    /// <see cref="DocumentSyncHandler.ComputeDiagnosticsForSnapshot"/>, which never calls
+    /// <see cref="ProjectState.UpdateFile"/> and so can never clobber a newer tree written by a
+    /// concurrent didChange/didSave (issue #1657).
+    ///
+    /// A per-file <see cref="CancellationTokenSource"/> supersedes stale binds: a newer edit to
+    /// the same file cancels any still-running bind for the file's previous text, and the
+    /// superseded bind's publish is skipped so it can never overwrite the newer diagnostics
+    /// (issue #1664).
+    /// </summary>
+    private void SchedulePushDiagnosticsBind(DocumentUri uri, DiagnosticComputationResult parseResult)
+    {
+        if (this.clientSupportsPullDiagnostics)
+        {
+            return;
+        }
+
+        var filePath = uri.GetFileSystemPath();
+        var project = parseResult.Content.Project;
+        var syntaxTree = parseResult.Content.SyntaxTree;
+        var key = uri.ToString();
+
+        var cts = new CancellationTokenSource();
+        this.pushBindCts.AddOrUpdate(
+            key,
+            cts,
+            (_, previous) =>
+            {
+                previous.Cancel();
+                previous.Dispose();
+                return cts;
+            });
+        var token = cts.Token;
+
+        _ = Task.Run(
+            async () =>
+            {
+                var delay = this.TestPushBindDelay;
+                if (delay != null)
+                {
+                    try
+                    {
+                        await delay(token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                }
+
+                DiagnosticComputationResult bound;
+                try
+                {
+                    token.ThrowIfCancellationRequested();
+                    bound = DocumentSyncHandler.ComputeDiagnosticsForSnapshot(syntaxTree, skipBinding: false, project, filePath, this.workspaceState);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    LogHandlerException(nameof(this.SchedulePushDiagnosticsBind), ex);
+                    return;
+                }
+
+                this.TestOnBindResult?.Invoke(uri, bound);
+
+                // A newer edit superseded this bind while it ran; its diagnostics are stale, so
+                // drop them instead of clobbering whatever the newer edit publishes.
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                this.TestOnPublish?.Invoke(uri, bound.Diagnostics);
+                this.rpc?.NotifyWithParameterObjectAsync(
+                    "textDocument/publishDiagnostics",
+                    new PublishDiagnosticsParams { Uri = uri, Diagnostics = bound.Diagnostics });
+            },
+            token);
     }
 
     private void DetectClientDiagnosticCapabilities(JsonElement capabilities)

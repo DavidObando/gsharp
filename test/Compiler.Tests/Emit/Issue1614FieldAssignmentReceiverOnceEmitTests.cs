@@ -89,13 +89,114 @@ public class Issue1614FieldAssignmentReceiverOnceEmitTests
 
         var (finalCount, callCount) = RunAndGetTwoIntResults(source, "finalCount", "callCount");
 
-        // Compound assignment reads the current field value through the
-        // receiver once and writes through it once (two evaluations,
-        // matching the accepted property-compound-assignment behavior).
-        // Pre-fix this was three evaluations (read + write + spurious
-        // reload for the discarded statement-position result).
+        // Issue #1688: the compound-assignment receiver is spilled to a
+        // temp and evaluated exactly ONCE, then reused for both the read
+        // (current field value) and the write. Pre-#1688 this was two
+        // evaluations (read + write); pre-#1614 it was three (plus a
+        // spurious reload for the discarded statement-position result).
         Assert.Equal(15, finalCount);
-        Assert.Equal(2, callCount);
+        Assert.Equal(1, callCount);
+    }
+
+    [Fact]
+    public void CallReceiverFieldCompoundAssignment_WritesBackToTheSameObjectItRead()
+    {
+        // The receiver is a call that mutates shared state and returns a
+        // fresh object each invocation; the compound write must land on the
+        // SAME instance the compound read observed (recorded via a global
+        // set inside GetBox), not a second freshly-constructed instance.
+        var source = """
+            package P1688A
+            import System
+
+            class Box {
+                var Count int32
+            }
+
+            public var calls = 0
+            public var lastBox = Box()
+
+            func GetBox() Box {
+                calls = calls + 1
+                var b = Box()
+                b.Count = 10
+                lastBox = b
+                return b
+            }
+
+            GetBox().Count += 5
+            public var finalCount = lastBox.Count
+            public var callCount = calls
+            """;
+
+        var (finalCount, callCount) = RunAndGetTwoIntResults(source, "finalCount", "callCount");
+
+        Assert.Equal(15, finalCount);
+        Assert.Equal(1, callCount);
+    }
+
+    [Fact]
+    public void CallReceiverPropertyCompoundAssignment_EvaluatesReceiverExactlyOnce()
+    {
+        var source = """
+            package P1688B
+            import System
+
+            class Box {
+                var backing int32
+                prop Count int32 { get { return backing } set { backing = value } }
+            }
+
+            public var calls = 0
+            let shared = Box()
+
+            func GetBox() Box {
+                calls = calls + 1
+                return shared
+            }
+
+            shared.Count = 10
+            GetBox().Count += 5
+            public var finalCount = shared.Count
+            public var callCount = calls
+            """;
+
+        var (finalCount, callCount) = RunAndGetTwoIntResults(source, "finalCount", "callCount");
+
+        Assert.Equal(15, finalCount);
+        Assert.Equal(1, callCount);
+    }
+
+    [Fact]
+    public void LocalReceiverFieldCompoundAssignment_NeedsNoSpillAndStillWorks()
+    {
+        // Trivial (local-variable) receivers have no side effect to
+        // preserve; the fix must not force a temp for them, and the
+        // compound assignment must still produce the correct result.
+        var source = """
+            package P1688C
+            import System
+
+            class Box {
+                var Count int32
+            }
+
+            let shared = Box()
+            shared.Count = 10
+            shared.Count += 5
+            public var finalCount = shared.Count
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod(
+            "<Main>$",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var finalCountField = program.GetField("finalCount", BindingFlags.Public | BindingFlags.Static);
+
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { Array.Empty<string>() });
+
+        Assert.Equal(15, (int)finalCountField!.GetValue(null)!);
     }
 
     private static (int First, int Second) RunAndGetTwoIntResults(string source, string firstField, string secondField)

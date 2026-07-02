@@ -720,7 +720,12 @@ internal sealed partial class ExpressionBinder
         // field the literal omitted. (For class/data-class literals the
         // synthesized default constructor — invoked by `newobj` — already runs
         // the instance field initializers, so this only applies to value types.)
-        if (!structSymbol.IsClass && !structSymbol.InstanceFieldInitializers.IsEmpty)
+        // Issue #1714: also synthesize a `""` fallback for any `string` field
+        // left uncovered by both the literal and a declared initializer —
+        // `initobj` alone would leave it at the CLR default `null`, diverging
+        // from the interpreter's Evaluator.DefaultValue (Go-style `""` zero
+        // value for `string`).
+        if (!structSymbol.IsClass)
         {
             foreach (var field in structSymbol.Fields)
             {
@@ -732,6 +737,16 @@ internal sealed partial class ExpressionBinder
                 if (structSymbol.InstanceFieldInitializers.TryGetValue(field, out var initExpr))
                 {
                     inits.Add(new BoundFieldInitializer(field, initExpr));
+                    seenFieldNames.Add(field.Name);
+                }
+                else if (field.Type == TypeSymbol.String)
+                {
+                    // Issue #1714: this is a storage-default site (an omitted
+                    // field in a struct literal), not the explicit `default`
+                    // expression, so synthesize a plain `""` literal here
+                    // rather than a BoundDefaultExpression — the latter now
+                    // intentionally keeps CLR-null semantics for `string`.
+                    inits.Add(new BoundFieldInitializer(field, new BoundLiteralExpression(null, string.Empty, TypeSymbol.String)));
                     seenFieldNames.Add(field.Name);
                 }
             }

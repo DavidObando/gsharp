@@ -96,6 +96,14 @@ public sealed class FunctionPointerTypeSymbol : TypeSymbol
     }
 
     /// <summary>
+    /// Removes all entries from the static type cache. Called by
+    /// <see cref="ReferenceResolver.Dispose"/> to release stale
+    /// <see cref="Type"/> objects backed by a disposed metadata load context
+    /// that would otherwise pin the context's memory indefinitely.
+    /// </summary>
+    internal static void ClearCache() => Cache.Clear();
+
+    /// <summary>
     /// Issue #1624: builds an identity-correct cache key using
     /// <see cref="FunctionTypeSymbol.AppendIdentityKey"/> — the same builder
     /// <see cref="FunctionTypeSymbol"/> and <see cref="TupleTypeSymbol"/> use —

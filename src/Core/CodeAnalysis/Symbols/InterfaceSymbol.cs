@@ -576,6 +576,15 @@ public sealed class InterfaceSymbol : TypeSymbol
         TryResolveMembers();
     }
 
+    /// <summary>
+    /// Removes all entries from the static constructed-interface cache.
+    /// Called by <see cref="ReferenceResolver.Dispose"/> to release stale
+    /// <see cref="Type"/> objects and definition/argument symbols backed by
+    /// a disposed metadata load context that would otherwise pin the
+    /// context's memory indefinitely.
+    /// </summary>
+    internal static void ClearCache() => ConstructedCache.Clear();
+
     private static TypeArgsKey BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments) => new(typeArguments);
 
     private static InterfaceSymbol CreateConstructed(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments)

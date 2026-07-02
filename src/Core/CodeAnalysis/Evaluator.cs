@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -85,10 +86,17 @@ public sealed class Evaluator
     {
         this.program = program;
         globals = variables;
-        Locals.Push(new Dictionary<VariableSymbol, object>());
+        Locals.Push(new ConcurrentDictionary<VariableSymbol, object>());
     }
 
-    private Stack<Dictionary<VariableSymbol, object>> Locals => executionState.Value.Locals;
+    // Issue #1718: a frame dictionary is shared by reference with every
+    // goroutine spawned while it is on the locals stack (see
+    // CloneExecutionStateForGoroutine), so a captured enclosing-scope
+    // variable can be assigned from the spawning thread and a goroutine at
+    // the same time. Plain Dictionary<,> is not thread-safe under
+    // concurrent writes (can corrupt buckets/throw on resize); every frame
+    // is a ConcurrentDictionary so those racing reads/writes are safe.
+    private Stack<ConcurrentDictionary<VariableSymbol, object>> Locals => executionState.Value.Locals;
 
     private Stack<ScopeFrame> ScopeFrames => executionState.Value.ScopeFrames;
 
@@ -232,7 +240,7 @@ public sealed class Evaluator
     /// </summary>
     /// <param name="frame">The frame to push (parameters, 'this', captured locals).</param>
     /// <returns>A disposable guard that pops <paramref name="frame"/> exactly once.</returns>
-    private FrameScope PushFrame(Dictionary<VariableSymbol, object> frame) => new(Locals, frame);
+    private FrameScope PushFrame(ConcurrentDictionary<VariableSymbol, object> frame) => new(Locals, frame);
 
     private static Dictionary<BoundLabel, int> GetLabelToIndex(BoundBlockStatement body) =>
         LabelIndexCache.GetValue(body, static b =>
@@ -540,7 +548,7 @@ public sealed class Evaluator
         var current = executionState.Value;
         return new ExecutionState
         {
-            Locals = new Stack<Dictionary<VariableSymbol, object>>(current.Locals.Reverse()),
+            Locals = new Stack<ConcurrentDictionary<VariableSymbol, object>>(current.Locals.Reverse()),
         };
     }
 
@@ -1452,7 +1460,7 @@ public sealed class Evaluator
                 else if (init.Property.SetterSymbol != null && program.Functions.TryGetValue(init.Property.SetterSymbol, out var setterBody))
                 {
                     var value = EvaluateExpression(init.Value);
-                    var frame = new Dictionary<Symbols.VariableSymbol, object>
+                    var frame = new ConcurrentDictionary<Symbols.VariableSymbol, object>
                     {
                         [init.Property.SetterSymbol.ThisParameter] = sv,
                         [init.Property.SetterSymbol.Parameters[0]] = value,
@@ -1566,7 +1574,7 @@ public sealed class Evaluator
         }
 
         var closure = (ClosureValue)targetValue;
-        var frame = new Dictionary<VariableSymbol, object>();
+        var frame = new ConcurrentDictionary<VariableSymbol, object>();
         foreach (var kv in closure.CapturedLocals)
         {
             frame[kv.Key] = kv.Value;
@@ -1645,7 +1653,7 @@ public sealed class Evaluator
                 if (baseInitOnStruct != null
                     && baseInitOnStruct.GSharpBaseType is StructSymbol gsBase)
                 {
-                    var frame = new Dictionary<VariableSymbol, object>();
+                    var frame = new ConcurrentDictionary<VariableSymbol, object>();
                     for (var i = 0; i < primaryParams.Length; i++)
                     {
                         frame[primaryParams[i]] = sv.Fields[primaryParams[i].Name];
@@ -1666,7 +1674,7 @@ public sealed class Evaluator
             }
 
             var ctorFunction = explicitCtor.Function;
-            var frame2 = new Dictionary<VariableSymbol, object>
+            var frame2 = new ConcurrentDictionary<VariableSymbol, object>
             {
                 [ctorFunction.ThisParameter] = sv,
             };
@@ -1714,7 +1722,7 @@ public sealed class Evaluator
         if (baseInit != null || node.StructType.ImportedBaseType != null
             || HasClrAncestor(node.StructType))
         {
-            var frame = new Dictionary<VariableSymbol, object>();
+            var frame = new ConcurrentDictionary<VariableSymbol, object>();
             for (var i = 0; i < parameters.Length; i++)
             {
                 frame[parameters[i]] = sv.Fields[parameters[i].Name];
@@ -2082,7 +2090,7 @@ public sealed class Evaluator
             var methodSymbol = node.IsAdd ? node.Event.AddMethodSymbol : node.Event.RemoveMethodSymbol;
             if (methodSymbol != null && program.Functions.TryGetValue(methodSymbol, out var body))
             {
-                var frame = new Dictionary<Symbols.VariableSymbol, object>();
+                var frame = new ConcurrentDictionary<Symbols.VariableSymbol, object>();
                 if (methodSymbol.ThisParameter != null)
                 {
                     frame[methodSymbol.ThisParameter] = receiverValue;
@@ -2277,7 +2285,7 @@ public sealed class Evaluator
             else if (node.Property.GetterSymbol != null && program.Functions.TryGetValue(node.Property.GetterSymbol, out var staticGetterBody))
             {
                 // Issue #263: computed static property getter — no 'this' parameter.
-                var frame = new Dictionary<Symbols.VariableSymbol, object>();
+                var frame = new ConcurrentDictionary<Symbols.VariableSymbol, object>();
                 using (PushFrame(frame))
                 {
                     return EvaluateFunctionBody(staticGetterBody);
@@ -2332,7 +2340,7 @@ public sealed class Evaluator
         // Computed property: execute the bound getter body.
         if (property.GetterSymbol != null && program.Functions.TryGetValue(property.GetterSymbol, out var getterBody))
         {
-            var frame = new Dictionary<Symbols.VariableSymbol, object>
+            var frame = new ConcurrentDictionary<Symbols.VariableSymbol, object>
             {
                 [property.GetterSymbol.ThisParameter] = receiverValue,
             };
@@ -2358,7 +2366,7 @@ public sealed class Evaluator
             }
             else if (node.Property.SetterSymbol != null && program.Functions.TryGetValue(node.Property.SetterSymbol, out var staticSetterBody))
             {
-                var frame = new Dictionary<Symbols.VariableSymbol, object>
+                var frame = new ConcurrentDictionary<Symbols.VariableSymbol, object>
                 {
                     [node.Property.SetterSymbol.Parameters[0]] = value,
                 };
@@ -2406,7 +2414,7 @@ public sealed class Evaluator
         if (node.Property.SetterSymbol != null && program.Functions.TryGetValue(node.Property.SetterSymbol, out var setterBody))
         {
             var receiverValue = EvaluateExpression(node.Receiver);
-            var frame = new Dictionary<Symbols.VariableSymbol, object>
+            var frame = new ConcurrentDictionary<Symbols.VariableSymbol, object>
             {
                 [node.Property.SetterSymbol.ThisParameter] = receiverValue,
                 [node.Property.SetterSymbol.Parameters[0]] = value,
@@ -2968,7 +2976,7 @@ public sealed class Evaluator
         }
         else
         {
-            var locals = new Dictionary<VariableSymbol, object>();
+            var locals = new ConcurrentDictionary<VariableSymbol, object>();
 
             // ADR-0060 item #7: identify ref-kind parameters so we can
             // write the post-body value back into the caller's lvalue.
@@ -2995,7 +3003,7 @@ public sealed class Evaluator
                 else
                 {
                     var value = EvaluateExpression(arg);
-                    locals.Add(parameter, value);
+                    locals[parameter] = value;
                 }
             }
 
@@ -3221,7 +3229,7 @@ public sealed class Evaluator
         {
             foreach (var binding in bindings)
             {
-                frame.Remove(binding.Key);
+                frame.TryRemove(binding.Key, out _);
             }
         }
     }
@@ -3875,7 +3883,7 @@ public sealed class Evaluator
             }
         }
 
-        var frame = new Dictionary<VariableSymbol, object>
+        var frame = new ConcurrentDictionary<VariableSymbol, object>
         {
             [method.ThisParameter] = receiverValue,
         };
@@ -3885,7 +3893,7 @@ public sealed class Evaluator
         {
             var parameter = method.Parameters[i + parameterOffset];
             var value = EvaluateExpression(node.Arguments[i]);
-            frame.Add(parameter, value);
+            frame[parameter] = value;
         }
 
         using (PushFrame(frame))
@@ -3911,7 +3919,7 @@ public sealed class Evaluator
         var receiverValue = EvaluateExpression(node.Receiver);
         var method = node.Method;
 
-        var frame = new Dictionary<VariableSymbol, object>
+        var frame = new ConcurrentDictionary<VariableSymbol, object>
         {
             [method.ThisParameter] = receiverValue,
         };
@@ -3921,7 +3929,7 @@ public sealed class Evaluator
         {
             var parameter = method.Parameters[i + parameterOffset];
             var value = EvaluateExpression(node.Arguments[i]);
-            frame.Add(parameter, value);
+            frame[parameter] = value;
         }
 
         using (PushFrame(frame))
@@ -3974,7 +3982,7 @@ public sealed class Evaluator
 
         var method = node.Method;
 
-        var frame = new Dictionary<VariableSymbol, object>
+        var frame = new ConcurrentDictionary<VariableSymbol, object>
         {
             [method.ThisParameter] = receiverValue,
         };
@@ -3984,7 +3992,7 @@ public sealed class Evaluator
         {
             var parameter = method.Parameters[i + parameterOffset];
             var value = EvaluateExpression(node.Arguments[i]);
-            frame.Add(parameter, value);
+            frame[parameter] = value;
         }
 
         using (PushFrame(frame))
@@ -4116,7 +4124,7 @@ public sealed class Evaluator
                 $"Static-virtual interface call '{node.InterfaceMethod.Name}' has no runtime body (no implementer found and no default).");
         }
 
-        var frame2 = new Dictionary<VariableSymbol, object>();
+        var frame2 = new ConcurrentDictionary<VariableSymbol, object>();
         for (var i = 0; i < node.Arguments.Length; i++)
         {
             frame2[target.Parameters[i]] = evaluatedArgs[i];
@@ -4679,7 +4687,7 @@ public sealed class Evaluator
         }
         finally
         {
-            locals.Remove(node.Capture);
+            locals.TryRemove(node.Capture, out _);
         }
     }
 
@@ -4859,7 +4867,7 @@ public sealed class Evaluator
             return null;
         }
 
-        var chainFrame = new Dictionary<VariableSymbol, object>
+        var chainFrame = new ConcurrentDictionary<VariableSymbol, object>
         {
             [thisParam] = receiver,
         };
@@ -4889,13 +4897,13 @@ public sealed class Evaluator
     }
 
     /// <summary>
-    /// Disposable guard returned by <see cref="PushFrame(Dictionary{VariableSymbol, object})"/>
+    /// Disposable guard returned by <see cref="PushFrame(ConcurrentDictionary{VariableSymbol, object})"/>
     /// that pops the associated locals frame when disposed, guaranteeing the
     /// pop runs on both normal and exceptional (unwind) control flow.
     /// </summary>
     private readonly struct FrameScope : IDisposable
     {
-        private readonly Stack<Dictionary<VariableSymbol, object>> stack;
+        private readonly Stack<ConcurrentDictionary<VariableSymbol, object>> stack;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="FrameScope"/> struct,
@@ -4903,7 +4911,7 @@ public sealed class Evaluator
         /// </summary>
         /// <param name="stack">The locals stack to push onto and later pop from.</param>
         /// <param name="frame">The frame to push.</param>
-        public FrameScope(Stack<Dictionary<VariableSymbol, object>> stack, Dictionary<VariableSymbol, object> frame)
+        public FrameScope(Stack<ConcurrentDictionary<VariableSymbol, object>> stack, ConcurrentDictionary<VariableSymbol, object> frame)
         {
             this.stack = stack;
             this.stack.Push(frame);
@@ -4991,7 +4999,7 @@ public sealed class Evaluator
     /// </summary>
     private sealed class ExecutionState
     {
-        public Stack<Dictionary<VariableSymbol, object>> Locals { get; set; } = new();
+        public Stack<ConcurrentDictionary<VariableSymbol, object>> Locals { get; set; } = new();
 
         public Stack<ScopeFrame> ScopeFrames { get; set; } = new();
 

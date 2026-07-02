@@ -459,13 +459,17 @@ internal sealed class StatementBinder
 
     private void InvalidateNarrowingsForAssignedVariables(SyntaxNode statementSyntax)
     {
-        if (binderCtx.NarrowedVariables.Count == 0)
+        // Issue #1639: `NarrowedVariables.Count == 0` never fires in practice —
+        // `BindBlockStatements` pushes a (usually empty) memberNotNullFrame for
+        // every block, so the list always has at least one entry once binding
+        // is inside any block. The real fast-path question is whether any
+        // active frame actually holds a narrowing; if none do, no walk of the
+        // statement's syntax subtree can possibly invalidate anything, so skip
+        // both walks (and their HashSet/List allocations) entirely.
+        if (!HasAnyActiveNarrowings())
         {
             return;
         }
-
-        var assignedNames = new HashSet<string>();
-        CollectAssignedNames(statementSyntax, assignedNames);
 
         // ADR-0069 addendum / issue #1180: member-path narrowings are far more
         // fragile than local narrowings. Any call could mutate a field reached
@@ -475,7 +479,13 @@ internal sealed class StatementBinder
         // drop EVERY member-bearing path when the statement contains a call or a
         // member-mutating assignment. Plain variable narrowings keep their
         // existing, more permissive invalidation (reassignment only).
-        var dropAllMemberPaths = StatementMayMutateMemberPaths(statementSyntax);
+        //
+        // Issue #1639: both the assigned-name collection and the member-mutation
+        // check used to walk the full statement syntax subtree separately. They
+        // gather independent facts from the same tree, so a single combined
+        // walk collects both in one pass instead of two.
+        var assignedNames = new HashSet<string>();
+        var dropAllMemberPaths = CollectAssignedNamesAndMemberMutation(statementSyntax, assignedNames);
 
         // Resolve the set of reassigned root variables so we can also drop any
         // member path rooted at one of them.
@@ -531,14 +541,42 @@ internal sealed class StatementBinder
     }
 
     /// <summary>
-    /// ADR-0069 addendum / issue #1180: returns whether <paramref name="node"/>
-    /// contains a construct that could change a value reached through a stable
-    /// member path — a call (whose callee could mutate a field), or a member /
-    /// index / indirect assignment. Such statements conservatively invalidate
-    /// all member-path smart casts.
+    /// Issue #1639: returns whether any currently active narrowing frame holds
+    /// at least one entry. Used as the fast-path guard before walking a
+    /// statement's syntax subtree for invalidation purposes — a block's
+    /// persistent <c>memberNotNullFrame</c> is pushed unconditionally (even
+    /// when empty), so testing <see cref="BinderContext.NarrowedVariables"/>
+    /// for emptiness alone never short-circuits. Frame counts are typically
+    /// shallow (bounded by nesting depth), so this scan is cheap relative to a
+    /// syntax subtree walk.
     /// </summary>
-    private static bool StatementMayMutateMemberPaths(SyntaxNode node)
+    private bool HasAnyActiveNarrowings()
     {
+        for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
+        {
+            if (binderCtx.NarrowedVariables[i].Count > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// ADR-0069 addendum / issue #1180 / issue #1639: combined single-pass walk
+    /// that collects both facts previously gathered by two separate full
+    /// subtree walks: (a) the set of plain-variable names reassigned anywhere
+    /// in <paramref name="node"/>, added to <paramref name="assigned"/>, and
+    /// (b) whether the subtree contains a construct that could change a value
+    /// reached through a stable member path — a call (whose callee could
+    /// mutate a field), or a member / index / indirect assignment — returned
+    /// as the method result. Such statements conservatively invalidate all
+    /// member-path smart casts.
+    /// </summary>
+    private static bool CollectAssignedNamesAndMemberMutation(SyntaxNode node, HashSet<string> assigned)
+    {
+        var mayMutateMemberPaths = false;
         switch (node)
         {
             case CallExpressionSyntax:
@@ -548,24 +586,8 @@ internal sealed class StatementBinder
             case CompoundIndexAssignmentExpressionSyntax:
             case IndirectAssignmentExpressionSyntax:
             case FieldAssignmentExpressionSyntax:
-                return true;
-        }
-
-        foreach (var child in node.GetChildren())
-        {
-            if (StatementMayMutateMemberPaths(child))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static void CollectAssignedNames(SyntaxNode node, HashSet<string> assigned)
-    {
-        switch (node)
-        {
+                mayMutateMemberPaths = true;
+                break;
             case AssignmentExpressionSyntax a:
                 assigned.Add(a.IdentifierToken.Text);
                 break;
@@ -583,8 +605,10 @@ internal sealed class StatementBinder
 
         foreach (var child in node.GetChildren())
         {
-            CollectAssignedNames(child, assigned);
+            mayMutateMemberPaths |= CollectAssignedNamesAndMemberMutation(child, assigned);
         }
+
+        return mayMutateMemberPaths;
     }
 
     /// <summary>

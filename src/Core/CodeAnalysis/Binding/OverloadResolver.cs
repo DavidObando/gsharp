@@ -914,12 +914,20 @@ internal sealed class OverloadResolver
             return applicable[0];
         }
 
-        // Phase 2: prefer candidates with the fewest defaulted parameters (an
-        // exact-arity overload beats one that relies on defaults). Also prefer
-        // a non-variadic candidate over a variadic one when both apply.
-        var bestScore = int.MaxValue;
-        FunctionSymbol best = null;
-        var tie = false;
+        // Phase 2 (issue #1631): rank by C# §7.5.3.2 "better function member"
+        // pairwise domination over per-argument conversion kind, reusing the
+        // SAME OverloadResolution.ImplicitConversionKind ranking (and numeric "better conversion
+        // target" tie-break) the CLR-reflection resolver
+        // (OverloadResolution.RankApplicable/CompareConversions) uses for
+        // imported-method overloads. This replaces the previous ad-hoc linear
+        // score, under which any two candidates that both needed an implicit
+        // conversion tied at score 0 (e.g. F(int64) / F(float64) called with an
+        // int32 constant) and reported a spurious GS0266 — even though one
+        // conversion is strictly "better" per C#. Only after the per-argument
+        // pairwise pass survivors are narrowed do the arity tie-breakers
+        // (fewest defaulted parameters, then non-variadic, then non-generic)
+        // run, matching the CLR path's phase ordering.
+        var data = new List<UserCandidateRankData>(applicable.Count);
         foreach (var cand in applicable)
         {
             var parameterOffset = cand.ExplicitReceiverParameter == null ? 0 : 1;
@@ -932,76 +940,322 @@ internal sealed class OverloadResolver
                 defaultsUsed = 0;
             }
 
-            // Apply a small penalty to variadic candidates (per ADR §6.6).
-            var score = defaultsUsed + (isVariadic ? 1 : 0);
-
             // For generic candidates, compute the inferred method-type
             // substitution so delegate parameter return types can be closed
-            // when scoring the value-return discard penalty below.
+            // when classifying the value-return discard case below.
             Dictionary<TypeParameterSymbol, TypeSymbol> candSubstitution = null;
             if (cand.IsGeneric)
             {
                 TryInferCandidateSubstitution(cand, boundArguments, argumentCount, out candSubstitution);
             }
 
-            // Score argument-type compatibility: +1 per exact-type match.
-            // Issue #1628: boundArguments[i] is source order, not parameter
-            // order — under named arguments the source-order index does not
-            // necessarily line up with the parameter it binds to (e.g. a
-            // named arg reorders a permutation-overload's parameters). Map
-            // each argument to its ACTUAL target slot (the same name→slot
-            // mapping IsApplicableUserCallable already validated) before
-            // scoring, so a named call still gets correct exact-match
-            // tie-breaking instead of being scored against the wrong param.
+            // Classify each supplied argument's conversion to its ACTUAL
+            // target slot. Issue #1628: boundArguments[i] is source order,
+            // not parameter order — under named arguments the source-order
+            // index does not necessarily line up with the parameter it binds
+            // to (e.g. a named arg reorders a permutation-overload's
+            // parameters). Map each argument to its real slot before
+            // classifying, so a named call still ranks against the correct
+            // parameter type.
+            var kinds = new OverloadResolution.ImplicitConversionKind[boundArguments.Count];
+            var paramTypes = new TypeSymbol[boundArguments.Count];
+            var isTailSlot = new bool[boundArguments.Count];
+            var elementType = isVariadic && cand.Parameters[cand.Parameters.Length - 1].Type is SliceTypeSymbol variadicSlice
+                ? variadicSlice.ElementType
+                : null;
             for (var i = 0; i < boundArguments.Count; i++)
             {
                 var slot = MapArgumentIndexToParameterSlot(cand, argumentNames, i, parameterOffset, paramLen);
-                if (slot < 0 || slot >= paramCountForScore)
+                if (slot < 0)
                 {
+                    // Unmapped (shouldn't happen for an applicable candidate) —
+                    // neutral: contributes no per-argument preference.
+                    kinds[i] = OverloadResolution.ImplicitConversionKind.Identity;
+                    continue;
+                }
+
+                if (slot >= paramCountForScore)
+                {
+                    // Issue #1631 (B1): variadic params-array tail argument.
+                    // Classify against the params ELEMENT type (so a genuine
+                    // widening in the tail is still visible) but flag the
+                    // slot as expanded-form. IsUserCandidateAtLeastAsGoodAs
+                    // below ranks an expanded-form slot strictly worse than a
+                    // normal-form slot on the SAME argument regardless of
+                    // conversion kind — C#'s "non-expanded form is preferred
+                    // over expanded form" rule (§7.5.3.2) — so a variadic
+                    // sibling can never dominate an applicable non-variadic
+                    // one purely because its tail was compared favourably.
+                    // Between two variadic candidates (both expanded), the
+                    // element-type kind still decides genuine betterness.
+                    isTailSlot[i] = true;
+                    var tailArgType = boundArguments[i]?.Type;
+                    kinds[i] = elementType == null
+                        ? OverloadResolution.ImplicitConversionKind.Identity
+                        : ClassifyUserArgumentConversionKind(tailArgType, elementType);
                     continue;
                 }
 
                 var argType = boundArguments[i]?.Type;
                 var paramType = cand.Parameters[slot + parameterOffset].Type;
-                if (argType != null && paramType != null && argType == paramType)
-                {
-                    score -= 10;
-                }
+                paramTypes[i] = paramType;
 
                 // Issue #1531 control: a value-returning delegate/method-group
                 // argument that maps onto a `(...)->void` delegate parameter
-                // discards its result. Penalize that mapping so a sibling
-                // `(...)->TResult` overload (whose delegate return closes to the
-                // argument's actual return type) is preferred — matching C#'s
-                // "better conversion from a method group" rule — instead of
-                // tying and reporting a spurious GS0266. Scoped strictly to the
-                // value-return-to-void-delegate shape, so it never disturbs the
-                // concrete-over-generic or defaulted-parameter preferences.
-                if (IsValueReturnDiscardedToVoidDelegate(argType, paramType, candSubstitution))
+                // discards its result. Classify it as C#'s worst-ranked
+                // "lambda to void delegate" conversion so a sibling
+                // `(...)->TResult` overload (whose delegate return closes to
+                // the argument's actual return type) is preferred — matching
+                // C#'s "better conversion from a method group" rule — instead
+                // of tying and reporting a spurious GS0266.
+                kinds[i] = IsValueReturnDiscardedToVoidDelegate(argType, paramType, candSubstitution)
+                    ? OverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate
+                    : ClassifyUserArgumentConversionKind(argType, paramType);
+            }
+
+            data.Add(new UserCandidateRankData(cand, kinds, paramTypes, isTailSlot, defaultsUsed, isVariadic));
+        }
+
+        // Phase 2a: pairwise domination. A candidate survives when no other
+        // candidate is "at least as good on every argument, and strictly
+        // better on at least one" (C# §7.5.3.2). Two candidates whose
+        // per-argument conversions are pairwise incomparable both survive —
+        // exactly the non-generic-vs-generic tie the previous strict-
+        // dominance-over-all-others requirement rejected.
+        var argTypes = new TypeSymbol[boundArguments.Count];
+        for (var i = 0; i < boundArguments.Count; i++)
+        {
+            argTypes[i] = boundArguments[i]?.Type;
+        }
+
+        var survivors = new List<UserCandidateRankData>(data.Count);
+        foreach (var c in data)
+        {
+            var dominated = false;
+            foreach (var o in data)
+            {
+                if (ReferenceEquals(c.Candidate, o.Candidate))
                 {
-                    score += 1;
+                    continue;
+                }
+
+                if (IsUserCandidateAtLeastAsGoodAs(o, c, argTypes))
+                {
+                    dominated = true;
+                    break;
                 }
             }
 
-            if (score < bestScore)
+            if (!dominated)
             {
-                bestScore = score;
-                best = cand;
-                tie = false;
-            }
-            else if (score == bestScore)
-            {
-                tie = true;
+                survivors.Add(c);
             }
         }
 
-        if (tie)
+        // Domination is a strict partial order over a finite non-empty set
+        // (applicable.Count > 1 here), so a maximal element always survives —
+        // survivors is never empty; the old "fall back to data" branch was
+        // dead code.
+        System.Diagnostics.Debug.Assert(survivors.Count > 0, "pairwise domination must leave at least one survivor");
+        var pool = survivors;
+
+        // Phase 2b: prefer the fewest defaulted parameters (an exact-arity
+        // overload beats one that relies on defaults).
+        if (pool.Count > 1)
         {
-            ambiguous = true;
-            return null;
+            var minDefaults = pool.Min(w => w.DefaultsUsed);
+            var fewestDefaults = pool.Where(w => w.DefaultsUsed == minDefaults).ToList();
+            if (fewestDefaults.Count > 0 && fewestDefaults.Count < pool.Count)
+            {
+                pool = fewestDefaults;
+            }
         }
 
-        return best;
+        // Phase 2c: prefer a non-variadic candidate over a variadic one (per
+        // ADR §6.6 — the normal-form / non-expanded-params preference).
+        if (pool.Count > 1)
+        {
+            var nonVariadic = pool.Where(w => !w.IsVariadic).ToList();
+            if (nonVariadic.Count > 0 && nonVariadic.Count < pool.Count)
+            {
+                pool = nonVariadic;
+            }
+        }
+
+        // Phase 2d: prefer a non-generic candidate over a generic one when
+        // otherwise tied (C# §7.5.3.2's non-generic-over-generic tie-break).
+        if (pool.Count > 1)
+        {
+            var nonGeneric = pool.Where(w => !w.Candidate.IsGeneric).ToList();
+            if (nonGeneric.Count > 0 && nonGeneric.Count < pool.Count)
+            {
+                pool = nonGeneric;
+            }
+        }
+
+        if (pool.Count == 1)
+        {
+            return pool[0].Candidate;
+        }
+
+        ambiguous = true;
+        return null;
+    }
+
+    /// <summary>
+    /// Per-candidate data accumulated during Phase 2 user-overload ranking
+    /// (issue #1631): the per-argument conversion classification plus the
+    /// arity axes (defaulted-parameter count, variadic-ness) used by the
+    /// tie-breakers that run after pairwise domination.
+    /// </summary>
+    private readonly struct UserCandidateRankData
+    {
+        public UserCandidateRankData(FunctionSymbol candidate, OverloadResolution.ImplicitConversionKind[] kinds, TypeSymbol[] paramTypes, bool[] isTailSlot, int defaultsUsed, bool isVariadic)
+        {
+            Candidate = candidate;
+            Kinds = kinds;
+            ParamTypes = paramTypes;
+            IsTailSlot = isTailSlot;
+            DefaultsUsed = defaultsUsed;
+            IsVariadic = isVariadic;
+        }
+
+        public FunctionSymbol Candidate { get; }
+
+        public OverloadResolution.ImplicitConversionKind[] Kinds { get; }
+
+        public TypeSymbol[] ParamTypes { get; }
+
+        /// <summary>
+        /// Gets per-argument flags set when the argument at that index bound
+        /// to this candidate's variadic params-array tail (as opposed to a
+        /// normal fixed parameter slot) (issue #1631, B1).
+        /// </summary>
+        public bool[] IsTailSlot { get; }
+
+        public int DefaultsUsed { get; }
+
+        public bool IsVariadic { get; }
+    }
+
+    /// <summary>
+    /// Issue #1631: C# §7.5.3.2 "better function member" pairwise comparison —
+    /// mirrors <c>OverloadResolution.IsAtLeastAsGoodAs</c> for user-symbolic
+    /// candidates. Returns <see langword="true"/> when <paramref name="a"/> is
+    /// not worse than <paramref name="b"/> on any argument and strictly better
+    /// on at least one.
+    /// </summary>
+    private static bool IsUserCandidateAtLeastAsGoodAs(UserCandidateRankData a, UserCandidateRankData b, TypeSymbol[] argTypes)
+    {
+        var hasStrictlyBetter = false;
+        for (var i = 0; i < a.Kinds.Length; i++)
+        {
+            var cmp = CompareUserConversions(a.Kinds[i], a.ParamTypes[i], a.IsTailSlot[i], b.Kinds[i], b.ParamTypes[i], b.IsTailSlot[i], argTypes[i]);
+            if (cmp > 0)
+            {
+                return false;
+            }
+
+            if (cmp < 0)
+            {
+                hasStrictlyBetter = true;
+            }
+        }
+
+        return hasStrictlyBetter;
+    }
+
+    /// <summary>
+    /// Issue #1631: compares two candidate conversions for the SAME argument,
+    /// mirroring <c>OverloadResolution.CompareConversions</c>. Different
+    /// <see cref="OverloadResolution.ImplicitConversionKind"/>s rank by their declared ordinal
+    /// (lower is better); same-kind numeric widenings tie-break via the
+    /// shared <see cref="OverloadResolution.CompareNumericTargets"/> "better
+    /// conversion target" rule (C# §7.5.3.4), reusing the exact CLR-path
+    /// helper rather than reimplementing the numeric/signed-vs-unsigned
+    /// lattice a second time.
+    /// </summary>
+    private static int CompareUserConversions(OverloadResolution.ImplicitConversionKind ka, TypeSymbol paramA, bool tailA, OverloadResolution.ImplicitConversionKind kb, TypeSymbol paramB, bool tailB, TypeSymbol source)
+    {
+        // Issue #1631 (B1'): per C# §7.5.3.2, "non-expanded form preferred
+        // over expanded form" is a LATE tie-break applied only when per-arg
+        // betterness is otherwise tied across every argument — it is not a
+        // per-arg override. Per-arg comparison must rank purely on each
+        // side's own conversion kind (e.g. an exact element-type match on a
+        // variadic tail slot legitimately beats a widening conversion on a
+        // normal-form slot). Phase 2c (prefer non-variadic) applies the
+        // actual tie-break once all per-arg comparisons agree.
+        if (ka != kb)
+        {
+            return ((int)ka).CompareTo((int)kb);
+        }
+
+        if (ka == OverloadResolution.ImplicitConversionKind.NumericWidening)
+        {
+            return OverloadResolution.CompareNumericTargets(paramA?.ClrType, paramB?.ClrType, source?.ClrType);
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Issue #1631: classifies the implicit conversion from a user-symbolic
+    /// argument type to a user-symbolic parameter type using the SAME
+    /// <see cref="OverloadResolution.ImplicitConversionKind"/> ranking the CLR-reflection
+    /// resolver (<see cref="OverloadResolution.ClassifyImplicit"/>) uses for
+    /// imported-method overloads, so both resolvers agree on which conversion
+    /// is "better". Bounded to the conversion shapes the user-symbolic
+    /// <see cref="Conversion"/> classifier actually distinguishes: identity,
+    /// nullable-wrap (<c>T -&gt; T?</c>), and numeric widening (via the
+    /// shared <see cref="NumericWideningLattice"/>). Every other implicit
+    /// conversion (reference upcast, interface satisfaction, boxing,
+    /// user-defined <c>op_Implicit</c>, …) folds into
+    /// <see cref="OverloadResolution.ImplicitConversionKind.Reference"/> — the user-symbolic type
+    /// model does not carry enough structure to rank those sub-kinds
+    /// separately, but they still rank strictly better than the numeric/
+    /// delegate special cases ranked worse below.
+    /// </summary>
+    private static OverloadResolution.ImplicitConversionKind ClassifyUserArgumentConversionKind(TypeSymbol argType, TypeSymbol paramType)
+    {
+        if (argType == null || paramType == null)
+        {
+            return OverloadResolution.ImplicitConversionKind.None;
+        }
+
+        if (argType == paramType)
+        {
+            return OverloadResolution.ImplicitConversionKind.Identity;
+        }
+
+        if (paramType is NullableTypeSymbol nullableParam && argType == nullableParam.UnderlyingType)
+        {
+            return OverloadResolution.ImplicitConversionKind.NullableWrap;
+        }
+
+        // ponytail: widening-then-wrap (e.g. int32 -> int64?) is not caught by
+        // the identity-underlying check above (argType != nullableParam.UnderlyingType)
+        // and falls through to the Reference bucket below instead of a rank
+        // between NumericWidening and Reference. No ImplicitConversionKind slot
+        // exists for it today; add one (and a matching CompareNumericTargets
+        // path against nullableParam.UnderlyingType) if a real ambiguity shows up.
+        var argClr = argType.ClrType;
+        var paramClr = paramType.ClrType;
+        if (argClr != null && paramClr != null
+            && NumericWideningLattice.IsNumericPrimitive(argClr.FullName)
+            && NumericWideningLattice.IsNumericPrimitive(paramClr.FullName)
+            && NumericWideningLattice.IsWidening(argClr, paramClr))
+        {
+            return OverloadResolution.ImplicitConversionKind.NumericWidening;
+        }
+
+        // ponytail: object vs. an implemented interface (e.g. f(object) vs.
+        // f(IInterface) for a class arg) both fold into Reference here, so
+        // they tie and report GS0266 where C# would prefer the interface.
+        // Pre-existing ceiling (parity with the old linear score), not a
+        // #1631 regression. Upgrade path: split Reference into sub-kinds
+        // (exact-interface-satisfaction vs. base-class/object upcast) sharing
+        // more of Conversion.Classify's structure, if this surfaces in practice.
+        return OverloadResolution.ImplicitConversionKind.Reference;
     }
 
     /// <summary>
