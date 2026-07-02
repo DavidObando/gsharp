@@ -945,10 +945,24 @@ internal sealed class OverloadResolver
             }
 
             // Score argument-type compatibility: +1 per exact-type match.
-            for (var i = 0; i < paramCountForScore && i < boundArguments.Count; i++)
+            // Issue #1628: boundArguments[i] is source order, not parameter
+            // order — under named arguments the source-order index does not
+            // necessarily line up with the parameter it binds to (e.g. a
+            // named arg reorders a permutation-overload's parameters). Map
+            // each argument to its ACTUAL target slot (the same name→slot
+            // mapping IsApplicableUserCallable already validated) before
+            // scoring, so a named call still gets correct exact-match
+            // tie-breaking instead of being scored against the wrong param.
+            for (var i = 0; i < boundArguments.Count; i++)
             {
+                var slot = MapArgumentIndexToParameterSlot(cand, argumentNames, i, parameterOffset, paramLen);
+                if (slot < 0 || slot >= paramCountForScore)
+                {
+                    continue;
+                }
+
                 var argType = boundArguments[i]?.Type;
-                var paramType = cand.Parameters[i + parameterOffset].Type;
+                var paramType = cand.Parameters[slot + parameterOffset].Type;
                 if (argType != null && paramType != null && argType == paramType)
                 {
                     score -= 10;
@@ -1322,6 +1336,42 @@ internal sealed class OverloadResolver
     /// ADR-0063: returns true when the supplied argument count + names could
     /// reach the parameter list of the candidate.
     /// </summary>
+    /// <summary>
+    /// Issue #1628: maps a source-order argument index to the parameter slot
+    /// (0-based, excluding <paramref name="parameterOffset"/>) it actually
+    /// binds to on <paramref name="candidate"/>. A named argument binds to
+    /// whichever parameter shares its name — not necessarily its source
+    /// position — while an unnamed argument binds positionally. Mirrors the
+    /// name→slot resolution <see cref="IsApplicableUserCallable"/> already
+    /// validates and <c>TryReorderUserCallArguments</c> already performs, so
+    /// Phase-2 exact-match scoring ranks the candidate against the parameter
+    /// it will really receive the argument on. Returns -1 if the name (already
+    /// validated applicable) is not found, which should not happen in practice.
+    /// </summary>
+    private static int MapArgumentIndexToParameterSlot(
+        FunctionSymbol candidate,
+        ImmutableArray<string> argumentNames,
+        int argumentIndex,
+        int parameterOffset,
+        int paramLen)
+    {
+        var name = argumentNames.IsDefault || argumentIndex >= argumentNames.Length ? null : argumentNames[argumentIndex];
+        if (name == null)
+        {
+            return argumentIndex;
+        }
+
+        for (var p = 0; p < paramLen; p++)
+        {
+            if (candidate.Parameters[p + parameterOffset].Name == name)
+            {
+                return p;
+            }
+        }
+
+        return -1;
+    }
+
     private static bool IsApplicableUserCallable(FunctionSymbol candidate, int argumentCount, ImmutableArray<string> argumentNames)
     {
         var parameterOffset = candidate.ExplicitReceiverParameter == null ? 0 : 1;
