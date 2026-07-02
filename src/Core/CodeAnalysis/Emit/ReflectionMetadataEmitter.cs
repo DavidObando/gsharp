@@ -3387,6 +3387,161 @@ internal sealed class ReflectionMetadataEmitter
     /// <summary>
     /// PR-E-10 body-emit callback used by
     /// <see cref="StateMachineEmitter.EmitStateMachineMoveNext"/>. Builds the
+    /// Shared plumbing for every method-body scaffold in this emitter. It owns
+    /// the ~19 slot-tracking dictionaries, runs the
+    /// <see cref="MethodBodyPlanner.CollectLocalsAndLabels"/> slot planner,
+    /// encodes the locals signature, and constructs the
+    /// <see cref="MethodBodyEmitter"/>. Centralizing the dictionaries, the
+    /// 22-argument planner call and the 25-argument emitter construction keeps
+    /// them in exactly one place so a fix applies to every scaffold at once and
+    /// can no longer drift between the near-identical copies.
+    /// </summary>
+    private sealed class MethodBodyEmitSession
+    {
+        private readonly ReflectionMetadataEmitter outer;
+        private readonly Dictionary<VariableSymbol, int> locals = new();
+        private readonly Dictionary<BoundLabel, LabelHandle> labels = new();
+        private readonly List<TypeSymbol> localTypes = new();
+        private readonly Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots = new();
+        private readonly Dictionary<BoundStructLiteralExpression, int> structLiteralSlots = new();
+        private readonly Dictionary<BoundDefaultExpression, int> defaultExpressionSlots = new();
+        private readonly Dictionary<BoundIndexExpression, int> mapIndexSlots = new();
+        private readonly Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots = new();
+        private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots = new();
+        private readonly Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots = new();
+        private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots = new();
+        private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots = new();
+        private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots = new();
+        private readonly Dictionary<BoundExpression, int> receiverSpillSlots = new();
+        private readonly Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots = new();
+        private readonly Dictionary<BoundExpression, int> indexAssignmentValueSlots = new();
+        private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes = new();
+        private readonly Dictionary<BoundBinaryExpression, LiftedBinarySlots> liftedBinarySlots = new();
+        private readonly Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots = new();
+        private readonly Dictionary<VariableSymbol, object> constValues = new();
+
+        public MethodBodyEmitSession(ReflectionMetadataEmitter outer, InstructionEncoder il)
+        {
+            this.outer = outer;
+            this.Il = il;
+        }
+
+        /// <summary>Gets the instruction encoder that all planned/emitted IL flows through.</summary>
+        public InstructionEncoder Il { get; }
+
+        /// <summary>Gets the collected local-variable slot map (for PDB local info capture).</summary>
+        public Dictionary<VariableSymbol, int> Locals => this.locals;
+
+        /// <summary>Gets the collected compile-time constant bindings (for PDB local-constant capture).</summary>
+        public Dictionary<VariableSymbol, object> ConstValues => this.constValues;
+
+        /// <summary>Issue #216: collects compile-time const bindings before slot allocation.</summary>
+        /// <param name="body">The bound body to scan for const bindings.</param>
+        public void CollectConstValues(BoundBlockStatement body)
+            => MethodBodyPlanner.CollectConstValues(body, this.constValues);
+
+        /// <summary>
+        /// Runs the slot planner for one body region, appending to the shared
+        /// slot dictionaries. May be called more than once (e.g. base-initializer
+        /// arguments and field initializers are planned separately).
+        /// </summary>
+        /// <param name="body">The bound body region contributing locals/labels.</param>
+        /// <param name="function">The owning function, or <see langword="null"/> for synthesized bodies.</param>
+        public void Plan(BoundBlockStatement body, FunctionSymbol function = null)
+        {
+            this.outer.methodBodyPlanner.CollectLocalsAndLabels(
+                body,
+                function,
+                this.locals,
+                this.localTypes,
+                this.labels,
+                this.appendSlots,
+                this.structLiteralSlots,
+                this.defaultExpressionSlots,
+                this.mapIndexSlots,
+                this.patternSwitchSlots,
+                this.typePatternScratchSlots,
+                this.switchExpressionSlots,
+                this.channelOpSlots,
+                this.scopeFrameSlots,
+                this.selectStatementSlots,
+                this.receiverSpillSlots,
+                this.indexAssignmentValueSlots,
+                this.goEnclosingScopes,
+                this.liftedBinarySlots,
+                this.nullableCoalesceSpillSlots,
+                this.Il,
+                this.stackAllocResultSlots);
+        }
+
+        /// <summary>Encodes the collected locals into a standalone signature (default when there are none).</summary>
+        /// <returns>The locals signature handle, or <c>default</c> when no locals were collected.</returns>
+        public StandaloneSignatureHandle BuildLocalsSignature()
+        {
+            if (this.localTypes.Count == 0)
+            {
+                return default;
+            }
+
+            var localsSigBlob = new BlobBuilder();
+            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(this.localTypes.Count);
+            foreach (var t in this.localTypes)
+            {
+                this.outer.EncodeLocalVariableType(encoder.AddVariable(), t);
+            }
+
+            return this.outer.emitCtx.Metadata.AddStandaloneSignature(
+                this.outer.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
+        }
+
+        /// <summary>Constructs the body emitter over the collected slot dictionaries.</summary>
+        /// <param name="parameters">The parameter-to-IL-slot map for the method.</param>
+        /// <param name="structThisParameter">The struct <c>this</c> parameter, when arg0 is a managed pointer.</param>
+        /// <param name="asyncFieldMap">The async state-machine field map (MoveNext only).</param>
+        /// <param name="asyncPlan">The async state-machine plan (MoveNext only).</param>
+        /// <param name="asyncIteratorEmitCtx">The async-iterator emit context (async-iterator MoveNext only).</param>
+        /// <param name="enclosingClosure">The enclosing closure info (closure invoke methods only).</param>
+        /// <returns>A configured <see cref="MethodBodyEmitter"/>.</returns>
+        public MethodBodyEmitter CreateEmitter(
+            Dictionary<ParameterSymbol, int> parameters,
+            ParameterSymbol structThisParameter = null,
+            AsyncStateMachineFieldMap asyncFieldMap = null,
+            AsyncStateMachinePlan asyncPlan = null,
+            StateMachineEmitter.AsyncIteratorEmitContext asyncIteratorEmitCtx = null,
+            ClosureEmitter.ClosureInfo enclosingClosure = null)
+        {
+            return new MethodBodyEmitter(
+                this.outer,
+                this.Il,
+                this.locals,
+                parameters,
+                this.labels,
+                this.appendSlots,
+                this.structLiteralSlots,
+                this.defaultExpressionSlots,
+                this.mapIndexSlots,
+                this.patternSwitchSlots,
+                this.typePatternScratchSlots,
+                this.switchExpressionSlots,
+                this.channelOpSlots,
+                this.scopeFrameSlots,
+                this.selectStatementSlots,
+                this.receiverSpillSlots,
+                this.indexAssignmentValueSlots,
+                this.goEnclosingScopes,
+                liftedBinarySlots: this.liftedBinarySlots,
+                nullableCoalesceSpillSlots: this.nullableCoalesceSpillSlots,
+                structThisParameter: structThisParameter,
+                asyncFieldMap: asyncFieldMap,
+                asyncPlan: asyncPlan,
+                asyncIteratorEmitCtx: asyncIteratorEmitCtx,
+                constValues: this.constValues,
+                enclosingClosure: enclosingClosure,
+                stackAllocResultSlots: this.stackAllocResultSlots);
+        }
+    }
+
+    /// <summary>
     /// raw method-body bytes for an async state-machine MoveNext using the
     /// rewritten bound-tree from <see cref="MoveNextBodyRewriter"/>. Returns
     /// <c>BodyOffset = -1</c> under <see cref="EmitContext.MetadataOnly"/>.
@@ -3410,55 +3565,11 @@ internal sealed class ReflectionMetadataEmitter
             var body = moveNextBody.Body;
 
             var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-
-            // Pre-scan locals, labels, and the rest for the body emitter.
-            var locals = new Dictionary<VariableSymbol, int>();
-            var labels = new Dictionary<BoundLabel, LabelHandle>();
-            var localTypes = new List<TypeSymbol>();
-            var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
-            var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
-            var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
-            var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
-            var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
-            var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
-            var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
-            var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
-            var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
-            var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
-            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
-            var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
-            var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
-            var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
-            var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
-            var nullableCoalesceSpillSlots = new Dictionary<BoundBinaryExpression, int>();
+            var session = new MethodBodyEmitSession(this, il);
 
             // Issue #216: collect compile-time const bindings before slot allocation.
-            var constValues = new Dictionary<VariableSymbol, object>();
-            MethodBodyPlanner.CollectConstValues(body, constValues);
-
-            this.methodBodyPlanner.CollectLocalsAndLabels(
-                body,
-                null,
-                locals,
-                localTypes,
-                labels,
-                appendSlots,
-                structLiteralSlots,
-                defaultExpressionSlots,
-                mapIndexSlots,
-                patternSwitchSlots,
-                typePatternScratchSlots,
-                switchExpressionSlots,
-                channelOpSlots,
-                scopeFrameSlots,
-                selectStatementSlots,
-                receiverSpillSlots,
-                indexAssignmentValueSlots,
-                goEnclosingScopes,
-                liftedBinarySlots,
-                nullableCoalesceSpillSlots,
-                il,
-                stackAllocResultSlots);
+            session.CollectConstValues(body);
+            session.Plan(body);
 
             // MoveNext is instance on the SM struct: arg0 = this.
             var parameters = new Dictionary<ParameterSymbol, int>
@@ -3466,45 +3577,12 @@ internal sealed class ReflectionMetadataEmitter
                 [moveNextBody.ThisParameter] = 0,
             };
 
-            StandaloneSignatureHandle localsSignature = default;
-            if (localTypes.Count > 0)
-            {
-                var localsSigBlob = new BlobBuilder();
-                var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
-                foreach (var t in localTypes)
-                {
-                    EncodeLocalVariableType(encoder.AddVariable(), t);
-                }
-
-                localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-            }
-
-            var emitter = new MethodBodyEmitter(
-                this,
-                il,
-                locals,
+            var localsSignature = session.BuildLocalsSignature();
+            var emitter = session.CreateEmitter(
                 parameters,
-                labels,
-                appendSlots,
-                structLiteralSlots,
-                defaultExpressionSlots,
-                mapIndexSlots,
-                patternSwitchSlots,
-                typePatternScratchSlots,
-                switchExpressionSlots,
-                channelOpSlots,
-                scopeFrameSlots,
-                selectStatementSlots,
-                receiverSpillSlots,
-                indexAssignmentValueSlots,
-                goEnclosingScopes,
-                liftedBinarySlots: liftedBinarySlots,
-                nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-                constValues: constValues,
                 structThisParameter: moveNextBody.ThisParameter,
                 asyncFieldMap: plan.FieldMap,
-                asyncPlan: plan,
-                stackAllocResultSlots: stackAllocResultSlots);
+                asyncPlan: plan);
 
             try
             {
@@ -3518,8 +3596,8 @@ internal sealed class ReflectionMetadataEmitter
 
             bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
             capturedSequencePoints = emitter.SequencePoints;
-            capturedLocals = MethodBodyPlanner.CollectLocalInfo(locals);
-            capturedConstants = MethodBodyPlanner.CollectLocalConstantInfo(constValues);
+            capturedLocals = MethodBodyPlanner.CollectLocalInfo(session.Locals);
+            capturedConstants = MethodBodyPlanner.CollectLocalConstantInfo(session.ConstValues);
             capturedCodeSize = il.Offset;
             capturedLocalsSignature = localsSignature;
         }
@@ -3685,89 +3763,11 @@ internal sealed class ReflectionMetadataEmitter
     private int EmitStaticConstructorBodyFromBlock(BoundBlockStatement body, SyntaxNode anchor)
     {
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-        var locals = new Dictionary<VariableSymbol, int>();
-        var labels = new Dictionary<BoundLabel, LabelHandle>();
-        var localTypes = new List<TypeSymbol>();
-        var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
-        var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
-        var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
-        var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
-        var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
-        var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
-        var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
-        var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
-        var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
-        var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
-        var receiverSpillSlots = new Dictionary<BoundExpression, int>();
-        var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
-        var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
-        var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
-        var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
-        var nullableCoalesceSpillSlots = new Dictionary<BoundBinaryExpression, int>();
-        var constValues = new Dictionary<VariableSymbol, object>();
+        var session = new MethodBodyEmitSession(this, il);
+        session.Plan(body);
 
-        this.methodBodyPlanner.CollectLocalsAndLabels(
-            body,
-            null,
-            locals,
-            localTypes,
-            labels,
-            appendSlots,
-            structLiteralSlots,
-            defaultExpressionSlots,
-            mapIndexSlots,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            receiverSpillSlots,
-            indexAssignmentValueSlots,
-            goEnclosingScopes,
-            liftedBinarySlots,
-            nullableCoalesceSpillSlots,
-            il,
-            stackAllocResultSlots);
-
-        var parameters = new Dictionary<ParameterSymbol, int>();
-
-        StandaloneSignatureHandle localsSignature = default;
-        if (localTypes.Count > 0)
-        {
-            var localsSigBlob = new BlobBuilder();
-            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
-            foreach (var t in localTypes)
-            {
-                EncodeLocalVariableType(encoder.AddVariable(), t);
-            }
-
-            localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-        }
-
-        var emitter = new MethodBodyEmitter(
-            this,
-            il,
-            locals,
-            parameters,
-            labels,
-            appendSlots,
-            structLiteralSlots,
-            defaultExpressionSlots,
-            mapIndexSlots,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            receiverSpillSlots,
-            indexAssignmentValueSlots,
-            goEnclosingScopes,
-            liftedBinarySlots: liftedBinarySlots,
-            nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-            constValues: constValues,
-            stackAllocResultSlots: stackAllocResultSlots);
+        var localsSignature = session.BuildLocalsSignature();
+        var emitter = session.CreateEmitter(new Dictionary<ParameterSymbol, int>());
 
         try
         {
@@ -3799,92 +3799,16 @@ internal sealed class ReflectionMetadataEmitter
         var body = new BoundBlockStatement(null, statements);
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-        var locals = new Dictionary<VariableSymbol, int>();
-        var labels = new Dictionary<BoundLabel, LabelHandle>();
-        var localTypes = new List<TypeSymbol>();
-        var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
-        var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
-        var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
-        var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
-        var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
-        var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
-        var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
-        var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
-        var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
-        var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
-        var receiverSpillSlots = new Dictionary<BoundExpression, int>();
-        var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
-        var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
-        var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
-        var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
-        var nullableCoalesceSpillSlots = new Dictionary<BoundBinaryExpression, int>();
-        var constValues = new Dictionary<VariableSymbol, object>();
-
-        this.methodBodyPlanner.CollectLocalsAndLabels(
-            body,
-            null,
-            locals,
-            localTypes,
-            labels,
-            appendSlots,
-            structLiteralSlots,
-            defaultExpressionSlots,
-            mapIndexSlots,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            receiverSpillSlots,
-            indexAssignmentValueSlots,
-            goEnclosingScopes,
-            liftedBinarySlots,
-            nullableCoalesceSpillSlots,
-            il,
-            stackAllocResultSlots);
+        var session = new MethodBodyEmitSession(this, il);
+        session.Plan(body);
 
         var parameters = new Dictionary<ParameterSymbol, int>
         {
             [thisParam] = 0,
         };
 
-        StandaloneSignatureHandle localsSignature = default;
-        if (localTypes.Count > 0)
-        {
-            var localsSigBlob = new BlobBuilder();
-            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
-            foreach (var t in localTypes)
-            {
-                EncodeLocalVariableType(encoder.AddVariable(), t);
-            }
-
-            localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-        }
-
-        var emitter = new MethodBodyEmitter(
-            this,
-            il,
-            locals,
-            parameters,
-            labels,
-            appendSlots,
-            structLiteralSlots,
-            defaultExpressionSlots,
-            mapIndexSlots,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            receiverSpillSlots,
-            indexAssignmentValueSlots,
-            goEnclosingScopes,
-            liftedBinarySlots: liftedBinarySlots,
-            nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-            constValues: constValues,
-            stackAllocResultSlots: stackAllocResultSlots);
+        var localsSignature = session.BuildLocalsSignature();
+        var emitter = session.CreateEmitter(parameters);
 
         // base()
         il.LoadArgument(0);
@@ -3924,50 +3848,8 @@ internal sealed class ReflectionMetadataEmitter
         var body = new BoundBlockStatement(null, statements);
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-        var locals = new Dictionary<VariableSymbol, int>();
-        var labels = new Dictionary<BoundLabel, LabelHandle>();
-        var localTypes = new List<TypeSymbol>();
-        var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
-        var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
-        var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
-        var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
-        var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
-        var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
-        var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
-        var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
-        var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
-        var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
-        var receiverSpillSlots = new Dictionary<BoundExpression, int>();
-        var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
-        var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
-        var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
-        var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
-        var nullableCoalesceSpillSlots = new Dictionary<BoundBinaryExpression, int>();
-        var constValues = new Dictionary<VariableSymbol, object>();
-
-        this.methodBodyPlanner.CollectLocalsAndLabels(
-            body,
-            null,
-            locals,
-            localTypes,
-            labels,
-            appendSlots,
-            structLiteralSlots,
-            defaultExpressionSlots,
-            mapIndexSlots,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            receiverSpillSlots,
-            indexAssignmentValueSlots,
-            goEnclosingScopes,
-            liftedBinarySlots,
-            nullableCoalesceSpillSlots,
-            il,
-            stackAllocResultSlots);
+        var session = new MethodBodyEmitSession(this, il);
+        session.Plan(body);
 
         var paramSlots = new Dictionary<ParameterSymbol, int>
         {
@@ -3978,42 +3860,8 @@ internal sealed class ReflectionMetadataEmitter
             paramSlots[parameters[i]] = i + 1;
         }
 
-        StandaloneSignatureHandle localsSignature = default;
-        if (localTypes.Count > 0)
-        {
-            var localsSigBlob = new BlobBuilder();
-            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
-            foreach (var t in localTypes)
-            {
-                EncodeLocalVariableType(encoder.AddVariable(), t);
-            }
-
-            localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-        }
-
-        var emitter = new MethodBodyEmitter(
-            this,
-            il,
-            locals,
-            paramSlots,
-            labels,
-            appendSlots,
-            structLiteralSlots,
-            defaultExpressionSlots,
-            mapIndexSlots,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            receiverSpillSlots,
-            indexAssignmentValueSlots,
-            goEnclosingScopes,
-            liftedBinarySlots: liftedBinarySlots,
-            nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-            constValues: constValues,
-            stackAllocResultSlots: stackAllocResultSlots);
+        var localsSignature = session.BuildLocalsSignature();
+        var emitter = session.CreateEmitter(paramSlots);
 
         // base()
         il.LoadArgument(0);
@@ -4092,26 +3940,7 @@ internal sealed class ReflectionMetadataEmitter
         // Synthesize a `this` parameter for the field-initializer receiver.
         var thisParam = new ParameterSymbol("this", classSym);
 
-        var locals = new Dictionary<VariableSymbol, int>();
-        var labels = new Dictionary<BoundLabel, LabelHandle>();
-        var localTypes = new List<TypeSymbol>();
-        var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
-        var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
-        var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
-        var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
-        var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
-        var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
-        var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
-        var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
-        var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
-        var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
-        var receiverSpillSlots = new Dictionary<BoundExpression, int>();
-        var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
-        var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
-        var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
-        var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
-        var nullableCoalesceSpillSlots = new Dictionary<BoundBinaryExpression, int>();
-        var constValues = new Dictionary<VariableSymbol, object>();
+        var session = new MethodBodyEmitSession(this, il);
 
         // Pre-scan the base arguments so any scratch slots they require are
         // allocated and registered in the locals signature.
@@ -4123,29 +3952,7 @@ internal sealed class ReflectionMetadataEmitter
                 synth.Add(new BoundExpressionStatement(null, arg));
             }
 
-            this.methodBodyPlanner.CollectLocalsAndLabels(
-                new BoundBlockStatement(null, synth.ToImmutable()),
-                null,
-                locals,
-                localTypes,
-                labels,
-                appendSlots,
-                structLiteralSlots,
-                defaultExpressionSlots,
-                mapIndexSlots,
-                patternSwitchSlots,
-                typePatternScratchSlots,
-                switchExpressionSlots,
-                channelOpSlots,
-                scopeFrameSlots,
-                selectStatementSlots,
-                receiverSpillSlots,
-                indexAssignmentValueSlots,
-                goEnclosingScopes,
-                liftedBinarySlots,
-                nullableCoalesceSpillSlots,
-                il,
-                stackAllocResultSlots);
+            session.Plan(new BoundBlockStatement(null, synth.ToImmutable()));
         }
 
         // Issue #640: pre-scan instance field initializer expressions for locals.
@@ -4153,29 +3960,7 @@ internal sealed class ReflectionMetadataEmitter
         if (!classSym.InstanceFieldInitializers.IsEmpty)
         {
             fieldInitBody = new BoundBlockStatement(null, BuildInstanceFieldInitializerStatements(classSym, thisParam));
-            this.methodBodyPlanner.CollectLocalsAndLabels(
-                fieldInitBody,
-                null,
-                locals,
-                localTypes,
-                labels,
-                appendSlots,
-                structLiteralSlots,
-                defaultExpressionSlots,
-                mapIndexSlots,
-                patternSwitchSlots,
-                typePatternScratchSlots,
-                switchExpressionSlots,
-                channelOpSlots,
-                scopeFrameSlots,
-                selectStatementSlots,
-                receiverSpillSlots,
-                indexAssignmentValueSlots,
-                goEnclosingScopes,
-                liftedBinarySlots,
-                nullableCoalesceSpillSlots,
-                il,
-                stackAllocResultSlots);
+            session.Plan(fieldInitBody);
         }
 
         var paramSlots = new Dictionary<ParameterSymbol, int>
@@ -4187,51 +3972,14 @@ internal sealed class ReflectionMetadataEmitter
             paramSlots[parameters[i]] = i + 1;
         }
 
-        StandaloneSignatureHandle localsSignature = default;
-        if (localTypes.Count > 0)
-        {
-            var localsSigBlob = new BlobBuilder();
-            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
-            foreach (var t in localTypes)
-            {
-                EncodeLocalVariableType(encoder.AddVariable(), t);
-            }
+        var localsSignature = session.BuildLocalsSignature();
+        var emitter = session.CreateEmitter(paramSlots);
 
-            localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-        }
-
-        var emitter = new MethodBodyEmitter(
-            this,
-            il,
-            locals,
-            paramSlots,
-            labels,
-            appendSlots,
-            structLiteralSlots,
-            defaultExpressionSlots,
-            mapIndexSlots,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            receiverSpillSlots,
-            indexAssignmentValueSlots,
-            goEnclosingScopes,
-            liftedBinarySlots: liftedBinarySlots,
-            nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-            constValues: constValues,
-            stackAllocResultSlots: stackAllocResultSlots);
-
-        // base(args)
+        // base(args) — `this` followed by the (ref-kind aware) base arguments.
         il.LoadArgument(0);
         if (!init.Arguments.IsDefaultOrEmpty)
         {
-            foreach (var arg in init.Arguments)
-            {
-                emitter.EmitValue(arg);
-            }
+            emitter.EmitBaseConstructorArguments(init.Arguments, init.ArgumentRefKinds);
         }
 
         il.OpCode(ILOpCode.Call);
@@ -4293,27 +4041,7 @@ internal sealed class ReflectionMetadataEmitter
         var body = this.emitCtx.Program.Functions[function];
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-
-        var locals = new Dictionary<VariableSymbol, int>();
-        var labels = new Dictionary<BoundLabel, LabelHandle>();
-        var localTypes = new List<TypeSymbol>();
-        var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
-        var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
-        var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
-        var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
-        var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
-        var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
-        var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
-        var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
-        var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
-        var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
-        var receiverSpillSlots = new Dictionary<BoundExpression, int>();
-        var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
-        var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
-        var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
-        var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
-        var nullableCoalesceSpillSlots = new Dictionary<BoundBinaryExpression, int>();
-        var constValues = new Dictionary<VariableSymbol, object>();
+        var session = new MethodBodyEmitSession(this, il);
 
         // Pre-scan the base arguments so any scratch slots they require are
         // allocated and registered in the locals signature. ADR-0065 §2:
@@ -4328,29 +4056,7 @@ internal sealed class ReflectionMetadataEmitter
                 synth.Add(new BoundExpressionStatement(null, arg));
             }
 
-            this.methodBodyPlanner.CollectLocalsAndLabels(
-                new BoundBlockStatement(null, synth.ToImmutable()),
-                null,
-                locals,
-                localTypes,
-                labels,
-                appendSlots,
-                structLiteralSlots,
-                defaultExpressionSlots,
-                mapIndexSlots,
-                patternSwitchSlots,
-                typePatternScratchSlots,
-                switchExpressionSlots,
-                channelOpSlots,
-                scopeFrameSlots,
-                selectStatementSlots,
-                receiverSpillSlots,
-                indexAssignmentValueSlots,
-                goEnclosingScopes,
-                liftedBinarySlots,
-                nullableCoalesceSpillSlots,
-                il,
-                stackAllocResultSlots);
+            session.Plan(new BoundBlockStatement(null, synth.ToImmutable()));
         }
 
         // Issue #640: pre-scan instance field initializer expressions for locals.
@@ -4361,55 +4067,11 @@ internal sealed class ReflectionMetadataEmitter
         if (!ctor.IsConvenience && !classSym.InstanceFieldInitializers.IsEmpty)
         {
             fieldInitBody = new BoundBlockStatement(null, BuildInstanceFieldInitializerStatements(classSym, function.ThisParameter));
-            this.methodBodyPlanner.CollectLocalsAndLabels(
-                fieldInitBody,
-                null,
-                locals,
-                localTypes,
-                labels,
-                appendSlots,
-                structLiteralSlots,
-                defaultExpressionSlots,
-                mapIndexSlots,
-                patternSwitchSlots,
-                typePatternScratchSlots,
-                switchExpressionSlots,
-                channelOpSlots,
-                scopeFrameSlots,
-                selectStatementSlots,
-                receiverSpillSlots,
-                indexAssignmentValueSlots,
-                goEnclosingScopes,
-                liftedBinarySlots,
-                nullableCoalesceSpillSlots,
-                il,
-                stackAllocResultSlots);
+            session.Plan(fieldInitBody);
         }
 
-        MethodBodyPlanner.CollectConstValues(body, constValues);
-        this.methodBodyPlanner.CollectLocalsAndLabels(
-            body,
-            function,
-            locals,
-            localTypes,
-            labels,
-            appendSlots,
-            structLiteralSlots,
-            defaultExpressionSlots,
-            mapIndexSlots,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            receiverSpillSlots,
-            indexAssignmentValueSlots,
-            goEnclosingScopes,
-            liftedBinarySlots,
-            nullableCoalesceSpillSlots,
-            il,
-            stackAllocResultSlots);
+        session.CollectConstValues(body);
+        session.Plan(body, function);
 
         // Slot 0 is the implicit `this`; user parameters shift up by one.
         var paramSlots = new Dictionary<ParameterSymbol, int>
@@ -4421,42 +4083,8 @@ internal sealed class ReflectionMetadataEmitter
             paramSlots[function.Parameters[i]] = i + 1;
         }
 
-        StandaloneSignatureHandle localsSignature = default;
-        if (localTypes.Count > 0)
-        {
-            var localsSigBlob = new BlobBuilder();
-            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
-            foreach (var t in localTypes)
-            {
-                EncodeLocalVariableType(encoder.AddVariable(), t);
-            }
-
-            localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-        }
-
-        var emitter = new MethodBodyEmitter(
-            this,
-            il,
-            locals,
-            paramSlots,
-            labels,
-            appendSlots,
-            structLiteralSlots,
-            defaultExpressionSlots,
-            mapIndexSlots,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            receiverSpillSlots,
-            indexAssignmentValueSlots,
-            goEnclosingScopes,
-            liftedBinarySlots: liftedBinarySlots,
-            nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-            constValues: constValues,
-            stackAllocResultSlots: stackAllocResultSlots);
+        var localsSignature = session.BuildLocalsSignature();
+        var emitter = session.CreateEmitter(paramSlots);
 
         // ADR-0065 §2: a `convenience init(...)` does NOT chain to the base
         // constructor itself — the user-authored body begins with an
@@ -4523,52 +4151,10 @@ internal sealed class ReflectionMetadataEmitter
         var function = deinit.Function;
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        var session = new MethodBodyEmitSession(this, il);
 
-        var locals = new Dictionary<VariableSymbol, int>();
-        var labels = new Dictionary<BoundLabel, LabelHandle>();
-        var localTypes = new List<TypeSymbol>();
-        var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
-        var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
-        var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
-        var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
-        var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
-        var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
-        var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
-        var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
-        var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
-        var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
-        var receiverSpillSlots = new Dictionary<BoundExpression, int>();
-        var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
-        var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
-        var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
-        var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
-        var nullableCoalesceSpillSlots = new Dictionary<BoundBinaryExpression, int>();
-        var constValues = new Dictionary<VariableSymbol, object>();
-
-        MethodBodyPlanner.CollectConstValues(body, constValues);
-        this.methodBodyPlanner.CollectLocalsAndLabels(
-            body,
-            function,
-            locals,
-            localTypes,
-            labels,
-            appendSlots,
-            structLiteralSlots,
-            defaultExpressionSlots,
-            mapIndexSlots,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            receiverSpillSlots,
-            indexAssignmentValueSlots,
-            goEnclosingScopes,
-            liftedBinarySlots,
-            nullableCoalesceSpillSlots,
-            il,
-            stackAllocResultSlots);
+        session.CollectConstValues(body);
+        session.Plan(body, function);
 
         // Slot 0 is the implicit `this`; deinit has no user parameters.
         var paramSlots = new Dictionary<ParameterSymbol, int>
@@ -4576,42 +4162,8 @@ internal sealed class ReflectionMetadataEmitter
             [function.ThisParameter] = 0,
         };
 
-        StandaloneSignatureHandle localsSignature = default;
-        if (localTypes.Count > 0)
-        {
-            var localsSigBlob = new BlobBuilder();
-            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
-            foreach (var t in localTypes)
-            {
-                EncodeLocalVariableType(encoder.AddVariable(), t);
-            }
-
-            localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-        }
-
-        var emitter = new MethodBodyEmitter(
-            this,
-            il,
-            locals,
-            paramSlots,
-            labels,
-            appendSlots,
-            structLiteralSlots,
-            defaultExpressionSlots,
-            mapIndexSlots,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            receiverSpillSlots,
-            indexAssignmentValueSlots,
-            goEnclosingScopes,
-            liftedBinarySlots: liftedBinarySlots,
-            nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-            constValues: constValues,
-            stackAllocResultSlots: stackAllocResultSlots);
+        var localsSignature = session.BuildLocalsSignature();
+        var emitter = session.CreateEmitter(paramSlots);
 
         // Wrap the user body in try { … } finally { base.Finalize(); }.
         // Matches the IL shape Roslyn emits for `~Type()`. The base
@@ -4724,55 +4276,11 @@ internal sealed class ReflectionMetadataEmitter
             else
             {
                 var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-
-                // Pre-scan body for locals (top-level only — Lowerer flattens blocks) and labels.
-                var locals = new Dictionary<VariableSymbol, int>();
-                var labels = new Dictionary<BoundLabel, LabelHandle>();
-                var localTypes = new List<TypeSymbol>();
-                var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
-                var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
-                var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
-                var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
-                var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
-                var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
-                var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
-                var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
-                var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
-                var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
-                var receiverSpillSlots = new Dictionary<BoundExpression, int>();
-                var stackAllocResultSlots = new Dictionary<BoundStackAllocExpression, int>();
-                var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
-                var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
-                var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
-                var nullableCoalesceSpillSlots = new Dictionary<BoundBinaryExpression, int>();
+                var session = new MethodBodyEmitSession(this, il);
 
                 // Issue #216: collect compile-time const bindings before slot allocation.
-                var constValues = new Dictionary<VariableSymbol, object>();
-                MethodBodyPlanner.CollectConstValues(body, constValues);
-
-                this.methodBodyPlanner.CollectLocalsAndLabels(
-                    body,
-                    function,
-                    locals,
-                    localTypes,
-                    labels,
-                    appendSlots,
-                    structLiteralSlots,
-                    defaultExpressionSlots,
-                    mapIndexSlots,
-                    patternSwitchSlots,
-                    typePatternScratchSlots,
-                    switchExpressionSlots,
-                    channelOpSlots,
-                    scopeFrameSlots,
-                    selectStatementSlots,
-                    receiverSpillSlots,
-                    indexAssignmentValueSlots,
-                    goEnclosingScopes,
-                    liftedBinarySlots,
-                    nullableCoalesceSpillSlots,
-                    il,
-                    stackAllocResultSlots);
+                session.CollectConstValues(body);
+                session.Plan(body, function);
 
                 // For instance methods, IL slot 0 is the implicit `this`, so user
                 // parameters shift up by one. Both the synthesized `ThisParameter`
@@ -4797,18 +4305,7 @@ internal sealed class ReflectionMetadataEmitter
                     emittedParameterIndex++;
                 }
 
-                StandaloneSignatureHandle localsSignature = default;
-                if (localTypes.Count > 0)
-                {
-                    var localsSigBlob = new BlobBuilder();
-                    var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
-                    foreach (var t in localTypes)
-                    {
-                        EncodeLocalVariableType(encoder.AddVariable(), t);
-                    }
-
-                    localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-                }
+                var localsSignature = session.BuildLocalsSignature();
 
                 // Detect async iterator MoveNext and thread emit context.
                 StateMachineEmitter.AsyncIteratorEmitContext aiEmitCtx = null;
@@ -4829,32 +4326,11 @@ internal sealed class ReflectionMetadataEmitter
                 }
 
                 var enclosingClosureInfo = this.closures.ClosureInvokeToInfo.TryGetValue(function, out var ec) ? ec : null;
-                var emitter = new MethodBodyEmitter(
-                    this,
-                    il,
-                    locals,
+                var emitter = session.CreateEmitter(
                     parameters,
-                    labels,
-                    appendSlots,
-                    structLiteralSlots,
-                    defaultExpressionSlots,
-                    mapIndexSlots,
-                    patternSwitchSlots,
-                    typePatternScratchSlots,
-                    switchExpressionSlots,
-                    channelOpSlots,
-                    scopeFrameSlots,
-                    selectStatementSlots,
-                    receiverSpillSlots,
-                    indexAssignmentValueSlots,
-                    goEnclosingScopes,
-                    liftedBinarySlots: liftedBinarySlots,
-                    nullableCoalesceSpillSlots: nullableCoalesceSpillSlots,
-                    constValues: constValues,
                     structThisParameter: structThis,
                     asyncIteratorEmitCtx: aiEmitCtx,
-                    enclosingClosure: enclosingClosureInfo,
-                    stackAllocResultSlots: stackAllocResultSlots);
+                    enclosingClosure: enclosingClosureInfo);
 
                 // 6.2 SilentEmitFailure invariant: wrap the per-function
                 // EmitBlock in a try/catch so any exception that escapes the
@@ -4878,8 +4354,8 @@ internal sealed class ReflectionMetadataEmitter
 
                 bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
                 capturedSequencePoints = emitter.SequencePoints;
-                capturedLocals = MethodBodyPlanner.CollectLocalInfo(locals);
-                capturedConstants = MethodBodyPlanner.CollectLocalConstantInfo(constValues);
+                capturedLocals = MethodBodyPlanner.CollectLocalInfo(session.Locals);
+                capturedConstants = MethodBodyPlanner.CollectLocalConstantInfo(session.ConstValues);
                 capturedCodeSize = il.Offset;
                 capturedLocalsSignature = localsSignature;
             } // end else (non-async path)

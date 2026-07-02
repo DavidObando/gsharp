@@ -197,48 +197,94 @@ internal sealed class MemberDefEmitter
     }
 
     /// <summary>
+    /// Emits a property accessor's method body, shared by all four property
+    /// accessor copies (instance/static × get/set). Returns a fully-emitted
+    /// computed-accessor MethodDef when the accessor has a bound body (the
+    /// caller returns it directly), otherwise a body offset for the
+    /// auto-property or NotImplementedException fallback body. The issue #989
+    /// self-TypeSpec backing-field token handling lives here in exactly one
+    /// place so it can no longer drift between the copies.
+    /// </summary>
+    /// <param name="structSym">The owning type whose accessor is emitted.</param>
+    /// <param name="prop">The property whose accessor body is emitted.</param>
+    /// <param name="isStatic"><see langword="true"/> for a static accessor.</param>
+    /// <param name="isGetter"><see langword="true"/> for a getter, <see langword="false"/> for a setter.</param>
+    /// <returns>
+    /// A tuple: <c>Computed</c> is the handle of a fully-emitted computed
+    /// accessor (return it directly) or <see langword="null"/>; <c>BodyOffset</c>
+    /// is the method-body offset for the auto/fallback body, or <c>-1</c>.
+    /// </returns>
+    private (MethodDefinitionHandle? Computed, int BodyOffset) EmitPropertyAccessorBody(
+        StructSymbol structSym, PropertySymbol prop, bool isStatic, bool isGetter)
+    {
+        if (this.emitCtx.MetadataOnly)
+        {
+            return (null, -1);
+        }
+
+        if (prop.IsAutoProperty && prop.BackingField != null
+            && this.cache.StructFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
+        {
+            // Issue #989: inside a generic type's own accessor body the
+            // backing-field token must be a self-TypeSpec MemberRef
+            // (Box`1<!0>), not the bare FieldDef, or the verifier rejects
+            // the receiver type on the stack.
+            var backingToken = ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym)
+                ? this.resolveFieldToken(structSym, prop.BackingField)
+                : (EntityHandle)backingHandle;
+            var il = new InstructionEncoder(new BlobBuilder());
+            if (isGetter)
+            {
+                if (!isStatic)
+                {
+                    il.LoadArgument(0);
+                }
+
+                il.OpCode(isStatic ? ILOpCode.Ldsfld : ILOpCode.Ldfld);
+            }
+            else
+            {
+                if (!isStatic)
+                {
+                    il.LoadArgument(0);
+                }
+
+                il.LoadArgument(isStatic ? 0 : 1);
+                il.OpCode(isStatic ? ILOpCode.Stsfld : ILOpCode.Stfld);
+            }
+
+            il.Token(backingToken);
+            il.OpCode(ILOpCode.Ret);
+            return (null, this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il)));
+        }
+
+        var accessorSymbol = isGetter ? prop.GetterSymbol : prop.SetterSymbol;
+        if (accessorSymbol != null && this.emitCtx.Program.Functions.TryGetValue(accessorSymbol, out var body))
+        {
+            // Computed property with bound body: emit using EmitFunction infrastructure.
+            return (this.emitFunction(accessorSymbol, body, false), -1);
+        }
+
+        // Fallback: throw new NotImplementedException().
+        var nieIl = new InstructionEncoder(new BlobBuilder());
+        var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
+        nieIl.OpCode(ILOpCode.Newobj);
+        nieIl.Token(nieCtor);
+        nieIl.OpCode(ILOpCode.Throw);
+        return (null, this.emitCtx.MethodBodyStream.AddMethodBody(nieIl, maxStack: MaxStackTracker.ComputeMaxStack(nieIl)));
+    }
+
+    /// <summary>
     /// ADR-0051 Phase 6: emits a getter accessor MethodDef (get_PropertyName).
     /// For auto-properties: ldarg.0, ldfld backing, ret.
     /// For computed properties: emits the bound getter body IL.
     /// </summary>
     private MethodDefinitionHandle EmitPropertyGetter(StructSymbol structSym, PropertySymbol prop)
     {
-        int bodyOffset = -1;
-        if (!this.emitCtx.MetadataOnly)
+        var (computed, bodyOffset) = this.EmitPropertyAccessorBody(structSym, prop, isStatic: false, isGetter: true);
+        if (computed.HasValue)
         {
-            if (prop.IsAutoProperty && prop.BackingField != null
-                && this.cache.StructFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
-            {
-                // Issue #989: inside a generic type's own accessor body the
-                // backing-field token must be a self-TypeSpec MemberRef
-                // (Box`1<!0>), not the bare FieldDef, or the verifier rejects
-                // the receiver type on the stack.
-                var backingToken = ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym)
-                    ? this.resolveFieldToken(structSym, prop.BackingField)
-                    : (EntityHandle)backingHandle;
-                var il = new InstructionEncoder(new BlobBuilder());
-                il.LoadArgument(0);
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(backingToken);
-                il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
-            }
-            else if (prop.GetterSymbol != null && this.emitCtx.Program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
-            {
-                // Computed property with bound body: emit using EmitFunction infrastructure.
-                var handle = this.emitFunction(prop.GetterSymbol, getterBody, false);
-                return handle;
-            }
-            else
-            {
-                // Fallback: throw new NotImplementedException().
-                var il = new InstructionEncoder(new BlobBuilder());
-                var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
-                il.OpCode(ILOpCode.Newobj);
-                il.Token(nieCtor);
-                il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
-            }
+            return computed.Value;
         }
 
         var sigBlob = new BlobBuilder();
@@ -276,40 +322,10 @@ internal sealed class MemberDefEmitter
     /// </summary>
     private MethodDefinitionHandle EmitPropertySetter(StructSymbol structSym, PropertySymbol prop)
     {
-        int bodyOffset = -1;
-        if (!this.emitCtx.MetadataOnly)
+        var (computed, bodyOffset) = this.EmitPropertyAccessorBody(structSym, prop, isStatic: false, isGetter: false);
+        if (computed.HasValue)
         {
-            if (prop.IsAutoProperty && prop.BackingField != null
-                && this.cache.StructFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
-            {
-                // Issue #989: self-TypeSpec field MemberRef for generic types.
-                var backingToken = ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym)
-                    ? this.resolveFieldToken(structSym, prop.BackingField)
-                    : (EntityHandle)backingHandle;
-                var il = new InstructionEncoder(new BlobBuilder());
-                il.LoadArgument(0);
-                il.LoadArgument(1);
-                il.OpCode(ILOpCode.Stfld);
-                il.Token(backingToken);
-                il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
-            }
-            else if (prop.SetterSymbol != null && this.emitCtx.Program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
-            {
-                // Computed property with bound body: emit using EmitFunction infrastructure.
-                var handle = this.emitFunction(prop.SetterSymbol, setterBody, false);
-                return handle;
-            }
-            else
-            {
-                // Fallback: throw new NotImplementedException().
-                var il = new InstructionEncoder(new BlobBuilder());
-                var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
-                il.OpCode(ILOpCode.Newobj);
-                il.Token(nieCtor);
-                il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
-            }
+            return computed.Value;
         }
 
         var sigBlob = new BlobBuilder();
@@ -455,36 +471,10 @@ internal sealed class MemberDefEmitter
     /// </summary>
     private MethodDefinitionHandle EmitStaticPropertyGetter(StructSymbol structSym, PropertySymbol prop)
     {
-        int bodyOffset = -1;
-        if (!this.emitCtx.MetadataOnly)
+        var (computed, bodyOffset) = this.EmitPropertyAccessorBody(structSym, prop, isStatic: true, isGetter: true);
+        if (computed.HasValue)
         {
-            if (prop.IsAutoProperty && prop.BackingField != null
-                && this.cache.StructFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
-            {
-                // Issue #989: self-TypeSpec field MemberRef for generic types.
-                var backingToken = ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym)
-                    ? this.resolveFieldToken(structSym, prop.BackingField)
-                    : (EntityHandle)backingHandle;
-                var il = new InstructionEncoder(new BlobBuilder());
-                il.OpCode(ILOpCode.Ldsfld);
-                il.Token(backingToken);
-                il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
-            }
-            else if (prop.GetterSymbol != null && this.emitCtx.Program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
-            {
-                var handle = this.emitFunction(prop.GetterSymbol, getterBody, false);
-                return handle;
-            }
-            else
-            {
-                var il = new InstructionEncoder(new BlobBuilder());
-                var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
-                il.OpCode(ILOpCode.Newobj);
-                il.Token(nieCtor);
-                il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
-            }
+            return computed.Value;
         }
 
         var sigBlob = new BlobBuilder();
@@ -507,37 +497,10 @@ internal sealed class MemberDefEmitter
     /// </summary>
     private MethodDefinitionHandle EmitStaticPropertySetter(StructSymbol structSym, PropertySymbol prop)
     {
-        int bodyOffset = -1;
-        if (!this.emitCtx.MetadataOnly)
+        var (computed, bodyOffset) = this.EmitPropertyAccessorBody(structSym, prop, isStatic: true, isGetter: false);
+        if (computed.HasValue)
         {
-            if (prop.IsAutoProperty && prop.BackingField != null
-                && this.cache.StructFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
-            {
-                // Issue #989: self-TypeSpec field MemberRef for generic types.
-                var backingToken = ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym)
-                    ? this.resolveFieldToken(structSym, prop.BackingField)
-                    : (EntityHandle)backingHandle;
-                var il = new InstructionEncoder(new BlobBuilder());
-                il.LoadArgument(0);
-                il.OpCode(ILOpCode.Stsfld);
-                il.Token(backingToken);
-                il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
-            }
-            else if (prop.SetterSymbol != null && this.emitCtx.Program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
-            {
-                var handle = this.emitFunction(prop.SetterSymbol, setterBody, false);
-                return handle;
-            }
-            else
-            {
-                var il = new InstructionEncoder(new BlobBuilder());
-                var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
-                il.OpCode(ILOpCode.Newobj);
-                il.Token(nieCtor);
-                il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
-            }
+            return computed.Value;
         }
 
         var sigBlob = new BlobBuilder();

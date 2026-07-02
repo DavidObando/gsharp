@@ -270,6 +270,26 @@ internal sealed partial class MethodBodyEmitter
     /// </summary>
     private void EmitMethodGroupToNamedDelegate(BoundMethodGroupExpression methodGroup, EntityHandle delegateCtorHandle)
     {
+        this.EmitMethodGroupTarget(methodGroup);
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(delegateCtorHandle);
+    }
+
+    /// <summary>
+    /// Emits the shared prologue of a user method-group-to-delegate
+    /// conversion: it resolves the function pointer token and leaves the
+    /// delegate-constructor operands on the stack — <c>ldnull; ldftn ftn</c>
+    /// for a static group, or <c>&lt;receiver&gt;; [box]; dup; ldvirtftn ftn</c>
+    /// / <c>&lt;receiver&gt;; [box]; ldftn ftn</c> for an instance group — ready
+    /// for the caller's <c>newobj &lt;Delegate&gt;::.ctor(object, IntPtr)</c>.
+    /// Both the named-delegate path (<see cref="EmitMethodGroupToNamedDelegate"/>)
+    /// and the synthesized/CLR-delegate path
+    /// (<see cref="EmitMethodGroup(BoundMethodGroupExpression, Type)"/>) share
+    /// this single implementation so the #1397 interface-receiver ldvirtftn and
+    /// #1467 generic-receiver token handling live in exactly one place.
+    /// </summary>
+    private void EmitMethodGroupTarget(BoundMethodGroupExpression methodGroup)
+    {
         if (!this.outer.cache.FunctionHandles.TryGetValue(methodGroup.Function, out var staticHandle)
             && !this.outer.cache.MethodHandles.TryGetValue(methodGroup.Function, out staticHandle))
         {
@@ -277,37 +297,55 @@ internal sealed partial class MethodBodyEmitter
                 $"Method group '{methodGroup.Function.Name}' has no emitted MethodDef.");
         }
 
+        // Issue #1467: when the method group targets an instance method of a
+        // user-declared GENERIC type, the `ldftn`/`ldvirtftn` target must be a
+        // MemberRef parented at the constructed receiver TypeSpec — a bare
+        // MethodDef of a method on a generic type is not a valid delegate-ctor
+        // function token (ilverify `DelegateCtor`). Re-resolve through the
+        // receiver's type.
+        EntityHandle ftnToken = staticHandle;
+        if (methodGroup.Receiver?.Type is StructSymbol receiverStruct
+            && ReflectionMetadataEmitter.IsUserGenericTypeReference(receiverStruct)
+            && this.outer.cache.MethodHandles.ContainsKey(methodGroup.Function))
+        {
+            ftnToken = this.outer.ResolveUserInstanceMethodToken(receiverStruct, methodGroup.Function);
+        }
+
         if (methodGroup.Receiver == null)
         {
             this.il.OpCode(ILOpCode.Ldnull);
             this.il.OpCode(ILOpCode.Ldftn);
-            this.il.Token(staticHandle);
+            this.il.Token(ftnToken);
         }
         else
         {
             this.EmitExpression(methodGroup.Receiver);
 
+            // Box value-type receivers so the resulting delegate's Target
+            // slot (typed `object`) holds a reference.
             if (ReflectionMetadataEmitter.IsValueTypeSymbol(methodGroup.Receiver.Type))
             {
                 this.il.OpCode(ILOpCode.Box);
                 this.il.Token(this.outer.GetElementTypeToken(methodGroup.Receiver.Type));
             }
 
-            if (methodGroup.Function.IsOpen || methodGroup.Function.IsOverride)
+            // For an `open` (virtual) / `override` instance method — and,
+            // per issue #1397, an interface-typed receiver — dispatch via
+            // `ldvirtftn` so the delegate invokes the concrete implementation.
+            // Non-virtual / sealed methods use `ldftn` directly.
+            if (methodGroup.Function.IsOpen || methodGroup.Function.IsOverride
+                || methodGroup.Receiver.Type is InterfaceSymbol)
             {
                 this.il.OpCode(ILOpCode.Dup);
                 this.il.OpCode(ILOpCode.Ldvirtftn);
-                this.il.Token(staticHandle);
+                this.il.Token(ftnToken);
             }
             else
             {
                 this.il.OpCode(ILOpCode.Ldftn);
-                this.il.Token(staticHandle);
+                this.il.Token(ftnToken);
             }
         }
-
-        this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(delegateCtorHandle);
     }
 
     private void EmitClrEventSubscription(BoundClrEventSubscriptionExpression subscription)
@@ -589,13 +627,6 @@ internal sealed partial class MethodBodyEmitter
     // already go through EmitClrMethodGroup.
     private void EmitMethodGroup(BoundMethodGroupExpression methodGroup, Type overrideDelegateType)
     {
-        if (!this.outer.cache.FunctionHandles.TryGetValue(methodGroup.Function, out var methodHandle)
-            && !this.outer.cache.MethodHandles.TryGetValue(methodGroup.Function, out methodHandle))
-        {
-            throw new InvalidOperationException(
-                $"Method group '{methodGroup.Function.Name}' has no emitted MethodDef.");
-        }
-
         Type delegateType = null;
         if (overrideDelegateType != null
             || (methodGroup.FunctionType.ClrType != null
@@ -604,58 +635,9 @@ internal sealed partial class MethodBodyEmitter
             delegateType = overrideDelegateType ?? this.outer.ResolveDelegateClrType(methodGroup.FunctionType);
         }
 
-        // Issue #1467: when the method group targets an instance method of a
-        // user-declared GENERIC type (e.g. `Task.Run(Encoder)` inside
-        // `FilterC[T]`), the `ldftn`/`ldvirtftn` target must be a MemberRef
-        // parented at the constructed receiver TypeSpec — a bare MethodDef of a
-        // method on a generic type is not a valid delegate-ctor function token
-        // (ilverify `DelegateCtor`). Re-resolve through the receiver's type.
-        EntityHandle ftnToken = methodHandle;
-        if (methodGroup.Receiver?.Type is StructSymbol receiverStruct
-            && ReflectionMetadataEmitter.IsUserGenericTypeReference(receiverStruct)
-            && this.outer.cache.MethodHandles.ContainsKey(methodGroup.Function))
-        {
-            ftnToken = this.outer.ResolveUserInstanceMethodToken(receiverStruct, methodGroup.Function);
-        }
-
-        if (methodGroup.Receiver == null)
-        {
-            this.il.OpCode(ILOpCode.Ldnull);
-            this.il.OpCode(ILOpCode.Ldftn);
-            this.il.Token(ftnToken);
-        }
-        else
-        {
-            this.EmitExpression(methodGroup.Receiver);
-
-            // Box value-type receivers so the resulting delegate's Target
-            // slot (typed `object`) holds a reference. Mirrors the
-            // defensive box in EmitClrMethodGroup.
-            if (ReflectionMetadataEmitter.IsValueTypeSymbol(methodGroup.Receiver.Type))
-            {
-                this.il.OpCode(ILOpCode.Box);
-                this.il.Token(this.outer.GetElementTypeToken(methodGroup.Receiver.Type));
-            }
-
-            // For an `open` (virtual) instance method, honor virtual
-            // dispatch via `ldvirtftn` so an override on a derived
-            // receiver is invoked. Non-virtual / sealed methods use
-            // `ldftn` directly. Issue #1397: an interface-typed receiver
-            // must also dispatch via `ldvirtftn` so the delegate invokes
-            // the concrete implementation through interface dispatch.
-            if (methodGroup.Function.IsOpen || methodGroup.Function.IsOverride
-                || methodGroup.Receiver.Type is InterfaceSymbol)
-            {
-                this.il.OpCode(ILOpCode.Dup);
-                this.il.OpCode(ILOpCode.Ldvirtftn);
-                this.il.Token(ftnToken);
-            }
-            else
-            {
-                this.il.OpCode(ILOpCode.Ldftn);
-                this.il.Token(ftnToken);
-            }
-        }
+        // Shared prologue: resolves the (interface/generic-aware) function
+        // pointer token and leaves the delegate-ctor operands on the stack.
+        this.EmitMethodGroupTarget(methodGroup);
 
         this.il.OpCode(ILOpCode.Newobj);
 
