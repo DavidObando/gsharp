@@ -113,7 +113,7 @@ class Vec(ref x int32) { }
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0241");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0424");
     }
 
     // ----------------------------------------------------------------------

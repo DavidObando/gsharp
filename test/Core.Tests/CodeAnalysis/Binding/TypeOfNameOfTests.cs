@@ -107,7 +107,7 @@ var n = nameof(Console.WriteLine)
         var tree = SyntaxTree.Parse(SourceText.From("var n = nameof(123)\n"));
         var compilation = new Compilation(tree);
         var diagnostics = compilation.GlobalScope.Diagnostics;
-        Assert.Contains(diagnostics, d => d.Id == "GS0190");
+        Assert.Contains(diagnostics, d => d.Id == "GS0420");
     }
 
     [Fact]
@@ -119,7 +119,7 @@ var n = nameof(Console.WriteLine(""hi""))
 "));
         var compilation = new Compilation(tree);
         var diagnostics = compilation.GlobalScope.Diagnostics;
-        Assert.Contains(diagnostics, d => d.Id == "GS0190");
+        Assert.Contains(diagnostics, d => d.Id == "GS0420");
     }
 
     [Fact]
