@@ -48,9 +48,58 @@
     <_ExplicitReference Include="$(FrameworkPathOverride)\mscorlib.dll" Condition=" '$(FrameworkPathOverride)' != '' " />
   </ItemGroup>
 
+  <!-- Issue #1666: same property-only-change hazard as
+       src/Sdk/Gsharp.NET.Sdk/build/Gsharp.NET.Core.Sdk.targets — mirror the
+       .NET SDK's CoreCompileInputs.cache idiom here too. Additionally list
+       $(GsharpCompilerFullPath) (gsc.dll) directly as a CoreCompile input:
+       rebuilding the in-tree compiler must retrigger Gsharp.Extensions so a
+       compiler bugfix is actually picked up rather than reusing the stale
+       assembly compiled with the old gsc. -->
+  <Target Name="_GsharpCreateCoreCompileInputsCache"
+          BeforeTargets="CoreCompile">
+    <PropertyGroup>
+      <_GsharpCoreCompileInputsCacheFile>$(IntermediateOutputPath)$(TargetName).CoreCompileInputs.cache</_GsharpCoreCompileInputsCacheFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <_GsharpCoreCompileInputsToHash Include="$(Version)" />
+      <_GsharpCoreCompileInputsToHash Include="$(DebugType)" />
+      <_GsharpCoreCompileInputsToHash Include="$(Deterministic)" />
+      <_GsharpCoreCompileInputsToHash Include="$(NoWarn)" />
+      <_GsharpCoreCompileInputsToHash Include="$(TreatWarningsAsErrors)" />
+      <_GsharpCoreCompileInputsToHash Include="$(WarningsAsErrors)" />
+      <_GsharpCoreCompileInputsToHash Include="$(OutputType)" />
+      <_GsharpCoreCompileInputsToHash Include="$(Optimize)" />
+      <_GsharpCoreCompileInputsToHash Include="$(SourceLink)" />
+      <_GsharpCoreCompileInputsToHash Include="$(EmbedAllSources)" />
+      <_GsharpCoreCompileInputsToHash Include="$(ProduceReferenceAssembly)" />
+      <_GsharpCoreCompileInputsToHash Include="$(GenerateDocumentationFile)" />
+    </ItemGroup>
+
+    <Hash ItemsToHash="@(_GsharpCoreCompileInputsToHash)">
+      <Output TaskParameter="HashResult" PropertyName="_GsharpCoreCompileInputsHash" />
+    </Hash>
+
+    <WriteLinesToFile Lines="$(_GsharpCoreCompileInputsHash)"
+                       File="$(_GsharpCoreCompileInputsCacheFile)"
+                       Overwrite="True"
+                       WriteOnlyWhenDifferent="True" />
+
+    <ItemGroup>
+      <FileWrites Include="$(_GsharpCoreCompileInputsCacheFile)" />
+    </ItemGroup>
+  </Target>
+
   <Target Name="CoreCompile"
-          Inputs="$(MSBuildAllProjects);@(Compile);@(ReferencePathWithRefAssemblies)"
-          Outputs="@(IntermediateAssembly)"
+          Inputs="$(MSBuildAllProjects);
+                  @(Compile);
+                  @(ReferencePathWithRefAssemblies);
+                  $(GsharpCompilerFullPath);
+                  $(IntermediateOutputPath)$(TargetName).CoreCompileInputs.cache"
+          Outputs="@(IntermediateAssembly);
+                   $(DocumentationFile);
+                   @(IntermediateRefAssembly);
+                   @(_DebugSymbolsIntermediatePath)"
           DependsOnTargets="$(CoreCompileDependsOn)">
 
     <Error Condition="!Exists('$(GsharpCompilerFullPath)')"
