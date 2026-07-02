@@ -30,6 +30,24 @@ public sealed class FunctionTypeSymbol : TypeSymbol
     // still sharing within one.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TypeSymbol, object> UserTypeIds = new System.Runtime.CompilerServices.ConditionalWeakTable<TypeSymbol, object>();
 
+    // Issue #1624 regression: a plain imported CLR reference type (e.g. a
+    // `Holder` class from a project reference, loaded through a
+    // MetadataLoadContext) has a non-null ClrType, so it skipped the
+    // ContainsSameCompilationUserType branch above and fell to the
+    // name-only default below ("Holder"). Two *different* test
+    // compilations each load their own MetadataLoadContext and get a
+    // distinct System.Type instance for "Holder" — but the name-only key
+    // aliased them, so a tuple cached by the first compilation (holding a
+    // ClrType from its now-disposed context) was handed back to the
+    // second, breaking emit. Key any type with a live ClrType by that
+    // Type object's identity instead: stable process-wide singletons
+    // (int32, string, ...) keep one id forever (still fully shared), while
+    // distinct MetadataLoadContext Type instances across compilations get
+    // distinct ids (no aliasing), and repeated lookups of the *same*
+    // System.Type within one compilation collapse to the same id (still
+    // interned).
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<System.Type, object> ClrTypeIds = new System.Runtime.CompilerServices.ConditionalWeakTable<System.Type, object>();
+
     private static long typeParameterIdSeed;
 
     private FunctionTypeSymbol(string name, ImmutableArray<TypeSymbol> parameterTypes, ImmutableArray<bool> isVariadic, TypeSymbol returnType)
@@ -201,7 +219,16 @@ public sealed class FunctionTypeSymbol : TypeSymbol
         return returnType == null || returnType == TypeSymbol.Void;
     }
 
-    private static void AppendIdentityKey(System.Text.StringBuilder builder, TypeSymbol type)
+    /// <summary>
+    /// Appends an identity-correct cache-key fragment for <paramref name="type"/>.
+    /// Issue #1624: shared by <see cref="TupleTypeSymbol"/> and
+    /// <see cref="FunctionPointerTypeSymbol"/> so every structural cache in the
+    /// symbol table keys on symbol identity (not display name), preventing
+    /// same-named types from different compilations from aliasing.
+    /// </summary>
+    /// <param name="builder">The key builder to append to.</param>
+    /// <param name="type">The type whose identity-key fragment to append.</param>
+    internal static void AppendIdentityKey(System.Text.StringBuilder builder, TypeSymbol type)
     {
         // Issue #1457: any slot that references a same-compilation user type
         // (directly or nested, e.g. `Item`, `List[Item]`, `(Item, int)`) must be
@@ -239,6 +266,39 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 AppendIdentityKey(builder, fn.ReturnType);
                 break;
 
+            // Issue #1518/#1624 regression: NullableTypeSymbol's ClrType is
+            // the bare *underlying* CLR type (see NullableTypeSymbol ctor),
+            // not Nullable<T> — so `int32?` and `int32` share the same
+            // System.Type. Falling through to the ClrType-identity default
+            // below would collapse their keys and alias a `Func<..,int32?>`
+            // with a `Func<..,int32>` in the process-wide cache. Always key
+            // nullable slots structurally (by their own tag plus the
+            // recursively-keyed underlying type) regardless of whether they
+            // carry a type parameter.
+            case NullableTypeSymbol nt:
+                builder.Append("!nullable(");
+                AppendIdentityKey(builder, nt.UnderlyingType);
+                builder.Append(')');
+                break;
+
+            // #1777 follow-up: SliceTypeSymbol/ArrayTypeSymbol both build their
+            // ClrType as `elementType.ClrType.MakeArrayType()` — a fixed-length
+            // array's Length is symbol-only metadata that never reaches the CLR
+            // shape, so `[]int32`, `[3]int32`, and `[5]int32` all resolve to the
+            // identical `typeof(int[])` instance. PinnedTypeSymbol copies its
+            // underlying type's ClrType verbatim, and NullabilityAnnotatedTypeSymbol
+            // copies both Name and ClrType from its BaseType. None of these carry a
+            // type parameter or same-compilation user type, so all four would
+            // otherwise fall through to the ClrType/name fallback below and alias
+            // distinct shapes in the process-wide Tuple/FunctionPointer caches —
+            // the same failure mode as #1624. Always key them structurally.
+            case SliceTypeSymbol:
+            case ArrayTypeSymbol:
+            case PinnedTypeSymbol:
+            case NullabilityAnnotatedTypeSymbol:
+                AppendStructuralKey(builder, type);
+                break;
+
             // Issue #1620: a composite type (List[T], []T, T?, (T, int32), ...)
             // that structurally carries a type parameter must NOT fall through
             // to the name-based default below — two distinct generic
@@ -251,7 +311,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 AppendStructuralKey(builder, type);
                 break;
             default:
-                builder.Append(type?.Name ?? "void");
+                AppendNameOrClrIdentityKey(builder, type);
                 break;
         }
     }
@@ -281,8 +341,31 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 builder.Append(')');
                 break;
             case ArrayTypeSymbol a:
-                builder.Append("!array(");
+                // Length must be part of the key: it is symbol-only metadata
+                // absent from the shared `elementType[]` ClrType, so `[3]int32`
+                // and `[5]int32` (and `[]int32`, via the distinct `!slice` tag
+                // above) would otherwise collide.
+                builder.Append("!array(").Append(a.Length).Append(',');
                 AppendIdentityKey(builder, a.ElementType);
+                builder.Append(')');
+                break;
+            case PinnedTypeSymbol p:
+                builder.Append("!pinned(");
+                AppendIdentityKey(builder, p.UnderlyingType);
+                builder.Append(')');
+                break;
+            case NullabilityAnnotatedTypeSymbol na:
+                // Include NullableFlags so two annotations of the same base
+                // type with different inner-position nullability (e.g. key
+                // vs. value nullable in Dictionary<K,V>) also key distinctly,
+                // not just annotated-vs-bare.
+                builder.Append("!nann(");
+                for (var i = 0; i < na.NullableFlags.Length; i++)
+                {
+                    builder.Append(na.NullableFlags[i]).Append(',');
+                }
+
+                AppendIdentityKey(builder, na.BaseType);
                 builder.Append(')');
                 break;
             case SequenceTypeSymbol seq:
@@ -383,8 +466,38 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 // composite kinds handled above (see AnyTypeParameter), so
                 // this default is unreachable in practice; keep the
                 // name-based fallback for safety.
-                builder.Append(type?.Name ?? "void");
+                AppendNameOrClrIdentityKey(builder, type);
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1624 regression fix: appends the identity-key fragment for a
+    /// type that is neither a type parameter, a function type, nor a
+    /// same-compilation user type without CLR backing. Such a type either has
+    /// no ClrType (the true singleton built-ins like <c>void</c>/<c>error</c>,
+    /// safely shared by name) or carries a live <see cref="System.Type"/> —
+    /// a built-in primitive (a genuine process-wide singleton) or an
+    /// <see cref="ImportedTypeSymbol"/> projected from a
+    /// <see cref="System.Reflection.MetadataLoadContext"/> (a distinct
+    /// <see cref="System.Type"/> instance per compilation even when the
+    /// simple name matches, e.g. two test compilations that each define a
+    /// "Holder" class). Keying by the CLR <see cref="System.Type"/> object's
+    /// identity keeps every true singleton shared while never aliasing two
+    /// same-named types loaded by different compilations.
+    /// </summary>
+    /// <param name="builder">The key builder to append to.</param>
+    /// <param name="type">The type whose fallback key fragment to append.</param>
+    private static void AppendNameOrClrIdentityKey(System.Text.StringBuilder builder, TypeSymbol type)
+    {
+        if (type?.ClrType is System.Type clrType)
+        {
+            var id = (long)ClrTypeIds.GetValue(clrType, _ => NextTypeParameterId());
+            builder.Append("!clr").Append(id);
+        }
+        else
+        {
+            builder.Append(type?.Name ?? "void");
         }
     }
 

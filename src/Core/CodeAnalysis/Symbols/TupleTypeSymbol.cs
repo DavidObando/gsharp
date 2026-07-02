@@ -46,24 +46,27 @@ public sealed class TupleTypeSymbol : TypeSymbol
             throw new ArgumentException("Tuples must have at least two element types.", nameof(elementTypes));
         }
 
-        var key = BuildName(elementTypes);
-
-        // Issue #649: The cache is keyed by name alone (e.g. "(Holder, string)").
-        // Across compilations in the same process (common in tests), different
-        // TypeSymbol instances with the same name may appear (loaded from
-        // different MetadataLoadContext instances). Validate that the cached
-        // entry's element types still match by reference; if not, replace it.
-        if (Cache.TryGetValue(key, out var existing))
+        // Issue #1624: key on element-type *identity* (via FunctionTypeSymbol's
+        // shared identity-key builder), not the display name. A name-based key
+        // (e.g. "(Holder, string)") can alias two distinct same-named types
+        // from different compilations; the previous fix (#649) validated
+        // identity on lookup but then racily overwrote the cache entry on a
+        // mismatch, so concurrent callers could still observe two distinct
+        // instances for the same elements. GetOrAdd is atomic, so no overwrite
+        // is needed once the key itself is identity-correct.
+        var keyBuilder = new StringBuilder();
+        for (var i = 0; i < elementTypes.Length; i++)
         {
-            if (existing.ElementTypes.SequenceEqual(elementTypes))
+            if (i > 0)
             {
-                return existing;
+                keyBuilder.Append(',');
             }
+
+            FunctionTypeSymbol.AppendIdentityKey(keyBuilder, elementTypes[i]);
         }
 
-        var result = new TupleTypeSymbol(elementTypes);
-        Cache[key] = result;
-        return result;
+        var key = keyBuilder.ToString();
+        return Cache.GetOrAdd(key, _ => new TupleTypeSymbol(elementTypes));
     }
 
     private static string BuildName(ImmutableArray<TypeSymbol> elementTypes)
