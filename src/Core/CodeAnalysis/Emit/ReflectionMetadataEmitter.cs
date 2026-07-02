@@ -1869,6 +1869,24 @@ internal sealed class ReflectionMetadataEmitter
             EmitInterfaceBaseImplRows(i);
         }
 
+        // Issue #1716: interface abstract/default method MethodDef rows are
+        // reserved (PlanInterfaceMethods, above) BEFORE the delegate ctor/
+        // Invoke rows, so they must also be *actually emitted* before the
+        // delegate TypeDefs below — EmitDelegateTypeDef adds its ctor/Invoke
+        // MethodDefs eagerly (not deferred to a later body-emission pass like
+        // classes/structs), so any deferred-reservation member scheduled
+        // ahead of delegates in the MethodDef row plan must be flushed here to
+        // keep actual AddMethodDefinition call order monotone with the
+        // reserved row plan. Interfaces are currently the only such member
+        // category planned ahead of delegates; emitting their bodies here
+        // (instead of in the later EmitInterfaceMethodBodies pass alongside
+        // classes/structs) preserves the invariant for any interface/delegate
+        // combination, not just one hard-coded shape.
+        foreach (var i in topInterfaces)
+        {
+            EmitInterfaceMethodBodies(i);
+        }
+
         // ADR-0059 / issue #255: emit named delegate TypeDefs immediately
         // after interfaces and before non-SM classes/structs. Each delegate's
         // TypeDef methodList points at the ctor row reserved above; the
@@ -2535,11 +2553,6 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.EmitInterfaceStaticConstructor(i);
             }
-        }
-
-        foreach (var i in topInterfaces)
-        {
-            EmitInterfaceMethodBodies(i);
         }
 
         // B2. Non-SM class ctors + instance methods.
