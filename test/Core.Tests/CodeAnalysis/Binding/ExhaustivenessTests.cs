@@ -123,6 +123,97 @@ let label = switch value { case 1: ""one"" }
     }
 
     [Fact]
+    public void SwitchExpression_Enum_OrPattern_AllMembersCovered_HasNoDiagnostic()
+    {
+        // Issue #1643: `Red or Green` plus `Blue` covers every member.
+        var diagnostics = Bind(@"
+enum Color { Red, Green, Blue }
+let color = Color.Red
+let label = switch color { case Color.Red or Color.Green: ""warm"" case Color.Blue: ""cool"" }
+");
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void SwitchExpression_Enum_NestedOrPattern_SingleArm_HasNoDiagnostic()
+    {
+        // Issue #1643: `Red or Green or Blue` in one arm must flatten through
+        // arbitrary nesting.
+        var diagnostics = Bind(@"
+enum Color { Red, Green, Blue }
+let color = Color.Red
+let label = switch color { case Color.Red or Color.Green or Color.Blue: ""any"" }
+");
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void SwitchExpression_Enum_OrPattern_StillMissingMember_DiagnosesMissingName()
+    {
+        // Issue #1643: or-pattern flattening must not over-claim coverage — a
+        // genuinely non-exhaustive switch still reports the correct miss.
+        var diagnostics = Bind(@"
+enum Color { Red, Green, Blue }
+let color = Color.Red
+let label = switch color { case Color.Red or Color.Green: ""warm"" }
+");
+
+        Assert.Contains(diagnostics, d => d.Message == "Switch expression on enum 'Color' is not exhaustive: missing 'Blue'.");
+    }
+
+    [Fact]
+    public void SwitchExpression_Enum_AndPattern_DoesNotFalselyCoverConstants()
+    {
+        // Issue #1643: an `and` conjunction narrows and must not be flattened
+        // into covering its constituent constant.
+        var diagnostics = Bind(@"
+enum Color { Red, Green, Blue }
+let color = Color.Red
+let label = switch color { case Color.Red and Color.Red: ""red"" case Color.Green: ""green"" }
+");
+
+        Assert.Contains(diagnostics, d => d.Message == "Switch expression on enum 'Color' is not exhaustive: missing 'Red', 'Blue'.");
+    }
+
+    [Fact]
+    public void SwitchExpression_SealedInterface_OrPattern_AllImplementorsCovered_HasNoDiagnostic()
+    {
+        // Issue #1643: type patterns nested in an or-pattern must be flattened
+        // for sealed-interface discriminants too.
+        var diagnostics = Bind(@"
+sealed interface Expr { }
+class Add : Expr { }
+class Mul : Expr { }
+class Sub : Expr { }
+func Label(expr Expr) string {
+ return switch expr { case _ is Add or _ is Mul: ""addOrMul"" case x is Sub: ""sub"" }
+}
+");
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void SwitchExpression_SealedClass_OrPattern_AllSubclassesCovered_HasNoDiagnostic()
+    {
+        // Issue #1643: type patterns nested in an or-pattern must be flattened
+        // for sealed-class discriminants too.
+        var diagnostics = Bind(@"
+sealed class Shape { }
+class Circle : Shape { }
+class Square : Shape { }
+class Triangle : Shape { }
+func Area(s Shape) string {
+ return switch s { case _ is Circle or _ is Square: ""quad"" case t is Triangle: ""tri"" }
+}
+");
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
     public void SwitchStatement_Enum_MissingMember_DiagnosesStatementForm()
     {
         var diagnostics = Bind(@"
