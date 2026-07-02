@@ -1153,6 +1153,29 @@ internal sealed class SlotPlanner
             base.VisitClrPropertyAssignmentExpression(node);
         }
 
+        // Issue #1614: a field assignment through an expression-based
+        // receiver (issue #567: closure-boxing lowers `variable.Field = v`
+        // to `boxLocal.Value.Field = v`; ADR-0112 chained assignment binds
+        // `a.B.C = v` the same way) is the only field-assignment shape whose
+        // receiver is an arbitrary, potentially side-effecting expression.
+        // The emitter used to evaluate it twice — once for `stfld`, once
+        // more afterwards to `ldfld` the just-stored value back out as the
+        // expression result — invoking any receiver side effect (e.g. a
+        // factory call) twice. Mirror the property-assignment fix (issue
+        // #418 P1-2): pre-allocate a value-typed temp so the emitter can
+        // `dup; stloc tmp; stfld; ldloc tmp` instead of re-evaluating the
+        // receiver. The simple-variable-receiver overloads below are
+        // unaffected — reloading a variable has no side effects.
+        protected override void VisitFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+        {
+            if (node.ReceiverExpression != null)
+            {
+                this.sink.Add(node);
+            }
+
+            base.VisitFieldAssignmentExpression(node);
+        }
+
         // ADR-0060 / issue #491: assignments to ref-kind parameters or to
         // ref-aliasing locals lower to `<addr>; value; dup; stloc tmp; stind`.
         // To preserve the assignment-as-expression result semantics without
