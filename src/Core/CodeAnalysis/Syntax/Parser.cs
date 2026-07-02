@@ -82,11 +82,26 @@ public class Parser
     /// </summary>
     /// <param name="syntaxTree">The source syntax tree object.</param>
     public Parser(SyntaxTree syntaxTree)
+        : this(syntaxTree, 0, syntaxTree.Text.Length)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="Parser"/> class that parses only the
+    /// <paramref name="start"/>-<paramref name="end"/> window of <paramref name="syntaxTree"/>'s
+    /// text. Used to re-parse an interpolated-string hole's expression directly out of the
+    /// outer source so resulting nodes carry true absolute positions without copying/padding
+    /// the file prefix (issue #1605).
+    /// </summary>
+    /// <param name="syntaxTree">The source syntax tree object.</param>
+    /// <param name="start">The absolute position to start parsing from.</param>
+    /// <param name="end">The absolute position, exclusive, at which parsing stops.</param>
+    public Parser(SyntaxTree syntaxTree, int start, int end)
     {
         var tokens = new List<SyntaxToken>();
         var docTokens = ImmutableArray.CreateBuilder<SyntaxToken>();
 
-        var lexer = new Lexer(syntaxTree);
+        var lexer = new Lexer(syntaxTree, start, end);
         SyntaxToken token;
         do
         {
@@ -9938,17 +9953,16 @@ public class Parser
                 }
             }
 
-            // ADR-0055 §C: parse the captured expression with span remapping so
-            // every inner token, node, and diagnostic carries its true absolute
-            // position in the outer file. The hole's expression clause begins at
-            // fragment.Position; we re-create a source text in which everything
-            // before that offset is blanked to spaces (newlines preserved, so
-            // line/column also match) and the expression text sits at its real
-            // offset. Inner spans are therefore absolute outer-file spans.
-            var innerText = SourceText.From(BuildHolePaddedText(syntaxTree.Text, fragment.Position, exprText), syntaxTree.Text.FileName);
-            var innerTree = SyntaxTree.Parse(innerText);
-            Diagnostics.AddRange(innerTree.Diagnostics);
-            var innerExpression = ExtractFirstExpression(innerTree);
+            // ADR-0055 §C / issue #1605: parse the captured expression directly out of
+            // the outer syntax tree's own text, bounded to [fragment.Position,
+            // fragment.Position + exprText.Length). Every inner token/node is built
+            // against the SAME outer SyntaxTree, so its Position is already the true
+            // absolute offset in the outer file — no padded-copy allocation or re-lex
+            // of the file prefix is needed (that was O(fileSize) per hole).
+            var innerParser = new Parser(syntaxTree, fragment.Position, fragment.Position + exprText.Length);
+            var innerRoot = innerParser.ParseCompilationUnit();
+            Diagnostics.AddRange(innerParser.Diagnostics);
+            var innerExpression = ExtractFirstExpression(innerRoot);
             if (innerExpression == null)
             {
                 // Fall back to a synthetic missing-name node anchored on the
@@ -9962,25 +9976,6 @@ public class Parser
         }
 
         return new InterpolatedStringExpressionSyntax(syntaxTree, token, segments.ToImmutable());
-    }
-
-    // ADR-0055 §C: builds the source text used to parse a hole expression with
-    // correct absolute positions. The returned text equals the outer text up to
-    // <paramref name="holeOffset"/> — but with every non-newline character
-    // blanked to a space so the prefix produces no tokens — followed by the
-    // expression source itself. The expression's first character thus lands at
-    // its true outer offset, and preserved newlines keep line/column accurate.
-    private static string BuildHolePaddedText(SourceText outerText, int holeOffset, string exprText)
-    {
-        var builder = new System.Text.StringBuilder(holeOffset + exprText.Length);
-        for (var i = 0; i < holeOffset; i++)
-        {
-            var c = outerText[i];
-            builder.Append(c == '\r' || c == '\n' ? c : ' ');
-        }
-
-        builder.Append(exprText);
-        return builder.ToString();
     }
 
     // ADR-0055 delimiter-aware hole splitter. Finds the first top-level `,`
@@ -10054,9 +10049,9 @@ public class Parser
         }
     }
 
-    private static ExpressionSyntax ExtractFirstExpression(SyntaxTree innerTree)
+    private static ExpressionSyntax ExtractFirstExpression(CompilationUnitSyntax innerRoot)
     {
-        foreach (var member in innerTree.Root.Members)
+        foreach (var member in innerRoot.Members)
         {
             if (member is GlobalStatementSyntax gs && gs.Statement is ExpressionStatementSyntax es)
             {

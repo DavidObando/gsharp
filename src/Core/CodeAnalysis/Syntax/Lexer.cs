@@ -17,6 +17,7 @@ public sealed class Lexer
 {
     private readonly SyntaxTree syntaxTree;
     private readonly SourceText text;
+    private readonly int end;
 
     private int position;
 
@@ -29,9 +30,27 @@ public sealed class Lexer
     /// </summary>
     /// <param name="syntaxTree">The source syntax tree that contains the text document to lex from.</param>
     public Lexer(SyntaxTree syntaxTree)
+        : this(syntaxTree, 0, syntaxTree.Text.Length)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="Lexer"/> class that lexes only the
+    /// <paramref name="start"/>-<paramref name="end"/> window of <paramref name="syntaxTree"/>'s
+    /// text, treating <paramref name="end"/> as a virtual end-of-file. Used to re-lex an
+    /// interpolated-string hole's expression text directly out of the outer source so the
+    /// resulting tokens carry true absolute positions without copying/padding the file
+    /// prefix (issue #1605).
+    /// </summary>
+    /// <param name="syntaxTree">The source syntax tree that contains the text document to lex from.</param>
+    /// <param name="start">The absolute position to start lexing from.</param>
+    /// <param name="end">The absolute position, exclusive, at which the lexer reports end-of-file.</param>
+    public Lexer(SyntaxTree syntaxTree, int start, int end)
     {
         this.syntaxTree = syntaxTree;
         this.text = syntaxTree.Text;
+        this.end = end;
+        this.position = start;
     }
 
     /// <summary>
@@ -477,7 +496,7 @@ public sealed class Lexer
     {
         var index = position + offset;
 
-        if (index >= text.Length)
+        if (index >= end)
         {
             return '\0';
         }

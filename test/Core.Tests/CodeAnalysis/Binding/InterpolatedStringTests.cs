@@ -425,6 +425,61 @@ public class InterpolatedStringTests
         Assert.Equal("undefinedThing".Length, diagnostic.Location.Span.Length);
     }
 
+    [Fact]
+    public void Hole_Diagnostic_On_Later_Line_Reports_True_Line_Number()
+    {
+        // Issue #1605: the hole is now re-lexed directly out of the outer text
+        // (no padded-copy re-parse), so the line/column must still come out
+        // right for a hole many lines into the file.
+        var source = string.Concat(System.Linq.Enumerable.Repeat("let a = 1\n", 20))
+            + "let msg = \"val=${undefinedThing}\"\n";
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        var vars = new System.Collections.Generic.Dictionary<VariableSymbol, object>();
+        var result = compilation.Evaluate(vars);
+
+        var expectedStart = source.IndexOf("undefinedThing", System.StringComparison.Ordinal);
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Location.Span.Start == expectedStart);
+        Assert.Equal(20, diagnostic.Location.StartLine);
+    }
+
+    [Fact]
+    public void Many_Interpolation_Holes_Parse_Near_Linear_Time()
+    {
+        // Issue #1605: each hole used to re-lex/re-parse a padded copy of the
+        // whole file prefix seen so far (O(fileSize) per hole => O(n^2)
+        // total). Doubling the hole count should now roughly double the
+        // parse time, not quadruple it.
+        static string BuildSource(int holeCount)
+        {
+            var sb = new System.Text.StringBuilder();
+            for (var i = 0; i < holeCount; i++)
+            {
+                sb.Append("let v").Append(i).Append(" = \"prefix ${").Append(i).Append("} suffix\"\n");
+            }
+
+            return sb.ToString();
+        }
+
+        static long TimeParse(string source)
+        {
+            // Warm up JIT once before timing.
+            SyntaxTree.Parse(SourceText.From(source));
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            SyntaxTree.Parse(SourceText.From(source));
+            sw.Stop();
+            return sw.ElapsedTicks;
+        }
+
+        var small = TimeParse(BuildSource(500));
+        var large = TimeParse(BuildSource(4000)); // 8x the holes/text
+
+        // Quadratic behavior would show ~64x growth; near-linear should stay
+        // well under that. Generous bound to avoid flakiness on shared CI
+        // hardware while still catching a regression back to O(n^2).
+        Assert.True(large < small * 30, $"expected near-linear scaling, got small={small} large={large} ratio={(double)large / small}");
+    }
+
     private static (ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics, System.Collections.Generic.Dictionary<VariableSymbol, object> Variables) Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
