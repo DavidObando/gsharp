@@ -1869,6 +1869,56 @@ internal sealed class ReflectionMetadataEmitter
             EmitInterfaceBaseImplRows(i);
         }
 
+        // Issue #1433 regression fix: an interface method body emitted below
+        // (e.g. a static-virtual `shared func Create(...)` factory) may
+        // `newobj` a non-SM class's primary/explicit ctor — including a class
+        // declared later in source order. cache.ClassCtorHandles /
+        // ClassPrimaryCtorHandles / ExplicitCtorHandles are normally
+        // pre-registered from the planned rows (classCtorRows /
+        // classPrimaryCtorRows, reserved by PlanClassMethods above) much
+        // later in this pass, right before class method bodies are emitted.
+        // That pre-registration must happen here too — before interface
+        // bodies are emitted — so a ctor call site inside an interface body
+        // can resolve the handle. This mirrors (and is intentionally
+        // duplicated by) the equivalent loop later in the pass; both loops
+        // derive the same handles from the same planned rows, so re-running
+        // it there for classes not covered by this early loop is harmless.
+        foreach (var c in nonSmClasses)
+        {
+            if (!classCtorRows.TryGetValue(c, out var firstCtorRow))
+            {
+                continue;
+            }
+
+            if (c.ExplicitConstructor != null)
+            {
+                var firstHandle = MetadataTokens.MethodDefinitionHandle(firstCtorRow);
+                for (int i = 0; i < c.ExplicitConstructors.Length; i++)
+                {
+                    this.cache.ExplicitCtorHandles[c.ExplicitConstructors[i]] =
+                        MetadataTokens.MethodDefinitionHandle(firstCtorRow + i);
+                }
+
+                this.cache.ClassCtorHandles[c] = firstHandle;
+                this.cache.ClassPrimaryCtorHandles[c] = firstHandle;
+            }
+            else if (c.BaseConstructorInitializer != null)
+            {
+                var forwardingHandle = MetadataTokens.MethodDefinitionHandle(firstCtorRow);
+                this.cache.ClassCtorHandles[c] = forwardingHandle;
+                this.cache.ClassPrimaryCtorHandles[c] = forwardingHandle;
+            }
+            else
+            {
+                this.cache.ClassCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(firstCtorRow);
+
+                if (c.HasPrimaryConstructor && classPrimaryCtorRows.TryGetValue(c, out var primaryRow))
+                {
+                    this.cache.ClassPrimaryCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(primaryRow);
+                }
+            }
+        }
+
         // Issue #1716: interface abstract/default method MethodDef rows are
         // reserved (PlanInterfaceMethods, above) BEFORE the delegate ctor/
         // Invoke rows, so they must also be *actually emitted* before the
@@ -2270,69 +2320,12 @@ internal sealed class ReflectionMetadataEmitter
             this.cache.ClassCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(classCtorRows[c]);
         }
 
-        // Issue #503 / #523 / #920: pre-register EVERY non-SM user class's
-        // constructor handle(s) from the planned ctor rows BEFORE any method
-        // body is emitted. A class method (or `init` body) may `newobj` another
-        // class — including a sibling class declared later, a capturing-lambda
-        // closure class, a capture box, or a NESTED class — whose ctor body is
-        // emitted later in the pass. Without an up-front handle the construction
-        // site cannot resolve the ctor token and EmitConstructorCall throws
-        // "Type '…' has no emitted primary ctor." (issue #920: this always bites
-        // nested classes, because the enclosing class's method bodies are
-        // emitted in the top-level pass strictly before the unified nested-type
-        // pass that records nested ctors). The closure ctor's MethodDef row is
-        // already reserved by the planner at line ~733, and PlanClassMethods has
-        // reserved classCtorRows/classPrimaryCtorRows for every other class
-        // (top-level and nested), so claim those handles now (same trick used
-        // for SM classes above). The actual ctor bodies are still emitted in the
-        // planned row order during the class-method-body pass below; this loop
-        // mirrors EmitClassMethodBodies' exact per-overload / primary /
-        // base-forwarding row assignment so the pre-registered handles equal the
-        // handles produced during emission.
-        foreach (var c in nonSmClasses)
-        {
-            if (!classCtorRows.TryGetValue(c, out var firstCtorRow))
-            {
-                continue;
-            }
-
-            if (c.ExplicitConstructor != null)
-            {
-                // ADR-0063 §9 / ADR-0065 §5: each declared `init(...)` overload
-                // (and the synthesized-from-primary designated init) occupies a
-                // contiguous MethodDef row starting at firstCtorRow. The first
-                // overload also doubles as the legacy class/primary ctor handle.
-                var firstHandle = MetadataTokens.MethodDefinitionHandle(firstCtorRow);
-                for (int i = 0; i < c.ExplicitConstructors.Length; i++)
-                {
-                    this.cache.ExplicitCtorHandles[c.ExplicitConstructors[i]] =
-                        MetadataTokens.MethodDefinitionHandle(firstCtorRow + i);
-                }
-
-                this.cache.ClassCtorHandles[c] = firstHandle;
-                this.cache.ClassPrimaryCtorHandles[c] = firstHandle;
-            }
-            else if (c.BaseConstructorInitializer != null)
-            {
-                // Issue #306: a single forwarding ctor occupies firstCtorRow and
-                // serves as both the class ctor and the primary ctor handle.
-                var forwardingHandle = MetadataTokens.MethodDefinitionHandle(firstCtorRow);
-                this.cache.ClassCtorHandles[c] = forwardingHandle;
-                this.cache.ClassPrimaryCtorHandles[c] = forwardingHandle;
-            }
-            else
-            {
-                // Default-only ctor (covers user classes with no ctor, capture
-                // boxes, and synthesized closure classes) plus an optional
-                // separate primary ctor row.
-                this.cache.ClassCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(firstCtorRow);
-
-                if (c.HasPrimaryConstructor && classPrimaryCtorRows.TryGetValue(c, out var primaryRow))
-                {
-                    this.cache.ClassPrimaryCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(primaryRow);
-                }
-            }
-        }
+        // Issue #503 / #523 / #920 / #1433: non-SM user class ctor handles
+        // (ClassCtorHandles / ClassPrimaryCtorHandles / ExplicitCtorHandles)
+        // are pre-registered from the planned rows earlier in this pass (see
+        // the loop above, right before interface method bodies are emitted —
+        // an interface body may itself `newobj` a class ctor), so no further
+        // pre-registration is needed here before class method bodies below.
 
         // === PHASE A: Emit remaining TypeDefs (Program + SM) ===
         // <Program> TypeDefs BEFORE SM TypeDefs (ECMA-335 §II.22.32: enclosing row < nested row).
