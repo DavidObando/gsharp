@@ -29,7 +29,11 @@ public sealed class Lexer
     // Issue #1677: uniform-run whitespace text (all-space or all-tab indentation, single
     // newlines, etc.) is shared process-wide instead of re-substringed per token, since it
     // is immutable and identical across files/lexers. Kept small and static (not tied to any
-    // one lexer instance) because whitespace runs are a closed, tiny alphabet.
+    // one lexer instance) because whitespace runs are a closed, tiny alphabet. Runs longer
+    // than WhitespaceRunCacheMaxLength bypass the cache so the static table stays bounded
+    // (a few whitespace chars x lengths 1..MaxLength) in a long-lived language-server process;
+    // long uniform runs are rare and the per-occurrence win is dominated by short indent runs.
+    private const int WhitespaceRunCacheMaxLength = 64;
     private static readonly ConcurrentDictionary<(char Ch, int Length), string> WhitespaceRunCache = new();
 
     private readonly SyntaxTree syntaxTree;
@@ -552,7 +556,7 @@ public sealed class Lexer
     // content), so it cannot be replaced by a placeholder.
     private string GetTrivialText(int start, int length)
     {
-        if (kind == SyntaxKind.WhitespaceToken && length > 0)
+        if (kind == SyntaxKind.WhitespaceToken && length > 0 && length <= WhitespaceRunCacheMaxLength)
         {
             var ch = text[start];
             var uniform = true;
