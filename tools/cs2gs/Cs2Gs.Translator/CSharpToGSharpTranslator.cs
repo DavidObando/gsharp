@@ -6578,7 +6578,12 @@ public sealed class CSharpToGSharpTranslator
                     case "Value":
                         return new NonNullAssertionExpression(this.TranslateExpression(member.Expression));
                     case "HasValue":
-                        return new BinaryExpression(this.TranslateExpression(member.Expression), "!=", LiteralExpression.Null());
+                        // Parenthesize the null test so it composes correctly
+                        // under any surrounding operator. C# `!x.HasValue` would
+                        // otherwise translate to `!x != nil`, which G# parses as
+                        // `(!x) != nil` (GS0128); `!(x != nil)` is always correct.
+                        return new ParenthesizedExpression(
+                            new BinaryExpression(this.TranslateExpression(member.Expression), "!=", LiteralExpression.Null()));
                 }
             }
 
@@ -6893,6 +6898,21 @@ public sealed class CSharpToGSharpTranslator
             var arguments = invocation.ArgumentList.Arguments
                 .Select(a => this.TranslateArgument(a))
                 .ToList();
+
+            // Directly invoking a nullable-reference delegate field/property
+            // (`handler(args)` where `handler` is `((T) -> R)?`) needs a `!!`
+            // assertion on the callee: G# smart-casts only locals, never a
+            // field/property chain, so an unforgiven nullable delegate field is
+            // "not a function" (GS0131) even inside an `if handler != nil` guard.
+            // This is the invocation-callee analog of the receiver `!!` pass
+            // (#1594); locals are excluded by the shared helper. It fires for any
+            // nullable delegate field/property callee, not just this one shape.
+            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
+                    { MethodKind: MethodKind.DelegateInvoke }
+                && this.ReceiverIsNullableReferenceFieldOrProperty(invocation.Expression))
+            {
+                target = new NonNullAssertionExpression(target);
+            }
 
             return new InvocationExpression(target, arguments, typeArguments);
         }
