@@ -148,7 +148,12 @@
   <Target Name="_GsharpGetRefAssemblyForPack"
           Condition=" '$(ProduceReferenceAssembly)' == 'true' ">
     <ItemGroup>
-      <TfmSpecificPackageFile Include="$(ProjectDir)obj/$(Configuration)/$(TargetFramework)/ref/$(TargetName)$(TargetExt)"
+      <!-- Issue #1672: use the SDK-computed $(TargetRefPath) instead of
+           reconstructing the obj/ layout by string concatenation, so pack
+           still works with customized BaseIntermediateOutputPath/
+           IntermediateOutputPath (see build/gsharp.build.props), UseArtifactsOutput,
+           or a non-default MSBuildProjectExtensionsPath. -->
+      <TfmSpecificPackageFile Include="$(TargetRefPath)"
                               PackagePath="ref/$(TargetFramework)/" />
     </ItemGroup>
   </Target>
