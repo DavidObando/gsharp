@@ -999,22 +999,15 @@ internal sealed class OverloadResolver
                 continue;
             }
 
-            // Issue #1552: Kotlin-model null-safety gate. A nullable REFERENCE
-            // argument `S?` does NOT satisfy a non-nullable REFERENCE parameter
-            // unless the parameter is null-tolerant (`object`/`object?` or any
-            // nullable target). This overrides the #521 reference-upcast leak in
-            // Conversion.Classify (a NullableTypeSymbol exposes its underlying
-            // ClrType, so an IMPORTED `S? -> S` is otherwise mis-classified as
-            // implicit) WITHOUT changing global conversion semantics — we only
-            // treat such a candidate as non-applicable here. Value-type nullables
-            // (`int32?`, user `struct?`, `enum?`) and nullable type-parameter
-            // underlyings are never reference-like, so the gate leaves them
-            // untouched.
-            if (IsNullableReferenceGateRejected(argType, paramType))
-            {
-                return false;
-            }
-
+            // Issue #1627: the #1552 point-fix gate that used to live here
+            // (calling IsNullableReferenceGateRejected before classification)
+            // has been removed. Conversion.Classify now rejects an imported
+            // nullable-REFERENCE argument `S?` against a non-null-tolerant
+            // reference parameter `S` at the classification source (see the
+            // `#1627` comment in Conversion.Classify), so the general
+            // convertibility check below already reports it as non-applicable
+            // — consistently, in every BindConversion position, not just this
+            // multi-candidate positional filter.
             var conversion = Conversion.Classify(argType, paramType);
             if (conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity))
             {
