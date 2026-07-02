@@ -410,7 +410,6 @@ public sealed class ControlFlowGraph
     /// </summary>
     public sealed class GraphBuilder
     {
-        private readonly Dictionary<BoundStatement, BasicBlock> blockFromStatement = [];
         private readonly Dictionary<BoundLabel, BasicBlock> blockFromLabel = [];
         private readonly List<BasicBlockBranch> branches = [];
         private readonly BasicBlock start = new BasicBlock(isStart: true);
@@ -436,7 +435,6 @@ public sealed class ControlFlowGraph
             {
                 foreach (var statement in block.Statements)
                 {
-                    blockFromStatement.Add(statement, block);
                     if (statement is BoundLabelStatement labelStatement)
                     {
                         blockFromLabel.Add(labelStatement.Label, block);
@@ -525,20 +523,52 @@ public sealed class ControlFlowGraph
                 }
             }
 
-        ScanAgain:
-            foreach (var block in blocks)
-            {
-                if (!block.Incoming.Any())
-                {
-                    RemoveBlock(blocks, block);
-                    goto ScanAgain;
-                }
-            }
+            RemoveUnreachableBlocks(blocks);
 
             blocks.Insert(0, start);
             blocks.Add(end);
 
             return new ControlFlowGraph(start, end, blocks, branches);
+        }
+
+        private void RemoveUnreachableBlocks(List<BasicBlock> blocks)
+        {
+            // ponytail: single-pass worklist replacing the old goto-restart
+            // scan (was O(n^2)). Peels blocks whose incoming-branch count
+            // hits zero, cascading through their outgoing edges, same fixpoint
+            // as the original "remove and rescan" loop.
+            var removed = new HashSet<BasicBlock>();
+            var queue = new Queue<BasicBlock>();
+            foreach (var block in blocks)
+            {
+                if (!block.Incoming.Any())
+                {
+                    removed.Add(block);
+                    queue.Enqueue(block);
+                }
+            }
+
+            while (queue.Count > 0)
+            {
+                var block = queue.Dequeue();
+                foreach (var branch in block.Outgoing)
+                {
+                    branch.To.Incoming.Remove(branch);
+                    if (!removed.Contains(branch.To) && !branch.To.Incoming.Any())
+                    {
+                        removed.Add(branch.To);
+                        queue.Enqueue(branch.To);
+                    }
+                }
+            }
+
+            if (removed.Count == 0)
+            {
+                return;
+            }
+
+            branches.RemoveAll(branch => removed.Contains(branch.From) || removed.Contains(branch.To));
+            blocks.RemoveAll(block => removed.Contains(block));
         }
 
         private void Connect(BasicBlock from, BasicBlock to, BoundExpression condition = null)
@@ -560,23 +590,6 @@ public sealed class ControlFlowGraph
             from.Outgoing.Add(branch);
             to.Incoming.Add(branch);
             branches.Add(branch);
-        }
-
-        private void RemoveBlock(List<BasicBlock> blocks, BasicBlock block)
-        {
-            foreach (var branch in block.Incoming)
-            {
-                branch.From.Outgoing.Remove(branch);
-                branches.Remove(branch);
-            }
-
-            foreach (var branch in block.Outgoing)
-            {
-                branch.To.Incoming.Remove(branch);
-                branches.Remove(branch);
-            }
-
-            blocks.Remove(block);
         }
 
         private BoundExpression Negate(BoundExpression condition)
