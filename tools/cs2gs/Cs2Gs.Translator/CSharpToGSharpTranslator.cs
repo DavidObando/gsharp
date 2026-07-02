@@ -3427,6 +3427,21 @@ public sealed class CSharpToGSharpTranslator
             string op = binary.OperatorToken.Text;
             GExpression right = this.TranslateExpression(binary.Right);
 
+            // C# string concatenation `a + b`: when the `+` operator binds to
+            // `string`, C# implicitly converts each non-string operand to a string
+            // (via `String.Concat`/`ToString`). G# has no implicit conversion, so a
+            // `+` whose operands are not both `string` is GS0129 (`operator '+' is
+            // not defined for 'Indent' and 'string'`). Rewrite each non-string
+            // operand to an explicit `operand.ToString()` so the concatenation
+            // type-checks, matching C#'s displayed value.
+            if (binary.IsKind(SyntaxKind.AddExpression)
+                && this.context.GetTypeInfo(binary).Type?.SpecialType == SpecialType.System_String)
+            {
+                left = this.CoerceConcatOperand(binary.Left, left);
+                right = this.CoerceConcatOperand(binary.Right, right);
+                return new BinaryExpression(left, op, right);
+            }
+
             // C# null-coalescing `a ?? b`: the left is a nullable numeric, the
             // right must match the left's *underlying* (non-nullable) numeric type
             // (a `??` is not a symmetric arithmetic promotion of both sides). Only
@@ -3501,6 +3516,35 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return new BinaryExpression(left, op, right);
+        }
+
+        // For a string-concatenation `+` operand: if the operand's C# type is not
+        // already `string`, wrap the translated operand in an explicit
+        // `operand.ToString()` call so G# (which has no implicit string conversion)
+        // type-checks the concatenation. A string operand (including a nested
+        // string `+` sub-expression, whose type is also `string`) is returned
+        // unchanged, as is a bare `null` literal (`null.ToString()` would throw;
+        // C# renders it as the empty string, and a translated `nil` keeps that
+        // intent while remaining assignable to a `string` slot). The operand is
+        // parenthesized when needed so member access binds to the whole operand.
+        private GExpression CoerceConcatOperand(ExpressionSyntax operandSyntax, GExpression translated)
+        {
+            ITypeSymbol operandType = this.context.GetTypeInfo(operandSyntax).Type;
+            if (operandType?.SpecialType == SpecialType.System_String)
+            {
+                return translated;
+            }
+
+            if (IsNullOrSuppressedNull(operandSyntax))
+            {
+                return translated;
+            }
+
+            GExpression receiver = translated is BinaryExpression or IfExpression
+                ? new ParenthesizedExpression(translated)
+                : translated;
+
+            return new InvocationExpression(new MemberAccessExpression(receiver, "ToString"));
         }
 
         // For a compound numeric assignment `x OP= y` (`+= -= *= /= %= &= |= ^=`),
