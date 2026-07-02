@@ -42,6 +42,16 @@ internal sealed class MemberLookup
     private readonly BinderContext binderCtx;
 
     /// <summary>
+    /// Process-wide memoization backing <see cref="SafeGetMethodsIncludingSelfAndInterfaces"/>,
+    /// keyed on the CLR <see cref="Type"/> plus the probed method name.
+    /// Cleared via <see cref="ClearCache"/> (wired into
+    /// <see cref="ReferenceResolver.Dispose"/>) so entries keyed on a disposed
+    /// <c>MetadataLoadContext</c>'s <see cref="Type"/> instances do not pin
+    /// that context's memory for the process lifetime (#1622-style leak).
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(Type ClrType, string Name), IReadOnlyList<MethodInfo>> MethodsIncludingSelfAndInterfacesCache = new();
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="MemberLookup"/> class.
     /// </summary>
     /// <param name="binderCtx">The shared binder context that exposes the
@@ -133,34 +143,48 @@ internal sealed class MemberLookup
             return Array.Empty<MethodInfo>();
         }
 
-        var selfMethods = ClrTypeUtilities.SafeGetMethods(clrType, BindingFlags.Public | BindingFlags.Instance);
-        var result = new List<MethodInfo>();
-        foreach (var m in selfMethods)
+        // Issue #1678: this result is recomputed identically at every call
+        // site that probes the same (type, name) pair — e.g. the "does this
+        // type have an accessible Add?" collection-initializer check runs once
+        // per collection-literal expression against the same receiver type.
+        // ClrTypeUtilities.SafeGetMethods/SafeGetInterfaces are themselves
+        // memoized per Type now, but the name filter and the O(result ×
+        // candidates) IsMethodHiddenByExisting dedup below still re-ran on
+        // every call before this cache existed. Keyed on the CLR Type (not the
+        // GSharp symbol) so it is naturally invalidated by
+        // ClrTypeUtilities.ClearCache() clearing the caches it reads from.
+        return MethodsIncludingSelfAndInterfacesCache.GetOrAdd((clrType, name), key =>
         {
-            if (string.Equals(m.Name, name, StringComparison.Ordinal))
+            var (t, n) = key;
+            var selfMethods = ClrTypeUtilities.SafeGetMethods(t, BindingFlags.Public | BindingFlags.Instance);
+            var result = new List<MethodInfo>();
+            foreach (var m in selfMethods)
             {
-                result.Add(m);
-            }
-        }
-
-        // Walk transitive interfaces for DIMs not surfaced by the concrete type.
-        foreach (var iface in ClrTypeUtilities.SafeGetInterfaces(clrType))
-        {
-            foreach (var m in ClrTypeUtilities.SafeGetMethods(iface, BindingFlags.Public | BindingFlags.Instance))
-            {
-                if (!string.Equals(m.Name, name, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (!IsMethodHiddenByExisting(result, m))
+                if (string.Equals(m.Name, n, StringComparison.Ordinal))
                 {
                     result.Add(m);
                 }
             }
-        }
 
-        return result;
+            // Walk transitive interfaces for DIMs not surfaced by the concrete type.
+            foreach (var iface in ClrTypeUtilities.SafeGetInterfaces(t))
+            {
+                foreach (var m in ClrTypeUtilities.SafeGetMethods(iface, BindingFlags.Public | BindingFlags.Instance))
+                {
+                    if (!string.Equals(m.Name, n, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (!IsMethodHiddenByExisting(result, m))
+                    {
+                        result.Add(m);
+                    }
+                }
+            }
+
+            return result;
+        });
     }
 
     /// <summary>
@@ -1995,6 +2019,13 @@ internal sealed class MemberLookup
 
         return false;
     }
+
+    /// <summary>
+    /// Removes every entry from the <see cref="MethodsIncludingSelfAndInterfacesCache"/>.
+    /// Called by <see cref="ReferenceResolver.Dispose"/> (#1678, mirroring #1622)
+    /// alongside <see cref="ClrTypeUtilities.ClearCache"/>.
+    /// </summary>
+    internal static void ClearCache() => MethodsIncludingSelfAndInterfacesCache.Clear();
 
     /// <summary>
     /// Returns the callable parameter slice of <paramref name="method"/> —

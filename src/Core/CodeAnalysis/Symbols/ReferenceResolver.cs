@@ -14,6 +14,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Runtime.CompilerServices;
+using GSharp.Core.CodeAnalysis.Binding;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -194,6 +195,14 @@ public sealed class ReferenceResolver : IDisposable
         StructSymbol.ClearCache();
         InterfaceSymbol.ClearCache();
         DelegateTypeSymbol.ClearCache();
+
+        // Issue #1678: the binder's per-Type CLR member-enumeration
+        // memoization (ClrTypeUtilities.SafeGetMethods/SafeGetInterfaces/etc.
+        // and MemberLookup's higher-level (Type, name) method cache) is also
+        // process-wide and keyed on this context's Type objects. Clear it for
+        // the same reason as every cache above.
+        ClrTypeUtilities.ClearCache();
+        MemberLookup.ClearCache();
     }
 
     /// <summary>
