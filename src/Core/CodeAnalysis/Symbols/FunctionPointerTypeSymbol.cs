@@ -68,10 +68,12 @@ public sealed class FunctionPointerTypeSymbol : TypeSymbol
     /// <returns>A cached <see cref="FunctionPointerTypeSymbol"/>.</returns>
     public static FunctionPointerTypeSymbol Get(CallingConvention callingConvention, ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
     {
-        var displayName = BuildDisplayName(callingConvention, parameterTypes, returnType ?? TypeSymbol.Void);
+        returnType ??= TypeSymbol.Void;
+        var displayName = BuildDisplayName(callingConvention, parameterTypes, returnType);
+        var key = BuildIdentityKey("u", callingConvention.ToString(), parameterTypes, returnType);
         return Cache.GetOrAdd(
-            displayName,
-            _ => new FunctionPointerTypeSymbol(displayName, isManaged: false, callingConvention, parameterTypes, returnType ?? TypeSymbol.Void));
+            key,
+            _ => new FunctionPointerTypeSymbol(displayName, isManaged: false, callingConvention, parameterTypes, returnType));
     }
 
     /// <summary>
@@ -85,10 +87,45 @@ public sealed class FunctionPointerTypeSymbol : TypeSymbol
     /// <returns>A cached managed <see cref="FunctionPointerTypeSymbol"/>.</returns>
     public static FunctionPointerTypeSymbol GetManaged(ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
     {
-        var displayName = BuildManagedDisplayName(parameterTypes, returnType ?? TypeSymbol.Void);
+        returnType ??= TypeSymbol.Void;
+        var displayName = BuildManagedDisplayName(parameterTypes, returnType);
+        var key = BuildIdentityKey("m", null, parameterTypes, returnType);
         return Cache.GetOrAdd(
-            displayName,
-            _ => new FunctionPointerTypeSymbol(displayName, isManaged: true, CallingConvention.Winapi, parameterTypes, returnType ?? TypeSymbol.Void));
+            key,
+            _ => new FunctionPointerTypeSymbol(displayName, isManaged: true, CallingConvention.Winapi, parameterTypes, returnType));
+    }
+
+    /// <summary>
+    /// Issue #1624: builds an identity-correct cache key using
+    /// <see cref="FunctionTypeSymbol.AppendIdentityKey"/> — the same builder
+    /// <see cref="FunctionTypeSymbol"/> and <see cref="TupleTypeSymbol"/> use —
+    /// so two distinct types that merely share a display name (e.g. a
+    /// same-named parameter type loaded from different compilations) never
+    /// alias in this process-wide cache.
+    /// </summary>
+    private static string BuildIdentityKey(string kindTag, string callingConventionTag, ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append('!').Append(kindTag);
+        if (callingConventionTag != null)
+        {
+            sb.Append('[').Append(callingConventionTag).Append(']');
+        }
+
+        sb.Append('(');
+        for (var i = 0; i < parameterTypes.Length; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(',');
+            }
+
+            FunctionTypeSymbol.AppendIdentityKey(sb, parameterTypes[i]);
+        }
+
+        sb.Append(")->");
+        FunctionTypeSymbol.AppendIdentityKey(sb, returnType);
+        return sb.ToString();
     }
 
     private static string BuildManagedDisplayName(ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)

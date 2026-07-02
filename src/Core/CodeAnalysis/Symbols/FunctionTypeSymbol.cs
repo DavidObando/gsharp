@@ -201,7 +201,16 @@ public sealed class FunctionTypeSymbol : TypeSymbol
         return returnType == null || returnType == TypeSymbol.Void;
     }
 
-    private static void AppendIdentityKey(System.Text.StringBuilder builder, TypeSymbol type)
+    /// <summary>
+    /// Appends an identity-correct cache-key fragment for <paramref name="type"/>.
+    /// Issue #1624: shared by <see cref="TupleTypeSymbol"/> and
+    /// <see cref="FunctionPointerTypeSymbol"/> so every structural cache in the
+    /// symbol table keys on symbol identity (not display name), preventing
+    /// same-named types from different compilations from aliasing.
+    /// </summary>
+    /// <param name="builder">The key builder to append to.</param>
+    /// <param name="type">The type whose identity-key fragment to append.</param>
+    internal static void AppendIdentityKey(System.Text.StringBuilder builder, TypeSymbol type)
     {
         // Issue #1457: any slot that references a same-compilation user type
         // (directly or nested, e.g. `Item`, `List[Item]`, `(Item, int)`) must be
