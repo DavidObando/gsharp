@@ -465,10 +465,26 @@ public class InterpolatedStringTests
         {
             // Warm up JIT once before timing.
             SyntaxTree.Parse(SourceText.From(source));
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            SyntaxTree.Parse(SourceText.From(source));
-            sw.Stop();
-            return sw.ElapsedTicks;
+
+            // Take the best (minimum) of several runs. Minimum is the least
+            // noisy statistic for wall-clock microbenchmarks: it excludes GC
+            // pauses and scheduler preemption spikes that otherwise make a
+            // single-shot ratio flaky on shared CI hardware.
+            var best = long.MaxValue;
+            for (var i = 0; i < 7; i++)
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                SyntaxTree.Parse(SourceText.From(source));
+                sw.Stop();
+                if (sw.ElapsedTicks < best)
+                {
+                    best = sw.ElapsedTicks;
+                }
+            }
+
+            // Floor the denominator so an anomalously fast small sample can't
+            // blow up the ratio.
+            return System.Math.Max(best, 1);
         }
 
         var small = TimeParse(BuildSource(500));
