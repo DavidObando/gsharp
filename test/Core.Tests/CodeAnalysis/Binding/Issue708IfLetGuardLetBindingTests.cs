@@ -283,6 +283,47 @@ Run(""a"", ""b"")
         Assert.Single(result.Diagnostics, d => d.Id == "GS0297");
     }
 
+    [Fact]
+    public void GuardLet_LaterArmBadInitializer_ArmDiagnosticSurvivesExactlyOnce()
+    {
+        // Arm 2's rhs is non-nullable (its own GS0296). Arm 1 succeeds and
+        // binds the else block; per #1637 the arm-2-specific diagnostic
+        // must still surface exactly once, not swallowed by the else's
+        // per-arm TruncateTo.
+        var result = Evaluate(@"
+func Run(a string?) int32 {
+    guard let x = a, let y = ""hi"" else {
+        return 0
+    }
+    return x.Length + y.Length
+}
+Run(""a"")
+");
+
+        Assert.Single(result.Diagnostics, d => d.Id == "GS0296");
+    }
+
+    [Fact]
+    public void GuardLet_AllArmsFail_ElseStillBoundOnceForDiagnostics()
+    {
+        // Issue #1637 follow-up: if every binding arm fails (non-nullable
+        // rhs on both), the arm loop never binds the else block. The
+        // fallback bind must still surface GS0297 and the else's own
+        // internal diagnostic exactly once.
+        var result = Evaluate(@"
+func Run() {
+    guard let x = ""a"", let y = ""b"" else {
+        var z = 1
+    }
+    var w = 1
+}
+Run()
+");
+
+        Assert.Equal(2, result.Diagnostics.Count(d => d.Id == "GS0296"));
+        Assert.Single(result.Diagnostics, d => d.Id == "GS0297");
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));

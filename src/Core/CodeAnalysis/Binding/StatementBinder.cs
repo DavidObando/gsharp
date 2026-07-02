@@ -1606,6 +1606,20 @@ internal sealed class StatementBinder
             persistentFrame[variable] = underlying;
             statements.Add(ifStmt);
         }
+
+        // If every arm's binding clause failed (all `continue`d above), the
+        // else block was never bound and its diagnostics -- including
+        // GS0297 -- would silently vanish. Bind it once here, purely for
+        // diagnostics; it isn't wired into any statement since there's no
+        // successful binding left to guard.
+        if (!hasBoundElseOnce)
+        {
+            var armElse = BindStatement(syntax.ElseStatement);
+            if (!EndsInUnconditionalExit(armElse))
+            {
+                Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location);
+            }
+        }
     }
 
     private static Dictionary<AccessPath, TypeSymbol> MergeNarrowingFrames(
