@@ -563,23 +563,19 @@ public class Issue1619SpillCompositeAwaitEmitTests
     }
 
     [Fact]
-    public void Await_In_NullConditional_Access_On_ValueType_Nullable_Emits_Invalid_IL_KnownLimitation()
+    public void Await_In_NullConditional_Access_On_ValueType_Nullable_Runs_And_Verifies()
     {
-        // Watch-item: T? for a value type (struct) receiver, with an await
-        // inside the null-conditional invocation's argument. Unlike the
-        // reference-type case above (Await_In_NullConditional_Access_...),
-        // gsc currently emits INVALID IL for this shape: the spiller's
-        // rebuilt receiver ends up boxed as System.Nullable`1<Pt> where the
-        // emitter expects the unwrapped Pt value, caught here by ilverify's
-        // StackUnexpected error. This is a pre-existing, separate defect in
-        // how nullable *value types* are represented across the
-        // null-conditional spill path - unrelated to the
-        // SpillConditionalAddress double-eval fixed above - and is out of
-        // scope for issue #1619 / this fix. This test pins the current
-        // (broken) behavior so a future fix has a regression test to flip
-        // green, and so this gap doesn't silently regress further.
+        // Issue #1700: T? for a value type (struct) receiver, with an await
+        // inside the null-conditional invocation's argument. The receiver
+        // probe (EmitNullConditionalReceiverProbe) now spills the value-type
+        // Nullable<T> receiver to its own scratch slot and boxes it (rather
+        // than storing it into nc.Capture, which is declared as the
+        // unwrapped T and previously produced a StackUnexpected verifier
+        // error), matching the `??`/`!!` null-probe shapes elsewhere in the
+        // emitter, so this now emits valid IL and runs both the has-value
+        // and nil receiver shapes correctly.
         var source = """
-            package P1619O
+            package P1700A
 
             import System.Threading.Tasks
 
@@ -597,14 +593,60 @@ public class Issue1619SpillCompositeAwaitEmitTests
             }
 
             public var nonNilResult = -1
+            public var nilResult = -1
             let c = C()
             let p = Pt{X: 10}
             let r1 = c.AddToPoint(p, Task.FromResult(5)).Result
             nonNilResult = r1 ?? -100
+            let r2 = c.AddToPoint(nil, Task.FromResult(5)).Result
+            nilResult = r2 ?? -100
             """;
 
-        var ex = Assert.Throws<Xunit.Sdk.XunitException>(() => CompileAndInvokeEntry(source));
-        Assert.Contains("StackUnexpected", ex.Message);
+        var assembly = CompileAndInvokeEntry(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+
+        Assert.Equal(15, ReadInt(program, "nonNilResult"));
+        Assert.Equal(-100, ReadInt(program, "nilResult"));
+    }
+
+    [Fact]
+    public void Await_In_NullConditional_Receiver_On_Bcl_ValueType_Nullable_Runs_And_Verifies()
+    {
+        // Issue #1700 sibling shape: the await sits in the *receiver*
+        // expression (SpillNullConditionalAccess's receiverHasAwait branch,
+        // rebuilding the node with the possibly-spilled receiver expression
+        // unchanged) rather than in the invocation argument (the
+        // receiverHasAwait == false, whenNotNullHasAwait == true branch
+        // exercised above). Uses a BCL value type (int32?) to prove the fix
+        // generalizes beyond user-declared structs. Both branches funnel
+        // through the same EmitNullConditionalReceiverProbe fix.
+        var source = """
+            package P1700C
+
+            import System.Threading.Tasks
+
+            class C2 {
+                init() {}
+
+                async func Cmp(t Task[int32?]) int32? {
+                    return (await t)?.CompareTo(5)
+                }
+            }
+
+            public var nonNilResult = -100
+            public var nilResult = -100
+            let c = C2()
+            let r1 = c.Cmp(Task.FromResult[int32?](10)).Result
+            nonNilResult = r1 ?? -100
+            let r2 = c.Cmp(Task.FromResult[int32?](nil)).Result
+            nilResult = r2 ?? -100
+            """;
+
+        var assembly = CompileAndInvokeEntry(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+
+        Assert.Equal(1, ReadInt(program, "nonNilResult"));
+        Assert.Equal(-100, ReadInt(program, "nilResult"));
     }
 
     [Fact]
