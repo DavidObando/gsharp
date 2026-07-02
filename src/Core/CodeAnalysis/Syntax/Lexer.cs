@@ -1536,7 +1536,17 @@ public sealed class Lexer
         {
             if (targetType == TypeSymbol.Float32)
             {
-                return float.Parse(digitBody, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture);
+                var f = float.Parse(digitBody, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture);
+
+                // G# has no float-infinity literal syntax, so any non-finite
+                // result here means the literal overflowed (net10.0's
+                // float.Parse returns ±Infinity instead of throwing).
+                if (float.IsInfinity(f))
+                {
+                    throw new System.OverflowException();
+                }
+
+                return f;
             }
 
             if (targetType == TypeSymbol.Decimal)
@@ -1545,7 +1555,13 @@ public sealed class Lexer
             }
 
             // Float64 default.
-            return double.Parse(digitBody, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture);
+            var d = double.Parse(digitBody, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture);
+            if (double.IsInfinity(d))
+            {
+                throw new System.OverflowException();
+            }
+
+            return d;
         }
         catch (System.Exception)
         {

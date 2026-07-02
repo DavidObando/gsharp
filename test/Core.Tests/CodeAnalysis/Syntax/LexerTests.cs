@@ -260,6 +260,22 @@ public class LexerTests
         Assert.Equal(expectedValue, token.Value);
     }
 
+    // .NET Core 3.0+ float/double.Parse returns ±Infinity for out-of-range
+    // text instead of throwing. G# has no infinity literal syntax, so any
+    // non-finite parse result is a genuine overflow (issue #1606) and must
+    // report GS0004 rather than silently producing Infinity.
+    [Theory]
+    [InlineData("1e999")]
+    [InlineData("1e999d")]
+    [InlineData("1e40f")]
+    public void Lexes_FloatLiteral_Overflow_Reports(string text)
+    {
+        var tokens = SyntaxTree.ParseTokens(text, out var diagnostics);
+        var token = Assert.Single(tokens);
+        Assert.Contains(diagnostics, d => d.Id == "GS0004");
+        Assert.False(double.IsInfinity(System.Convert.ToDouble(token.Value)));
+    }
+
     [Theory]
     [InlineData("1.5M")]
     [InlineData("1.5m")]
