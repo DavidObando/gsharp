@@ -3925,7 +3925,23 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var field in classSym.Fields)
         {
-            if (field.Type == TypeSymbol.String && primaryParamFieldNames?.Contains(field.Name) != true)
+            if (primaryParamFieldNames?.Contains(field.Name) == true)
+            {
+                continue;
+            }
+
+            if (field.Type == TypeSymbol.String)
+            {
+                return true;
+            }
+
+            // Issue #1714: a struct-typed field may itself contain a `string`
+            // field (at any nesting depth) that needs the same fallback —
+            // see AppendNestedStructStringDefaultAssignments.
+            if (field.Type is StructSymbol nestedStructField
+                && IsValueTypeSymbol(nestedStructField)
+                && !IsUserGenericTypeReference(nestedStructField)
+                && HasNestedStringField(nestedStructField, depth: 0))
             {
                 return true;
             }
@@ -3936,6 +3952,43 @@ internal sealed class ReflectionMetadataEmitter
             if (property.IsAutoProperty && property.BackingField != null && property.Type == TypeSymbol.String)
             {
                 return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #1714: true when <paramref name="structType"/> has a `string`
+    /// field reachable at any nesting depth through a chain of struct-typed
+    /// fields — i.e. whether <see cref="AppendNestedStructStringDefaultAssignments"/>
+    /// would emit at least one assignment for it. Mirrors the recursion depth
+    /// guard used there for the same defensive reason.
+    /// </summary>
+    private static bool HasNestedStringField(StructSymbol structType, int depth)
+    {
+        const int maxDepth = 64;
+        if (depth >= maxDepth)
+        {
+            return false;
+        }
+
+        for (var t = structType; t != null; t = t.BaseClass)
+        {
+            foreach (var field in t.Fields)
+            {
+                if (field.Type == TypeSymbol.String)
+                {
+                    return true;
+                }
+
+                if (field.Type is StructSymbol nestedStruct
+                    && IsValueTypeSymbol(nestedStruct)
+                    && !IsUserGenericTypeReference(nestedStruct)
+                    && HasNestedStringField(nestedStruct, depth + 1))
+                {
+                    return true;
+                }
             }
         }
 
@@ -3980,6 +4033,22 @@ internal sealed class ReflectionMetadataEmitter
                 var defaultExpr = new BoundDefaultExpression(null, TypeSymbol.String);
                 var assignment = new BoundFieldAssignmentExpression(null, thisParam, classSym, field, defaultExpr);
                 statements.Add(new BoundExpressionStatement(null, assignment));
+                continue;
+            }
+
+            // Issue #1714: a struct-typed field with no explicit initializer is
+            // zero-inited the same way `default(FieldType)` is (see the
+            // MethodBodyEmitter.Conversions.cs initobj fixup) — its own string
+            // sub-fields, at any nesting depth, would otherwise stay `null`.
+            // Mirror the interpreter's Evaluator.DefaultValue(StructSymbol)
+            // recursion here so a nested string field also becomes `""`.
+            if (field.Type is StructSymbol nestedStructField
+                && IsValueTypeSymbol(nestedStructField)
+                && !IsUserGenericTypeReference(nestedStructField)
+                && primaryParamFieldNames?.Contains(field.Name) != true)
+            {
+                var fieldAccess = new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), classSym, field);
+                AppendNestedStructStringDefaultAssignments(statements, fieldAccess, nestedStructField, depth: 0);
             }
         }
 
@@ -4000,6 +4069,51 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return statements.ToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #1714: recursively walks <paramref name="structType"/>'s fields
+    /// (base-class chain first, same order as
+    /// <c>Evaluator.DefaultValue(StructSymbol)</c>) and appends a synthesized
+    /// <c>receiver.Field = ""</c> statement for every `string` field found —
+    /// at any nesting depth reachable through a chain of struct-typed fields
+    /// — using <see cref="BoundFieldAssignmentExpression.WithExpressionReceiver"/>
+    /// to build the nested member-access chain. A struct value type cannot
+    /// contain itself by value (the compiler rejects such declarations), so
+    /// unbounded recursion isn't reachable in practice; <paramref name="depth"/>
+    /// is a defensive cap guarding against that invariant ever being violated.
+    /// </summary>
+    private static void AppendNestedStructStringDefaultAssignments(
+        ImmutableArray<BoundStatement>.Builder statements,
+        BoundExpression receiverExpr,
+        StructSymbol structType,
+        int depth)
+    {
+        const int maxDepth = 64;
+        if (depth >= maxDepth)
+        {
+            return;
+        }
+
+        for (var t = structType; t != null; t = t.BaseClass)
+        {
+            foreach (var field in t.Fields)
+            {
+                if (field.Type == TypeSymbol.String)
+                {
+                    var defaultExpr = new BoundDefaultExpression(null, TypeSymbol.String);
+                    var assignment = BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, t, field, defaultExpr);
+                    statements.Add(new BoundExpressionStatement(null, assignment));
+                }
+                else if (field.Type is StructSymbol nestedStruct
+                    && IsValueTypeSymbol(nestedStruct)
+                    && !IsUserGenericTypeReference(nestedStruct))
+                {
+                    var nestedFieldAccess = new BoundFieldAccessExpression(null, receiverExpr, t, field);
+                    AppendNestedStructStringDefaultAssignments(statements, nestedFieldAccess, nestedStruct, depth + 1);
+                }
+            }
+        }
     }
 
     /// <summary>

@@ -1018,34 +1018,80 @@ internal sealed partial class MethodBodyEmitter
         // Issue #1714: `initobj` zero-inits every field to its CLR default,
         // which is `null` for a `string` field — diverging from the
         // interpreter's DefaultValue(StructSymbol), which recursively
-        // defaults each field (so a string field becomes `""`). Patch up any
-        // directly-declared string field (walking the base-class chain, same
-        // order as the interpreter) so `default(MyStruct)` agrees with the
-        // interpreter for structs with no explicit field initializer left
-        // unhandled by BuildInstanceFieldInitializerStatements /
-        // ExpressionBinder.Literals's struct-literal fold. Skipped for
-        // generic struct instantiations — those fields are erased at this
-        // point and not resolvable via the plain FieldDef map; the existing
-        // (pre-#1714) CLR-default behavior is unchanged for them.
+        // defaults each field, including fields nested inside a struct-typed
+        // field (so a string field becomes `""` at any nesting depth). Patch
+        // up any string field reachable from `structDefaultType` through a
+        // chain of struct-typed fields (walking the base-class chain at each
+        // level, same order as the interpreter) so `default(MyStruct)`
+        // agrees with the interpreter for structs with no explicit field
+        // initializer left unhandled by BuildInstanceFieldInitializerStatements
+        // / ExpressionBinder.Literals's struct-literal fold. Skipped for
+        // generic struct instantiations (at any depth) — those fields are
+        // erased at this point and not resolvable via the plain FieldDef map;
+        // the existing (pre-#1714) CLR-default behavior is unchanged for them.
         if (type is StructSymbol structDefaultType && !ReflectionMetadataEmitter.IsUserGenericTypeReference(structDefaultType))
         {
-            for (var t = structDefaultType; t != null; t = t.BaseClass)
-            {
-                foreach (var field in t.Fields)
-                {
-                    if (field.Type == TypeSymbol.String
-                        && this.outer.cache.StructFieldDefs.TryGetValue(field, out var stringFieldHandle))
-                    {
-                        this.il.LoadLocalAddress(slot);
-                        this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(string.Empty));
-                        this.il.OpCode(ILOpCode.Stfld);
-                        this.il.Token(stringFieldHandle);
-                    }
-                }
-            }
+            this.EmitDefaultStructStringFieldPatches(structDefaultType, slot, new List<EntityHandle>(), depth: 0);
         }
 
         this.il.LoadLocal(slot);
+    }
+
+    /// <summary>
+    /// Issue #1714: recursively walks <paramref name="structType"/>'s fields
+    /// (base-class chain first, same order as
+    /// <c>Evaluator.DefaultValue(StructSymbol)</c>) and, for every `string`
+    /// field found — at any nesting depth reachable through a chain of
+    /// struct-typed fields — emits an address load for the local at
+    /// <paramref name="slot"/> followed by an `ldflda` for each intermediate
+    /// struct-typed field in <paramref name="fieldAddressChain"/>, then
+    /// `stfld`'s the empty-string literal into the (possibly nested) string
+    /// field. A struct value type cannot contain itself by value (the
+    /// compiler rejects such declarations), so unbounded recursion isn't
+    /// reachable in practice; <paramref name="depth"/> is a defensive cap
+    /// guarding against that invariant ever being violated.
+    /// </summary>
+    private void EmitDefaultStructStringFieldPatches(StructSymbol structType, int slot, List<EntityHandle> fieldAddressChain, int depth)
+    {
+        const int maxDepth = 64;
+        if (depth >= maxDepth)
+        {
+            return;
+        }
+
+        for (var t = structType; t != null; t = t.BaseClass)
+        {
+            foreach (var field in t.Fields)
+            {
+                if (field.Type == TypeSymbol.String)
+                {
+                    if (!this.outer.cache.StructFieldDefs.TryGetValue(field, out var stringFieldHandle))
+                    {
+                        continue;
+                    }
+
+                    this.il.LoadLocalAddress(slot);
+                    foreach (var intermediate in fieldAddressChain)
+                    {
+                        this.il.OpCode(ILOpCode.Ldflda);
+                        this.il.Token(intermediate);
+                    }
+
+                    this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(string.Empty));
+                    this.il.OpCode(ILOpCode.Stfld);
+                    this.il.Token(stringFieldHandle);
+                }
+                else if (field.Type is StructSymbol nestedStruct
+                    && ReflectionMetadataEmitter.IsValueTypeSymbol(nestedStruct)
+                    && !ReflectionMetadataEmitter.IsUserGenericTypeReference(nestedStruct)
+                    && this.outer.cache.StructFieldDefs.TryGetValue(field, out var nestedFieldHandle))
+                {
+                    fieldAddressChain.Add(nestedFieldHandle);
+                    this.EmitDefaultStructStringFieldPatches(nestedStruct, slot, fieldAddressChain, depth + 1);
+                    fieldAddressChain.RemoveAt(fieldAddressChain.Count - 1);
+                }
+            }
+        }
     }
 
     /// <summary>
