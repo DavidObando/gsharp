@@ -11,6 +11,10 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public sealed class BlockStatementSyntax : StatementSyntax
 {
+    // Backing field for the property the parser assigns after construction. Its setter
+    // invalidates the node's cached span (issue #1675).
+    private SyntaxToken unsafeKeyword;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="BlockStatementSyntax"/> class.
     /// </summary>
@@ -40,7 +44,15 @@ public sealed class BlockStatementSyntax : StatementSyntax
     /// <c>unsafe</c> context (unmanaged raw pointers and raw-pointer operations
     /// permitted). Assigned by the parser; <c>null</c> for ordinary blocks.
     /// </summary>
-    public SyntaxToken UnsafeKeyword { get; set; }
+    public SyntaxToken UnsafeKeyword
+    {
+        get => unsafeKeyword;
+        set
+        {
+            unsafeKeyword = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this block is an <c>unsafe { … }</c> block (ADR-0122 / issue #1014).</summary>
     public bool IsUnsafe => UnsafeKeyword != null;

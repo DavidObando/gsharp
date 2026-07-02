@@ -13,6 +13,12 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public sealed class InterfaceDeclarationSyntax : MemberSyntax
 {
+    // Backing fields for the properties the parser assigns after construction. Their setters
+    // invalidate the node's cached span (issue #1675).
+    private SyntaxToken baseColonToken;
+    private SeparatedSyntaxList<TypeClauseSyntax> baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
+    private ImmutableArray<FieldDeclarationSyntax> staticFields = ImmutableArray<FieldDeclarationSyntax>.Empty;
+
     /// <summary>Initializes a new instance of the <see cref="InterfaceDeclarationSyntax"/> class.</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="accessibilityModifier">The optional accessibility modifier.</param>
@@ -198,14 +204,30 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     /// Non-null when the interface declares one or more base interfaces, e.g.
     /// <c>interface B : A</c>. Mirrors <see cref="StructDeclarationSyntax.BaseColonToken"/>.
     /// </summary>
-    public SyntaxToken BaseColonToken { get; set; }
+    public SyntaxToken BaseColonToken
+    {
+        get => baseColonToken;
+        set
+        {
+            baseColonToken = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>
     /// Gets or sets the comma-separated base-interface type clauses (issue #1006).
     /// Empty when the interface declares no base interfaces. Each clause must
     /// resolve to an interface; the binder rejects class/struct bases.
     /// </summary>
-    public SeparatedSyntaxList<TypeClauseSyntax> BaseTypeClauses { get; set; } = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
+    public SeparatedSyntaxList<TypeClauseSyntax> BaseTypeClauses
+    {
+        get => baseTypeClauses;
+        set
+        {
+            baseTypeClauses = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this interface declares one or more base interfaces (issue #1006).</summary>
     public bool HasBaseInterfaces => BaseColonToken != null;
@@ -217,5 +239,13 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     /// fields on the interface TypeDef. Populated post-construction by the
     /// parser (mirrors <see cref="BaseTypeClauses"/>).
     /// </summary>
-    public ImmutableArray<FieldDeclarationSyntax> StaticFields { get; set; } = ImmutableArray<FieldDeclarationSyntax>.Empty;
+    public ImmutableArray<FieldDeclarationSyntax> StaticFields
+    {
+        get => staticFields;
+        set
+        {
+            staticFields = value;
+            InvalidateCachedSpan();
+        }
+    }
 }

@@ -11,6 +11,10 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public sealed class PropertyDeclarationSyntax : SyntaxNode
 {
+    // Backing field for the property the parser assigns after construction. Its setter
+    // invalidates the node's cached span (issue #1675).
+    private SyntaxToken staticModifier;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="PropertyDeclarationSyntax"/> class.
     /// </summary>
@@ -74,7 +78,15 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <c>shared { … }</c> block (ADR-0089 / issue #1019), or
     /// <see langword="null"/> for an ordinary instance property.
     /// </summary>
-    public SyntaxToken StaticModifier { get; set; }
+    public SyntaxToken StaticModifier
+    {
+        get => staticModifier;
+        set
+        {
+            staticModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this property carries a <c>shared</c> static modifier (ADR-0089 / issue #1019).</summary>
     public bool HasStaticModifier => StaticModifier != null;
@@ -121,6 +133,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     internal PropertyDeclarationSyntax WithAnnotations(ImmutableArray<AnnotationSyntax> annotations)
     {
         Annotations = annotations.IsDefault ? ImmutableArray<AnnotationSyntax>.Empty : annotations;
+        InvalidateCachedSpan();
         return this;
     }
 
@@ -144,6 +157,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
         OpenBracketToken = openBracketToken;
         Parameters = parameters ?? new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty);
         CloseBracketToken = closeBracketToken;
+        InvalidateCachedSpan();
         return this;
     }
 }

@@ -11,6 +11,22 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public sealed class StructDeclarationSyntax : MemberSyntax
 {
+    // Backing fields for the properties the parser assigns after construction. Their setters
+    // invalidate the node's cached span (issue #1675) so a span computed before the mutation is
+    // never served afterwards.
+    private SeparatedSyntaxList<TypeClauseSyntax> baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
+    private SyntaxToken unsafeModifier;
+    private TypeParameterListSyntax typeParameterList;
+    private SyntaxToken refModifier;
+    private SharedBlockSyntax sharedBlock;
+    private SyntaxToken baseConstructorOpenParenthesisToken;
+    private SeparatedSyntaxList<ExpressionSyntax> baseConstructorArguments;
+    private SyntaxToken baseConstructorCloseParenthesisToken;
+    private SyntaxToken sealedKeyword;
+    private ImmutableArray<ConstructorDeclarationSyntax> constructors = ImmutableArray<ConstructorDeclarationSyntax>.Empty;
+    private DeinitDeclarationSyntax deinitializer;
+    private ImmutableArray<MemberSyntax> nestedTypes = ImmutableArray<MemberSyntax>.Empty;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="StructDeclarationSyntax"/> class.
     /// </summary>
@@ -400,8 +416,15 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// Gets or sets the parsed base/interface type clauses in source order.
     /// Empty/default when no base clause was declared. Assigned by the parser.
     /// </summary>
-    public SeparatedSyntaxList<TypeClauseSyntax> BaseTypeClauses { get; set; }
-        = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
+    public SeparatedSyntaxList<TypeClauseSyntax> BaseTypeClauses
+    {
+        get => baseTypeClauses;
+        set
+        {
+            baseTypeClauses = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this declaration carries a Kotlin-style primary constructor parameter list.</summary>
     public bool HasPrimaryConstructor => PrimaryConstructorOpenParenthesisToken != null;
@@ -423,7 +446,15 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// unmanaged raw pointers (<c>*T</c> → CLR <c>ELEMENT_TYPE_PTR</c>).
     /// Assigned by the parser; <c>null</c> otherwise.
     /// </summary>
-    public SyntaxToken UnsafeModifier { get; set; }
+    public SyntaxToken UnsafeModifier
+    {
+        get => unsafeModifier;
+        set
+        {
+            unsafeModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this aggregate was declared <c>unsafe</c> (ADR-0122 / issue #1014).</summary>
     public bool IsUnsafe => UnsafeModifier != null;
@@ -450,40 +481,118 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     public SyntaxToken CloseBraceToken { get; }
 
     /// <summary>Gets or sets the optional type-parameter list (Phase 4.3 / ADR-0020), e.g. <c>[T any]</c> in <c>class Box[T any] { ... }</c>. Assigned by the parser when the declaration is generic; <c>null</c> otherwise.</summary>
-    public TypeParameterListSyntax TypeParameterList { get; set; }
+    public TypeParameterListSyntax TypeParameterList
+    {
+        get => typeParameterList;
+        set
+        {
+            typeParameterList = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets or sets the optional <c>ref</c> contextual keyword (issue #367). Non-null marks this <c>struct</c> as by-ref-like (<c>ref struct</c>). Assigned by the parser; <c>null</c> otherwise.</summary>
-    public SyntaxToken RefModifier { get; set; }
+    public SyntaxToken RefModifier
+    {
+        get => refModifier;
+        set
+        {
+            refModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets or sets the optional <c>shared { … }</c> block (ADR-0053) grouping static member declarations. Null when the type has no shared block.</summary>
-    public SharedBlockSyntax SharedBlock { get; set; }
+    public SharedBlockSyntax SharedBlock
+    {
+        get => sharedBlock;
+        set
+        {
+            sharedBlock = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets or sets the optional opening paren of a base-constructor argument list (issue #306), e.g. the <c>(</c> in <c>: Exception(message)</c>. Null when the base clause supplies no constructor arguments. Assigned by the parser.</summary>
-    public SyntaxToken BaseConstructorOpenParenthesisToken { get; set; }
+    public SyntaxToken BaseConstructorOpenParenthesisToken
+    {
+        get => baseConstructorOpenParenthesisToken;
+        set
+        {
+            baseConstructorOpenParenthesisToken = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets or sets the base-constructor argument expressions (issue #306). Empty/default when no base-constructor argument list was declared.</summary>
-    public SeparatedSyntaxList<ExpressionSyntax> BaseConstructorArguments { get; set; }
+    public SeparatedSyntaxList<ExpressionSyntax> BaseConstructorArguments
+    {
+        get => baseConstructorArguments;
+        set
+        {
+            baseConstructorArguments = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets or sets the optional closing paren of the base-constructor argument list (issue #306). Null when none was declared.</summary>
-    public SyntaxToken BaseConstructorCloseParenthesisToken { get; set; }
+    public SyntaxToken BaseConstructorCloseParenthesisToken
+    {
+        get => baseConstructorCloseParenthesisToken;
+        set
+        {
+            baseConstructorCloseParenthesisToken = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this declaration carries an explicit base-constructor argument list (issue #306).</summary>
     public bool HasBaseConstructorArguments => BaseConstructorOpenParenthesisToken != null;
 
     /// <summary>Gets or sets the optional <c>sealed</c> contextual keyword (ADR-0078). Non-null marks a class as forming a closed hierarchy (subtypes confined to the same package). Always null for <c>struct</c>; the parser diagnoses <c>sealed struct</c> with GS0310.</summary>
-    public SyntaxToken SealedKeyword { get; set; }
+    public SyntaxToken SealedKeyword
+    {
+        get => sealedKeyword;
+        set
+        {
+            sealedKeyword = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this class was declared <c>sealed</c> (ADR-0078).</summary>
     public bool IsSealed => SealedKeyword != null;
 
     /// <summary>Gets or sets the optional standalone user-defined constructors (<c>init(...)</c>) declared in this class body (issue #306). Empty when the class declares none. Assigned by the parser.</summary>
-    public System.Collections.Immutable.ImmutableArray<ConstructorDeclarationSyntax> Constructors { get; set; }
-        = System.Collections.Immutable.ImmutableArray<ConstructorDeclarationSyntax>.Empty;
+    public System.Collections.Immutable.ImmutableArray<ConstructorDeclarationSyntax> Constructors
+    {
+        get => constructors;
+        set
+        {
+            constructors = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets or sets the optional user-defined <c>deinit</c> declaration (ADR-0068 / issue #698). Non-null only when the class body declares exactly one <c>deinit</c>; assigned by the parser. The parser reports GS0290 on any subsequent duplicate and stores only the first.</summary>
-    public DeinitDeclarationSyntax Deinitializer { get; set; }
+    public DeinitDeclarationSyntax Deinitializer
+    {
+        get => deinitializer;
+        set
+        {
+            deinitializer = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets or sets the nested type declarations (<c>class</c> / <c>struct</c> / <c>interface</c> / <c>enum</c>) declared inside this aggregate's body (ADR-0110 / issue #910). Empty for types that declare none. Each element is a <see cref="StructDeclarationSyntax"/>, <see cref="InterfaceDeclarationSyntax"/>, or <see cref="EnumDeclarationSyntax"/>. Assigned by the parser.</summary>
-    public ImmutableArray<MemberSyntax> NestedTypes { get; set; }
-        = ImmutableArray<MemberSyntax>.Empty;
+    public ImmutableArray<MemberSyntax> NestedTypes
+    {
+        get => nestedTypes;
+        set
+        {
+            nestedTypes = value;
+            InvalidateCachedSpan();
+        }
+    }
 }

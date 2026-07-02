@@ -11,6 +11,11 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public sealed class VariableDeclarationSyntax : StatementSyntax
 {
+    // Backing fields for the properties the parser assigns after construction. Their setters
+    // invalidate the node's cached span (issue #1675).
+    private SyntaxToken scopedModifier;
+    private SyntaxToken refKindModifier;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="VariableDeclarationSyntax"/> class.
     /// </summary>
@@ -87,7 +92,15 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// Gets or sets the optional <c>scoped</c> contextual modifier token (ADR-0058 / issue #376).
     /// When non-null, the local's safe-to-escape scope is restricted to the current function body.
     /// </summary>
-    public SyntaxToken ScopedModifier { get; set; }
+    public SyntaxToken ScopedModifier
+    {
+        get => scopedModifier;
+        set
+        {
+            scopedModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this declaration carries the <c>scoped</c> modifier (ADR-0058).</summary>
     public bool IsScoped => ScopedModifier != null;
@@ -97,7 +110,15 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// When non-null, this declaration is a ref-aliasing local: the slot stores a managed pointer to the
     /// initializer's lvalue and reads/writes through the local indirect through the alias.
     /// </summary>
-    public SyntaxToken RefKindModifier { get; set; }
+    public SyntaxToken RefKindModifier
+    {
+        get => refKindModifier;
+        set
+        {
+            refKindModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this declaration carries the <c>ref</c> aliasing modifier (issue #491).</summary>
     public bool HasRefKindModifier => RefKindModifier != null;
@@ -128,6 +149,7 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     internal VariableDeclarationSyntax WithAnnotations(ImmutableArray<AnnotationSyntax> annotations)
     {
         Annotations = annotations.IsDefault ? ImmutableArray<AnnotationSyntax>.Empty : annotations;
+        InvalidateCachedSpan();
         return this;
     }
 }
