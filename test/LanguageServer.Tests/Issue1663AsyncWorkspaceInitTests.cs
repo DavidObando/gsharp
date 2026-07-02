@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -89,7 +90,77 @@ public class Issue1663AsyncWorkspaceInitTests
         }
     }
 
-    private static string CreateSampleWorkspace()
+    /// <summary>
+    /// Issue #1786 follow-up (B1): the background workspace load must never clobber a client's
+    /// open buffer with stale disk text, no matter how didOpen/didChange interleaves with
+    /// discovery reaching that file. Runs the real "initialized" background-load path
+    /// concurrently with didOpen/didChange on the same file, many times, to flush out both
+    /// documented races (client edits before discovery registers the project; client edits
+    /// after discovery registers the project but before it visits the file).
+    /// </summary>
+    [Fact]
+    public async Task BackgroundLoadRacingDidOpen_ClientBufferAlwaysWinsOverDisk()
+    {
+        const string diskText = "func foo() {\n  var x = 1\n}\n";
+        const string bufferText = "func foo() {\n  var x = 2 // edited by client\n}\n";
+
+        for (var iteration = 0; iteration < 25; iteration++)
+        {
+            var rootDir = CreateSampleWorkspace(diskText);
+            try
+            {
+                var workspace = new WorkspaceState();
+                var server = new LspServer(new DocumentContentService(), workspace);
+                var filePath = Path.Combine(rootDir, "Demo", "Foo.gs");
+                var uri = DocumentUri.FromFileSystemPath(filePath);
+
+                await server.InitializeAsync(new InitializeParams { RootPath = rootDir });
+
+                // Kick off the real background load and, concurrently, hammer didOpen/didChange
+                // for the same file with different text than what's on disk.
+                using var doc = JsonDocument.Parse("{}");
+                var initializedTask = Task.Run(() => server.Initialized(doc.RootElement.Clone()));
+                var editTask = Task.Run(async () =>
+                {
+                    await server.DidOpenAsync(new DidOpenTextDocumentParams
+                    {
+                        TextDocument = new TextDocumentItem { Uri = uri, Text = bufferText },
+                    });
+                    for (var i = 0; i < 10; i++)
+                    {
+                        await server.DidChangeAsync(new DidChangeTextDocumentParams
+                        {
+                            TextDocument = new VersionedTextDocumentIdentifier { Uri = uri },
+                            ContentChanges = new List<TextDocumentContentChangeEvent> { new TextDocumentContentChangeEvent { Text = bufferText } },
+                        });
+                    }
+                });
+
+                await Task.WhenAll(initializedTask, editTask);
+                await WaitForAsync(() => workspace.GetProjectForFile(filePath) != null);
+
+                // Give the background load's per-file registration a moment to fully settle
+                // (it may still be mid-flight for other files/projects, but this workspace has
+                // only one file).
+                await WaitForAsync(() =>
+                {
+                    var proj = workspace.GetProjectForFile(filePath);
+                    return proj != null && proj.TryGetSyntaxTree(filePath, out var t) && t.Text.ToString() == bufferText;
+                });
+
+                var loadedProject = workspace.GetProjectForFile(filePath);
+                Assert.NotNull(loadedProject);
+                Assert.True(loadedProject.TryGetSyntaxTree(filePath, out var syntaxTree));
+                Assert.Equal(bufferText, syntaxTree.Text.ToString());
+            }
+            finally
+            {
+                Directory.Delete(rootDir, recursive: true);
+            }
+        }
+    }
+
+    private static string CreateSampleWorkspace(string sourceText = "func foo() {\n  var x = 1\n}\n")
     {
         var rootDir = Path.Combine(Path.GetTempPath(), "gsinit_" + Guid.NewGuid().ToString("N"));
         var projDir = Path.Combine(rootDir, "Demo");
@@ -99,7 +170,7 @@ public class Issue1663AsyncWorkspaceInitTests
             Path.Combine(projDir, "Demo.gsproj"),
             "<Project Sdk=\"Gsharp.NET.Sdk\">\n  <PropertyGroup><OutputType>Library</OutputType><TargetFramework>net10.0</TargetFramework><AssemblyName>Demo</AssemblyName></PropertyGroup>\n</Project>\n");
 
-        File.WriteAllText(Path.Combine(projDir, "Foo.gs"), "func foo() {\n  var x = 1\n}\n");
+        File.WriteAllText(Path.Combine(projDir, "Foo.gs"), sourceText);
 
         return rootDir;
     }

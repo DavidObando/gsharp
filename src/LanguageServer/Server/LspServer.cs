@@ -46,6 +46,7 @@ public sealed class LspServer
     private Timer refreshTimer;
     private string defaultFormattingIndent = "  ";
     private string pendingWorkspaceRootPath;
+    private CancellationTokenSource backgroundLoadCts;
 
     public LspServer(DocumentContentService documentContentService, WorkspaceState workspaceState, ILogger logger = null)
     {
@@ -85,21 +86,48 @@ public sealed class LspServer
         // Issue #1663: workspace discovery (globbing every project, reading and parsing every
         // source file) used to run inline in "initialize", blocking the handshake for
         // seconds-to-minutes on a large workspace. Kick it off in the background instead, now
-        // that the client has the capabilities and can start sending requests. WorkspaceState's
-        // maps are ConcurrentDictionary-backed, so requests racing the load see either "not
-        // found yet" (handled today via GetProjectForFile returning null → empty diagnostics,
-        // same as an unopened file) or the fully-populated project once loading catches up; no
-        // extra locking is needed for correctness.
+        // that the client has the capabilities and can start sending requests.
+        //
+        // Issue #1786 follow-up (B1): file registration is routed through the same gate as
+        // didOpen/didChange/didSave (one file at a time, brief hold, matching the write
+        // contract documented on the class), and prefers the client's recorded open buffer
+        // over disk text. This guarantees the client's buffer always wins over disk,
+        // regardless of how discovery interleaves with edits, with no torn state.
         var rootPath = this.pendingWorkspaceRootPath;
+        this.backgroundLoadCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        this.backgroundLoadCts = cts;
         _ = Task.Run(() =>
         {
             try
             {
-                WorkspaceInitializer.Initialize(this.workspaceState, rootPath);
+                WorkspaceInitializer.Initialize(
+                    this.workspaceState,
+                    rootPath,
+                    cts.Token,
+                    tryGetOpenBuffer: file => this.workspaceState.TryGetOpenBuffer(file, out var text) ? text : null,
+                    withGate: mutate =>
+                    {
+                        this.gate.Wait(cts.Token);
+                        try
+                        {
+                            mutate();
+                        }
+                        finally
+                        {
+                            this.gate.Release();
+                        }
+                    });
             }
-            catch
+            catch (OperationCanceledException)
             {
-                // Workspace discovery is best-effort; single-file editing still works without it.
+                // Shutdown raced the background load; nothing left to do.
+            }
+            catch (Exception ex)
+            {
+                // Workspace discovery is best-effort; single-file editing still works without
+                // it, but a failed load should be debuggable rather than silently degraded.
+                this.logger?.LogError($"Background workspace load failed: {ex.GetType().FullName}: {ex.Message}", ex);
             }
         });
     }
@@ -108,6 +136,8 @@ public sealed class LspServer
     public object Shutdown()
     {
         this.shutdownRequested = true;
+        this.backgroundLoadCts?.Cancel();
+        this.backgroundLoadCts?.Dispose();
         return null;
     }
 
@@ -190,6 +220,12 @@ public sealed class LspServer
         return this.GuardAsync(() =>
         {
             this.documentContentService.TryRemove(uri.ToString());
+            var filePath = uri.GetFileSystemPath();
+            if (!string.IsNullOrEmpty(filePath))
+            {
+                this.workspaceState.ClearOpenBuffer(filePath);
+            }
+
             return 0;
         });
     }
@@ -920,6 +956,15 @@ public sealed class LspServer
     private void UpdateDocument(DocumentUri uri, string text)
     {
         var filePath = uri.GetFileSystemPath();
+
+        // Issue #1786 follow-up (B1): record the buffer before touching the project so a
+        // concurrent background load that hasn't registered this file's project yet will see
+        // it once it gets there, instead of loading stale disk text.
+        if (!string.IsNullOrEmpty(filePath))
+        {
+            this.workspaceState.SetOpenBuffer(filePath, text);
+        }
+
         var project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
         if (project != null)
         {
