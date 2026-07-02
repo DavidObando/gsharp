@@ -15,6 +15,15 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public sealed class Lexer
 {
+    // Issue #1602: hard limit on the nesting depth of string-interpolation
+    // holes. ScanInterpolationHole and SkipInterpolationNestedLiteral are
+    // mutually recursive (`"${"${"${…`), so without a guard a few kilobytes of
+    // nested interpolation kill the process with an uncatchable
+    // StackOverflowException. The limit is deliberately modest: each nesting
+    // level later costs a full nested SyntaxTree.Parse on the same call stack
+    // when the parser parses the hole's expression text.
+    private const int MaxInterpolationNestingDepth = 32;
+
     private readonly SyntaxTree syntaxTree;
     private readonly SourceText text;
     private readonly int end;
@@ -24,6 +33,14 @@ public sealed class Lexer
     private int start;
     private SyntaxKind kind;
     private object value;
+
+    // Issue #1602: current interpolation-hole nesting depth. See
+    // MaxInterpolationNestingDepth above.
+    private int interpolationHoleDepth;
+
+    // Issue #1602: whether GS0417 has already been reported for this lex, so
+    // the failure unwinds with a single diagnostic.
+    private bool reportedInterpolationNestingTooDeep;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Lexer"/> class.
@@ -870,6 +887,36 @@ public sealed class Lexer
     /// <returns><see langword="true"/> if the hole closed normally.</returns>
     private bool ScanInterpolationHole(int holeStart)
     {
+        // Issue #1602: bound the ScanInterpolationHole ↔
+        // SkipInterpolationNestedLiteral mutual recursion. Past the limit,
+        // report GS0417 once and fail the whole hole scan; the failure
+        // propagates outward (see SkipInterpolationNestedLiteral) so the
+        // enclosing string lex stops cleanly instead of overflowing the stack.
+        if (interpolationHoleDepth >= MaxInterpolationNestingDepth)
+        {
+            if (!reportedInterpolationNestingTooDeep)
+            {
+                reportedInterpolationNestingTooDeep = true;
+                var loc = new TextLocation(this.text, new TextSpan(holeStart, 1));
+                Diagnostics.ReportNestingTooDeep(loc);
+            }
+
+            return false;
+        }
+
+        interpolationHoleDepth++;
+        try
+        {
+            return ScanInterpolationHoleCore(holeStart);
+        }
+        finally
+        {
+            interpolationHoleDepth--;
+        }
+    }
+
+    private bool ScanInterpolationHoleCore(int holeStart)
+    {
         var depth = 1; // the opening '{' of '${'
         while (true)
         {
@@ -883,7 +930,14 @@ public sealed class Lexer
 
             if (c == '"' || c == '\'')
             {
-                SkipInterpolationNestedLiteral(c);
+                if (!SkipInterpolationNestedLiteral(c))
+                {
+                    // Issue #1602: a nested hole ran past the nesting limit —
+                    // abandon this hole too so the failure reaches the string
+                    // lexer without further recursion.
+                    return false;
+                }
+
                 continue;
             }
 
@@ -943,7 +997,10 @@ public sealed class Lexer
     /// escapes. <see cref="position"/> starts on the opening delimiter.
     /// </summary>
     /// <param name="quote">The opening delimiter (<c>"</c> or <c>'</c>).</param>
-    private void SkipInterpolationNestedLiteral(char quote)
+    /// <returns><see langword="false"/> when a nested interpolation hole
+    /// exceeded the nesting limit (issue #1602), so the caller must abandon
+    /// its own scan; <see langword="true"/> otherwise.</returns>
+    private bool SkipInterpolationNestedLiteral(char quote)
     {
         position++; // consume opening delimiter
         if (quote == '"')
@@ -959,7 +1016,7 @@ public sealed class Lexer
                 if (Current == '"')
                 {
                     position++; // closing quote
-                    return;
+                    return true;
                 }
 
                 if (Current == '$' && Lookahead == '{')
@@ -967,7 +1024,10 @@ public sealed class Lexer
                     position += 2; // consume nested '${'
                     if (!ScanInterpolationHole(position))
                     {
-                        return;
+                        // Issue #1602: propagate the nested failure so every
+                        // enclosing hole unwinds instead of rescanning the
+                        // same deeply nested region.
+                        return false;
                     }
 
                     position++; // consume nested '}'
@@ -977,7 +1037,7 @@ public sealed class Lexer
                 position++;
             }
 
-            return; // unterminated; the outer scanner reports at EOF/newline
+            return true; // unterminated; the outer scanner reports at EOF/newline
         }
 
         // Single-quoted character literal: backslash escapes a single char.
@@ -992,11 +1052,13 @@ public sealed class Lexer
             if (Current == '\'')
             {
                 position++;
-                return;
+                return true;
             }
 
             position++;
         }
+
+        return true;
     }
 
     private void ReadWhiteSpace()

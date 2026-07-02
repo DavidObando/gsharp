@@ -11,7 +11,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 /// Issue #1603: <c>using let (a, b) = …</c> (tuple deconstruction) and
 /// <c>using let { … } = …</c> (named deconstruction) are not a single
 /// variable declaration, so <c>using</c> cannot wrap them. Parsing must
-/// report <c>GS0417</c> and recover instead of throwing an
+/// report <c>GS0418</c> and recover instead of throwing an
 /// <see cref="System.InvalidCastException"/> from the previous unconditional
 /// cast to <see cref="VariableDeclarationSyntax"/>. Same for
 /// <c>await using</c>.
@@ -19,7 +19,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 public class Issue1603UsingDeconstructionParserTests
 {
     [Fact]
-    public void Using_TupleDeconstruction_Reports_GS0417_Instead_Of_Throwing()
+    public void Using_TupleDeconstruction_Reports_GS0418_Instead_Of_Throwing()
     {
         const string source = @"
 package p
@@ -27,11 +27,11 @@ class C { func F() { using let (a, b) = G() } func G() (int32, int32) { return (
 ";
         var tree = SyntaxTree.Parse(source);
 
-        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0417");
+        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0418");
     }
 
     [Fact]
-    public void AwaitUsing_TupleDeconstruction_Reports_GS0417_Instead_Of_Throwing()
+    public void AwaitUsing_TupleDeconstruction_Reports_GS0418_Instead_Of_Throwing()
     {
         const string source = @"
 package p
@@ -39,11 +39,11 @@ class C { async func F() { await using let (a, b) = G() } func G() (int32, int32
 ";
         var tree = SyntaxTree.Parse(source);
 
-        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0417");
+        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0418");
     }
 
     [Fact]
-    public void Using_NamedDeconstruction_Reports_GS0417_Instead_Of_Throwing()
+    public void Using_NamedDeconstruction_Reports_GS0418_Instead_Of_Throwing()
     {
         const string source = @"
 package p
@@ -52,11 +52,11 @@ class C { func F(p Pt) { using let { X, Y } = p } }
 ";
         var tree = SyntaxTree.Parse(source);
 
-        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0417");
+        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0418");
     }
 
     [Fact]
-    public void Using_SingleVariableDeclaration_Still_Parses_Without_GS0417()
+    public void Using_SingleVariableDeclaration_Still_Parses_Without_GS0418()
     {
         const string source = @"
 package p
@@ -64,6 +64,6 @@ class C { func F() { using let a = G() } func G() int32 { return 1 } }
 ";
         var tree = SyntaxTree.Parse(source);
 
-        Assert.DoesNotContain(tree.Diagnostics, d => d.Id == "GS0417");
+        Assert.DoesNotContain(tree.Diagnostics, d => d.Id == "GS0418");
     }
 }

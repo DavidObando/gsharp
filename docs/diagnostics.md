@@ -843,6 +843,26 @@ GS0415 supports the user-facing `sizeof(T)` expression (issue #1336, ADR-0135).
 known unmanaged size and is rejected with GS0415. Constrain the type parameter
 `unmanaged` (`[T unmanaged]`) to make `sizeof(T)` legal.
 
+## Nesting-too-deep diagnostic (GS0417)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0417 | Error | The source nests expressions, types, statements, patterns, or string-interpolation holes more deeply than the compiler's recursion limit. Simplify or flatten the nesting. |
+
+GS0417 supports the parser/lexer recursion-depth guard (issue #1602). The
+recursive-descent parser enforces a hard recursion limit at every self-nesting
+parse family (expressions, type clauses, statements, patterns, nested type
+declarations, and the speculative type-clause lookahead), and the lexer bounds
+the nesting of string-interpolation holes (`"${"${…}"}"`). Without the guard,
+a few kilobytes of deeply nested input — e.g. thousands of unbalanced
+`a[a[a[…` or `((((…`, exactly what an editor buffer looks like mid-edit —
+terminate the whole process with an uncatchable `StackOverflowException`.
+Past the limit the parser reports GS0417 once, recovers with a placeholder
+node, and finishes the parse normally, mirroring Roslyn's CS8078 ("an
+expression is too long or complex to compile"). Realistic programs never
+approach the limit; generated code that does should be restructured to reduce
+nesting depth.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

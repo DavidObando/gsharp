@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis.Text;
 
 namespace GSharp.Core.CodeAnalysis.Syntax;
@@ -15,6 +16,27 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public class Parser
 {
+    // Issue #1602: hard limit on the recursion depth of the recursive-descent
+    // parser. Without a guard, a few kilobytes of deeply nested input
+    // (`a[a[a[…`, `((((…`, `!!!!…`) drive the parser into an uncatchable
+    // StackOverflowException that kills the whole process (compiler, REPL, or
+    // language server). Every self-nesting parse family (expressions, type
+    // clauses, statements, patterns, nested type declarations, and the
+    // speculative TryScan* lookahead helpers) ticks this counter on entry via
+    // <see cref="EnsureNestedParseAllowed"/>; past the limit the parse is
+    // abandoned, GS0417 is reported once, and a minimal compilation unit is
+    // returned (see <see cref="ParseCompilationUnit"/>), mirroring Roslyn's
+    // CS8078 ("an expression is too long or complex to compile").
+    private const int MaxRecursionDepth = 500;
+
+    // Issue #1602: recursion depth below which the (cheap, but not free)
+    // adaptive <see cref="RuntimeHelpers.EnsureSufficientExecutionStack"/>
+    // probe is skipped. Shallow parses never pay for the stack check; deep
+    // parses get a belt-and-suspenders guarantee even on threads with small
+    // stacks, where MaxRecursionDepth ticks alone might not be conservative
+    // enough.
+    private const int UncheckedRecursionDepth = 64;
+
     private readonly SyntaxTree syntaxTree;
 
     // ADR-0078 / issue #725: when a single source-level declaration desugars
@@ -76,6 +98,10 @@ public class Parser
     // counter so a parenthesised or argument-position range (`a[(1..3)]`,
     // `a[f(1..3)]`) is still recognised as a standalone `System.Range` value.
     private int suppressRangeOperator;
+
+    // Issue #1602: current recursion depth of the guarded parse families. See
+    // MaxRecursionDepth above.
+    private int recursionDepth;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Parser"/> class.
@@ -142,9 +168,32 @@ public class Parser
 
     /// <summary>
     /// Creates a compilation unit by parsing the members as read in the source text.
+    /// Issue #1602: mirrors Roslyn's ParseWithStackGuard — when the recursion
+    /// guard (see <see cref="EnsureNestedParseAllowed"/>) detects input nested
+    /// beyond <see cref="MaxRecursionDepth"/> (or the thread's remaining
+    /// execution stack), the parse is abandoned wholesale, GS0417 is reported,
+    /// and a minimal (empty) compilation unit is returned, so the parse always
+    /// terminates normally with diagnostics instead of killing the process
+    /// with an uncatchable <see cref="StackOverflowException"/>.
     /// </summary>
     /// <returns>A compilation unit.</returns>
     public CompilationUnitSyntax ParseCompilationUnit()
+    {
+        try
+        {
+            return ParseCompilationUnitCore();
+        }
+        catch (InsufficientExecutionStackException)
+        {
+            // The position was left at the token where the guard tripped, so
+            // the diagnostic points at the offending nesting depth.
+            Diagnostics.ReportNestingTooDeep(new TextLocation(syntaxTree.Text, Current.Span));
+            var endOfFileToken = tokens[tokens.Length - 1];
+            return new CompilationUnitSyntax(syntaxTree, ImmutableArray<MemberSyntax>.Empty, endOfFileToken);
+        }
+    }
+
+    private CompilationUnitSyntax ParseCompilationUnitCore()
     {
         var package = ParsePackage();
         var imports = ParseImports();
@@ -603,8 +652,24 @@ public class Parser
     /// ADR-0078 / issue #718: parses an aggregate declaration whose head is
     ///   [open|sealed]? [data]? [inline]? [ref]? (class|struct|enum|interface) Name[TParams]? ...
     /// The accessibility modifier was already consumed in <see cref="ParseMember"/>.
+    /// Issue #1602: depth-guarded — nested type declarations
+    /// (<c>class A { class B { … } }</c>) recurse through this method.
     /// </summary>
     private MemberSyntax ParseAggregateDeclaration(SyntaxToken accessibilityModifier)
+    {
+        EnsureNestedParseAllowed();
+        recursionDepth++;
+        try
+        {
+            return ParseAggregateDeclarationCore(accessibilityModifier);
+        }
+        finally
+        {
+            recursionDepth--;
+        }
+    }
+
+    private MemberSyntax ParseAggregateDeclarationCore(SyntaxToken accessibilityModifier)
     {
         SyntaxToken openModifier = null;
         SyntaxToken sealedModifier = null;
@@ -3756,7 +3821,24 @@ public class Parser
         return parameter;
     }
 
+    // Issue #1602: depth-guarded wrapper — type clauses self-nest through
+    // pointers (`*T`), arrays (`[]T`), tuples, function types, and generic
+    // type-argument lists (`List[List[…]]`).
     private TypeClauseSyntax ParseTypeClause()
+    {
+        EnsureNestedParseAllowed();
+        recursionDepth++;
+        try
+        {
+            return ParseTypeClauseCore();
+        }
+        finally
+        {
+            recursionDepth--;
+        }
+    }
+
+    private TypeClauseSyntax ParseTypeClauseCore()
     {
         if (Current.Kind == SyntaxKind.FuncKeyword)
         {
@@ -4654,7 +4736,23 @@ public class Parser
         return new GlobalStatementSyntax(syntaxTree, statement);
     }
 
+    // Issue #1602: depth-guarded wrapper — statements self-nest through blocks
+    // (`{{{{…`), if/for/while bodies, switch cases, etc.
     private StatementSyntax ParseStatement()
+    {
+        EnsureNestedParseAllowed();
+        recursionDepth++;
+        try
+        {
+            return ParseStatementCore();
+        }
+        finally
+        {
+            recursionDepth--;
+        }
+    }
+
+    private StatementSyntax ParseStatementCore()
     {
         // Issue #187 / ADR-0047 §2: a local `var`/`let`/`const` can be
         // preceded by Kotlin-style `@` annotations (default target `field`).
@@ -6017,7 +6115,25 @@ public class Parser
         return left;
     }
 
+    // Issue #1602: depth-guarded wrapper — every pattern nesting cycle
+    // (parenthesized, list, property, and `not` chains) passes through
+    // ParseUnaryPattern, so a single tick here bounds the whole pattern
+    // grammar.
     private PatternSyntax ParseUnaryPattern()
+    {
+        EnsureNestedParseAllowed();
+        recursionDepth++;
+        try
+        {
+            return ParseUnaryPatternCore();
+        }
+        finally
+        {
+            recursionDepth--;
+        }
+    }
+
+    private PatternSyntax ParseUnaryPatternCore()
     {
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "not")
         {
@@ -6497,12 +6613,60 @@ public class Parser
         return new ExpressionStatementSyntax(syntaxTree, expression);
     }
 
+    // Issue #1602: guards entry into a self-nesting parse family. When the
+    // recursion-depth limit (or the runtime's remaining execution stack) is
+    // exhausted, the whole parse is abandoned with an
+    // <see cref="InsufficientExecutionStackException"/> that is caught in
+    // <see cref="ParseCompilationUnit"/>, which reports GS0417 and returns a
+    // minimal compilation unit — the same strategy as Roslyn's
+    // ParseWithStackGuard. Bailing out wholesale (rather than recovering with
+    // a placeholder node) matters: the parser's iterative error-recovery loops
+    // would otherwise keep folding the remaining nested input into an
+    // unboundedly DEEP syntax tree, which the recursive binder could not
+    // survive either. Speculative lookahead (TryScanTypeClause) does not
+    // throw; it fails silently instead.
+    private void EnsureNestedParseAllowed()
+    {
+        if (recursionDepth >= MaxRecursionDepth)
+        {
+            throw new InsufficientExecutionStackException();
+        }
+
+        if (recursionDepth >= UncheckedRecursionDepth)
+        {
+            // Adaptive belt-and-suspenders: even below the deterministic
+            // limit, bail out early when the actual thread stack is running
+            // low (small-stack threads, deep surrounding call chains).
+            RuntimeHelpers.EnsureSufficientExecutionStack();
+        }
+    }
+
     private ExpressionSyntax ParseExpression()
     {
+        // Recursion safety: ParseAssignmentExpression (the immediate delegate)
+        // carries the issue #1602 recursion-depth guard for the whole
+        // expression pipeline.
         return ParseAssignmentExpression();
     }
 
+    // Issue #1602: depth-guarded wrapper — see MaxRecursionDepth. Covers every
+    // expression nesting cycle that funnels through ParseExpression as well as
+    // the direct right-hand-side self-recursion of assignment forms.
     private ExpressionSyntax ParseAssignmentExpression()
+    {
+        EnsureNestedParseAllowed();
+        recursionDepth++;
+        try
+        {
+            return ParseAssignmentExpressionCore();
+        }
+        finally
+        {
+            recursionDepth--;
+        }
+    }
+
+    private ExpressionSyntax ParseAssignmentExpressionCore()
     {
         if (Peek(0).Kind == SyntaxKind.IdentifierToken &&
             Peek(1).Kind == SyntaxKind.OpenSquareBracketToken &&
@@ -6785,6 +6949,24 @@ public class Parser
     // binder/emitter reuse the existing NullCoalesce machinery.
     private ExpressionSyntax ParseNullCoalescingExpression()
     {
+        // Issue #1602: depth-guarded — the right-associative `??` tail below
+        // self-recurses once per operator, so the guard must tick here (not
+        // only in ParseAssignmentExpression) for `a ?? a ?? …` chains to be
+        // bounded.
+        EnsureNestedParseAllowed();
+        recursionDepth++;
+        try
+        {
+            return ParseNullCoalescingExpressionCore();
+        }
+        finally
+        {
+            recursionDepth--;
+        }
+    }
+
+    private ExpressionSyntax ParseNullCoalescingExpressionCore()
+    {
         var left = ParseBinaryExpression();
 
         if (Current.Kind == SyntaxKind.QuestionQuestionToken)
@@ -6797,7 +6979,25 @@ public class Parser
         return left;
     }
 
+    // Issue #1602: depth-guarded wrapper — prefix unary operators (`-`, `!`,
+    // `*`, `&`, `++`, `await`, …) recurse directly into ParseBinaryExpression
+    // without passing through ParseAssignmentExpression, so deep unary chains
+    // need their own tick.
     private ExpressionSyntax ParseBinaryExpression(int parentPrecedence = 0)
+    {
+        EnsureNestedParseAllowed();
+        recursionDepth++;
+        try
+        {
+            return ParseBinaryExpressionCore(parentPrecedence);
+        }
+        finally
+        {
+            recursionDepth--;
+        }
+    }
+
+    private ExpressionSyntax ParseBinaryExpressionCore(int parentPrecedence)
     {
         ExpressionSyntax left;
         var unaryOperatorPrecedence = Current.Kind.GetUnaryOperatorPrecedence();
@@ -7081,7 +7281,25 @@ public class Parser
     // ADR-0073 / issue #710: the `?[` token is the prefix of a null-conditional
     // index access and is treated symmetrically to `[`, with the resulting
     // IndexExpressionSyntax carrying IsNullConditional = true.
+    // Issue #1602: depth-guarded wrapper — the postfix loop itself is
+    // iterative, but an index argument re-enters the full expression grammar
+    // (`a[a[a[…`), so the chain participates in the recursion cycle and ticks
+    // the guard while an index (or accessor) argument parse is in flight.
     private ExpressionSyntax ParsePostfixChain(ExpressionSyntax current)
+    {
+        EnsureNestedParseAllowed();
+        recursionDepth++;
+        try
+        {
+            return ParsePostfixChainCore(current);
+        }
+        finally
+        {
+            recursionDepth--;
+        }
+    }
+
+    private ExpressionSyntax ParsePostfixChainCore(ExpressionSyntax current)
     {
         while (true)
         {
@@ -8179,7 +8397,45 @@ public class Parser
 
     private bool TryScanTypeClause(ref int pos) => TryScanTypeClause(ref pos, out _);
 
+    // Issue #1602: depth-guarded wrapper — TryScanTypeClause and
+    // TryScanOptionalTypeArgumentList are mutually recursive during
+    // speculative lookahead (`a[a[a[…` scans as a candidate type-argument
+    // list). Speculation must fail GRACEFULLY at the limit: it returns false
+    // without reporting, and the subsequent real parse (which takes the
+    // non-generic interpretation) reports GS0417 if it also runs too deep.
     private bool TryScanTypeClause(ref int pos, out bool isComplex)
+    {
+        if (recursionDepth >= MaxRecursionDepth)
+        {
+            isComplex = false;
+            return false;
+        }
+
+        if (recursionDepth >= UncheckedRecursionDepth)
+        {
+            try
+            {
+                RuntimeHelpers.EnsureSufficientExecutionStack();
+            }
+            catch (InsufficientExecutionStackException)
+            {
+                isComplex = false;
+                return false;
+            }
+        }
+
+        recursionDepth++;
+        try
+        {
+            return TryScanTypeClauseCore(ref pos, out isComplex);
+        }
+        finally
+        {
+            recursionDepth--;
+        }
+    }
+
+    private bool TryScanTypeClauseCore(ref int pos, out bool isComplex)
     {
         isComplex = false;
 
@@ -9438,7 +9694,24 @@ public class Parser
     // Issue #669: parse an if-expression of the form
     // `if cond { expr }`, `if cond { expr } else { expr }`,
     // or `if cond { expr } else if ... { expr } else { expr }`.
+    // Issue #1602: depth-guarded wrapper — if-expressions self-recurse through
+    // `else if` chains and through ParseBlockExpression/ParseBlockExpressionItem
+    // (which dispatch back here without passing the expression pipeline).
     private IfExpressionSyntax ParseIfExpression()
+    {
+        EnsureNestedParseAllowed();
+        recursionDepth++;
+        try
+        {
+            return ParseIfExpressionCore();
+        }
+        finally
+        {
+            recursionDepth--;
+        }
+    }
+
+    private IfExpressionSyntax ParseIfExpressionCore()
     {
         var ifKeyword = MatchToken(SyntaxKind.IfKeyword);
         suppressTrailingObjectInitializer++;
