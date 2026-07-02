@@ -191,6 +191,27 @@ defer 42
     }
 
     [Fact]
+    public void Defer_CallWithOutArgument_ReportsGS0419()
+    {
+        // Issue #1635 NB-1: a by-ref (ref/out/in) argument's bound value is
+        // the ADDRESS of its target storage. Eager capture spilling that
+        // address into an ordinary readonly local is not a meaningful by-ref
+        // capture, so `defer` on such a call is rejected rather than
+        // mis-compiled.
+        var result = Evaluate(@"
+import System
+import System.Collections.Generic
+
+var dict = Dictionary[string, int32]()
+dict[""key""] = 42
+var value = 0
+defer dict.TryGetValue(""key"", &value)
+");
+
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0419");
+    }
+
+    [Fact]
     public void Using_DisposeProtectsSubsequentThrowingStatements()
     {
         var result = Evaluate(@"

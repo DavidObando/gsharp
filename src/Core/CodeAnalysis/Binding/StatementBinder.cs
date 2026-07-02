@@ -2685,6 +2685,19 @@ internal sealed class StatementBinder
             return (ImmutableArray<BoundStatement>.Empty, null, new BoundExpressionStatement(null, new BoundErrorExpression(null)));
         }
 
+        // Issue #1635 NB-1: a by-ref (ref/out/in) argument's bound value IS the
+        // address of its target storage (a BoundAddressOfExpression /
+        // BoundConditionalAddressExpression). Eager capture spills each
+        // argument's *value* into a fresh readonly local, which for a by-ref
+        // argument would spill the address into an ordinary (non-ref) local —
+        // not supported by the emitter and not a meaningful by-ref capture.
+        // Reject rather than silently mis-defer.
+        if (HasByRefArgument(expression))
+        {
+            Diagnostics.ReportDeferOperandHasByRefArgument(syntax.Expression.Location);
+            return (ImmutableArray<BoundStatement>.Empty, null, new BoundExpressionStatement(null, new BoundErrorExpression(null)));
+        }
+
         var prefix = ImmutableArray.CreateBuilder<BoundStatement>();
         var capturedCall = CaptureDeferArguments(expression, prefix);
         return (prefix.ToImmutable(), capturedCall, null);
@@ -2696,20 +2709,84 @@ internal sealed class StatementBinder
             BoundUserInstanceCallExpression or
             BoundImportedCallExpression or
             BoundImportedInstanceCallExpression;
+
+    // A ref/out/in argument is bound as the ADDRESS of its target storage —
+    // a BoundAddressOfExpression or BoundConditionalAddressExpression — for
+    // every deferable call kind (user function, imported function/method).
+    // Detecting the argument shape directly (rather than only consulting
+    // ArgumentRefKinds, which only imported call kinds carry) catches every
+    // by-ref argument regardless of which call kind wraps it.
+    private static bool HasByRefArgument(BoundExpression expression)
+    {
+        var arguments = expression switch
+        {
+            BoundCallExpression call => call.Arguments,
+            BoundImportedCallExpression call => call.Arguments,
+            BoundUserInstanceCallExpression call => call.Arguments,
+            BoundImportedInstanceCallExpression call => call.Arguments,
+            BoundIndirectCallExpression call => call.Arguments,
+            _ => ImmutableArray<BoundExpression>.Empty,
+        };
+
+        foreach (var argument in arguments)
+        {
+            if (argument is BoundAddressOfExpression or BoundConditionalAddressExpression)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // ADR-0030 / issue #1635 (NB-1 follow-up): rebuild the deferred call with the
+    // SAME node kind and EVERY metadata property the original call carried —
+    // constrained-interface dispatch info, explicit type arguments, non-virtual
+    // base-call marking, ref-kind annotations, static generic owner types, etc.
+    // Only the receiver/target and arguments change (to the captured `$defer$`
+    // locals); nothing else may be dropped or the deferred call can emit wrong
+    // dispatch or invalid metadata.
     private BoundExpression CaptureDeferArguments(BoundExpression expression, ImmutableArray<BoundStatement>.Builder prefix)
     {
         switch (expression)
         {
             case BoundCallExpression call:
-                return new BoundCallExpression(null, call.Function, CaptureArguments(call.Arguments, prefix), call.ReturnType);
+                return new BoundCallExpression(null, call.Function, CaptureArguments(call.Arguments, prefix), call.ReturnType, call.IsConditionalElided)
+                {
+                    StaticGenericOwnerType = call.StaticGenericOwnerType,
+                    StaticGenericInterfaceOwnerType = call.StaticGenericInterfaceOwnerType,
+                };
             case BoundIndirectCallExpression call:
                 return new BoundIndirectCallExpression(null, CaptureExpression(call.Target, prefix), call.FunctionType, CaptureArguments(call.Arguments, prefix));
             case BoundUserInstanceCallExpression call:
-                return new BoundUserInstanceCallExpression(null, CaptureExpression(call.Receiver, prefix), call.Method, CaptureArguments(call.Arguments, prefix), call.Type);
+                return new BoundUserInstanceCallExpression(
+                    null,
+                    CaptureExpression(call.Receiver, prefix),
+                    call.Method,
+                    CaptureArguments(call.Arguments, prefix),
+                    call.Type,
+                    call.ConstrainedReceiverTypeParameter,
+                    call.ConstrainedInterfaceType);
             case BoundImportedCallExpression call:
-                return new BoundImportedCallExpression(null, call.Function, CaptureArguments(call.Arguments, prefix));
+                return new BoundImportedCallExpression(
+                    null,
+                    call.Function,
+                    CaptureArguments(call.Arguments, prefix),
+                    call.ArgumentRefKinds,
+                    call.TypeArgumentSymbols,
+                    call.StaticContainerType);
             case BoundImportedInstanceCallExpression call:
-                return new BoundImportedInstanceCallExpression(null, CaptureExpression(call.Receiver, prefix), call.Method, call.Type, CaptureArguments(call.Arguments, prefix));
+                return new BoundImportedInstanceCallExpression(
+                    null,
+                    CaptureExpression(call.Receiver, prefix),
+                    call.Method,
+                    call.Type,
+                    CaptureArguments(call.Arguments, prefix),
+                    call.ArgumentRefKinds,
+                    call.TypeArgumentSymbols,
+                    call.ConstrainedReceiverTypeParameter,
+                    call.ConstrainedInterfaceType,
+                    call.IsNonVirtualBaseCall);
             default:
                 throw new InvalidOperationException($"Unexpected deferred expression: {expression.Kind}");
         }

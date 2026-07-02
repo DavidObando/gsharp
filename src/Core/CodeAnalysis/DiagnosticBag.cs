@@ -619,6 +619,25 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that the operand of a <c>defer</c> statement is a call with
+    /// one or more <c>ref</c>/<c>out</c>/<c>in</c> arguments (issue #1635 NB-1).
+    /// Eager argument capture spills each argument's evaluated value into a
+    /// fresh readonly local ahead of the deferred invocation; a by-ref
+    /// argument's value IS the address of its target storage, which cannot
+    /// be spilled into an ordinary local without either aliasing an
+    /// unrelated temp (silently breaking the by-ref contract) or requiring
+    /// verifiable-IL support for spilled managed pointers that the emitter
+    /// does not have. Rather than mis-defer the call, `defer` on such a call
+    /// is rejected outright.
+    /// </summary>
+    /// <param name="location">The text location of the operand.</param>
+    public void ReportDeferOperandHasByRefArgument(TextLocation location)
+    {
+        var message = "'defer' cannot capture a call with 'ref', 'out', or 'in' arguments.";
+        Report(location, "GS0419", message);
+    }
+
+    /// <summary>
     /// Reports that the operand of a channel-receive expression (<c>&lt;-ch</c>) is not a channel (Phase 5.5 / ADR-0022).
     /// </summary>
     /// <param name="location">The text location of the operand.</param>
