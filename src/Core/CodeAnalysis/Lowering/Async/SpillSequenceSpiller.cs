@@ -7,6 +7,7 @@ using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 
@@ -23,14 +24,41 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 /// <list type="bullet">
 /// <item><description>Binary expressions (arithmetic/comparison) with await in either operand.</description></item>
 /// <item><description>Short-circuit operators (<c>&amp;&amp;</c>, <c>||</c>) with await on the right.</description></item>
-/// <item><description>Method calls (user, imported, imported-instance) with await in arguments.</description></item>
+/// <item><description>Method calls (user, imported, imported-instance, CLR static/instance/ctor,
+/// indirect, function-pointer) with await in the receiver/target and/or arguments.</description></item>
 /// <item><description>Variable declarations and return statements with nested await.</description></item>
 /// <item><description>Conversion expressions wrapping an await.</description></item>
+/// <item><description>Ternary/conditional expressions with await in the condition and/or an arm
+/// (issue #1619) — only the taken arm's await actually runs, via an if/else expansion
+/// mirroring the short-circuit logical-operator spill.</description></item>
+/// <item><description>Index expressions, array/tuple/struct/map literals, stack-alloc, append,
+/// len/cap, is/as, field/property access and assignment, and CLR interop operators/indexers
+/// with await in any operand (issue #1619) — each spilled left-to-right like a call's
+/// argument list.</description></item>
+/// <item><description>Switch expressions with await in the governing expression and/or an arm
+/// value (issue #1619 completion) — spilled via an index-selecting rebuild of the switch (so
+/// pattern-matching/guard semantics run unmodified against a spilled discriminant) followed by
+/// an if/else-chain expansion keyed off the selected arm index, so only the taken arm's await
+/// runs, mirroring the ternary spill.</description></item>
+/// <item><description>Null-conditional access (<c>?.</c>) expressions with await in the receiver
+/// and/or the when-not-null continuation (issue #1619 completion) — the receiver is spilled
+/// once into the capture local/field and the continuation runs only on the non-nil path,
+/// via an if/else expansion when the continuation itself contains await.</description></item>
+/// <item><description>Conditional address-of expressions with await in a conditionally-selected
+/// operand (ADR-0061; issue #1619 completion) — each operand's nested await is spilled behind a
+/// conditional-goto guard so only the selected branch's side effects run, then the original
+/// <see cref="Binding.BoundConditionalAddressExpression"/> node is rebuilt from the (now
+/// await-free) operands so the existing branch-and-take-address emitter performs the final,
+/// correct addressing — no byref-typed value is ever carried across the branch join.</description></item>
 /// </list></para>
 /// <para>Deferred cases (emit a diagnostic if encountered):
 /// <list type="bullet">
 /// <item><description>Ref/out arguments containing await.</description></item>
 /// <item><description>Value-type receivers of instance methods containing await in arguments.</description></item>
+/// <item><description>A switch-expression arm <c>when</c> guard containing await (issue #1619) —
+/// guards must be re-evaluated for every candidate arm during dispatch, so an await inside a
+/// guard would need to re-run (and re-suspend) for each pattern tried; this requires a fuller
+/// per-guard suspension protocol that is out of scope here, so it remains diagnostic-gated.</description></item>
 /// </list></para>
 /// </remarks>
 public static class SpillSequenceSpiller
@@ -422,6 +450,173 @@ public static class SpillSequenceSpiller
                 case BoundBlockExpression block:
                     return SpillBlockExpression(block);
 
+                // Conditional (ternary) expression — issue #1619. Arms are
+                // conditionally evaluated, so an await in an arm mirrors the
+                // short-circuit if/else expansion used by SpillLogicalAnd/Or
+                // rather than the plain left-to-right spill of SpillBinary.
+                case BoundConditionalExpression conditional:
+                    return SpillConditional(conditional);
+
+                // Index expression — issue #1619 (arr[await idx()]).
+                case BoundIndexExpression index:
+                    return SpillIndex(index);
+
+                // CLR interop calls/ctors/operators — issue #1619. Arguments
+                // (and, where present, a receiver/pointer) are spilled
+                // left-to-right exactly like the user-call spill paths above.
+                case BoundClrStaticCallExpression clrStatic:
+                    return SpillClrStaticCall(clrStatic);
+                case BoundClrConstructorCallExpression clrCtor:
+                    return SpillClrConstructorCall(clrCtor);
+                case BoundConstructorCallExpression ctorCall:
+                    return SpillConstructorCall(ctorCall);
+                case BoundConstructorChainingExpression ctorChain:
+                    return SpillConstructorChaining(ctorChain);
+                case BoundIndirectCallExpression indirectCall:
+                    return SpillIndirectCall(indirectCall);
+                case BoundFunctionPointerInvocationExpression fpInvoke:
+                    return SpillFunctionPointerInvocation(fpInvoke);
+                case BoundClrIndexExpression clrIndex:
+                    return SpillClrIndex(clrIndex);
+                case BoundClrIndexAssignmentExpression clrIndexAssign:
+                    return SpillClrIndexAssignment(clrIndexAssign);
+                case BoundClrPropertyAccessExpression clrPropAccess:
+                    return SpillClrPropertyAccess(clrPropAccess);
+                case BoundClrPropertyAssignmentExpression clrPropAssign:
+                    return SpillTwoOperand(
+                        clrPropAssign,
+                        clrPropAssign.Receiver,
+                        clrPropAssign.Value,
+                        (recv, val) => new BoundClrPropertyAssignmentExpression(null, recv, clrPropAssign.Member, val, clrPropAssign.Type));
+                case BoundClrBinaryOperatorExpression clrBinary:
+                    return SpillTwoOperand(
+                        clrBinary,
+                        clrBinary.Left,
+                        clrBinary.Right,
+                        (l, r) => new BoundClrBinaryOperatorExpression(null, clrBinary.OperatorKind, l, r, clrBinary.Method, clrBinary.Type));
+                case BoundClrUnaryOperatorExpression clrUnary:
+                    return SpillOneOperand(
+                        clrUnary,
+                        clrUnary.Operand,
+                        operand => new BoundClrUnaryOperatorExpression(null, clrUnary.OperatorKind, operand, clrUnary.Method, clrUnary.Type));
+                case BoundClrConversionCallExpression clrConv:
+                    return SpillOneOperand(
+                        clrConv,
+                        clrConv.Source,
+                        src => new BoundClrConversionCallExpression(null, src, clrConv.Method, clrConv.Type));
+                case BoundClrEventSubscriptionExpression clrEventSub:
+                    return SpillTwoOperand(
+                        clrEventSub,
+                        clrEventSub.Receiver,
+                        clrEventSub.Handler,
+                        (recv, handler) => new BoundClrEventSubscriptionExpression(null, recv, clrEventSub.Event, handler, clrEventSub.IsAdd));
+                case BoundEventSubscriptionExpression eventSub:
+                    return SpillTwoOperand(
+                        eventSub,
+                        eventSub.Receiver,
+                        eventSub.Handler,
+                        (recv, handler) => new BoundEventSubscriptionExpression(null, recv, eventSub.StructType, eventSub.Event, handler, eventSub.IsAdd));
+
+                case BoundFieldAccessExpression fieldAccess:
+                    return SpillFieldAccess(fieldAccess);
+                case BoundPropertyAccessExpression propAccess:
+                    return SpillOneOperand(
+                        propAccess,
+                        propAccess.Receiver,
+                        recv => new BoundPropertyAccessExpression(null, recv, propAccess.StructType, propAccess.Property, propAccess.NarrowedType));
+                case BoundPropertyAssignmentExpression propAssign:
+                    return SpillTwoOperand(
+                        propAssign,
+                        propAssign.Receiver,
+                        propAssign.Value,
+                        (recv, val) => new BoundPropertyAssignmentExpression(null, recv, propAssign.StructType, propAssign.Property, val));
+                case BoundTupleLiteralExpression tupleLiteral:
+                    return SpillTupleLiteral(tupleLiteral);
+                case BoundTupleElementAccessExpression tupleAccess:
+                    return SpillOneOperand(
+                        tupleAccess,
+                        tupleAccess.Receiver,
+                        recv => new BoundTupleElementAccessExpression(null, recv, tupleAccess.TupleType, tupleAccess.Index));
+                case BoundInterpolatedStringExpression interpolated:
+                    return SpillInterpolatedString(interpolated);
+                case BoundArrayCreationExpression arrayCreation:
+                    return SpillArrayCreation(arrayCreation);
+                case BoundStackAllocExpression stackAlloc:
+                    return SpillStackAlloc(stackAlloc);
+                case BoundLenExpression len:
+                    return SpillOneOperand(len, len.Operand, operand => new BoundLenExpression(null, operand));
+                case BoundCapExpression cap:
+                    return SpillOneOperand(cap, cap.Operand, operand => new BoundCapExpression(null, operand));
+                case BoundAppendExpression append:
+                    return SpillTwoOperand(
+                        append,
+                        append.Slice,
+                        append.Element,
+                        (slice, element) => new BoundAppendExpression(null, slice, element, append.SliceType));
+                case BoundStructLiteralExpression structLiteral:
+                    return SpillStructLiteral(structLiteral);
+                case BoundMakeChannelExpression makeChannel:
+                    return SpillOneOperand(
+                        makeChannel,
+                        makeChannel.Capacity,
+                        capacity => new BoundMakeChannelExpression(null, makeChannel.ChannelType, capacity));
+                case BoundChannelReceiveExpression channelReceive:
+                    return SpillOneOperand(
+                        channelReceive,
+                        channelReceive.Channel,
+                        channel => new BoundChannelReceiveExpression(null, channel, channelReceive.Type));
+                case BoundChannelCloseExpression channelClose:
+                    return SpillOneOperand(
+                        channelClose,
+                        channelClose.Channel,
+                        channel => new BoundChannelCloseExpression(null, channel));
+                case BoundMapLiteralExpression mapLiteral:
+                    return SpillMapLiteral(mapLiteral);
+                case BoundMapDeleteExpression mapDelete:
+                    return SpillTwoOperand(
+                        mapDelete,
+                        mapDelete.Map,
+                        mapDelete.Key,
+                        (map, key) => new BoundMapDeleteExpression(null, map, key));
+                case BoundIsExpression isExpr:
+                    return SpillOneOperand(isExpr, isExpr.Expression, operand => new BoundIsExpression(null, operand, isExpr.TargetType));
+                case BoundAsExpression asExpr:
+                    return SpillOneOperand(asExpr, asExpr.Expression, operand => new BoundAsExpression(null, operand, asExpr.TargetType));
+                case BoundThrowExpression throwExpr:
+                    return SpillOneOperand(throwExpr, throwExpr.Expression, operand => new BoundThrowExpression(null, operand));
+                case BoundAddressOfExpression addressOf:
+                    return SpillOneOperand(addressOf, addressOf.Operand, operand => new BoundAddressOfExpression(null, operand));
+                case BoundDereferenceExpression dereference:
+                    return SpillOneOperand(dereference, dereference.Operand, operand => new BoundDereferenceExpression(null, operand));
+                case BoundIndirectAssignmentExpression indirectAssign:
+                    return SpillTwoOperand(
+                        indirectAssign,
+                        indirectAssign.Pointer,
+                        indirectAssign.Value,
+                        (ptr, val) => new BoundIndirectAssignmentExpression(null, ptr, val));
+
+                // Switch expression — issue #1619 completion. The governing
+                // (discriminant) expression and each arm's result are spilled
+                // via a two-phase index dispatch (see SpillSwitch); only a
+                // `when`-guard containing `await` remains diagnostic-gated
+                // (see SpillSwitch for why).
+                case BoundSwitchExpression switchExpr:
+                    return SpillSwitch(switchExpr);
+
+                // Null-conditional access (`?.`) — issue #1619 completion.
+                // Mirrors SpillConditional: the receiver is always evaluated,
+                // but the (possibly await-containing) access only runs on
+                // the non-nil path.
+                case BoundNullConditionalAccessExpression nullConditional:
+                    return SpillNullConditionalAccess(nullConditional);
+
+                // Conditional address-of (ADR-0061) — issue #1619 completion.
+                // Same if/else shape as SpillConditional, but the selected
+                // branch's lvalue address is taken only after its own await
+                // (if any) has resolved.
+                case BoundConditionalAddressExpression condAddr:
+                    return SpillConditionalAddress(condAddr);
+
                 // Expression kinds that are trivial for spilling — they are either
                 // leaf nodes (no BoundExpression children that could contain an await)
                 // or their children are structurally unable to hold an await at this
@@ -436,56 +631,13 @@ public static class SpillSequenceSpiller
                 case BoundTypeOfExpression:
                 case BoundSizeOfExpression:
                 case BoundFunctionPointerFromMethodExpression:
-                case BoundFunctionPointerInvocationExpression:
                 case BoundMethodGroupExpression:
                 case BoundClrMethodGroupExpression:
                 case BoundFunctionLiteralExpression:
                 case BoundErrorExpression:
-                case BoundAddressOfExpression:
-                case BoundDereferenceExpression:
-                case BoundIndirectAssignmentExpression:
-                case BoundConditionalAddressExpression:
-                case BoundConditionalExpression:
-                case BoundThrowExpression:
-                case BoundClrStaticCallExpression:
-                case BoundClrConstructorCallExpression:
-                case BoundClrPropertyAccessExpression:
-                case BoundClrPropertyAssignmentExpression:
-                case BoundClrBinaryOperatorExpression:
-                case BoundClrUnaryOperatorExpression:
-                case BoundClrConversionCallExpression:
-                case BoundClrIndexExpression:
-                case BoundClrIndexAssignmentExpression:
-                case BoundClrEventSubscriptionExpression:
-                case BoundEventSubscriptionExpression:
-                case BoundConstructorCallExpression:
-                case BoundConstructorChainingExpression:
-                case BoundFieldAccessExpression:
-                case BoundPropertyAccessExpression:
-                case BoundPropertyAssignmentExpression:
-                case BoundNullConditionalAccessExpression:
-                case BoundTupleLiteralExpression:
-                case BoundTupleElementAccessExpression:
-                case BoundIndirectCallExpression:
-                case BoundInterpolatedStringExpression:
-                case BoundIndexExpression:
-                case BoundArrayCreationExpression:
-                case BoundStackAllocExpression:
-                case BoundLenExpression:
-                case BoundCapExpression:
-                case BoundAppendExpression:
-                case BoundStructLiteralExpression:
-                case BoundSwitchExpression:
-                case BoundMakeChannelExpression:
-                case BoundChannelReceiveExpression:
-                case BoundChannelCloseExpression:
-                case BoundMapLiteralExpression:
-                case BoundMapDeleteExpression:
                 case BoundSpillSequenceExpression:
                 case BoundStateMachineAwaitOnCompleted:
                 case BoundStateMachineBuilderMoveNext:
-                case BoundIsExpression:
-                case BoundAsExpression:
                     return Trivial(expression);
 
                 default:
@@ -1115,6 +1267,864 @@ public static class SpillSequenceSpiller
                 spilled.Locals,
                 spilled.SideEffects,
                 value);
+        }
+
+        /// <summary>
+        /// Spills a ternary/conditional expression (issue #1619). Unlike a
+        /// plain binary expression, only one of <c>WhenTrue</c>/<c>WhenFalse</c>
+        /// executes at runtime, so an await in an arm must not run
+        /// unconditionally. This mirrors the if/else-with-goto expansion used
+        /// by <see cref="SpillLogicalAnd"/>/<see cref="SpillLogicalOr"/>: the
+        /// condition (if it itself has an await) is spilled unconditionally
+        /// first, then each arm's side effects are guarded behind a label so
+        /// only the taken arm's await(s) actually run.
+        /// </summary>
+        private BoundSpillSequenceExpression SpillConditional(BoundConditionalExpression conditional)
+        {
+            var conditionHasAwait = AsyncBoundTreeQueries.HasAwait(conditional.Condition);
+            var trueHasAwait = AsyncBoundTreeQueries.HasAwait(conditional.WhenTrue);
+            var falseHasAwait = AsyncBoundTreeQueries.HasAwait(conditional.WhenFalse);
+
+            if (!conditionHasAwait && !trueHasAwait && !falseHasAwait)
+            {
+                return Trivial(conditional);
+            }
+
+            var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
+            var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
+
+            BoundExpression condition = conditional.Condition;
+            if (conditionHasAwait)
+            {
+                var spilledCondition = SpillExpression(conditional.Condition);
+                locals.AddRange(spilledCondition.Locals);
+                sideEffects.AddRange(spilledCondition.SideEffects);
+                condition = spilledCondition.Value;
+            }
+
+            var resultLocal = MakeSpillTemp(conditional.Type);
+            var elseLabel = MakeLabel();
+            var endLabel = MakeLabel();
+
+            // if (!condition) goto else
+            sideEffects.Add(new BoundConditionalGotoStatement(null, elseLabel, condition, jumpIfTrue: false));
+
+            // then: result = whenTrue (spilled — only runs if condition was true)
+            var spilledTrue = SpillExpression(conditional.WhenTrue);
+            locals.AddRange(spilledTrue.Locals);
+            sideEffects.AddRange(spilledTrue.SideEffects);
+            sideEffects.Add(new BoundExpressionStatement(
+                null,
+                new BoundAssignmentExpression(null, resultLocal, spilledTrue.Value)));
+            sideEffects.Add(new BoundGotoStatement(null, endLabel));
+
+            // else: result = whenFalse (spilled — only runs if condition was false)
+            sideEffects.Add(new BoundLabelStatement(null, elseLabel));
+            var spilledFalse = SpillExpression(conditional.WhenFalse);
+            locals.AddRange(spilledFalse.Locals);
+            sideEffects.AddRange(spilledFalse.SideEffects);
+            sideEffects.Add(new BoundExpressionStatement(
+                null,
+                new BoundAssignmentExpression(null, resultLocal, spilledFalse.Value)));
+
+            // end:
+            sideEffects.Add(new BoundLabelStatement(null, endLabel));
+
+            locals.Add(resultLocal);
+
+            return new BoundSpillSequenceExpression(
+                null,
+                locals.ToImmutable(),
+                sideEffects.ToImmutable(),
+                new BoundVariableExpression(null, resultLocal));
+        }
+
+        /// <summary>
+        /// Spills a switch expression (issue #1619 completion). A guard
+        /// (<c>when</c> clause) containing <c>await</c> stays diagnostic-gated:
+        /// a false guard must fall through to the next arm's pattern test, and
+        /// replicating that retry as bound-tree control flow would mean
+        /// re-implementing the whole pattern-matching decision tree
+        /// (<see cref="Emit.MethodBodyEmitter.EmitPattern"/> and friends) instead
+        /// of reusing it — a duplication this pass avoids for every other kind.
+        /// The discriminant and each arm's result value, however, are fully
+        /// spillable: this method reuses the existing (unmodified) pattern-match
+        /// dispatch to select which arm matched — by building a second,
+        /// award-free "index" switch whose arms carry the same
+        /// patterns/guards but return the arm's ordinal instead of its real
+        /// result — and only then evaluates the *selected* arm's (possibly
+        /// awaiting) result, via an if/else-if chain on the stored index. Any
+        /// locals a pattern binds (e.g. <c>case Point(var x, var y)</c>) are
+        /// still assigned by the (unmodified, reused) pattern test itself, so
+        /// they remain visible to the result-evaluation chain.
+        /// </summary>
+        private BoundSpillSequenceExpression SpillSwitch(BoundSwitchExpression switchExpr)
+        {
+            var discriminantHasAwait = AsyncBoundTreeQueries.HasAwait(switchExpr.Discriminant);
+            BoundExpression firstGuardAwaitSyntaxHolder = null;
+            var anyGuardHasAwait = false;
+            var anyResultHasAwait = false;
+            foreach (var arm in switchExpr.Arms)
+            {
+                if (arm.Guard != null && AsyncBoundTreeQueries.HasAwait(arm.Guard))
+                {
+                    anyGuardHasAwait = true;
+                    firstGuardAwaitSyntaxHolder ??= arm.Guard;
+                }
+
+                if (AsyncBoundTreeQueries.HasAwait(arm.Result))
+                {
+                    anyResultHasAwait = true;
+                }
+            }
+
+            if (!discriminantHasAwait && !anyGuardHasAwait && !anyResultHasAwait)
+            {
+                return Trivial(switchExpr);
+            }
+
+            if (anyGuardHasAwait)
+            {
+                var anchor = firstGuardAwaitSyntaxHolder.Syntax
+                    ?? AsyncBoundTreeQueries.FindFirstAwaitSyntax(firstGuardAwaitSyntaxHolder);
+                EmitDiagnosticException.Throw(
+                    anchor,
+                    "'await' inside a switch-expression 'when' guard is not yet supported across a suspension point.");
+            }
+
+            var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
+            var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
+
+            var discriminant = switchExpr.Discriminant;
+            if (discriminantHasAwait)
+            {
+                var spilledDiscriminant = SpillExpression(switchExpr.Discriminant);
+                locals.AddRange(spilledDiscriminant.Locals);
+                sideEffects.AddRange(spilledDiscriminant.SideEffects);
+                discriminant = spilledDiscriminant.Value;
+            }
+
+            if (!anyResultHasAwait)
+            {
+                // Only the discriminant needed spilling — no arm result has an
+                // await, so the existing opaque pattern-dispatch emission can
+                // still own arm selection and result evaluation unmodified.
+                var rebuiltSwitch = new BoundSwitchExpression(null, discriminant, switchExpr.Arms, switchExpr.Type);
+                return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), rebuiltSwitch);
+            }
+
+            // Phase 1: reuse the unmodified pattern/guard machinery to select
+            // which arm matched, via a synthetic switch expression whose arms
+            // return their own ordinal (an await-free int) instead of the real
+            // (possibly awaiting) result.
+            var indexArms = ImmutableArray.CreateBuilder<BoundSwitchExpressionArm>(switchExpr.Arms.Length);
+            for (var i = 0; i < switchExpr.Arms.Length; i++)
+            {
+                var arm = switchExpr.Arms[i];
+                indexArms.Add(new BoundSwitchExpressionArm(null, arm.Pattern, arm.Guard, new BoundLiteralExpression(null, i)));
+            }
+
+            var indexSwitch = new BoundSwitchExpression(null, discriminant, indexArms.ToImmutable(), TypeSymbol.Int32);
+            var armIndexLocal = MakeSpillTemp(TypeSymbol.Int32);
+            locals.Add(armIndexLocal);
+            sideEffects.Add(new BoundVariableDeclaration(null, armIndexLocal, indexSwitch));
+
+            // Phase 2: dispatch on the stored arm index, evaluating only the
+            // selected arm's (possibly awaiting) result.
+            var resultLocal = MakeSpillTemp(switchExpr.Type);
+            var endLabel = MakeLabel();
+            var eqOperator = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32);
+            var firstArmResultDeclared = false;
+
+            for (var i = 0; i < switchExpr.Arms.Length; i++)
+            {
+                var arm = switchExpr.Arms[i];
+                var nextArmLabel = MakeLabel();
+
+                var isSelected = new BoundBinaryExpression(
+                    null,
+                    new BoundVariableExpression(null, armIndexLocal),
+                    eqOperator,
+                    new BoundLiteralExpression(null, i));
+                sideEffects.Add(new BoundConditionalGotoStatement(null, nextArmLabel, isSelected, jumpIfTrue: false));
+
+                var spilledResult = SpillExpression(arm.Result);
+                locals.AddRange(spilledResult.Locals);
+                sideEffects.AddRange(spilledResult.SideEffects);
+
+                if (!firstArmResultDeclared)
+                {
+                    // Declare resultLocal with a real initializer here (rather
+                    // than relying on FlushSideEffects' generic int-0 default
+                    // fallback, which is wrong for non-numeric result types).
+                    sideEffects.Add(new BoundVariableDeclaration(null, resultLocal, spilledResult.Value));
+                    firstArmResultDeclared = true;
+                }
+                else
+                {
+                    sideEffects.Add(new BoundExpressionStatement(
+                        null,
+                        new BoundAssignmentExpression(null, resultLocal, spilledResult.Value)));
+                }
+
+                sideEffects.Add(new BoundGotoStatement(null, endLabel));
+                sideEffects.Add(new BoundLabelStatement(null, nextArmLabel));
+            }
+
+            sideEffects.Add(new BoundLabelStatement(null, endLabel));
+
+            locals.Add(resultLocal);
+
+            return new BoundSpillSequenceExpression(
+                null,
+                locals.ToImmutable(),
+                sideEffects.ToImmutable(),
+                new BoundVariableExpression(null, resultLocal));
+        }
+
+        /// <summary>
+        /// Spills a null-conditional access (<c>?.</c>) expression (issue #1619
+        /// completion). Mirrors <see cref="SpillConditional"/>: the receiver is
+        /// always evaluated (spilled unconditionally if it has an await), but
+        /// <see cref="BoundNullConditionalAccessExpression.WhenNotNull"/> — and
+        /// any await inside it — must only run on the non-nil path, so that
+        /// path is expanded into explicit if/else statements instead of
+        /// letting the opaque single-expression emission
+        /// (<c>EmitNullConditionalAccess</c>) own it. The not-null branch
+        /// reuses the general-purpose conversion emitter (rather than
+        /// duplicating <c>EmitNullConditionalAccess</c>'s bespoke
+        /// Nullable-wrap IL) to lift a value-typed result into
+        /// <see cref="BoundNullConditionalAccessExpression.Type"/> when needed.
+        /// </summary>
+        private BoundSpillSequenceExpression SpillNullConditionalAccess(BoundNullConditionalAccessExpression nc)
+        {
+            var receiverHasAwait = AsyncBoundTreeQueries.HasAwait(nc.Receiver);
+            var whenNotNullHasAwait = AsyncBoundTreeQueries.HasAwait(nc.WhenNotNull);
+
+            if (!receiverHasAwait && !whenNotNullHasAwait)
+            {
+                return Trivial(nc);
+            }
+
+            var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
+            var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
+
+            var receiver = nc.Receiver;
+            if (receiverHasAwait)
+            {
+                var spilledReceiver = SpillExpression(nc.Receiver);
+                locals.AddRange(spilledReceiver.Locals);
+                sideEffects.AddRange(spilledReceiver.SideEffects);
+                receiver = spilledReceiver.Value;
+            }
+
+            if (!whenNotNullHasAwait)
+            {
+                // Only the receiver needed spilling — WhenNotNull is still
+                // await-free. EmitNullConditionalAccess writes/reads
+                // nc.Capture via direct EmitStoreVariable/EmitLoadVariable
+                // calls, not through bound-tree Assignment/Variable nodes —
+                // so MoveNextBodyRewriter's hoisted-field substitution (which
+                // only rewrites nodes it can see in the tree) never touches
+                // that write, and it would land in a plain local while every
+                // *read* of nc.Capture nested inside nc.WhenNotNull (a real
+                // BoundVariableExpression the rewriter *does* see) gets
+                // redirected to the hoisted field instead — reading an
+                // never-written field. Declaring the capture explicitly here
+                // (a real BoundVariableDeclaration the rewriter recognizes)
+                // and feeding the capture variable back in as its own
+                // receiver makes emitter's redundant internal store a
+                // harmless no-op dead store into the (unused) plain-local
+                // fallback slot, while every real read still consistently
+                // resolves to the (already correctly written) hoisted field.
+                sideEffects.Add(new BoundVariableDeclaration(null, (LocalVariableSymbol)nc.Capture, receiver));
+                locals.Add((LocalVariableSymbol)nc.Capture);
+                var captureRef = new BoundVariableExpression(null, nc.Capture);
+                var rebuiltNc = new BoundNullConditionalAccessExpression(null, captureRef, nc.Capture, nc.WhenNotNull, nc.Type, nc.ResultSlot);
+                return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), rebuiltNc);
+            }
+
+            // WhenNotNull has an await: it must run only on the non-nil path,
+            // so the nil check needs explicit if/else control flow. Since this
+            // path replaces the BoundNullConditionalAccessExpression node
+            // entirely, nc.Capture is no longer discoverable by the emitter's
+            // CollectNullConditionalCaptures walk (which only finds the local
+            // through a surviving node of that kind) — it must be registered
+            // as a spill local explicitly here or its slot never gets planned.
+            // It is declared (not just assigned) with the real receiver value
+            // as its initializer so FlushSideEffects never falls back to its
+            // int32-literal-0 default — which is the wrong CLR type for a
+            // reference/struct-typed capture and would fail IL verification.
+            locals.Add((LocalVariableSymbol)nc.Capture);
+            sideEffects.Add(new BoundVariableDeclaration(null, (LocalVariableSymbol)nc.Capture, receiver));
+
+            var isVoid = ReferenceEquals(nc.Type, TypeSymbol.Void);
+            var resultLocal = isVoid ? null : MakeSpillTemp(nc.Type);
+
+            var nonNullLabel = MakeLabel();
+            var endLabel = MakeLabel();
+
+            // if (capture) goto nonNull   (brtrue — reference/Nullable non-nil check)
+            sideEffects.Add(new BoundConditionalGotoStatement(null, nonNullLabel, new BoundVariableExpression(null, nc.Capture), jumpIfTrue: true));
+
+            // nil branch
+            if (!isVoid)
+            {
+                sideEffects.Add(new BoundVariableDeclaration(null, resultLocal, new BoundDefaultExpression(null, nc.Type)));
+            }
+
+            sideEffects.Add(new BoundGotoStatement(null, endLabel));
+
+            // non-null branch
+            sideEffects.Add(new BoundLabelStatement(null, nonNullLabel));
+            var spilledWhenNotNull = SpillExpression(nc.WhenNotNull);
+            locals.AddRange(spilledWhenNotNull.Locals);
+            sideEffects.AddRange(spilledWhenNotNull.SideEffects);
+
+            if (isVoid)
+            {
+                sideEffects.Add(new BoundExpressionStatement(null, spilledWhenNotNull.Value));
+            }
+            else
+            {
+                var value = spilledWhenNotNull.Value;
+
+                // ResultSlot != null marks a value-typed access result whose
+                // WhenNotNull sub-tree pushes the raw underlying value, which
+                // must be lifted into the Nullable<T>/nc.Type shape — unless
+                // it's already a Nullable<T> itself (ADR-0073 chained `?.`).
+                if (nc.ResultSlot != null && value.Type is not NullableTypeSymbol)
+                {
+                    value = new BoundConversionExpression(null, nc.Type, value);
+                }
+
+                sideEffects.Add(new BoundExpressionStatement(null, new BoundAssignmentExpression(null, resultLocal, value)));
+            }
+
+            sideEffects.Add(new BoundLabelStatement(null, endLabel));
+
+            if (!isVoid)
+            {
+                locals.Add(resultLocal);
+            }
+
+            var resultValue = isVoid
+                ? (BoundExpression)new BoundLiteralExpression(null, null, TypeSymbol.Void)
+                : new BoundVariableExpression(null, resultLocal);
+
+            return new BoundSpillSequenceExpression(
+                null,
+                locals.ToImmutable(),
+                sideEffects.ToImmutable(),
+                resultValue);
+        }
+
+        /// <summary>
+        /// Spills a conditional address-of expression (ADR-0061; issue #1619
+        /// completion). Unlike <see cref="SpillConditional"/>'s ternary case,
+        /// the *result* here is a managed pointer (<c>T&amp;</c>), which
+        /// cannot be carried across the if/else join in a plain spill temp:
+        /// <see cref="RefInitializationHoister"/> — the pass that runs
+        /// immediately after this one — eliminates every <c>T&amp;</c>-typed
+        /// local by re-deriving its address from a *single* declaration-site
+        /// template at every use site, since state-machine field hoisting
+        /// can never hold a managed pointer. A local reassigned differently
+        /// in each branch (one address in the "then" arm, a different one in
+        /// the "else" arm) breaks that single-template assumption — the
+        /// hoister only tracks the last template it walks over lexically,
+        /// so it would silently rewrite every read to whichever branch's
+        /// address expression appears last in the statement list, regardless
+        /// of which branch actually ran (this was caught by
+        /// <c>Await_In_Conditional_Address_Condition_Selects_Correct_RefBranch</c>
+        /// failing with the wrong branch's value).
+        /// <para>
+        /// The fix: never store the address itself across the join. Only the
+        /// (plain-typed, non-byref) sub-expressions that an await could be
+        /// nested inside — e.g. an indexer's index, a field access's receiver
+        /// — are spilled, and only inside a guard that runs solely when that
+        /// operand is the one selected (so its await never fires on the
+        /// unchosen branch). The two (possibly-rebuilt) lvalue trees are then
+        /// fed back into a fresh <see cref="BoundConditionalAddressExpression"/>
+        /// so the existing, unmodified <c>EmitConditionalAddress</c> emitter
+        /// still performs the actual branch-and-take-address IL — it just
+        /// re-evaluates the (already spilled, side-effect-free) condition a
+        /// second time and reads whichever branch's temps were populated.
+        /// </para>
+        /// </summary>
+        private BoundSpillSequenceExpression SpillConditionalAddress(BoundConditionalAddressExpression condAddr)
+        {
+            var conditionHasAwait = AsyncBoundTreeQueries.HasAwait(condAddr.Condition);
+            var trueHasAwait = AsyncBoundTreeQueries.HasAwait(condAddr.WhenTrueOperand);
+            var falseHasAwait = AsyncBoundTreeQueries.HasAwait(condAddr.WhenFalseOperand);
+
+            if (!conditionHasAwait && !trueHasAwait && !falseHasAwait)
+            {
+                return Trivial(condAddr);
+            }
+
+            var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
+            var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
+
+            // If the condition contains an await, spill it exactly once, up
+            // front, so the guards/rebuild below reference the resulting
+            // value rather than re-running the await.
+            var condition = condAddr.Condition;
+            if (conditionHasAwait)
+            {
+                var spilledCondition = SpillExpression(condAddr.Condition);
+                locals.AddRange(spilledCondition.Locals);
+                sideEffects.AddRange(spilledCondition.SideEffects);
+                condition = spilledCondition.Value;
+            }
+
+            // The condition is read up to three times below: the "then"
+            // guard, the "else" guard, and the rebuilt
+            // BoundConditionalAddressExpression that EmitConditionalAddress
+            // re-evaluates. If it isn't already side-effect-free, materialize
+            // it into a spill temp exactly once here so a side effect in the
+            // condition (e.g. a method call) can't fire more than once.
+            if (!IsPureOrConstant(condition))
+            {
+                var condTemp = MakeSpillTemp(condition.Type);
+                locals.Add(condTemp);
+                sideEffects.Add(new BoundVariableDeclaration(null, condTemp, condition));
+                condition = new BoundVariableExpression(null, condTemp);
+            }
+
+            var trueOperand = condAddr.WhenTrueOperand;
+            if (trueHasAwait)
+            {
+                // Guard: only spill (and evaluate any nested await) when this
+                // branch is the one that will actually be selected.
+                var skipTrueLabel = MakeLabel();
+                sideEffects.Add(new BoundConditionalGotoStatement(null, skipTrueLabel, condition, jumpIfTrue: false));
+
+                var spilledTrue = SpillExpression(condAddr.WhenTrueOperand);
+                locals.AddRange(spilledTrue.Locals);
+                sideEffects.AddRange(spilledTrue.SideEffects);
+                trueOperand = spilledTrue.Value;
+
+                sideEffects.Add(new BoundLabelStatement(null, skipTrueLabel));
+            }
+
+            var falseOperand = condAddr.WhenFalseOperand;
+            if (falseHasAwait)
+            {
+                var skipFalseLabel = MakeLabel();
+                sideEffects.Add(new BoundConditionalGotoStatement(null, skipFalseLabel, condition, jumpIfTrue: true));
+
+                var spilledFalse = SpillExpression(condAddr.WhenFalseOperand);
+                locals.AddRange(spilledFalse.Locals);
+                sideEffects.AddRange(spilledFalse.SideEffects);
+                falseOperand = spilledFalse.Value;
+
+                sideEffects.Add(new BoundLabelStatement(null, skipFalseLabel));
+            }
+
+            // Rebuild the original node kind so the existing (unmodified)
+            // EmitConditionalAddress emitter still owns the actual
+            // branch-and-take-address IL — it never sees a byref local.
+            var value = new BoundConditionalAddressExpression(null, condition, trueOperand, falseOperand, condAddr.PointeeType);
+
+            return new BoundSpillSequenceExpression(
+                null,
+                locals.ToImmutable(),
+                sideEffects.ToImmutable(),
+                value);
+        }
+
+        private BoundSpillSequenceExpression SpillIndex(BoundIndexExpression index)
+        {
+            return SpillTwoOperand(
+                index,
+                index.Target,
+                index.Index,
+                (target, idx) => new BoundIndexExpression(null, target, idx, index.Type));
+        }
+
+        private BoundSpillSequenceExpression SpillClrStaticCall(BoundClrStaticCallExpression call)
+        {
+            var (locals, sideEffects, args) = SpillArgumentList(call.Arguments);
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(call);
+            }
+
+            var value = new BoundClrStaticCallExpression(null, call.Method, call.Type, args.ToImmutable(), call.ArgumentRefKinds);
+            return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
+        }
+
+        private BoundSpillSequenceExpression SpillClrConstructorCall(BoundClrConstructorCallExpression call)
+        {
+            var (locals, sideEffects, args) = SpillArgumentList(call.Arguments);
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(call);
+            }
+
+            var value = new BoundClrConstructorCallExpression(call.Syntax, call.ClrType, call.Constructor, args.ToImmutable(), call.Type, call.ArgumentRefKinds);
+            return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
+        }
+
+        private BoundSpillSequenceExpression SpillConstructorCall(BoundConstructorCallExpression call)
+        {
+            var (locals, sideEffects, args) = SpillArgumentList(call.Arguments);
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(call);
+            }
+
+            var value = new BoundConstructorCallExpression(call.Syntax, call.StructType, args.ToImmutable(), call.SelectedConstructor);
+            return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
+        }
+
+        private BoundSpillSequenceExpression SpillConstructorChaining(BoundConstructorChainingExpression call)
+        {
+            var (locals, sideEffects, args) = SpillArgumentList(call.Arguments);
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(call);
+            }
+
+            var value = new BoundConstructorChainingExpression(call.Syntax, call.SelectedConstructor, args.ToImmutable());
+            return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
+        }
+
+        /// <summary>
+        /// Spills a target/pointer expression together with a following
+        /// argument list, preserving the rule that the target is evaluated
+        /// before any argument (issue #1619). Used for indirect calls,
+        /// function-pointer invocations, and CLR indexers.
+        /// </summary>
+        private BoundSpillSequenceExpression SpillTargetAndArguments(
+            BoundExpression original,
+            BoundExpression target,
+            ImmutableArray<BoundExpression> arguments,
+            Func<BoundExpression, ImmutableArray<BoundExpression>, BoundExpression> rebuild)
+        {
+            var combined = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length + 1);
+            combined.Add(target);
+            combined.AddRange(arguments);
+
+            var (locals, sideEffects, spilledCombined) = SpillArgumentList(combined.ToImmutable());
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(original);
+            }
+
+            var spilledTarget = spilledCombined[0];
+            var spilledArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+            for (var i = 1; i < spilledCombined.Count; i++)
+            {
+                spilledArgs.Add(spilledCombined[i]);
+            }
+
+            var value = rebuild(spilledTarget, spilledArgs.ToImmutable());
+            return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
+        }
+
+        private BoundSpillSequenceExpression SpillIndirectCall(BoundIndirectCallExpression call)
+        {
+            return SpillTargetAndArguments(
+                call,
+                call.Target,
+                call.Arguments,
+                (target, args) => new BoundIndirectCallExpression(null, target, call.FunctionType, args));
+        }
+
+        private BoundSpillSequenceExpression SpillFunctionPointerInvocation(BoundFunctionPointerInvocationExpression call)
+        {
+            return SpillTargetAndArguments(
+                call,
+                call.Pointer,
+                call.Arguments,
+                (pointer, args) => new BoundFunctionPointerInvocationExpression(null, pointer, args, call.FunctionPointerType));
+        }
+
+        private BoundSpillSequenceExpression SpillClrIndex(BoundClrIndexExpression index)
+        {
+            return SpillTargetAndArguments(
+                index,
+                index.Target,
+                index.Arguments,
+                (target, args) => new BoundClrIndexExpression(null, target, index.Indexer, args, index.Type));
+        }
+
+        private BoundSpillSequenceExpression SpillClrIndexAssignment(BoundClrIndexAssignmentExpression assign)
+        {
+            // Target is a stable VariableSymbol (not a BoundExpression) — only
+            // the indexer arguments and the assigned value can hold an await.
+            var combined = ImmutableArray.CreateBuilder<BoundExpression>(assign.Arguments.Length + 1);
+            combined.AddRange(assign.Arguments);
+            combined.Add(assign.Value);
+
+            var (locals, sideEffects, spilled) = SpillArgumentList(combined.ToImmutable());
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(assign);
+            }
+
+            var spilledArgs = ImmutableArray.CreateBuilder<BoundExpression>(assign.Arguments.Length);
+            for (var i = 0; i < assign.Arguments.Length; i++)
+            {
+                spilledArgs.Add(spilled[i]);
+            }
+
+            var spilledValue = spilled[assign.Arguments.Length];
+            var value = new BoundClrIndexAssignmentExpression(null, assign.Target, assign.Indexer, spilledArgs.ToImmutable(), spilledValue, assign.Type);
+            return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
+        }
+
+        private BoundSpillSequenceExpression SpillClrPropertyAccess(BoundClrPropertyAccessExpression access)
+        {
+            // Receiver is null for a static member access — nothing to spill.
+            if (access.Receiver == null)
+            {
+                return Trivial(access);
+            }
+
+            return SpillOneOperand(
+                access,
+                access.Receiver,
+                recv => new BoundClrPropertyAccessExpression(null, recv, access.Member, access.Type, access.StaticContainerType));
+        }
+
+        private BoundSpillSequenceExpression SpillFieldAccess(BoundFieldAccessExpression fieldAccess)
+        {
+            // Receiver is null for an interface-static field read — nothing to spill.
+            if (fieldAccess.Receiver == null)
+            {
+                return Trivial(fieldAccess);
+            }
+
+            return SpillOneOperand(
+                fieldAccess,
+                fieldAccess.Receiver,
+                recv => new BoundFieldAccessExpression(null, recv, fieldAccess.StructType, fieldAccess.Field, fieldAccess.NarrowedType));
+        }
+
+        private BoundSpillSequenceExpression SpillTupleLiteral(BoundTupleLiteralExpression tupleLiteral)
+        {
+            var (locals, sideEffects, elements) = SpillArgumentList(tupleLiteral.Elements);
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(tupleLiteral);
+            }
+
+            var value = new BoundTupleLiteralExpression(null, tupleLiteral.TupleType, elements.ToImmutable());
+            return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
+        }
+
+        /// <summary>
+        /// Spills an interpolated string's holes. By this point in the
+        /// pipeline most interpolated strings have already been lowered to
+        /// the handler pattern (a <see cref="BoundBlockExpression"/>, handled
+        /// by <see cref="SpillBlockExpression"/>); this path only fires for
+        /// interpolated strings that reach the spiller in their raw
+        /// part-list form (issue #1619).
+        /// </summary>
+        private BoundSpillSequenceExpression SpillInterpolatedString(BoundInterpolatedStringExpression interpolated)
+        {
+            var holeIndices = new List<int>();
+            for (var i = 0; i < interpolated.Parts.Length; i++)
+            {
+                if (interpolated.Parts[i].IsHole)
+                {
+                    holeIndices.Add(i);
+                }
+            }
+
+            var holeExpressions = ImmutableArray.CreateBuilder<BoundExpression>(holeIndices.Count);
+            foreach (var i in holeIndices)
+            {
+                holeExpressions.Add(interpolated.Parts[i].Value);
+            }
+
+            var (locals, sideEffects, spilledHoles) = SpillArgumentList(holeExpressions.ToImmutable());
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(interpolated);
+            }
+
+            var parts = ImmutableArray.CreateBuilder<BoundInterpolatedStringPart>(interpolated.Parts.Length);
+            parts.AddRange(interpolated.Parts);
+            for (var i = 0; i < holeIndices.Count; i++)
+            {
+                var partIndex = holeIndices[i];
+                parts[partIndex] = parts[partIndex].WithValue(spilledHoles[i]);
+            }
+
+            var value = new BoundInterpolatedStringExpression(null, parts.ToImmutable(), interpolated.Handler);
+            return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
+        }
+
+        private BoundSpillSequenceExpression SpillArrayCreation(BoundArrayCreationExpression arrayCreation)
+        {
+            if (arrayCreation.LengthExpression != null)
+            {
+                return SpillOneOperand(
+                    arrayCreation,
+                    arrayCreation.LengthExpression,
+                    length => new BoundArrayCreationExpression(null, arrayCreation.ContainerType, length));
+            }
+
+            var (locals, sideEffects, elements) = SpillArgumentList(arrayCreation.Elements);
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(arrayCreation);
+            }
+
+            var value = new BoundArrayCreationExpression(null, arrayCreation.ContainerType, elements.ToImmutable());
+            return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
+        }
+
+        private BoundSpillSequenceExpression SpillStackAlloc(BoundStackAllocExpression stackAlloc)
+        {
+            var combined = ImmutableArray.CreateBuilder<BoundExpression>(stackAlloc.InitializerElements.Length + 1);
+            combined.Add(stackAlloc.Count);
+            combined.AddRange(stackAlloc.InitializerElements);
+
+            var (locals, sideEffects, spilled) = SpillArgumentList(combined.ToImmutable());
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(stackAlloc);
+            }
+
+            var spilledCount = spilled[0];
+            var spilledElements = ImmutableArray.CreateBuilder<BoundExpression>(stackAlloc.InitializerElements.Length);
+            for (var i = 1; i < spilled.Count; i++)
+            {
+                spilledElements.Add(spilled[i]);
+            }
+
+            var value = new BoundStackAllocExpression(null, stackAlloc.ResultType, stackAlloc.ElementType, spilledCount, stackAlloc.IsPointerForm, spilledElements.ToImmutable());
+            return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
+        }
+
+        private BoundSpillSequenceExpression SpillStructLiteral(BoundStructLiteralExpression structLiteral)
+        {
+            var values = ImmutableArray.CreateBuilder<BoundExpression>(structLiteral.Initializers.Length);
+            foreach (var init in structLiteral.Initializers)
+            {
+                values.Add(init.Value);
+            }
+
+            var (locals, sideEffects, spilledValues) = SpillArgumentList(values.ToImmutable());
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(structLiteral);
+            }
+
+            var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>(structLiteral.Initializers.Length);
+            for (var i = 0; i < structLiteral.Initializers.Length; i++)
+            {
+                var original = structLiteral.Initializers[i];
+                initializers.Add(original.Field != null
+                    ? new BoundFieldInitializer(original.Field, spilledValues[i])
+                    : new BoundFieldInitializer(original.Property, spilledValues[i]));
+            }
+
+            var value = new BoundStructLiteralExpression(null, structLiteral.StructType, initializers.ToImmutable());
+            return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
+        }
+
+        private BoundSpillSequenceExpression SpillMapLiteral(BoundMapLiteralExpression mapLiteral)
+        {
+            var kvExprs = ImmutableArray.CreateBuilder<BoundExpression>(mapLiteral.Entries.Length * 2);
+            foreach (var entry in mapLiteral.Entries)
+            {
+                kvExprs.Add(entry.Key);
+                kvExprs.Add(entry.Value);
+            }
+
+            var (locals, sideEffects, spilledKv) = SpillArgumentList(kvExprs.ToImmutable());
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(mapLiteral);
+            }
+
+            var entries = ImmutableArray.CreateBuilder<BoundMapEntry>(mapLiteral.Entries.Length);
+            for (var i = 0; i < mapLiteral.Entries.Length; i++)
+            {
+                entries.Add(new BoundMapEntry(spilledKv[i * 2], spilledKv[(i * 2) + 1]));
+            }
+
+            var value = new BoundMapLiteralExpression(null, mapLiteral.MapType, entries.ToImmutable());
+            return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
+        }
+
+        /// <summary>
+        /// Spills a single-operand expression: if the operand has no await,
+        /// returns the original expression unchanged (trivial); otherwise
+        /// spills the operand and rebuilds via <paramref name="rebuild"/>.
+        /// </summary>
+        private BoundSpillSequenceExpression SpillOneOperand(
+            BoundExpression original,
+            BoundExpression operand,
+            Func<BoundExpression, BoundExpression> rebuild)
+        {
+            if (!AsyncBoundTreeQueries.HasAwait(operand))
+            {
+                return Trivial(original);
+            }
+
+            var spilled = SpillExpression(operand);
+            var value = rebuild(spilled.Value);
+            return new BoundSpillSequenceExpression(null, spilled.Locals, spilled.SideEffects, value);
+        }
+
+        /// <summary>
+        /// Spills two operands evaluated eagerly, left-to-right (no short
+        /// circuiting) — mirrors the non-logical path of <see cref="SpillBinary"/>
+        /// and <see cref="SpillIndexAssignment"/>. If the second operand has
+        /// an await, the first is spilled to a stable temp first (unless it's
+        /// already pure/constant) so its value survives the suspension.
+        /// </summary>
+        private BoundSpillSequenceExpression SpillTwoOperand(
+            BoundExpression original,
+            BoundExpression a,
+            BoundExpression b,
+            Func<BoundExpression, BoundExpression, BoundExpression> rebuild)
+        {
+            var aHasAwait = AsyncBoundTreeQueries.HasAwait(a);
+            var bHasAwait = AsyncBoundTreeQueries.HasAwait(b);
+
+            if (!aHasAwait && !bHasAwait)
+            {
+                return Trivial(original);
+            }
+
+            var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
+            var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
+
+            BoundExpression left = a;
+            if (aHasAwait)
+            {
+                var spilledA = SpillExpression(a);
+                locals.AddRange(spilledA.Locals);
+                sideEffects.AddRange(spilledA.SideEffects);
+                left = spilledA.Value;
+            }
+
+            if (bHasAwait && !IsPureOrConstant(left))
+            {
+                var temp = MakeSpillTemp(left.Type);
+                locals.Add(temp);
+                sideEffects.Add(new BoundVariableDeclaration(null, temp, left));
+                left = new BoundVariableExpression(null, temp);
+            }
+
+            BoundExpression right = b;
+            if (bHasAwait)
+            {
+                var spilledB = SpillExpression(b);
+                locals.AddRange(spilledB.Locals);
+                sideEffects.AddRange(spilledB.SideEffects);
+                right = spilledB.Value;
+            }
+
+            var value = rebuild(left, right);
+            return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
         }
 
         /// <summary>

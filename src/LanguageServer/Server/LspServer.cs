@@ -44,6 +44,7 @@ public sealed class LspServer
     private bool clientSupportsPullDiagnostics;
     private bool clientSupportsDiagnosticRefresh;
     private Timer refreshTimer;
+    private string defaultFormattingIndent = "  ";
 
     public LspServer(DocumentContentService documentContentService, WorkspaceState workspaceState, ILogger logger = null)
     {
@@ -68,6 +69,7 @@ public sealed class LspServer
     {
         var rootPath = request?.RootPath ?? request?.RootUri?.GetFileSystemPath();
         this.DetectClientDiagnosticCapabilities(request?.Capabilities ?? default);
+        this.defaultFormattingIndent = ResolveDefaultFormattingIndent(request?.InitializationOptions ?? default);
         try
         {
             WorkspaceInitializer.Initialize(this.workspaceState, rootPath);
@@ -189,9 +191,12 @@ public sealed class LspServer
             return new FullDocumentDiagnosticReport { Items = Array.Empty<Diagnostic>() };
         }
 
-        // Snapshot the current text and owning project under the gate, then run the (potentially
-        // expensive) full binding pass off the gate so interactive requests are not blocked.
-        string text = null;
+        // Snapshot the current SyntaxTree and owning project under the gate, then run the
+        // (potentially expensive) full binding pass off the gate so interactive requests are not
+        // blocked. Binding runs against the captured tree via ComputeDiagnosticsForSnapshot, which
+        // never calls ProjectState.UpdateFile — a stale snapshot pull racing a concurrent
+        // didChange can therefore never clobber a newer tree written under the gate (issue #1657).
+        SyntaxTree syntaxTree = null;
         string filePath = null;
         ProjectState project = null;
         await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -201,7 +206,7 @@ public sealed class LspServer
             project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
             if (this.documentContentService.TryGet(uri.ToString(), out var content))
             {
-                text = content.SyntaxTree.Text.ToString();
+                syntaxTree = content.SyntaxTree;
             }
         }
         finally
@@ -209,7 +214,7 @@ public sealed class LspServer
             this.gate.Release();
         }
 
-        if (text == null)
+        if (syntaxTree == null)
         {
             return new FullDocumentDiagnosticReport { Items = Array.Empty<Diagnostic>() };
         }
@@ -219,7 +224,7 @@ public sealed class LspServer
         DiagnosticComputationResult result;
         try
         {
-            result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: false, project, filePath, this.workspaceState);
+            result = DocumentSyncHandler.ComputeDiagnosticsForSnapshot(syntaxTree, skipBinding: false, project, filePath, this.workspaceState);
         }
         catch (OperationCanceledException)
         {
@@ -502,25 +507,26 @@ public sealed class LspServer
     public Task<TextEdit[]> FormattingAsync(DocumentFormattingParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => this.FormatDocument(content),
+            (content, ct) => this.FormatDocument(content, request.Options),
             Array.Empty<TextEdit>(),
             cancellationToken);
 
+    // Range formatting and on-type formatting are not advertised in ServerCapabilitiesFactory
+    // (see issue #1660): implementing correct partial-range formatting on top of the
+    // whole-token-stream FormattingEngine would require re-deriving per-statement offsets and
+    // splicing them back into an unrelated slice of the document, which is substantially more
+    // risk than value for a formatter that already produces a correct, idempotent whole-document
+    // result. These handlers are kept registered as safe no-ops in case a non-conformant client
+    // invokes them despite the missing capability; they intentionally do not fall back to a
+    // whole-document format, since that would reintroduce the whole-document mangling this fix
+    // removes for the range/on-type case.
     [JsonRpcMethod("textDocument/rangeFormatting", UseSingleObjectParameterDeserialization = true)]
     public Task<TextEdit[]> RangeFormattingAsync(DocumentRangeFormattingParams request, CancellationToken cancellationToken = default)
-        => this.ReadDocumentAsync(
-            request.TextDocument,
-            (content, ct) => this.FormatDocument(content),
-            Array.Empty<TextEdit>(),
-            cancellationToken);
+        => Task.FromResult(Array.Empty<TextEdit>());
 
     [JsonRpcMethod("textDocument/onTypeFormatting", UseSingleObjectParameterDeserialization = true)]
     public Task<TextEdit[]> OnTypeFormattingAsync(DocumentOnTypeFormattingParams request, CancellationToken cancellationToken = default)
-        => this.ReadDocumentAsync(
-            request.TextDocument,
-            (content, ct) => this.FormatDocument(content),
-            Array.Empty<TextEdit>(),
-            cancellationToken);
+        => Task.FromResult(Array.Empty<TextEdit>());
 
     [JsonRpcMethod("textDocument/implementation", UseSingleObjectParameterDeserialization = true)]
     public Task<Location[]> ImplementationAsync(ImplementationParams request, CancellationToken cancellationToken = default)
@@ -950,6 +956,46 @@ public sealed class LspServer
         }
     }
 
+    /// <summary>
+    /// Reads the extension's <c>formattingIndentSize</c>/<c>formattingUseTabs</c> initialization
+    /// options (see serverManager.ts) to compute the indent unit used when a formatting request
+    /// does not itself supply <see cref="FormattingOptions"/>.
+    /// </summary>
+    private static string ResolveDefaultFormattingIndent(JsonElement initializationOptions)
+    {
+        const string fallback = "  ";
+        try
+        {
+            if (initializationOptions.ValueKind != JsonValueKind.Object)
+            {
+                return fallback;
+            }
+
+            var useTabs = initializationOptions.TryGetProperty("formattingUseTabs", out var useTabsElement)
+                && useTabsElement.ValueKind == JsonValueKind.True;
+
+            if (useTabs)
+            {
+                return "\t";
+            }
+
+            if (initializationOptions.TryGetProperty("formattingIndentSize", out var sizeElement)
+                && sizeElement.ValueKind == JsonValueKind.Number
+                && sizeElement.TryGetInt32(out var size)
+                && size > 0)
+            {
+                return new string(' ', size);
+            }
+
+            return fallback;
+        }
+        catch
+        {
+            // Initialization option parsing is best-effort; fall back to the two-space default.
+            return fallback;
+        }
+    }
+
     private void RequestDiagnosticRefresh(DocumentUri changedUri)
     {
         if (!this.clientSupportsPullDiagnostics || !this.clientSupportsDiagnosticRefresh)
@@ -1024,11 +1070,12 @@ public sealed class LspServer
         return document.GetSemanticTokens();
     }
 
-    private TextEdit[] FormatDocument(DocumentContent content)
+    private TextEdit[] FormatDocument(DocumentContent content, FormattingOptions options)
     {
         var sourceText = content.SyntaxTree.Text;
         var originalText = sourceText.ToString();
-        var formatted = FormattingEngine.Format(originalText);
+        var indent = ResolveIndent(options, this.defaultFormattingIndent);
+        var formatted = FormattingEngine.Format(originalText, indent);
         if (formatted == originalText)
         {
             return Array.Empty<TextEdit>();
@@ -1044,6 +1091,22 @@ public sealed class LspServer
                 NewText = formatted,
             },
         };
+    }
+
+    /// <summary>
+    /// Resolves the indent unit for a formatting request: the request's own
+    /// <see cref="FormattingOptions"/> (tabSize/insertSpaces, as sent by the editor per the LSP
+    /// spec) take precedence, falling back to the server-wide default derived from the
+    /// extension's initialization options when the request supplies none.
+    /// </summary>
+    private static string ResolveIndent(FormattingOptions options, string fallback)
+    {
+        if (options == null || options.TabSize <= 0)
+        {
+            return fallback;
+        }
+
+        return options.InsertSpaces ? new string(' ', options.TabSize) : "\t";
     }
 
     private Range ComputePrepareRename(DocumentContent content, PrepareRenameParams request)

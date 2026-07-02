@@ -99,6 +99,28 @@ public sealed class Lowerer : BoundTreeRewriter
 
     /// <inheritdoc/>
     /// <remarks>
+    /// Issue #1615: <c>scope { }</c> bodies are emitted as a protected
+    /// (try/finally) region so spawned tasks are always awaited — see
+    /// <c>MethodBodyEmitter.EmitScopeStatement</c>. A <c>return</c> lexically
+    /// inside a scope must therefore get the same store-to-temp +
+    /// goto-exit rewrite as a return inside a real try block, so counts
+    /// toward <see cref="tryNestingDepth"/> just like <see cref="RewriteTryStatement"/>.
+    /// </remarks>
+    protected override BoundStatement RewriteScopeStatement(BoundScopeStatement node)
+    {
+        this.tryNestingDepth++;
+        try
+        {
+            return base.RewriteScopeStatement(node);
+        }
+        finally
+        {
+            this.tryNestingDepth--;
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
     /// Issue #419 (P0-2): rewrites <c>return</c> statements that appear
     /// lexically inside a try / catch / finally region. The original
     /// <c>BoundReturnStatement</c> is replaced with a store to a synthetic

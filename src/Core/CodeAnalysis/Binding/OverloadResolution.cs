@@ -231,40 +231,19 @@ internal static class OverloadResolution
     public static readonly Type DefaultLiteralArgumentType = typeof(DefaultLiteralArgumentMarker);
 #pragma warning restore SA1201
 
-    /// <summary>
-    /// Issue #658: per-call supplementary interface check for user-defined G#
-    /// classes whose CLR type does not exist at bind time. When set (non-null),
-    /// <see cref="ClassifyImplicit"/> invokes this callback as a final
-    /// reference-conversion check before falling through to
-    /// <see cref="UserDefinedImplicitConversionLookup"/>. The binder sets this
-    /// before calling <see cref="Resolve{T}"/> for calls that include user-
-    /// class arguments and clears it immediately after.
-    /// </summary>
-    [ThreadStatic]
-#pragma warning disable SA1401 // Field should be private
-#pragma warning disable SA1201 // Elements should appear in the correct order
-    internal static Func<Type, Type, bool> SupplementaryInterfaceCheck;
-#pragma warning restore SA1201
-#pragma warning restore SA1401
-
-    /// <summary>
-    /// Issue #1311: per-call constant-narrowing applicability hook for imported/
-    /// BCL candidates. When set (non-null), <see cref="EvaluateCandidate{T}"/>
-    /// invokes it for an argument whose natural type has no implicit conversion
-    /// to the parameter type. The callback receives the source argument index
-    /// and the CLR parameter type and returns <see langword="true"/> when the
-    /// argument is a constant integer expression whose value fits that
-    /// (possibly narrower / cross-sign) integer parameter — i.e. C# §10.2.11
-    /// implicit constant expression conversion. The binder sets this from the
-    /// bound arguments before calling <see cref="Resolve{T}"/> and clears it
-    /// immediately after. Modelled on <see cref="SupplementaryInterfaceCheck"/>.
-    /// </summary>
-    [ThreadStatic]
-#pragma warning disable SA1401 // Field should be private
-#pragma warning disable SA1201 // Elements should appear in the correct order
-    internal static Func<int, Type, bool> ConstantNarrowingArgumentCheck;
-#pragma warning restore SA1201
-#pragma warning restore SA1401
+    // Issue #658 / #1311 / #1634: the supplementary-interface and constant-
+    // narrowing checks used to live here as mutable (later [ThreadStatic])
+    // fields, set immediately before and nulled immediately after each
+    // `Resolve<T>` call. That "install/clear around the call" pattern is not
+    // reentrant: nested resolution performed *inside* the hook window (e.g.
+    // `RebindInlineOutVarArguments`, lambda re-binding, or any other bind that
+    // itself resolves an overload before the outer `finally` runs) clears the
+    // outer call's hook out from under it, and — because binding also runs
+    // concurrently across language-server request threads via `Task.Run` —
+    // a `[ThreadStatic]` field only protects against *cross-thread* races, not
+    // this same-thread reentrancy hazard. Both checks are now threaded through
+    // `Resolve<T>` as ordinary parameters instead, so each call carries its own
+    // context and there is no shared mutable state to race or clobber.
 
     /// <summary>
     /// Classifies the implicit conversion from <paramref name="source"/> to
@@ -274,8 +253,16 @@ internal static class OverloadResolution
     /// </summary>
     /// <param name="target">The target parameter type.</param>
     /// <param name="source">The argument type.</param>
+    /// <param name="supplementaryInterfaceCheck">
+    /// Issue #658 / #1634: optional per-call callback recognising a user-
+    /// defined G# class → CLR-interface implicit reference conversion that the
+    /// built-in checks below cannot see (the class's CLR type is a surrogate at
+    /// bind time). Passed down from the <see cref="Resolve{T}"/> call that is
+    /// evaluating this argument; <see langword="null"/> when the call has no
+    /// user-class arguments.
+    /// </param>
     /// <returns>The conversion classification.</returns>
-    public static ImplicitConversionKind ClassifyImplicit(Type target, Type source)
+    public static ImplicitConversionKind ClassifyImplicit(Type target, Type source, Func<Type, Type, bool> supplementaryInterfaceCheck = null)
     {
         if (target is null)
         {
@@ -462,8 +449,7 @@ internal static class OverloadResolution
         // whose CLR type is a surrogate (e.g. System.Object), the built-in checks
         // above won't recognise that the user class implements the target interface.
         // This callback lets the binder inject that knowledge.
-        var sic = SupplementaryInterfaceCheck;
-        if (sic != null && target.IsInterface && sic(source, target))
+        if (supplementaryInterfaceCheck != null && target.IsInterface && supplementaryInterfaceCheck(source, target))
         {
             return ImplicitConversionKind.Reference;
         }
@@ -598,7 +584,20 @@ internal static class OverloadResolution
     /// <see langword="null"/>, the constraint check relies solely on the CLR
     /// type arguments (prior behaviour).
     /// </param>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null)
+    /// <param name="supplementaryInterfaceCheck">
+    /// Issue #658 / #1634: optional per-call user-class → CLR-interface
+    /// applicability hook forwarded to <see cref="ClassifyImplicit"/> while
+    /// evaluating this call's candidates. Threaded as a parameter (rather than
+    /// a shared mutable static) so concurrent and nested resolutions never
+    /// observe another call's hook.
+    /// </param>
+    /// <param name="constantNarrowingArgumentCheck">
+    /// Issue #1311 / #1634: optional per-call constant-narrowing applicability
+    /// hook forwarded to <see cref="EvaluateCandidate{T}"/> while evaluating
+    /// this call's candidates. Threaded as a parameter for the same reentrancy/
+    /// concurrency reason as <paramref name="supplementaryInterfaceCheck"/>.
+    /// </param>
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)>();
@@ -622,7 +621,7 @@ internal static class OverloadResolution
             // rest.
             try
             {
-                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols);
+                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck);
             }
             catch (Exception ex) when (IsMetadataLoadFailure(ex))
             {
@@ -641,7 +640,7 @@ internal static class OverloadResolution
             {
                 try
                 {
-                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames, recoverTypeArgSymbols);
+                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck);
                 }
                 catch (Exception ex) when (IsMetadataLoadFailure(ex))
                 {
@@ -771,6 +770,51 @@ internal static class OverloadResolution
         if (ret != null && ret.IsGenericParameter && ret.DeclaringMethod != null)
         {
             position = ret.GenericParameterPosition;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #1599: determines whether the parameter at <paramref name="parameterIndex"/>
+    /// of a closed generic method's open definition is typed by exactly one of the
+    /// method's own type parameters — including through a by-ref (<c>out</c>/<c>ref</c>)
+    /// wrapper, e.g. the <c>out TEnum</c> parameter of
+    /// <c>bool TryParse&lt;TEnum&gt;(string, out TEnum)</c>. When it does, the caller can
+    /// recover the real parameter (pointee) type from the explicit type-argument symbol
+    /// at the reported position, which is necessary when the method was closed over a
+    /// value-type placeholder (or an <see cref="object"/> erasure) because the type
+    /// argument is a same-compilation user value type with no reference-context CLR type.
+    /// This is the parameter analogue of
+    /// <see cref="TryGetGenericMethodParameterReturnPosition(MethodInfo, out int)"/> and
+    /// is what lets an inline <c>out var</c> declaration recover the correct pointee type
+    /// instead of leaking the placeholder.
+    /// </summary>
+    /// <param name="closed">The closed generic method.</param>
+    /// <param name="parameterIndex">The zero-based parameter position to inspect.</param>
+    /// <param name="position">The method type-parameter position of the parameter, when matched.</param>
+    /// <returns><see langword="true"/> when the parameter (pointee) is a bare method type parameter.</returns>
+    public static bool TryGetGenericMethodParameterPosition(MethodInfo closed, int parameterIndex, out int position)
+    {
+        position = -1;
+        if (closed == null || !closed.IsGenericMethod || parameterIndex < 0)
+        {
+            return false;
+        }
+
+        var open = closed.IsGenericMethodDefinition ? closed : closed.GetGenericMethodDefinition();
+        var parameters = open.GetParameters();
+        if (parameterIndex >= parameters.Length)
+        {
+            return false;
+        }
+
+        var paramType = parameters[parameterIndex].ParameterType;
+        var pointee = paramType != null && paramType.IsByRef ? paramType.GetElementType() : paramType;
+        if (pointee != null && pointee.IsGenericParameter && pointee.DeclaringMethod != null)
+        {
+            position = pointee.GenericParameterPosition;
             return true;
         }
 
@@ -1660,11 +1704,11 @@ internal static class OverloadResolution
     /// <summary>
     /// Evaluates a single candidate for applicability against the supplied
     /// argument types, appending it to <paramref name="applicable"/> when it
-    /// applies. Factored out of <see cref="Resolve{T}(IEnumerable{T}, IReadOnlyList{Type}, IReadOnlyList{Type}, Func{Type, Type}, IReadOnlyList{bool}, IReadOnlyList{string}, Func{MethodInfo, ImmutableArray{TypeSymbol}})"/>
+    /// applies. Factored out of <see cref="Resolve{T}"/>
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null)
         where T : MethodBase
     {
         {
@@ -1843,7 +1887,7 @@ internal static class OverloadResolution
                 paramTypes[i] = paramTypeRewrite != null
                     ? paramTypeRewrite(parameters[paramIndex].ParameterType)
                     : parameters[paramIndex].ParameterType;
-                var conv = ClassifyImplicit(paramTypes[i], argTypes[i]);
+                var conv = ClassifyImplicit(paramTypes[i], argTypes[i], supplementaryInterfaceCheck);
                 if (conv == ImplicitConversionKind.None)
                 {
                     // ADR-0055 Tier 4 (#369): an interpolated-string argument
@@ -1860,8 +1904,8 @@ internal static class OverloadResolution
                     {
                         conv = ImplicitConversionKind.InterpolatedStringToFormattable;
                     }
-                    else if (ConstantNarrowingArgumentCheck != null
-                        && ConstantNarrowingArgumentCheck(i, paramTypes[i]))
+                    else if (constantNarrowingArgumentCheck != null
+                        && constantNarrowingArgumentCheck(i, paramTypes[i]))
                     {
                         // Issue #1311: a constant integer argument that fits a
                         // narrower / cross-sign integer parameter is implicitly
@@ -1902,7 +1946,7 @@ internal static class OverloadResolution
     /// applicability check in <see cref="EvaluateCandidate"/> but rewrites the
     /// trailing parameter type to the element type for ranking purposes.
     /// </summary>
-    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null)
+    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null)
         where T : MethodBase
     {
         T candidate = rawCandidate;
@@ -2081,7 +2125,7 @@ internal static class OverloadResolution
             }
 
             paramTypes[i] = target;
-            var conv = ClassifyImplicit(target, argTypes[i]);
+            var conv = ClassifyImplicit(target, argTypes[i], supplementaryInterfaceCheck);
             if (conv == ImplicitConversionKind.None)
             {
                 return;

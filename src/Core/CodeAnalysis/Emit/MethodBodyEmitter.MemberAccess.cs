@@ -567,15 +567,34 @@ internal sealed partial class MethodBodyEmitter
                 ? drefRecv.Operand
                 : null;
 
+            // Issue #1614: the receiver is an arbitrary expression (e.g. a
+            // method-call result) and may have side effects, so it must be
+            // evaluated exactly once. Previously the receiver was emitted a
+            // second time after the store to re-read the field for the
+            // expression result — re-running any side effect and, worse,
+            // reading the field off a freshly re-evaluated (possibly
+            // different) object. Mirror the property-assignment fix (issue
+            // #418 P1-2): dup the assigned value into a pre-planned temp
+            // before the `stfld` and load the temp back as the result —
+            // no second receiver evaluation, no re-read.
+            if (!this.receiverSpillSlots.TryGetValue(fas, out var valueSlot))
+            {
+                throw new InvalidOperationException(
+                    $"No slot populated for {fas.Kind} on field '{fas.Field.Name}' — "
+                    + "walker pre-pass missed this child? "
+                    + "Check AssignmentValueSpillCollector and its ancestor walker.");
+            }
+
             this.EmitExpression(addressReceiver ?? fas.ReceiverExpression);
             this.EmitExpression(fas.Value);
+            this.il.OpCode(ILOpCode.Dup);
+            this.il.StoreLocal(valueSlot);
             this.il.OpCode(ILOpCode.Stfld);
             this.il.Token(fieldHandle);
 
-            // Leave the assigned value on the stack as the expression result.
-            this.EmitExpression(addressReceiver ?? fas.ReceiverExpression);
-            this.il.OpCode(ILOpCode.Ldfld);
-            this.il.Token(fieldHandle);
+            // Expression result: the value we just stored — no second
+            // receiver evaluation, no second field read.
+            this.il.LoadLocal(valueSlot);
             return;
         }
 
@@ -1430,13 +1449,25 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.OpCode(ILOpCode.Ldind_r8);
         }
-        else if (clrType.IsSameAs(typeof(short)) || clrType.IsSameAs(typeof(ushort)) || clrType.IsSameAs(typeof(char)))
+        else if (clrType.IsSameAs(typeof(short)))
         {
             this.il.OpCode(ILOpCode.Ldind_i2);
         }
-        else if (clrType.IsSameAs(typeof(byte)) || clrType.IsSameAs(typeof(sbyte)) || clrType.IsSameAs(typeof(bool)))
+        else if (clrType.IsSameAs(typeof(ushort)) || clrType.IsSameAs(typeof(char)))
+        {
+            // Issue #1613: ldind.i2 sign-extends to int32. ushort/char are
+            // unsigned pointees — mirror EmitLoadElement (issue #520) and use
+            // the unsigned form so values >= 0x8000 don't come back negative.
+            this.il.OpCode(ILOpCode.Ldind_u2);
+        }
+        else if (clrType.IsSameAs(typeof(sbyte)))
         {
             this.il.OpCode(ILOpCode.Ldind_i1);
+        }
+        else if (clrType.IsSameAs(typeof(byte)) || clrType.IsSameAs(typeof(bool)))
+        {
+            // Issue #1613: same fix for byte/bool — ldind.u1 zero-extends.
+            this.il.OpCode(ILOpCode.Ldind_u1);
         }
         else if (pointeeType is StructSymbol { IsClass: false } || (clrType != null && clrType.IsValueType))
         {

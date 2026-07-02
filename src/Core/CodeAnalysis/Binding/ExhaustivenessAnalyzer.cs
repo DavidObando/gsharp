@@ -83,7 +83,15 @@ public static class ExhaustivenessAnalyzer
         }
 
         var patternArray = patterns.ToArray();
-        if (patternArray.Any(pattern => pattern == null || pattern is BoundDiscardPattern))
+        if (patternArray.Any(pattern => pattern == null))
+        {
+            return false;
+        }
+
+        // Issue #1643: an `or` disjunction (`Red or Green`) covers whatever its
+        // leaves cover, including a nested discard, so flatten before checking
+        // for a wildcard arm. `and` conjunctions narrow and are NOT flattened.
+        if (patternArray.Any(pattern => FlattenDisjunction(pattern).Any(leaf => leaf is BoundDiscardPattern)))
         {
             return false;
         }
@@ -94,12 +102,15 @@ public static class ExhaustivenessAnalyzer
             var coveredValues = new HashSet<int>();
             foreach (var pattern in patternArray)
             {
-                if (pattern is BoundConstantPattern constant
-                    && constant.Value is BoundLiteralExpression literal
-                    && literal.Type == enumSymbol
-                    && literal.Value is int value)
+                foreach (var leaf in FlattenDisjunction(pattern))
                 {
-                    coveredValues.Add(value);
+                    if (leaf is BoundConstantPattern constant
+                        && constant.Value is BoundLiteralExpression literal
+                        && literal.Type == enumSymbol
+                        && literal.Value is int value)
+                    {
+                        coveredValues.Add(value);
+                    }
                 }
             }
 
@@ -121,11 +132,14 @@ public static class ExhaustivenessAnalyzer
             var coveredTypes = new HashSet<StructSymbol>();
             foreach (var pattern in patternArray)
             {
-                if (pattern is BoundTypePattern typePattern
-                    && typePattern.TargetType is StructSymbol structSymbol
-                    && structSymbol.Interfaces.Any(i => SameInterface(i, sealedInterface)))
+                foreach (var leaf in FlattenDisjunction(pattern))
                 {
-                    coveredTypes.Add(structSymbol);
+                    if (leaf is BoundTypePattern typePattern
+                        && typePattern.TargetType is StructSymbol structSymbol
+                        && structSymbol.Interfaces.Any(i => SameInterface(i, sealedInterface)))
+                    {
+                        coveredTypes.Add(structSymbol);
+                    }
                 }
             }
 
@@ -151,11 +165,14 @@ public static class ExhaustivenessAnalyzer
             var coveredSubclasses = new HashSet<StructSymbol>();
             foreach (var pattern in patternArray)
             {
-                if (pattern is BoundTypePattern typePattern
-                    && typePattern.TargetType is StructSymbol structSymbol
-                    && IsSubclassOf(structSymbol, sealedBaseClass))
+                foreach (var leaf in FlattenDisjunction(pattern))
                 {
-                    coveredSubclasses.Add(structSymbol);
+                    if (leaf is BoundTypePattern typePattern
+                        && typePattern.TargetType is StructSymbol structSymbol
+                        && IsSubclassOf(structSymbol, sealedBaseClass))
+                    {
+                        coveredSubclasses.Add(structSymbol);
+                    }
                 }
             }
 
@@ -167,6 +184,33 @@ public static class ExhaustivenessAnalyzer
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issue #1643: recursively flattens an `or` disjunction (<see cref="BoundBinaryPattern"/>
+    /// with <see cref="BoundBinaryPattern.IsConjunction"/> false) into its leaf patterns, so
+    /// each disjunct is matched individually against the covered-variant set. Any nesting
+    /// (<c>A or B or C</c>, <c>(A or B) or C</c>) is handled. An `and` conjunction narrows
+    /// rather than covers, so it is never flattened and is returned as a single opaque leaf.
+    /// </summary>
+    private static IEnumerable<BoundPattern> FlattenDisjunction(BoundPattern pattern)
+    {
+        if (pattern is BoundBinaryPattern { IsConjunction: false } disjunction)
+        {
+            foreach (var leaf in FlattenDisjunction(disjunction.Left))
+            {
+                yield return leaf;
+            }
+
+            foreach (var leaf in FlattenDisjunction(disjunction.Right))
+            {
+                yield return leaf;
+            }
+        }
+        else
+        {
+            yield return pattern;
+        }
     }
 
     private static bool IsSubclassOf(StructSymbol candidate, StructSymbol baseClass)

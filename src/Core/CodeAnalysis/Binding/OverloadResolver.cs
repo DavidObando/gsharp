@@ -589,6 +589,75 @@ internal sealed class OverloadResolver
     /// supplied the wrapper returns it unchanged so legacy single-overload
     /// callsites keep their existing diagnostics (wrong arity, etc.).
     /// </summary>
+    /// <summary>
+    /// Issue #1626: finalizes an implicit static-self dispatch (a bare
+    /// <c>Helper(args)</c> call resolved inside a static interface/struct
+    /// helper body) once <see cref="SelectInstanceOverloadOrReport"/> has
+    /// picked <paramref name="method"/>. That selector returns a lone
+    /// candidate with NO applicability check, so this helper — mirroring the
+    /// arity/named-argument handling every other static-call finalizer
+    /// performs — validates argument count and reorders named arguments
+    /// before converting, instead of indexing <c>method.Parameters</c>
+    /// positionally and risking an out-of-range crash (too many args) or an
+    /// invalid short <see cref="BoundCallExpression"/> (too few args).
+    /// </summary>
+    /// <remarks>
+    /// ponytail: this is only reached when <see cref="bindUserTypeStaticCall"/>
+    /// is <see langword="null"/> (e.g. an <see cref="OverloadResolver"/> built
+    /// directly, without the production callback wiring). The real binder
+    /// always supplies <c>bindUserTypeStaticCall</c>, which gives full
+    /// optional/variadic/generic fidelity via <c>BindUserTypeStaticCall</c>;
+    /// this fallback only needs to be crash-safe, not feature-complete.
+    /// </remarks>
+    private BoundExpression BindImplicitStaticSelfCallFallback(
+        FunctionSymbol method,
+        CallExpressionSyntax syntax,
+        ImmutableArray<BoundExpression> boundArguments,
+        ImmutableArray<string> argumentNames)
+    {
+        var parameterCount = method.Parameters.Length;
+        if (boundArguments.Length != parameterCount)
+        {
+            Diagnostics.ReportWrongArgumentCount(syntax.Location, method.Name, parameterCount, boundArguments.Length);
+            return new BoundErrorExpression(null);
+        }
+
+        ExpressionSyntax[] permutedSyntax;
+        ImmutableArray<BoundExpression> permutedArguments;
+        if (!argumentNames.IsDefault)
+        {
+            if (!TryReorderUserCallArguments(
+                    syntax.Arguments,
+                    boundArguments,
+                    parameterCount,
+                    p => method.Parameters[p].Name,
+                    method.Name,
+                    out permutedSyntax,
+                    out permutedArguments))
+            {
+                return new BoundErrorExpression(null);
+            }
+        }
+        else
+        {
+            permutedSyntax = new ExpressionSyntax[syntax.Arguments.Count];
+            for (var i = 0; i < syntax.Arguments.Count; i++)
+            {
+                permutedSyntax[i] = syntax.Arguments[i];
+            }
+
+            permutedArguments = boundArguments;
+        }
+
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(parameterCount);
+        for (var ai = 0; ai < parameterCount; ai++)
+        {
+            convertedArgs.Add(conversions.BindConversion(permutedSyntax[ai].Location, permutedArguments[ai], method.Parameters[ai].Type));
+        }
+
+        return new BoundCallExpression(null, method, convertedArgs.MoveToImmutable());
+    }
+
     public FunctionSymbol SelectInstanceOverloadOrReport(
         ImmutableArray<FunctionSymbol> overloads,
         ImmutableArray<BoundExpression> arguments,
@@ -999,22 +1068,15 @@ internal sealed class OverloadResolver
                 continue;
             }
 
-            // Issue #1552: Kotlin-model null-safety gate. A nullable REFERENCE
-            // argument `S?` does NOT satisfy a non-nullable REFERENCE parameter
-            // unless the parameter is null-tolerant (`object`/`object?` or any
-            // nullable target). This overrides the #521 reference-upcast leak in
-            // Conversion.Classify (a NullableTypeSymbol exposes its underlying
-            // ClrType, so an IMPORTED `S? -> S` is otherwise mis-classified as
-            // implicit) WITHOUT changing global conversion semantics — we only
-            // treat such a candidate as non-applicable here. Value-type nullables
-            // (`int32?`, user `struct?`, `enum?`) and nullable type-parameter
-            // underlyings are never reference-like, so the gate leaves them
-            // untouched.
-            if (IsNullableReferenceGateRejected(argType, paramType))
-            {
-                return false;
-            }
-
+            // Issue #1627: the #1552 point-fix gate that used to live here
+            // (calling IsNullableReferenceGateRejected before classification)
+            // has been removed. Conversion.Classify now rejects an imported
+            // nullable-REFERENCE argument `S?` against a non-null-tolerant
+            // reference parameter `S` at the classification source (see the
+            // `#1627` comment in Conversion.Classify), so the general
+            // convertibility check below already reports it as non-applicable
+            // — consistently, in every BindConversion position, not just this
+            // multi-candidate positional filter.
             var conversion = Conversion.Classify(argType, paramType);
             if (conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity))
             {
@@ -3979,13 +4041,7 @@ internal sealed class OverloadResolver
                             return bindUserTypeStaticCall(implicitReceiverStruct, syntax);
                         }
 
-                        var convertedSelfStaticArgs = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
-                        for (var ai = 0; ai < syntax.Arguments.Count; ai++)
-                        {
-                            convertedSelfStaticArgs.Add(conversions.BindConversion(syntax.Arguments[ai].Location, boundArguments[ai], implicitMethod.Parameters[ai].Type));
-                        }
-
-                        return new BoundCallExpression(null, implicitMethod, convertedSelfStaticArgs.MoveToImmutable());
+                        return BindImplicitStaticSelfCallFallback(implicitMethod, syntax, boundArguments.ToImmutable(), argumentNames);
                     }
 
                     var implicitReceiver = new BoundVariableExpression(null, effThis);
@@ -4062,13 +4118,17 @@ internal sealed class OverloadResolver
                         return new BoundErrorExpression(null);
                     }
 
-                    var convertedStaticArgs = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
-                    for (var ai = 0; ai < syntax.Arguments.Count; ai++)
-                    {
-                        convertedStaticArgs.Add(conversions.BindConversion(syntax.Arguments[ai].Location, boundArguments[ai], implicitStaticMethod.Parameters[ai].Type));
-                    }
-
-                    return new BoundCallExpression(null, implicitStaticMethod, convertedStaticArgs.MoveToImmutable());
+                    // Issue #1626: `implicitStaticMethod` may be a private static
+                    // helper (only visible from inside the interface body, via
+                    // `GetStaticPrivateMethods` above) that the shared
+                    // `bindUserTypeStaticCall` finalizer cannot see — its own
+                    // member lookup only walks the public `StaticMethods`
+                    // bucket. Finalize directly here instead, but through the
+                    // same arity/named-argument-safe helper the struct
+                    // static-self path (above) falls back to, so a lone
+                    // candidate can no longer be indexed past its parameter
+                    // list.
+                    return BindImplicitStaticSelfCallFallback(implicitStaticMethod, syntax, boundArguments.ToImmutable(), argumentNames);
                 }
             }
 

@@ -257,7 +257,7 @@ public class Compilation
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var diagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
 
-        var program = Binder.BindProgram(GlobalScope, References);
+        var program = BoundProgram;
 
         var allErrors = diagnostics
             .Concat(program.Diagnostics)
@@ -272,18 +272,6 @@ public class Compilation
         if (allErrors.Any())
         {
             return new EvaluationResult(allWarnings.Concat(allErrors).ToImmutableArray(), null);
-        }
-
-        var appPath = Environment.GetCommandLineArgs()[0];
-        var appDirectory = Path.GetDirectoryName(appPath);
-        var cfgPath = Path.Combine(appDirectory, "cfg.dot");
-        var cfgStatement = !program.Statement.Statements.Any() && program.Functions.Any()
-                              ? program.Functions.Last().Value
-                              : program.Statement;
-        var cfg = ControlFlowGraph.Create(cfgStatement);
-        using (var streamWriter = new StreamWriter(cfgPath))
-        {
-            cfg.WriteTo(streamWriter);
         }
 
         var evaluator = new Evaluator(program, variables);
@@ -310,7 +298,7 @@ public class Compilation
     /// <param name="writer">The writer.</param>
     public void EmitTree(TextWriter writer)
     {
-        var program = Binder.BindProgram(GlobalScope, References);
+        var program = BoundProgram;
 
         if (program.Statement.Statements.Any())
         {
@@ -342,7 +330,7 @@ public class Compilation
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
 
-        var program = Binder.BindProgram(GlobalScope, References);
+        var program = BoundProgram;
 
         var allDiagnostics = syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray();
         if (allDiagnostics.Any(d => d.IsError))
@@ -453,7 +441,7 @@ public class Compilation
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
 
-        var program = Binder.BindProgram(GlobalScope, References);
+        var program = BoundProgram;
 
         var allDiagnostics = syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray();
         if (allDiagnostics.Any(d => d.IsError))
