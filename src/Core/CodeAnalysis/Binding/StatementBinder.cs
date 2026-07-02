@@ -1555,16 +1555,14 @@ internal sealed class StatementBinder
         ImmutableArray<BoundStatement>.Builder statements,
         Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
-        // Bind the else block once up-front strictly to validate that it
-        // unconditionally exits the enclosing scope (GS0297). We then
-        // re-bind it for each binding arm because the ControlFlowGraph
-        // builder demands that each BoundStatement appear at most once
-        // in the tree (it keys block lookup by statement identity).
-        var probeElse = BindStatement(syntax.ElseStatement);
-        if (!EndsInUnconditionalExit(probeElse))
-        {
-            Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location);
-        }
+        // The else block must be re-bound once per binding arm because the
+        // ControlFlowGraph builder demands that each BoundStatement appear
+        // at most once in the tree (it keys block lookup by statement
+        // identity). Re-binding the same syntax repeatedly would otherwise
+        // report every diagnostic inside the else block once per arm
+        // (issue #1637), so only the first bind's diagnostics are kept;
+        // subsequent re-binds are truncated back to that point.
+        var hasBoundElseOnce = false;
 
         foreach (var binding in syntax.Bindings)
         {
@@ -1578,7 +1576,20 @@ internal sealed class StatementBinder
             // Bind a fresh copy of the else block for this arm so that the
             // ControlFlowGraph builder sees a unique BoundStatement
             // instance per arm.
+            var diagMark = Diagnostics.Count;
             var armElse = BindStatement(syntax.ElseStatement);
+            if (hasBoundElseOnce)
+            {
+                Diagnostics.TruncateTo(diagMark);
+            }
+            else
+            {
+                hasBoundElseOnce = true;
+                if (!EndsInUnconditionalExit(armElse))
+                {
+                    Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location);
+                }
+            }
 
             // Build `if <var> == nil { else }`.
             var read = new BoundVariableExpression(binding, variable);
@@ -1594,6 +1605,20 @@ internal sealed class StatementBinder
             // we have the data inline here, so just promote directly.
             persistentFrame[variable] = underlying;
             statements.Add(ifStmt);
+        }
+
+        // If every arm's binding clause failed (all `continue`d above), the
+        // else block was never bound and its diagnostics -- including
+        // GS0297 -- would silently vanish. Bind it once here, purely for
+        // diagnostics; it isn't wired into any statement since there's no
+        // successful binding left to guard.
+        if (!hasBoundElseOnce)
+        {
+            var armElse = BindStatement(syntax.ElseStatement);
+            if (!EndsInUnconditionalExit(armElse))
+            {
+                Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location);
+            }
         }
     }
 

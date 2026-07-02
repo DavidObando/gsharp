@@ -220,6 +220,110 @@ Run(""hi"")
         Assert.Empty(result.Diagnostics);
     }
 
+    [Fact]
+    public void GuardLet_SingleBinding_ElseDiagnosticReportedExactlyOnce()
+    {
+        // Issue #1637: the else block used to be bound once as a
+        // validity probe and once more per binding arm, so a single
+        // binding produced the same diagnostic twice.
+        var result = Evaluate(@"
+func Run(s string?) int32 {
+    guard let v = s else {
+        var w = ""hi""
+        guard let n = w else {
+            return 0
+        }
+        return n.Length
+    }
+    return v.Length
+}
+Run(""hi"")
+");
+
+        Assert.Single(result.Diagnostics, d => d.Id == "GS0296");
+    }
+
+    [Fact]
+    public void GuardLet_MultipleBindings_ElseDiagnosticReportedExactlyOnce()
+    {
+        // Issue #1637: with N binding arms the else block used to be
+        // re-bound N+1 times, reporting every diagnostic inside it
+        // N+1 times instead of once.
+        var result = Evaluate(@"
+func Run(a string?, b string?) int32 {
+    guard let x = a, let y = b else {
+        var w = ""hi""
+        guard let n = w else {
+            return 0
+        }
+        return n.Length
+    }
+    return x.Length + y.Length
+}
+Run(""a"", ""b"")
+");
+
+        Assert.Single(result.Diagnostics, d => d.Id == "GS0296");
+    }
+
+    [Fact]
+    public void GuardLet_MultipleBindings_ElseWithoutExit_DiagnosesGS0297ExactlyOnce()
+    {
+        var result = Evaluate(@"
+func Run(a string?, b string?) {
+    guard let x = a, let y = b else {
+        var z = 1
+    }
+    var w = x
+    var q = y
+}
+Run(""a"", ""b"")
+");
+
+        Assert.Single(result.Diagnostics, d => d.Id == "GS0297");
+    }
+
+    [Fact]
+    public void GuardLet_LaterArmBadInitializer_ArmDiagnosticSurvivesExactlyOnce()
+    {
+        // Arm 2's rhs is non-nullable (its own GS0296). Arm 1 succeeds and
+        // binds the else block; per #1637 the arm-2-specific diagnostic
+        // must still surface exactly once, not swallowed by the else's
+        // per-arm TruncateTo.
+        var result = Evaluate(@"
+func Run(a string?) int32 {
+    guard let x = a, let y = ""hi"" else {
+        return 0
+    }
+    return x.Length + y.Length
+}
+Run(""a"")
+");
+
+        Assert.Single(result.Diagnostics, d => d.Id == "GS0296");
+    }
+
+    [Fact]
+    public void GuardLet_AllArmsFail_ElseStillBoundOnceForDiagnostics()
+    {
+        // Issue #1637 follow-up: if every binding arm fails (non-nullable
+        // rhs on both), the arm loop never binds the else block. The
+        // fallback bind must still surface GS0297 and the else's own
+        // internal diagnostic exactly once.
+        var result = Evaluate(@"
+func Run() {
+    guard let x = ""a"", let y = ""b"" else {
+        var z = 1
+    }
+    var w = 1
+}
+Run()
+");
+
+        Assert.Equal(2, result.Diagnostics.Count(d => d.Id == "GS0296"));
+        Assert.Single(result.Diagnostics, d => d.Id == "GS0297");
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
