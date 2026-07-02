@@ -67,27 +67,48 @@ function decodeXmlEntities(value: string): string {
 }
 
 /**
- * Finds the TRX result for a given test key (either a fully-qualified name or the
- * server-provided filter token). TRX `testName` values aren't guaranteed to match the
- * key exactly (e.g. the key may be a partial FQN used with `FullyQualifiedName~`), so
- * an exact match is tried first, then a suffix/substring match in either direction.
+ * Strips the `(arg=value, ...)` parameter list MSTest `[DataRow]`/xUnit `[Theory]`
+ * append to a TRX `testName`, leaving the base (non-parameterized) test name so a
+ * single TestItem leaf can be matched against every data-driven row it produced.
  */
-export function matchTrxResult(
+function baseTestName(testName: string): string {
+  const parenIndex = testName.indexOf('(');
+  return parenIndex === -1 ? testName : testName.slice(0, parenIndex);
+}
+
+/**
+ * Finds every TRX result for a given test key (either a fully-qualified name or the
+ * server-provided filter token). A single TestItem leaf can map to *multiple* TRX rows
+ * when the test is parameterized (`[DataRow]`/`[Theory]`), so this returns all matches
+ * rather than just the first — callers must aggregate them (see `aggregateTrxResults`)
+ * instead of only looking at one row, or a single failing data row can be hidden behind
+ * an earlier passing one.
+ *
+ * TRX `testName` values aren't guaranteed to match the key exactly (e.g. the key may be
+ * a partial FQN used with `FullyQualifiedName~`), so an exact match (ignoring any
+ * parameter list) is tried first, then a qualified suffix match in either direction
+ * (`Namespace.Class.Add` matches key `Add`, and vice versa). Plain substring matching is
+ * intentionally not used: it would let a short name like `Add` spuriously match an
+ * unrelated test like `ReadAddress`.
+ */
+export function matchTrxResults(
   key: string,
   results: readonly TrxTestResult[],
-): TrxTestResult | undefined {
-  const exact = results.find((r) => r.testName === key);
-  if (exact) {
+): TrxTestResult[] {
+  const keyBase = baseTestName(key);
+
+  const exact = results.filter((r) => {
+    const base = baseTestName(r.testName);
+    return r.testName === key || base === key || base === keyBase;
+  });
+  if (exact.length > 0) {
     return exact;
   }
 
-  return results.find(
-    (r) =>
-      r.testName.endsWith(`.${key}`) ||
-      key.endsWith(`.${r.testName}`) ||
-      r.testName.includes(key) ||
-      key.includes(r.testName),
-  );
+  return results.filter((r) => {
+    const base = baseTestName(r.testName);
+    return base.endsWith(`.${keyBase}`) || keyBase.endsWith(`.${base}`);
+  });
 }
 
 /**
@@ -109,4 +130,67 @@ export function classifyOutcome(outcome: string): RunOutcome {
     default:
       return 'errored';
   }
+}
+
+/** The outcome and combined message for a TestItem leaf after aggregating every TRX
+ * row that matched it (see `matchTrxResults`). */
+export interface AggregatedTrxResult {
+  outcome: RunOutcome;
+  message?: string;
+}
+
+const OUTCOME_PRECEDENCE: RunOutcome[] = ['errored', 'failed', 'passed', 'skipped'];
+
+/**
+ * Combines every TRX row matched for a single TestItem leaf into one outcome, using
+ * "any failure wins" precedence: if any row errored the leaf is reported as errored,
+ * else if any row failed the leaf is failed, else if any row passed the leaf is
+ * passed, and only if every row was skipped/not-executed is the leaf skipped. This
+ * is what prevents a parameterized test ([DataRow]/[Theory]) with a mix of passing
+ * and failing data rows from being reported as passed just because the first row
+ * happened to pass. Failure/error messages from every non-passing row are
+ * concatenated so no failing data row is silently dropped from the report.
+ */
+export function aggregateTrxResults(
+  results: readonly TrxTestResult[],
+): AggregatedTrxResult | undefined {
+  if (results.length === 0) {
+    return undefined;
+  }
+
+  const byOutcome = new Map<RunOutcome, TrxTestResult[]>();
+  for (const result of results) {
+    const outcome = classifyOutcome(result.outcome);
+    const bucket = byOutcome.get(outcome);
+    if (bucket) {
+      bucket.push(result);
+    } else {
+      byOutcome.set(outcome, [result]);
+    }
+  }
+
+  for (const outcome of OUTCOME_PRECEDENCE) {
+    const bucket = byOutcome.get(outcome);
+    if (!bucket) {
+      continue;
+    }
+    if (outcome === 'passed' || outcome === 'skipped') {
+      return { outcome };
+    }
+    return { outcome, message: formatFailureMessages(bucket) };
+  }
+
+  // Unreachable: every classifyOutcome() result is one of OUTCOME_PRECEDENCE.
+  return { outcome: 'skipped' };
+}
+
+function formatFailureMessages(rows: readonly TrxTestResult[]): string {
+  return rows
+    .map((row) => {
+      const text = row.stackTrace
+        ? `${row.message ?? 'Test failed'}\n${row.stackTrace}`
+        : (row.message ?? `Test failed: ${row.testName}`);
+      return rows.length > 1 ? `[${row.testName}] ${text}` : text;
+    })
+    .join('\n\n');
 }

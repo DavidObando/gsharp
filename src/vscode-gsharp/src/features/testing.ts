@@ -5,7 +5,8 @@ import * as fs from 'fs';
 import * as cp from 'child_process';
 import { LanguageClient } from 'vscode-languageclient/node';
 import { Logger } from '../utils/logger';
-import { classifyOutcome, matchTrxResult, parseTrx, TrxTestResult } from './trx';
+import { aggregateTrxResults, matchTrxResults, parseTrx, TrxTestResult } from './trx';
+import { killProcessTree } from './processKill';
 
 interface TestItem {
   id: string;
@@ -296,6 +297,9 @@ async function runTests(
     forEachLeaf(item, (leaf) => run.started(leaf));
   }
 
+  // `run.end()` must happen no matter how this exits (early return, thrown error while
+  // building the run itself, etc.) — otherwise the Test Explorer UI stays "running"
+  // forever because VS Code never learns the run finished.
   try {
     // Group the selection by the owning project so each `dotnet test` invocation runs
     // against the correct `.gsproj`. A multi-project workspace (e.g. several test
@@ -307,7 +311,6 @@ async function runTests(
           run.errored(leaf, new vscode.TestMessage('No .gsproj file found.')),
         );
       }
-      run.end();
       return;
     }
 
@@ -323,9 +326,9 @@ async function runTests(
     for (const item of items) {
       forEachLeaf(item, (leaf) => run.errored(leaf, new vscode.TestMessage(message)));
     }
+  } finally {
+    run.end();
   }
-
-  run.end();
 }
 
 /**
@@ -432,7 +435,27 @@ async function runProject(
 
     reportTrxResults(leaves, trxPath, exitCode, token, run);
   } finally {
-    fs.rmSync(resultsDirectory, { recursive: true, force: true });
+    removeResultsDirectory(resultsDirectory);
+  }
+}
+
+/**
+ * Best-effort cleanup of the temporary results directory. If the test host process
+ * wasn't fully torn down (see `killProcessTree`) the TRX file or directory can still
+ * be locked for a moment after the child process is reported closed; retrying a few
+ * times with a short delay avoids `fs.rmSync` throwing and aborting the run instead of
+ * merely leaving a stray temp directory behind.
+ */
+function removeResultsDirectory(dir: string, retriesLeft = 5): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    const retryable = code === 'EBUSY' || code === 'ENOTEMPTY' || code === 'EPERM';
+    if (retryable && retriesLeft > 0) {
+      setTimeout(() => removeResultsDirectory(dir, retriesLeft - 1), 200).unref();
+    }
+    // Otherwise give up silently: a leftover temp directory is not fatal.
   }
 }
 
@@ -447,7 +470,7 @@ async function runTestProcess(
   run: vscode.TestRun,
   token: vscode.CancellationToken,
 ): Promise<number> {
-  const child = cp.spawn('dotnet', args, { cwd: path.dirname(projectUri.fsPath) });
+  const child = spawnDotnet(args, path.dirname(projectUri.fsPath));
 
   const handleOutput = (data: Buffer) => {
     run.appendOutput(data.toString().replace(/\r?\n/g, '\r\n'));
@@ -455,7 +478,7 @@ async function runTestProcess(
   child.stdout.on('data', handleOutput);
   child.stderr.on('data', handleOutput);
 
-  const cancellation = token.onCancellationRequested(() => child.kill());
+  const cancellation = token.onCancellationRequested(() => killProcessTree(child));
   try {
     return await new Promise<number>((resolve) => {
       child.on('error', () => resolve(1));
@@ -464,6 +487,21 @@ async function runTestProcess(
   } finally {
     cancellation.dispose();
   }
+}
+
+/**
+ * Spawns `dotnet` for a test run. On POSIX the child is detached into its own process
+ * group so `killProcessTree` can terminate every process it spawns (e.g. `testhost`)
+ * via the group, not just the `dotnet` launcher itself. Windows has no equivalent of
+ * process groups here; `killProcessTree` instead uses `taskkill /T` to walk the actual
+ * process tree by pid.
+ */
+function spawnDotnet(args: string[], cwd: string, env?: NodeJS.ProcessEnv): cp.ChildProcessWithoutNullStreams {
+  return cp.spawn('dotnet', args, {
+    cwd,
+    env,
+    detached: process.platform !== 'win32',
+  });
 }
 
 /**
@@ -478,9 +516,9 @@ async function runDebugProcess(
   token: vscode.CancellationToken,
 ): Promise<number> {
   const folder = vscode.workspace.getWorkspaceFolder(projectUri);
-  const child = cp.spawn('dotnet', args, {
-    cwd: path.dirname(projectUri.fsPath),
-    env: { ...process.env, VSTEST_HOST_DEBUG: '1' },
+  const child = spawnDotnet(args, path.dirname(projectUri.fsPath), {
+    ...process.env,
+    VSTEST_HOST_DEBUG: '1',
   });
 
   let attached = false;
@@ -503,7 +541,7 @@ async function runDebugProcess(
   child.stderr.on('data', handleOutput);
 
   const cancellation = token.onCancellationRequested(() => {
-    child.kill();
+    killProcessTree(child);
   });
 
   try {
@@ -563,8 +601,9 @@ function reportTrxResults(
     }
 
     const key = testFilters.get(leaf.id) ?? leaf.label;
-    const result = matchTrxResult(key, trxResults);
-    if (!result) {
+    const matches = matchTrxResults(key, trxResults);
+    const aggregated = aggregateTrxResults(matches);
+    if (!aggregated) {
       run.errored(
         leaf,
         new vscode.TestMessage(`No matching result found in TRX output for '${key}'.`),
@@ -572,25 +611,20 @@ function reportTrxResults(
       continue;
     }
 
-    const outcome = classifyOutcome(result.outcome);
-    switch (outcome) {
+    switch (aggregated.outcome) {
       case 'passed':
         run.passed(leaf);
         break;
-      case 'failed': {
-        const text = result.stackTrace
-          ? `${result.message ?? 'Test failed'}\n${result.stackTrace}`
-          : (result.message ?? `Test failed: ${key}`);
-        run.failed(leaf, new vscode.TestMessage(text));
+      case 'failed':
+        run.failed(leaf, new vscode.TestMessage(aggregated.message ?? `Test failed: ${key}`));
         break;
-      }
       case 'skipped':
         run.skipped(leaf);
         break;
       default:
         run.errored(
           leaf,
-          new vscode.TestMessage(result.message ?? `Test outcome: ${result.outcome}`),
+          new vscode.TestMessage(aggregated.message ?? `Test outcome: ${aggregated.outcome}`),
         );
         break;
     }
