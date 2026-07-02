@@ -203,6 +203,12 @@ public sealed class ReferenceResolver : IDisposable
         // the same reason as every cache above.
         ClrTypeUtilities.ClearCache();
         MemberLookup.ClearCache();
+
+        // Issue #1632: ClrOperatorResolution.TryResolveConversion memoizes
+        // user-defined-conversion lookups per (sourceType, targetType,
+        // allowExplicit); those Type instances also originate from this
+        // context, so clear it for the same reason as the caches above.
+        ClrOperatorResolution.ClearCache();
     }
 
     /// <summary>

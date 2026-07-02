@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -48,6 +49,23 @@ internal static class ClrOperatorResolution
         [SyntaxKind.BangToken] = "op_LogicalNot",
         [SyntaxKind.HatToken] = "op_OnesComplement",
     };
+
+    /// <summary>
+    /// Issue #1632: memoizes <see cref="TryResolveConversion"/> per
+    /// <c>(sourceType, targetType, allowExplicit)</c>. Overload resolution
+    /// probes user-defined conversions for every candidate × argument pair
+    /// that fails direct classification (<c>IsConvertibilityApplicable</c> in
+    /// <c>OverloadResolver</c>), and each probe used to re-walk
+    /// <see cref="TryFind"/>'s uncached <c>GetMethods</c> reflection scan on
+    /// both the source and target declaring types. Keyed purely on the CLR
+    /// <see cref="Type"/> pair (interned per <see cref="System.Reflection.MetadataLoadContext"/>),
+    /// so the cache is safe to share process-wide. Cleared by
+    /// <see cref="ClearCache"/> — wired into
+    /// <see cref="GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.Dispose"/>
+    /// (mirroring #1678/#1622) — so entries keyed on a disposed context's
+    /// <see cref="Type"/> instances do not pin that context's memory.
+    /// </summary>
+    private static readonly ConcurrentDictionary<(Type Source, Type Target, bool AllowExplicit), ConversionProbeResult> ConversionCache = new();
 
     /// <summary>Looks up the CLR operator name for a binary operator token.</summary>
     /// <param name="kind">The operator syntax kind.</param>
@@ -253,27 +271,48 @@ internal static class ClrOperatorResolution
             return false;
         }
 
+        var key = (sourceType, targetType, allowExplicit);
+        if (!ConversionCache.TryGetValue(key, out var cached))
+        {
+            cached = ResolveConversionUncached(sourceType, targetType, allowExplicit);
+            ConversionCache[key] = cached;
+        }
+
+        method = cached.Method;
+        isExplicit = cached.IsExplicit;
+        return cached.Found;
+    }
+
+    /// <summary>
+    /// Removes every entry from <see cref="ConversionCache"/>. Called by
+    /// <see cref="GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.Dispose"/>
+    /// alongside <see cref="GSharp.Core.CodeAnalysis.Symbols.ClrTypeUtilities.ClearCache"/>
+    /// and <see cref="MemberLookup.ClearCache"/> (#1632, mirroring #1678/#1622).
+    /// </summary>
+    internal static void ClearCache() => ConversionCache.Clear();
+
+    private static ConversionProbeResult ResolveConversionUncached(Type sourceType, Type targetType, bool allowExplicit)
+    {
         // Pass 1: implicits on source then target.
-        if (TryFind(sourceType, "op_Implicit", sourceType, targetType, out method)
+        if (TryFind(sourceType, "op_Implicit", sourceType, targetType, out var method)
             || TryFind(targetType, "op_Implicit", sourceType, targetType, out method))
         {
-            return true;
+            return new ConversionProbeResult(found: true, method, isExplicit: false);
         }
 
         if (!allowExplicit)
         {
-            return false;
+            return new ConversionProbeResult(found: false, method: null, isExplicit: false);
         }
 
         // Pass 2: explicits on source then target.
         if (TryFind(sourceType, "op_Explicit", sourceType, targetType, out method)
             || TryFind(targetType, "op_Explicit", sourceType, targetType, out method))
         {
-            isExplicit = true;
-            return true;
+            return new ConversionProbeResult(found: true, method, isExplicit: true);
         }
 
-        return false;
+        return new ConversionProbeResult(found: false, method: null, isExplicit: false);
     }
 
     private static bool TryFind(Type declaring, string name, Type src, Type tgt, out MethodInfo method)
@@ -315,5 +354,21 @@ internal static class ClrOperatorResolution
         }
 
         return false;
+    }
+
+    private readonly struct ConversionProbeResult
+    {
+        public ConversionProbeResult(bool found, MethodInfo method, bool isExplicit)
+        {
+            this.Found = found;
+            this.Method = method;
+            this.IsExplicit = isExplicit;
+        }
+
+        public bool Found { get; }
+
+        public MethodInfo Method { get; }
+
+        public bool IsExplicit { get; }
     }
 }
