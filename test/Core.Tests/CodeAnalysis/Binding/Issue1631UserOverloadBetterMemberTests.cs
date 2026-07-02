@@ -136,14 +136,16 @@ func Issue1631VarUse() int32 -> Issue1631VarF(1, 2)
     }
 
     [Fact]
-    public void VariadicTailWidening_PrefersNormalFormOverExpanded()
+    public void VariadicElementIdentity_BeatsNormalFormWidening()
     {
-        // B1 regression: the variadic candidate's tail argument used to be
-        // forced to Identity (the best possible rank) regardless of its real
-        // conversion, letting it wrongly dominate an applicable non-variadic
-        // sibling that has to widen. Here arg1 (int32) widens to int64 on the
-        // normal-form overload but matches the params element type (int32)
-        // exactly on the variadic overload; C# still prefers the normal form.
+        // B1' regression: per C# §7.5.3.2, "prefer non-expanded form" is a
+        // LATE tie-break applied only when per-arg betterness is otherwise
+        // tied — it must not override a genuine per-arg conversion-kind
+        // difference. Here arg2 (int32) widens to int64 on the normal-form
+        // overload but matches the params element type (int32) exactly on
+        // the variadic overload, so per-arg betterness picks the variadic
+        // form (matching Roslyn: F(1, 2) with F(int,long) and
+        // F(int, params int[]) binds the params overload).
         const string source = @"
 package p
 func Issue1631VarWF(x int32, y int64) int32 -> 1
@@ -158,8 +160,31 @@ func Issue1631VarWUse() int32 -> Issue1631VarWF(1, 2)
         var selected = FindCall(compilation, "Issue1631VarWF");
         Assert.NotNull(selected);
         Assert.Equal(2, selected.Parameters.Length);
+        Assert.True(selected.Parameters[1].IsVariadic);
+    }
+
+    [Fact]
+    public void BothFormsIdenticalPerArg_PrefersNormalFormAsTieBreak()
+    {
+        // Locks in the true §7.5.3.2 tie-break: when every argument is
+        // Identity on BOTH the normal-form and variadic candidates (no
+        // widening anywhere to decide the arg comparisons), Phase 2c's
+        // "prefer non-variadic" rule is what picks the normal form.
+        const string source = @"
+package p
+func Issue1631VarTieF(x int32, y int32) int32 -> 1
+func Issue1631VarTieF(x int32, rest ...int32) int32 -> 2
+func Issue1631VarTieUse() int32 -> Issue1631VarTieF(1, 2)
+";
+        var compilation = Compile(source);
+        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+
+        var selected = FindCall(compilation, "Issue1631VarTieF");
+        Assert.NotNull(selected);
+        Assert.Equal(2, selected.Parameters.Length);
         Assert.False(selected.Parameters[1].IsVariadic);
-        Assert.Equal(TypeSymbol.Int64, selected.Parameters[1].Type);
     }
 
     [Fact]

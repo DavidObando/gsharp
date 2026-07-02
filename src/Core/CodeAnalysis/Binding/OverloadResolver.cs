@@ -1177,21 +1177,14 @@ internal sealed class OverloadResolver
     /// </summary>
     private static int CompareUserConversions(OverloadResolution.ImplicitConversionKind ka, TypeSymbol paramA, bool tailA, OverloadResolution.ImplicitConversionKind kb, TypeSymbol paramB, bool tailB, TypeSymbol source)
     {
-        // Issue #1631 (B1): a normal-form (fixed-parameter) slot is always
-        // strictly better than an expanded-form (variadic tail) slot on the
-        // SAME argument, independent of each side's own conversion kind —
-        // C#'s "non-expanded form preferred over expanded form" rule
-        // (§7.5.3.2). Without this, a variadic candidate's tail argument
-        // (classified against the params element type) can out-rank a
-        // non-variadic sibling's real widening conversion and wrongly
-        // dominate it. When both sides are tail slots (two variadic
-        // candidates), fall through to the normal kind comparison so genuine
-        // element-type betterness still decides.
-        if (tailA != tailB)
-        {
-            return tailA ? 1 : -1;
-        }
-
+        // Issue #1631 (B1'): per C# §7.5.3.2, "non-expanded form preferred
+        // over expanded form" is a LATE tie-break applied only when per-arg
+        // betterness is otherwise tied across every argument — it is not a
+        // per-arg override. Per-arg comparison must rank purely on each
+        // side's own conversion kind (e.g. an exact element-type match on a
+        // variadic tail slot legitimately beats a widening conversion on a
+        // normal-form slot). Phase 2c (prefer non-variadic) applies the
+        // actual tie-break once all per-arg comparisons agree.
         if (ka != kb)
         {
             return ((int)ka).CompareTo((int)kb);
