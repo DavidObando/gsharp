@@ -4917,18 +4917,10 @@ internal sealed class ReflectionMetadataEmitter
                         // emit a modreq(System.Runtime.CompilerServices.IsReadOnlyAttribute) on
                         // the parameter signature so consumers (e.g. C#) treat the call site as
                         // readonly. ParameterAttributes (Out / In) are stamped on the per-parameter
-                        // metadata row below.
-                        var paramEncoder = ps.AddParameter();
-                        if (p.RefKind == RefKind.In)
-                        {
-                            var isReadOnlyAttrType = this.wellKnown.GetIsReadOnlyAttributeTypeRef();
-                            if (!isReadOnlyAttrType.IsNil)
-                            {
-                                paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false);
-                            }
-                        }
-
-                        EncodeTypeSymbol(paramEncoder.Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                        // metadata row below. Issue #1610: this encoding is shared with the
+                        // interface abstract / static-virtual slot paths so the interface
+                        // signature and its implementation can never drift apart.
+                        TypeDefEmitter.EncodeParameterSignature(ps, p, this.EncodeTypeSymbol, this.wellKnown);
                     }
                 });
 

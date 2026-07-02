@@ -945,17 +945,7 @@ internal sealed class TypeDefEmitter
                         // modreq for `in` (matching the C# convention so consumers see a
                         // normal `ref`/`out`/`in` parameter). ParameterAttributes.Out / In
                         // are stamped on the per-parameter row below.
-                        var paramEncoder = ps.AddParameter();
-                        if (p.RefKind == RefKind.In)
-                        {
-                            var isReadOnlyAttrType = this.wellKnown.GetIsReadOnlyAttributeTypeRef();
-                            if (!isReadOnlyAttrType.IsNil)
-                            {
-                                paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false);
-                            }
-                        }
-
-                        this.encodeTypeSymbol(paramEncoder.Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                        EncodeParameterSignature(ps, p, this.encodeTypeSymbol, this.wellKnown);
                     }
                 });
 
@@ -1040,11 +1030,23 @@ internal sealed class TypeDefEmitter
                 r => this.encodeReturnSymbol(r, method.Type, method.ReturnRefKind),
                 ps =>
                 {
+                    // Issue #1610: encode ref/out/in parameters as managed
+                    // pointers (`T&`, plus the IsReadOnlyAttribute modreq for
+                    // `in`) exactly like the class-method path — otherwise the
+                    // abstract slot's by-value signature never matches the
+                    // implementing class's byref signature and type load fails
+                    // with TypeLoadException.
                     foreach (var p in method.Parameters)
                     {
-                        this.encodeTypeSymbol(ps.AddParameter().Type(), p.Type);
+                        EncodeParameterSignature(ps, p, this.encodeTypeSymbol, this.wellKnown);
                     }
                 });
+
+        // Issue #1610: emit a Parameter row per source parameter (name plus
+        // ParameterAttributes.In/Out and the IsReadOnlyAttribute for `in`),
+        // mirroring EmitFunction, so interface parameters keep their names in
+        // metadata (named arguments / IDE signature help from consumers).
+        var firstParamHandle = this.AddRefKindAwareParameterRows(method.Parameters);
 
         var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
             | MethodAttributes.Virtual | MethodAttributes.Abstract
@@ -1055,7 +1057,7 @@ internal sealed class TypeDefEmitter
             name: this.emitCtx.Metadata.GetOrAddString(method.Name),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: -1,
-            parameterList: this.nextParameterHandle());
+            parameterList: firstParamHandle);
 
         if (methodGenericArity > 0)
         {
@@ -1083,11 +1085,19 @@ internal sealed class TypeDefEmitter
                 r => this.encodeReturnSymbol(r, method.Type, method.ReturnRefKind),
                 ps =>
                 {
+                    // Issue #1610: same as EmitAbstractMethod — ref/out/in
+                    // parameters must be encoded byref (plus the `in` modreq)
+                    // or implementing types never satisfy the static-virtual
+                    // slot.
                     foreach (var p in method.Parameters)
                     {
-                        this.encodeTypeSymbol(ps.AddParameter().Type(), p.Type);
+                        EncodeParameterSignature(ps, p, this.encodeTypeSymbol, this.wellKnown);
                     }
                 });
+
+        // Issue #1610: Parameter rows with names and In/Out flags, mirroring
+        // EmitFunction.
+        var firstParamHandle = this.AddRefKindAwareParameterRows(method.Parameters);
 
         var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
             | MethodAttributes.Static | MethodAttributes.Virtual
@@ -1103,7 +1113,92 @@ internal sealed class TypeDefEmitter
             name: this.emitCtx.Metadata.GetOrAddString(method.Name),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: hasBody ? bodyOffset : -1,
-            parameterList: this.nextParameterHandle());
+            parameterList: firstParamHandle);
+    }
+
+    /// <summary>
+    /// Issue #1610: encodes one method-signature parameter with its
+    /// <see cref="RefKind"/>. A <c>ref</c>/<c>out</c>/<c>in</c> parameter is
+    /// encoded as a managed pointer (<c>T&amp;</c>); an <c>in</c> parameter
+    /// additionally carries a
+    /// <c>modreq(System.Runtime.CompilerServices.IsReadOnlyAttribute)</c> so
+    /// consumers (e.g. C#) treat the call site as readonly (ADR-0060).
+    /// This is the single canonical encoding shared by every MethodDef
+    /// signature path — class/struct methods
+    /// (<c>ReflectionMetadataEmitter.EmitFunction</c>), interface abstract and
+    /// static-virtual slots, delegate <c>Invoke</c>, and explicit
+    /// constructors — so the interface slot and its implementation can never
+    /// drift apart again.
+    /// </summary>
+    /// <param name="ps">The signature's parameters encoder.</param>
+    /// <param name="parameter">The parameter symbol to encode.</param>
+    /// <param name="encodeTypeSymbol">The shared type-symbol encoder.</param>
+    /// <param name="wellKnown">Well-known references used to resolve the <c>IsReadOnlyAttribute</c> modreq.</param>
+    internal static void EncodeParameterSignature(
+        ParametersEncoder ps,
+        ParameterSymbol parameter,
+        Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol,
+        WellKnownReferences wellKnown)
+    {
+        var paramEncoder = ps.AddParameter();
+        if (parameter.RefKind == RefKind.In)
+        {
+            var isReadOnlyAttrType = wellKnown.GetIsReadOnlyAttributeTypeRef();
+            if (!isReadOnlyAttrType.IsNil)
+            {
+                paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false);
+            }
+        }
+
+        encodeTypeSymbol(paramEncoder.Type(isByRef: parameter.RefKind != RefKind.None), parameter.Type);
+    }
+
+    /// <summary>
+    /// Issue #1610: emits one <c>Parameter</c> row per source parameter,
+    /// giving each its metadata name, stamping
+    /// <see cref="ParameterAttributes.Out"/> / <see cref="ParameterAttributes.In"/>
+    /// for <c>out</c> / <c>in</c> (ADR-0060 §6: <c>ref</c> carries neither),
+    /// attaching the <c>IsReadOnlyAttribute</c> custom attribute for
+    /// <c>in</c>, and <c>[ParamArrayAttribute]</c> for a trailing variadic
+    /// parameter. Returns the handle of the first emitted row — or the next
+    /// available row when the parameter list is empty — suitable to feed into
+    /// <c>AddMethodDefinition.parameterList</c>.
+    /// </summary>
+    /// <param name="parameters">The method's source parameters.</param>
+    /// <returns>The MethodDef's <c>parameterList</c> anchor handle.</returns>
+    private ParameterHandle AddRefKindAwareParameterRows(ImmutableArray<ParameterSymbol> parameters)
+    {
+        var first = this.nextParameterHandle();
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var p = parameters[i];
+            var paramAttributes = ParameterAttributes.None;
+            if (p.RefKind == RefKind.Out)
+            {
+                paramAttributes |= ParameterAttributes.Out;
+            }
+            else if (p.RefKind == RefKind.In)
+            {
+                paramAttributes |= ParameterAttributes.In;
+            }
+
+            var paramHandle = this.emitCtx.Metadata.AddParameter(
+                attributes: paramAttributes,
+                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
+                sequenceNumber: i + 1);
+
+            if (p.RefKind == RefKind.In)
+            {
+                this.emitIsReadOnlyAttributeOnParameter(paramHandle);
+            }
+
+            if (p.IsVariadic)
+            {
+                this.emitParamArrayAttributeOnParameter(paramHandle);
+            }
+        }
+
+        return first;
     }
 
     // Constructor emission
@@ -1402,55 +1497,16 @@ internal sealed class TypeDefEmitter
                         // ADR-0060: ref-kind constructor parameters are encoded as
                         // managed pointers (`T&`). For `in`, also stamp the
                         // IsReadOnlyAttribute modreq.
-                        var paramEncoder = ps.AddParameter();
-                        if (p.RefKind == RefKind.In)
-                        {
-                            var isReadOnlyAttrType = this.wellKnown.GetIsReadOnlyAttributeTypeRef();
-                            if (!isReadOnlyAttrType.IsNil)
-                            {
-                                paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false);
-                            }
-                        }
-
-                        this.encodeTypeSymbol(paramEncoder.Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                        EncodeParameterSignature(ps, p, this.encodeTypeSymbol, this.wellKnown);
                     }
                 });
 
         // ADR-0060: emit a Parameter row per source parameter so we can stamp
         // ParameterAttributes.In/Out and (for `in`) IsReadOnlyAttribute.
-        var firstCtorParamHandle = this.nextParameterHandle();
-        for (var pi = 0; pi < function.Parameters.Length; pi++)
-        {
-            var p = function.Parameters[pi];
-            var paramAttributes = ParameterAttributes.None;
-            if (p.RefKind == RefKind.Out)
-            {
-                paramAttributes |= ParameterAttributes.Out;
-            }
-            else if (p.RefKind == RefKind.In)
-            {
-                paramAttributes |= ParameterAttributes.In;
-            }
-
-            var paramHandle = this.emitCtx.Metadata.AddParameter(
-                attributes: paramAttributes,
-                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
-                sequenceNumber: pi + 1);
-
-            if (p.RefKind == RefKind.In)
-            {
-                this.emitIsReadOnlyAttributeOnParameter(paramHandle);
-            }
-
-            // ADR-0102 / issue #812: emit [ParamArrayAttribute] on the
-            // trailing variadic parameter of an explicit init(...)
-            // constructor so C#/F# consumers see `params`. Mirrors the
-            // method path in ReflectionMetadataEmitter.AddMethodDefinition.
-            if (p.IsVariadic)
-            {
-                this.emitParamArrayAttributeOnParameter(paramHandle);
-            }
-        }
+        // ADR-0102 / issue #812: the row helper also stamps
+        // [ParamArrayAttribute] on a trailing variadic parameter so C#/F#
+        // consumers see `params`.
+        var firstCtorParamHandle = this.AddRefKindAwareParameterRows(function.Parameters);
 
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
