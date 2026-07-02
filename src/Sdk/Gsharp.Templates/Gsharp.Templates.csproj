@@ -68,7 +68,7 @@
   <Target Name="BuildGsharpTemplatesContent"
           BeforeTargets="AssignTargetPaths;_GetPackageFiles;GenerateNuspec;CoreCompile"
           Inputs="@(_TemplateSourceFile)"
-          Outputs="$(GsharpTemplatesIntermediateContent)/.stamp">
+          Outputs="$(GsharpTemplatesIntermediateContent)/.stamp-$(Version)">
     <!-- Clean stale staging so files removed from content/ are not packed. -->
     <RemoveDir Directories="$(GsharpTemplatesIntermediateContent)" />
     <MakeDir Directories="$(GsharpTemplatesIntermediateContent)" />
@@ -81,7 +81,7 @@
                       Token="__GSHARP_SDK_VERSION__"
                       Replacement="$(Version)" />
 
-    <WriteLinesToFile File="$(GsharpTemplatesIntermediateContent)/.stamp" Lines="$(Version)" Overwrite="true" />
+    <WriteLinesToFile File="$(GsharpTemplatesIntermediateContent)/.stamp-$(Version)" Lines="$(Version)" Overwrite="true" />
   </Target>
 
   <!-- Materialize substituted content as Content items that NuGet will pack under content/. -->
@@ -89,7 +89,7 @@
           DependsOnTargets="BuildGsharpTemplatesContent"
           BeforeTargets="_GetPackageFiles;GenerateNuspec">
     <ItemGroup>
-      <_PackagedTemplateFile Include="$(GsharpTemplatesIntermediateContent)/**/*" Exclude="$(GsharpTemplatesIntermediateContent)/.stamp" />
+      <_PackagedTemplateFile Include="$(GsharpTemplatesIntermediateContent)/**/*" Exclude="$(GsharpTemplatesIntermediateContent)/.stamp*" />
       <Content Include="@(_PackagedTemplateFile)"
                Pack="true"
                PackagePath="content/%(RecursiveDir)%(Filename)%(Extension)" />
