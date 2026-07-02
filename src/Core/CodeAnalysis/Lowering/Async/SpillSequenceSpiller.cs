@@ -1506,10 +1506,36 @@ public static class SpillSequenceSpiller
         /// </summary>
         private BoundSpillSequenceExpression SpillNullConditionalAccess(BoundNullConditionalAccessExpression nc)
         {
+            // Issue #1700: a value-type `Nullable<T>` receiver (BCL, user
+            // struct/enum) needs the statement-based (declare + goto/label)
+            // rebuild below UNCONDITIONALLY — even when neither the receiver
+            // nor WhenNotNull contains an await. `nc.Capture` is declared as
+            // the unwrapped `T` (so member-access binding resolves against
+            // `T`), so it can never directly hold the real `Nullable<T>`
+            // receiver value; and since this whole method reachable via
+            // SpillExpression only runs inside an async method body,
+            // MoveNextBodyRewriter's hoisting walk may promote `nc.Capture`
+            // to a state-machine field regardless of whether *this specific*
+            // access spans a suspension point — and it only redirects
+            // bound-tree-visible reads/writes (BoundVariableExpression /
+            // BoundAssignmentExpression / BoundVariableDeclaration nodes),
+            // never the emitter's direct EmitStoreVariable/EmitLoadVariable
+            // calls. Leaving the node's own capture-write to
+            // EmitNullConditionalAccess (as the Trivial passthrough would)
+            // risks a silent dead store into an unused fallback local while
+            // every real read resolves to a never-written hoisted field —
+            // wrong runtime value with still-valid IL (ilverify cannot see
+            // this). Building the write as a genuine
+            // BoundAssignmentExpression here (mirroring the existing
+            // reference-type Leg-1/2/3 patterns below) keeps it visible to
+            // the hoisting walk regardless of leg.
+            var isValueTypeNullableReceiver = nc.Receiver.Type is NullableTypeSymbol ncReceiverNullable
+                && NullableLifting.IsAnyValueTypeNullable(ncReceiverNullable);
+
             var receiverHasAwait = HasAwait(nc.Receiver);
             var whenNotNullHasAwait = HasAwait(nc.WhenNotNull);
 
-            if (!receiverHasAwait && !whenNotNullHasAwait)
+            if (!isValueTypeNullableReceiver && !receiverHasAwait && !whenNotNullHasAwait)
             {
                 return Trivial(nc);
             }
@@ -1526,9 +1552,10 @@ public static class SpillSequenceSpiller
                 receiver = spilledReceiver.Value;
             }
 
-            if (!whenNotNullHasAwait)
+            if (!isValueTypeNullableReceiver && !whenNotNullHasAwait)
             {
-                // Only the receiver needed spilling — WhenNotNull is still
+                // Reference-type (or non-nullable-collapse) receiver, only
+                // the receiver needed spilling — WhenNotNull is still
                 // await-free. EmitNullConditionalAccess writes/reads
                 // nc.Capture via direct EmitStoreVariable/EmitLoadVariable
                 // calls, not through bound-tree Assignment/Variable nodes —
@@ -1545,6 +1572,8 @@ public static class SpillSequenceSpiller
                 // harmless no-op dead store into the (unused) plain-local
                 // fallback slot, while every real read still consistently
                 // resolves to the (already correctly written) hoisted field.
+                // `nc.Capture` shares the CLR representation of `receiver`
+                // for reference types, so this workaround remains sound.
                 sideEffects.Add(new BoundVariableDeclaration(null, (LocalVariableSymbol)nc.Capture, receiver));
                 locals.Add((LocalVariableSymbol)nc.Capture);
                 var captureRef = new BoundVariableExpression(null, nc.Capture);
@@ -1552,19 +1581,54 @@ public static class SpillSequenceSpiller
                 return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), rebuiltNc);
             }
 
-            // WhenNotNull has an await: it must run only on the non-nil path,
-            // so the nil check needs explicit if/else control flow. Since this
+            // Either WhenNotNull has an await (must run only on the non-nil
+            // path, needing explicit if/else control flow) or the receiver
+            // is a value-type Nullable<T> (needing the wrapper-local +
+            // guard + `!!` unwrap shape regardless of await). Since this
             // path replaces the BoundNullConditionalAccessExpression node
-            // entirely, nc.Capture is no longer discoverable by the emitter's
-            // CollectNullConditionalCaptures walk (which only finds the local
-            // through a surviving node of that kind) — it must be registered
-            // as a spill local explicitly here or its slot never gets planned.
-            // It is declared (not just assigned) with the real receiver value
-            // as its initializer so FlushSideEffects never falls back to its
-            // int32-literal-0 default — which is the wrong CLR type for a
-            // reference/struct-typed capture and would fail IL verification.
-            locals.Add((LocalVariableSymbol)nc.Capture);
-            sideEffects.Add(new BoundVariableDeclaration(null, (LocalVariableSymbol)nc.Capture, receiver));
+            // entirely, nc.Capture is no longer discoverable by the
+            // emitter's CollectNullConditionalCaptures walk (which only
+            // finds the local through a surviving node of that kind) — it
+            // must be registered as a spill local explicitly here or its
+            // slot never gets planned.
+            //
+            // Issue #1700: a value-type `Nullable<T>` receiver cannot reuse
+            // `nc.Capture` (declared as unwrapped `T`) to hold the raw
+            // receiver, nor can a `T`-typed variable read be branched on
+            // directly (both are the same StackUnexpected mismatch as the
+            // reference-type Leg-1 case above). Route it through its own
+            // `Nullable<T>`-typed wrapper local instead: declare
+            // `wrapper := receiver`, guard on `wrapper` (its Nullable<T>
+            // type makes EmitConditionalGotoProbe take the box-probe path),
+            // then unwrap `wrapper` into `nc.Capture` via `!!`
+            // (NullAssertion) only once the guard confirms HasValue — `!!`'s
+            // emit path already has full, pre-existing support for user
+            // struct/enum and BCL value-type Nullable<T> operands
+            // (NullableValueTypeUnwrapCollector auto-slots any such node it
+            // finds in the tree), so no new emitter plumbing is needed here.
+            LocalVariableSymbol wrapperLocal = null;
+            BoundExpression guardCondition;
+            if (isValueTypeNullableReceiver)
+            {
+                wrapperLocal = MakeSpillTemp(receiver.Type);
+                locals.Add(wrapperLocal);
+                sideEffects.Add(new BoundVariableDeclaration(null, wrapperLocal, receiver));
+
+                locals.Add((LocalVariableSymbol)nc.Capture);
+                sideEffects.Add(new BoundVariableDeclaration(null, (LocalVariableSymbol)nc.Capture, new BoundDefaultExpression(null, nc.Capture.Type)));
+                guardCondition = new BoundVariableExpression(null, wrapperLocal);
+            }
+            else
+            {
+                // It is declared (not just assigned) with the real receiver
+                // value as its initializer so FlushSideEffects never falls
+                // back to its int32-literal-0 default — which is the wrong
+                // CLR type for a reference-typed capture and would fail IL
+                // verification.
+                locals.Add((LocalVariableSymbol)nc.Capture);
+                sideEffects.Add(new BoundVariableDeclaration(null, (LocalVariableSymbol)nc.Capture, receiver));
+                guardCondition = new BoundVariableExpression(null, nc.Capture);
+            }
 
             var isVoid = ReferenceEquals(nc.Type, TypeSymbol.Void);
             var resultLocal = isVoid ? null : MakeSpillTemp(nc.Type);
@@ -1572,8 +1636,8 @@ public static class SpillSequenceSpiller
             var nonNullLabel = MakeLabel();
             var endLabel = MakeLabel();
 
-            // if (capture) goto nonNull   (brtrue — reference/Nullable non-nil check)
-            sideEffects.Add(new BoundConditionalGotoStatement(null, nonNullLabel, new BoundVariableExpression(null, nc.Capture), jumpIfTrue: true));
+            // if (capture/wrapper) goto nonNull   (brtrue — reference/Nullable non-nil check)
+            sideEffects.Add(new BoundConditionalGotoStatement(null, nonNullLabel, guardCondition, jumpIfTrue: true));
 
             // nil branch
             if (!isVoid)
@@ -1585,6 +1649,14 @@ public static class SpillSequenceSpiller
 
             // non-null branch
             sideEffects.Add(new BoundLabelStatement(null, nonNullLabel));
+
+            if (isValueTypeNullableReceiver)
+            {
+                var unwrapOp = BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, wrapperLocal.Type);
+                var unwrap = new BoundUnaryExpression(null, unwrapOp, new BoundVariableExpression(null, wrapperLocal));
+                sideEffects.Add(new BoundExpressionStatement(null, new BoundAssignmentExpression(null, nc.Capture, unwrap)));
+            }
+
             var spilledWhenNotNull = SpillExpression(nc.WhenNotNull);
             locals.AddRange(spilledWhenNotNull.Locals);
             sideEffects.AddRange(spilledWhenNotNull.SideEffects);

@@ -1214,11 +1214,11 @@ internal sealed partial class MethodBodyEmitter
         // branch with no matching value on the not-null branch).
         if (ReferenceEquals(nc.Type, Symbols.TypeSymbol.Void))
         {
-            this.EmitExpression(nc.Receiver);
-            this.EmitStoreVariable(nc.Capture);
-            this.EmitLoadVariable(nc.Capture);
             var endVoid = this.il.DefineLabel();
-            this.il.Branch(ILOpCode.Brfalse, endVoid);
+            var nonNullVoid = this.il.DefineLabel();
+            this.EmitNullConditionalReceiverProbe(nc, nonNullVoid);
+            this.il.Branch(ILOpCode.Br, endVoid);
+            this.il.MarkLabel(nonNullVoid);
             this.EmitExpression(nc.WhenNotNull);
             this.il.MarkLabel(endVoid);
             return;
@@ -1229,12 +1229,9 @@ internal sealed partial class MethodBodyEmitter
         // null on the stack and skip the access; otherwise evaluate the
         // access sub-tree, which references the capture local in place
         // of the original receiver.
-        this.EmitExpression(nc.Receiver);
-        this.EmitStoreVariable(nc.Capture);
-        this.EmitLoadVariable(nc.Capture);
         var end = this.il.DefineLabel();
         var nonNull = this.il.DefineLabel();
-        this.il.Branch(ILOpCode.Brtrue, nonNull);
+        this.EmitNullConditionalReceiverProbe(nc, nonNull);
 
         if (nc.ResultSlot != null)
         {
@@ -1335,6 +1332,73 @@ internal sealed partial class MethodBodyEmitter
         this.il.MarkLabel(nonNull);
         this.EmitExpression(nc.WhenNotNull);
         this.il.MarkLabel(end);
+    }
+
+    // Issue #1700: evaluates a null-conditional access's receiver and
+    // branches to <paramref name="nonNullTarget"/> when it has a value,
+    // otherwise falls through (the caller supplies the nil-path code
+    // immediately after this call). On the has-value path, `nc.Capture` is
+    // populated so the (unchanged) `WhenNotNull` sub-tree — bound against
+    // `nc.Capture` as its receiver — sees the same value it always has.
+    //
+    // A value-type `Nullable<T>` receiver (BCL, user struct/enum, or a
+    // struct-constrained open type parameter) cannot reuse `nc.Capture`'s
+    // slot for the raw receiver value: that slot is declared as the
+    // unwrapped `T` (so member-access binding resolves `Add`/etc. against
+    // `T`, not `Nullable<T>`), but the receiver expression pushes the real
+    // `Nullable<T>` wrapper. Storing that wrapper into the `T`-typed capture
+    // slot, then `brtrue`-ing the reloaded `T` struct, is invalid IL
+    // (ilverify StackUnexpected) — this is the actual root cause, reachable
+    // with or without an `await` inside the access. Route the wrapper
+    // through the pre-allocated `Nullable<T>`-typed scratch slot
+    // (`receiverSpillSlots[nc.Receiver]`, planned in
+    // `MethodBodyPlanner.CollectLocalsAndLabels`) instead: probe `HasValue`
+    // via `box; brtrue` (ECMA-335 §I.8.2.4 — boxing `Nullable<T>` yields
+    // `null` when empty, a boxed `T` otherwise, giving a legally
+    // branchable object reference), and only unwrap into `nc.Capture` once
+    // the has-value path is confirmed.
+    private void EmitNullConditionalReceiverProbe(BoundNullConditionalAccessExpression nc, LabelHandle nonNullTarget)
+    {
+        if (nc.Receiver.Type is NullableTypeSymbol receiverNullable
+            && NullableLifting.IsAnyValueTypeNullable(receiverNullable))
+        {
+            var wrapperSlot = this.receiverSpillSlots[nc.Receiver];
+            this.EmitExpression(nc.Receiver);
+            this.il.StoreLocal(wrapperSlot);
+            this.il.LoadLocal(wrapperSlot);
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(receiverNullable));
+            var nilFallthrough = this.il.DefineLabel();
+            this.il.Branch(ILOpCode.Brfalse, nilFallthrough);
+
+            this.il.LoadLocalAddress(wrapperSlot);
+            if (NullableLifting.IsUserValueTypeNullable(receiverNullable))
+            {
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(this.outer.GetNullableGetValueMemberRefForUserValueType(receiverNullable));
+            }
+            else
+            {
+                var innerClr = receiverNullable.UnderlyingType.ClrType
+                    ?? throw new InvalidOperationException(
+                        $"Value-type Nullable<{receiverNullable.UnderlyingType.Name}> null-conditional receiver has no CLR underlying type.");
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(this.outer.wellKnown.GetNullableGetValueOrDefaultReference(innerClr));
+            }
+
+            this.EmitStoreVariable(nc.Capture);
+            this.il.Branch(ILOpCode.Br, nonNullTarget);
+            this.il.MarkLabel(nilFallthrough);
+            return;
+        }
+
+        // Reference-typed (or non-nullable-collapse) receiver: `nc.Capture`
+        // shares the CLR representation of `nc.Receiver`, so a direct
+        // store/reload/brtrue is valid IL.
+        this.EmitExpression(nc.Receiver);
+        this.EmitStoreVariable(nc.Capture);
+        this.EmitLoadVariable(nc.Capture);
+        this.il.Branch(ILOpCode.Brtrue, nonNullTarget);
     }
 
     private void EmitTupleLiteral(BoundTupleLiteralExpression tuple)

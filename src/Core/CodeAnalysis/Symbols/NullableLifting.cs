@@ -161,6 +161,24 @@ public static class NullableLifting
     }
 
     /// <summary>
+    /// Issue #1700: unifies <see cref="IsValueTypeNullable"/> (BCL / open
+    /// struct-constrained type-parameter underlyings, which carry a runtime
+    /// <c>ClrType</c>) and <see cref="IsUserValueTypeNullable"/> (same-
+    /// compilation user struct/enum underlyings, which do not) into a single
+    /// predicate for emit-side code that must treat every value-type
+    /// <c>Nullable&lt;T&gt;</c> receiver the same way — e.g. the null-
+    /// conditional-access receiver probe, which cannot use <c>brtrue</c>
+    /// directly on a <c>Nullable&lt;T&gt;</c> struct value (ilverify
+    /// <c>StackUnexpected</c>) regardless of which kind of <c>T</c> it wraps.
+    /// </summary>
+    /// <param name="nullable">The wrapper to test.</param>
+    /// <returns><see langword="true"/> for any value-type <c>Nullable&lt;T&gt;</c>, BCL or user-declared.</returns>
+    internal static bool IsAnyValueTypeNullable(NullableTypeSymbol nullable)
+    {
+        return IsValueTypeNullable(nullable) || IsUserValueTypeNullable(nullable);
+    }
+
+    /// <summary>
     /// Returns <see langword="true"/> when <paramref name="type"/> is a
     /// constructed <c>System.Nullable&lt;T&gt;</c> (i.e. closed-generic over the
     /// open <c>System.Nullable`1</c> definition). The open definition itself

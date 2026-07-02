@@ -387,6 +387,28 @@ internal sealed class MethodBodyPlanner
                 locals[nc.ResultSlot] = localTypes.Count;
                 localTypes.Add(nc.ResultSlot.Type);
             }
+
+            // Issue #1700: a value-type `Nullable<T>` receiver (e.g. a
+            // struct/enum `T?`) cannot share `nc.Capture`'s slot — that slot
+            // is declared as the unwrapped `T` (so member-access binding
+            // resolves against `T`, not `Nullable<T>`), but the receiver
+            // expression pushes the real `Nullable<T>` wrapper. Storing that
+            // wrapper into the `T`-typed capture slot, then `brtrue`-ing the
+            // reloaded `T` struct, is invalid IL (ilverify StackUnexpected)
+            // regardless of whether an `await` is involved — this is the
+            // root cause, not just the await-spilled shape. Pre-allocate a
+            // second, `Nullable<T>`-typed scratch slot (keyed by nc.Receiver,
+            // mirroring the `!!`/`??` value-type spill slots) so the emitter
+            // can store the real wrapper, probe `HasValue` off its address,
+            // and only then unwrap into `nc.Capture` on the non-nil path.
+            if (nc.Receiver.Type is NullableTypeSymbol receiverNullable
+                && NullableLifting.IsAnyValueTypeNullable(receiverNullable)
+                && !receiverSpillSlots.ContainsKey(nc.Receiver))
+            {
+                var wrapperSlot = localTypes.Count;
+                localTypes.Add(nc.Receiver.Type);
+                receiverSpillSlots[nc.Receiver] = wrapperSlot;
+            }
         }
 
         foreach (var append in this.CollectAppends(body))

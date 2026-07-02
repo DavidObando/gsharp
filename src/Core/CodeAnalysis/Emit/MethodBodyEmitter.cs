@@ -963,7 +963,7 @@ internal sealed partial class MethodBodyEmitter
 
         if (!crossesRegion)
         {
-            this.EmitExpression(conditional);
+            this.EmitConditionalGotoProbe(conditional);
             this.il.Branch(jumpIfTrue ? ILOpCode.Brtrue : ILOpCode.Brfalse, targetHandle);
             return;
         }
@@ -972,10 +972,36 @@ internal sealed partial class MethodBodyEmitter
         // `leave` is not conditional, so emit the inverse branch over a
         // `leave` to the target.
         var skipLabel = this.il.DefineLabel();
-        this.EmitExpression(conditional);
+        this.EmitConditionalGotoProbe(conditional);
         this.il.Branch(jumpIfTrue ? ILOpCode.Brfalse : ILOpCode.Brtrue, skipLabel);
         this.il.Branch(ILOpCode.Leave, targetHandle);
         this.il.MarkLabel(skipLabel);
+    }
+
+    // Issue #1700: a BoundConditionalGotoStatement whose condition is a
+    // value-type `Nullable<T>` (e.g. the null-conditional-access spiller's
+    // receiver capture for a struct/enum `T?`) cannot use `brtrue`/`brfalse`
+    // directly on the loaded struct — that is invalid IL (ilverify
+    // StackUnexpected: a Nullable<T> value has no valid truthy
+    // interpretation). Mirror the `??`/`!!` null-probe shapes elsewhere in
+    // this emitter: `box Nullable<T>` yields `null` when `HasValue == false`
+    // and a boxed `T` otherwise (ECMA-335 §I.8.2.4), giving an object
+    // reference that `brtrue`/`brfalse` can legally test. This covers BCL
+    // value types, user-declared struct/enum underlyings (null ClrType during
+    // emit — GetElementTypeToken already closes the TypeSpec over the emitted
+    // TypeDef for those), and struct-constrained open type parameters
+    // uniformly, since no reload of the boxed value is needed here (the
+    // non-null branch re-reads the original capture/local, not this probe).
+    private void EmitConditionalGotoProbe(BoundExpression conditional)
+    {
+        this.EmitExpression(conditional);
+
+        if (conditional.Type is NullableTypeSymbol nullable
+            && (NullableLifting.IsValueTypeNullable(nullable) || NullableLifting.IsUserValueTypeNullable(nullable)))
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(nullable));
+        }
     }
 
     // Issue #420 (P3-4): debug-only check used by EmitFieldAssignment to
