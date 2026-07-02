@@ -173,6 +173,27 @@ public sealed class ReferenceResolver : IDisposable
         // context across compilations in the same process (issue #908). Clear
         // it for the same reason.
         FunctionTypeSymbol.ClearCache();
+
+        // Every other interning cache in this namespace is process-wide and
+        // keyed (directly or via a constructed-generic definition) by symbols
+        // that ultimately point back at this context's Type objects or at
+        // Declaration syntax trees. Left uncleared they pin that memory for
+        // the lifetime of the process even though no live compilation can
+        // reach them anymore (#1622).
+        NullableTypeSymbol.ClearCache();
+        SliceTypeSymbol.ClearCache();
+        MapTypeSymbol.ClearCache();
+        PointerTypeSymbol.ClearCache();
+        ByRefTypeSymbol.ClearCache();
+        ArrayTypeSymbol.ClearCache();
+        SequenceTypeSymbol.ClearCache();
+        AsyncSequenceTypeSymbol.ClearCache();
+        ChannelTypeSymbol.ClearCache();
+        TupleTypeSymbol.ClearCache();
+        FunctionPointerTypeSymbol.ClearCache();
+        StructSymbol.ClearCache();
+        InterfaceSymbol.ClearCache();
+        DelegateTypeSymbol.ClearCache();
     }
 
     /// <summary>
