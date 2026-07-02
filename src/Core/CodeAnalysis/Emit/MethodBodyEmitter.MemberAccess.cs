@@ -346,6 +346,27 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadLocalAddress(slot);
         this.il.OpCode(ILOpCode.Callvirt);
         this.il.Token(this.outer.GetMethodReference(tryGet));
+
+        // Issue #1714: TryGetValue zero-initialises the out V parameter via the
+        // CLR default when the key is missing — for V == string that CLR
+        // default is `null`, but G# gives `string` Go-style value semantics
+        // where the zero value is `""` (matching the interpreter's
+        // Evaluator.DefaultValue). Branch on the returned `found` bool (still
+        // on the stack) so a miss yields `""` instead of the CLR-default
+        // `null`, while every other V keeps the CLR-default fast path.
+        if (mapType.ValueType == TypeSymbol.String)
+        {
+            var found = this.il.DefineLabel();
+            var end = this.il.DefineLabel();
+            this.il.Branch(ILOpCode.Brtrue, found);
+            this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(string.Empty));
+            this.il.Branch(ILOpCode.Br, end);
+            this.il.MarkLabel(found);
+            this.il.LoadLocal(slot);
+            this.il.MarkLabel(end);
+            return;
+        }
+
         this.il.OpCode(ILOpCode.Pop);
         this.il.LoadLocal(slot);
     }

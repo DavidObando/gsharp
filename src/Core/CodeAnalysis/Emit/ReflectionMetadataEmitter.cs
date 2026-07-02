@@ -3904,18 +3904,97 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #1714: true when <see cref="BuildInstanceFieldInitializerStatements"/>
+    /// would produce a non-empty statement list for <paramref name="classSym"/> —
+    /// either a declared instance field initializer, or a `string`-typed field
+    /// (plain or auto-property backing field) that needs the Go-style `""`
+    /// zero-value fallback. Callers use this instead of checking
+    /// <c>InstanceFieldInitializers.IsEmpty</c> directly so the fallback isn't
+    /// silently skipped.
+    /// </summary>
+    internal static bool NeedsInstanceFieldInitializerStatements(StructSymbol classSym)
+    {
+        if (!classSym.InstanceFieldInitializers.IsEmpty)
+        {
+            return true;
+        }
+
+        var primaryParamFieldNames = classSym.PrimaryConstructorParameters.IsDefaultOrEmpty
+            ? null
+            : classSym.PrimaryConstructorParameters.Select(p => p.Name).ToImmutableHashSet();
+
+        foreach (var field in classSym.Fields)
+        {
+            if (field.Type == TypeSymbol.String && primaryParamFieldNames?.Contains(field.Name) != true)
+            {
+                return true;
+            }
+        }
+
+        foreach (var property in classSym.Properties)
+        {
+            if (property.IsAutoProperty && property.BackingField != null && property.Type == TypeSymbol.String)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Issue #640: builds the bound assignment statements for all instance
     /// field initializers in declaration order. Used by the default, primary,
     /// forwarding, and explicit constructor body emitters.
     /// </summary>
     private static ImmutableArray<BoundStatement> BuildInstanceFieldInitializerStatements(StructSymbol classSym, ParameterSymbol thisParam = null)
     {
+        // Issue #1714: a primary-ctor parameter assigns its same-named field
+        // via a raw `stfld` emitted *before* this statement list runs (see
+        // EmitClassPrimaryConstructorBodyBytes) — exclude those fields here so
+        // the synthesized string-default fallback below does not clobber the
+        // primary-ctor-supplied value with `""`.
+        var primaryParamFieldNames = classSym.PrimaryConstructorParameters.IsDefaultOrEmpty
+            ? null
+            : classSym.PrimaryConstructorParameters.Select(p => p.Name).ToImmutableHashSet();
+
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         foreach (var field in classSym.Fields)
         {
             if (classSym.InstanceFieldInitializers.TryGetValue(field, out var initExpr))
             {
                 var assignment = new BoundFieldAssignmentExpression(null, thisParam, classSym, field, initExpr);
+                statements.Add(new BoundExpressionStatement(null, assignment));
+                continue;
+            }
+
+            // Issue #1714: `string` has Go-style value semantics in G# — its
+            // zero value is `""`, not the CLR reference-type default `null`
+            // (matching the interpreter's Evaluator.DefaultValue). A field
+            // with no explicit initializer would otherwise keep the CLR
+            // default (`null`) forever, since nothing else stores into it.
+            // Only applies to plain fields, not primary-ctor-parameter fields
+            // (those are populated from the argument, not defaulted).
+            if (field.Type == TypeSymbol.String && primaryParamFieldNames?.Contains(field.Name) != true)
+            {
+                var defaultExpr = new BoundDefaultExpression(null, TypeSymbol.String);
+                var assignment = new BoundFieldAssignmentExpression(null, thisParam, classSym, field, defaultExpr);
+                statements.Add(new BoundExpressionStatement(null, assignment));
+            }
+        }
+
+        // Issue #1714: auto-property backing fields are not part of
+        // `classSym.Fields` (see PlanAggregateFields) and properties have no
+        // declaration-level initializer syntax, so an unset `string`
+        // auto-property's backing field would otherwise stay at the CLR
+        // default `null` — diverging from the interpreter, which always
+        // computes an unset property's value via DefaultValue(property.Type).
+        foreach (var property in classSym.Properties)
+        {
+            if (property.IsAutoProperty && property.BackingField != null && property.Type == TypeSymbol.String)
+            {
+                var defaultExpr = new BoundDefaultExpression(null, TypeSymbol.String);
+                var assignment = new BoundFieldAssignmentExpression(null, thisParam, classSym, property.BackingField, defaultExpr);
                 statements.Add(new BoundExpressionStatement(null, assignment));
             }
         }
@@ -3957,7 +4036,7 @@ internal sealed class ReflectionMetadataEmitter
 
         // Issue #640: pre-scan instance field initializer expressions for locals.
         BoundBlockStatement fieldInitBody = null;
-        if (!classSym.InstanceFieldInitializers.IsEmpty)
+        if (NeedsInstanceFieldInitializerStatements(classSym))
         {
             fieldInitBody = new BoundBlockStatement(null, BuildInstanceFieldInitializerStatements(classSym, thisParam));
             session.Plan(fieldInitBody);
@@ -4064,7 +4143,7 @@ internal sealed class ReflectionMetadataEmitter
         // chained-to designated init handles them), so don't reserve scratch
         // slots for those expressions either.
         BoundBlockStatement fieldInitBody = null;
-        if (!ctor.IsConvenience && !classSym.InstanceFieldInitializers.IsEmpty)
+        if (!ctor.IsConvenience && NeedsInstanceFieldInitializerStatements(classSym))
         {
             fieldInitBody = new BoundBlockStatement(null, BuildInstanceFieldInitializerStatements(classSym, function.ThisParameter));
             session.Plan(fieldInitBody);

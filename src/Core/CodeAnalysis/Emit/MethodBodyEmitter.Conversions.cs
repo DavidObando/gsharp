@@ -975,6 +975,18 @@ internal sealed partial class MethodBodyEmitter
             || (type is ImportedTypeSymbol erasedGen && erasedGen.HasTypeParameterArgument)
             || (type is NullableTypeSymbol nullableTp && nullableTp.UnderlyingType is TypeParameterSymbol);
 
+        // Issue #1714: `string` is a CLR reference type but G# gives it Go-style
+        // value semantics — its zero value is `""`, not `null` (matching the
+        // interpreter's Evaluator.DefaultValue, which special-cases
+        // TypeSymbol.String ahead of the reference-type fallback). Emit the
+        // empty-string literal instead of `ldnull` so `default(string)` agrees
+        // across both backends.
+        if (type == TypeSymbol.String)
+        {
+            this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(string.Empty));
+            return;
+        }
+
         // Reference types: ldnull
         if (!typeParamLike && !ReflectionMetadataEmitter.IsValueTypeSymbol(type))
         {
@@ -1002,6 +1014,37 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadLocalAddress(slot);
         this.il.OpCode(ILOpCode.Initobj);
         this.il.Token(this.outer.GetElementTypeToken(type));
+
+        // Issue #1714: `initobj` zero-inits every field to its CLR default,
+        // which is `null` for a `string` field — diverging from the
+        // interpreter's DefaultValue(StructSymbol), which recursively
+        // defaults each field (so a string field becomes `""`). Patch up any
+        // directly-declared string field (walking the base-class chain, same
+        // order as the interpreter) so `default(MyStruct)` agrees with the
+        // interpreter for structs with no explicit field initializer left
+        // unhandled by BuildInstanceFieldInitializerStatements /
+        // ExpressionBinder.Literals's struct-literal fold. Skipped for
+        // generic struct instantiations — those fields are erased at this
+        // point and not resolvable via the plain FieldDef map; the existing
+        // (pre-#1714) CLR-default behavior is unchanged for them.
+        if (type is StructSymbol structDefaultType && !ReflectionMetadataEmitter.IsUserGenericTypeReference(structDefaultType))
+        {
+            for (var t = structDefaultType; t != null; t = t.BaseClass)
+            {
+                foreach (var field in t.Fields)
+                {
+                    if (field.Type == TypeSymbol.String
+                        && this.outer.cache.StructFieldDefs.TryGetValue(field, out var stringFieldHandle))
+                    {
+                        this.il.LoadLocalAddress(slot);
+                        this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(string.Empty));
+                        this.il.OpCode(ILOpCode.Stfld);
+                        this.il.Token(stringFieldHandle);
+                    }
+                }
+            }
+        }
+
         this.il.LoadLocal(slot);
     }
 
