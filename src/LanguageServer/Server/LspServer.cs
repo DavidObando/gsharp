@@ -189,9 +189,12 @@ public sealed class LspServer
             return new FullDocumentDiagnosticReport { Items = Array.Empty<Diagnostic>() };
         }
 
-        // Snapshot the current text and owning project under the gate, then run the (potentially
-        // expensive) full binding pass off the gate so interactive requests are not blocked.
-        string text = null;
+        // Snapshot the current SyntaxTree and owning project under the gate, then run the
+        // (potentially expensive) full binding pass off the gate so interactive requests are not
+        // blocked. Binding runs against the captured tree via ComputeDiagnosticsForSnapshot, which
+        // never calls ProjectState.UpdateFile — a stale snapshot pull racing a concurrent
+        // didChange can therefore never clobber a newer tree written under the gate (issue #1657).
+        SyntaxTree syntaxTree = null;
         string filePath = null;
         ProjectState project = null;
         await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -201,7 +204,7 @@ public sealed class LspServer
             project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
             if (this.documentContentService.TryGet(uri.ToString(), out var content))
             {
-                text = content.SyntaxTree.Text.ToString();
+                syntaxTree = content.SyntaxTree;
             }
         }
         finally
@@ -209,7 +212,7 @@ public sealed class LspServer
             this.gate.Release();
         }
 
-        if (text == null)
+        if (syntaxTree == null)
         {
             return new FullDocumentDiagnosticReport { Items = Array.Empty<Diagnostic>() };
         }
@@ -219,7 +222,7 @@ public sealed class LspServer
         DiagnosticComputationResult result;
         try
         {
-            result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: false, project, filePath, this.workspaceState);
+            result = DocumentSyncHandler.ComputeDiagnosticsForSnapshot(syntaxTree, skipBinding: false, project, filePath, this.workspaceState);
         }
         catch (OperationCanceledException)
         {

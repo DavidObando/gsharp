@@ -32,10 +32,11 @@ public static class CodeLensComputer
 
         // SemanticLookup.ResolveSymbol matches identifier tokens by reference equality, so the
         // tree we iterate must be the exact instance the project compilation was built from.
-        // Diagnostic pulls reparse the file via ProjectState.UpdateFile, which replaces the tree
-        // held by the project after DocumentContent was cached — leaving content.SyntaxTree stale
-        // relative to the cached compilation. Prefer the project's current tree for this file so
-        // member-identifier lookups (which have no name-based fallback in SemanticModel) succeed.
+        // ProjectState.UpdateFile only ever runs under the write gate (didOpen/didChange/didSave;
+        // see issue #1657), so content.SyntaxTree and the project's cached tree stay in sync in
+        // practice. Still prefer the project's current tree defensively so member-identifier
+        // lookups (which have no name-based fallback in SemanticModel) keep working even if a
+        // future caller races the two.
         var tree = ResolveProjectTree(content, uri) ?? content.SyntaxTree;
 
         foreach (var member in tree.Root.Members)

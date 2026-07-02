@@ -77,4 +77,45 @@ public class DocumentSyncHandlerTests
             catch (IOException) { }
         }
     }
+
+    [Fact]
+    public void ComputeDiagnosticsForSnapshot_DoesNotOverwriteNewerProjectTreeOrInvalidateNewerCompilation()
+    {
+        // Regression for issue #1657: a read-only request (e.g. textDocument/diagnostic pull)
+        // captures a SyntaxTree snapshot under the write gate and then binds off-gate. If a
+        // didChange lands on the gate between the snapshot capture and the off-gate bind, the
+        // pull must never clobber the project's newer tree with its own stale snapshot, and the
+        // diagnostics it returns must still reflect exactly the snapshot it was given.
+        const string staleText = "func F() int32 {\n}\n";
+        const string newerText = "func F() int32 {\n    return 1\n}\n";
+        const string filePath = "/test/file1.gs";
+
+        var project = new ProjectState("/test/project.gsproj");
+        var staleTree = project.UpdateFile(filePath, staleText);
+
+        // Cache a compilation for the current (stale) tree, mirroring the project's state at the
+        // moment the pull captured its snapshot.
+        project.GetCompilation();
+
+        // Simulate a concurrent didChange landing on the gate after the pull's snapshot was
+        // captured: this both replaces the project's tree and invalidates its cached compilation.
+        var newerTree = project.UpdateFile(filePath, newerText);
+
+        // The pull binds against the pre-edit snapshot it captured earlier under the gate.
+        var snapshotResult = DocumentSyncHandler.ComputeDiagnosticsForSnapshot(staleTree, skipBinding: false, project, filePath, workspace: null);
+
+        // The returned diagnostics must reflect exactly the stale snapshot text (the missing
+        // return statement), not the project's current, already-fixed text.
+        Assert.Contains(snapshotResult.Diagnostics, d => d.Message.Contains("Not all code paths", System.StringComparison.Ordinal));
+
+        // The project's own tree must still be the newer one written by UpdateFile: the pull must
+        // never have clobbered it with the stale snapshot it was bound against.
+        var currentCompilation = project.GetCompilation();
+        Assert.Contains(currentCompilation.SyntaxTrees, t => ReferenceEquals(t, newerTree));
+        Assert.DoesNotContain(currentCompilation.SyntaxTrees, t => ReferenceEquals(t, staleTree));
+
+        // Rebinding the project's current (fixed) tree must show no missing-return diagnostic,
+        // proving the newer compilation was neither corrupted nor left bound to stale content.
+        Assert.DoesNotContain(currentCompilation.GlobalScope.Diagnostics, d => d.Message.Contains("Not all code paths", System.StringComparison.Ordinal));
+    }
 }
