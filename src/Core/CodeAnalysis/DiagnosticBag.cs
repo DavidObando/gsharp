@@ -634,7 +634,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportDeferOperandHasByRefArgument(TextLocation location)
     {
         var message = "'defer' cannot capture a call with 'ref', 'out', or 'in' arguments.";
-        Report(location, "GS0419", message);
+        Report(location, "GS0460", message);
     }
 
     /// <summary>

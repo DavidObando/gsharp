@@ -191,7 +191,7 @@ defer 42
     }
 
     [Fact]
-    public void Defer_CallWithOutArgument_ReportsGS0419()
+    public void Defer_CallWithOutArgument_ReportsGS0460()
     {
         // Issue #1635 NB-1: a by-ref (ref/out/in) argument's bound value is
         // the ADDRESS of its target storage. Eager capture spilling that
@@ -208,7 +208,7 @@ var value = 0
 defer dict.TryGetValue(""key"", &value)
 ");
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0419");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0460");
     }
 
     [Fact]
