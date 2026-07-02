@@ -279,49 +279,83 @@ public static class PdbSourceLocator
     /// only while the lease is held (e.g. inside a <c>using</c> block) and
     /// must check <see cref="ReaderLease.IsValid"/> before use.
     /// </summary>
+    /// <remarks>
+    /// Every path out of this method (normal return, invalid-lease return,
+    /// or an exception) releases <c>pathLock</c> exactly once: the lock is
+    /// only handed off to the returned <see cref="ReaderLease"/> on success,
+    /// and the local reference is cleared as soon as ownership transfers, so
+    /// the <c>finally</c> block only releases the lock when this method is
+    /// still holding it itself. This keeps a thrown exception (e.g. a
+    /// <see cref="BadImageFormatException"/> from a partially-written PDB)
+    /// from leaving the lock held forever, which would otherwise deadlock
+    /// every future lookup for the same assembly path. A freshly loaded
+    /// <see cref="MetadataReaderProvider"/> that has not yet been installed
+    /// into the cache is disposed on the exception path so it does not leak
+    /// its native or managed buffer.
+    /// </remarks>
     private static ReaderLease GetOrLoadReaderLease(string assemblyFilePath)
     {
         var pathLock = PathLocks.GetOrAdd(assemblyFilePath, static _ => new object());
         Monitor.Enter(pathLock);
 
-        if (!File.Exists(assemblyFilePath))
-        {
-            Monitor.Exit(pathLock);
-            return ReaderLease.Invalid;
-        }
-
-        DateTime mtimeUtc;
+        MetadataReaderProvider loadedProvider = null;
         try
         {
-            mtimeUtc = File.GetLastWriteTimeUtc(assemblyFilePath);
+            if (!File.Exists(assemblyFilePath))
+            {
+                return ReaderLease.Invalid;
+            }
+
+            DateTime mtimeUtc;
+            try
+            {
+                mtimeUtc = File.GetLastWriteTimeUtc(assemblyFilePath);
+            }
+            catch (IOException)
+            {
+                return ReaderLease.Invalid;
+            }
+
+            if (ReaderCache.TryGetValue(assemblyFilePath, out var cached) && cached.MtimeUtc == mtimeUtc)
+            {
+                var hitLease = new ReaderLease(pathLock, cached.Reader);
+                pathLock = null; // Ownership transferred to the lease; do not release in finally.
+                return hitLease;
+            }
+
+            loadedProvider = LoadReaderProvider(assemblyFilePath);
+            if (loadedProvider == null)
+            {
+                return ReaderLease.Invalid;
+            }
+
+            var loadedReader = loadedProvider.GetMetadataReader();
+            ReaderCache[assemblyFilePath] = new CachedReader(loadedProvider, loadedReader, mtimeUtc);
+            loadedProvider = null; // Now owned by the cache; do not dispose it below.
+
+            // The stale entry's reader is no longer reachable from the cache and no
+            // other thread can be reading it: we hold this path's lock, and every
+            // reader is only ever used while that lock is held.
+            cached.Provider?.Dispose();
+
+            var missLease = new ReaderLease(pathLock, loadedReader);
+            pathLock = null; // Ownership transferred to the lease; do not release in finally.
+            return missLease;
         }
-        catch (IOException)
+        catch
         {
-            Monitor.Exit(pathLock);
-            return ReaderLease.Invalid;
+            // A provider that was loaded but never installed into the cache
+            // would otherwise leak its underlying buffer.
+            loadedProvider?.Dispose();
+            throw;
         }
-
-        if (ReaderCache.TryGetValue(assemblyFilePath, out var cached) && cached.MtimeUtc == mtimeUtc)
+        finally
         {
-            return new ReaderLease(pathLock, cached.Reader);
+            if (pathLock != null)
+            {
+                Monitor.Exit(pathLock);
+            }
         }
-
-        var loadedProvider = LoadReaderProvider(assemblyFilePath);
-        if (loadedProvider == null)
-        {
-            Monitor.Exit(pathLock);
-            return ReaderLease.Invalid;
-        }
-
-        var loadedReader = loadedProvider.GetMetadataReader();
-        ReaderCache[assemblyFilePath] = new CachedReader(loadedProvider, loadedReader, mtimeUtc);
-
-        // The stale entry's reader is no longer reachable from the cache and no
-        // other thread can be reading it: we hold this path's lock, and every
-        // reader is only ever used while that lock is held.
-        cached.Provider?.Dispose();
-
-        return new ReaderLease(pathLock, loadedReader);
     }
 
     private static MetadataReaderProvider LoadReaderProvider(string assemblyFilePath)
