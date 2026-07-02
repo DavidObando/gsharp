@@ -117,6 +117,14 @@ public static class AsyncExceptionHandlerRewriter
 
     private sealed class Rewriter : BoundTreeRewriter
     {
+        // Reference-keyed "does this subtree contain an await" cache shared by every
+        // HasAwait probe this Rewriter instance makes, so repeated queries over the
+        // same nested try/catch/finally subtrees are O(1) after the first visit
+        // (issue #1625). Safe for the whole pass: rewriting always produces new node
+        // instances (see BoundTreeRewriter), so a memoized entry is never observed
+        // for a node that was actually mutated.
+        private readonly Dictionary<BoundNode, bool> awaitMemo = AsyncBoundTreeQueries.CreateHasAwaitMemo();
+
         private int localOrdinal;
 
         /// <summary>
@@ -149,14 +157,14 @@ public static class AsyncExceptionHandlerRewriter
             bool anyCatchHasAwait = false;
             foreach (var clause in rewrittenClauses)
             {
-                if (AsyncBoundTreeQueries.HasAwait(clause.Body))
+                if (HasAwait(clause.Body))
                 {
                     anyCatchHasAwait = true;
                     break;
                 }
             }
 
-            bool finallyHasAwait = rewrittenFinally != null && AsyncBoundTreeQueries.HasAwait(rewrittenFinally);
+            bool finallyHasAwait = rewrittenFinally != null && HasAwait(rewrittenFinally);
 
             // The finally must be lifted out of the protected region in either
             // of two cases:
@@ -167,7 +175,7 @@ public static class AsyncExceptionHandlerRewriter
             //      finally on every yield, which is semantically wrong (the
             //      finally should run only when the try completes normally,
             //      exceptionally, or via early exit — not on async suspension).
-            bool tryBodyHasAwait = AsyncBoundTreeQueries.HasAwait(rewrittenTry);
+            bool tryBodyHasAwait = HasAwait(rewrittenTry);
             bool needsFinallyLift = rewrittenFinally != null && (finallyHasAwait || tryBodyHasAwait);
 
             if (!anyCatchHasAwait && !needsFinallyLift)
@@ -225,6 +233,8 @@ public static class AsyncExceptionHandlerRewriter
             return new BoundBlockStatement(null, statements.ToImmutable());
         }
 
+        private bool HasAwait(BoundStatement statement) => AsyncBoundTreeQueries.HasAwait(statement, awaitMemo);
+
         private void RewriteCatchWithAwait(
             ImmutableArray<BoundStatement>.Builder statements,
             BoundStatement tryBody,
@@ -247,7 +257,7 @@ public static class AsyncExceptionHandlerRewriter
 
             foreach (var clause in catchClauses)
             {
-                if (AsyncBoundTreeQueries.HasAwait(clause.Body))
+                if (HasAwait(clause.Body))
                 {
                     // Per-clause capture local of nullable-of-original-type.
                     // A reference-type nullable shares the CLR representation,
@@ -388,7 +398,7 @@ public static class AsyncExceptionHandlerRewriter
 
             foreach (var clause in catchClauses)
             {
-                if (AsyncBoundTreeQueries.HasAwait(clause.Body))
+                if (HasAwait(clause.Body))
                 {
                     // Per-clause capture local of nullable-of-original-type.
                     var captureType = NullableTypeSymbol.Get(clause.ExceptionType);

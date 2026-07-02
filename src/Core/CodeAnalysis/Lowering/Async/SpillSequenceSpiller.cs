@@ -82,6 +82,14 @@ public static class SpillSequenceSpiller
 
     private sealed class Spiller
     {
+        // Reference-keyed "does this subtree contain an await" cache shared by every
+        // HasAwait probe this Spiller instance makes. RewriteStatementToList/SpillExpression
+        // re-query the same child nodes at every recursion level; without this memo that
+        // was an O(n^2) re-walk of the tree for an async body with n nodes (issue #1625).
+        // Safe across the whole pass because rewriting always produces new node instances
+        // (see BoundTreeRewriter) — a memoized entry is never observed for a mutated node.
+        private readonly Dictionary<BoundNode, bool> awaitMemo = AsyncBoundTreeQueries.CreateHasAwaitMemo();
+
         private int spillOrdinal;
 
         public BoundBlockStatement RewriteBlock(BoundBlockStatement block)
@@ -185,7 +193,7 @@ public static class SpillSequenceSpiller
 
         private bool RewriteVariableDeclaration(BoundVariableDeclaration decl, ImmutableArray<BoundStatement>.Builder builder)
         {
-            if (decl.Initializer == null || !AsyncBoundTreeQueries.HasAwait(decl.Initializer))
+            if (decl.Initializer == null || !HasAwait(decl.Initializer))
             {
                 builder.Add(decl);
                 return false;
@@ -199,7 +207,7 @@ public static class SpillSequenceSpiller
 
         private bool RewriteExpressionStatement(BoundExpressionStatement exprStmt, ImmutableArray<BoundStatement>.Builder builder)
         {
-            if (!AsyncBoundTreeQueries.HasAwait(exprStmt.Expression))
+            if (!HasAwait(exprStmt.Expression))
             {
                 builder.Add(exprStmt);
                 return false;
@@ -231,7 +239,7 @@ public static class SpillSequenceSpiller
 
         private bool RewriteReturnStatement(BoundReturnStatement ret, ImmutableArray<BoundStatement>.Builder builder)
         {
-            if (ret.Expression == null || !AsyncBoundTreeQueries.HasAwait(ret.Expression))
+            if (ret.Expression == null || !HasAwait(ret.Expression))
             {
                 builder.Add(ret);
                 return false;
@@ -254,7 +262,7 @@ public static class SpillSequenceSpiller
             BoundExpression condition = ifStmt.Condition;
             var conditionChanged = false;
 
-            if (AsyncBoundTreeQueries.HasAwait(condition))
+            if (HasAwait(condition))
             {
                 var spilledCond = SpillExpression(condition);
                 FlushSideEffects(spilledCond, builder);
@@ -313,7 +321,7 @@ public static class SpillSequenceSpiller
         /// </remarks>
         private bool RewriteConditionalGotoStatement(BoundConditionalGotoStatement gotoStmt, ImmutableArray<BoundStatement>.Builder builder)
         {
-            if (!AsyncBoundTreeQueries.HasAwait(gotoStmt.Condition))
+            if (!HasAwait(gotoStmt.Condition))
             {
                 builder.Add(gotoStmt);
                 return false;
@@ -681,7 +689,7 @@ public static class SpillSequenceSpiller
             BoundSpillSequenceExpression innerSpill = null;
             BoundExpression innerExpr = awaitExpr.Expression;
 
-            if (AsyncBoundTreeQueries.HasAwait(awaitExpr.Expression))
+            if (HasAwait(awaitExpr.Expression))
             {
                 innerSpill = SpillExpression(awaitExpr.Expression);
                 innerExpr = innerSpill.Value;
@@ -724,8 +732,8 @@ public static class SpillSequenceSpiller
                 return SpillLogicalOr(binary);
             }
 
-            var leftHasAwait = AsyncBoundTreeQueries.HasAwait(binary.Left);
-            var rightHasAwait = AsyncBoundTreeQueries.HasAwait(binary.Right);
+            var leftHasAwait = HasAwait(binary.Left);
+            var rightHasAwait = HasAwait(binary.Right);
 
             if (!leftHasAwait && !rightHasAwait)
             {
@@ -794,7 +802,7 @@ public static class SpillSequenceSpiller
 
             // Spill the left side.
             BoundExpression left = binary.Left;
-            if (AsyncBoundTreeQueries.HasAwait(binary.Left))
+            if (HasAwait(binary.Left))
             {
                 var spilledLeft = SpillExpression(binary.Left);
                 locals.AddRange(spilledLeft.Locals);
@@ -843,7 +851,7 @@ public static class SpillSequenceSpiller
             var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
 
             BoundExpression left = binary.Left;
-            if (AsyncBoundTreeQueries.HasAwait(binary.Left))
+            if (HasAwait(binary.Left))
             {
                 var spilledLeft = SpillExpression(binary.Left);
                 locals.AddRange(spilledLeft.Locals);
@@ -953,14 +961,14 @@ public static class SpillSequenceSpiller
             var argsHaveAwait = false;
             foreach (var arg in call.Arguments)
             {
-                if (AsyncBoundTreeQueries.HasAwait(arg))
+                if (HasAwait(arg))
                 {
                     argsHaveAwait = true;
                     break;
                 }
             }
 
-            if (AsyncBoundTreeQueries.HasAwait(receiver))
+            if (HasAwait(receiver))
             {
                 var spilledReceiver = SpillExpression(receiver);
                 locals.AddRange(spilledReceiver.Locals);
@@ -1002,14 +1010,14 @@ public static class SpillSequenceSpiller
             var argsHaveAwait = false;
             foreach (var arg in call.Arguments)
             {
-                if (AsyncBoundTreeQueries.HasAwait(arg))
+                if (HasAwait(arg))
                 {
                     argsHaveAwait = true;
                     break;
                 }
             }
 
-            if (AsyncBoundTreeQueries.HasAwait(receiver))
+            if (HasAwait(receiver))
             {
                 var spilledReceiver = SpillExpression(receiver);
                 locals.AddRange(spilledReceiver.Locals);
@@ -1051,14 +1059,14 @@ public static class SpillSequenceSpiller
             var argsHaveAwait = false;
             foreach (var arg in call.Arguments)
             {
-                if (AsyncBoundTreeQueries.HasAwait(arg))
+                if (HasAwait(arg))
                 {
                     argsHaveAwait = true;
                     break;
                 }
             }
 
-            if (AsyncBoundTreeQueries.HasAwait(receiver))
+            if (HasAwait(receiver))
             {
                 var spilledReceiver = SpillExpression(receiver);
                 locals.AddRange(spilledReceiver.Locals);
@@ -1100,14 +1108,14 @@ public static class SpillSequenceSpiller
             var argsHaveAwait = false;
             foreach (var arg in call.Arguments)
             {
-                if (AsyncBoundTreeQueries.HasAwait(arg))
+                if (HasAwait(arg))
                 {
                     argsHaveAwait = true;
                     break;
                 }
             }
 
-            if (AsyncBoundTreeQueries.HasAwait(receiver))
+            if (HasAwait(receiver))
             {
                 var spilledReceiver = SpillExpression(receiver);
                 locals.AddRange(spilledReceiver.Locals);
@@ -1142,7 +1150,7 @@ public static class SpillSequenceSpiller
 
         private BoundSpillSequenceExpression SpillConversion(BoundConversionExpression conv)
         {
-            if (!AsyncBoundTreeQueries.HasAwait(conv.Expression))
+            if (!HasAwait(conv.Expression))
             {
                 return Trivial(conv);
             }
@@ -1158,7 +1166,7 @@ public static class SpillSequenceSpiller
 
         private BoundSpillSequenceExpression SpillAssignment(BoundAssignmentExpression assign)
         {
-            if (!AsyncBoundTreeQueries.HasAwait(assign.Expression))
+            if (!HasAwait(assign.Expression))
             {
                 return Trivial(assign);
             }
@@ -1176,7 +1184,7 @@ public static class SpillSequenceSpiller
         {
             // Receiver is a VariableSymbol — already a stable local read, no spilling needed.
             // Only the RHS Value can contain an await.
-            if (!AsyncBoundTreeQueries.HasAwait(assign.Value))
+            if (!HasAwait(assign.Value))
             {
                 return Trivial(assign);
             }
@@ -1199,8 +1207,8 @@ public static class SpillSequenceSpiller
         {
             // Target is a VariableSymbol — already a stable local read.
             // Index and Value can each contain an await.
-            var indexHasAwait = AsyncBoundTreeQueries.HasAwait(assign.Index);
-            var valueHasAwait = AsyncBoundTreeQueries.HasAwait(assign.Value);
+            var indexHasAwait = HasAwait(assign.Index);
+            var valueHasAwait = HasAwait(assign.Value);
 
             if (!indexHasAwait && !valueHasAwait)
             {
@@ -1255,7 +1263,7 @@ public static class SpillSequenceSpiller
 
         private BoundSpillSequenceExpression SpillUnary(BoundUnaryExpression unary)
         {
-            if (!AsyncBoundTreeQueries.HasAwait(unary.Operand))
+            if (!HasAwait(unary.Operand))
             {
                 return Trivial(unary);
             }
@@ -1281,9 +1289,9 @@ public static class SpillSequenceSpiller
         /// </summary>
         private BoundSpillSequenceExpression SpillConditional(BoundConditionalExpression conditional)
         {
-            var conditionHasAwait = AsyncBoundTreeQueries.HasAwait(conditional.Condition);
-            var trueHasAwait = AsyncBoundTreeQueries.HasAwait(conditional.WhenTrue);
-            var falseHasAwait = AsyncBoundTreeQueries.HasAwait(conditional.WhenFalse);
+            var conditionHasAwait = HasAwait(conditional.Condition);
+            var trueHasAwait = HasAwait(conditional.WhenTrue);
+            var falseHasAwait = HasAwait(conditional.WhenFalse);
 
             if (!conditionHasAwait && !trueHasAwait && !falseHasAwait)
             {
@@ -1360,19 +1368,19 @@ public static class SpillSequenceSpiller
         /// </summary>
         private BoundSpillSequenceExpression SpillSwitch(BoundSwitchExpression switchExpr)
         {
-            var discriminantHasAwait = AsyncBoundTreeQueries.HasAwait(switchExpr.Discriminant);
+            var discriminantHasAwait = HasAwait(switchExpr.Discriminant);
             BoundExpression firstGuardAwaitSyntaxHolder = null;
             var anyGuardHasAwait = false;
             var anyResultHasAwait = false;
             foreach (var arm in switchExpr.Arms)
             {
-                if (arm.Guard != null && AsyncBoundTreeQueries.HasAwait(arm.Guard))
+                if (arm.Guard != null && HasAwait(arm.Guard))
                 {
                     anyGuardHasAwait = true;
                     firstGuardAwaitSyntaxHolder ??= arm.Guard;
                 }
 
-                if (AsyncBoundTreeQueries.HasAwait(arm.Result))
+                if (HasAwait(arm.Result))
                 {
                     anyResultHasAwait = true;
                 }
@@ -1498,8 +1506,8 @@ public static class SpillSequenceSpiller
         /// </summary>
         private BoundSpillSequenceExpression SpillNullConditionalAccess(BoundNullConditionalAccessExpression nc)
         {
-            var receiverHasAwait = AsyncBoundTreeQueries.HasAwait(nc.Receiver);
-            var whenNotNullHasAwait = AsyncBoundTreeQueries.HasAwait(nc.WhenNotNull);
+            var receiverHasAwait = HasAwait(nc.Receiver);
+            var whenNotNullHasAwait = HasAwait(nc.WhenNotNull);
 
             if (!receiverHasAwait && !whenNotNullHasAwait)
             {
@@ -1653,9 +1661,9 @@ public static class SpillSequenceSpiller
         /// </summary>
         private BoundSpillSequenceExpression SpillConditionalAddress(BoundConditionalAddressExpression condAddr)
         {
-            var conditionHasAwait = AsyncBoundTreeQueries.HasAwait(condAddr.Condition);
-            var trueHasAwait = AsyncBoundTreeQueries.HasAwait(condAddr.WhenTrueOperand);
-            var falseHasAwait = AsyncBoundTreeQueries.HasAwait(condAddr.WhenFalseOperand);
+            var conditionHasAwait = HasAwait(condAddr.Condition);
+            var trueHasAwait = HasAwait(condAddr.WhenTrueOperand);
+            var falseHasAwait = HasAwait(condAddr.WhenFalseOperand);
 
             if (!conditionHasAwait && !trueHasAwait && !falseHasAwait)
             {
@@ -2063,7 +2071,7 @@ public static class SpillSequenceSpiller
             BoundExpression operand,
             Func<BoundExpression, BoundExpression> rebuild)
         {
-            if (!AsyncBoundTreeQueries.HasAwait(operand))
+            if (!HasAwait(operand))
             {
                 return Trivial(original);
             }
@@ -2086,8 +2094,8 @@ public static class SpillSequenceSpiller
             BoundExpression b,
             Func<BoundExpression, BoundExpression, BoundExpression> rebuild)
         {
-            var aHasAwait = AsyncBoundTreeQueries.HasAwait(a);
-            var bHasAwait = AsyncBoundTreeQueries.HasAwait(b);
+            var aHasAwait = HasAwait(a);
+            var bHasAwait = HasAwait(b);
 
             if (!aHasAwait && !bHasAwait)
             {
@@ -2141,13 +2149,17 @@ public static class SpillSequenceSpiller
             var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
             var args = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
 
-            // First pass: determine which args have await.
+            // First pass: determine which args have await. Cache the per-argument
+            // result in a set so the main loop below reuses it instead of
+            // re-walking each argument's subtree a second time (issue #1625).
             var awaitIndices = new List<int>();
+            var argsWithAwait = new HashSet<int>();
             for (var i = 0; i < arguments.Length; i++)
             {
-                if (AsyncBoundTreeQueries.HasAwait(arguments[i]))
+                if (HasAwait(arguments[i]))
                 {
                     awaitIndices.Add(i);
+                    argsWithAwait.Add(i);
                 }
             }
 
@@ -2169,7 +2181,7 @@ public static class SpillSequenceSpiller
             {
                 var arg = arguments[i];
 
-                if (AsyncBoundTreeQueries.HasAwait(arg))
+                if (argsWithAwait.Contains(i))
                 {
                     // Spill this argument's await.
                     var spilledArg = SpillExpression(arg);
@@ -2296,5 +2308,9 @@ public static class SpillSequenceSpiller
             // The actual value will be overwritten before use.
             return new BoundLiteralExpression(null, 0);
         }
+
+        private bool HasAwait(BoundStatement statement) => AsyncBoundTreeQueries.HasAwait(statement, awaitMemo);
+
+        private bool HasAwait(BoundExpression expression) => AsyncBoundTreeQueries.HasAwait(expression, awaitMemo);
     }
 }
