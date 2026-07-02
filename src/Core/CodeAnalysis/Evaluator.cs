@@ -2203,14 +2203,13 @@ public sealed class Evaluator
 
     private static object DefaultValue(Symbols.TypeSymbol type)
     {
-        if (type == Symbols.TypeSymbol.Bool)
+        // Issue #504/#1652: NullableTypeSymbol.ClrType aliases the underlying
+        // type's ClrType (e.g. `int?` reports `typeof(int)`), so it must be
+        // special-cased ahead of the value-type fallback below — otherwise
+        // `default(int?)` would wrongly become boxed `0` instead of `nil`.
+        if (type is Symbols.NullableTypeSymbol)
         {
-            return false;
-        }
-
-        if (type == Symbols.TypeSymbol.Int32)
-        {
-            return 0;
+            return null;
         }
 
         if (type == Symbols.TypeSymbol.String)
@@ -2218,9 +2217,19 @@ public sealed class Evaluator
             return string.Empty;
         }
 
-        if (type is Symbols.EnumSymbol)
+        // Issue #1652: user-defined enums have no ClrType (they're not emitted
+        // to real CLR System.Enum types at interpret time) and their members
+        // are bound to raw `int` literals (see EnumMemberSymbol.Value / the
+        // BoundLiteralExpression produced in ExpressionBinder.Access.cs) — so
+        // a plain boxed `int 0` here already equals `Color.Zero`'s boxed int.
+        // Imported enums (real CLR System.Enum types) DO have a ClrType and
+        // are handled by the general value-type fallback below via
+        // Enum.ToObject (Activator.CreateInstance produces the real enum
+        // zero), matching the idiom already used for enum arithmetic results
+        // elsewhere in this file (see UnwrapEnumToUnderlying/NumericCoerce).
+        if (type is Symbols.EnumSymbol enumType)
         {
-            return 0;
+            return enumType.ClrType != null ? Enum.ToObject(enumType.ClrType, 0) : 0;
         }
 
         if (type is Symbols.StructSymbol s)
@@ -2232,6 +2241,18 @@ public sealed class Evaluator
             }
 
             return sv;
+        }
+
+        // Issue #1652: every other value type (bool, all sized/unsigned ints,
+        // float32/float64, decimal, char, nint/nuint, and user value structs
+        // that slipped through as plain ClrType) gets its real CLR default via
+        // Activator.CreateInstance, so the boxed runtime type always matches
+        // what the emitter would produce for a V-typed scratch local. Reference
+        // types (string handled above, classes, interfaces) and nullable T?
+        // correctly fall through to null.
+        if (type?.ClrType != null && type.ClrType.IsValueType)
+        {
+            return Activator.CreateInstance(type.ClrType);
         }
 
         return null;
