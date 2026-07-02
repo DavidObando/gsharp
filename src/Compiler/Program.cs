@@ -63,6 +63,12 @@ public class Program
             return ReportFatalIOError(ex);
         }
 
+        if (parsed.ShowHelp)
+        {
+            PrintHelp();
+            return Success;
+        }
+
         if (parsed.SourceFiles.Count == 0)
         {
             Console.Error.WriteLine("Must specify at least one source file.");
@@ -494,6 +500,38 @@ public class Program
         };
     }
 
+    /// <summary>
+    /// Prints usage/help text for the gsc command-line switches to stdout.
+    /// </summary>
+    private static void PrintHelp()
+    {
+        Console.WriteLine("""
+        Usage: gsc <source-files> [options]
+
+        Options:
+          /out:<file>                   Output assembly path.
+          /refout:<file>                Output reference assembly path.
+          /assemblyname:<name>          Output assembly name.
+          /version:<string>             Informational version stamped on the output assembly.
+          /target:exe|library|lib|dll   Output type (default: exe).
+          /targetframework:<tfm>        Target framework moniker (alias: /tfm:<tfm>).
+          /r:<file>, /reference:<file>  Reference an assembly.
+          /lib:<path>                   Accepted for csc compatibility (currently a no-op).
+          /implicitimports[+|-]         Enable/disable implicit System import (alias: /implicit-imports).
+          /noimplicitimports            Disable implicit System import (alias: /no-implicit-imports).
+          /nowarn:<ids>                 Suppress the given diagnostic IDs (comma/semicolon separated).
+          /warnaserror[+|-][:<ids>]     Treat warnings as errors, globally or for specific IDs.
+          /debug[+|-][:<value>]         Emit debug info: none, portable, full, pdbonly, embedded.
+          /pdb:<file>                   Sidecar PDB path.
+          /doc:<file>                   XML documentation output path.
+          /sourcelink:<file>            Source Link JSON file.
+          /deterministic[+|-]           Enable/disable deterministic emit.
+          /embed[+|-]                   Embed all primary sources in the PDB.
+          /log:<file>                   Write compiler diagnostic log to file.
+          /?, /help                     Show this help message.
+        """);
+    }
+
     private static CommandLineArgs ParseCommandLine(string[] args)
     {
         var result = new CommandLineArgs();
@@ -693,14 +731,19 @@ public class Program
                             : value.Trim();
                         break;
 
+                    case "lib":
+                        // /lib:<path> (csc-compatible assembly search path). Accepted but
+                        // currently a no-op: gsc resolves references from explicit /reference:
+                        // paths only, it does not probe search directories.
+                        break;
+
                     case "?":
                     case "help":
                         result.ShowHelp = true;
                         break;
 
                     default:
-                        // Forward-compatible: ignore unknown flags rather than failing the SDK BuildTask.
-                        break;
+                        throw new CommandLineException($"Unrecognized option: {raw}. Use /? or /help for usage.");
                 }
             }
             else
