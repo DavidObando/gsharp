@@ -479,4 +479,63 @@ public class LexerTests
         Assert.Equal(SyntaxKind.EndOfFileToken, tokens[^1].Kind);
         Assert.Single(tokens, t => t.Kind == SyntaxKind.EndOfFileToken);
     }
+
+    [Fact]
+    public void RepeatedIdentifiers_ShareSameTextInstance()
+    {
+        // Issue #1677: repeated identifiers must be interned (same reference) but still
+        // compare equal by value, and every occurrence must keep its own correct Span/Start.
+        var tokens = SyntaxTree.ParseTokens("foo foo foo bar foo")
+            .Where(t => t.Kind == SyntaxKind.IdentifierToken)
+            .ToImmutableArray();
+
+        Assert.Equal(5, tokens.Length);
+        var fooTokens = tokens.Where(t => t.Text == "foo").ToImmutableArray();
+        Assert.Equal(4, fooTokens.Length);
+        Assert.Same(fooTokens[0].Text, fooTokens[1].Text);
+        Assert.Same(fooTokens[0].Text, fooTokens[2].Text);
+        Assert.Same(fooTokens[0].Text, fooTokens[3].Text);
+        Assert.NotSame(fooTokens[0].Text, tokens.First(t => t.Text == "bar").Text);
+
+        // Spans still reflect each occurrence's own position despite sharing text.
+        Assert.Equal(0, tokens[0].Span.Start);
+        Assert.Equal(4, tokens[1].Span.Start);
+        Assert.Equal(8, tokens[2].Span.Start);
+        Assert.Equal(12, tokens[3].Span.Start);
+        Assert.Equal(16, tokens[4].Span.Start);
+    }
+
+    [Theory]
+    [InlineData("a  b")]
+    [InlineData("a\tb")]
+    [InlineData("a\nb")]
+    [InlineData("a \t\t b")]
+    public void Whitespace_TextAndSpan_AreExact(string source)
+    {
+        // Issue #1677: whitespace text may be served from a shared cache for uniform runs,
+        // but must still be value-identical to (and long enough to reconstruct) the source.
+        var tokens = SyntaxTree.ParseTokens(source);
+        var reconstructed = new System.Text.StringBuilder();
+        foreach (var token in tokens.Where(t => t.Kind != SyntaxKind.EndOfFileToken))
+        {
+            Assert.Equal(token.Span.Length, token.Text.Length);
+            reconstructed.Append(token.Text);
+        }
+
+        Assert.Equal(source, reconstructed.ToString());
+    }
+
+    [Fact]
+    public void UniformWhitespaceRuns_OfSameLength_ShareTextInstance()
+    {
+        // Issue #1677: same-length, same-character whitespace runs (e.g. matching indentation)
+        // are served from a shared cache instead of a fresh substring per occurrence.
+        var tokens = SyntaxTree.ParseTokens("a   b   c")
+            .Where(t => t.Kind == SyntaxKind.WhitespaceToken)
+            .ToImmutableArray();
+
+        Assert.Equal(2, tokens.Length);
+        Assert.Equal("   ", tokens[0].Text);
+        Assert.Same(tokens[0].Text, tokens[1].Text);
+    }
 }

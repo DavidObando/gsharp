@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Text;
@@ -24,15 +26,36 @@ public sealed class Lexer
     // when the parser parses the hole's expression text.
     private const int MaxInterpolationNestingDepth = 32;
 
+    // Issue #1677: uniform-run whitespace text (all-space or all-tab indentation, single
+    // newlines, etc.) is shared process-wide instead of re-substringed per token, since it
+    // is immutable and identical across files/lexers. Kept small and static (not tied to any
+    // one lexer instance) because whitespace runs are a closed, tiny alphabet. Runs longer
+    // than WhitespaceRunCacheMaxLength bypass the cache so the static table stays bounded
+    // (a few whitespace chars x lengths 1..MaxLength) in a long-lived language-server process;
+    // long uniform runs are rare and the per-occurrence win is dominated by short indent runs.
+    private const int WhitespaceRunCacheMaxLength = 64;
+    private static readonly ConcurrentDictionary<(char Ch, int Length), string> WhitespaceRunCache = new();
+
     private readonly SyntaxTree syntaxTree;
     private readonly SourceText text;
     private readonly int end;
+
+    // Issue #1677: lexer-local identifier intern table so repeated identifiers (e.g. `foo`
+    // used 1000 times in a file) share one string instance for their .Text instead of each
+    // occurrence allocating its own substring. Scoped per-Lexer (per-parse), so it never
+    // leaks across compilations.
+    private readonly Dictionary<string, string> internedIdentifiers = new(StringComparer.Ordinal);
 
     private int position;
 
     private int start;
     private SyntaxKind kind;
     private object value;
+
+    // Issue #1677: set by ReadIdentifierOrKeyword when it determines the token is a plain
+    // identifier (not a keyword). Lex() reuses this interned string instead of substringing
+    // the same range a second time.
+    private string internedIdentifierText;
 
     // Issue #1602: current interpolation-hole nesting depth. See
     // MaxInterpolationNestingDepth above.
@@ -88,6 +111,7 @@ public sealed class Lexer
         start = position;
         kind = SyntaxKind.BadToken;
         value = null;
+        internedIdentifierText = null;
 
         switch (Current)
         {
@@ -515,10 +539,43 @@ public sealed class Lexer
         var text = SyntaxFacts.GetText(kind);
         if (text == null)
         {
-            text = this.text.ToString(start, length);
+            text = kind == SyntaxKind.IdentifierToken && internedIdentifierText != null
+                ? internedIdentifierText
+                : GetTrivialText(start, length);
         }
 
         return new SyntaxToken(syntaxTree, kind, start, text, value);
+    }
+
+    // Issue #1677: whitespace runs (indentation, single newlines, blank lines) are a tiny,
+    // closed alphabet of immutable strings, so a uniform run (all same char) is looked up
+    // in a shared cache instead of substringed fresh every time. Non-uniform whitespace and
+    // every other trivial-text kind (comments, numbers, strings) fall back to the substring:
+    // their exact text is observed by consumers (for example FormattingEngine reads
+    // WhitespaceToken/CommentToken .Text verbatim to preserve user line breaks and comment
+    // content), so it cannot be replaced by a placeholder.
+    private string GetTrivialText(int start, int length)
+    {
+        if (kind == SyntaxKind.WhitespaceToken && length > 0 && length <= WhitespaceRunCacheMaxLength)
+        {
+            var ch = text[start];
+            var uniform = true;
+            for (var i = start + 1; i < start + length; i++)
+            {
+                if (text[i] != ch)
+                {
+                    uniform = false;
+                    break;
+                }
+            }
+
+            if (uniform)
+            {
+                return WhitespaceRunCache.GetOrAdd((ch, length), _ => this.text.ToString(start, length));
+            }
+        }
+
+        return this.text.ToString(start, length);
     }
 
     private char Peek(int offset)
@@ -1728,5 +1785,18 @@ public sealed class Lexer
         var length = position - start;
         var text = this.text.ToString(start, length);
         kind = SyntaxFacts.GetKeywordKind(text);
+
+        if (kind == SyntaxKind.IdentifierToken)
+        {
+            // Issue #1677: intern so repeated identifiers share one string, and stash it so
+            // Lex() below doesn't substring the same source range a second time.
+            if (!internedIdentifiers.TryGetValue(text, out var interned))
+            {
+                interned = text;
+                internedIdentifiers.Add(text, text);
+            }
+
+            internedIdentifierText = interned;
+        }
     }
 }
