@@ -53,15 +53,34 @@ public static class IteratorMoveNextBodyBuilder
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
 
         // Pre-pass: locate each yield within the user's try-statement nesting.
-        // For iterators we cannot keep user try-finally regions in MoveNext
-        // because:
-        //   * `ret` is illegal inside a CLR protected region, so the yield's
-        //     `return true` cannot stay there, and
-        //   * `leave` from the try would trigger the finally on every yield.
-        // Instead, the user try-finally is removed in MoveNext: the try body
-        // is inlined followed by the finally body so that normal completion
-        // still runs cleanup. Dispose handles premature termination by
-        // running the pending finallies based on the current suspension state.
+        //
+        // Issue #1618: user try-finally regions with yields ARE kept as real
+        // CLR protected regions in MoveNext (see
+        // FieldAccessYieldRewriter.RewriteTryStatement below), so the runtime
+        // itself guarantees the finally runs on every exit path — normal
+        // completion, an uncaught exception from the body, and an early
+        // return/break — not just the happy path. Two problems that come
+        // with keeping a real region are solved as follows:
+        //   * `ret` is illegal inside a CLR protected region: the yield's
+        //     `return true` is rewritten by the later Lowerer.Lower() pass
+        //     (which already rewrites any return inside a protected region
+        //     into a store-to-temp + goto a shared method-exit label,
+        //     see Lowerer.RewriteReturnStatement) into a `goto` that the
+        //     emitter turns into `leave`.
+        //   * A `leave` from a yield must NOT run the finally (the iterator
+        //     merely suspended, it isn't done): the finally is guarded by a
+        //     check of the current suspension `state` — while suspended at
+        //     one of this try's own yields, `state` equals that yield's
+        //     number, which the guard excludes.
+        //   * The CLR forbids branching into a protected region from
+        //     outside it, so the outer state dispatch cannot jump directly
+        //     to a resume label that lives inside a user try. Instead it
+        //     routes to a synthesized entry label placed immediately before
+        //     the (outermost) try, and an internal dispatch placed at the
+        //     top of each try's body routes the rest of the way in.
+        // Dispose still handles premature termination (disposal while
+        // suspended) separately, by running the pending finallies based on
+        // the saved suspension state.
         var tryDispatch = IteratorTryDispatchPlanner.Plan(plan.Body, plan.YieldStates);
 
         var yieldLabels = new Dictionary<int, BoundLabel>();
@@ -87,12 +106,20 @@ public static class IteratorMoveNextBodyBuilder
 
         foreach (var kvp in plan.YieldStates.OrderBy(p => p.Value))
         {
-            // Because we remove the user's try wrappers in MoveNext (see
-            // above), the outer dispatch can jump directly to the resume
-            // label — there is no protected region to route around.
+            // Issue #1618: user try-finally regions with yields are now kept
+            // as real CLR protected regions (see RewriteTryStatement below)
+            // so an exception thrown from the body reliably runs the
+            // finally. The CLR forbids branching into a protected region
+            // from outside it, so a resume state that lives inside a user
+            // try cannot be jumped to directly — the outer dispatch instead
+            // routes to that try's synthesized entry label (placed just
+            // before the try), which falls through into the region, then an
+            // internal dispatch placed at the top of the try routes the
+            // rest of the way to the actual resume label.
+            var target = tryDispatch.GetOuterDispatchTarget(kvp.Value) ?? yieldLabels[kvp.Value];
             statements.Add(new BoundConditionalGotoStatement(
                 null,
-                yieldLabels[kvp.Value],
+                target,
                 new BoundBinaryExpression(
                     null,
                     FieldRead(stateField),
@@ -499,13 +526,6 @@ public static class IteratorMoveNextBodyBuilder
         private readonly IteratorTryDispatchPlan tryDispatch;
         private readonly IReadOnlyDictionary<BoundYieldStatement, int> yieldStateMap;
 
-        // Stack of pending user-finally blocks during walk (innermost first).
-        // A `return` lexically inside these trys must run each finally body
-        // before jumping to endLabel, mirroring the CLR's normal stack
-        // unwinding on `leave`. Yields do NOT consume this stack — the
-        // finally is run lazily by Dispose on premature termination.
-        private readonly Stack<BoundStatement> pendingFinallies = new Stack<BoundStatement>();
-
         public FieldAccessYieldRewriter(
             StructSymbol smClass,
             ParameterSymbol thisParameter,
@@ -669,95 +689,129 @@ public static class IteratorMoveNextBodyBuilder
                 return base.RewriteTryStatement(node);
             }
 
-            // The user try contains yields. We cannot keep it as a CLR
-            // protected region in MoveNext because the yield's `return true`
-            // would be illegal inside the try, and a `leave` would run the
-            // finally on every yield. Instead, we remove the try wrapper:
-            //   * Inline the rewritten try body.
-            //   * If a finally is present, inline it after the body so that
-            //     normal completion still runs cleanup.
-            //   * Premature termination (early break / Dispose) is handled
-            //     by the synthesized Dispose body, which runs the same
-            //     finally based on the current state.
+            // Issue #1618: the user try contains yields. It is kept as a
+            // REAL CLR protected region (rather than removed and inlined)
+            // so the runtime itself guarantees the finally runs on every
+            // exit path — normal completion, an exception thrown from the
+            // body, and an early return/break — not only normal completion.
+            //
+            //   * Internal dispatch: a resumed call cannot jump directly to
+            //     a resume label living inside this try (the CLR forbids
+            //     branching into a protected region from outside it). The
+            //     outer dispatch instead jumps to this try's entry label
+            //     (prepended immediately before the try below), which falls
+            //     through into an internal dispatch prepended to the try
+            //     body that routes the rest of the way to the actual resume
+            //     label (or to a nested try's own entry label).
+            //   * Finally guard: `leave`-ing the try on a `yield` suspend
+            //     must NOT run the finally — the iterator merely paused, it
+            //     isn't done. The finally body is guarded so it only runs
+            //     when the current suspension `state` is NOT one of this
+            //     try's own yield states; that's true for a genuine exit
+            //     (normal completion / exception / return) but false right
+            //     after suspending (state was just set to the yield's own
+            //     number).
             //
             // Catch clauses are not supported when the try contains yields
             // (the language disallows this). If present we drop them; this
             // is conservative and matches the C# iterator restriction.
-            if (node.FinallyBlock != null)
-            {
-                this.pendingFinallies.Push(node.FinallyBlock);
-            }
+            var rewrittenTryBody = this.RewriteStatement(node.TryBlock);
 
-            BoundStatement rewrittenTryBody;
-            try
+            var tryBodyStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+            var internalDispatch = this.tryDispatch.GetInternalDispatchEntries(node);
+            if (!internalDispatch.IsDefaultOrEmpty)
             {
-                rewrittenTryBody = this.RewriteStatement(node.TryBlock);
-            }
-            finally
-            {
-                if (node.FinallyBlock != null)
+                foreach (var entry in internalDispatch)
                 {
-                    this.pendingFinallies.Pop();
+                    tryBodyStatements.Add(new BoundConditionalGotoStatement(
+                        null,
+                        entry.Target,
+                        new BoundBinaryExpression(
+                            null,
+                            this.FieldRead(this.stateField),
+                            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                            new BoundLiteralExpression(null, entry.State)),
+                        jumpIfTrue: true));
                 }
             }
 
-            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-            if (rewrittenTryBody is BoundBlockStatement b)
+            if (rewrittenTryBody is BoundBlockStatement rewrittenBlock)
             {
-                statements.AddRange(b.Statements);
+                tryBodyStatements.AddRange(rewrittenBlock.Statements);
             }
             else
             {
-                statements.Add(rewrittenTryBody);
+                tryBodyStatements.Add(rewrittenTryBody);
             }
 
-            if (node.FinallyBlock != null)
+            BoundStatement result;
+            if (node.FinallyBlock == null)
+            {
+                result = new BoundBlockStatement(null, tryBodyStatements.ToImmutable());
+            }
+            else
             {
                 // Finally body is rewritten with the same field-access /
                 // local-hoisting transforms (but the finally itself does
                 // not contain yields by language rule, so the yield
                 // rewriter is a safe pass-through here).
                 var rewrittenFinally = this.RewriteStatement(node.FinallyBlock);
-                if (rewrittenFinally is BoundBlockStatement fb)
+
+                BoundExpression suspendedAtOwnYield = null;
+                foreach (var s in statesInside)
                 {
-                    statements.AddRange(fb.Statements);
+                    var eq = new BoundBinaryExpression(
+                        null,
+                        this.FieldRead(this.stateField),
+                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        new BoundLiteralExpression(null, s));
+                    suspendedAtOwnYield = suspendedAtOwnYield == null
+                        ? eq
+                        : new BoundBinaryExpression(
+                            null,
+                            suspendedAtOwnYield,
+                            BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                            eq);
                 }
-                else
-                {
-                    statements.Add(rewrittenFinally);
-                }
+
+                var notSuspended = new BoundUnaryExpression(
+                    null,
+                    BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool),
+                    suspendedAtOwnYield);
+
+                var guardedFinally = new BoundIfStatement(null, notSuspended, AsBlock(rewrittenFinally), elseStatement: null);
+
+                result = new BoundTryStatement(
+                    node.Syntax,
+                    new BoundBlockStatement(null, tryBodyStatements.ToImmutable()),
+                    ImmutableArray<BoundCatchClause>.Empty,
+                    AsBlock(guardedFinally));
             }
 
-            return new BoundBlockStatement(null, statements.ToImmutable());
+            var entryLabel = this.tryDispatch.GetEntryLabel(node);
+            if (entryLabel == null)
+            {
+                return result;
+            }
+
+            return new BoundBlockStatement(
+                null,
+                ImmutableArray.Create(new BoundLabelStatement(null, entryLabel), result));
         }
 
         protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)
         {
-            // `return` inside an iterator terminates enumeration. Run any
-            // pending user-finally blocks (innermost first) before jumping
-            // to the end label, mirroring CLR `leave` unwinding semantics.
-            if (this.pendingFinallies.Count == 0)
-            {
-                return new BoundGotoStatement(null, this.endLabel);
-            }
-
-            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-            foreach (var finallyBlock in this.pendingFinallies)
-            {
-                var rewrittenFinally = this.RewriteStatement(finallyBlock);
-                if (rewrittenFinally is BoundBlockStatement fb)
-                {
-                    statements.AddRange(fb.Statements);
-                }
-                else
-                {
-                    statements.Add(rewrittenFinally);
-                }
-            }
-
-            statements.Add(new BoundGotoStatement(null, this.endLabel));
-            return new BoundBlockStatement(null, statements.ToImmutable());
+            // A bare `return` inside an iterator body means "stop
+            // enumerating" (like `yield break`). Goto the shared end label,
+            // which sets state = -1 and returns false. If this goto leaves
+            // an enclosing user try (now a real CLR protected region — see
+            // RewriteTryStatement above), the runtime automatically runs
+            // that try's finally as part of the `leave`.
+            return new BoundGotoStatement(null, this.endLabel);
         }
+
+        private static BoundBlockStatement AsBlock(BoundStatement statement) =>
+            statement as BoundBlockStatement ?? new BoundBlockStatement(null, ImmutableArray.Create(statement));
 
         private BoundExpression FieldRead(FieldSymbol field) =>
             new BoundFieldAccessExpression(null, new BoundVariableExpression(null, this.thisParameter), this.smClass, field);
