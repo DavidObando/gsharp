@@ -157,16 +157,43 @@ public sealed class ControlFlowGraph
                 hasDefault = true;
             }
 
-            // Arm bodies are flattened into bound block statements by the
-            // lowerer, so the same all-paths-return analysis applies to each
-            // arm (recursively handling nested switches).
-            if (arm.Body is not BoundBlockStatement armBlock || !AllPathsReturn(armBlock))
+            if (!StatementDefinitelyReturns(arm.Body))
             {
                 return false;
             }
         }
 
         return hasDefault;
+    }
+
+    /// <summary>
+    /// Structurally determines whether a bound statement definitely returns (or
+    /// throws) on the fall-through path — without constructing a sub control-flow
+    /// graph. This is deliberately conservative: escaping jumps such as
+    /// <c>continue</c>/<c>break</c>/<c>goto</c> (which the lowerer emits as goto
+    /// statements targeting labels outside the statement) are treated as NOT
+    /// returning. Building an isolated CFG for such a statement would fail
+    /// because those jump targets are not present in the isolated graph
+    /// (issue #1596 follow-up: fixes a crash on <c>continue</c>/<c>break</c>
+    /// inside a switch arm nested in a loop).
+    /// </summary>
+    /// <param name="statement">The bound statement.</param>
+    /// <returns>Whether the statement definitely returns or throws.</returns>
+    private static bool StatementDefinitelyReturns(BoundStatement statement)
+    {
+        switch (statement)
+        {
+            case BoundBlockStatement block:
+                // A block definitely returns iff its last reachable statement
+                // definitely returns.
+                var last = block.Statements.LastOrDefault();
+                return last != null && StatementDefinitelyReturns(last);
+            case BoundPatternSwitchStatement nestedSwitch:
+                return SwitchAlwaysReturns(nestedSwitch);
+            default:
+                return statement.Kind == BoundNodeKind.ReturnStatement
+                    || statement.Kind == BoundNodeKind.ThrowStatement;
+        }
     }
 
     /// <summary>
