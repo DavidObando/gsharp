@@ -250,6 +250,8 @@ ADR-0056 §1/§2 makes spans indexable: a `Span[T]` / `ReadOnlySpan[T]` indexer 
 |----|----------|-------------|-----------------|
 | GS0226 | Error | Cannot assign through a read-only span element (`ReadOnlySpan[T]` is read-only). | `var s ReadOnlySpan[int32] = arr` then `s[0] = 1` — a `ReadOnlySpan[T]` indexer is `ref readonly T`; use `Span[T]` to write. |
 
+Issue #1655: the ref-kind-on-async/iterator ban was previously misfiled under this ID; it now ships as **GS0422** — see [Reassigned diagnostics (GS0419–GS0424)](#reassigned-diagnostics-gs0419gs0424).
+
 ### Nested-type resolution diagnostics (GS0268)
 
 | ID | Severity | Description | Example trigger |

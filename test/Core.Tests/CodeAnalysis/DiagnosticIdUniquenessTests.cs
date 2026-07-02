@@ -6,7 +6,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis;
@@ -16,32 +18,18 @@ namespace GSharp.Core.Tests.CodeAnalysis;
 /// it appears in <c>/nowarn</c> and <c>/warnaserror</c> flags, IDE quick-info,
 /// and documentation. Two unrelated diagnostics sharing one ID silently break
 /// that contract (suppressing one silently suppresses the other). This test
-/// scans every <c>Report(location, "GS####", message)</c> call site under
-/// <c>src/</c> and fails if any ID is used for more than one distinct message
-/// shape, so a future collision fails CI instead of shipping.
+/// parses every file under <c>src/</c> with Roslyn and finds every
+/// <c>Report(..., "GS####", ...)</c> / <c>new Diagnostic(..., "GS####", ...)</c>
+/// call site, regardless of whether the message argument is a string literal,
+/// an interpolated string, or a local variable/expression. The "shape" for a
+/// given ID is the name of its enclosing method — this repo's convention is
+/// one <c>ReportXxx</c> wrapper method per diagnostic ID — so an ID used from
+/// two distinct methods (a real collision) is caught even when the message
+/// argument text itself gives no clue (the variable-message form regex alone
+/// would miss).
 /// </summary>
 public class DiagnosticIdUniquenessTests
 {
-    // Interpolation holes ("{name}", "{0}", nested braces) vary call to call;
-    // normalize them to a single placeholder so two reports of the *same*
-    // diagnostic with different interpolated values are not flagged as a
-    // collision, while two genuinely different message templates still are.
-    private static readonly Regex InterpolationHole = new(@"\{[^{}]*\}", RegexOptions.Compiled);
-
-    // Matches `Report(<args>, "GSxxxx", <message>)` — the DiagnosticBag helper
-    // form, where <message> is a (possibly interpolated) C# string literal.
-    private static readonly Regex ReportCall = new(
-        @"\bReport\([^;]*?""(GS\d{4})""\s*,\s*(\$?""(?:[^""\\]|\\.)*"")",
-        RegexOptions.Compiled | RegexOptions.Singleline);
-
-    // Matches `new Diagnostic(<args>, "GSxxxx", <severity>, <message>)` — the
-    // low-level form used outside DiagnosticBag (e.g. AsyncEmitPrecheck),
-    // where <message> is typically an identifier/expression rather than a
-    // literal. The expression text itself is the "shape" being compared.
-    private static readonly Regex NewDiagnosticCall = new(
-        @"new\s+Diagnostic\([^;]*?""(GS\d{4})""\s*,\s*DiagnosticSeverity\.\w+\s*,\s*([^,;()]+?)\s*\)",
-        RegexOptions.Compiled | RegexOptions.Singleline);
-
     [Fact]
     public void Every_DiagnosticId_Maps_To_Exactly_One_Message_Shape()
     {
@@ -49,22 +37,42 @@ public class DiagnosticIdUniquenessTests
         var srcRoot = Path.Combine(repoRoot, "src");
         Assert.True(Directory.Exists(srcRoot), $"src directory not found: {srcRoot}");
 
-        // id -> set of (normalized message template -> example "file:line" site)
-        var idToTemplates = new Dictionary<string, Dictionary<string, string>>();
+        // id -> set of (enclosing-method shape -> example "file:line" site)
+        var idToShapes = new Dictionary<string, Dictionary<string, string>>();
 
         foreach (var file in Directory.EnumerateFiles(srcRoot, "*.cs", SearchOption.AllDirectories))
         {
             var text = File.ReadAllText(file);
-            RecordMatches(ReportCall, text, file, repoRoot, idToTemplates);
-            RecordMatches(NewDiagnosticCall, text, file, repoRoot, idToTemplates);
+            var tree = CSharpSyntaxTree.ParseText(text, path: file);
+            var root = tree.GetCompilationUnitRoot();
+
+            foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (GetSimpleName(invocation.Expression) != "Report")
+                {
+                    continue;
+                }
+
+                RecordCallSite(invocation.ArgumentList, invocation, file, repoRoot, text, idToShapes);
+            }
+
+            foreach (var creation in root.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
+            {
+                if (GetSimpleName(creation.Type) != "Diagnostic" || creation.ArgumentList == null)
+                {
+                    continue;
+                }
+
+                RecordCallSite(creation.ArgumentList, creation, file, repoRoot, text, idToShapes);
+            }
         }
 
-        Assert.NotEmpty(idToTemplates);
+        Assert.NotEmpty(idToShapes);
 
-        var collisions = idToTemplates
+        var collisions = idToShapes
             .Where(kv => kv.Value.Count > 1)
             .OrderBy(kv => kv.Key, StringComparer.Ordinal)
-            .Select(kv => $"{kv.Key} is used for {kv.Value.Count} distinct messages:\n" +
+            .Select(kv => $"{kv.Key} is used from {kv.Value.Count} distinct enclosing methods:\n" +
                           string.Join("\n", kv.Value.Select(t => $"    {t.Value}: {t.Key}")))
             .ToArray();
 
@@ -74,34 +82,83 @@ public class DiagnosticIdUniquenessTests
             string.Join("\n\n", collisions));
     }
 
-    private static void RecordMatches(
-        Regex pattern,
-        string text,
+    private static void RecordCallSite(
+        ArgumentListSyntax argumentList,
+        SyntaxNode callNode,
         string file,
         string repoRoot,
-        Dictionary<string, Dictionary<string, string>> idToTemplates)
+        string text,
+        Dictionary<string, Dictionary<string, string>> idToShapes)
     {
-        foreach (Match match in pattern.Matches(text))
+        // Find the "GSxxxx" string literal argument, wherever it falls in the
+        // argument list (Report and Diagnostic's ctor put it in different
+        // positions).
+        var idLiteral = argumentList.Arguments
+            .Select(a => a.Expression)
+            .OfType<LiteralExpressionSyntax>()
+            .FirstOrDefault(l => l.IsKind(SyntaxKind.StringLiteralExpression) && IsGsId(l.Token.ValueText));
+
+        if (idLiteral == null)
         {
-            var id = match.Groups[1].Value;
-            var rawMessage = match.Groups[2].Value;
-            var template = InterpolationHole.Replace(rawMessage, "{}");
-            var line = text[..match.Index].Count(c => c == '\n') + 1;
-            var site = $"{Path.GetRelativePath(repoRoot, file)}:{line}";
+            return;
+        }
 
-            if (!idToTemplates.TryGetValue(id, out var templates))
-            {
-                templates = new Dictionary<string, string>();
-                idToTemplates[id] = templates;
-            }
+        var id = idLiteral.Token.ValueText;
+        var shape = GetEnclosingMemberName(callNode);
+        var line = text[..callNode.SpanStart].Count(c => c == '\n') + 1;
+        var site = $"{Path.GetRelativePath(repoRoot, file)}:{line}";
 
-            // Keep the first site seen for each distinct template so the
-            // failure message can point at both call sites of a collision.
-            if (!templates.ContainsKey(template))
+        if (!idToShapes.TryGetValue(id, out var shapes))
+        {
+            shapes = new Dictionary<string, string>();
+            idToShapes[id] = shapes;
+        }
+
+        // Keep the first site seen for each distinct shape so the failure
+        // message can point at both call sites of a collision.
+        if (!shapes.ContainsKey(shape))
+        {
+            shapes[shape] = site;
+        }
+    }
+
+    private static bool IsGsId(string value) =>
+        value.Length == 6 && value.StartsWith("GS", StringComparison.Ordinal) && value[2..].All(char.IsDigit);
+
+    // Resolves the simple name of a possibly-qualified expression
+    // (e.g. `this.Report`, `Diagnostics.Report` -> "Report").
+    private static string GetSimpleName(SyntaxNode expression) => expression switch
+    {
+        MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+        IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+        GenericNameSyntax generic => generic.Identifier.ValueText,
+        _ => string.Empty,
+    };
+
+    // The "shape" for a diagnostic ID: the name of its nearest enclosing
+    // method/local-function/constructor/property accessor. This is what
+    // actually distinguishes two unrelated diagnostics sharing an ID, since
+    // this repo's convention is one ReportXxx wrapper method per ID -
+    // regardless of whether the message is a literal, interpolated string,
+    // or a local variable.
+    private static string GetEnclosingMemberName(SyntaxNode node)
+    {
+        for (var current = node.Parent; current != null; current = current.Parent)
+        {
+            switch (current)
             {
-                templates[template] = site;
+                case MethodDeclarationSyntax method:
+                    return method.Identifier.ValueText;
+                case LocalFunctionStatementSyntax localFunction:
+                    return localFunction.Identifier.ValueText;
+                case ConstructorDeclarationSyntax ctor:
+                    return ctor.Identifier.ValueText;
+                case AccessorDeclarationSyntax accessor:
+                    return $"{(accessor.Parent?.Parent as PropertyDeclarationSyntax)?.Identifier.ValueText}.{accessor.Keyword.ValueText}";
             }
         }
+
+        return "<top-level>";
     }
 
     private static string FindRepoRoot()
