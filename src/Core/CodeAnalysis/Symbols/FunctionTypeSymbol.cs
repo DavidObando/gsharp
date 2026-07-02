@@ -238,7 +238,151 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 builder.Append(")->");
                 AppendIdentityKey(builder, fn.ReturnType);
                 break;
+
+            // Issue #1620: a composite type (List[T], []T, T?, (T, int32), ...)
+            // that structurally carries a type parameter must NOT fall through
+            // to the name-based default below — two distinct generic
+            // declarations reusing the same letter (`T`) for unrelated
+            // TypeParameterSymbol instances would render the identical name
+            // ("List<T>") and alias in the process-wide cache. Recurse
+            // structurally so every nested type parameter contributes its own
+            // `!tp<N>` identity id instead.
+            case not null when TypeSymbol.ContainsTypeParameter(type):
+                AppendStructuralKey(builder, type);
+                break;
             default:
+                builder.Append(type?.Name ?? "void");
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1620: builds a shape-plus-identity key for a composite type that
+    /// structurally contains a <see cref="TypeParameterSymbol"/>. Each
+    /// composite kind contributes a stable shape tag (its generic definition
+    /// identity for user/imported generics, or a fixed marker for built-in
+    /// wrappers) followed by its recursively-keyed components, so the overall
+    /// key is unique per distinct combination of shape and nested type
+    /// parameter identities while still collapsing structurally identical
+    /// signatures.
+    /// </summary>
+    private static void AppendStructuralKey(System.Text.StringBuilder builder, TypeSymbol type)
+    {
+        switch (type)
+        {
+            case NullableTypeSymbol n:
+                builder.Append("!nullable(");
+                AppendIdentityKey(builder, n.UnderlyingType);
+                builder.Append(')');
+                break;
+            case SliceTypeSymbol s:
+                builder.Append("!slice(");
+                AppendIdentityKey(builder, s.ElementType);
+                builder.Append(')');
+                break;
+            case ArrayTypeSymbol a:
+                builder.Append("!array(");
+                AppendIdentityKey(builder, a.ElementType);
+                builder.Append(')');
+                break;
+            case SequenceTypeSymbol seq:
+                builder.Append("!seq(");
+                AppendIdentityKey(builder, seq.ElementType);
+                builder.Append(')');
+                break;
+            case AsyncSequenceTypeSymbol aseq:
+                builder.Append("!aseq(");
+                AppendIdentityKey(builder, aseq.ElementType);
+                builder.Append(')');
+                break;
+            case MapTypeSymbol m:
+                builder.Append("!map(");
+                AppendIdentityKey(builder, m.KeyType);
+                builder.Append(',');
+                AppendIdentityKey(builder, m.ValueType);
+                builder.Append(')');
+                break;
+            case TupleTypeSymbol tup:
+                builder.Append("!tuple(");
+                for (var i = 0; i < tup.ElementTypes.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        builder.Append(',');
+                    }
+
+                    AppendIdentityKey(builder, tup.ElementTypes[i]);
+                }
+
+                builder.Append(')');
+                break;
+            case ByRefTypeSymbol br:
+                builder.Append("!byref(");
+                AppendIdentityKey(builder, br.PointeeType);
+                builder.Append(')');
+                break;
+            case StructSymbol st when !st.TypeArguments.IsDefaultOrEmpty:
+                builder.Append("!struct:").Append(st.Definition?.Name ?? st.Name).Append('(');
+                for (var i = 0; i < st.TypeArguments.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        builder.Append(',');
+                    }
+
+                    AppendIdentityKey(builder, st.TypeArguments[i]);
+                }
+
+                builder.Append(')');
+                break;
+            case InterfaceSymbol iface when !iface.TypeArguments.IsDefaultOrEmpty:
+                builder.Append("!iface:").Append(iface.Definition?.Name ?? iface.Name).Append('(');
+                for (var i = 0; i < iface.TypeArguments.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        builder.Append(',');
+                    }
+
+                    AppendIdentityKey(builder, iface.TypeArguments[i]);
+                }
+
+                builder.Append(')');
+                break;
+            case DelegateTypeSymbol del:
+                builder.Append("!delegate(");
+                for (var i = 0; i < del.Parameters.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        builder.Append(',');
+                    }
+
+                    AppendIdentityKey(builder, del.Parameters[i].Type);
+                }
+
+                builder.Append(")->");
+                AppendIdentityKey(builder, del.ReturnType);
+                break;
+            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
+                builder.Append("!imported:").Append(it.OpenDefinition?.FullName ?? it.Name).Append('(');
+                for (var i = 0; i < it.TypeArguments.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        builder.Append(',');
+                    }
+
+                    AppendIdentityKey(builder, it.TypeArguments[i]);
+                }
+
+                builder.Append(')');
+                break;
+            default:
+                // TypeSymbol.ContainsTypeParameter only descends into the
+                // composite kinds handled above (see AnyTypeParameter), so
+                // this default is unreachable in practice; keep the
+                // name-based fallback for safety.
                 builder.Append(type?.Name ?? "void");
                 break;
         }
