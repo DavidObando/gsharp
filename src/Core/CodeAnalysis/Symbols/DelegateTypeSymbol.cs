@@ -30,7 +30,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </remarks>
 public sealed class DelegateTypeSymbol : TypeSymbol
 {
-    private static readonly ConcurrentDictionary<(DelegateTypeSymbol Definition, string ArgsKey), DelegateTypeSymbol> ConstructedCache = new();
+    private static readonly ConcurrentDictionary<(DelegateTypeSymbol Definition, TypeArgsKey ArgsKey), DelegateTypeSymbol> ConstructedCache = new();
 
     private FunctionTypeSymbol equivalentFunctionType;
 
@@ -177,16 +177,7 @@ public sealed class DelegateTypeSymbol : TypeSymbol
         return ConstructedCache.GetOrAdd((definition, key), _ => CreateConstructed(definition, typeArguments));
     }
 
-    private static string BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments)
-    {
-        var parts = new string[typeArguments.Length];
-        for (var i = 0; i < typeArguments.Length; i++)
-        {
-            parts[i] = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(typeArguments[i]).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        }
-
-        return string.Join(",", parts);
-    }
+    private static TypeArgsKey BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments) => new(typeArguments);
 
     private static DelegateTypeSymbol CreateConstructed(DelegateTypeSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
     {

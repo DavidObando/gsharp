@@ -18,7 +18,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </summary>
 public sealed class InterfaceSymbol : TypeSymbol
 {
-    private static readonly ConcurrentDictionary<(InterfaceSymbol Def, string Args), InterfaceSymbol> ConstructedCache = new();
+    private static readonly ConcurrentDictionary<(InterfaceSymbol Def, TypeArgsKey Args), InterfaceSymbol> ConstructedCache = new();
 
     private ImmutableArray<FunctionSymbol> methods;
     private ImmutableArray<FunctionSymbol> staticMethods = ImmutableArray<FunctionSymbol>.Empty;
@@ -576,16 +576,7 @@ public sealed class InterfaceSymbol : TypeSymbol
         TryResolveMembers();
     }
 
-    private static string BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments)
-    {
-        var parts = new string[typeArguments.Length];
-        for (var i = 0; i < typeArguments.Length; i++)
-        {
-            parts[i] = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(typeArguments[i]).ToString();
-        }
-
-        return string.Join(",", parts);
-    }
+    private static TypeArgsKey BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments) => new(typeArguments);
 
     private static InterfaceSymbol CreateConstructed(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
     {
