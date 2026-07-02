@@ -56,7 +56,7 @@ public static class ReplHost
     }
 
     /// <summary>Resolves the build version from the assembly's informational version (set by Nerdbank GitVersioning).</summary>
-    private static string GetVersion()
+    internal static string GetVersion()
     {
         var info = Assembly.GetExecutingAssembly()
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
