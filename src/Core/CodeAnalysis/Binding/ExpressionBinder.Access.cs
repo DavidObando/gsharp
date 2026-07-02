@@ -4466,7 +4466,18 @@ internal sealed partial class ExpressionBinder
             return ByRefTypeSymbol.Get(TypeSymbol.FromClrType(propertyType.GetElementType()!));
         }
 
-        return TypeSymbol.FromClrType(propertyType);
+        // Issue #1627 (surfaced regression fix): honour the indexer's
+        // `[NullableAttribute]`/`[NullableContextAttribute]` metadata (and
+        // the #1354 "unannotated imported reference type defaults to
+        // nullable" rule) the same way every other property/parameter read
+        // does via `ClrNullability`. Without this, a plain
+        // `TypeSymbol.FromClrType(propertyType)` erased a genuinely nullable
+        // indexer element (e.g. `JsonNode?` for `JsonNode.this[string]`) to
+        // its non-nullable form; the classification fix at
+        // `Conversion.Classify` now correctly rejects an incoming `S?` value
+        // against that spuriously non-nullable target instead of silently
+        // dropping the `?` via the #521 leak.
+        return ClrNullability.GetPropertyTypeSymbol(closedIndexer);
     }
 
     // Issue #1301: resolve the element type of a closed indexer against the
