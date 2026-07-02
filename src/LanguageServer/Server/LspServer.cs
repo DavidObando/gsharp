@@ -1332,13 +1332,34 @@ public sealed class LspServer
         var fileDir = Path.GetDirectoryName(Path.GetFullPath(filePath));
         foreach (var project in this.workspaceState.Projects)
         {
-            if (fileDir != null && fileDir.StartsWith(project.ProjectDirectory, StringComparison.OrdinalIgnoreCase))
+            if (fileDir != null && IsWithinDirectory(fileDir, project.ProjectDirectory))
             {
                 return project;
             }
         }
 
         return this.workspaceState.GetOrCreateImplicitProject();
+    }
+
+    // A plain StartsWith check would let "/repo/Lib2" match project directory "/repo/Lib".
+    // Require the prefix match to land on a path-separator boundary (or be an exact match)
+    // so sibling directories that merely share a name prefix are never confused for one
+    // another. Comparison is ordinal-ignore-case, matching ProjectDirectory's own case
+    // handling, and accepts both '/' and '\' as separators for cross-platform paths.
+    private static bool IsWithinDirectory(string candidateDir, string projectDirectory)
+    {
+        if (string.Equals(candidateDir, projectDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!candidateDir.StartsWith(projectDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var boundaryChar = candidateDir[projectDirectory.Length];
+        return boundaryChar == Path.DirectorySeparatorChar || boundaryChar == Path.AltDirectorySeparatorChar;
     }
 
     private static GSharp.Core.CodeAnalysis.Compilation.Compilation TryGetCompilation(DocumentContent content)
