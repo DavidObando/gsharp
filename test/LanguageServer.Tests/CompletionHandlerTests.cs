@@ -11,6 +11,23 @@ namespace GSharp.LanguageServer.Tests;
 public class CompletionHandlerTests
 {
     [Fact]
+    public void ComputeCompletions_HonorsCancellation()
+    {
+        // Issue #1662: ComputeCompletions accepted a CancellationToken but never observed it,
+        // so a superseded completion request (fast typing) ran the whole global-scope walk to
+        // completion. An already-cancelled token must now short-circuit instead of returning a
+        // result.
+        const string source = "func add(a int32, b int32) int32 { return a + b }\nvar x = 1\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        using var cts = new System.Threading.CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<System.OperationCanceledException>(
+            () => CompletionComputer.ComputeCompletions(content, new Position(2, 0), cts.Token));
+    }
+
+    [Fact]
     public void ComputeCompletions_IncludesKeywords()
     {
         const string source = "let x = 42\n";

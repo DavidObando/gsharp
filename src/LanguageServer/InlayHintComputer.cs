@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.LanguageServer.Protocol;
@@ -15,7 +16,7 @@ namespace GSharp.LanguageServer;
 /// </summary>
 public static class InlayHintComputer
 {
-    public static IReadOnlyList<InlayHint> ComputeHints(DocumentContent content)
+    public static IReadOnlyList<InlayHint> ComputeHints(DocumentContent content, CancellationToken ct = default)
     {
         var tree = content.SyntaxTree;
         var text = tree.Text;
@@ -34,7 +35,10 @@ public static class InlayHintComputer
 
         foreach (var call in FindNodes<CallExpressionSyntax>(tree.Root))
         {
-            AddParameterHints(hints, call, compilation, text);
+            // Each call resolves a symbol (a potentially expensive cold-cache lookup);
+            // check between calls so a superseded request aborts mid-walk (issue #1662).
+            ct.ThrowIfCancellationRequested();
+            AddParameterHints(hints, call, compilation, text, ct);
         }
 
         return hints;
@@ -44,9 +48,10 @@ public static class InlayHintComputer
         List<InlayHint> hints,
         CallExpressionSyntax call,
         GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
-        GSharp.Core.CodeAnalysis.Text.SourceText text)
+        GSharp.Core.CodeAnalysis.Text.SourceText text,
+        CancellationToken ct = default)
     {
-        var symbol = SemanticLookup.ResolveSymbol(compilation, call.Identifier);
+        var symbol = SemanticLookup.ResolveSymbol(compilation, call.Identifier, ct);
         if (symbol is not FunctionSymbol func)
         {
             return;

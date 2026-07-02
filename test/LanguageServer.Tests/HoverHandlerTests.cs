@@ -13,6 +13,23 @@ namespace GSharp.LanguageServer.Tests;
 
 public class HoverHandlerTests
 {
+    [Fact]
+    public void ComputeHover_HonorsCancellation()
+    {
+        // Issue #1662: ComputeHover accepted a CancellationToken but never observed it. On a
+        // cold compilation the first ResolveSymbol call triggers the (potentially expensive)
+        // whole-workspace SemanticModel build; an already-cancelled token must short-circuit
+        // that build instead of returning a result.
+        const string source = "func add(a int32, b int32) int32 { return a + b }\nvar x = add(1, 2)\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        using var cts = new System.Threading.CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<System.OperationCanceledException>(
+            () => HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "add"), cts.Token));
+    }
+
     [Theory]
     [InlineData("let answer = 42\n", "answer", "let answer int32")]
     [InlineData("var count = 0\n", "count", "var count int32")]

@@ -8,6 +8,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -22,7 +23,7 @@ namespace GSharp.LanguageServer;
 
 public static class HoverComputer
 {
-    public static Hover ComputeHover(DocumentContent content, Position position)
+    public static Hover ComputeHover(DocumentContent content, Position position, CancellationToken ct = default)
     {
         var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
@@ -40,7 +41,7 @@ public static class HoverComputer
             return asyncHover;
         }
 
-        var symbol = SemanticLookup.ResolveSymbol(compilation, token);
+        var symbol = SemanticLookup.ResolveSymbol(compilation, token, ct);
 
         // When the token isn't directly in the semantic model (e.g. member access
         // on a user-defined type like person.Name), try resolving through the
@@ -962,35 +963,35 @@ internal sealed record HoverDocSection(string Heading, string Body);
 
 public static class ReferencesComputer
 {
-    public static IReadOnlyList<Location> ComputeReferences(DocumentUri uri, DocumentContent content, Position position, bool includeDeclaration)
+    public static IReadOnlyList<Location> ComputeReferences(DocumentUri uri, DocumentContent content, Position position, bool includeDeclaration, CancellationToken ct = default)
     {
         var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
-        var target = SemanticLookup.ResolveSymbol(compilation, token);
+        var target = SemanticLookup.ResolveSymbol(compilation, token, ct);
         if (target == null)
         {
             return Array.Empty<Location>();
         }
 
-        return SemanticLookup.FindReferences(compilation, target)
+        return SemanticLookup.FindReferences(compilation, target, ct)
             .Where(t => includeDeclaration || !IsDeclaration(compilation, t, target))
             .Select(t => new Location { Uri = GetDocumentUri(t, uri), Range = SemanticLookup.ToRange(t) })
             .ToList();
     }
 
-    public static IReadOnlyList<SyntaxToken> ComputeReferenceTokens(DocumentContent content, Position position, bool includeDeclaration)
+    public static IReadOnlyList<SyntaxToken> ComputeReferenceTokens(DocumentContent content, Position position, bool includeDeclaration, CancellationToken ct = default)
     {
         var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
-        var target = SemanticLookup.ResolveSymbol(compilation, token);
+        var target = SemanticLookup.ResolveSymbol(compilation, token, ct);
         if (target == null)
         {
             return Array.Empty<SyntaxToken>();
         }
 
-        return SemanticLookup.FindReferences(compilation, target)
+        return SemanticLookup.FindReferences(compilation, target, ct)
             .Where(t => includeDeclaration || !IsDeclaration(compilation, t, target))
             .ToList();
     }
@@ -1061,7 +1062,7 @@ public static class ReferencesComputer
 
 public static class RenameComputer
 {
-    public static WorkspaceEdit ComputeRename(DocumentUri uri, DocumentContent content, Position position, string newName)
+    public static WorkspaceEdit ComputeRename(DocumentUri uri, DocumentContent content, Position position, string newName, CancellationToken ct = default)
     {
         if (!SemanticLookup.IsValidIdentifier(newName))
         {
@@ -1071,13 +1072,13 @@ public static class RenameComputer
         var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
-        var target = SemanticLookup.ResolveSymbol(compilation, token);
+        var target = SemanticLookup.ResolveSymbol(compilation, token, ct);
         if (!SemanticLookup.CanRename(target))
         {
             return null;
         }
 
-        var references = SemanticLookup.FindReferences(compilation, target).ToList();
+        var references = SemanticLookup.FindReferences(compilation, target, ct).ToList();
         if (references.Count == 0)
         {
             return null;
@@ -1116,12 +1117,12 @@ public static class RenameComputer
 
 public static class DefinitionComputer
 {
-    public static Location ComputeDefinition(DocumentUri uri, DocumentContent content, Position position)
+    public static Location ComputeDefinition(DocumentUri uri, DocumentContent content, Position position, CancellationToken ct = default)
     {
         var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
-        var symbol = SemanticLookup.ResolveSymbol(compilation, token);
+        var symbol = SemanticLookup.ResolveSymbol(compilation, token, ct);
         var workspace = content.Workspace;
 
         // Imported symbols (cross-assembly): try sibling-G#-project source walk
@@ -1133,7 +1134,7 @@ public static class DefinitionComputer
 
         if (symbol != null)
         {
-            var declarationToken = FindDeclarationToken(compilation, symbol);
+            var declarationToken = FindDeclarationToken(compilation, symbol, ct);
             if (declarationToken != null)
             {
                 var targetUri = GetDocumentUri(declarationToken, uri);
@@ -1208,7 +1209,7 @@ public static class DefinitionComputer
         return fallback;
     }
 
-    private static SyntaxToken FindDeclarationToken(Compilation compilation, Symbol symbol)
+    private static SyntaxToken FindDeclarationToken(Compilation compilation, Symbol symbol, CancellationToken ct = default)
     {
         return symbol switch
         {
@@ -1218,8 +1219,8 @@ public static class DefinitionComputer
             EnumMemberSymbol m => FindEnumMemberToken(m),
             PropertySymbol p when p.Declaration != null => p.Declaration.Identifier,
             EventSymbol ev when ev.Declaration != null => ev.Declaration.Identifier,
-            FieldSymbol field => FindFieldToken(compilation, field),
-            VariableSymbol variable => FindVariableToken(compilation, variable),
+            FieldSymbol field => FindFieldToken(compilation, field, ct),
+            VariableSymbol variable => FindVariableToken(compilation, variable, ct),
             _ => null,
         };
     }
@@ -1236,10 +1237,11 @@ public static class DefinitionComputer
             .FirstOrDefault(id => id.Text == member.Name);
     }
 
-    private static SyntaxToken FindFieldToken(Compilation compilation, FieldSymbol field)
+    private static SyntaxToken FindFieldToken(Compilation compilation, FieldSymbol field, CancellationToken ct = default)
     {
         foreach (var tree in compilation.SyntaxTrees)
         {
+            ct.ThrowIfCancellationRequested();
             foreach (var structDecl in FindNodes<StructDeclarationSyntax>(tree.Root))
             {
                 foreach (var fieldDecl in structDecl.Fields)
@@ -1255,10 +1257,11 @@ public static class DefinitionComputer
         return null;
     }
 
-    private static SyntaxToken FindVariableToken(Compilation compilation, VariableSymbol variable)
+    private static SyntaxToken FindVariableToken(Compilation compilation, VariableSymbol variable, CancellationToken ct = default)
     {
         foreach (var tree in compilation.SyntaxTrees)
         {
+            ct.ThrowIfCancellationRequested();
             foreach (var varDecl in FindNodes<VariableDeclarationSyntax>(tree.Root))
             {
                 if (varDecl.Identifier.Text == variable.Name)
@@ -1315,13 +1318,16 @@ public static class DocumentSymbolComputer
     private const string AnonymousFieldName = "<field>";
     private const string AnonymousEnumMemberName = "<member>";
 
-    public static IReadOnlyList<SymbolInformationOrDocumentSymbol> ComputeDocumentSymbols(DocumentContent content)
+    public static IReadOnlyList<SymbolInformationOrDocumentSymbol> ComputeDocumentSymbols(DocumentContent content, CancellationToken ct = default)
     {
         var result = new List<SymbolInformationOrDocumentSymbol>();
         var text = content.SyntaxTree.Text;
 
         foreach (var member in content.SyntaxTree.Root.Members)
         {
+            // Each member spawns its own child-collecting loop below; check between
+            // top-level members so a superseded request aborts a large-file walk early.
+            ct.ThrowIfCancellationRequested();
             switch (member)
             {
                 case FunctionDeclarationSyntax func:
@@ -1405,7 +1411,7 @@ public static class DocumentSymbolComputer
 
 public static class SignatureHelpComputer
 {
-    public static SignatureHelp ComputeSignatureHelp(DocumentContent content, Position position)
+    public static SignatureHelp ComputeSignatureHelp(DocumentContent content, Position position, CancellationToken ct = default)
     {
         var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
@@ -1448,7 +1454,7 @@ public static class SignatureHelpComputer
 
         // Find the identifier token just before the paren
         var funcToken = SemanticLookup.FindTokenAt(content.SyntaxTree, funcNameEnd.Value - 1);
-        var symbol = SemanticLookup.ResolveSymbol(compilation, funcToken);
+        var symbol = SemanticLookup.ResolveSymbol(compilation, funcToken, ct);
         if (symbol is not FunctionSymbol function)
         {
             return null;
@@ -1483,7 +1489,7 @@ public static class SignatureHelpComputer
 
 public static class CompletionComputer
 {
-    public static IReadOnlyList<CompletionItem> ComputeCompletions(DocumentContent content, Position position)
+    public static IReadOnlyList<CompletionItem> ComputeCompletions(DocumentContent content, Position position, CancellationToken ct = default)
     {
         var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
@@ -1538,6 +1544,7 @@ public static class CompletionComputer
         // Add global symbols (functions, variables, types)
         foreach (var function in compilation.GlobalScope.Functions)
         {
+            ct.ThrowIfCancellationRequested();
             if (seen.Add(function.Name))
             {
                 items.Add(new CompletionItem
@@ -1551,6 +1558,7 @@ public static class CompletionComputer
 
         foreach (var variable in compilation.GlobalScope.Variables)
         {
+            ct.ThrowIfCancellationRequested();
             if (seen.Add(variable.Name))
             {
                 items.Add(new CompletionItem
@@ -1564,6 +1572,7 @@ public static class CompletionComputer
 
         foreach (var structSymbol in compilation.GlobalScope.Structs)
         {
+            ct.ThrowIfCancellationRequested();
             if (seen.Add(structSymbol.Name))
             {
                 items.Add(new CompletionItem

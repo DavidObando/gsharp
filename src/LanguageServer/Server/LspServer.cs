@@ -292,7 +292,7 @@ public sealed class LspServer
     public Task<Hover> HoverAsync(HoverParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => HoverComputer.ComputeHover(content, request.Position),
+            (content, ct) => HoverComputer.ComputeHover(content, request.Position, ct),
             null,
             cancellationToken);
 
@@ -300,7 +300,7 @@ public sealed class LspServer
     public Task<Location> DefinitionAsync(DefinitionParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => DefinitionComputer.ComputeDefinition(request.TextDocument.Uri, content, request.Position),
+            (content, ct) => DefinitionComputer.ComputeDefinition(request.TextDocument.Uri, content, request.Position, ct),
             null,
             cancellationToken);
 
@@ -308,7 +308,7 @@ public sealed class LspServer
     public Task<Location[]> ReferencesAsync(ReferenceParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => ReferencesComputer.ComputeReferences(request.TextDocument.Uri, content, request.Position, request.Context?.IncludeDeclaration ?? false).ToArray(),
+            (content, ct) => ReferencesComputer.ComputeReferences(request.TextDocument.Uri, content, request.Position, request.Context?.IncludeDeclaration ?? false, ct).ToArray(),
             Array.Empty<Location>(),
             cancellationToken);
 
@@ -318,7 +318,7 @@ public sealed class LspServer
             request.TextDocument,
             (content, ct) =>
             {
-                var tokens = ReferencesComputer.ComputeReferenceTokens(content, request.Position, includeDeclaration: true);
+                var tokens = ReferencesComputer.ComputeReferenceTokens(content, request.Position, includeDeclaration: true, ct);
                 return tokens.Select(t => new DocumentHighlight
                 {
                     Range = SemanticLookup.ToRange(t),
@@ -332,7 +332,7 @@ public sealed class LspServer
     public Task<SymbolInformationOrDocumentSymbol[]> DocumentSymbolAsync(DocumentSymbolParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => DocumentSymbolComputer.ComputeDocumentSymbols(content).ToArray(),
+            (content, ct) => DocumentSymbolComputer.ComputeDocumentSymbols(content, ct).ToArray(),
             Array.Empty<SymbolInformationOrDocumentSymbol>(),
             cancellationToken);
 
@@ -358,7 +358,7 @@ public sealed class LspServer
     public Task<CompletionList> CompletionAsync(CompletionParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => new CompletionList(CompletionComputer.ComputeCompletions(content, request.Position)),
+            (content, ct) => new CompletionList(CompletionComputer.ComputeCompletions(content, request.Position, ct)),
             new CompletionList(),
             cancellationToken);
 
@@ -366,7 +366,7 @@ public sealed class LspServer
     public Task<SignatureHelp> SignatureHelpAsync(SignatureHelpParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => SignatureHelpComputer.ComputeSignatureHelp(content, request.Position),
+            (content, ct) => SignatureHelpComputer.ComputeSignatureHelp(content, request.Position, ct),
             null,
             cancellationToken);
 
@@ -374,7 +374,7 @@ public sealed class LspServer
     public Task<WorkspaceEdit> RenameAsync(RenameParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => RenameComputer.ComputeRename(request.TextDocument.Uri, content, request.Position, request.NewName),
+            (content, ct) => RenameComputer.ComputeRename(request.TextDocument.Uri, content, request.Position, request.NewName, ct),
             null,
             cancellationToken);
 
@@ -382,7 +382,7 @@ public sealed class LspServer
     public Task<Range> PrepareRenameAsync(PrepareRenameParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => this.ComputePrepareRename(content, request),
+            (content, ct) => this.ComputePrepareRename(content, request, ct),
             null,
             cancellationToken);
 
@@ -390,7 +390,7 @@ public sealed class LspServer
     public Task<CommandOrCodeActionContainer> CodeActionAsync(CodeActionParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => CodeActionComputer.ComputeCodeActions(request.TextDocument.Uri, content, request.Range),
+            (content, ct) => CodeActionComputer.ComputeCodeActions(request.TextDocument.Uri, content, request.Range, ct),
             new CommandOrCodeActionContainer(),
             cancellationToken);
 
@@ -465,7 +465,7 @@ public sealed class LspServer
     public Task<InlayHint[]> InlayHintAsync(InlayHintParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => InlayHintComputer.ComputeHints(content).ToArray(),
+            (content, ct) => InlayHintComputer.ComputeHints(content, ct).ToArray(),
             Array.Empty<InlayHint>(),
             cancellationToken);
 
@@ -473,7 +473,7 @@ public sealed class LspServer
     public Task<FoldingRange[]> FoldingRangeAsync(FoldingRangeParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => FoldingComputer.ComputeFoldings(content).ToArray(),
+            (content, ct) => FoldingComputer.ComputeFoldings(content, ct).ToArray(),
             Array.Empty<FoldingRange>(),
             cancellationToken);
 
@@ -483,7 +483,13 @@ public sealed class LspServer
             request.TextDocument,
             (content, ct) => request.Positions == null
                 ? Array.Empty<SelectionRange>()
-                : request.Positions.Select(p => SelectionRangeComputer.ComputeSelectionRange(content, p)).ToArray(),
+                : request.Positions.Select(p =>
+                {
+                    // One position per requested caret/selection; check between them so a
+                    // multi-cursor request doesn't run every position after cancellation.
+                    ct.ThrowIfCancellationRequested();
+                    return SelectionRangeComputer.ComputeSelectionRange(content, p);
+                }).ToArray(),
             Array.Empty<SelectionRange>(),
             cancellationToken);
 
@@ -532,7 +538,7 @@ public sealed class LspServer
     public Task<Location[]> ImplementationAsync(ImplementationParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => this.ComputeImplementation(content, request),
+            (content, ct) => this.ComputeImplementation(content, request, ct),
             Array.Empty<Location>(),
             cancellationToken);
 
@@ -540,7 +546,7 @@ public sealed class LspServer
     public Task<Location[]> TypeDefinitionAsync(TypeDefinitionParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => this.ComputeTypeDefinition(content, request),
+            (content, ct) => this.ComputeTypeDefinition(content, request, ct),
             Array.Empty<Location>(),
             cancellationToken);
 
@@ -548,7 +554,7 @@ public sealed class LspServer
     public Task<LinkedEditingRanges> LinkedEditingRangeAsync(LinkedEditingRangeParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => this.ComputeLinkedEditingRanges(content, request),
+            (content, ct) => this.ComputeLinkedEditingRanges(content, request, ct),
             null,
             cancellationToken);
 
@@ -599,10 +605,14 @@ public sealed class LspServer
     // Roslyn likewise dispatches non-mutating work via Task.Run "to enforce parallelizability".
     // CancellationToken is honored end-to-end: StreamJsonRpc maps the LSP $/cancelRequest
     // notification onto this token, it is checked immediately before compute() runs below,
-    // and it is threaded into per-document computers with expensive per-item loops
-    // (CodeLensComputer, SemanticTokensComputer) so a superseded hover/codeLens/semanticTokens
-    // request aborts mid-loop instead of running the whole (potentially per-member
-    // FindReferences or per-token) walk to completion (issue #1662).
+    // and it is threaded all the way into every per-document computer's expensive per-item
+    // loops (hover/definition/references/rename/completion/documentSymbol/codeLens/
+    // semanticTokens/inlayHint/folding/etc., and the shared SemanticLookup model/reference-index
+    // builds they all route through) so a superseded request aborts mid-loop instead of running
+    // the whole (potentially per-member FindReferences, per-token, or whole-workspace model
+    // build) walk to completion (issue #1662). Note: textDocument/semanticTokens/range
+    // recomputes the whole document instead of just the requested range — a separate,
+    // pre-existing inefficiency this change does not address.
     private async Task<T> ReadDocumentAsync<T>(
         TextDocumentIdentifier identifier,
         Func<DocumentContent, CancellationToken, T> compute,
@@ -1112,7 +1122,7 @@ public sealed class LspServer
         return options.InsertSpaces ? new string(' ', options.TabSize) : "\t";
     }
 
-    private Range ComputePrepareRename(DocumentContent content, PrepareRenameParams request)
+    private Range ComputePrepareRename(DocumentContent content, PrepareRenameParams request, CancellationToken ct = default)
     {
         var offset = SemanticLookup.ToOffset(content, request.Position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
@@ -1127,11 +1137,11 @@ public sealed class LspServer
             return null;
         }
 
-        var symbol = SemanticLookup.ResolveSymbol(compilation, token);
+        var symbol = SemanticLookup.ResolveSymbol(compilation, token, ct);
         return SemanticLookup.CanRename(symbol) ? SemanticLookup.ToRange(token) : null;
     }
 
-    private Location[] ComputeImplementation(DocumentContent content, ImplementationParams request)
+    private Location[] ComputeImplementation(DocumentContent content, ImplementationParams request, CancellationToken ct = default)
     {
         var offset = SemanticLookup.ToOffset(content, request.Position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
@@ -1146,7 +1156,7 @@ public sealed class LspServer
             return Array.Empty<Location>();
         }
 
-        var symbol = SemanticLookup.ResolveSymbol(compilation, token);
+        var symbol = SemanticLookup.ResolveSymbol(compilation, token, ct);
         if (symbol is not InterfaceSymbol iface)
         {
             return Array.Empty<Location>();
@@ -1155,6 +1165,7 @@ public sealed class LspServer
         var locations = new List<Location>();
         foreach (var structSym in compilation.GlobalScope.Structs)
         {
+            ct.ThrowIfCancellationRequested();
             if (structSym.Interfaces.Contains(iface) && structSym.Declaration != null)
             {
                 locations.Add(new Location
@@ -1168,7 +1179,7 @@ public sealed class LspServer
         return locations.ToArray();
     }
 
-    private Location[] ComputeTypeDefinition(DocumentContent content, TypeDefinitionParams request)
+    private Location[] ComputeTypeDefinition(DocumentContent content, TypeDefinitionParams request, CancellationToken ct = default)
     {
         var offset = SemanticLookup.ToOffset(content, request.Position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
@@ -1183,7 +1194,7 @@ public sealed class LspServer
             return Array.Empty<Location>();
         }
 
-        var symbol = SemanticLookup.ResolveSymbol(compilation, token);
+        var symbol = SemanticLookup.ResolveSymbol(compilation, token, ct);
         TypeSymbol typeSymbol = symbol switch
         {
             ParameterSymbol ps => ps.Type,
@@ -1197,7 +1208,7 @@ public sealed class LspServer
             return Array.Empty<Location>();
         }
 
-        var firstRef = SemanticLookup.FindReferences(compilation, typeSymbol).FirstOrDefault();
+        var firstRef = SemanticLookup.FindReferences(compilation, typeSymbol, ct).FirstOrDefault();
         if (firstRef == null)
         {
             return Array.Empty<Location>();
@@ -1213,7 +1224,7 @@ public sealed class LspServer
         };
     }
 
-    private LinkedEditingRanges ComputeLinkedEditingRanges(DocumentContent content, LinkedEditingRangeParams request)
+    private LinkedEditingRanges ComputeLinkedEditingRanges(DocumentContent content, LinkedEditingRangeParams request, CancellationToken ct = default)
     {
         var tree = content.SyntaxTree;
         var offset = SemanticLookup.ToOffset(content, request.Position);
@@ -1229,13 +1240,13 @@ public sealed class LspServer
             return null;
         }
 
-        var symbol = SemanticLookup.ResolveSymbol(compilation, token);
+        var symbol = SemanticLookup.ResolveSymbol(compilation, token, ct);
         if (!SemanticLookup.CanRename(symbol))
         {
             return null;
         }
 
-        var references = SemanticLookup.FindReferences(compilation, symbol).ToList();
+        var references = SemanticLookup.FindReferences(compilation, symbol, ct).ToList();
         if (references.Count == 0)
         {
             return null;

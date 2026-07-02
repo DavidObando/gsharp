@@ -48,20 +48,20 @@ public static class CodeLensComputer
             switch (member)
             {
                 case FunctionDeclarationSyntax func:
-                    var funcSymbol = SemanticLookup.ResolveSymbol(compilation, func.Identifier);
+                    var funcSymbol = SemanticLookup.ResolveSymbol(compilation, func.Identifier, ct);
                     if (funcSymbol != null)
                     {
-                        var refCount = SemanticLookup.FindReferences(compilation, funcSymbol).Count() - 1; // exclude declaration
+                        var refCount = SemanticLookup.FindReferences(compilation, funcSymbol, ct).Count() - 1; // exclude declaration
                         var range = SemanticLookup.ToRange(func.Identifier);
                         lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
 
                     break;
                 case StructDeclarationSyntax structDecl:
-                    var structSymbol = SemanticLookup.ResolveSymbol(compilation, structDecl.Identifier);
+                    var structSymbol = SemanticLookup.ResolveSymbol(compilation, structDecl.Identifier, ct);
                     if (structSymbol != null)
                     {
-                        var refCount = SemanticLookup.FindReferences(compilation, structSymbol).Count() - 1;
+                        var refCount = SemanticLookup.FindReferences(compilation, structSymbol, ct).Count() - 1;
                         var range = SemanticLookup.ToRange(structDecl.Identifier);
                         lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
@@ -81,10 +81,10 @@ public static class CodeLensComputer
 
                     break;
                 case EnumDeclarationSyntax enumDecl:
-                    var enumSymbol = SemanticLookup.ResolveSymbol(compilation, enumDecl.Identifier);
+                    var enumSymbol = SemanticLookup.ResolveSymbol(compilation, enumDecl.Identifier, ct);
                     if (enumSymbol != null)
                     {
-                        var refCount = SemanticLookup.FindReferences(compilation, enumSymbol).Count() - 1;
+                        var refCount = SemanticLookup.FindReferences(compilation, enumSymbol, ct).Count() - 1;
                         var range = SemanticLookup.ToRange(enumDecl.Identifier);
                         lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
@@ -92,10 +92,10 @@ public static class CodeLensComputer
                     AddMemberLenses(compilation, lenses, enumDecl.Members.Select(m => m.Identifier), uri, ct);
                     break;
                 case InterfaceDeclarationSyntax ifaceDecl:
-                    var ifaceSymbol = SemanticLookup.ResolveSymbol(compilation, ifaceDecl.Identifier);
+                    var ifaceSymbol = SemanticLookup.ResolveSymbol(compilation, ifaceDecl.Identifier, ct);
                     if (ifaceSymbol != null)
                     {
-                        var refCount = SemanticLookup.FindReferences(compilation, ifaceSymbol).Count() - 1;
+                        var refCount = SemanticLookup.FindReferences(compilation, ifaceSymbol, ct).Count() - 1;
                         var range = SemanticLookup.ToRange(ifaceDecl.Identifier);
                         lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
@@ -105,10 +105,10 @@ public static class CodeLensComputer
                     AddMemberLenses(compilation, lenses, ifaceDecl.Events.Select(e => e.Identifier), uri, ct);
                     break;
                 case TypeAliasDeclarationSyntax typeAlias:
-                    var aliasSymbol = SemanticLookup.ResolveSymbol(compilation, typeAlias.Identifier);
+                    var aliasSymbol = SemanticLookup.ResolveSymbol(compilation, typeAlias.Identifier, ct);
                     if (aliasSymbol != null)
                     {
-                        var refCount = SemanticLookup.FindReferences(compilation, aliasSymbol).Count() - 1;
+                        var refCount = SemanticLookup.FindReferences(compilation, aliasSymbol, ct).Count() - 1;
                         var range = SemanticLookup.ToRange(typeAlias.Identifier);
                         lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
@@ -117,10 +117,10 @@ public static class CodeLensComputer
                 case GlobalStatementSyntax globalStatement:
                     if (globalStatement.Statement is VariableDeclarationSyntax varDecl)
                     {
-                        var varSymbol = SemanticLookup.ResolveSymbol(compilation, varDecl.Identifier);
+                        var varSymbol = SemanticLookup.ResolveSymbol(compilation, varDecl.Identifier, ct);
                         if (varSymbol != null)
                         {
-                            var refCount = SemanticLookup.FindReferences(compilation, varSymbol).Count() - 1;
+                            var refCount = SemanticLookup.FindReferences(compilation, varSymbol, ct).Count() - 1;
                             var range = SemanticLookup.ToRange(varDecl.Identifier);
                             lenses.Add(CreateReferenceLens(range, refCount, uri));
                         }
@@ -148,10 +148,10 @@ public static class CodeLensComputer
                 continue;
             }
 
-            var symbol = SemanticLookup.ResolveSymbol(compilation, identifier);
+            var symbol = SemanticLookup.ResolveSymbol(compilation, identifier, ct);
             if (symbol != null)
             {
-                var refCount = SemanticLookup.FindReferences(compilation, symbol).Count() - 1;
+                var refCount = SemanticLookup.FindReferences(compilation, symbol, ct).Count() - 1;
                 var range = SemanticLookup.ToRange(identifier);
                 lenses.Add(CreateReferenceLens(range, refCount, uri));
             }

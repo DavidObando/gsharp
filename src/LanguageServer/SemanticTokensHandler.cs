@@ -98,7 +98,7 @@ public static class SemanticTokensComputer
             // while the hole expressions are tokenized as real code (identifiers, numbers).
             if (token.Kind == SyntaxKind.InterpolatedStringToken)
             {
-                EmitInterpolatedStringTokens(builder, tree, text, token.Span, compilation, declarationPositions);
+                EmitInterpolatedStringTokens(builder, tree, text, token.Span, compilation, declarationPositions, ct);
                 continue;
             }
 
@@ -114,7 +114,7 @@ public static class SemanticTokensComputer
                 }
             }
 
-            var classification = ClassifyToken(resolveToken, compilation, declarationPositions);
+            var classification = ClassifyToken(resolveToken, compilation, declarationPositions, ct);
             if (classification == null)
             {
                 continue;
@@ -134,7 +134,8 @@ public static class SemanticTokensComputer
         GSharp.Core.CodeAnalysis.Text.SourceText text,
         GSharp.Core.CodeAnalysis.Text.TextSpan literalSpan,
         GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
-        HashSet<int> declarationPositions)
+        HashSet<int> declarationPositions,
+        CancellationToken ct = default)
     {
         var node = FindInterpolatedNode(tree.Root, literalSpan.Start);
 
@@ -177,7 +178,7 @@ public static class SemanticTokensComputer
                         resolveToken = SemanticLookup.FindTokenAt(tree, leaf.Span.Start) ?? leaf;
                     }
 
-                    var classification = ClassifyToken(resolveToken, compilation, declarationPositions);
+                    var classification = ClassifyToken(resolveToken, compilation, declarationPositions, ct);
                     if (classification == null)
                     {
                         continue;
@@ -355,7 +356,8 @@ public static class SemanticTokensComputer
     private static (SemanticTokenType Type, SemanticTokenModifier[] Modifiers)? ClassifyToken(
         SyntaxToken token,
         GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
-        HashSet<int> declarationPositions)
+        HashSet<int> declarationPositions,
+        CancellationToken ct = default)
     {
         // Comments
         if (token.Kind == SyntaxKind.CommentToken)
@@ -393,7 +395,7 @@ public static class SemanticTokensComputer
         // Identifiers — resolve via semantic model
         if (token.Kind == SyntaxKind.IdentifierToken && compilation != null)
         {
-            return ClassifyIdentifier(token, compilation, declarationPositions);
+            return ClassifyIdentifier(token, compilation, declarationPositions, ct);
         }
 
         return null;
@@ -402,9 +404,10 @@ public static class SemanticTokensComputer
     private static (SemanticTokenType Type, SemanticTokenModifier[] Modifiers)? ClassifyIdentifier(
         SyntaxToken token,
         GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
-        HashSet<int> declarationPositions)
+        HashSet<int> declarationPositions,
+        CancellationToken ct = default)
     {
-        var symbol = SemanticLookup.ResolveSymbol(compilation, token);
+        var symbol = SemanticLookup.ResolveSymbol(compilation, token, ct);
         if (symbol == null)
         {
             return null;
