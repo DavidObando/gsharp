@@ -48,7 +48,7 @@ The server capability factory enables the following:
 | Document highlights | `textDocument/documentHighlight`. |
 | Document symbols | `textDocument/documentSymbol`. |
 | Workspace symbols | `workspace/symbol`. |
-| Formatting | `textDocument/formatting`, `textDocument/rangeFormatting`, and `textDocument/onTypeFormatting`. |
+| Formatting | `textDocument/formatting` (whole-document only). Range and on-type formatting were intentionally dropped (#1660); the server no longer advertises those capabilities and handles the corresponding requests as safe no-ops. |
 | Folding ranges | `textDocument/foldingRange`. |
 | Selection ranges | `textDocument/selectionRange`. |
 | Linked editing | `textDocument/linkedEditingRange`. |
