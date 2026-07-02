@@ -27,18 +27,17 @@ namespace GSharp.Compiler.Tests.Emit;
 /// and/or throwing at runtime — and both now verify and invoke the correct
 /// method. Each test uses UNIQUE type/delegate names because the in-process
 /// <c>FunctionTypeSymbol</c> cache is name-keyed.
+///
+/// <para>The interface-receiver case below was previously blocked by issue
+/// #1716 — a separate, pre-existing MethodDef row-reservation ordering bug —
+/// and skipped until that was fixed. See
+/// <see cref="Issue1716DelegateOverInterfaceRowReservationEmitTests"/> for a
+/// standalone regression test covering the general row-reservation fix
+/// itself.</para>
 /// </summary>
 public class Issue1617NamedDelegateMethodGroupEmitTests
 {
-    [Fact(Skip = "Blocked by a separate, pre-existing emitter scheduling bug (GS9998): a "
-        + "user-declared interface with methods cannot currently coexist with a named "
-        + "delegate type in the same compilation — the interface's abstract MethodDef rows "
-        + "are emitted after the delegate's reserved .ctor row, tripping the delegate "
-        + "row-reservation invariant. This is orthogonal to issue #1617 (the drift-3 code "
-        + "fix — porting the #1397 interface-receiver ldvirtftn handling into "
-        + "EmitMethodGroupToNamedDelegate — is correct and faithful to its EmitMethodGroup "
-        + "twin, but cannot be exercised end-to-end until GS9998 is fixed). The generic-"
-        + "receiver case below covers the sibling #1467 token-resolution port end-to-end.")]
+    [Fact]
     public void EndToEnd_NamedDelegate_MethodGroupOverInterfaceReceiver_Runs()
     {
         const string source = """
