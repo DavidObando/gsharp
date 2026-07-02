@@ -75,7 +75,19 @@ public sealed class Lexer
         switch (Current)
         {
             case '\0':
-                kind = SyntaxKind.EndOfFileToken;
+                if (position >= end)
+                {
+                    kind = SyntaxKind.EndOfFileToken;
+                }
+                else
+                {
+                    // Embedded NUL mid-file: distinct from true end-of-file (position >= end).
+                    // Report and skip so the rest of the file still lexes (issue #1608).
+                    var location = new TextLocation(this.text, new TextSpan(position, 1));
+                    Diagnostics.ReportBadCharacter(location, Current);
+                    position++;
+                }
+
                 break;
             case '+':
                 position++;
