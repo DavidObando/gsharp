@@ -37,6 +37,15 @@ public class Parser
     // enough.
     private const int UncheckedRecursionDepth = 64;
 
+    // Issue #1607: shared bound for speculative "does this look like X"
+    // token-lookahead scans (matching-bracket / matching-brace searches).
+    // A well-formed construct always resolves within a few dozen tokens;
+    // this cap only fires on malformed/unbalanced input, turning an O(n)
+    // scan-to-EOF (which is O(n^2) in aggregate since these run per
+    // position) into an O(1) bailout. Mirrors the existing maxScan used by
+    // LooksLikeLambdaStart / LooksLikeArrowFunctionTypeClauseStart.
+    private const int LookaheadMaxScan = 4096;
+
     private readonly SyntaxTree syntaxTree;
 
     // ADR-0078 / issue #725: when a single source-level declaration desugars
@@ -5979,7 +5988,8 @@ public class Parser
         var depth = 0;
         var bracketDepth = 0;
         var braceDepth = 0;
-        for (var i = parenOffset; i < tokens.Length; i++)
+        var scanBound = Math.Min(tokens.Length, parenOffset + LookaheadMaxScan);
+        for (var i = parenOffset; i < scanBound; i++)
         {
             var t = Peek(i);
             switch (t.Kind)
@@ -8192,7 +8202,7 @@ public class Parser
     {
         offset = 0;
         var depth = 0;
-        for (var i = 1; ; i++)
+        for (var i = 1; i <= LookaheadMaxScan; i++)
         {
             var kind = Peek(i).Kind;
             if (kind == SyntaxKind.EndOfFileToken)
@@ -8219,6 +8229,8 @@ public class Parser
                 }
             }
         }
+
+        return false;
     }
 
     private ExpressionSyntax ParseNameOrCallExpression()
@@ -8780,7 +8792,7 @@ public class Parser
         }
 
         var depth = 0;
-        for (var i = 1; ; i++)
+        for (var i = 1; i <= LookaheadMaxScan; i++)
         {
             var kind = Peek(i).Kind;
             if (kind == SyntaxKind.EndOfFileToken)
@@ -8813,6 +8825,8 @@ public class Parser
                 return true;
             }
         }
+
+        return false;
     }
 
     private static bool IsLiteralStartToken(SyntaxKind kind)
@@ -9360,7 +9374,8 @@ public class Parser
         }
 
         var depth = 0;
-        for (var i = openParenOffset; ; i++)
+        var scanBound = openParenOffset + LookaheadMaxScan;
+        for (var i = openParenOffset; i <= scanBound; i++)
         {
             var kind = Peek(i).Kind;
             if (kind == SyntaxKind.EndOfFileToken)
@@ -9386,6 +9401,8 @@ public class Parser
                 }
             }
         }
+
+        return false;
     }
 
     private SeparatedSyntaxList<ExpressionSyntax> ParseArguments()
@@ -9841,6 +9858,11 @@ public class Parser
             var j = i + 1;
             while (true)
             {
+                if (j > LookaheadMaxScan)
+                {
+                    return false;
+                }
+
                 var k = Peek(j).Kind;
                 if (k == SyntaxKind.EndOfFileToken)
                 {
@@ -9883,6 +9905,11 @@ public class Parser
             var braceDepth = 0;
             while (true)
             {
+                if (j > LookaheadMaxScan)
+                {
+                    return false;
+                }
+
                 var k = Peek(j).Kind;
                 if (k == SyntaxKind.EndOfFileToken)
                 {
