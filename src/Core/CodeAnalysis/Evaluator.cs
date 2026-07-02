@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -18,14 +19,43 @@ namespace GSharp.Core.CodeAnalysis;
 /// <summary>
 /// Program evaluator.
 /// </summary>
+/// <remarks>
+/// Issue #1651: this type owns a <see cref="ThreadLocal{T}"/> (<c>executionState</c>)
+/// but is intentionally not <see cref="IDisposable"/>. Fire-and-forget
+/// <c>go</c> tasks (ADR-0022) may still be running on background threads
+/// after <see cref="Evaluate"/> returns, so eagerly disposing the
+/// ThreadLocal here would risk an <see cref="ObjectDisposedException"/> on
+/// one of those threads. The per-thread slots are reclaimed once every
+/// thread that touched them exits; CA1001 is suppressed for that
+/// deliberate trade-off.
+/// </remarks>
+#pragma warning disable CA1001 // Types that own disposable fields should be disposable
 public sealed class Evaluator
+#pragma warning restore CA1001
 {
     private readonly BoundProgram program;
     private readonly Dictionary<VariableSymbol, object> globals;
-    private readonly Stack<Dictionary<VariableSymbol, object>> locals = new Stack<Dictionary<VariableSymbol, object>>();
-    private readonly object goLock = new object();
-    private readonly Stack<ScopeFrame> scopeFrames = new Stack<ScopeFrame>();
-    private readonly Stack<System.Collections.IList> iteratorSinks = new Stack<System.Collections.IList>();
+
+    // Issue #1651: everything below this point used to be an ordinary
+    // instance field. That is correct only because the interpreter was
+    // assumed single-threaded, but `go`/`scope` spawn the goroutine body on
+    // a ThreadPool thread via Task.Run while the spawning thread keeps
+    // running the enclosing block concurrently. Sharing the locals stack
+    // and control-transfer flags (isReturning/pendingGotoLabel/lastValue)
+    // between those threads corrupts frame resolution and lets a `return`
+    // inside a goroutine make an unrelated caller's function return early.
+    // `executionState` gives every thread (main thread and every goroutine)
+    // its own copy of that per-execution state, held in a ThreadLocal. Only
+    // true interpreter globals (globals/static fields/iterator cache/random)
+    // remain shared, guarded by <see cref="globalsLock"/>.
+    private readonly ThreadLocal<ExecutionState> executionState = new(() => new ExecutionState());
+
+    // Guards every read/write of state that is genuinely shared across
+    // goroutines: global variables, struct/interface static fields, the
+    // iterator-function cache, and the lazily-created Random instance.
+    // None of the .NET collections backing them are thread-safe.
+    private readonly object globalsLock = new object();
+
     private readonly Dictionary<Symbols.FunctionSymbol, bool> iteratorFunctionCache = [];
     private readonly Dictionary<(Symbols.StructSymbol, Symbols.FieldSymbol), object> staticFields = [];
 
@@ -36,7 +66,29 @@ public sealed class Evaluator
     private readonly Dictionary<(Symbols.InterfaceSymbol, Symbols.FieldSymbol), object> interfaceStaticFields = [];
     private Random random;
 
-    private object lastValue;
+    /// <summary>
+    /// Initializes a new instance of the <see cref="Evaluator"/> class.
+    /// </summary>
+    /// <param name="program">The program.</param>
+    /// <param name="variables">The variables.</param>
+    public Evaluator(BoundProgram program, Dictionary<VariableSymbol, object> variables)
+    {
+        this.program = program;
+        globals = variables;
+        Locals.Push(new Dictionary<VariableSymbol, object>());
+    }
+
+    private Stack<Dictionary<VariableSymbol, object>> Locals => executionState.Value.Locals;
+
+    private Stack<ScopeFrame> ScopeFrames => executionState.Value.ScopeFrames;
+
+    private Stack<System.Collections.IList> IteratorSinks => executionState.Value.IteratorSinks;
+
+    private object LastValue
+    {
+        get => executionState.Value.LastValue;
+        set => executionState.Value.LastValue = value;
+    }
 
     // Issue #738: control-transfer state for nested blocks (switch arms,
     // try/catch/finally bodies, scope bodies, select cases, await-for-range
@@ -47,20 +99,18 @@ public sealed class Evaluator
     // fields below let an inner loop signal an in-flight control transfer to
     // outer loops, which propagate it until it either resolves at the right
     // label or unwinds to a function boundary (where `EvaluateFunctionBody`
-    // consumes it).
-    private bool isReturning;
-    private BoundLabel pendingGotoLabel;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="Evaluator"/> class.
-    /// </summary>
-    /// <param name="program">The program.</param>
-    /// <param name="variables">The variables.</param>
-    public Evaluator(BoundProgram program, Dictionary<VariableSymbol, object> variables)
+    // consumes it). Issue #1651: per-thread via <see cref="executionState"/>
+    // so a return inside a goroutine cannot flip the caller's flag.
+    private bool IsReturning
     {
-        this.program = program;
-        globals = variables;
-        locals.Push(new Dictionary<VariableSymbol, object>());
+        get => executionState.Value.IsReturning;
+        set => executionState.Value.IsReturning = value;
+    }
+
+    private BoundLabel PendingGotoLabel
+    {
+        get => executionState.Value.PendingGotoLabel;
+        set => executionState.Value.PendingGotoLabel = value;
     }
 
     /// <summary>
@@ -70,6 +120,93 @@ public sealed class Evaluator
     public object Evaluate()
     {
         return EvaluateFunctionBody(program.Statement);
+    }
+
+    // Issue #1651: goroutines run with their own locals/control-transfer
+    // state (see EvaluateGoStatement), but globals, struct/interface static
+    // fields, the iterator-function cache and the lazily-created Random
+    // instance are genuinely shared across every thread. None of the
+    // backing collections are thread-safe, so every access is funneled
+    // through these helpers, guarded by globalsLock.
+    private object GetGlobal(VariableSymbol variable)
+    {
+        lock (globalsLock)
+        {
+            return globals[variable];
+        }
+    }
+
+    private bool TryGetGlobal(VariableSymbol variable, out object value)
+    {
+        lock (globalsLock)
+        {
+            return globals.TryGetValue(variable, out value);
+        }
+    }
+
+    private void SetGlobal(VariableSymbol variable, object value)
+    {
+        lock (globalsLock)
+        {
+            globals[variable] = value;
+        }
+    }
+
+    private bool TryGetStaticField(Symbols.StructSymbol structType, Symbols.FieldSymbol field, out object value)
+    {
+        lock (globalsLock)
+        {
+            return staticFields.TryGetValue((structType, field), out value);
+        }
+    }
+
+    private void SetStaticField(Symbols.StructSymbol structType, Symbols.FieldSymbol field, object value)
+    {
+        lock (globalsLock)
+        {
+            staticFields[(structType, field)] = value;
+        }
+    }
+
+    private bool TryGetInterfaceStaticField(Symbols.InterfaceSymbol interfaceType, Symbols.FieldSymbol field, out object value)
+    {
+        lock (globalsLock)
+        {
+            return interfaceStaticFields.TryGetValue((interfaceType, field), out value);
+        }
+    }
+
+    private void SetInterfaceStaticField(Symbols.InterfaceSymbol interfaceType, Symbols.FieldSymbol field, object value)
+    {
+        lock (globalsLock)
+        {
+            interfaceStaticFields[(interfaceType, field)] = value;
+        }
+    }
+
+    private bool TryGetCachedIsIteratorFunction(Symbols.FunctionSymbol function, out bool isIterator)
+    {
+        lock (globalsLock)
+        {
+            return iteratorFunctionCache.TryGetValue(function, out isIterator);
+        }
+    }
+
+    private void CacheIsIteratorFunction(Symbols.FunctionSymbol function, bool isIterator)
+    {
+        lock (globalsLock)
+        {
+            iteratorFunctionCache[function] = isIterator;
+        }
+    }
+
+    private int NextRandom(int max)
+    {
+        lock (globalsLock)
+        {
+            random ??= new Random();
+            return random.Next(max);
+        }
     }
 
     /// <summary>
@@ -85,7 +222,7 @@ public sealed class Evaluator
     /// </summary>
     /// <param name="frame">The frame to push (parameters, 'this', captured locals).</param>
     /// <returns>A disposable guard that pops <paramref name="frame"/> exactly once.</returns>
-    private FrameScope PushFrame(Dictionary<VariableSymbol, object> frame) => new(locals, frame);
+    private FrameScope PushFrame(Dictionary<VariableSymbol, object> frame) => new(Locals, frame);
 
     private object EvaluateStatement(BoundBlockStatement body)
     {
@@ -110,21 +247,21 @@ public sealed class Evaluator
             // every statement so that returns/gotos triggered by the
             // *previous* iteration's nested call are honored before any new
             // statement runs.
-            if (isReturning)
+            if (IsReturning)
             {
-                return lastValue;
+                return LastValue;
             }
 
-            if (pendingGotoLabel != null)
+            if (PendingGotoLabel != null)
             {
-                if (labelToIndex.TryGetValue(pendingGotoLabel, out var pendIdx))
+                if (labelToIndex.TryGetValue(PendingGotoLabel, out var pendIdx))
                 {
-                    pendingGotoLabel = null;
+                    PendingGotoLabel = null;
                     index = pendIdx;
                     continue;
                 }
 
-                return lastValue;
+                return LastValue;
             }
 
             var s = body.Statements[index];
@@ -153,8 +290,8 @@ public sealed class Evaluator
                         // inside a switch arm body). Park the label and
                         // bail; the outer EvaluateStatement will pick it
                         // up via the top-of-loop check above.
-                        pendingGotoLabel = gs.Label;
-                        return lastValue;
+                        PendingGotoLabel = gs.Label;
+                        return LastValue;
                     }
 
                     break;
@@ -169,8 +306,8 @@ public sealed class Evaluator
                         }
                         else
                         {
-                            pendingGotoLabel = cgs.Label;
-                            return lastValue;
+                            PendingGotoLabel = cgs.Label;
+                            return LastValue;
                         }
                     }
                     else
@@ -184,9 +321,9 @@ public sealed class Evaluator
                     break;
                 case BoundNodeKind.ReturnStatement:
                     var rs = (BoundReturnStatement)s;
-                    lastValue = rs.Expression == null ? null : EvaluateExpression(rs.Expression);
-                    isReturning = true;
-                    return lastValue;
+                    LastValue = rs.Expression == null ? null : EvaluateExpression(rs.Expression);
+                    IsReturning = true;
+                    return LastValue;
                 case BoundNodeKind.TryStatement:
                     EvaluateTryStatement((BoundTryStatement)s);
                     index++;
@@ -233,7 +370,7 @@ public sealed class Evaluator
             }
         }
 
-        return lastValue;
+        return LastValue;
     }
 
     /// <summary>
@@ -248,8 +385,8 @@ public sealed class Evaluator
     private object EvaluateFunctionBody(BoundBlockStatement body)
     {
         var result = EvaluateStatement(body);
-        isReturning = false;
-        pendingGotoLabel = null;
+        IsReturning = false;
+        PendingGotoLabel = null;
         return result;
     }
 
@@ -265,40 +402,78 @@ public sealed class Evaluator
             && node.Initializer is BoundAddressOfExpression refAddr)
         {
             var alias = new RefAlias(refAddr.Operand);
-            var locals = this.locals.Peek();
+            var locals = this.Locals.Peek();
             locals[node.Variable] = alias;
 
             // Mirror the read-through semantics for `lastValue` (used by REPL).
-            lastValue = EvaluateExpression(refAddr.Operand);
+            LastValue = EvaluateExpression(refAddr.Operand);
             return;
         }
 
         var value = EvaluateExpression(node.Initializer);
-        lastValue = value;
+        LastValue = value;
         Assign(node.Variable, value);
     }
 
     private void EvaluateGoStatement(BoundGoStatement node)
     {
-        // Phase 5.3 / ADR-0022: fire-and-forget Task.Run by default. The
-        // interpreter's evaluation state is single-threaded; serialize body
-        // execution with a monitor on the evaluator so the shared
-        // locals/globals stacks remain consistent. Concurrency in the
-        // interpreter is observational (Task scheduling) rather than parallel.
+        // Phase 5.3 / ADR-0022: fire-and-forget Task.Run by default.
+        //
+        // Issue #1651: the goroutine body used to run under a single
+        // `goLock` shared with the spawning thread's own locals stack and
+        // control-transfer flags (isReturning/pendingGotoLabel/lastValue).
+        // That only serialized goroutines against EACH OTHER — the
+        // spawning thread never took the lock and kept mutating the same
+        // locals stack concurrently, so interleaved Push/Pop corrupted
+        // frame resolution and a `return` inside the goroutine could flip
+        // the spawner's isReturning/lastValue and make an unrelated
+        // function return early with the goroutine's value.
+        //
+        // The fix gives the goroutine its own <see cref="ExecutionState"/>:
+        // a clone of the CURRENT locals stack (same frame dictionaries, new
+        // Stack container) so the goroutine still sees every variable its
+        // closure captured, but its own calls push/pop frames without
+        // touching the spawner's stack; and fresh control-transfer fields
+        // so a `return`/`goto` inside it cannot leak out. Only genuine
+        // interpreter globals (globals/static fields/iterator cache/random)
+        // stay shared, guarded by <see cref="globalsLock"/>.
         //
         // Phase 5.7 / ADR-0022: when this `go` is lexically inside a `scope`,
         // register the resulting Task with the innermost scope frame so it can
         // be awaited at scope exit. Exceptions are not swallowed in that case;
         // the scope propagates them.
+        //
+        // Issue #1651 (follow-up): Task.Run's body is not guaranteed to run on
+        // a brand-new thread. When the spawning thread later blocks on
+        // Task.WhenAll(...).GetAwaiter().GetResult() waiting for this very
+        // goroutine (or a sibling queued alongside it), the default
+        // TaskScheduler is free to inline the queued goroutine body onto that
+        // SAME blocked thread to avoid starving the pool. If the goroutine
+        // lambda just assigns executionState.Value = goroutineState and never
+        // restores it, an inlined run permanently clobbers the blocked
+        // thread's own ExecutionState (its live ScopeFrames/Locals) with the
+        // goroutine's fresh one, so control returns to code that still
+        // believes it is running with its original frames pushed but is
+        // actually looking at an empty ScopeFrames/Locals stack. Saving and
+        // restoring the previous value — like a context switch — keeps the
+        // blocked thread's state intact whether the goroutine runs on a new
+        // thread or inline on this one.
         var expression = node.Expression;
-        var enclosingScope = scopeFrames.Count > 0 ? scopeFrames.Peek() : null;
+        var goroutineState = CloneExecutionStateForGoroutine();
+        var enclosingScope = ScopeFrames.Count > 0 ? ScopeFrames.Peek() : null;
         if (enclosingScope != null)
         {
             var task = Task.Run(() =>
             {
-                lock (this.goLock)
+                var previousState = executionState.Value;
+                executionState.Value = goroutineState;
+                try
                 {
                     EvaluateExpression(expression);
+                }
+                finally
+                {
+                    executionState.Value = previousState;
                 }
             });
             enclosingScope.Tasks.Add(task);
@@ -307,12 +482,11 @@ public sealed class Evaluator
 
         Task.Run(() =>
         {
+            var previousState = executionState.Value;
+            executionState.Value = goroutineState;
             try
             {
-                lock (this.goLock)
-                {
-                    EvaluateExpression(expression);
-                }
+                EvaluateExpression(expression);
             }
             catch
             {
@@ -320,7 +494,36 @@ public sealed class Evaluator
                 // through TaskScheduler.UnobservedTaskException; the interpreter
                 // discards them rather than crashing the host.
             }
+            finally
+            {
+                executionState.Value = previousState;
+            }
         });
+    }
+
+    /// <summary>
+    /// Issue #1651: builds the <see cref="ExecutionState"/> a spawned
+    /// goroutine runs with. The locals stack is cloned (same frame
+    /// dictionaries, new <see cref="Stack{T}"/> container) off the
+    /// CALLING thread's current stack so the goroutine's closure still
+    /// observes every captured variable — including later writes to it,
+    /// matching Go's by-reference closure capture — while the goroutine's
+    /// own Push/Pop for calls it makes cannot corrupt the caller's stack.
+    /// Control-transfer flags and scope/iterator bookkeeping start fresh:
+    /// they describe the dynamic extent of a single call chain and must
+    /// not leak between the caller and the goroutine in either direction.
+    /// </summary>
+    private ExecutionState CloneExecutionStateForGoroutine()
+    {
+        // Stack<T>(IEnumerable<T>) pushes elements in enumeration order, and a
+        // Stack<T> enumerates top-first — so cloning it directly would flip
+        // top and bottom. Reversing the source enumeration before
+        // reconstructing restores the original top-to-bottom order.
+        var current = executionState.Value;
+        return new ExecutionState
+        {
+            Locals = new Stack<Dictionary<VariableSymbol, object>>(current.Locals.Reverse()),
+        };
     }
 
     private void EvaluateScopeStatement(BoundScopeStatement node)
@@ -331,14 +534,14 @@ public sealed class Evaluator
         // First failure wins (rethrown); the remaining failures, if any,
         // are attached as AggregateException.InnerExceptions[1..].
         var frame = new ScopeFrame();
-        scopeFrames.Push(frame);
+        ScopeFrames.Push(frame);
         try
         {
             EvaluateStatement((BoundBlockStatement)node.Body);
         }
         finally
         {
-            scopeFrames.Pop();
+            ScopeFrames.Pop();
         }
 
         if (frame.Tasks.Count == 0)
@@ -432,8 +635,8 @@ public sealed class Evaluator
                 node);
         }
 
-        var cancellationToken = scopeFrames.Count > 0
-            ? scopeFrames.Peek().Cts.Token
+        var cancellationToken = ScopeFrames.Count > 0
+            ? ScopeFrames.Peek().Cts.Token
             : System.Threading.CancellationToken.None;
 
         var getEnumerator = asyncEnumerableInterface.GetMethod(
@@ -473,17 +676,17 @@ public sealed class Evaluator
                 // a goto to this loop's break label (or a plain return)
                 // exits the loop; any other pending goto belongs to an
                 // enclosing loop and is left parked so it propagates.
-                if (pendingGotoLabel != null && pendingGotoLabel == node.ContinueLabel)
+                if (PendingGotoLabel != null && PendingGotoLabel == node.ContinueLabel)
                 {
-                    pendingGotoLabel = null;
+                    PendingGotoLabel = null;
                     continue;
                 }
 
-                if (isReturning || pendingGotoLabel != null)
+                if (IsReturning || PendingGotoLabel != null)
                 {
-                    if (pendingGotoLabel == node.BreakLabel)
+                    if (PendingGotoLabel == node.BreakLabel)
                     {
-                        pendingGotoLabel = null;
+                        PendingGotoLabel = null;
                     }
 
                     break;
@@ -539,7 +742,7 @@ public sealed class Evaluator
 
     private void EvaluateExpressionStatement(BoundExpressionStatement node)
     {
-        lastValue = EvaluateExpression(node.Expression);
+        LastValue = EvaluateExpression(node.Expression);
     }
 
     private void EvaluateTryStatement(BoundTryStatement node)
@@ -569,17 +772,17 @@ public sealed class Evaluator
                 // cleared state, then either keep the finally's own new
                 // transfer (it supersedes per ECMA-335 III.1.7.5) or
                 // restore the original.
-                var savedReturning = isReturning;
-                var savedGoto = pendingGotoLabel;
-                isReturning = false;
-                pendingGotoLabel = null;
+                var savedReturning = IsReturning;
+                var savedGoto = PendingGotoLabel;
+                IsReturning = false;
+                PendingGotoLabel = null;
 
                 EvaluateStatement((BoundBlockStatement)node.FinallyBlock);
 
-                if (!isReturning && pendingGotoLabel == null)
+                if (!IsReturning && PendingGotoLabel == null)
                 {
-                    isReturning = savedReturning;
-                    pendingGotoLabel = savedGoto;
+                    IsReturning = savedReturning;
+                    PendingGotoLabel = savedGoto;
                 }
             }
         }
@@ -970,11 +1173,11 @@ public sealed class Evaluator
     {
         if (v.Variable.Kind == SymbolKind.GlobalVariable)
         {
-            return globals[v.Variable];
+            return GetGlobal(v.Variable);
         }
         else
         {
-            var locals = this.locals.Peek();
+            var locals = this.Locals.Peek();
             var stored = locals[v.Variable];
 
             // Issue #491 (ADR-0060 follow-up): a ref-aliasing local stores a
@@ -1078,8 +1281,8 @@ public sealed class Evaluator
     private object EvaluateIndexAssignmentExpression(BoundIndexAssignmentExpression node)
     {
         var targetValue = node.Target.Kind == Symbols.SymbolKind.GlobalVariable
-            ? globals[node.Target]
-            : locals.Peek()[node.Target];
+            ? GetGlobal(node.Target)
+            : Locals.Peek()[node.Target];
 
         // Phase 3.A.4: map indexed assignment `m[k] = v`.
         if (node.Target.Type is MapTypeSymbol && targetValue is System.Collections.IDictionary dict)
@@ -1366,10 +1569,10 @@ public sealed class Evaluator
     {
         if (v is GlobalVariableSymbol)
         {
-            return globals.TryGetValue(v, out var g) ? g : null;
+            return TryGetGlobal(v, out var g) ? g : null;
         }
 
-        foreach (var frame in this.locals)
+        foreach (var frame in this.Locals)
         {
             if (frame.TryGetValue(v, out var value))
             {
@@ -1377,7 +1580,7 @@ public sealed class Evaluator
             }
         }
 
-        return globals.TryGetValue(v, out var gv) ? gv : null;
+        return TryGetGlobal(v, out var gv) ? gv : null;
     }
 
     private object EvaluateConstructorCallExpression(BoundConstructorCallExpression node)
@@ -1934,8 +2137,8 @@ public sealed class Evaluator
     private object EvaluateClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
     {
         var target = node.Target.Kind == Symbols.SymbolKind.GlobalVariable
-            ? globals[node.Target]
-            : locals.Peek()[node.Target];
+            ? GetGlobal(node.Target)
+            : Locals.Peek()[node.Target];
 
         var args = new object[node.Arguments.Length];
         for (var i = 0; i < node.Arguments.Length; i++)
@@ -1966,7 +2169,7 @@ public sealed class Evaluator
             // (per closed construction for a generic interface).
             if (node.InterfaceType != null)
             {
-                if (interfaceStaticFields.TryGetValue((node.InterfaceType, node.Field), out var ifaceValue))
+                if (TryGetInterfaceStaticField(node.InterfaceType, node.Field, out var ifaceValue))
                 {
                     return ifaceValue;
                 }
@@ -1974,7 +2177,7 @@ public sealed class Evaluator
                 return DefaultValue(node.Field.Type);
             }
 
-            if (staticFields.TryGetValue((node.StructType, node.Field), out var staticValue))
+            if (TryGetStaticField(node.StructType, node.Field, out var staticValue))
             {
                 return staticValue;
             }
@@ -2003,17 +2206,17 @@ public sealed class Evaluator
             // (per closed construction for a generic interface).
             if (node.InterfaceType != null)
             {
-                interfaceStaticFields[(node.InterfaceType, node.Field)] = value;
+                SetInterfaceStaticField(node.InterfaceType, node.Field, value);
                 return value;
             }
 
-            staticFields[(node.StructType, node.Field)] = value;
+            SetStaticField(node.StructType, node.Field, value);
             return value;
         }
 
         var current = node.Receiver.Kind == Symbols.SymbolKind.GlobalVariable
-            ? globals[node.Receiver]
-            : locals.Peek()[node.Receiver];
+            ? GetGlobal(node.Receiver)
+            : Locals.Peek()[node.Receiver];
 
         var sv = current as StructValue ?? new StructValue(node.StructType);
 
@@ -2048,7 +2251,7 @@ public sealed class Evaluator
         {
             if (node.Property.IsAutoProperty && node.Property.BackingField != null)
             {
-                if (staticFields.TryGetValue((node.StructType, node.Property.BackingField), out var staticValue))
+                if (TryGetStaticField(node.StructType, node.Property.BackingField, out var staticValue))
                 {
                     return staticValue;
                 }
@@ -2133,7 +2336,7 @@ public sealed class Evaluator
         {
             if (node.Property.IsAutoProperty && node.Property.BackingField != null)
             {
-                staticFields[(node.StructType, node.Property.BackingField)] = value;
+                SetStaticField(node.StructType, node.Property.BackingField, value);
             }
             else if (node.Property.SetterSymbol != null && program.Functions.TryGetValue(node.Property.SetterSymbol, out var staticSetterBody))
             {
@@ -2157,8 +2360,8 @@ public sealed class Evaluator
             {
                 var receiverVar = bve.Variable;
                 var current = receiverVar.Kind == Symbols.SymbolKind.GlobalVariable
-                    ? globals[receiverVar]
-                    : locals.Peek()[receiverVar];
+                    ? GetGlobal(receiverVar)
+                    : Locals.Peek()[receiverVar];
 
                 var sv = current as StructValue ?? new StructValue(node.StructType);
 
@@ -2729,12 +2932,7 @@ public sealed class Evaluator
         else if (node.Function == BuiltinFunctions.Rnd)
         {
             var max = (int)EvaluateExpression(node.Arguments[0]);
-            if (random == null)
-            {
-                random = new Random();
-            }
-
-            return random.Next(max);
+            return NextRandom(max);
         }
         else
         {
@@ -2817,7 +3015,7 @@ public sealed class Evaluator
 
     private bool IsIteratorFunction(Symbols.FunctionSymbol function, BoundBlockStatement body)
     {
-        if (iteratorFunctionCache.TryGetValue(function, out var cached))
+        if (TryGetCachedIsIteratorFunction(function, out var cached))
         {
             return cached;
         }
@@ -2825,7 +3023,7 @@ public sealed class Evaluator
         var walker = new YieldFinder();
         walker.RewriteStatement(body);
         cached = walker.Found;
-        iteratorFunctionCache[function] = cached;
+        CacheIsIteratorFunction(function, cached);
         return cached;
     }
 
@@ -2841,14 +3039,14 @@ public sealed class Evaluator
         var listType = typeof(List<>).MakeGenericType(elementType);
         var list = (System.Collections.IList)Activator.CreateInstance(listType);
 
-        iteratorSinks.Push(list);
+        IteratorSinks.Push(list);
         try
         {
             EvaluateFunctionBody(body);
         }
         finally
         {
-            iteratorSinks.Pop();
+            IteratorSinks.Pop();
         }
 
         if (IsAsyncEnumerableReturn(function.Type))
@@ -2862,14 +3060,14 @@ public sealed class Evaluator
 
     private void EvaluateYieldStatement(BoundYieldStatement node)
     {
-        if (iteratorSinks.Count == 0)
+        if (IteratorSinks.Count == 0)
         {
             throw new EvaluatorException("'yield' encountered outside of an iterator function.", node);
         }
 
         var value = EvaluateExpression(node.Expression);
-        iteratorSinks.Peek().Add(value);
-        lastValue = value;
+        IteratorSinks.Peek().Add(value);
+        LastValue = value;
     }
 
     private static Type GetIteratorElementClrType(TypeSymbol type)
@@ -2977,7 +3175,7 @@ public sealed class Evaluator
 
     private object EvaluateWithPatternBindings(Dictionary<VariableSymbol, object> bindings, Func<object> evaluate)
     {
-        var frame = locals.Peek();
+        var frame = Locals.Peek();
         foreach (var binding in bindings)
         {
             frame[binding.Key] = binding.Value;
@@ -3794,7 +3992,7 @@ public sealed class Evaluator
         // implementing the slot's interface.
         if (resolvedImpl == null && slotIface != null)
         {
-            foreach (var frame in locals)
+            foreach (var frame in Locals)
             {
                 foreach (var kv in frame)
                 {
@@ -4370,11 +4568,11 @@ public sealed class Evaluator
             if (fa.InterfaceType != null)
             {
                 // Issue #1030: interface static field write-back.
-                interfaceStaticFields[(fa.InterfaceType, fa.Field)] = value;
+                SetInterfaceStaticField(fa.InterfaceType, fa.Field, value);
                 return;
             }
 
-            staticFields[(fa.StructType, fa.Field)] = value;
+            SetStaticField(fa.StructType, fa.Field, value);
             return;
         }
 
@@ -4393,7 +4591,7 @@ public sealed class Evaluator
             if (pa.Receiver == null)
             {
                 // ADR-0053: static property write-back.
-                staticFields[(pa.StructType, pa.Property.BackingField)] = value;
+                SetStaticField(pa.StructType, pa.Property.BackingField, value);
                 return;
             }
 
@@ -4428,7 +4626,7 @@ public sealed class Evaluator
             return null;
         }
 
-        var locals = this.locals.Peek();
+        var locals = this.Locals.Peek();
         locals[node.Capture] = receiver;
         try
         {
@@ -4451,11 +4649,11 @@ public sealed class Evaluator
 
         if (variable.Kind == SymbolKind.GlobalVariable)
         {
-            globals[variable] = value;
+            SetGlobal(variable, value);
         }
         else
         {
-            var locals = this.locals.Peek();
+            var locals = this.Locals.Peek();
 
             // Issue #491 (ADR-0060 follow-up): writing to a ref-aliasing local
             // routes the new value to the aliased storage (not replacing the
@@ -4572,7 +4770,7 @@ public sealed class Evaluator
         // current `this` binding. The convenience init body is bound with its
         // own `this`, which matches the chained-to ctor's `this` since both
         // belong to the same class.
-        foreach (var frame in locals)
+        foreach (var frame in Locals)
         {
             foreach (var kv in frame)
             {
@@ -4735,5 +4933,29 @@ public sealed class Evaluator
         public List<Task> Tasks { get; } = [];
 
         public System.Threading.CancellationTokenSource Cts { get; } = new System.Threading.CancellationTokenSource();
+    }
+
+    /// <summary>
+    /// Issue #1651: per-thread interpreter state. One instance lives on the
+    /// main thread and one more is created for every goroutine (<c>go</c>/
+    /// <c>scope</c> task), so pushing/popping locals frames or flipping a
+    /// control-transfer flag on one thread is invisible to every other
+    /// thread. See <see cref="EvaluateGoStatement"/> for how a goroutine's
+    /// instance is seeded from its parent's locals chain to preserve
+    /// closure visibility while still isolating call-frame push/pop.
+    /// </summary>
+    private sealed class ExecutionState
+    {
+        public Stack<Dictionary<VariableSymbol, object>> Locals { get; set; } = new();
+
+        public Stack<ScopeFrame> ScopeFrames { get; set; } = new();
+
+        public Stack<System.Collections.IList> IteratorSinks { get; set; } = new();
+
+        public object LastValue { get; set; }
+
+        public bool IsReturning { get; set; }
+
+        public BoundLabel PendingGotoLabel { get; set; }
     }
 }
