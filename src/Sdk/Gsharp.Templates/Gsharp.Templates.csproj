@@ -5,6 +5,9 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <NoWarn>$(NoWarn);NU5128;NU5100</NoWarn>
     <IncludeBuildOutput>false</IncludeBuildOutput>
+    <!-- No compiled output means no PDB to symbol-package (issue #1671's central
+         IncludeSymbols=true would otherwise produce an empty, invalid .snupkg). -->
+    <IncludeSymbols>false</IncludeSymbols>
 
     <PackageType>Template</PackageType>
     <PackageId>Gsharp.Templates</PackageId>
