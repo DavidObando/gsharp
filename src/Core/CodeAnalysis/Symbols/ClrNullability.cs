@@ -51,6 +51,24 @@ public static class ClrNullability
     }
 
     /// <summary>
+    /// Issue #1701: variant of <see cref="GetPropertyTypeSymbol(PropertyInfo)"/>
+    /// for a ref-returning indexer (<c>PropertyType.IsByRef</c>), where the
+    /// <c>[NullableAttribute]</c> metadata is read off <paramref name="property"/>
+    /// but applied to <paramref name="elementType"/> (the by-ref pointee,
+    /// e.g. <c>T</c> in <c>ref T</c>) rather than the by-ref type itself —
+    /// mirroring how <see cref="GetPropertyTypeSymbol(PropertyInfo)"/> handles
+    /// the non-byref case. Callers wrap the result in <c>ByRefTypeSymbol</c>.
+    /// </summary>
+    /// <param name="property">The ref-returning indexer/property to read attributes from.</param>
+    /// <param name="elementType">The dereferenced (non-byref) element type.</param>
+    /// <returns>The nullability-aware element type symbol.</returns>
+    public static TypeSymbol GetPropertyElementTypeSymbol(PropertyInfo property, Type elementType)
+    {
+        var baseSymbol = TypeSymbol.FromClrType(elementType);
+        return ApplyReferenceNullabilityFull(baseSymbol, elementType, property, property.DeclaringType);
+    }
+
+    /// <summary>
     /// Returns the GSharp <see cref="TypeSymbol"/> for a field's
     /// declared type, with reference-type nullability applied.
     /// </summary>

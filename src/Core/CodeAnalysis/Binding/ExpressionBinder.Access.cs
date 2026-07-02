@@ -4463,7 +4463,12 @@ internal sealed partial class ExpressionBinder
         var propertyType = closedIndexer.PropertyType;
         if (propertyType.IsByRef)
         {
-            return ByRefTypeSymbol.Get(TypeSymbol.FromClrType(propertyType.GetElementType()!));
+            // Issue #1701: route the by-ref element through the same
+            // nullability-aware helper as the non-byref path below (instead
+            // of a raw FromClrType) so a hypothetical `ref T?` indexer
+            // element keeps its `[NullableAttribute]` metadata instead of
+            // silently erasing to non-null.
+            return ByRefTypeSymbol.Get(ClrNullability.GetPropertyElementTypeSymbol(closedIndexer, propertyType.GetElementType()!));
         }
 
         // Issue #1627 (surfaced regression fix): honour the indexer's
@@ -4501,10 +4506,11 @@ internal sealed partial class ExpressionBinder
         var propertyType = indexer.PropertyType;
         if (propertyType.IsByRef)
         {
-            return ByRefTypeSymbol.Get(TypeSymbol.FromClrType(propertyType.GetElementType()!));
+            // Issue #1701: same nullability-aware routing as MapErasedIndexerElementType.
+            return ByRefTypeSymbol.Get(ClrNullability.GetPropertyElementTypeSymbol(indexer, propertyType.GetElementType()!));
         }
 
-        return TypeSymbol.FromClrType(propertyType);
+        return ClrNullability.GetPropertyTypeSymbol(indexer);
     }
 
     private static TypeSymbol MapClrMemberType(System.Type clrType)

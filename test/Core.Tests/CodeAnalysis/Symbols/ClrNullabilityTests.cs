@@ -310,6 +310,26 @@ public class ClrNullabilityTests
         Assert.Same(TypeSymbol.String, nullable.UnderlyingType);
     }
 
+    [Fact]
+    public void GetPropertyElementTypeSymbol_AnnotatedNullableProperty_IsNullable()
+    {
+        // Issue #1701 crack 1: a ref-returning indexer element must keep the
+        // declaring property's `[NullableAttribute]` metadata instead of
+        // erasing via a raw `TypeSymbol.FromClrType`.
+        var prop = typeof(Sample).GetProperty(nameof(Sample.AnnotatedProperty));
+        var sym = ClrNullability.GetPropertyElementTypeSymbol(prop!, typeof(string));
+        var nullable = Assert.IsType<NullableTypeSymbol>(sym);
+        Assert.Same(TypeSymbol.String, nullable.UnderlyingType);
+    }
+
+    [Fact]
+    public void GetPropertyElementTypeSymbol_NonNullProperty_StaysFlat()
+    {
+        var prop = typeof(Sample).GetProperty(nameof(Sample.NonNullProperty));
+        var sym = ClrNullability.GetPropertyElementTypeSymbol(prop!, typeof(string));
+        Assert.Same(TypeSymbol.String, sym);
+    }
+
     /// <summary>
     /// Carries the C# 8 nullability annotations we need to test against.
     /// Compiled with the surrounding project's nullable context — the
@@ -329,6 +349,18 @@ public class ClrNullabilityTests
         {
             return string.Empty;
         }
+
+        // Issue #1701: stand-ins for a ref-returning indexer's dereferenced
+        // element type. A genuine `ref T?` indexer is not exercisable through
+        // G# surface syntax today (Span/ReadOnlySpan element T is always
+        // value-typed in practice), so these validate the routed helper
+        // (`ClrNullability.GetPropertyElementTypeSymbol`) directly: it must
+        // read the `[NullableAttribute]` metadata off the declaring property
+        // and apply it to the supplied (dereferenced) element type, exactly
+        // like `GetPropertyTypeSymbol` does for the non-byref case.
+        public string? AnnotatedProperty => null;
+
+        public string NonNullProperty => string.Empty;
 
         public Dictionary<string, string?> GetDictionary()
         {
