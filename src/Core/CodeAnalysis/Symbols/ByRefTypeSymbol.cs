@@ -40,4 +40,12 @@ public sealed class ByRefTypeSymbol : TypeSymbol
 
         return Cache.GetOrAdd(pointeeType, pt => new ByRefTypeSymbol(pt));
     }
+
+    /// <summary>
+    /// Removes all entries from the static type cache. Called by
+    /// <see cref="ReferenceResolver.Dispose"/> to release stale
+    /// <see cref="Type"/> objects backed by a disposed metadata load context
+    /// that would otherwise pin the context's memory indefinitely.
+    /// </summary>
+    internal static void ClearCache() => Cache.Clear();
 }

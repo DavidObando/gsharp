@@ -58,6 +58,14 @@ public sealed class MapTypeSymbol : TypeSymbol
         return Cache.GetOrAdd((keyType, valueType), k => new MapTypeSymbol(k.Item1, k.Item2));
     }
 
+    /// <summary>
+    /// Removes all entries from the static type cache. Called by
+    /// <see cref="ReferenceResolver.Dispose"/> to release stale
+    /// <see cref="Type"/> objects backed by a disposed metadata load context
+    /// that would otherwise pin the context's memory indefinitely.
+    /// </summary>
+    internal static void ClearCache() => Cache.Clear();
+
     private static Type MakeClrType(TypeSymbol keyType, TypeSymbol valueType)
     {
         if (keyType.ClrType == null || valueType.ClrType == null)

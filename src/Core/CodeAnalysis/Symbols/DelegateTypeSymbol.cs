@@ -177,6 +177,15 @@ public sealed class DelegateTypeSymbol : TypeSymbol
         return ConstructedCache.GetOrAdd((definition, key), _ => CreateConstructed(definition, typeArguments));
     }
 
+    /// <summary>
+    /// Removes all entries from the static constructed-delegate cache.
+    /// Called by <see cref="ReferenceResolver.Dispose"/> to release stale
+    /// <see cref="Type"/> objects and definition/argument symbols backed by
+    /// a disposed metadata load context that would otherwise pin the
+    /// context's memory indefinitely.
+    /// </summary>
+    internal static void ClearCache() => ConstructedCache.Clear();
+
     private static TypeArgsKey BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments) => new(typeArguments);
 
     private static DelegateTypeSymbol CreateConstructed(DelegateTypeSymbol definition, ImmutableArray<TypeSymbol> typeArguments)

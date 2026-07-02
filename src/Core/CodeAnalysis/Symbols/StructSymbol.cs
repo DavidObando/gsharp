@@ -1503,6 +1503,20 @@ public sealed class StructSymbol : TypeSymbol
         return changed ? builder.MoveToImmutable() : default;
     }
 
+    /// <summary>
+    /// Removes all entries from the static constructed-struct caches.
+    /// Called by <see cref="ReferenceResolver.Dispose"/> to release stale
+    /// <see cref="Type"/> objects and definition/argument symbols backed by
+    /// a disposed metadata load context that would otherwise pin the
+    /// context's memory indefinitely.
+    /// </summary>
+    internal static void ClearCache()
+    {
+        ConstructedCache.Clear();
+        ConstructedNestedCache.Clear();
+        ConstructedNestedGenericCache.Clear();
+    }
+
     private static TypeArgsKey BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments) => new(typeArguments);
 
     private static TypeSymbol EnclosingTypeOf(TypeSymbol type) => type switch
