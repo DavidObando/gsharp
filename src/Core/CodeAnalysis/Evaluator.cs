@@ -72,6 +72,21 @@ public sealed class Evaluator
         return EvaluateFunctionBody(program.Statement);
     }
 
+    /// <summary>
+    /// Issue #1650: pushes a locals frame for a user-function call (plain
+    /// call, closure/indirect call, instance/base call, property or event
+    /// accessor, constrained static call, constructor body, etc.) and
+    /// returns a guard that pops it on <see cref="IDisposable.Dispose"/>.
+    /// Use with a <c>using</c> statement/declaration so the frame is always
+    /// popped — including when the callee throws and a caller-level
+    /// try/catch handles the exception. Without this guard, an unwound
+    /// exception used to leave the callee's dead frame on the stack,
+    /// corrupting every subsequent local-variable read/write in the caller.
+    /// </summary>
+    /// <param name="frame">The frame to push (parameters, 'this', captured locals).</param>
+    /// <returns>A disposable guard that pops <paramref name="frame"/> exactly once.</returns>
+    private FrameScope PushFrame(Dictionary<VariableSymbol, object> frame) => new(locals, frame);
+
     private object EvaluateStatement(BoundBlockStatement body)
     {
         var labelToIndex = new Dictionary<BoundLabel, int>();
@@ -1221,9 +1236,10 @@ public sealed class Evaluator
                         [init.Property.SetterSymbol.ThisParameter] = sv,
                         [init.Property.SetterSymbol.Parameters[0]] = value,
                     };
-                    locals.Push(frame);
-                    EvaluateFunctionBody(setterBody);
-                    locals.Pop();
+                    using (PushFrame(frame))
+                    {
+                        EvaluateFunctionBody(setterBody);
+                    }
                 }
 
                 continue;
@@ -1340,10 +1356,10 @@ public sealed class Evaluator
             frame[closure.Function.Parameters[i]] = EvaluateExpression(node.Arguments[i]);
         }
 
-        this.locals.Push(frame);
-        var result = EvaluateFunctionBody(closure.Body);
-        this.locals.Pop();
-        return result;
+        using (PushFrame(frame))
+        {
+            return EvaluateFunctionBody(closure.Body);
+        }
     }
 
     private object LookupVariable(VariableSymbol v)
@@ -1414,18 +1430,13 @@ public sealed class Evaluator
                         frame[primaryParams[i]] = sv.Fields[primaryParams[i].Name];
                     }
 
-                    locals.Push(frame);
-                    try
+                    using (PushFrame(frame))
                     {
                         var baseParams = gsBase.PrimaryConstructorParameters;
                         for (var i = 0; i < baseParams.Length && i < baseInitOnStruct.Arguments.Length; i++)
                         {
                             sv.Fields[baseParams[i].Name] = EvaluateExpression(baseInitOnStruct.Arguments[i]);
                         }
-                    }
-                    finally
-                    {
-                        locals.Pop();
                     }
                 }
 
@@ -1444,8 +1455,7 @@ public sealed class Evaluator
                 frame2[ctorFunction.Parameters[i]] = EvaluateExpression(node.Arguments[i]);
             }
 
-            locals.Push(frame2);
-            try
+            using (PushFrame(frame2))
             {
                 // Forward the GSharp base initializer. CLR base initializers are
                 // routed through reflection by AllocateClrBacking (issue #319) so
@@ -1464,10 +1474,6 @@ public sealed class Evaluator
 
                 var body = program.Functions[ctorFunction];
                 EvaluateFunctionBody(body);
-            }
-            finally
-            {
-                locals.Pop();
             }
 
             return sv;
@@ -1493,8 +1499,7 @@ public sealed class Evaluator
                 frame[parameters[i]] = sv.Fields[parameters[i].Name];
             }
 
-            locals.Push(frame);
-            try
+            using (PushFrame(frame))
             {
                 if (baseInit != null && baseInit.GSharpBaseType is StructSymbol gsharpBase)
                 {
@@ -1509,10 +1514,6 @@ public sealed class Evaluator
                 // ultimately derives from a CLR type) so inherited CLR instance
                 // state — such as Exception.Message — is set per the emit path.
                 AllocateClrBacking(sv, node.StructType, baseInit);
-            }
-            finally
-            {
-                locals.Pop();
             }
         }
 
@@ -1871,9 +1872,10 @@ public sealed class Evaluator
                     frame[methodSymbol.Parameters[0]] = handlerValue;
                 }
 
-                locals.Push(frame);
-                EvaluateFunctionBody(body);
-                locals.Pop();
+                using (PushFrame(frame))
+                {
+                    EvaluateFunctionBody(body);
+                }
             }
 
             return null;
@@ -2055,10 +2057,10 @@ public sealed class Evaluator
             {
                 // Issue #263: computed static property getter — no 'this' parameter.
                 var frame = new Dictionary<Symbols.VariableSymbol, object>();
-                locals.Push(frame);
-                var result = EvaluateFunctionBody(staticGetterBody);
-                locals.Pop();
-                return result;
+                using (PushFrame(frame))
+                {
+                    return EvaluateFunctionBody(staticGetterBody);
+                }
             }
 
             return DefaultValue(node.Property.Type);
@@ -2113,10 +2115,10 @@ public sealed class Evaluator
             {
                 [property.GetterSymbol.ThisParameter] = receiverValue,
             };
-            locals.Push(frame);
-            var result = EvaluateFunctionBody(getterBody);
-            locals.Pop();
-            return result;
+            using (PushFrame(frame))
+            {
+                return EvaluateFunctionBody(getterBody);
+            }
         }
 
         return DefaultValue(property.Type);
@@ -2139,9 +2141,10 @@ public sealed class Evaluator
                 {
                     [node.Property.SetterSymbol.Parameters[0]] = value,
                 };
-                locals.Push(frame);
-                EvaluateFunctionBody(staticSetterBody);
-                locals.Pop();
+                using (PushFrame(frame))
+                {
+                    EvaluateFunctionBody(staticSetterBody);
+                }
             }
 
             return value;
@@ -2187,9 +2190,11 @@ public sealed class Evaluator
                 [node.Property.SetterSymbol.ThisParameter] = receiverValue,
                 [node.Property.SetterSymbol.Parameters[0]] = value,
             };
-            locals.Push(frame);
-            EvaluateFunctionBody(setterBody);
-            locals.Pop();
+            using (PushFrame(frame))
+            {
+                EvaluateFunctionBody(setterBody);
+            }
+
             return value;
         }
 
@@ -2743,52 +2748,49 @@ public sealed class Evaluator
                 }
             }
 
-            this.locals.Push(locals);
-
-            var statement = program.Functions[node.Function];
-
-            if (IsIteratorFunction(node.Function, statement))
+            using (PushFrame(locals))
             {
-                var iteratorResult = EvaluateIteratorFunction(node.Function, statement);
-                this.locals.Pop();
-                return iteratorResult;
-            }
+                var statement = program.Functions[node.Function];
 
-            var result = EvaluateFunctionBody(statement);
-
-            // ADR-0060 item #7: write the final parameter slot value back to
-            // the caller's lvalue for every 'ref'/'out' parameter.
-            if (userRefSlots != null)
-            {
-                foreach (var (parameter, operand) in userRefSlots)
+                if (IsIteratorFunction(node.Function, statement))
                 {
-                    var finalValue = locals.TryGetValue(parameter, out var v) ? v : null;
-                    switch (operand)
+                    return EvaluateIteratorFunction(node.Function, statement);
+                }
+
+                var result = EvaluateFunctionBody(statement);
+
+                // ADR-0060 item #7: write the final parameter slot value back to
+                // the caller's lvalue for every 'ref'/'out' parameter.
+                if (userRefSlots != null)
+                {
+                    foreach (var (parameter, operand) in userRefSlots)
                     {
-                        case BoundVariableExpression bve:
-                            Assign(bve.Variable, finalValue);
-                            break;
-                        case BoundFieldAccessExpression fa:
-                            WriteBackField(fa, finalValue);
-                            break;
-                        case BoundPropertyAccessExpression pa:
-                            WriteBackProperty(pa, finalValue);
-                            break;
-                        case BoundIndexExpression idx:
-                            WriteBackIndex(idx, finalValue);
-                            break;
+                        var finalValue = locals.TryGetValue(parameter, out var v) ? v : null;
+                        switch (operand)
+                        {
+                            case BoundVariableExpression bve:
+                                Assign(bve.Variable, finalValue);
+                                break;
+                            case BoundFieldAccessExpression fa:
+                                WriteBackField(fa, finalValue);
+                                break;
+                            case BoundPropertyAccessExpression pa:
+                                WriteBackProperty(pa, finalValue);
+                                break;
+                            case BoundIndexExpression idx:
+                                WriteBackIndex(idx, finalValue);
+                                break;
+                        }
                     }
                 }
+
+                if (node.Function.IsAsync)
+                {
+                    return WrapAsyncResult(node.Function.Type, result);
+                }
+
+                return result;
             }
-
-            this.locals.Pop();
-
-            if (node.Function.IsAsync)
-            {
-                return WrapAsyncResult(node.Function.Type, result);
-            }
-
-            return result;
         }
     }
 
@@ -3591,12 +3593,11 @@ public sealed class Evaluator
             frame.Add(parameter, value);
         }
 
-        locals.Push(frame);
-        var statement = program.Functions[method];
-        var result = EvaluateFunctionBody(statement);
-        locals.Pop();
-
-        return result;
+        using (PushFrame(frame))
+        {
+            var statement = program.Functions[method];
+            return EvaluateFunctionBody(statement);
+        }
     }
 
     /// <summary>
@@ -3628,12 +3629,11 @@ public sealed class Evaluator
             frame.Add(parameter, value);
         }
 
-        locals.Push(frame);
-        var statement = program.Functions[method];
-        var result = EvaluateFunctionBody(statement);
-        locals.Pop();
-
-        return result;
+        using (PushFrame(frame))
+        {
+            var statement = program.Functions[method];
+            return EvaluateFunctionBody(statement);
+        }
     }
 
     /// <summary>
@@ -3692,12 +3692,11 @@ public sealed class Evaluator
             frame.Add(parameter, value);
         }
 
-        locals.Push(frame);
-        var statement = program.Functions[method];
-        var result = EvaluateFunctionBody(statement);
-        locals.Pop();
-
-        return result;
+        using (PushFrame(frame))
+        {
+            var statement = program.Functions[method];
+            return EvaluateFunctionBody(statement);
+        }
     }
 
     /// <summary>
@@ -3828,10 +3827,10 @@ public sealed class Evaluator
             frame2[target.Parameters[i]] = evaluatedArgs[i];
         }
 
-        locals.Push(frame2);
-        var result = EvaluateFunctionBody(statement);
-        locals.Pop();
-        return result;
+        using (PushFrame(frame2))
+        {
+            return EvaluateFunctionBody(statement);
+        }
     }
 
     private object EvaluateConversionExpression(BoundConversionExpression node)
@@ -4575,8 +4574,7 @@ public sealed class Evaluator
             chainFrame[targetCtor.Function.Parameters[i]] = argValues[i];
         }
 
-        locals.Push(chainFrame);
-        try
+        using (PushFrame(chainFrame))
         {
             if (targetCtor.BaseInitializer is BaseConstructorInitializer chainBaseInit
                 && chainBaseInit.GSharpBaseType is StructSymbol chainGsBase)
@@ -4591,12 +4589,35 @@ public sealed class Evaluator
             var body = program.Functions[targetCtor.Function];
             EvaluateFunctionBody(body);
         }
-        finally
-        {
-            locals.Pop();
-        }
 
         return null;
+    }
+
+    /// <summary>
+    /// Disposable guard returned by <see cref="PushFrame(Dictionary{VariableSymbol, object})"/>
+    /// that pops the associated locals frame when disposed, guaranteeing the
+    /// pop runs on both normal and exceptional (unwind) control flow.
+    /// </summary>
+    private readonly struct FrameScope : IDisposable
+    {
+        private readonly Stack<Dictionary<VariableSymbol, object>> stack;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="FrameScope"/> struct,
+        /// pushing <paramref name="frame"/> onto <paramref name="stack"/>.
+        /// </summary>
+        /// <param name="stack">The locals stack to push onto and later pop from.</param>
+        /// <param name="frame">The frame to push.</param>
+        public FrameScope(Stack<Dictionary<VariableSymbol, object>> stack, Dictionary<VariableSymbol, object> frame)
+        {
+            this.stack = stack;
+            this.stack.Push(frame);
+        }
+
+        /// <summary>
+        /// Pops the frame pushed by the constructor.
+        /// </summary>
+        public void Dispose() => stack.Pop();
     }
 
     private sealed class YieldFinder : Binding.BoundTreeRewriter
