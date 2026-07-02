@@ -18,14 +18,14 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </summary>
 public sealed class StructSymbol : TypeSymbol
 {
-    private static readonly ConcurrentDictionary<(StructSymbol Def, string ArgsKey), StructSymbol> ConstructedCache = new();
+    private static readonly ConcurrentDictionary<(StructSymbol Def, TypeArgsKey ArgsKey), StructSymbol> ConstructedCache = new();
 
     // Issue #1521: identity cache for constructed references to types nested
     // inside a generic enclosing type (`Box[int32].Tag`), keyed by the nested
     // definition and the flattened enclosing type-argument vector so two
     // references to the same construction share one symbol (preserving
     // reference equality and TypeSpec caching in the emitter).
-    private static readonly ConcurrentDictionary<(StructSymbol Def, string ArgsKey), StructSymbol> ConstructedNestedCache = new();
+    private static readonly ConcurrentDictionary<(StructSymbol Def, TypeArgsKey ArgsKey), StructSymbol> ConstructedNestedCache = new();
 
     // Issue #1537: identity cache for constructed references to a GENERIC type
     // nested inside a generic enclosing type (`Outer[int32].Middle[string]`),
@@ -33,7 +33,7 @@ public sealed class StructSymbol : TypeSymbol
     // vector, and the nested type's own type-argument vector. Distinct from
     // ConstructedNestedCache (which keys only the enclosing args for a nested
     // type with no own parameters) so the two representations never collide.
-    private static readonly ConcurrentDictionary<(StructSymbol Def, string EnclosingKey, string OwnKey), StructSymbol> ConstructedNestedGenericCache = new();
+    private static readonly ConcurrentDictionary<(StructSymbol Def, TypeArgsKey EnclosingKey, TypeArgsKey OwnKey), StructSymbol> ConstructedNestedGenericCache = new();
 
     // Issue #1341: backing stores for the generically-erased member tables whose
     // reads are forwarded to Definition on a constructed instance. On a
@@ -1503,16 +1503,7 @@ public sealed class StructSymbol : TypeSymbol
         return changed ? builder.MoveToImmutable() : default;
     }
 
-    private static string BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments)
-    {
-        var parts = new string[typeArguments.Length];
-        for (var i = 0; i < typeArguments.Length; i++)
-        {
-            parts[i] = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(typeArguments[i]).ToString();
-        }
-
-        return string.Join(",", parts);
-    }
+    private static TypeArgsKey BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments) => new(typeArguments);
 
     private static TypeSymbol EnclosingTypeOf(TypeSymbol type) => type switch
     {
