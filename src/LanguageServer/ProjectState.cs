@@ -280,6 +280,62 @@ public class ProjectState
     }
 
     /// <summary>
+    /// Builds a <see cref="Compilation"/> against a caller-supplied <paramref name="snapshotTree"/>
+    /// for <paramref name="filePath"/> WITHOUT mutating this project's cached trees, cached
+    /// compilation, or dirty flag. This is the read-only counterpart to
+    /// <see cref="UpdateFile"/> + <see cref="GetCompilation"/>: non-mutating LSP requests (e.g.
+    /// the textDocument/diagnostic pull handler) that run off the write gate must never call
+    /// <see cref="UpdateFile"/>, because a request holding a stale (pre-edit) snapshot could
+    /// otherwise race a concurrent didChange and overwrite a newer tree with the stale one
+    /// (issue #1657). When <paramref name="snapshotTree"/> is reference-equal to the tree
+    /// already cached for <paramref name="filePath"/> — the overwhelmingly common case, since
+    /// <see cref="UpdateFile"/> keeps the two in sync on every didOpen/didChange under the gate
+    /// — this reuses the normal cached <see cref="GetCompilation"/> path. Otherwise (a pull
+    /// racing a not-yet-applied or already-superseded edit) it builds a throwaway compilation
+    /// from the current tree set with this file's tree swapped for the snapshot, so the returned
+    /// diagnostics always reflect exactly the requested text without disturbing project state.
+    /// </summary>
+    /// <param name="filePath">Absolute path to the <c>.gs</c> file the snapshot belongs to.</param>
+    /// <param name="snapshotTree">The already-parsed snapshot tree to bind.</param>
+    /// <returns>A <see cref="Compilation"/> reflecting exactly <paramref name="snapshotTree"/>.</returns>
+    public Compilation GetCompilationForSnapshot(string filePath, SyntaxTree snapshotTree)
+    {
+        var key = NormalizePath(filePath);
+        lock (compilationLock)
+        {
+            if (syntaxTrees.TryGetValue(key, out var current) && ReferenceEquals(current, snapshotTree))
+            {
+                return GetCompilation();
+            }
+
+            RefreshReferencesFromSourceFile_NoLock();
+            var resolver = GetOrBuildResolver_NoLock();
+            var trees = syntaxTrees.Values.ToArray();
+            bool replaced = false;
+            for (int i = 0; i < trees.Length; i++)
+            {
+                if (string.Equals(NormalizePath(trees[i].Text?.FileName), key, StringComparison.Ordinal))
+                {
+                    trees[i] = snapshotTree;
+                    replaced = true;
+                    break;
+                }
+            }
+
+            if (!replaced)
+            {
+                trees = trees.Append(snapshotTree).ToArray();
+            }
+
+            var snapshotCompilation = resolver != null
+                ? new Compilation(resolver, trees)
+                : new Compilation(trees);
+            snapshotCompilation.BodyCache = bodyCache;
+            return snapshotCompilation;
+        }
+    }
+
+    /// <summary>
     /// ADR-0105 (Phase 2): attempts to construct the next <see cref="Compilation"/>
     /// incrementally when the only change since <see cref="compilation"/> is a
     /// body-only edit to a single file. On success returns a new compilation
