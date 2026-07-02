@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using GSharp.Compiler;
@@ -107,7 +108,90 @@ public class Issue1716DelegateOverInterfaceRowReservationEmitTests
         Assert.Equal("103\n", output);
     }
 
-    private static string CompileAndRun(string source)
+    [Fact]
+    public void EndToEnd_InterfaceBodyConstructsPrimaryCtorStruct_Runs()
+    {
+        // Latent hazard #1 flagged in PR #1796 review: same root cause as the
+        // class ctor regression (ClassCtorHandles / ClassPrimaryCtorHandles
+        // populated too late for interface bodies to see), but for a VALUE
+        // TYPE. A data struct's primary-ctor handle is registered inside
+        // EmitDataStructSynthesizedMembers, called from EmitStructMethodBodies
+        // — which still runs AFTER EmitInterfaceMethodBodies. An interface
+        // `shared func` that `newobj`s a primary-ctor struct should still
+        // resolve the ctor handle.
+        const string source = """
+            package i1716struct
+            import System
+
+            inline struct Box1716(N int32) { }
+
+            interface IBoxFactory1716 {
+                shared {
+                    func Make(n int32) Box1716 {
+                        return Box1716(n)
+                    }
+                }
+            }
+
+            func Main() {
+                let b = IBoxFactory1716.Make(42)
+                System.Console.WriteLine(b.N)
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("42\n", output);
+    }
+
+    [Fact]
+    public void EndToEnd_InterfaceBodyConstructsNamedDelegate_Runs()
+    {
+        // Latent hazard #2 flagged in PR #1796 review: DelegateCtorHandles is
+        // populated inside EmitDelegateTypeDef, which still runs AFTER
+        // EmitInterfaceMethodBodies. An interface body performing a
+        // method-group -> named-delegate conversion should still resolve the
+        // delegate's .ctor MethodDef.
+        // The method-group source is another `shared` method on the SAME
+        // interface, emitted earlier in interface-body emission order — a
+        // top-level `func` source would additionally hit the (out-of-scope,
+        // unrelated) fact that top-level function MethodDef handles aren't
+        // registered until phase B4, later still than interface bodies.
+        const string source = """
+            package i1716del
+            import System
+
+            type IntFn1716D = delegate func(n int32) int32
+
+            interface IConverter1716 {
+                shared {
+                    func Double1716D(n int32) int32 { return n * 2 }
+                    func GetDoubler() IntFn1716D {
+                        var d IntFn1716D = IConverter1716.Double1716D
+                        return d
+                    }
+                }
+            }
+
+            func Main() {
+                let fn = IConverter1716.GetDoubler()
+                System.Console.WriteLine(fn.Invoke(21))
+            }
+            """;
+
+        // Issue #755's static-virtual interface members are always emitted
+        // Virtual|NewSlot (even the sole implementation), so ldftn on one for
+        // delegate creation trips ilverify's non-final-virtual check — a
+        // known, already-tracked ilverify gap for this feature (see
+        // IlVerifier.KnownIssues.StaticVirtualInterface for the sibling
+        // CallAbstract/Constrained codes); the CLR JIT accepts and dispatches
+        // the IL correctly, confirmed by the successful run below.
+        var output = CompileAndRun(
+            source,
+            ignoredIlVerifyErrorCodes: new[] { "LdftnNonFinalVirtual" });
+        Assert.Equal("42\n", output);
+    }
+
+    private static string CompileAndRun(string source, IEnumerable<string> ignoredIlVerifyErrorCodes = null)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_1716mg_exe_").FullName;
         try
@@ -145,7 +229,7 @@ public class Issue1716DelegateOverInterfaceRowReservationEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
 
-            IlVerifier.Verify(dllPath);
+            IlVerifier.Verify(dllPath, ignoredErrorCodes: ignoredIlVerifyErrorCodes);
 
             var rtConfig = Path.ChangeExtension(dllPath, ".runtimeconfig.json");
             if (!File.Exists(rtConfig))

@@ -1879,10 +1879,10 @@ internal sealed class ReflectionMetadataEmitter
         // later in this pass, right before class method bodies are emitted.
         // That pre-registration must happen here too — before interface
         // bodies are emitted — so a ctor call site inside an interface body
-        // can resolve the handle. This mirrors (and is intentionally
-        // duplicated by) the equivalent loop later in the pass; both loops
-        // derive the same handles from the same planned rows, so re-running
-        // it there for classes not covered by this early loop is harmless.
+        // can resolve the handle. The later pre-registration loop was
+        // removed; the handles claimed here are final (see the comment near
+        // `firstSmClassMethodRow` below, right before class method bodies are
+        // emitted, which documents that no further pre-registration runs).
         foreach (var c in nonSmClasses)
         {
             if (!classCtorRows.TryGetValue(c, out var firstCtorRow))
@@ -1917,6 +1917,35 @@ internal sealed class ReflectionMetadataEmitter
                     this.cache.ClassPrimaryCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(primaryRow);
                 }
             }
+        }
+
+        // Same hazard, same fix, for an `inline struct`'s primary ctor: an
+        // interface body may `newobj Box(n)` where `Box` is an inline struct
+        // (single-field value type). Its ctor handle is normally registered
+        // inside EmitInlineStructSynthesizedMembers, called from
+        // EmitStructMethodBodies — which also runs after interface bodies.
+        // Pre-register it from the row structFirstMethodRows reserved for it
+        // (PlanStructMethods above): the inline-struct ctor always occupies
+        // the first of its reserved rows. A `data struct` primary-ctor call
+        // is bound as a field-by-field BoundStructLiteralExpression instead
+        // of a ctor call, so it never needs a ClassPrimaryCtorHandles entry.
+        foreach (var s in nonSmStructs)
+        {
+            if (s.IsInline && structFirstMethodRows.TryGetValue(s, out var inlineCtorRow))
+            {
+                this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(inlineCtorRow);
+            }
+        }
+
+        // Same hazard, same fix, for a NAMED DELEGATE's ctor: an interface
+        // body may perform a method-group -> named-delegate conversion
+        // (`newobj` the delegate's compiler-provided ctor). DelegateCtorHandles
+        // is normally registered inside EmitDelegateTypeDef, which runs after
+        // interface bodies (see the Issue #1716 comment below). Pre-register
+        // it here from the row already reserved in delegateCtorRows above.
+        foreach (var d in delegates)
+        {
+            this.cache.DelegateCtorHandles[d] = MetadataTokens.MethodDefinitionHandle(delegateCtorRows[d]);
         }
 
         // Issue #1716: interface abstract/default method MethodDef rows are
