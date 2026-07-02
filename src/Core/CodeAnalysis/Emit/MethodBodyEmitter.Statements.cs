@@ -429,7 +429,12 @@ internal sealed partial class MethodBodyEmitter
         var endLabel = this.il.DefineLabel();
 
         this.il.MarkLabel(tryStart);
-        this.EmitStatement(node.Body);
+
+        // Issue #1615: the scope body is a protected region just like a
+        // try block — `return`/`break`/`goto` out of it must emit `leave`,
+        // not a bare `ret`/`br`. EmitProtectedRegion pushes the body's label
+        // set so region-crossing gotos are translated to `leave`.
+        this.EmitProtectedRegion((BoundBlockStatement)node.Body);
         this.il.Branch(ILOpCode.Leave, endLabel);
 
         this.il.MarkLabel(finallyStart);
