@@ -3158,17 +3158,48 @@ public sealed class Evaluator
             case BoundBinaryOperatorKind.NotEquals:
                 return !object.Equals(left, right);
             case BoundBinaryOperatorKind.Less:
-                return (int)left < (int)right;
             case BoundBinaryOperatorKind.LessOrEquals:
-                return (int)left <= (int)right;
             case BoundBinaryOperatorKind.Greater:
-                return (int)left > (int)right;
             case BoundBinaryOperatorKind.GreaterOrEquals:
-                return (int)left >= (int)right;
+                // Issue #1653: this used to hard-cast both operands to `int`,
+                // throwing InvalidCastException for any other discriminant
+                // width (double, long, uint, char, enum, ...). Route through
+                // the same width-aware NumericCompare the binary relational
+                // operators use (after unwrapping enum discriminants to their
+                // underlying numeric type, mirroring line ~2380) so a pattern
+                // comparison matches `<`/`<=`/`>`/`>=` operator semantics and
+                // the emitter's unsigned/NaN-aware opcodes (#421).
+                var relLeft = UnwrapEnumToUnderlying(left);
+                var relRight = UnwrapEnumToUnderlying(right);
+
+                // IEEE 754: every relational comparison against NaN is false.
+                // double/float.CompareTo instead sorts NaN as less than any
+                // other value, so NaN must be special-cased here to match the
+                // emitter's unordered handling rather than NumericCompare.
+                if (IsNaN(relLeft) || IsNaN(relRight))
+                {
+                    return false;
+                }
+
+                var cmp = NumericCompare(relLeft, relRight);
+                return op switch
+                {
+                    BoundBinaryOperatorKind.Less => cmp < 0,
+                    BoundBinaryOperatorKind.LessOrEquals => cmp <= 0,
+                    BoundBinaryOperatorKind.Greater => cmp > 0,
+                    _ => cmp >= 0,
+                };
             default:
                 throw new InvalidOperationException($"Unexpected relational pattern operator {op}.");
         }
     }
+
+    private static bool IsNaN(object value) => value switch
+    {
+        float f => float.IsNaN(f),
+        double d => double.IsNaN(d),
+        _ => false,
+    };
 
     private object EvaluateAwaitExpression(BoundAwaitExpression node)
     {
