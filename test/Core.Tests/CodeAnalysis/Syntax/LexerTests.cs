@@ -5,6 +5,7 @@
 using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
@@ -446,5 +447,36 @@ public class LexerTests
         Assert.Equal(2, fragments.Length);
         Assert.False(fragments[0].IsExpression);
         Assert.Equal("hello\n", fragments[0].Text);
+    }
+
+    [Fact]
+    public void EmbeddedNul_ReportsDiagnostic_AndDoesNotTruncateFile()
+    {
+        // Issue #1608: an embedded NUL used to be indistinguishable from EOF,
+        // silently dropping everything after it.
+        var tree = SyntaxTree.Parse("let a = 1\n\0let b = 2\n");
+
+        Assert.Contains(tree.Diagnostics, d => d.Message.Contains("Bad character", System.StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(2, tree.Root.Members.Length);
+    }
+
+    [Fact]
+    public void NormalInput_StillLexesToSingleTrailingEndOfFileToken()
+    {
+        var sourceText = SourceText.From("let a = 1");
+        var syntaxTree = SyntaxTree.Parse(sourceText);
+        var lexer = new Lexer(syntaxTree);
+        var tokens = new System.Collections.Generic.List<SyntaxToken>();
+        SyntaxToken token;
+        do
+        {
+            token = lexer.Lex();
+            tokens.Add(token);
+        }
+        while (token.Kind != SyntaxKind.EndOfFileToken);
+
+        Assert.Empty(lexer.Diagnostics);
+        Assert.Equal(SyntaxKind.EndOfFileToken, tokens[^1].Kind);
+        Assert.Single(tokens, t => t.Kind == SyntaxKind.EndOfFileToken);
     }
 }
