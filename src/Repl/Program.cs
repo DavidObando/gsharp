@@ -15,6 +15,12 @@ public static class Program
     {
         if (args.Length == 0)
         {
+            if (Console.IsInputRedirected)
+            {
+                Console.Error.WriteLine("gsi requires an interactive terminal");
+                return 1;
+            }
+
             return ReplHost.Run();
         }
 
