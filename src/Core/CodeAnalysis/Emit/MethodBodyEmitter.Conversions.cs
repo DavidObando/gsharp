@@ -717,21 +717,28 @@ internal sealed partial class MethodBodyEmitter
 
             op = ILOpCode.Conv_u4;
         }
-        else if (to.IsSameAs(typeof(long)))
+        else if (to.IsSameAs(typeof(long)) || to.IsSameAs(typeof(ulong))
+            || to.IsSameAs(typeof(nint)) || to.IsSameAs(typeof(nuint)))
         {
-            op = ILOpCode.Conv_i8;
-        }
-        else if (to.IsSameAs(typeof(ulong)))
-        {
-            op = ILOpCode.Conv_u8;
-        }
-        else if (to.IsSameAs(typeof(nint)))
-        {
-            op = ILOpCode.Conv_i;
-        }
-        else if (to.IsSameAs(typeof(nuint)))
-        {
-            op = ILOpCode.Conv_u;
+            // ECMA-335: widening to a 64-bit/native-int slot must
+            // sign-extend or zero-extend based on the SOURCE's
+            // signedness, not the target's. `uint32 -> int64` needs
+            // `conv.u8` (zero-extend); `int32 -> uint64` needs
+            // `conv.i8` (sign-extend). Float sources have no signedness
+            // distinction, so those keep the target-based opcode.
+            var fromFloat = from.IsSameAs(typeof(float)) || from.IsSameAs(typeof(double));
+            var useUnsigned = fromFloat
+                ? (to.IsSameAs(typeof(ulong)) || to.IsSameAs(typeof(nuint)))
+                : IsUnsignedClrType(from);
+
+            if (to.IsSameAs(typeof(long)) || to.IsSameAs(typeof(ulong)))
+            {
+                op = useUnsigned ? ILOpCode.Conv_u8 : ILOpCode.Conv_i8;
+            }
+            else
+            {
+                op = useUnsigned ? ILOpCode.Conv_u : ILOpCode.Conv_i;
+            }
         }
         else if (to.IsSameAs(typeof(float)))
         {

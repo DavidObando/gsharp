@@ -119,6 +119,104 @@ public class ConversionEmitTests
         Assert.Equal("Blue", result2.ToString());
     }
 
+    [Fact]
+    public void UInt32_To_Int64_Widens_As_Unsigned_Not_Sign_Extended()
+    {
+        // Issue #1612: `uint32 -> int64` must zero-extend (conv.u8), not
+        // sign-extend (conv.i8). 0xFFFFFFFF as uint32 is 4294967295, and
+        // that value must survive the widen unchanged.
+        var source = """
+            package P
+
+            func ToInt64(value uint32) int64 {
+                return int64(value)
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var toInt64 = program.GetMethod(
+            "ToInt64",
+            BindingFlags.Public | BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(toInt64);
+
+        var result = toInt64!.Invoke(null, new object[] { 0xFFFFFFFFu });
+        Assert.Equal(4294967295L, result);
+    }
+
+    [Fact]
+    public void Int32_To_UInt64_Widens_As_Signed_Sign_Extended()
+    {
+        // Issue #1612: `int32 -> uint64` must sign-extend (conv.i8), not
+        // zero-extend (conv.u8). -1 as int32 must become
+        // 0xFFFFFFFFFFFFFFFF, not 0x00000000FFFFFFFF.
+        var source = """
+            package P
+
+            func ToUInt64(value int32) uint64 {
+                return uint64(value)
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var toUInt64 = program.GetMethod(
+            "ToUInt64",
+            BindingFlags.Public | BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(toUInt64);
+
+        var result = toUInt64!.Invoke(null, new object[] { -1 });
+        Assert.Equal(0xFFFFFFFFFFFFFFFFUL, result);
+    }
+
+    [Fact]
+    public void UInt32_To_NInt_Widens_As_Unsigned_Not_Sign_Extended()
+    {
+        // Issue #1612 same defect on the native-int target: `uint32 ->
+        // nint` must zero-extend.
+        var source = """
+            package P
+
+            func ToNInt(value uint32) nint {
+                return nint(value)
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var toNInt = program.GetMethod(
+            "ToNInt",
+            BindingFlags.Public | BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(toNInt);
+
+        var result = toNInt!.Invoke(null, new object[] { 0xFFFFFFFFu });
+        Assert.Equal(unchecked((nint)4294967295L), result);
+    }
+
+    [Fact]
+    public void Int32_To_NUInt_Widens_As_Signed_Sign_Extended()
+    {
+        // Issue #1612 same defect on the native-uint target: `int32 ->
+        // nuint` must sign-extend.
+        var source = """
+            package P
+
+            func ToNUInt(value int32) nuint {
+                return nuint(value)
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var toNUInt = program.GetMethod(
+            "ToNUInt",
+            BindingFlags.Public | BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(toNUInt);
+
+        var result = toNUInt!.Invoke(null, new object[] { -1 });
+        Assert.Equal(unchecked((nuint)0xFFFFFFFFFFFFFFFFUL), result);
+    }
+
     private static Assembly CompileToAssembly(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_conv_emit_").FullName;
