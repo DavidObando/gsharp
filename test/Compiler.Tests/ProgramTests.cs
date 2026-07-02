@@ -32,6 +32,43 @@ public class ProgramTests
     }
 
     [Fact]
+    public void Main_Help_PrintsUsageAndReturnsSuccess()
+    {
+        using var outWriter = new StringWriter();
+        var prevOut = Console.Out;
+        Console.SetOut(outWriter);
+        try
+        {
+            var exit = Program.Main(new[] { "/?" });
+            Assert.Equal(0, exit);
+            Assert.Contains("Usage: gsc", outWriter.ToString());
+            Assert.Contains("/help", outWriter.ToString());
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+        }
+    }
+
+    [Fact]
+    public void Main_UnrecognizedSwitch_ReturnsError()
+    {
+        using var err = new StringWriter();
+        var prevErr = Console.Error;
+        Console.SetError(err);
+        try
+        {
+            var exit = Program.Main(new[] { "--badswitch" });
+            Assert.NotEqual(0, exit);
+            Assert.Contains("Unrecognized option", err.ToString());
+        }
+        finally
+        {
+            Console.SetError(prevErr);
+        }
+    }
+
+    [Fact]
     public void Main_MissingFile_ReturnsError()
     {
         using var err = new StringWriter();
