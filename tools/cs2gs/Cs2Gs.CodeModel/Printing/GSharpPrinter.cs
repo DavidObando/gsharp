@@ -274,89 +274,75 @@ public static class GSharpPrinter
         return string.IsNullOrEmpty(argument.Name) ? value : $"{argument.Name}: {value}";
     }
 
-    private static string RenderStringLiteralBody(string value)
+    // Shared escaper for double-quoted string/interpolation bodies and
+    // single-quoted char bodies. `quoteChar` is the delimiter that needs
+    // backslash-escaping for the given literal kind ('"' for strings and
+    // interpolations, '\'' for chars); `escapeDollar` doubles '$' so it can't
+    // be mistaken for an interpolation hole (only applies to string forms —
+    // char literals have no interpolation syntax). Matches exactly the
+    // escapes G#'s lexer accepts (Lexer.cs ReadCharLiteral / string scanning):
+    // \\, \", \', \n, \r, \t, and \uXXXX for other control/non-printable
+    // chars.
+    private static string RenderEscapedLiteralBody(string value, char quoteChar, bool escapeDollar)
     {
         var sb = new StringBuilder();
         foreach (var ch in value)
         {
-            switch (ch)
+            if (ch == '\\')
             {
-                case '\\':
-                    sb.Append("\\\\");
-                    break;
-                case '"':
-                    sb.Append("\\\"");
-                    break;
-                case '$':
-                    sb.Append("$$");
-                    break;
-                case '\n':
-                    sb.Append("\\n");
-                    break;
-                case '\r':
-                    sb.Append("\\r");
-                    break;
-                case '\t':
-                    sb.Append("\\t");
-                    break;
-                default:
-                    if (ch < ' ' || ch == '\u007F')
-                    {
-                        sb.Append("\\u").Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture));
-                    }
-                    else
-                    {
-                        sb.Append(ch);
-                    }
+                sb.Append("\\\\");
+            }
+            else if (ch == quoteChar)
+            {
+                sb.Append('\\').Append(quoteChar);
+            }
+            else if (escapeDollar && ch == '$')
+            {
+                sb.Append("$$");
+            }
+            else
+            {
+                switch (ch)
+                {
+                    case '\n':
+                        sb.Append("\\n");
+                        break;
+                    case '\r':
+                        sb.Append("\\r");
+                        break;
+                    case '\t':
+                        sb.Append("\\t");
+                        break;
+                    default:
+                        if (ch < ' ' || ch == '\u007F')
+                        {
+                            sb.Append("\\u").Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture));
+                        }
+                        else
+                        {
+                            sb.Append(ch);
+                        }
 
-                    break;
+                        break;
+                }
             }
         }
 
         return sb.ToString();
     }
 
-    private static string RenderInterpolationText(string value)
-    {
-        var sb = new StringBuilder();
-        foreach (var ch in value)
-        {
-            switch (ch)
-            {
-                case '\\':
-                    sb.Append("\\\\");
-                    break;
-                case '"':
-                    sb.Append("\\\"");
-                    break;
-                case '$':
-                    sb.Append("$$");
-                    break;
-                case '\n':
-                    sb.Append("\\n");
-                    break;
-                case '\r':
-                    sb.Append("\\r");
-                    break;
-                case '\t':
-                    sb.Append("\\t");
-                    break;
-                default:
-                    if (ch < ' ' || ch == '\u007F')
-                    {
-                        sb.Append("\\u").Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture));
-                    }
-                    else
-                    {
-                        sb.Append(ch);
-                    }
+    private static string RenderStringLiteralBody(string value) =>
+        RenderEscapedLiteralBody(value, '"', escapeDollar: true);
 
-                    break;
-            }
-        }
+    private static string RenderInterpolationText(string value) =>
+        RenderEscapedLiteralBody(value, '"', escapeDollar: true);
 
-        return sb.ToString();
-    }
+    // Issue #1722: char literals must escape the closing quote, backslash,
+    // and control chars the same way strings do, or C#'s '\'' , '\\', '\n',
+    // etc. produce malformed/corrupted G# (empty literal, unterminated
+    // literal, or raw control bytes in the output file).
+    private static string RenderCharLiteralBody(string value) =>
+        RenderEscapedLiteralBody(value, '\'', escapeDollar: false);
 
     private static string RenderExpression(GExpression expression, int indent)
     {
@@ -560,7 +546,7 @@ public static class GSharpPrinter
             case LiteralKind.String:
                 return $"\"{RenderStringLiteralBody(literal.Value)}\"";
             case LiteralKind.Char:
-                return $"'{literal.Value}'";
+                return $"'{RenderCharLiteralBody(literal.Value)}'";
             default:
                 return literal.Value;
         }
