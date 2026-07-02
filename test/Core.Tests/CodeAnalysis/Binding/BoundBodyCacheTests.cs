@@ -287,6 +287,43 @@ public class BoundBodyCacheTests
         Assert.Equal(fromScratchPe, fromCachePe);
     }
 
+    /// <summary>
+    /// Issue #1645 — repeatedly editing one member's body must not leak stale
+    /// entries: only the current (memberId, bodyHash) stays cached, while a
+    /// lookup for that current body still hits.
+    /// </summary>
+    [Fact]
+    public void Store_Evicts_Stale_BodyHashes_For_Same_Member_On_Edit()
+    {
+        var cache = new BoundBodyCache();
+        BoundBodyCacheKey lastKey = default;
+        FunctionSymbol lastFunction = null;
+
+        for (var i = 0; i < 5; i++)
+        {
+            var source = $$"""
+                package P
+                func F(x int) int {
+                    return x + {{i}}
+                }
+                """;
+            var globalScope = BindGlobalScope(source);
+            var function = globalScope.Functions.Single(f => f.Name == "F");
+            var body = new BoundBlockStatement(function.Declaration.Body, ImmutableArray<BoundStatement>.Empty);
+
+            cache.Store(function, function.Declaration.Body, body, ImmutableArray<Diagnostic>.Empty);
+
+            lastFunction = function;
+            Assert.True(BoundBodyCache.TryCreateKey(function, function.Declaration.Body, out lastKey));
+        }
+
+        // Only the most recent edit's body survives — no unbounded growth.
+        Assert.Equal(1, cache.Count);
+
+        // The current (memberId, bodyHash) still hits.
+        Assert.True(cache.TryReuse(lastFunction, lastFunction.Declaration.Body, out _, out _));
+    }
+
     private static byte[] EmitToBytes(BoundProgram program)
     {
         using var stream = new MemoryStream();

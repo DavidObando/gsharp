@@ -75,6 +75,12 @@ public sealed class BoundBodyCache
 {
     private readonly ConcurrentDictionary<BoundBodyCacheKey, Entry> entries = new();
 
+    // ponytail: only the latest body per member is ever reusable (an edit makes
+    // every prior bodyHash for that member unreachable — see TryReuse's
+    // ReferenceEquals gate), so tracking the current key per member and evicting
+    // its predecessor keeps the cache at O(members) instead of growing with every edit.
+    private readonly ConcurrentDictionary<string, BoundBodyCacheKey> latestKeyByMember = new();
+
     private long hits;
     private long misses;
     private long stores;
@@ -87,6 +93,9 @@ public sealed class BoundBodyCache
 
     /// <summary>Gets the number of bodies stored into the cache so far.</summary>
     public long Stores => Interlocked.Read(ref stores);
+
+    /// <summary>Gets the number of entries currently retained in the cache.</summary>
+    public int Count => entries.Count;
 
     /// <summary>
     /// Computes the stable, content-addressed key for a member body. Returns
@@ -187,6 +196,15 @@ public sealed class BoundBodyCache
 
         entries[key] = new Entry(member, loweredBody, diagnostics.IsDefault ? ImmutableArray<Diagnostic>.Empty : diagnostics);
         Interlocked.Increment(ref stores);
+
+        // Evict the previous body for this member (if any and if different):
+        // a superseded bodyHash can never hit again, so keeping it is a pure leak.
+        var priorKey = latestKeyByMember.GetOrAdd(key.StableMemberId, key);
+        if (!priorKey.Equals(key))
+        {
+            latestKeyByMember[key.StableMemberId] = key;
+            entries.TryRemove(priorKey, out _);
+        }
     }
 
     private static string ComputeContainingTypePath(FunctionSymbol member)
