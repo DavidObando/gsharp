@@ -447,13 +447,22 @@ internal sealed partial class ExpressionBinder
         return new BoundAwaitExpression(null, operand, element, TryGetAwaiterTypeSymbol(operand.Type));
     }
 
+    // Issue #1785: `Task[T?]` for a same-compilation user value type
+    // (struct/enum) wraps T in a NullableTypeSymbol, whose ClrType is null
+    // just like the bare struct/enum case. Symbol-based detection (not
+    // ClrType.IsValueType, which is null for in-flight user types) is
+    // required to recognize it below.
+    private static bool IsAwaiterTypeArgumentCandidate(TypeSymbol a) =>
+        a is StructSymbol or InterfaceSymbol or EnumSymbol
+        || (a is NullableTypeSymbol nt && nt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol);
+
     private static TypeSymbol TryGetAwaiterTypeSymbol(TypeSymbol awaitableType)
     {
         if (awaitableType is not ImportedTypeSymbol importedAwaitable
             || importedAwaitable.OpenDefinition == null
             || importedAwaitable.TypeArguments.IsDefaultOrEmpty
             || importedAwaitable.HasTypeParameterArgument
-            || !importedAwaitable.TypeArguments.Any(static a => a is StructSymbol or InterfaceSymbol or EnumSymbol))
+            || !importedAwaitable.TypeArguments.Any(IsAwaiterTypeArgumentCandidate))
         {
             return null;
         }

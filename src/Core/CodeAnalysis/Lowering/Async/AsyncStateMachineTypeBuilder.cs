@@ -115,7 +115,8 @@ public static class AsyncStateMachineTypeBuilder
         sm.StateField = stateField;
 
         var builderFieldType = TypeSymbol.FromClrType(builderInfo.BuilderType);
-        if (kickoff.Type is StructSymbol or InterfaceSymbol or EnumSymbol
+        if ((kickoff.Type is StructSymbol or InterfaceSymbol or EnumSymbol
+                || (kickoff.Type is NullableTypeSymbol nullableUserVt3 && nullableUserVt3.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol))
             && builderInfo.BuilderType is { IsConstructedGenericType: true } builderClrType)
         {
             builderFieldType = ImportedTypeSymbol.GetConstructed(
@@ -230,7 +231,15 @@ public static class AsyncStateMachineTypeBuilder
             inner = kickoff.Type?.ClrType;
             if (inner == null)
             {
-                if (kickoff.Type is StructSymbol or InterfaceSymbol or EnumSymbol)
+                // Issue #1785: a nullable same-compilation user value type
+                // (`UserStruct?`/`UserEnum?`) reaches here too — the
+                // `IsValueType: true` probe above uses `nullable.UnderlyingType.ClrType`,
+                // which is null for a user struct/enum, so it fails to match
+                // and falls through. Erase to `object` the same way the bare
+                // struct/enum case does, using symbol-based detection instead
+                // of the null ClrType.
+                if (kickoff.Type is StructSymbol or InterfaceSymbol or EnumSymbol
+                    || (kickoff.Type is NullableTypeSymbol nullableUserVt2 && nullableUserVt2.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol))
                 {
                     inner = references.MapClrTypeToReferences(typeof(object));
                 }
