@@ -268,7 +268,25 @@ public static class HtmlReportWriter
 
         if (model.Gaps.Count == 0)
         {
-            sb.Append("<p class=\"empty\">No gaps — every app is green.</p>").Append(Newline);
+            if (model.IsGreen)
+            {
+                sb.Append("<p class=\"empty\">No gaps — every app is green.</p>").Append(Newline);
+            }
+            else if (model.MissingArtifactCount > 0)
+            {
+                sb.Append("<p class=\"empty bad\">Gap data unavailable — ")
+                    .Append(model.MissingArtifactCount.ToString(CultureInfo.InvariantCulture))
+                    .Append(" triage artifact(s) referenced by this run could not be read. ")
+                    .Append("This is NOT a green run; re-run triage or inspect the run directory.</p>")
+                    .Append(Newline);
+            }
+            else
+            {
+                sb.Append("<p class=\"empty bad\">Run FAILED with no recorded gaps — check pipeline logs; ")
+                    .Append("this is NOT a green run.</p>")
+                    .Append(Newline);
+            }
+
             sb.Append("</section>").Append(Newline);
             return;
         }

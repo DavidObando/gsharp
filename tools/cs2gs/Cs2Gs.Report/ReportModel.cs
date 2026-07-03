@@ -69,6 +69,32 @@ public sealed class ReportModel
     public List<GapReport> Gaps { get; set; } = new List<GapReport>();
 
     /// <summary>
+    /// Gets or sets the number of triage artifact paths referenced by <c>run.json</c>
+    /// that could not be found on disk when the model was built. A run whose apps
+    /// reference artifacts that are missing (deleted, not yet copied, or a
+    /// truncated/partial run) has incomplete gap data even when
+    /// <see cref="Gaps"/> ends up empty; consumers must not read an empty
+    /// <see cref="Gaps"/> list as "no gaps" unless this is also zero. See
+    /// <see cref="IsGreen"/>.
+    /// </summary>
+    [JsonPropertyName("missingArtifactCount")]
+    [JsonPropertyOrder(9)]
+    public int MissingArtifactCount { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether the run is genuinely green: it must be
+    /// based on positive evidence — the run itself reported success
+    /// (<see cref="Succeeded"/>), every referenced triage artifact was
+    /// readable (<see cref="MissingArtifactCount"/> is zero), and no gaps were
+    /// discovered (<see cref="Gaps"/> is empty) — never on the mere absence of
+    /// gap data, which can also mean the triage artifacts were missing or the
+    /// run failed outright.
+    /// </summary>
+    [JsonPropertyName("isGreen")]
+    [JsonPropertyOrder(10)]
+    public bool IsGreen => this.Succeeded && this.MissingArtifactCount == 0 && this.Gaps.Count == 0;
+
+    /// <summary>
     /// Gets or sets the absolute run directory the model was built from (i.e.
     /// the directory <see cref="AppReport.Artifacts"/> paths are relative to).
     /// Not part of the <c>summary.json</c> schema; used only so
@@ -125,6 +151,7 @@ public sealed class ReportModel
 
         var apps = new List<AppReport>();
         var artifacts = new List<(string AppId, TriageArtifact Artifact)>();
+        int missingArtifactCount = 0;
 
         foreach (AppResult app in run.Apps.OrderBy(a => a.AppId, StringComparer.Ordinal))
         {
@@ -135,15 +162,23 @@ public sealed class ReportModel
                 string artifactPath = Path.Combine(runDir, relative.Replace('/', Path.DirectorySeparatorChar));
                 if (!File.Exists(artifactPath))
                 {
+                    missingArtifactCount++;
+                    Console.Error.WriteLine(
+                        $"cs2gs: warning: triage artifact '{relative}' referenced by app '{app.AppId}' is missing under {runDir}; gap data is incomplete.");
                     continue;
                 }
 
                 TriageArtifact artifact = JsonSerializer.Deserialize<TriageArtifact>(
                     File.ReadAllText(artifactPath), TriageSerialization.Options);
-                if (artifact is not null)
+                if (artifact is null)
                 {
-                    artifacts.Add((app.AppId, artifact));
+                    missingArtifactCount++;
+                    Console.Error.WriteLine(
+                        $"cs2gs: warning: triage artifact '{relative}' referenced by app '{app.AppId}' did not deserialize; gap data is incomplete.");
+                    continue;
                 }
+
+                artifacts.Add((app.AppId, artifact));
             }
         }
 
@@ -160,6 +195,7 @@ public sealed class ReportModel
             StageOrder = stageOrder,
             Apps = apps,
             Gaps = GroupGaps(artifacts),
+            MissingArtifactCount = missingArtifactCount,
             RunDir = Path.GetFullPath(runDir),
         };
     }

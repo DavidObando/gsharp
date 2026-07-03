@@ -19,6 +19,7 @@
     <ProjectReference Include="..\Cs2Gs.Translator\Cs2Gs.Translator.csproj" />
     <ProjectReference Include="..\Cs2Gs.Pipeline\Cs2Gs.Pipeline.csproj" />
     <ProjectReference Include="..\Cs2Gs.Report\Cs2Gs.Report.csproj" />
+    <ProjectReference Include="..\Cs2Gs.Cli\Cs2Gs.Cli.csproj" />
   </ItemGroup>
 
   <ItemGroup>
