@@ -204,7 +204,7 @@ internal static class Program
                 }
             }
         }
-        catch (ArgumentException ex)
+        catch (MissingOptionValueException ex)
         {
             Console.Error.WriteLine("cs2gs: " + ex.Message);
             PrintUsage();
@@ -340,7 +340,7 @@ internal static class Program
                         return null;
                 }
             }
-            catch (ArgumentException ex)
+            catch (MissingOptionValueException ex)
             {
                 Console.Error.WriteLine("cs2gs: " + ex.Message);
                 PrintUsage();
@@ -364,18 +364,21 @@ internal static class Program
     /// <summary>
     /// Reads the value following an option flag (e.g. <c>--gsc &lt;path&gt;</c>).
     /// </summary>
-    /// <exception cref="ArgumentException">
+    /// <exception cref="MissingOptionValueException">
     /// The flag was the last token with no value following it. Callers catch
-    /// this alongside the unknown-option case and route it through the same
-    /// print-usage/return-1 path — a missing value is a usage error, not an
-    /// internal error, so it must not escape to <see cref="Main"/>'s generic
-    /// catch (which reports exit code 2).
+    /// this specific type and route it through the print-usage/return-1 path —
+    /// a missing value is a usage error, not an internal error. Using a
+    /// dedicated sentinel (rather than the base <see cref="ArgumentException"/>)
+    /// keeps that catch from also swallowing an unrelated
+    /// <see cref="ArgumentException"/> thrown by a case body (e.g. a future
+    /// validating option setter), which must still escape to <see cref="Main"/>'s
+    /// generic catch (exit code 2).
     /// </exception>
     private static string NextValue(string[] args, ref int index, string flag)
     {
         if (index + 1 >= args.Length)
         {
-            throw new ArgumentException($"option '{flag}' requires a value.");
+            throw new MissingOptionValueException($"option '{flag}' requires a value.");
         }
 
         return args[++index];
@@ -481,5 +484,18 @@ internal static class Program
         Console.WriteLine("A migrate run also writes report.html + summary.json into the run dir automatically (ADR-0115 §F).");
         Console.WriteLine();
         Console.WriteLine("Exit code is non-zero if any app fails a stage (so CI can gate).");
+    }
+
+    /// <summary>
+    /// Sentinel exception thrown by <see cref="NextValue"/> when an option's
+    /// value is missing, so verb loops can catch exactly this case as a usage
+    /// error without also catching unrelated <see cref="ArgumentException"/>s.
+    /// </summary>
+    private sealed class MissingOptionValueException : ArgumentException
+    {
+        public MissingOptionValueException(string message)
+            : base(message)
+        {
+        }
     }
 }
