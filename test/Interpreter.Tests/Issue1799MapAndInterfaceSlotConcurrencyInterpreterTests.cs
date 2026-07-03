@@ -166,6 +166,151 @@ public class Issue1799MapAndInterfaceSlotConcurrencyInterpreterTests
     }
 
     [Fact]
+    public void ManyConcurrentRuns_OneGoroutineRangesWhileOthersWrite_NeverThrowsCollectionModified()
+    {
+        // Opus review follow-up (blocking gap B1): the language sugar
+        // `for k, v in m` isn't currently wired for a native `map[K,V]`
+        // literal (only for imported CLR `Dictionary[K,V]`), but the
+        // underlying access it would lower to — `m.GetEnumerator()` /
+        // `MoveNext()` / `.Current.Key`/`.Value` — is directly reachable
+        // today and dispatches through the interpreter's generic
+        // CLR-reflection call path (EvaluateImportedInstanceCallExpression /
+        // EvaluateClrPropertyAccessExpression), a path the base #1799 fix
+        // never touched. One goroutine walks the shared map's enumerator in
+        // a hot loop while N others write distinct keys concurrently;
+        // without routing GetEnumerator() through GetMapLock (and returning
+        // an enumerator over a private clone) this reliably throws
+        // InvalidOperationException: "Collection was modified" or a
+        // NullReferenceException from a torn bucket read.
+        var source = """
+            func writer(m map[string,int32], key string, value int32) int32 {
+                for var i = 0; i < 20; i++ {
+                    m[key] = value
+                }
+
+                return 0
+            }
+
+            func rangeReader(m map[string,int32]) int32 {
+                var total = 0
+                for var i = 0; i < 20; i++ {
+                    var e = m.GetEnumerator()
+                    while e.MoveNext() {
+                        total = total + e.Current.Value
+                    }
+                }
+
+                return total
+            }
+
+            func run() int32 {
+                var m = map[string,int32]{}
+                scope {
+                    go rangeReader(m)
+                    for var i = 0; i < 16; i++ {
+                        go writer(m, "k" + i.ToString(), i)
+                    }
+                }
+
+                return 0
+            }
+
+            run()
+            """;
+
+        const int iterations = 200;
+        var exceptions = new System.Collections.Concurrent.ConcurrentBag<System.Exception>();
+        System.Threading.Tasks.Parallel.For(
+            0,
+            iterations,
+            new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = 16 },
+            _ =>
+            {
+                try
+                {
+                    var result = Evaluate(source);
+                    AssertNoRealDiagnostics(result);
+                }
+                catch (System.Exception ex)
+                {
+                    exceptions.Add(ex);
+                }
+            });
+
+        Assert.Empty(exceptions);
+    }
+
+    [Fact]
+    public void ManyConcurrentRuns_LenAndContainsKeyAndKeysReadWhileWriting_NeverThrows()
+    {
+        // Same gap as above (B1) but for the other reflection-dispatched
+        // members named in the review: `len(m)` (Count), `m.ContainsKey(k)`,
+        // and `m.Keys` all resolve to real Dictionary<,> members via CLR
+        // reflection and must serialize on the same per-map lock as
+        // index/delete/range.
+        var source = """
+            func writer(m map[string,int32], key string, value int32) int32 {
+                for var i = 0; i < 20; i++ {
+                    m[key] = value
+                }
+
+                return 0
+            }
+
+            func reader(m map[string,int32]) int32 {
+                var total = 0
+                for var i = 0; i < 20; i++ {
+                    total = total + len(m)
+                    if m.ContainsKey("k0") {
+                        total = total + 1
+                    }
+
+                    for k in m.Keys {
+                        total = total + 1
+                    }
+                }
+
+                return total
+            }
+
+            func run() int32 {
+                var m = map[string,int32]{}
+                scope {
+                    go reader(m)
+                    for var i = 0; i < 16; i++ {
+                        go writer(m, "k" + i.ToString(), i)
+                    }
+                }
+
+                return 0
+            }
+
+            run()
+            """;
+
+        const int iterations = 200;
+        var exceptions = new System.Collections.Concurrent.ConcurrentBag<System.Exception>();
+        System.Threading.Tasks.Parallel.For(
+            0,
+            iterations,
+            new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = 16 },
+            _ =>
+            {
+                try
+                {
+                    var result = Evaluate(source);
+                    AssertNoRealDiagnostics(result);
+                }
+                catch (System.Exception ex)
+                {
+                    exceptions.Add(ex);
+                }
+            });
+
+        Assert.Empty(exceptions);
+    }
+
+    [Fact]
     public void InterfaceSlotResolution_TwoInScopeImplementers_PicksSameOneEveryRun()
     {
         // "Strategy 2" of EvaluateConstrainedStaticCallExpression walks the

@@ -1260,6 +1260,8 @@ public sealed class Evaluator
         return array;
     }
 
+    // concurrency: ALL interpreter-owned Dictionary access must go through
+    // GetMapLock — see MapLocks.
     private object EvaluateMapLiteralExpression(BoundMapLiteralExpression node)
     {
         var keyClr = node.MapType.KeyType.ClrType ?? typeof(object);
@@ -1297,6 +1299,58 @@ public sealed class Evaluator
     // `dict` (see the <see cref="MapLocks"/> field doc for why maps need
     // this instead of a ConcurrentDictionary swap).
     private static object GetMapLock(object dict) => MapLocks.GetValue(dict, static _ => new object());
+
+    // concurrency: ALL interpreter-owned Dictionary access must go through
+    // GetMapLock — see MapLocks. Issue #1799 follow-up: index get/set,
+    // delete, and len (above) aren't the only paths into a map's backing
+    // Dictionary<,> — `range m`, `m.Count`, `m.ContainsKey(k)`, `m.Keys`,
+    // `m.Values`, and any other dot-member access on a map value dispatch
+    // through the interpreter's generic CLR-reflection call/property paths
+    // (EvaluateImportedInstanceCallExpression / EvaluateClrPropertyAccessExpression),
+    // which never touched this lock. Both of those central dispatch points
+    // now call this single helper so every reflection-based access to an
+    // interpreter-owned map is serialized the same way, instead of scattering
+    // per-member special cases.
+    private static bool TryGetInterpreterMapLock(object receiver, out object lockObj)
+    {
+        if (receiver is System.Collections.IDictionary)
+        {
+            lockObj = GetMapLock(receiver);
+            return true;
+        }
+
+        lockObj = null;
+        return false;
+    }
+
+    // Issue #1799 follow-up: `GetEnumerator()`/`Keys`/`Values` normally
+    // return a live view over the dictionary's own storage — an enumerator
+    // that throws "Collection was modified" on a concurrent write, or a
+    // KeyCollection/ValueCollection backed by the same buckets. Neither can
+    // be made safe by locking just the call that *produces* them, since the
+    // caller keeps using the result (MoveNext/Current, further iteration)
+    // long after the lock is released. Instead, clone the dictionary while
+    // holding <see cref="GetMapLock"/> and hand back a view over the CLONE:
+    // the clone is only ever reachable by the calling goroutine, so no
+    // further locking is needed, no concurrent writer can invalidate it, and
+    // no deadlock is possible even if the loop body itself writes back to
+    // the original map.
+    private static System.Collections.IDictionary CloneMapSnapshot(System.Collections.IDictionary dict)
+    {
+        var clone = (System.Collections.IDictionary)System.Activator.CreateInstance(dict.GetType());
+        foreach (System.Collections.DictionaryEntry entry in dict)
+        {
+            clone[entry.Key] = entry.Value;
+        }
+
+        return clone;
+    }
+
+    // Member names whose result is a live view over the dictionary rather
+    // than a plain value snapshot — these need <see cref="CloneMapSnapshot"/>
+    // instead of a direct invoke/get against the real map.
+    private static bool IsMapViewMember(string name) =>
+        name is "GetEnumerator" or "Keys" or "Values";
 
     private object EvaluateMapDeleteExpression(BoundMapDeleteExpression node)
     {
@@ -1966,6 +2020,25 @@ public sealed class Evaluator
         // implement `IEnumerator<object>`. Route through the matching
         // closed-generic interface on the receiver's runtime type.
         var member = ResolvePropertyOrFieldForReceiver(node.Member, receiver);
+
+        // concurrency: see TryGetInterpreterMapLock — routes `m.Count`,
+        // `m.Keys`, `m.Values`, etc. through the same per-map lock as
+        // index/delete/len.
+        if (TryGetInterpreterMapLock(receiver, out var mapLock))
+        {
+            lock (mapLock)
+            {
+                var propReceiver = IsMapViewMember(member.Name)
+                    ? CloneMapSnapshot((System.Collections.IDictionary)receiver)
+                    : receiver;
+                return member switch
+                {
+                    System.Reflection.PropertyInfo p => p.GetValue(propReceiver),
+                    System.Reflection.FieldInfo f => f.GetValue(propReceiver),
+                    _ => throw new EvaluatorException($"Unsupported CLR member kind '{node.Member.MemberType}'.", node),
+                };
+            }
+        }
 
         return member switch
         {
@@ -4479,6 +4552,24 @@ public sealed class Evaluator
         var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
 
         var method = ResolveMethodForReceiver(node.Method, receiver);
+
+        // concurrency: see TryGetInterpreterMapLock — routes `range m`'s
+        // `GetEnumerator()`/`MoveNext()`, `m.ContainsKey(k)`, `m.Remove(k)`,
+        // and any other reflection-dispatched method call whose receiver is
+        // an interpreter-owned map through the same per-map lock as
+        // index/delete/len.
+        if (TryGetInterpreterMapLock(receiver, out var mapLock))
+        {
+            lock (mapLock)
+            {
+                var invokeReceiver = IsMapViewMember(method.Name)
+                    ? CloneMapSnapshot((System.Collections.IDictionary)receiver)
+                    : receiver;
+                var lockedResult = method.Invoke(invokeReceiver, args);
+                WriteBackRefSlots(refSlots, args);
+                return lockedResult;
+            }
+        }
 
         var result = method.Invoke(receiver, args);
         WriteBackRefSlots(refSlots, args);
