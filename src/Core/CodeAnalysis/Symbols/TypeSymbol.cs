@@ -610,55 +610,32 @@ public class TypeSymbol : Symbol
         switch (type)
         {
             case null:
-                return false;
             case TypeParameterSymbol:
-                return false;
-            case NullableTypeSymbol n:
-                return ContainsSameCompilationUserType(n.UnderlyingType);
-            case SliceTypeSymbol s:
-                return ContainsSameCompilationUserType(s.ElementType);
-            case ArrayTypeSymbol a:
-                return ContainsSameCompilationUserType(a.ElementType);
-            case MapTypeSymbol m:
-                return ContainsSameCompilationUserType(m.KeyType) || ContainsSameCompilationUserType(m.ValueType);
-            case FunctionTypeSymbol fn:
-                foreach (var param in fn.ParameterTypes)
-                {
-                    if (ContainsSameCompilationUserType(param))
-                    {
-                        return true;
-                    }
-                }
-
-                return ContainsSameCompilationUserType(fn.ReturnType);
-            case TupleTypeSymbol tup:
-                foreach (var elem in tup.ElementTypes)
-                {
-                    if (ContainsSameCompilationUserType(elem))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
-            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
-                foreach (var arg in it.TypeArguments)
-                {
-                    if (ContainsSameCompilationUserType(arg))
-                    {
-                        return true;
-                    }
-                }
-
                 return false;
             case StructSymbol:
             case EnumSymbol:
             case InterfaceSymbol:
             case DelegateTypeSymbol:
                 return type.ClrType == null;
-            default:
-                return false;
         }
+
+        // Issue #1790: every other kind is a wrapper/constructed type — recurse
+        // through its immediate inner type(s) via the single canonical
+        // enumerator below instead of hand-copying a per-wrapper switch here.
+        // This is what previously let Sequence/AsyncSequence/Channel/ByRef/
+        // Pointer (whose CLR shape collapses to null when their element/
+        // pointee is a same-compilation user type) fall through to the
+        // "default: false" arm and alias across compilations (see
+        // <see cref="FunctionTypeSymbol.AppendIdentityKey"/>).
+        foreach (var inner in GetWrappedTypes(type))
+        {
+            if (ContainsSameCompilationUserType(inner))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -695,6 +672,94 @@ public class TypeSymbol : Symbol
                 return type.ClrType == null;
             default:
                 return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1790: the single canonical enumeration of a wrapper/constructed
+    /// <see cref="TypeSymbol"/>'s immediate inner type(s) — the element,
+    /// pointee, key/value, parameter/return, or type-argument slot(s) the
+    /// composite type structurally carries. Every generic/wrapper kind that
+    /// can carry another type is listed here exactly once so callers such as
+    /// <see cref="ContainsSameCompilationUserType"/> recurse uniformly rather
+    /// than each maintaining its own divergent switch (the class of bug that
+    /// let several wrapper kinds silently fall through as "no inner type").
+    /// Leaf kinds (primitives, same-compilation user types, type parameters)
+    /// are not wrappers and yield nothing here; their callers handle them
+    /// directly. Each yielded type is a strict substructure of
+    /// <paramref name="type"/> (types form a DAG built during binding, never
+    /// a cycle back to themselves), so recursive callers always terminate.
+    /// </summary>
+    /// <param name="type">The wrapper/constructed type to unwrap.</param>
+    /// <returns>The type's immediate inner type(s); empty for a leaf kind.</returns>
+    private static IEnumerable<TypeSymbol> GetWrappedTypes(TypeSymbol type)
+    {
+        switch (type)
+        {
+            case NullableTypeSymbol n:
+                yield return n.UnderlyingType;
+                break;
+            case SliceTypeSymbol s:
+                yield return s.ElementType;
+                break;
+            case ArrayTypeSymbol a:
+                yield return a.ElementType;
+                break;
+            case PinnedTypeSymbol p:
+                yield return p.UnderlyingType;
+                break;
+            case NullabilityAnnotatedTypeSymbol na:
+                yield return na.BaseType;
+                break;
+            case SequenceTypeSymbol seq:
+                yield return seq.ElementType;
+                break;
+            case AsyncSequenceTypeSymbol aseq:
+                yield return aseq.ElementType;
+                break;
+            case ChannelTypeSymbol ch:
+                yield return ch.ElementType;
+                break;
+            case ByRefTypeSymbol br:
+                yield return br.PointeeType;
+                break;
+            case PointerTypeSymbol ptr:
+                yield return ptr.PointeeType;
+                break;
+            case MapTypeSymbol m:
+                yield return m.KeyType;
+                yield return m.ValueType;
+                break;
+            case FunctionTypeSymbol fn:
+                foreach (var param in fn.ParameterTypes)
+                {
+                    yield return param;
+                }
+
+                yield return fn.ReturnType;
+                break;
+            case FunctionPointerTypeSymbol fp:
+                foreach (var param in fp.ParameterTypes)
+                {
+                    yield return param;
+                }
+
+                yield return fp.ReturnType;
+                break;
+            case TupleTypeSymbol tup:
+                foreach (var elem in tup.ElementTypes)
+                {
+                    yield return elem;
+                }
+
+                break;
+            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in it.TypeArguments)
+                {
+                    yield return arg;
+                }
+
+                break;
         }
     }
 }
