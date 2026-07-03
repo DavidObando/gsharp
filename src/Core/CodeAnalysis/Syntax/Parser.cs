@@ -9102,7 +9102,17 @@ public class Parser
             suppressStructLiteral = 0;
             try
             {
-                value = ParseExpression();
+                // Issue #1858: `Prop = { a, b }` mirrors the struct-literal
+                // target-less collection-initializer carve-out (issue #1567,
+                // `ParseFieldInitializerValue`) — a brace can never start a
+                // normal expression in value position, so its presence
+                // unambiguously selects the member collection-initializer form
+                // rather than an ordinary assignment value. This lets the
+                // construction-with-initializer-suffix form (issue #522) carry
+                // a nested collection member alongside constructor arguments.
+                value = Current.Kind == SyntaxKind.OpenBraceToken
+                    ? ParseCollectionInitializerExpression(target: null)
+                    : ParseExpression();
             }
             finally
             {

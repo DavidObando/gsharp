@@ -119,16 +119,15 @@ namespace Demo
     }
 
     [Fact]
-    public void CtorArgsPlusNestedCollectionInitializerMember_ReportsUnsupported()
+    public void CtorArgsPlusNestedCollectionInitializerMember_EmitsFaithfulSuffix()
     {
-        // Issue #1728 honest gap: gsc's construction-with-initializer-suffix
-        // form has no target-less collection-initializer carve-out (unlike the
-        // colon struct-literal form, issue #1567), so a nested `Prop = { a, b }`
-        // member combined with constructor arguments has no canonical G# form
-        // yet. It must be reported, not silently dropped.
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
-        {
-            ("Snippet.cs", @"
+        // Issue #1858 (follow-up to #1728): gsc's construction-with-
+        // initializer-suffix form now carries the same target-less
+        // collection-initializer carve-out as the colon struct-literal form
+        // (issue #1567), so a nested `Items = { 1, 2 }` member combined with
+        // constructor arguments AND another scalar member (`Bar = 2`) is
+        // translated faithfully — no member is silently dropped.
+        string printed = TranslateUnit(@"
 using System.Collections.Generic;
 
 namespace Demo
@@ -136,31 +135,67 @@ namespace Demo
     public class Foo
     {
         public int X { get; }
+        public int Bar { get; set; }
         public List<int> Items { get; } = new();
         public Foo(int x) { X = x; }
     }
 
     public class C
     {
-        public Foo Make(int x) => new Foo(x) { Items = { 1, 2 } };
+        public Foo Make(int x) => new Foo(x) { Items = { 1, 2 }, Bar = 2 };
     }
-}"),
-        });
-        Assert.True(
-            project.BoundWithoutErrors,
-            "Snippet should bind with no C# errors: " +
-                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+}");
 
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains("Foo(x)", printed);
+        Assert.Contains("Items = { 1, 2 }", printed);
+        Assert.Contains("Bar = 2", printed);
+    }
+
+    [Fact]
+    public void CtorArgsPlusNestedObjectInitializerMember_ReportsUnsupported()
+    {
+        // Regression guard (B1, PR #1877 review of issue #1858): a nested
+        // `Sub = { X = 1, Y = 2 }` member is a C# OBJECT initializer, not a
+        // collection initializer — it has no faithful G# form when combined
+        // with constructor arguments. Must still fail loud (ReportUnsupported),
+        // not silently lower each `X = 1` as a bare collection element (which
+        // would emit the semantically wrong `.Add(X = 1)`).
+        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
+namespace Demo
+{
+    public class Sub
+    {
+        public int X { get; set; }
+        public int Y { get; set; }
+    }
+
+    public class Foo
+    {
+        public int X { get; }
+        public Sub Sub { get; } = new Sub();
+        public Foo(int x) { X = x; }
+    }
+
+    public class C
+    {
+        public Foo Make(int x) => new Foo(x) { Sub = { X = 1, Y = 2 } };
+    }
+}");
 
         Assert.Contains(
             context.Diagnostics,
-            d => d.Message.Contains("construction-with-initializer-suffix", StringComparison.Ordinal));
+            d => d.Severity == TranslationSeverity.Unsupported &&
+                d.Message.Contains("nested collection/object initializer as a member value"));
+        Assert.DoesNotContain(".Add(X = 1)", printed);
     }
 
     private static string TranslateUnit(string source)
+    {
+        (string printed, _) = TranslateUnitWithContext(source);
+        return printed;
+    }
+
+    private static (string Printed, TranslationContext Context) TranslateUnitWithContext(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -178,6 +213,6 @@ namespace Demo
             result.Success,
             "Translated G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
-        return printed;
+        return (printed, context);
     }
 }

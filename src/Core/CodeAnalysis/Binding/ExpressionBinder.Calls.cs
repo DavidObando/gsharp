@@ -131,6 +131,28 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
+            // Issue #1858: a braced member value `Prop = { a, b }` populates a
+            // (typically get-only) collection member via `.Add(...)` calls —
+            // the same target-less collection-initializer form already
+            // supported by the struct/imported-class composite literals
+            // (issue #1567). Handling it here lets a collection member
+            // combine with constructor arguments in the initializer-suffix
+            // form (gsc issue #522), which neither of those literals covers.
+            if (initSyntax.Value is CollectionInitializerExpressionSyntax { Target: null } bracedInit)
+            {
+                var bracedReceiver = new BoundVariableExpression(initSyntax, tempVar);
+                if (TryEmitMemberCollectionInitializer(bracedReceiver, propertyName, initSyntax.PropertyIdentifier, bracedInit, statements))
+                {
+                    continue;
+                }
+
+                // Not a collection member (or not found) — fall through to the
+                // normal assignment path below, whose own lookup reports the
+                // appropriate diagnostic (unfound member, unassignable, or the
+                // defensive not-collection-initializable report when
+                // BindExpression is reached on the braced value).
+            }
+
             var assignment = BindObjectInitializerAssignment(tempVar, resultType, initSyntax);
             if (assignment == null)
             {
