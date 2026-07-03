@@ -192,11 +192,14 @@ public class GsharpTestProjectRunner
         // restore always fails and library parity is silently disabled. Pass
         // the repo `nuget.config` explicitly so restore finds the feed
         // regardless of where the scaffold lives.
+        // `dotnet test` forwards unrecognized args to MSBuild's VSTest target,
+        // and MSBuild has no `--configfile` switch (that's a `dotnet restore`/
+        // `dotnet nuget` only switch) - it fails hard with MSB1001. The
+        // MSBuild-property form works for build/restore/test alike.
         string repoNugetConfig = Path.Combine(this.RepoRoot, "nuget.config");
         if (File.Exists(repoNugetConfig))
         {
-            args.Add("--configfile");
-            args.Add(repoNugetConfig);
+            args.Add($"-p:RestoreConfigFile={repoNugetConfig}");
         }
 
         (int exit, string output) = this.RunDotnet(args, workDir);
