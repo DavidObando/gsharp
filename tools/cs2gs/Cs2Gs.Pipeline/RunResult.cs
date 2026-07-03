@@ -40,9 +40,22 @@ public sealed class RunResult
     [JsonPropertyOrder(4)]
     public bool Succeeded { get; set; }
 
+    /// <summary>
+    /// Gets or sets a value indicating whether no app failed but at least one
+    /// app has an unverified stage (a genuinely-unavailable dependency, e.g.
+    /// no locally-built SDK). Mutually exclusive with a "failed" run: a
+    /// skipped stage never overrides a failed one (ADR-0115 §C). Distinct
+    /// from <see cref="Succeeded"/> so the aggregate
+    /// rollup cannot render "not verified" as verified-green (issue #1831,
+    /// following the per-stage fix in issue #1749).
+    /// </summary>
+    [JsonPropertyName("unverified")]
+    [JsonPropertyOrder(5)]
+    public bool Unverified { get; set; }
+
     /// <summary>Gets or sets the per-app results.</summary>
     [JsonPropertyName("apps")]
-    [JsonPropertyOrder(5)]
+    [JsonPropertyOrder(6)]
     public List<AppResult> Apps { get; set; } = new List<AppResult>();
 }
 
@@ -62,24 +75,37 @@ public sealed class AppResult
     [JsonPropertyOrder(1)]
     public bool Succeeded { get; set; }
 
+    /// <summary>
+    /// Gets or sets a value indicating whether no stage failed but at least
+    /// one stage is <c>skipped</c> (a genuinely-unavailable dependency, not a
+    /// pass). Never <see langword="true"/> when <see cref="Succeeded"/> is
+    /// <see langword="false"/> — a failed stage always takes precedence
+    /// (ADR-0115 §C). This is the app-level counterpart of the per-stage
+    /// "skipped" status (issue #1749); it exists so the aggregate rollup does
+    /// not render an unverified app as green (issue #1831).
+    /// </summary>
+    [JsonPropertyName("unverified")]
+    [JsonPropertyOrder(2)]
+    public bool Unverified { get; set; }
+
     /// <summary>Gets or sets the category of the first failing stage, or null when green.</summary>
     [JsonPropertyName("failureCategory")]
-    [JsonPropertyOrder(2)]
+    [JsonPropertyOrder(3)]
     public string FailureCategory { get; set; }
 
     /// <summary>Gets or sets the per-stage results, in execution order.</summary>
     [JsonPropertyName("stages")]
-    [JsonPropertyOrder(3)]
+    [JsonPropertyOrder(4)]
     public List<StageResult> Stages { get; set; } = new List<StageResult>();
 
     /// <summary>Gets or sets the run-relative paths of the triage artifacts produced for this app.</summary>
     [JsonPropertyName("artifacts")]
-    [JsonPropertyOrder(4)]
+    [JsonPropertyOrder(5)]
     public List<string> Artifacts { get; set; } = new List<string>();
 
     /// <summary>Gets or sets the distinct fingerprints captured for this app.</summary>
     [JsonPropertyName("fingerprints")]
-    [JsonPropertyOrder(5)]
+    [JsonPropertyOrder(6)]
     public List<string> Fingerprints { get; set; } = new List<string>();
 }
 

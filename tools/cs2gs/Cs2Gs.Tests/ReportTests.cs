@@ -39,6 +39,11 @@ public class ReportTests
         Assert.Equal(1, model.GreenApps);
         Assert.False(model.Succeeded);
 
+        // A failed run is never "unverified" (issue #1831): failed takes
+        // precedence over the skipped stages the failing apps also carry.
+        Assert.False(model.Unverified);
+        Assert.Equal(0, model.UnverifiedApps);
+
         // Apps sorted by id.
         Assert.Equal(
             new[] { "corpus/L1-Console", "corpus/L2-Library", "corpus/L3-Library" },
@@ -67,6 +72,9 @@ public class ReportTests
         Assert.Equal(
             model.Gaps.Select(g => g.Fingerprint).OrderBy(f => f, StringComparer.Ordinal).ToArray(),
             model.Gaps.Select(g => g.Fingerprint).ToArray());
+
+        // Failed run stays red/non-zero exit (issue #1831 must not touch this).
+        Assert.Equal(1, Cs2Gs.Cli.Program.DetermineMigrateExitCode(model.Succeeded, reportGenerated: true));
     }
 
     /// <summary>
@@ -449,9 +457,73 @@ public class ReportTests
         Assert.Equal(0, model.MissingArtifactCount);
         Assert.True(model.IsGreen);
 
+        // Nothing skipped: not unverified, and the app is counted green.
+        Assert.False(model.Unverified);
+        Assert.Equal(0, model.UnverifiedApps);
+        Assert.Equal(1, model.GreenApps);
+
         string html = HtmlReportWriter.Render(model);
         Assert.Contains("every app is green", html, StringComparison.Ordinal);
 
+        Assert.Equal(0, Cs2Gs.Cli.Program.DetermineMigrateExitCode(model.Succeeded, reportGenerated: true));
+    }
+
+    /// <summary>
+    /// A run with an unverified stage (e.g. no locally-built SDK for
+    /// <c>compile</c>) but no failed stage must not roll up to a green app or
+    /// a plain "PASSED" verdict — the aggregate rollup must carry the same
+    /// "not verified" honesty as the per-stage <c>skipped</c> cell (issue
+    /// #1749), one level up (issue #1831). Exit code must still be 0: a
+    /// genuinely-unavailable SDK must never turn CI red.
+    /// </summary>
+    [Fact]
+    public void ReportModel_SkippedStageNoFailure_IsUnverifiedNotGreen_AndExitsZero()
+    {
+        string runDir = NewRunDir("unverified");
+
+        var run = new RunResult
+        {
+            RunId = "2026-03-01T00-00-03Z_unverified",
+            Timestamp = "2026-03-01T00:00:03Z",
+            GscVersion = "0.2.0+test",
+            GscPath = "/path/to/gsc.dll",
+            Succeeded = true,
+            Unverified = true,
+            Apps = new List<AppResult>
+            {
+                new AppResult
+                {
+                    AppId = "corpus/L1-Console",
+                    Succeeded = true,
+                    Unverified = true,
+                    Stages = new List<StageResult>
+                    {
+                        new StageResult { Stage = "translate", Status = "passed" },
+                        new StageResult { Stage = "compile", Status = "skipped" },
+                        new StageResult { Stage = "ilverify", Status = "skipped" },
+                        new StageResult { Stage = "test-parity", Status = "skipped" },
+                    },
+                },
+            },
+        };
+        WriteRunJson(runDir, run);
+
+        ReportModel model = ReportModel.FromRunDirectory(runDir);
+
+        Assert.True(model.Succeeded);
+        Assert.True(model.Unverified);
+        Assert.Equal(1, model.TotalApps);
+        Assert.Equal(0, model.GreenApps);
+        Assert.Equal(1, model.UnverifiedApps);
+        Assert.False(model.IsGreen);
+
+        string html = HtmlReportWriter.Render(model);
+        Assert.DoesNotContain("every app is green", html, StringComparison.Ordinal);
+        Assert.Contains("PASSED (unverified)", html, StringComparison.Ordinal);
+        Assert.Contains("1 unverified", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"state skip\">unverified</span>", html, StringComparison.Ordinal);
+
+        // Skipped-only must not turn the run red or non-zero (SDK-absent CI is legitimate).
         Assert.Equal(0, Cs2Gs.Cli.Program.DetermineMigrateExitCode(model.Succeeded, reportGenerated: true));
     }
 

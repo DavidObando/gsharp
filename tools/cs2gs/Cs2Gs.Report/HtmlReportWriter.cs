@@ -43,7 +43,7 @@ public static class HtmlReportWriter
         "h3{font-size:1rem;margin:0 0 .5rem;}",
         "a{color:#0969da;}",
         ".run-header .verdict{display:inline-block;font-weight:700;padding:.15rem .6rem;border-radius:999px;color:#fff;}",
-        ".verdict.ok{background:var(--ok);} .verdict.bad{background:var(--bad);}",
+        ".verdict.ok{background:var(--ok);} .verdict.bad{background:var(--bad);} .verdict.skip{background:var(--skip);}",
         ".provenance{display:grid;grid-template-columns:max-content 1fr;gap:.15rem 1rem;margin:.75rem 0 0;}",
         ".provenance dt{font-weight:600;color:var(--skip);} .provenance dd{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}",
         "table{border-collapse:collapse;width:100%;}",
@@ -65,7 +65,7 @@ public static class HtmlReportWriter
         ".toggle{margin:.5rem 0;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:6px;padding:.3rem .7rem;font:inherit;}",
         ".app-detail{border:1px solid var(--line);border-radius:6px;padding:1rem;margin:0 0 1rem;}",
         ".state{font-size:.75rem;padding:.1rem .5rem;border-radius:999px;color:#fff;vertical-align:middle;}",
-        ".state.ok{background:var(--ok);} .state.bad{background:var(--bad);}",
+        ".state.ok{background:var(--ok);} .state.bad{background:var(--bad);} .state.skip{background:var(--skip);}",
         ".stage-list th,.stage-list td{border:1px solid var(--line);padding:.3rem .6rem;text-align:left;}",
         ".meta-line .k,.artifact-h{font-weight:600;color:var(--skip);}",
         ".empty{color:var(--skip);}") + Newline;
@@ -180,8 +180,15 @@ public static class HtmlReportWriter
 
     private static void AppendHeader(StringBuilder sb, ReportModel model)
     {
-        string verdict = model.Succeeded ? "PASSED" : "FAILED";
-        string verdictClass = model.Succeeded ? "ok" : "bad";
+        // Precedence per ADR-0115 §C (issue #1831): a failed run is always
+        // "FAILED"/red; otherwise, any unverified app makes the run
+        // "PASSED (unverified)"/skip-colored rather than a plain green pass —
+        // "not verified" must never render as verified-green, one level up
+        // from the per-stage fix in issue #1749.
+        string verdict = !model.Succeeded
+            ? "FAILED"
+            : model.Unverified ? "PASSED (unverified)" : "PASSED";
+        string verdictClass = !model.Succeeded ? "bad" : model.Unverified ? "skip" : "ok";
 
         sb.Append("<header class=\"run-header\">").Append(Newline);
         sb.Append("<h1>cs2gs migration report</h1>").Append(Newline);
@@ -189,7 +196,14 @@ public static class HtmlReportWriter
             .Append("Run ").Append(verdict).Append(" — ")
             .Append(model.GreenApps.ToString(CultureInfo.InvariantCulture)).Append('/')
             .Append(model.TotalApps.ToString(CultureInfo.InvariantCulture))
-            .Append(" apps green</p>").Append(Newline);
+            .Append(" apps green");
+        if (model.UnverifiedApps > 0)
+        {
+            sb.Append(", ").Append(model.UnverifiedApps.ToString(CultureInfo.InvariantCulture))
+                .Append(" unverified");
+        }
+
+        sb.Append("</p>").Append(Newline);
         sb.Append("<dl class=\"provenance\">").Append(Newline);
         AppendDefinition(sb, "Run id", model.RunId);
         AppendDefinition(sb, "Timestamp", model.Timestamp);
@@ -438,11 +452,16 @@ public static class HtmlReportWriter
 
         foreach (AppReport app in model.Apps)
         {
-            string stateClass = app.Succeeded ? "ok" : "bad";
+            // Same precedence as the run header (issue #1831): failed apps
+            // are "bad"/red; an unverified-but-not-failed app is "skip"/gray
+            // (reusing the per-stage skip color from issue #1749), never
+            // green.
+            string stateClass = !app.Succeeded ? "bad" : app.Unverified ? "skip" : "ok";
+            string stateLabel = !app.Succeeded ? "failing" : app.Unverified ? "unverified" : "green";
             sb.Append("<article id=\"app-").Append(slugs[app.AppId]).Append("\" class=\"app-detail\">").Append(Newline);
             sb.Append("<h3>").Append(Encode(app.AppId))
                 .Append(" <span class=\"state ").Append(stateClass).Append("\">")
-                .Append(app.Succeeded ? "green" : "failing").Append("</span></h3>").Append(Newline);
+                .Append(stateLabel).Append("</span></h3>").Append(Newline);
 
             if (!string.IsNullOrEmpty(app.FailureCategory))
             {

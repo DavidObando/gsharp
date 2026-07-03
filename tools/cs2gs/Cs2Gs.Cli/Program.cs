@@ -436,8 +436,15 @@ internal static class Program
         }
 
         Console.WriteLine();
-        int passed = result.Apps.Count(a => a.Succeeded);
-        string verdict = result.Succeeded ? "PASSED" : "FAILED";
+
+        // Same precedence as the report (issue #1831): a run-level failure
+        // always wins; otherwise call out unverified apps rather than
+        // rendering them as a plain pass.
+        int passed = result.Apps.Count(a => a.Succeeded && !a.Unverified);
+        int unverified = result.Apps.Count(a => a.Unverified);
+        string verdict = !result.Succeeded
+            ? "FAILED"
+            : unverified > 0 ? $"PASSED ({unverified} unverified)" : "PASSED";
         Console.WriteLine($"{passed}/{result.Apps.Count} apps green; run {verdict}.");
     }
 

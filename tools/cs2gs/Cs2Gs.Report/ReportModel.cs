@@ -43,29 +43,49 @@ public sealed class ReportModel
     [JsonPropertyOrder(3)]
     public bool Succeeded { get; set; }
 
+    /// <summary>
+    /// Gets or sets a value indicating whether no app failed but at least one
+    /// app is unverified (a genuinely-unavailable dependency for one of its
+    /// stages). Mirrors <see cref="RunResult.Unverified"/>; kept distinct from
+    /// <see cref="Succeeded"/> so the run headline cannot render "not
+    /// verified" as verified-green (issue #1831).
+    /// </summary>
+    [JsonPropertyName("unverified")]
+    [JsonPropertyOrder(4)]
+    public bool Unverified { get; set; }
+
     /// <summary>Gets or sets the total number of apps in the run.</summary>
     [JsonPropertyName("totalApps")]
-    [JsonPropertyOrder(4)]
+    [JsonPropertyOrder(5)]
     public int TotalApps { get; set; }
 
     /// <summary>Gets or sets the number of apps green across every stage.</summary>
     [JsonPropertyName("greenApps")]
-    [JsonPropertyOrder(5)]
+    [JsonPropertyOrder(6)]
     public int GreenApps { get; set; }
+
+    /// <summary>
+    /// Gets or sets the number of apps that did not fail but have at least one
+    /// unverified stage. Counted separately from <see cref="GreenApps"/> —
+    /// never both (issue #1831).
+    /// </summary>
+    [JsonPropertyName("unverifiedApps")]
+    [JsonPropertyOrder(7)]
+    public int UnverifiedApps { get; set; }
 
     /// <summary>Gets or sets the stage names in execution order (Translate→Compile→IlVerify→TestParity).</summary>
     [JsonPropertyName("stageOrder")]
-    [JsonPropertyOrder(6)]
+    [JsonPropertyOrder(8)]
     public List<string> StageOrder { get; set; } = new List<string>();
 
     /// <summary>Gets or sets the per-app results, sorted by app id, each with its stages in execution order.</summary>
     [JsonPropertyName("apps")]
-    [JsonPropertyOrder(7)]
+    [JsonPropertyOrder(9)]
     public List<AppReport> Apps { get; set; } = new List<AppReport>();
 
     /// <summary>Gets or sets the discovered gaps, grouped by fingerprint and sorted by fingerprint.</summary>
     [JsonPropertyName("gaps")]
-    [JsonPropertyOrder(8)]
+    [JsonPropertyOrder(10)]
     public List<GapReport> Gaps { get; set; } = new List<GapReport>();
 
     /// <summary>
@@ -78,21 +98,23 @@ public sealed class ReportModel
     /// <see cref="IsGreen"/>.
     /// </summary>
     [JsonPropertyName("missingArtifactCount")]
-    [JsonPropertyOrder(9)]
+    [JsonPropertyOrder(11)]
     public int MissingArtifactCount { get; set; }
 
     /// <summary>
     /// Gets a value indicating whether the run is genuinely green: it must be
     /// based on positive evidence — the run itself reported success
-    /// (<see cref="Succeeded"/>), every referenced triage artifact was
-    /// readable (<see cref="MissingArtifactCount"/> is zero), and no gaps were
-    /// discovered (<see cref="Gaps"/> is empty) — never on the mere absence of
-    /// gap data, which can also mean the triage artifacts were missing or the
-    /// run failed outright.
+    /// (<see cref="Succeeded"/>) with nothing left unverified
+    /// (<see cref="Unverified"/> is <see langword="false"/>), every referenced
+    /// triage artifact was readable (<see cref="MissingArtifactCount"/> is
+    /// zero), and no gaps were discovered (<see cref="Gaps"/> is empty) —
+    /// never on the mere absence of gap data, which can also mean the triage
+    /// artifacts were missing or the run failed outright.
     /// </summary>
     [JsonPropertyName("isGreen")]
-    [JsonPropertyOrder(10)]
-    public bool IsGreen => this.Succeeded && this.MissingArtifactCount == 0 && this.Gaps.Count == 0;
+    [JsonPropertyOrder(12)]
+    public bool IsGreen => this.Succeeded && !this.Unverified
+        && this.MissingArtifactCount == 0 && this.Gaps.Count == 0;
 
     /// <summary>
     /// Gets or sets the absolute run directory the model was built from (i.e.
@@ -194,7 +216,10 @@ public sealed class ReportModel
             }
         }
 
-        int greenApps = run.Apps.Count(a => a.Succeeded);
+        // A green app must be verified: succeeded AND not merely skipped
+        // (issue #1831). Unverified apps get their own bucket, never green's.
+        int greenApps = run.Apps.Count(a => a.Succeeded && !a.Unverified);
+        int unverifiedApps = run.Apps.Count(a => a.Unverified);
 
         return new ReportModel
         {
@@ -202,8 +227,10 @@ public sealed class ReportModel
             Timestamp = run.Timestamp,
             GscVersion = run.GscVersion,
             Succeeded = run.Succeeded,
+            Unverified = run.Unverified,
             TotalApps = run.Apps.Count,
             GreenApps = greenApps,
+            UnverifiedApps = unverifiedApps,
             StageOrder = stageOrder,
             Apps = apps,
             Gaps = GroupGaps(artifacts),
@@ -253,6 +280,7 @@ public sealed class ReportModel
         {
             AppId = app.AppId,
             Succeeded = app.Succeeded,
+            Unverified = app.Unverified,
             FailureCategory = app.FailureCategory,
             Stages = stages,
             Artifacts = (app.Artifacts ?? new List<string>())
@@ -345,24 +373,33 @@ public sealed class AppReport
     [JsonPropertyOrder(1)]
     public bool Succeeded { get; set; }
 
+    /// <summary>
+    /// Gets or sets a value indicating whether no stage failed but at least
+    /// one is unverified. Never <see langword="true"/> together with a
+    /// <see langword="false"/> <see cref="Succeeded"/> (issue #1831).
+    /// </summary>
+    [JsonPropertyName("unverified")]
+    [JsonPropertyOrder(2)]
+    public bool Unverified { get; set; }
+
     /// <summary>Gets or sets the first failing stage's category, or null when green.</summary>
     [JsonPropertyName("failureCategory")]
-    [JsonPropertyOrder(2)]
+    [JsonPropertyOrder(3)]
     public string FailureCategory { get; set; }
 
     /// <summary>Gets or sets the per-stage statuses, in execution order.</summary>
     [JsonPropertyName("stages")]
-    [JsonPropertyOrder(3)]
+    [JsonPropertyOrder(4)]
     public List<StageResult> Stages { get; set; } = new List<StageResult>();
 
     /// <summary>Gets or sets the run-relative triage artifact paths for this app.</summary>
     [JsonPropertyName("artifacts")]
-    [JsonPropertyOrder(4)]
+    [JsonPropertyOrder(5)]
     public List<string> Artifacts { get; set; } = new List<string>();
 
     /// <summary>Gets or sets the distinct fingerprints captured for this app.</summary>
     [JsonPropertyName("fingerprints")]
-    [JsonPropertyOrder(5)]
+    [JsonPropertyOrder(6)]
     public List<string> Fingerprints { get; set; } = new List<string>();
 }
 
