@@ -1158,9 +1158,9 @@ public static class GSharpPrinter
             case ConstructorDeclaration constructor:
                 return RenderConstructor(constructor, indent);
             case DestructorDeclaration destructor:
-                return $"{Indent(indent)}deinit {RenderBlock(destructor.Body, indent)}";
+                return $"{RenderAttributeBlock(destructor.Attributes, indent)}{Indent(indent)}deinit {RenderBlock(destructor.Body, indent)}";
             case EventDeclaration eventDeclaration:
-                return $"{Indent(indent)}{RenderVisibility(eventDeclaration.Visibility)}event {eventDeclaration.Name} {RenderType(eventDeclaration.Type)}";
+                return $"{RenderAttributeBlock(eventDeclaration.Attributes, indent)}{Indent(indent)}{RenderVisibility(eventDeclaration.Visibility)}event {eventDeclaration.Name} {RenderType(eventDeclaration.Type)}";
             case SharedBlock sharedBlock:
                 return RenderSharedBlock(sharedBlock, indent);
             default:
