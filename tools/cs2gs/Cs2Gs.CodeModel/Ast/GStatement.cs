@@ -279,11 +279,13 @@ public sealed class ForInStatement : GStatement
     /// <param name="variableName">The iteration variable name.</param>
     /// <param name="iterable">The iterated expression.</param>
     /// <param name="body">The loop body.</param>
-    public ForInStatement(string variableName, GExpression iterable, BlockStatement body)
+    /// <param name="isAwait">Whether this is an asynchronous iteration (<c>await for</c>).</param>
+    public ForInStatement(string variableName, GExpression iterable, BlockStatement body, bool isAwait = false)
     {
         VariableName = variableName;
         Iterable = iterable;
         Body = body;
+        IsAwait = isAwait;
     }
 
     /// <summary>
@@ -315,11 +317,11 @@ public sealed class ForInStatement : GStatement
     public BlockStatement Body { get; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether this is an asynchronous iteration
+    /// Gets a value indicating whether this is an asynchronous iteration
     /// (<c>await for x in seq</c>, the translation of C# <c>await foreach</c>).
     /// Async iteration is only valid for the single-variable form.
     /// </summary>
-    public bool IsAwait { get; set; }
+    public bool IsAwait { get; }
 }
 
 /// <summary>
