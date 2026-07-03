@@ -119,16 +119,15 @@ namespace Demo
     }
 
     [Fact]
-    public void CtorArgsPlusNestedCollectionInitializerMember_ReportsUnsupported()
+    public void CtorArgsPlusNestedCollectionInitializerMember_EmitsFaithfulSuffix()
     {
-        // Issue #1728 honest gap: gsc's construction-with-initializer-suffix
-        // form has no target-less collection-initializer carve-out (unlike the
-        // colon struct-literal form, issue #1567), so a nested `Prop = { a, b }`
-        // member combined with constructor arguments has no canonical G# form
-        // yet. It must be reported, not silently dropped.
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
-        {
-            ("Snippet.cs", @"
+        // Issue #1858 (follow-up to #1728): gsc's construction-with-
+        // initializer-suffix form now carries the same target-less
+        // collection-initializer carve-out as the colon struct-literal form
+        // (issue #1567), so a nested `Items = { 1, 2 }` member combined with
+        // constructor arguments AND another scalar member (`Bar = 2`) is
+        // translated faithfully — no member is silently dropped.
+        string printed = TranslateUnit(@"
 using System.Collections.Generic;
 
 namespace Demo
@@ -136,28 +135,20 @@ namespace Demo
     public class Foo
     {
         public int X { get; }
+        public int Bar { get; set; }
         public List<int> Items { get; } = new();
         public Foo(int x) { X = x; }
     }
 
     public class C
     {
-        public Foo Make(int x) => new Foo(x) { Items = { 1, 2 } };
+        public Foo Make(int x) => new Foo(x) { Items = { 1, 2 }, Bar = 2 };
     }
-}"),
-        });
-        Assert.True(
-            project.BoundWithoutErrors,
-            "Snippet should bind with no C# errors: " +
-                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+}");
 
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Message.Contains("construction-with-initializer-suffix", StringComparison.Ordinal));
+        Assert.Contains("Foo(x)", printed);
+        Assert.Contains("Items = { 1, 2 }", printed);
+        Assert.Contains("Bar = 2", printed);
     }
 
     private static string TranslateUnit(string source)

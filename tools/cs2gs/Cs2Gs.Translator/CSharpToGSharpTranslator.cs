@@ -9585,13 +9585,12 @@ public sealed class CSharpToGSharpTranslator
         /// Builds the canonical G# construction-with-initializer-suffix
         /// <c>Target(args) { Name = value, ... }</c> (gsc issue #522) for a C#
         /// object initializer combined with constructor arguments (issue #1728):
-        /// <c>new T(a, b) { Field = value, ... }</c>. Unlike
-        /// <see cref="BuildObjectInitializerLiteral"/> (the colon struct-literal
-        /// form, no ctor args), this suffix parses each member value as a plain
-        /// expression (gsc's <c>ParseObjectInitializerList</c> → <c>ParseExpression</c>)
-        /// — it has no target-less collection-initializer carve-out (issue #1567),
-        /// so a nested <c>Prop = { a, b }</c> member has no canonical form here yet
-        /// and is reported as unsupported instead of silently dropped.
+        /// <c>new T(a, b) { Field = value, ... }</c>. A nested
+        /// <c>Prop = { a, b }</c> member lowers to the same target-less member
+        /// collection-initializer form used by <see cref="BuildObjectInitializerLiteral"/>
+        /// (issue #1567) — gsc's suffix parser now carries the same carve-out
+        /// (issue #1858), so a collection member composes with constructor
+        /// arguments in one construct instead of being dropped.
         /// </summary>
         private GExpression BuildConstructionWithInitializerSuffix(
             InitializerExpressionSyntax initializer,
@@ -9609,10 +9608,15 @@ public sealed class CSharpToGSharpTranslator
                         (nestedInit.IsKind(SyntaxKind.CollectionInitializerExpression) ||
                          nestedInit.IsKind(SyntaxKind.ObjectInitializerExpression)))
                     {
-                        this.context.ReportUnsupported(
-                            assignment,
-                            "nested collection/object initializer as a member value has no canonical G# form when the outer object creation also has constructor arguments; gsc's construction-with-initializer-suffix form (issue #522) has no target-less collection-initializer carve-out (issue #1728).");
-                        continue;
+                        List<CollectionInitializerElement> memberElements =
+                            this.TranslateCollectionInitializerElements(nestedInit);
+                        if (memberElements != null)
+                        {
+                            memberInitializers.Add(new FieldInitializer(
+                                SanitizeIdentifier(name.Identifier.Text),
+                                new CollectionInitializerExpression(target: null, memberElements)));
+                            continue;
+                        }
                     }
 
                     memberInitializers.Add(new FieldInitializer(
