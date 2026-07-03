@@ -5980,25 +5980,17 @@ internal sealed partial class ExpressionBinder
             argTypes[i] = t;
         }
 
-        // Issue #1812: `interpolatedStringArgs` is deliberately left null here
-        // (unlike every other CLR-call Resolve site). This path skips the
-        // entire CLR parameter-conversion pass below (see the "deliberately
-        // skip" comment on orderedArgs) because the emitted MemberRef parameter
-        // is the interface type-variable `!0`, passed unconverted. If the flag
-        // let overload resolution pick a FormattableString/handler overload
-        // here, the interpolated-string argument would still flow through as a
-        // plain `string`-typed BoundExpression with no rebind step to convert
-        // it — a worse bug (wrong overload chosen, argument never actually
-        // converted) than the status quo. Wiring this up would require adding
-        // the BuildResolvedClrCallArguments pipeline to a path that exists
-        // specifically to avoid it; left as a documented gap rather than risking
-        // an ilverify mismatch.
+        // Issue #1852 (follow-up from #1812 N1): mark which positional
+        // arguments are interpolated-string literals so overload resolution
+        // treats them as applicable to an IFormattable/FormattableString (or
+        // handler) parameter, just like every other CLR-call Resolve site.
+        var interpolatedStringArgs = ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length);
         var resolution = OverloadResolution.Resolve(
             candidates,
             argTypes,
             null,
             scope.References.MapClrTypeToReferences,
-            null,
+            interpolatedStringArgs,
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
         if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
         {
@@ -6014,6 +6006,24 @@ internal sealed partial class ExpressionBinder
         // the direct CLR mapping.
         var returnType = ResolveInstanceReturnTypeFromReceiver(constraintInterface, method)
             ?? MapClrMethodReturnType(method);
+
+        // Issue #1852: re-lower each interpolated-string argument whose
+        // resolved parameter is IFormattable/FormattableString-shaped to
+        // FormattableStringFactory.Create(...) — mirroring
+        // RebindFormattableInterpolationArguments, the same step every other
+        // CLR-call path runs — WITHOUT routing through the rest of
+        // BuildResolvedClrCallArguments (ApplyInterpolatedStringHandlers,
+        // delegate rebind, BindClrParameterConversions). This path
+        // deliberately skips the CLR boxing/conversion pass below (see the
+        // "deliberately skip" comment on orderedArgs): the emitted MemberRef
+        // parameter is the interface type-variable `!0`, passed unconverted,
+        // so routing every argument through the conversion pipeline would
+        // risk an ilverify mismatch. Only the specific interpolated-string
+        // arguments actually bound to a handler parameter are touched; every
+        // other argument (and the overload choice itself, unaffected unless a
+        // candidate's applicability actually depended on the flag) is
+        // unchanged.
+        arguments = RebindFormattableInterpolationArguments(arguments, ce.Arguments, parameters, resolution.ParameterMapping);
 
         // Order positionally for named arguments; deliberately skip the CLR
         // boxing/conversion pass — the emitted MemberRef parameter is the
