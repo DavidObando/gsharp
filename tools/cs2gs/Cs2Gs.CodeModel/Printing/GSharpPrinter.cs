@@ -850,6 +850,9 @@ public static class GSharpPrinter
             case WhileStatement whileStatement:
                 return $"{pad}while {RenderExpression(whileStatement.Condition, indent)} {RenderBlock(whileStatement.Body, indent)}";
 
+            case LockStatement lockStatement:
+                return $"{pad}lock {RenderExpression(lockStatement.Target, indent)} {RenderBlock(lockStatement.Body, indent)}";
+
             case ForStatement forStatement:
                 return RenderForStatement(forStatement, indent);
 

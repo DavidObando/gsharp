@@ -638,6 +638,21 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that the operand of a <c>lock</c> statement is not a
+    /// reference type (issue #1885). <c>lock</c> lowers to
+    /// <c>System.Threading.Monitor.Enter/Exit</c>, which requires a
+    /// reference-type argument; locking on a value type would box a fresh
+    /// copy on every entry, defeating mutual exclusion (matches C# CS0185).
+    /// </summary>
+    /// <param name="location">The text location of the operand.</param>
+    /// <param name="type">The offending operand type.</param>
+    public void ReportLockTargetMustBeReferenceType(TextLocation location, TypeSymbol type)
+    {
+        var message = $"'{type.Name}' is not a reference type as required by the 'lock' statement.";
+        Report(location, "GS0461", message);
+    }
+
+    /// <summary>
     /// Reports that the operand of a channel-receive expression (<c>&lt;-ch</c>) is not a channel (Phase 5.5 / ADR-0022).
     /// </summary>
     /// <param name="location">The text location of the operand.</param>

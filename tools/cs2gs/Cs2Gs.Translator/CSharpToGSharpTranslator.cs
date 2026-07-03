@@ -5520,32 +5520,14 @@ public sealed class CSharpToGSharpTranslator
 
         private GStatement TranslateLock(LockStatementSyntax lockStatement)
         {
-            // G# has no `lock` keyword; the canonical lowering is the BCL
-            // monitor pattern `Monitor.Enter(x)` followed by
-            // `try { body } finally { Monitor.Exit(x) }` (ADR-0115 §B). The
-            // translated target is embedded at BOTH the `Enter` and `Exit` call
-            // sites; C# evaluates a `lock` operand exactly once, so a non-trivial
-            // target (e.g. `GetSyncRoot()`) is spilled into a preceding local and
-            // both calls reference that local instead (issue #1731) — `Enter` and
-            // `Exit` then always agree on the same monitor.
-            GExpression target = this.SpillOperand(this.TranslateExpression(lockStatement.Expression));
-
-            GStatement enter = new ExpressionStatement(new InvocationExpression(
-                new MemberAccessExpression(new IdentifierExpression("Monitor"), "Enter"),
-                new List<GExpression> { target }));
-
+            // Issue #1885: G# has a first-class `lock target { body }` statement
+            // with the SAME single-evaluation, Monitor.Enter/try-finally/
+            // Monitor.Exit semantics as C#'s `lock`, so the translated target
+            // is emitted once and gsc lowers it — no manual Monitor lowering
+            // (and no missing `import System.Threading`) needed here.
+            GExpression target = this.TranslateExpression(lockStatement.Expression);
             BlockStatement body = this.TranslateStatementAsBlock(lockStatement.Statement);
-
-            var finallyBlock = new BlockStatement(new List<GStatement>
-            {
-                new ExpressionStatement(new InvocationExpression(
-                    new MemberAccessExpression(new IdentifierExpression("Monitor"), "Exit"),
-                    new List<GExpression> { target })),
-            });
-
-            var tryStatement = new TryStatement(body, new List<CatchClause>(), finallyBlock);
-
-            return new BlockStatement(new List<GStatement> { enter, tryStatement });
+            return new LockStatement(target, body);
         }
 
         // True when duplicating `expression` in the output has no observable
