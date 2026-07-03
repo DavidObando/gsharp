@@ -10172,8 +10172,16 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    // Issue #1785: `async func f(...) T?` for a same-compilation user value
+    // type (struct/enum) has a ResultTypeSymbol that is a NullableTypeSymbol
+    // wrapping the struct/enum, not the bare struct/enum symbol itself.
+    // Recognize that shape too — symbol-based (NullableLifting), not
+    // ClrType.IsValueType, which is null for in-flight user types — so the
+    // kickoff method's real Task<T?> return type is closed over the emitted
+    // Nullable<UserT> instead of falling back to the erased Task<object>.
     private static bool IsAsyncUserDefinedResultType(TypeSymbol type)
-        => type is StructSymbol or InterfaceSymbol or EnumSymbol;
+        => type is StructSymbol or InterfaceSymbol or EnumSymbol
+        || (type is NullableTypeSymbol nullableUserVt && nullableUserVt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol);
 
     /// <summary>
     /// ADR-0122 §9 / issue #1035: builds a standalone method signature for a

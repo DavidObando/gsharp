@@ -726,7 +726,20 @@ internal sealed class LambdaBinder
         var clr = element.ClrType;
         if (clr == null)
         {
-            if (element is StructSymbol or InterfaceSymbol or EnumSymbol
+            // Issue #1785: a nullable same-compilation user type
+            // (`UserStruct?`/`UserEnum?`/`UserClass?`) also has a null ClrType
+            // (its NullableTypeSymbol wraps the struct/enum/class's null
+            // ClrType), so it must widen to `Task<T?>` the same way a bare
+            // user struct/enum/class does below. Symbol-based detection (not
+            // ClrType.IsValueType, which is null for in-flight user types) is
+            // required. Reference-type nullables (`UserClass?`) are included
+            // too — their CLR shape is identical to the bare class, but the
+            // wrapping NullableTypeSymbol still reports a null ClrType and
+            // previously fell through unwrapped, leaving the async function's
+            // observable return type as the bare element instead of
+            // `Task<T?>` (e.g. "Cannot find member Result" at the call site).
+            if ((element is StructSymbol or InterfaceSymbol or EnumSymbol
+                || (element is NullableTypeSymbol nullableUserVt && nullableUserVt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol))
                 && Scope.References.TryResolveType("System.Threading.Tasks.Task`1", out var symbolicTaskOpen))
             {
                 // Issue #502 / #320: a user-defined async result type has no CLR
