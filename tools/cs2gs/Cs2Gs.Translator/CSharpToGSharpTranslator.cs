@@ -5286,7 +5286,15 @@ public sealed class CSharpToGSharpTranslator
             // still has to be read back for the next link; that read is real
             // C# semantics, unrelated to the #1845 divergence, and is left as
             // it was under the #1731/#1842 fix (the target was already made
-            // safe to re-embed above).
+            // safe to re-embed above). BUT when a compound link itself has an
+            // outer `=` link depending on its result (`a = b = c.P += d`), G#
+            // assignment is statement-only (no expression form), so the only
+            // way to hand the produced value up the chain is to re-embed the
+            // target. Re-embedding the target expression as-is re-reads its
+            // getter once per outer link (issue #1875) — instead of doing
+            // that, the read/combine/store is expanded manually (mirroring
+            // exactly what the compound operator does) so the combined value
+            // is captured directly, with no re-read at all.
             bool valueIsShared = false;
             for (int i = lefts.Count - 1; i >= 0; i--)
             {
@@ -5302,17 +5310,69 @@ public sealed class CSharpToGSharpTranslator
                     valueIsShared = true;
                 }
 
+                if (hasOuterLink && lefts[i].Op != "=" &&
+                    !IsTrivialOperand(safeTargets[i]) &&
+                    CompoundToBinaryOperator(lefts[i].Op) is string binaryOp)
+                {
+                    // `c.P += d` reused above (`a = b = c.P += d`): re-embedding
+                    // a NON-trivial target (a property/indexer read, unlike a
+                    // bare local) would re-run its getter once per outer link
+                    // (issue #1875). Instead read c.P's getter exactly once,
+                    // combine it with the operand, and store the result — the
+                    // combined value (not a re-read of c.P) is what every
+                    // outer `=` link reuses, matching C#'s single-getter-call
+                    // semantics. A trivial target (bare local/`this`) has no
+                    // getter to protect, so it keeps the simpler read-back
+                    // below unchanged.
+                    GExpression oldValue = this.SpillOperand(safeTargets[i], statements);
+                    GExpression newValue = this.SpillOperand(new BinaryExpression(oldValue, binaryOp, assignedValue), statements);
+                    statements.Add(new AssignmentStatement(safeTargets[i], newValue, "="));
+                    value = newValue;
+                    valueIsShared = true;
+                    continue;
+                }
+
                 statements.Add(new AssignmentStatement(safeTargets[i], assignedValue, lefts[i].Op));
 
                 if (hasOuterLink && lefts[i].Op != "=")
                 {
-                    value = safeTargets[i];
+                    // Trivial target (bare local/`this`): reading it back has
+                    // no getter to worry about, so it stays the simple
+                    // read-back this fix has always used for compound links.
+                    // `??=` also lands here regardless of target triviality —
+                    // it has no side-effect-free binary-expression equivalent
+                    // (it must only evaluate/store the right-hand side when
+                    // the target is null) — so a non-trivial `??=` target
+                    // costs one extra getter call total (not one per outer
+                    // link), the minimum faithful cost without reimplementing
+                    // its short-circuit semantics.
+                    value = IsTrivialOperand(safeTargets[i]) ? safeTargets[i] : this.SpillOperand(safeTargets[i], statements);
                     valueIsShared = true;
                 }
             }
 
             return statements;
         }
+
+        // Maps a C# compound-assignment operator token (`+=`, `-=`, …) to its
+        // underlying binary operator (`+`, `-`, …), or null for `??=` (which
+        // has no side-effect-preserving binary-expression equivalent — see
+        // <see cref="FlattenChainedAssignment"/>).
+        private static string CompoundToBinaryOperator(string compoundOp) => compoundOp switch
+        {
+            "+=" => "+",
+            "-=" => "-",
+            "*=" => "*",
+            "/=" => "/",
+            "%=" => "%",
+            "&=" => "&",
+            "|=" => "|",
+            "^=" => "^",
+            "<<=" => "<<",
+            ">>=" => ">>",
+            ">>>=" => ">>>",
+            _ => null,
+        };
 
         private IEnumerable<GStatement> LowerTupleAssignment(
             TupleExpressionSyntax leftTuple,
